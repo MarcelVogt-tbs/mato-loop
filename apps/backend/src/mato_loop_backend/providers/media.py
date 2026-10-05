@@ -20,8 +20,6 @@ from mato_loop_backend.providers.codex_oauth import CODEX_IMAGE_MODEL_ID
 from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings import (
     AiSettings,
-    apply_agent_profile_ai,
-    load_agent_profile,
     load_effective_ai,
 )
 from mato_loop_backend.settings.models import (
@@ -383,7 +381,6 @@ class MediaService:
         capability: ModelCapability,
         *,
         active_model_id: UUID | None = None,
-        agent_profile_id: UUID | None = None,
         user_id: UUID,
     ) -> ResolvedMediaModel:
         field_name = _DEFAULT_FIELDS.get(capability)
@@ -391,10 +388,7 @@ class MediaService:
             raise ProviderError(
                 "Unsupported media capability", code="provider.modelCapabilityUnavailable"
             )
-        settings = apply_agent_profile_ai(
-            await load_effective_ai(db, user_id),
-            await load_agent_profile(db, user_id, agent_profile_id),
-        )
+        settings = await load_effective_ai(db, user_id)
         target = resolve_media_target(
             settings, capability, active_model_id=active_model_id
         )
@@ -451,7 +445,6 @@ class MediaService:
         seed: int | None = None,
         timeout: float = 300,
         active_model_id: UUID | None = None,
-        agent_profile_id: UUID | None = None,
         expected_model_id: UUID | None = None,
         expected_trust_level: TrustLevel | None = None,
         user_id: UUID,
@@ -466,7 +459,6 @@ class MediaService:
             db,
             ModelCapability.IMAGE_GENERATION,
             active_model_id=active_model_id,
-            agent_profile_id=agent_profile_id,
             user_id=user_id,
         )
         if expected_model_id is not None and resolved.model.id != expected_model_id:
@@ -503,7 +495,6 @@ class MediaService:
         source_attachment_ids: tuple[UUID, ...] = (),
         timeout: float = 300,
         active_model_id: UUID | None = None,
-        agent_profile_id: UUID | None = None,
         expected_model_id: UUID | None = None,
         expected_trust_level: TrustLevel | None = None,
         user_id: UUID,
@@ -538,7 +529,6 @@ class MediaService:
             db,
             ModelCapability.IMAGE_EDITING,
             active_model_id=active_model_id,
-            agent_profile_id=agent_profile_id,
             user_id=user_id,
         )
         if expected_model_id is not None and resolved.model.id != expected_model_id:
@@ -578,7 +568,6 @@ class MediaService:
         voice: str = "shimmer",
         speed: float = 1.0,
         timeout: float = 300,
-        agent_profile_id: UUID | None = None,
         user_id: UUID,
     ) -> MediaResult:
         text = _require_text(text, max_length=100_000)
@@ -587,7 +576,6 @@ class MediaService:
         resolved = await cls.resolve_model(
             db,
             ModelCapability.SPEECH_GENERATION,
-            agent_profile_id=agent_profile_id,
             user_id=user_id,
         )
         protected = await _protected_text(resolved.provider, resolved.model, text)
@@ -615,7 +603,6 @@ class MediaService:
         cfg: float | None = None,
         seed: int | None = None,
         timeout: float = 300,
-        agent_profile_id: UUID | None = None,
         user_id: UUID,
     ) -> MediaResult:
         prompt = _require_text(prompt, max_length=20_000)
@@ -630,7 +617,6 @@ class MediaService:
         resolved = await cls.resolve_model(
             db,
             ModelCapability.AUDIO_GENERATION,
-            agent_profile_id=agent_profile_id,
             user_id=user_id,
         )
         protected_prompt = await _protected_text(resolved.provider, resolved.model, prompt)
@@ -663,7 +649,6 @@ class MediaService:
         language: str | None = None,
         timeout: float = 300,
         active_model_id: UUID | None = None,
-        agent_profile_id: UUID | None = None,
         expected_model_id: UUID | None = None,
         expected_trust_level: TrustLevel | None = None,
         user_id: UUID,
@@ -675,7 +660,6 @@ class MediaService:
             db,
             ModelCapability.AUDIO_TRANSCRIPTION,
             active_model_id=active_model_id,
-            agent_profile_id=agent_profile_id,
             user_id=user_id,
         )
         if (

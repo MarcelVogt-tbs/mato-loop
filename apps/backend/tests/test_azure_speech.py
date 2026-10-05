@@ -15,7 +15,6 @@ from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import AiSettings
 from mato_loop_backend.settings.models import (
-    AgentProfile,
     LlmProviderConfig,
     ModelCapability,
     ModelConfig,
@@ -278,15 +277,8 @@ async def test_media_service_resolves_azure_default_and_dispatches(monkeypatch):
         provider_id=provider.id, model_id=azure_speech.MODEL_ID,
         capabilities={ModelCapability.AUDIO_TRANSCRIPTION}, supports_tools=False,
     )
-    settings = AiSettings(providers=[provider], models=[model])
+    settings = AiSettings(providers=[provider], models=[model], audio_transcription_model_id=model.id)
     monkeypatch.setattr(media, "load_effective_ai", AsyncMock(return_value=settings))
-    monkeypatch.setattr(
-        media,
-        "load_agent_profile",
-        AsyncMock(return_value=AgentProfile(
-            name="Test", instructions="Test", audio_transcription_model_id=model.id
-        )),
-    )
     load = AsyncMock(return_value=SimpleNamespace())
     monkeypatch.setattr(media, "load_credential", load)
     monkeypatch.setattr(media, "read_credential", lambda _credential: {"api_key": "test-key"})

@@ -35,7 +35,7 @@ from mato_loop_backend.settings import (
     MemorySettings,
     SettingsStore,
     ToolExecutionPolicy,
-    load_agent_profile_ai,
+    load_effective_ai,
 )
 
 router = APIRouter(prefix="/memories", dependencies=[Depends(require_user)])
@@ -155,7 +155,7 @@ def dream_run_payload(item: MemoryDreamRun) -> dict[str, Any]:
 async def settings_payload(
     db: AsyncSession, settings: MemorySettings, user_id: UUID
 ) -> dict[str, Any]:
-    ai, _profile = await load_agent_profile_ai(db, user_id, None)
+    ai = await load_effective_ai(db, user_id)
     automatic_enabled, automatic_reason = dreaming_availability(
         settings, ai, automatic=True
     )
@@ -255,7 +255,7 @@ async def start_dream_runs(
     memory_settings = await SettingsStore.load(
         db, MemorySettings, user_id=user.id
     )
-    ai_settings, _profile = await load_agent_profile_ai(db, user.id, None)
+    ai_settings = await load_effective_ai(db, user.id)
     available, reason = dreaming_availability(
         memory_settings, ai_settings, automatic=False
     )

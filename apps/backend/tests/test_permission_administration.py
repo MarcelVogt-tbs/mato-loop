@@ -108,17 +108,16 @@ async def test_integration_permission_page_lists_configured_rights_and_resources
             {resource["key"] for resource in response["inherited"]["private"]["resources"]}) == ({"calendar.read": "ask"}, {"calendar:work"})
 
 
-async def test_reset_builtin_tool_permissions_preserves_models_and_integration_selection(monkeypatch):
+async def test_reset_builtin_tool_permissions_preserves_integration_selection(monkeypatch):
     user = UserAccount(id=uuid4(), username="admin", password_hash="hash", is_admin=True)
-    model_id = uuid4()
     documents = {(AgentProfilesSettings, None): AgentProfilesSettings(builtin_access_overrides={
-        PLAN_PROFILE_ID: AgentProfileAccessOverrides(default_model_id=model_id, integrations_enabled_by_default=True,
+        PLAN_PROFILE_ID: AgentProfileAccessOverrides(integrations_enabled_by_default=True,
                                                      public_permissions={"policies": {"shell.write": "auto"}}),
     })}
     db = settings_db(monkeypatch, documents)
     await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(), user, db, "instance")
     tools, profile = await load_agent_profile_tools(db, user.id, PLAN_PROFILE_ID, TrustLevel.PUBLIC)
-    assert (tool_execution_policy(tools, "shell.write"), profile.default_model_id, profile.integrations_enabled_by_default) == ("disabled", model_id, True)
+    assert (tool_execution_policy(tools, "shell.write"), profile.integrations_enabled_by_default) == ("disabled", True)
 
 
 @pytest.mark.parametrize("scope", ["instance", "personal"])

@@ -76,6 +76,7 @@ from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
     AgentProfilesSettings,
     AgentProfileUnavailable,
+    AiProviderSettings,
     AiSettings,
     EffectiveAgentIdentity,
     InstanceSkillsSettings,
@@ -2140,7 +2141,7 @@ async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> N
     async def load_settings(_db, settings_type, **_kwargs):
         return {
             ToolSettings: tool_settings,
-            AiSettings: AiSettings(),
+            AiProviderSettings: AiSettings(),
             UserAgentIdentitySettings: identity,
         }.get(settings_type, settings_type())
 
@@ -2197,7 +2198,7 @@ async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) 
     async def load_settings(_db, settings_type, **_kwargs):
         return {
             ToolSettings: tool_settings,
-            AiSettings: AiSettings(),
+            AiProviderSettings: AiSettings(),
             UserAgentIdentitySettings: identity,
         }.get(settings_type, settings_type())
 
@@ -2240,7 +2241,7 @@ async def test_update_agent_identity_rejects_changed_approved_persona(
     async def load_settings(_db, settings_type, **_kwargs):
         return {
             ToolSettings: tool_settings,
-            AiSettings: AiSettings(),
+            AiProviderSettings: AiSettings(),
             UserAgentIdentitySettings: identity,
         }.get(settings_type, settings_type())
 
@@ -2308,7 +2309,7 @@ async def test_update_agent_identity_rejects_persona_changed_since_run_start(
         AsyncMock(
             side_effect=lambda _db, settings_type, **_kwargs: {
                 ToolSettings: tool_settings,
-                AiSettings: AiSettings(),
+                AiProviderSettings: AiSettings(),
             }.get(settings_type, settings_type())
         ),
     )
@@ -3361,7 +3362,7 @@ async def test_disabled_agent_identity_tool_is_not_offered_or_executed(
     }
 
     async def load_settings(_db, settings_type, **_kwargs):
-        return {ToolSettings: tool_settings, AiSettings: AiSettings()}.get(settings_type, settings_type())
+        return {ToolSettings: tool_settings, AiProviderSettings: AiSettings()}.get(settings_type, settings_type())
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
     call = ToolCall(

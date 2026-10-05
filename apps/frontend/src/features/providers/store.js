@@ -12,6 +12,7 @@ function assignProviderPayload(store, payload) {
   if (!payload || !Array.isArray(payload.providers) || !Array.isArray(payload.models)) return
   store.providers = payload.providers
   store.models = payload.models
+  store.modelDefaults = payload.modelDefaults || {}
   store.availableProviders = payload.availableProviders ?? payload.providers
   store.availableModels = payload.availableModels ?? payload.models
   if ('personalProvidersEnabled' in payload) {
@@ -114,6 +115,7 @@ export const useProviderStore = defineStore('providers', {
   state: () => ({
     providers: [],
     models: [],
+    modelDefaults: {},
     availableProviders: null,
     availableModels: null,
     scope: 'instance',

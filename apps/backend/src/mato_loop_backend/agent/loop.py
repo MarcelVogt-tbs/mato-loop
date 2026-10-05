@@ -59,7 +59,7 @@ from mato_loop_backend.settings import (
     MemorySettings,
     SettingsStore,
     UserProfileSettings,
-    apply_agent_profile_ai,
+    apply_session_ai,
     effective_model_pseudonymization,
     effective_model_trust,
     load_agent_profile,
@@ -128,14 +128,18 @@ async def execute_loop_body(
     ):
         selected_execution_agent = None
     agent_profile_id = run.agent_profile_id or chat_session.agent_profile_id
+    from mato_loop_backend.settings.effective import session_agent_allowed
+
+    if not session_agent_allowed(chat_session, agent_profile_id):
+        raise AgentRunError("agentProfile.selectedUnavailable")
     try:
         prompt_agent_profile = await load_agent_profile(
             db, chat_session.user_id, agent_profile_id
         )
     except AgentProfileUnavailable as exc:
         raise AgentRunError("agentProfile.selectedUnavailable") from exc
-    ai_settings = apply_agent_profile_ai(ai_settings, prompt_agent_profile)
-    model_id = run.model_config_id or chat_session.model_config_id or ai_settings.default_model_id
+    ai_settings = apply_session_ai(ai_settings, chat_session, agent_profile_id)
+    model_id = run.model_config_id or ai_settings.default_model_id
     model = agent_run_support._model_for_id(ai_settings, model_id)
     if model is None:
         raise AgentRunError("session.modelUnavailable")
@@ -270,9 +274,9 @@ async def execute_loop_body(
                 or selected_execution_agent.revoked_at is not None
             ):
                 selected_execution_agent = None
-        ai_settings = apply_agent_profile_ai(
+        ai_settings = apply_session_ai(
             await load_effective_ai(db, chat_session.user_id),
-            prompt_agent_profile,
+            chat_session, agent_profile_id,
         )
         runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
         instance_limits = await SettingsStore.load(db, InstanceLimits)
@@ -435,8 +439,7 @@ async def execute_loop_body(
             "reasoning_effort": (
                 ReasoningEffort.NONE
                 if empty_response_retries > 0 and can_disable_reasoning
-                else chat_session.reasoning_effort
-                or prompt_agent_profile.reasoning_effort
+                else ai_settings.reasoning_effort
             ),
         }
 

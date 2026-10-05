@@ -40,26 +40,25 @@ from mato_loop_backend.providers.openai_compatible import DiscoveredModel
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.providers.settings_service import ProviderSettingsService
 from mato_loop_backend.settings import (
-    GENERAL_PROFILE_ID,
-    PLAN_PROFILE_ID,
     AgentProfilesSettings,
+    AiProviderSettings,
     AiSettings,
-    CustomAgentProfile,
     SettingsStore,
     ToolSettings,
-    UserAgentProfilesSettings,
     UserAiSettings,
 )
 from mato_loop_backend.settings.models import (
-    AgentProfileAccessOverrides,
     LlmProviderConfig,
     MemoryPolicy,
     ModelAvailability,
     ModelCapability,
     ModelConfig,
+    ModelDefaults,
+    ModelDefaultsSettings,
     ModelInputModality,
     ModelOrigin,
     ReasoningEffort,
+    UserModelDefaultsSettings,
 )
 
 
@@ -69,18 +68,20 @@ def _db() -> AsyncMock:
     return db
 
 
-def _mock_settings(monkeypatch, settings: AiSettings) -> None:
+def _mock_settings(monkeypatch, settings: AiSettings) -> ModelDefaultsSettings:
+    defaults = ModelDefaultsSettings(**settings.model_dump(include=set(ModelDefaults.model_fields)))
     async def load(_db, settings_type, **_kwargs):
-        if settings_type is AiSettings:
+        if settings_type is AiProviderSettings:
             return settings
         if settings_type is AgentProfilesSettings:
             return AgentProfilesSettings()
         return ToolSettings()
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
-    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=None))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=lambda _db, kind, **_kw: defaults if kind is ModelDefaultsSettings else None))
     monkeypatch.setattr(SettingsStore, "list_user_scopes", AsyncMock(return_value=[]))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    return defaults
 
 
 async def test_provider_create_needs_no_model_and_accepts_camel_case(monkeypatch) -> None:
@@ -171,7 +172,7 @@ async def test_azure_provider_update_preserves_key_and_removal_clears_default(mo
     settings = AiSettings(
         providers=[provider], models=[model], audio_transcription_model_id=model.id
     )
-    _mock_settings(monkeypatch, settings)
+    defaults = _mock_settings(monkeypatch, settings)
     db = _db()
     key_id = provider.credential_id
     payload = OpenAIProviderRequest.model_validate({
@@ -180,7 +181,7 @@ async def test_azure_provider_update_preserves_key_and_removal_clears_default(mo
     await update_openai_provider(provider.id, payload, db)
     assert provider.name == "Azure renamed"
     assert provider.credential_id == key_id
-    assert settings.audio_transcription_model_id == model.id
+    assert defaults.audio_transcription_model_id == model.id
     delete = AsyncMock()
     monkeypatch.setattr(provider_routes, "delete_credential", delete)
     await update_openai_provider(
@@ -193,7 +194,7 @@ async def test_azure_provider_update_preserves_key_and_removal_clears_default(mo
     )
     delete.assert_awaited_once_with(db, key_id, owner_id=None)
     assert provider.credential_id is None
-    assert settings.audio_transcription_model_id is None
+    assert defaults.audio_transcription_model_id is None
 
 
 async def test_azure_update_revalidates_union_payload_for_actual_provider(monkeypatch):
@@ -305,7 +306,7 @@ async def test_provider_transport_change_invalidates_discovered_models(monkeypat
         origin=ModelOrigin.DISCOVERED,
     )
     settings = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
-    _mock_settings(monkeypatch, settings)
+    defaults = _mock_settings(monkeypatch, settings)
 
     await update_openai_provider(
         provider.id,
@@ -315,7 +316,7 @@ async def test_provider_transport_change_invalidates_discovered_models(monkeypat
 
     assert provider.models_last_synced_at is None
     assert model.availability == ModelAvailability.MISSING
-    assert settings.default_model_id is None
+    assert defaults.default_model_id is None
 
 
 async def test_update_openai_provider_rejects_other_adapter(monkeypatch) -> None:
@@ -360,7 +361,7 @@ async def test_sync_adds_updates_and_marks_discovered_models_missing(monkeypatch
         default_model_id=missing.id,
     )
     db = _db()
-    _mock_settings(monkeypatch, settings)
+    defaults = _mock_settings(monkeypatch, settings)
     monkeypatch.setattr(
         ProviderService,
         "discover_models",
@@ -399,7 +400,7 @@ async def test_sync_adds_updates_and_marks_discovered_models_missing(monkeypatch
     assert added.use_discovered_context_window is True
     assert added.max_output_tokens is None
     assert added.discovered_max_output_tokens is None
-    assert settings.default_model_id is None
+    assert defaults.default_model_id is None
     assert provider.models_last_synced_at is not None
     assert result["models"][-1]["modelId"] == "opaque/vendor:model@1"
 
@@ -690,7 +691,7 @@ async def test_manual_model_crud_and_toggles(monkeypatch) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     settings = AiSettings(providers=[provider])
     db = _db()
-    _mock_settings(monkeypatch, settings)
+    defaults = _mock_settings(monkeypatch, settings)
 
     await create_manual_model(
         provider.id,
@@ -710,17 +711,17 @@ async def test_manual_model_crud_and_toggles(monkeypatch) -> None:
     assert model.origin == ModelOrigin.MANUAL
     assert model.supports_image_input is True
     assert model.reasoning_effort == "low"
-    assert settings.default_model_id is None
+    assert defaults.default_model_id is None
 
-    settings.default_model_id = model.id
-    settings.compaction_model_id = model.id
-    settings.title_generation_model_id = model.id
+    defaults.default_model_id = model.id
+    defaults.compaction_model_id = model.id
+    defaults.title_generation_model_id = model.id
 
     await set_model_enabled(model.id, EnabledRequest(enabled=False), db)
     assert model.enabled is False
-    assert settings.default_model_id is None
-    assert settings.compaction_model_id is None
-    assert settings.title_generation_model_id is None
+    assert defaults.default_model_id is None
+    assert defaults.compaction_model_id is None
+    assert defaults.title_generation_model_id is None
 
     await set_model_enabled(model.id, EnabledRequest(enabled=True), db)
     await update_model(
@@ -741,50 +742,23 @@ async def test_manual_model_crud_and_toggles(monkeypatch) -> None:
     assert updated.supports_parallel_tool_calls is False
 
     await set_provider_enabled(provider.id, EnabledRequest(enabled=False), db)
-    assert settings.default_model_id is None
+    assert defaults.default_model_id is None
 
     provider.enabled = True
     await delete_model(updated.id, db)
     assert settings.models == []
 
 
-async def test_instance_model_disable_removes_sparse_profile_references_for_all_users(
+async def test_instance_model_disable_removes_default_references_for_all_users(
     monkeypatch,
 ) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="agent")
     ai = AiSettings(providers=[provider], models=[model])
-    instance = AgentProfilesSettings(
-        builtin_access_overrides={
-            GENERAL_PROFILE_ID: AgentProfileAccessOverrides(
-                defaultModelId=model.id,
-                compactionModelId=model.id,
-            )
-        },
-        profiles=[
-            CustomAgentProfile(
-                name="Instance",
-                description="",
-                baseProfileId=GENERAL_PROFILE_ID,
-                overrides={"skillCreationModelId": model.id},
-            )
-        ],
-    )
+    instance = ModelDefaultsSettings(default_model_id=model.id, compaction_model_id=model.id, skill_creation_model_id=model.id)
     user_documents = [
-        (
-            uuid4(),
-            UserAgentProfilesSettings(
-                profiles=[
-                    CustomAgentProfile(
-                        name=name,
-                        description="",
-                        baseProfileId=PLAN_PROFILE_ID,
-                        overrides={"titleGenerationModelId": model.id},
-                    )
-                ]
-            ),
-        )
-        for name in ("First", "Second")
+        (uuid4(), UserModelDefaultsSettings(title_generation_model_id=model.id))
+        for _ in range(2)
     ]
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
     monkeypatch.setattr(
@@ -796,7 +770,7 @@ async def test_instance_model_disable_removes_sparse_profile_references_for_all_
         SettingsStore,
         "load_optional",
         AsyncMock(
-            side_effect=lambda _db, _kind, *, user_id, **_kwargs: dict(
+            side_effect=lambda _db, _kind, *, user_id=None, **_kwargs: instance if user_id is None else dict(
                 user_documents
             )[user_id]
         ),
@@ -809,13 +783,9 @@ async def test_instance_model_disable_removes_sparse_profile_references_for_all_
         db, ai, None, model.id, False
     )
 
-    overrides = [
-        instance.builtin_access_overrides[GENERAL_PROFILE_ID],
-        instance.profiles[0].overrides,
-        *(document.profiles[0].overrides for _, document in user_documents),
-    ]
+    overrides = [instance, *(document for _, document in user_documents)]
     assert all(
-        not set(override.model_dump(exclude_unset=True)) & {
+        not set(override.model_dump(exclude_none=True)) & {
             "default_model_id",
             "compaction_model_id",
             "skill_creation_model_id",
@@ -827,33 +797,15 @@ async def test_instance_model_disable_removes_sparse_profile_references_for_all_
     db.commit.assert_awaited_once()
 
 
-async def test_personal_model_delete_cleans_only_owner_profile(
+async def test_personal_model_delete_cleans_only_owner_defaults(
     monkeypatch,
 ) -> None:
     owner_id = uuid4()
     provider = LlmProviderConfig(name="Personal", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="personal")
     ai = UserAiSettings(providers=[provider], models=[model])
-    instance = AgentProfilesSettings(
-        profiles=[
-            CustomAgentProfile(
-                name="Instance",
-                description="",
-                baseProfileId=GENERAL_PROFILE_ID,
-                overrides={"defaultModelId": model.id},
-            )
-        ]
-    )
-    personal = UserAgentProfilesSettings(
-        profiles=[
-            CustomAgentProfile(
-                name="Personal",
-                description="",
-                baseProfileId=GENERAL_PROFILE_ID,
-                overrides={"defaultModelId": model.id},
-            )
-        ]
-    )
+    instance = ModelDefaultsSettings(default_model_id=model.id)
+    personal = UserModelDefaultsSettings(default_model_id=model.id)
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
     load_optional = AsyncMock(return_value=personal)
     monkeypatch.setattr(SettingsStore, "load_optional", load_optional)
@@ -864,17 +816,16 @@ async def test_personal_model_delete_cleans_only_owner_profile(
 
     await ProviderSettingsService.delete_model(db, ai, owner_id, model.id)
 
-    assert "default_model_id" in instance.profiles[0].overrides.model_fields_set
-    assert "default_model_id" not in personal.profiles[0].overrides.model_fields_set
-    assert "default_model_id" not in personal.model_dump(mode="json")["profiles"][0]["overrides"]
+    assert instance.default_model_id == model.id
+    assert personal.default_model_id is None
     load_optional.assert_awaited_once_with(
-        db, UserAgentProfilesSettings, user_id=owner_id, for_update=True
+        db, UserModelDefaultsSettings, user_id=owner_id, for_update=True
     )
     list_scopes.assert_not_awaited()
     db.commit.assert_awaited_once()
 
 
-async def test_model_capability_change_removes_incompatible_profile_reference(
+async def test_model_capability_change_removes_incompatible_default_reference(
     monkeypatch,
 ) -> None:
     provider = LlmProviderConfig(name="Media", adapter_type="lemonade")
@@ -884,17 +835,8 @@ async def test_model_capability_change_removes_incompatible_profile_reference(
         capabilities={ModelCapability.IMAGE_GENERATION},
     )
     ai = AiSettings(providers=[provider], models=[model])
-    instance = AgentProfilesSettings(
-        profiles=[
-            CustomAgentProfile(
-                name="Media",
-                description="",
-                baseProfileId=GENERAL_PROFILE_ID,
-                overrides={"imageGenerationModelId": model.id},
-            )
-        ]
-    )
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
+    instance = ModelDefaultsSettings(image_generation_model_id=model.id)
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=instance))
     monkeypatch.setattr(SettingsStore, "list_user_scopes", AsyncMock(return_value=[]))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
 
@@ -910,10 +852,7 @@ async def test_model_capability_change_removes_incompatible_profile_reference(
         None,
     )
 
-    assert (
-        "image_generation_model_id"
-        not in instance.profiles[0].overrides.model_fields_set
-    )
+    assert instance.image_generation_model_id is None
 
 
 async def test_duplicate_model_id_is_rejected_per_provider(monkeypatch) -> None:
@@ -953,12 +892,9 @@ async def test_model_delete_clears_defaults_and_sessions_in_its_scope(
         "audio_generation_model_id",
         "audio_transcription_model_id",
     )
-    settings_type = AiSettings if scope == "instance" else UserAiSettings
-    settings = settings_type(
-        providers=[provider],
-        models=[model],
-        **{field: model.id for field in default_fields},
-    )
+    settings_type = AiProviderSettings if scope == "instance" else UserAiSettings
+    settings = settings_type(providers=[provider], models=[model])
+    defaults = (ModelDefaultsSettings if scope == "instance" else UserModelDefaultsSettings)(**{field: model.id for field in default_fields})
     instance = settings if scope == "instance" else AiSettings(personal_providers_enabled=True)
 
     async def load(_db, loaded_type, **_kwargs):
@@ -967,7 +903,7 @@ async def test_model_delete_clears_defaults_and_sessions_in_its_scope(
         return settings if loaded_type is settings_type else instance
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
-    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=None))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=defaults))
     monkeypatch.setattr(SettingsStore, "list_user_scopes", AsyncMock(return_value=[]))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     db = _db()
@@ -975,7 +911,7 @@ async def test_model_delete_clears_defaults_and_sessions_in_its_scope(
     await delete_model(model.id, db, scope=scope, user=user)
 
     assert settings.models == []
-    assert all(getattr(settings, field) is None for field in default_fields)
+    assert all(getattr(defaults, field) is None for field in default_fields)
     statement = db.execute.await_args.args[0]
     sql = str(statement)
     assert ("chat_sessions.user_id" in sql) is (scope == "personal")
@@ -1026,14 +962,14 @@ async def test_provider_delete_clears_default_without_selecting_another(monkeypa
         compaction_model_id=first_model.id,
         title_generation_model_id=first_model.id,
     )
-    _mock_settings(monkeypatch, settings)
+    defaults = _mock_settings(monkeypatch, settings)
 
     await delete_provider(first_provider.id, _db())
 
     assert settings.models == [second_model]
-    assert settings.default_model_id is None
-    assert settings.compaction_model_id is None
-    assert settings.title_generation_model_id is None
+    assert defaults.default_model_id is None
+    assert defaults.compaction_model_id is None
+    assert defaults.title_generation_model_id is None
 
 
 async def test_instance_provider_mutation_requires_admin(monkeypatch) -> None:

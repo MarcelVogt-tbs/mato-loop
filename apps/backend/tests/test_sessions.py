@@ -20,6 +20,7 @@ from mato_loop_backend.api.routes.sessions import (
     ActiveFileRequest,
     SendMessageRequest,
     SessionCreateRequest,
+    SessionOptionsRequest,
     SessionReadRequest,
     SessionUpdateRequest,
     cancel_run,
@@ -63,8 +64,8 @@ from mato_loop_backend.sessions.service import (
     session_message_page,
 )
 from mato_loop_backend.settings import (
-    GENERAL_PROFILE_ID,
     AgentProfilesSettings,
+    AiProviderSettings,
     AiSettings,
     MemorySettings,
     SettingsStore,
@@ -73,10 +74,10 @@ from mato_loop_backend.settings import (
 )
 from mato_loop_backend.settings.models import (
     AgentProfile,
-    AgentProfileAccessOverrides,
     LlmProviderConfig,
     ModelAvailability,
     ModelConfig,
+    ModelDefaultsSettings,
 )
 
 
@@ -99,16 +100,12 @@ def _user() -> UserAccount:
 @pytest.fixture(autouse=True)
 def profile_model_defaults(monkeypatch):
     async def load_optional(db, settings_type, **_kwargs):
-        if settings_type is not AgentProfilesSettings:
+        if settings_type is AgentProfilesSettings:
+            return AgentProfilesSettings()
+        if settings_type is not ModelDefaultsSettings:
             return None
-        ai = await SettingsStore.load(db, AiSettings)
-        return AgentProfilesSettings(
-            builtin_access_overrides={
-                GENERAL_PROFILE_ID: AgentProfileAccessOverrides(
-                    default_model_id=ai.default_model_id,
-                )
-            }
-        )
+        ai = await SettingsStore.load(db, AiProviderSettings)
+        return ModelDefaultsSettings(default_model_id=getattr(ai, "default_model_id", None))
 
     monkeypatch.setattr(SettingsStore, "load_optional", load_optional)
 
@@ -594,6 +591,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
         model_id="test-model",
         name="Test",
         trust_level=TrustLevel.PRIVATE,
+        discovery_metadata={"reasoning_efforts": ["low", "high"], "default_reasoning_effort": "low"},
     )
     ai_settings = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
     memory_settings = MemorySettings()
@@ -606,7 +604,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     )
 
     async def load_settings(_db, settings_type, **_kwargs):
-        if settings_type is AiSettings:
+        if settings_type is AiProviderSettings:
             return ai_settings
         if settings_type is UserPreferences:
             return UserPreferences()
@@ -711,7 +709,7 @@ async def test_opening_an_app_creates_an_empty_session_with_storage(monkeypatch,
     )
 
     async def load_settings(_db, settings_type, **_kwargs):
-        return ai_settings if settings_type is AiSettings else MemorySettings()
+        return ai_settings if settings_type is AiProviderSettings else MemorySettings()
 
     monkeypatch.setattr(SettingsStore, "load", load_settings)
     start = AsyncMock()
@@ -861,7 +859,7 @@ async def test_session_defaults_report_effective_memory_state(monkeypatch) -> No
     memory_settings = MemorySettings(enabled=False)
 
     async def load_settings(_db, settings_type, **_kwargs):
-        if settings_type is AiSettings:
+        if settings_type is AiProviderSettings:
             return ai_settings
         if settings_type is UserPreferences:
             return UserPreferences()
@@ -869,7 +867,7 @@ async def test_session_defaults_report_effective_memory_state(monkeypatch) -> No
 
     monkeypatch.setattr(SettingsStore, "load", load_settings)
 
-    result = await session_defaults(user, AsyncMock(spec=AsyncSession))
+    result = await session_defaults(user, AsyncMock(spec=AsyncSession), SessionOptionsRequest())
 
     assert result["memoryMode"] == "full"
     assert result["effectiveMemoryMode"] == "disabled"
@@ -891,7 +889,7 @@ async def test_session_defaults_use_project_execution_preferences(monkeypatch) -
     )
 
     async def load_settings(_db, settings_type, **_kwargs):
-        if settings_type is AiSettings:
+        if settings_type is AiProviderSettings:
             return AiSettings()
         if settings_type is UserPreferences:
             return UserPreferences()
@@ -901,7 +899,7 @@ async def test_session_defaults_use_project_execution_preferences(monkeypatch) -
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [project, agent]
 
-    result = await session_defaults(user, db, project_id=project.id)
+    result = await session_defaults(user, db, SessionOptionsRequest(project_id=project.id))
 
     assert result["preferredExecutionAgentId"] == str(agent.id)
     assert result["currentDirectory"] == "/srv/project"
@@ -933,7 +931,7 @@ async def test_uncertain_first_commit_preserves_provisioned_session_tree(
     )
 
     async def load_settings(_db, settings_type, **_kwargs):
-        return ai_settings if settings_type is AiSettings else MemorySettings()
+        return ai_settings if settings_type is AiProviderSettings else MemorySettings()
 
     sessions = SessionStorage(tmp_path / "sessions")
     monkeypatch.setattr(SettingsStore, "load", load_settings)
@@ -2359,7 +2357,7 @@ async def test_session_rejects_unavailable_model_before_creation(monkeypatch) ->
     settings = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
 
     async def load_settings(_db, settings_type, **_kwargs):
-        return settings if settings_type is AiSettings else MemorySettings()
+        return settings if settings_type is AiProviderSettings else MemorySettings()
 
     monkeypatch.setattr(SettingsStore, "load", load_settings)
     run = AgentRun(
@@ -2494,7 +2492,8 @@ async def test_existing_session_message_passes_profile_to_next_run(monkeypatch) 
     model = ModelConfig(provider_id=provider.id, model_id="model")
     ai = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
     load_ai = AsyncMock(return_value=ai)
-    monkeypatch.setattr(session_service, "_profile_ai", load_ai)
+    monkeypatch.setattr(session_service, "load_effective_ai", load_ai)
+    monkeypatch.setattr(session_service, "validate_agent_profile", AsyncMock())
     grant = AsyncMock()
     monkeypatch.setattr(session_service, "add_directory_grant", grant)
     start = AsyncMock(return_value=run)
@@ -2509,7 +2508,7 @@ async def test_existing_session_message_passes_profile_to_next_run(monkeypatch) 
         db,
     )
 
-    load_ai.assert_awaited_once_with(db, user.id, selected_profile)
+    load_ai.assert_awaited_once_with(db, user.id)
     assert grant.await_args.args[:2] == (db, session.id)
     assert grant.await_args.args[5] == selected_profile
     assert start.await_args.kwargs["agent_profile_id_override"] == selected_profile
@@ -2716,6 +2715,32 @@ async def test_session_can_override_reasoning_effort() -> None:
     assert result["reasoningEffort"] == "ultra"
 
 
+async def test_template_switch_replaces_session_overrides(monkeypatch) -> None:
+    from mato_loop_backend.settings.session_profiles import (
+        CODING_TEMPLATE_ID,
+        SessionTemplatesSettings,
+    )
+
+    user = _user()
+    provider = LlmProviderConfig(name="Cloud", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="chat")
+    ai = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_: ai if kind is AiProviderSettings else kind()))
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Test", model_config_id=uuid4(), reasoning_effort="high", memory_mode="disabled", session_profile={"agent_models": {str(uuid4()): {"model_id": str(uuid4())}}}, web_search_policy="disabled")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    db.scalar.return_value = None
+
+    result = await update_session(session.id, SessionUpdateRequest(session_template_id=CODING_TEMPLATE_ID), user, db)
+
+    template = SessionTemplatesSettings().templates[1]
+    assert {key: result[key] for key in ("sessionProfile", "agentProfileId", "modelId", "reasoningEffort", "memoryMode", "webSearchPolicy")} == {
+        "sessionProfile": template.snapshot().model_dump(mode="json", by_alias=True),
+        "agentProfileId": str(template.start_agent_id), "modelId": None,
+        "reasoningEffort": None, "memoryMode": "full", "webSearchPolicy": "disabled",
+    }
+
+
 async def test_manual_title_change_skips_automatic_generation(monkeypatch) -> None:
     user = _user()
     session = ChatSession(
@@ -2883,7 +2908,7 @@ async def test_changing_computer_preserves_terminal_preference(monkeypatch) -> N
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
     db.scalar.return_value = None
-    monkeypatch.setattr(service, "_profile_ai", AsyncMock(return_value=AiSettings()))
+    monkeypatch.setattr(service, "load_effective_ai", AsyncMock(return_value=AiSettings()))
     monkeypatch.setattr(service, "validate_execution_preferences", AsyncMock(return_value=(None, None)))
     monkeypatch.setattr(service, "add_directory_grant", AsyncMock())
     await update_session(
@@ -3166,7 +3191,8 @@ async def test_control_center_update_is_owner_scoped() -> None:
     db.flush.assert_not_awaited()
 
 
-async def test_runtime_policy_cannot_change_during_active_run() -> None:
+@pytest.mark.parametrize("patch", [{"model_id": uuid4()}, {"session_template_id": None}])
+async def test_runtime_policy_cannot_change_during_active_run(patch) -> None:
     user = _user()
     session_id = uuid4()
     session = ChatSession(
@@ -3183,7 +3209,7 @@ async def test_runtime_policy_cannot_change_during_active_run() -> None:
     with pytest.raises(ApiError) as exc_info:
         await update_session(
             session_id,
-            SessionUpdateRequest(model_id=uuid4()),
+            SessionUpdateRequest(**patch),
             user,
             db,
         )

@@ -18,6 +18,7 @@ from mato_loop_backend.api.routes.mcp import callback_router as mcp_callback_rou
 from mato_loop_backend.api.routes.mcp import router as mcp_router
 from mato_loop_backend.api.routes.media import router as media_router
 from mato_loop_backend.api.routes.memories import router as memories_router
+from mato_loop_backend.api.routes.model_defaults import router as model_defaults_router
 from mato_loop_backend.api.routes.notifications import router as notifications_router
 from mato_loop_backend.api.routes.personal_variables import router as personal_variables_router
 from mato_loop_backend.api.routes.project_coding import router as project_coding_router
@@ -25,6 +26,7 @@ from mato_loop_backend.api.routes.projects import router as projects_router
 from mato_loop_backend.api.routes.providers import router as providers_router
 from mato_loop_backend.api.routes.questions import router as questions_router
 from mato_loop_backend.api.routes.search import router as search_router
+from mato_loop_backend.api.routes.session_templates import router as session_templates_router
 from mato_loop_backend.api.routes.sessions import router as sessions_router
 from mato_loop_backend.api.routes.skills import router as skills_router
 from mato_loop_backend.api.routes.tbs_desk import router as tbs_desk_router
@@ -45,6 +47,8 @@ api_router.include_router(instance_limits_router, tags=["instance-limits"])
 api_router.include_router(general_settings_router, tags=["settings"])
 api_router.include_router(agent_identity_router, tags=["agent-identity"])
 api_router.include_router(agent_profiles_router, tags=["agent-profiles"])
+api_router.include_router(model_defaults_router, tags=["model-defaults"])
+api_router.include_router(session_templates_router, tags=["session-templates"])
 api_router.include_router(providers_router, tags=["providers"])
 api_router.include_router(projects_router, tags=["projects"])
 api_router.include_router(project_coding_router, tags=["project-coding"])

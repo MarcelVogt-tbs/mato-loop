@@ -18,9 +18,8 @@ from mato_loop_backend.providers.codex_oauth import (
     CODEX_IMAGES_GENERATIONS_URL,
 )
 from mato_loop_backend.providers.media import MediaService
-from mato_loop_backend.settings import AiSettings, SettingsStore
+from mato_loop_backend.settings import AiSettings
 from mato_loop_backend.settings.models import (
-    AgentProfile,
     LlmProviderConfig,
     ModelCapability,
     ModelConfig,
@@ -162,15 +161,8 @@ async def test_media_service_edits_with_native_codex_model(monkeypatch) -> None:
         model_id="openai-codex/gpt-image-2",
         capabilities={ModelCapability.IMAGE_EDITING},
     )
-    settings = AiSettings(providers=[provider], models=[model])
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
-    monkeypatch.setattr(
-        media_module,
-        "load_agent_profile",
-        AsyncMock(return_value=AgentProfile(
-            name="Test", instructions="Test", image_generation_model_id=model.id
-        )),
-    )
+    settings = AiSettings(providers=[provider], models=[model], image_generation_model_id=model.id)
+    monkeypatch.setattr(media_module, "load_effective_ai", AsyncMock(return_value=settings))
     monkeypatch.setattr(
         media_module,
         "refresh_codex_credential",

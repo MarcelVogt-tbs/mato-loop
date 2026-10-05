@@ -433,7 +433,7 @@ async def test_runtime_preserves_stored_audio_when_commit_outcome_is_uncertain(
         "load",
         AsyncMock(
             side_effect=lambda _db, settings_type, **_kwargs: (
-                settings if settings_type is AiSettings else InstanceLimits()
+                settings if settings_type.settings_key == "ai" else InstanceLimits()
             )
         ),
     )
@@ -497,7 +497,7 @@ async def test_runtime_waits_for_commit_before_propagating_cancellation(
         "load",
         AsyncMock(
             side_effect=lambda _db, settings_type, **_kwargs: (
-                settings if settings_type is AiSettings else InstanceLimits()
+                settings if settings_type.settings_key == "ai" else InstanceLimits()
             )
         ),
     )

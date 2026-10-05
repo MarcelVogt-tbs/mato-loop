@@ -426,7 +426,7 @@ async def execute_tool_batch(
                 db=db, run=run, session=session, ai_settings=ai_settings,
                 model=model, model_trust_level=trust_level,
                 runtime_settings=runtime_settings, tool_settings=tool_settings,
-                agent_profile_id=agent_profile_id, tool_phase=tool_phase,
+                tool_phase=tool_phase,
                 next_model_request=next_helper_request,
                 count_model_request=count_helper_request,
             )

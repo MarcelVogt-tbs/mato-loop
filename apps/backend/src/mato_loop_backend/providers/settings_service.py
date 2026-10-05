@@ -15,28 +15,26 @@ from mato_loop_backend.providers.media import media_model_available
 from mato_loop_backend.providers.openai_compatible import DiscoveredModel
 from mato_loop_backend.security import scoped_credentials
 from mato_loop_backend.settings import (
-    AgentProfilesSettings,
-    AiSettings,
+    AiProviderSettings,
     SettingsStore,
-    UserAgentProfilesSettings,
     UserAiSettings,
 )
 from mato_loop_backend.settings.models import (
-    AgentProfileAccessOverrides,
-    AgentProfileOverrides,
     AiSettingsBase,
     LlmProviderConfig,
     MemoryPolicy,
     ModelAvailability,
     ModelCapability,
     ModelConfig,
+    ModelDefaultsSettings,
     ModelInputModality,
     ModelOrigin,
     TrustLevel,
+    UserModelDefaultsSettings,
 )
 
 SettingsApiScope = Literal["instance", "personal"]
-AiSettingsDocument = AiSettings | UserAiSettings
+AiSettingsDocument = AiProviderSettings | UserAiSettings
 CredentialLoader = Callable[..., Awaitable[Credential | None]]
 CredentialStore = Callable[..., Awaitable[Credential]]
 CredentialDelete = Callable[..., Awaitable[bool]]
@@ -172,25 +170,8 @@ def model_reference_available(
     )
 
 
-def clear_invalid_defaults(settings: AiSettingsBase) -> None:
-    for field in DEFAULT_MODEL_FIELDS:
-        model_id = getattr(settings, field)
-        if (
-            isinstance(settings, UserAiSettings)
-            and model_id is not None
-            and not any(item.id == model_id for item in settings.models)
-        ):
-            continue
-        if model_id is not None and (
-            not model_reference_available(settings, field, model_id)
-        ):
-            setattr(settings, field, None)
-
-
-def clear_removed_defaults(settings: AiSettingsBase, model_ids: set[UUID]) -> None:
-    for field in DEFAULT_MODEL_FIELDS:
-        if getattr(settings, field) in model_ids:
-            setattr(settings, field, None)
+def first_available_agent_model(settings: AiSettingsBase) -> UUID | None:
+    return next((item.id for item in settings.models if model_reference_available(settings, "default_model_id", item.id)), None)
 
 
 def _ensure_unique_model_id(
@@ -235,27 +216,7 @@ async def _clear_sessions(
     await db.execute(statement.values(model_config_id=None))
 
 
-def _clear_profile_model_references(
-    overrides: AgentProfileAccessOverrides | AgentProfileOverrides,
-    settings: AiSettingsBase,
-    candidate_ids: set[UUID],
-) -> bool:
-    changed = False
-    for field in DEFAULT_MODEL_FIELDS:
-        if field not in overrides.model_fields_set:
-            continue
-        model_id = getattr(overrides, field)
-        if (
-            model_id in candidate_ids
-            and not model_reference_available(settings, field, model_id)
-        ):
-            setattr(overrides, field, None)
-            overrides.model_fields_set.discard(field)
-            changed = True
-    return changed
-
-
-async def clear_invalid_profile_model_references(
+async def clear_invalid_model_defaults(
     db: AsyncSession,
     settings: AiSettingsDocument,
     owner_id: UUID | None,
@@ -264,50 +225,20 @@ async def clear_invalid_profile_model_references(
     if not candidate_ids:
         return
 
-    instance = await SettingsStore.load(
-        db, AgentProfilesSettings, for_update=True
-    )
-    if owner_id is None:
-        changed = any(
-            [
-                _clear_profile_model_references(overrides, settings, candidate_ids)
-                for overrides in instance.builtin_access_overrides.values()
-            ]
-        )
-        changed = any(
-            [
-                _clear_profile_model_references(
-                    profile.overrides, settings, candidate_ids
-                )
-                for profile in instance.profiles
-            ]
-        ) or changed
+    owners = [owner_id] if owner_id else [None, *await SettingsStore.list_user_scopes(db, UserModelDefaultsSettings)]
+    for user_id in owners:
+        document = await SettingsStore.load_optional(db, UserModelDefaultsSettings if user_id else ModelDefaultsSettings, user_id=user_id, for_update=True)
+        if document is None:
+            continue
+        changed = False
+        for field in DEFAULT_MODEL_FIELDS:
+            value = getattr(document, field)
+            if value in candidate_ids and not model_reference_available(settings, field, value):
+                setattr(document, field, None)
+                if field == "default_model_id":
+                    document.reasoning_effort = None
+                changed = True
         if changed:
-            await SettingsStore.save(db, instance)
-        documents = []
-        for user_id in await SettingsStore.list_user_scopes(
-            db, UserAgentProfilesSettings
-        ):
-            personal = await SettingsStore.load_optional(
-                db, UserAgentProfilesSettings, user_id=user_id, for_update=True
-            )
-            if personal is not None:
-                documents.append((user_id, personal))
-    else:
-        personal = await SettingsStore.load_optional(
-            db, UserAgentProfilesSettings, user_id=owner_id, for_update=True
-        )
-        documents = [(owner_id, personal)] if personal is not None else []
-
-    for user_id, document in documents:
-        if any(
-            [
-                _clear_profile_model_references(
-                    profile.overrides, settings, candidate_ids
-                )
-                for profile in document.profiles
-            ]
-        ):
             await SettingsStore.save(db, document, user_id=user_id)
 
 
@@ -323,10 +254,10 @@ class ProviderSettingsService:
         if scope == "instance":
             if user is not None and not getattr(user, "is_admin", False):
                 raise ProviderSettingsError("auth.adminRequired")
-            return await SettingsStore.load(db, AiSettings, for_update=for_update), None
+            return await SettingsStore.load(db, AiProviderSettings, for_update=for_update), None
         if user is None:
             raise ProviderSettingsError("auth.notAuthenticated")
-        instance = await SettingsStore.load(db, AiSettings)
+        instance = await SettingsStore.load(db, AiProviderSettings)
         if not instance.personal_providers_enabled and not user.is_admin:
             raise ProviderSettingsError("provider.personalDisabled")
         settings = await SettingsStore.load(
@@ -407,8 +338,7 @@ class ProviderSettingsService:
                     item.discovered_max_output_tokens = None
                     if item.origin == ModelOrigin.DISCOVERED:
                         item.availability = ModelAvailability.MISSING
-            clear_invalid_defaults(settings)
-            await clear_invalid_profile_model_references(
+            await clear_invalid_model_defaults(
                 db,
                 settings,
                 owner_id,
@@ -431,8 +361,7 @@ class ProviderSettingsService:
         enabled: bool,
     ) -> None:
         provider(settings, provider_id).enabled = enabled
-        clear_invalid_defaults(settings)
-        await clear_invalid_profile_model_references(
+        await clear_invalid_model_defaults(
             db,
             settings,
             owner_id,
@@ -475,7 +404,7 @@ class ProviderSettingsService:
 
     @staticmethod
     async def set_personal_providers_enabled(
-        db: AsyncSession, settings: AiSettings, enabled: bool
+        db: AsyncSession, settings: AiProviderSettings, enabled: bool
     ) -> None:
         settings.personal_providers_enabled = enabled
         await SettingsStore.save(db, settings)
@@ -539,7 +468,7 @@ class ProviderSettingsService:
         ):
             raise ProviderSettingsError("provider.configurationChanged")
         cls._reconcile_discovered_models(settings, current_provider, discovered)
-        await clear_invalid_profile_model_references(
+        await clear_invalid_model_defaults(
             db,
             settings,
             owner_id,
@@ -675,7 +604,6 @@ class ProviderSettingsService:
                 if value.origin == ModelOrigin.DISCOVERED:
                     value.availability = ModelAvailability.MISSING
         provider_config.models_last_synced_at = synced_at
-        clear_invalid_defaults(settings)
 
     @classmethod
     async def create_manual_model(
@@ -740,8 +668,7 @@ class ProviderSettingsService:
         if (validated.provider_id, validated.model_id) != (current.provider_id, current.model_id):
             validated.discovered_max_output_tokens = None
         settings.models[settings.models.index(current)] = validated
-        clear_invalid_defaults(settings)
-        await clear_invalid_profile_model_references(
+        await clear_invalid_model_defaults(
             db, settings, owner_id, {validated.id}
         )
         await cls.save(db, settings, owner_id)
@@ -760,8 +687,7 @@ class ProviderSettingsService:
         if enabled and value.availability == ModelAvailability.MISSING:
             raise ProviderSettingsError("provider.modelUnavailable")
         value.enabled = enabled
-        clear_invalid_defaults(settings)
-        await clear_invalid_profile_model_references(
+        await clear_invalid_model_defaults(
             db, settings, owner_id, {value.id}
         )
         await cls.save(db, settings, owner_id)
@@ -777,15 +703,13 @@ class ProviderSettingsService:
     ) -> None:
         value = model(settings, model_id)
         settings.models.remove(value)
-        clear_removed_defaults(settings, {value.id})
         statement = update(ChatSession).where(
             ChatSession.model_config_id == value.id
         )
         if owner_id is not None:
             statement = statement.where(ChatSession.user_id == owner_id)
         await db.execute(statement.values(model_config_id=None))
-        clear_invalid_defaults(settings)
-        await clear_invalid_profile_model_references(
+        await clear_invalid_model_defaults(
             db, settings, owner_id, {value.id}
         )
         await cls.save(db, settings, owner_id)
@@ -811,10 +735,8 @@ class ProviderSettingsService:
         settings.models = [
             item for item in settings.models if item.provider_id != provider_id
         ]
-        clear_removed_defaults(settings, removed_model_ids)
         await _clear_sessions(db, removed_model_ids, owner_id)
-        clear_invalid_defaults(settings)
-        await clear_invalid_profile_model_references(
+        await clear_invalid_model_defaults(
             db, settings, owner_id, removed_model_ids
         )
         if value.credential_id:
@@ -890,7 +812,6 @@ class ProviderSettingsService:
                 for item in settings.models:
                     if item.provider_id == value.id:
                         item.discovered_max_output_tokens = None
-        clear_invalid_defaults(settings)
         for credential in credentials:
             await db.delete(credential)
         affected_model_ids = {
@@ -898,7 +819,7 @@ class ProviderSettingsService:
             for item in settings.models
             if item.provider_id in affected_provider_ids
         }
-        await clear_invalid_profile_model_references(
+        await clear_invalid_model_defaults(
             db, settings, owner_id, affected_model_ids
         )
         await cls.save(db, settings, owner_id)

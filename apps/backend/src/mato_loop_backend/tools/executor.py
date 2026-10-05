@@ -36,7 +36,6 @@ from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings import (
     AgentProfileUnavailable,
     ToolExecutionPolicy,
-    apply_agent_profile_ai,
     load_agent_profile_tools,
     load_effective_ai,
 )
@@ -175,9 +174,7 @@ async def execute_definition(
         context.tool_settings = apply_delegation_ceiling(
             current_settings, context.tool_settings._delegation_ceiling
         )
-        ai_settings = apply_agent_profile_ai(
-            await load_effective_ai(context.db, context.session.user_id), _profile
-        )
+        ai_settings = await load_effective_ai(context.db, context.session.user_id)
         if self._capability_resolver is None:
             raise RuntimeError("tool registry capability resolver is not configured")
         if definition.required_capability not in self._capability_resolver(

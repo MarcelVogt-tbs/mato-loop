@@ -13,9 +13,8 @@ from mato_loop_backend.providers import lemonade
 from mato_loop_backend.providers import media as media_module
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.media import MediaService
-from mato_loop_backend.settings import AiSettings, SettingsStore
+from mato_loop_backend.settings import AiSettings
 from mato_loop_backend.settings.models import (
-    AgentProfile,
     LlmProviderConfig,
     ModelCapability,
     ModelConfig,
@@ -197,15 +196,8 @@ async def test_media_service_resolves_host_default_without_model_argument(monkey
         model_id="SD-Turbo",
         capabilities={ModelCapability.IMAGE_GENERATION},
     )
-    settings = AiSettings(providers=[provider], models=[model])
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
-    monkeypatch.setattr(
-        media_module,
-        "load_agent_profile",
-        AsyncMock(return_value=AgentProfile(
-            name="Test", instructions="Test", image_generation_model_id=model.id
-        )),
-    )
+    settings = AiSettings(providers=[provider], models=[model], image_generation_model_id=model.id)
+    monkeypatch.setattr(media_module, "load_effective_ai", AsyncMock(return_value=settings))
     image = _png()
     transport = AsyncMock(return_value=(image, {"created": 123}))
     monkeypatch.setattr(lemonade, "generate_image", transport)
@@ -244,15 +236,8 @@ async def test_media_service_rejects_changed_target_trust_before_transport(
         model_id="SD-Turbo",
         capabilities={ModelCapability.IMAGE_GENERATION},
     )
-    settings = AiSettings(providers=[provider], models=[model])
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
-    monkeypatch.setattr(
-        media_module,
-        "load_agent_profile",
-        AsyncMock(return_value=AgentProfile(
-            name="Test", instructions="Test", image_generation_model_id=model.id
-        )),
-    )
+    settings = AiSettings(providers=[provider], models=[model], image_generation_model_id=model.id)
+    monkeypatch.setattr(media_module, "load_effective_ai", AsyncMock(return_value=settings))
     transport = AsyncMock()
     monkeypatch.setattr(lemonade, "generate_image", transport)
 

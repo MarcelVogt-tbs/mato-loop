@@ -44,11 +44,13 @@ describe('MatoLoop frontend scaffold', () => {
     expect(settingsRoute.children.map((route) => route.name)).toEqual([
       'settings-personalization',
       'settings-providers',
+      'settings-model-defaults',
       'settings-execution-agents',
       'settings-integrations',
       'settings-mcp',
       'settings-skills',
       'settings-agents',
+      'settings-session-templates',
       'settings-tools',
       'settings-memory',
       'settings-channels',
@@ -84,7 +86,7 @@ describe('MatoLoop frontend scaffold', () => {
     ])
     expect(routes.find((route) => route.name === 'markdown-print')?.path).toBe('/print/markdown')
     expect(appRoute.children.find((route) => route.name === 'admin')?.meta.requiresAdmin).toBe(true)
-    expect(adminRoutes.map((route) => route.name)).toEqual(['admin-general', 'admin-notifications', 'admin-users', 'admin-providers', 'admin-tools', 'admin-integrations', 'admin-mcp', 'admin-skills', 'admin-personas', 'admin-agents', 'admin-channels', 'admin-instance-limits'])
+    expect(adminRoutes.map((route) => route.name)).toEqual(['admin-general', 'admin-notifications', 'admin-users', 'admin-providers', 'admin-model-defaults', 'admin-tools', 'admin-integrations', 'admin-mcp', 'admin-skills', 'admin-personas', 'admin-agents', 'admin-session-templates', 'admin-channels', 'admin-instance-limits'])
     expect(settingsRoutes.find((route) => route.name === 'settings-notifications')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-debug-access')?.meta.requiresAdmin).toBe(true)
     expect(settingsRoutes.find((route) => route.name === 'settings-tools')?.meta.requiresAdmin).toBeUndefined()

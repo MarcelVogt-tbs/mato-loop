@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.agent.loop as mock_agent_loop
 import mato_loop_backend.agent.runtime as mock_agent_runtime
-import mato_loop_backend.agent.titles as mock_agent_titles
 from mato_loop_backend.agent.run_contracts import AgentRunError
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
@@ -226,7 +225,7 @@ async def test_runtime_retry_reuses_failed_run_model(monkeypatch) -> None:
         AsyncMock(return_value=AiSettings(providers=[provider], models=[model])),
     )
     _mock_value = AsyncMock(return_value=current_profile)
-    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
         monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
     schedule = Mock()
     monkeypatch.setattr(AgentRuntime, "_schedule_run", schedule)

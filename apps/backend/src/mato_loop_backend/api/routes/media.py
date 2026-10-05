@@ -1,5 +1,4 @@
 from typing import Annotated
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,7 +39,6 @@ async def create_transcription(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     user: Annotated[UserAccount, Depends(require_user)],
     language: Annotated[str | None, Form(max_length=35)] = None,
-    agent_profile_id: Annotated[UUID | None, Form(alias="agentProfileId")] = None,
 ) -> dict[str, str]:
     settings = await load_effective_tools(db, user.id)
     instance_limits = await SettingsStore.load(db, InstanceLimits)
@@ -67,7 +65,6 @@ async def create_transcription(
             audio=data,
             language=language,
             timeout=settings.transcribe_audio.timeout_seconds,
-            agent_profile_id=agent_profile_id,
             user_id=user.id,
         )
     except ProviderError as exc:

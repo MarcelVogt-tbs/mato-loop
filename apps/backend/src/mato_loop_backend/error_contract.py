@@ -9,6 +9,12 @@ _CODE_PATTERN = re.compile(r"^[a-z][A-Za-z]*(?:\.[a-z][A-Za-z]*)+$")
 _GENERIC_MESSAGE = "The action failed."
 
 _MESSAGES = {
+    "sessionTemplate.notFound": "The session template is unavailable.",
+    "sessionTemplate.personalDisabled": "Personal session templates are disabled.",
+    "sessionTemplate.duplicate": "A session template with this name already exists.",
+    "sessionTemplate.limitReached": "The session template limit has been reached.",
+    "sessionTemplate.defaultProtected": "The default session template cannot be deleted.",
+    "modelDefaults.personalDisabled": "Personal model defaults are disabled.",
     "debug.notFound": "The requested data was not found.",
     "debug.queryFailed": "The debug query failed.",
     "debug.unavailable": "The debug service is unavailable.",

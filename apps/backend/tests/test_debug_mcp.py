@@ -192,7 +192,7 @@ async def test_debug_mcp_http_authenticates_and_filters_sessions(monkeypatch) ->
     assert user.id in statement.params.values()
 
 
-async def test_debug_mcp_uses_session_profile_for_ai_defaults(monkeypatch) -> None:
+async def test_debug_mcp_loads_owner_model_defaults(monkeypatch) -> None:
     user = UserAccount(id=uuid4(), username="admin", is_active=True, is_admin=True)
     session = ChatSession(id=uuid4(), user_id=user.id, agent_profile_id=uuid4())
     db = AsyncMock(spec=AsyncSession)
@@ -205,7 +205,7 @@ async def test_debug_mcp_uses_session_profile_for_ai_defaults(monkeypatch) -> No
     profile_ai = AsyncMock(side_effect=RuntimeError("stop after profile lookup"))
     monkeypatch.setattr(diagnostics_mcp, "AsyncSessionFactory", session_factory)
     monkeypatch.setattr(diagnostics_mcp, "_owned_session", AsyncMock(return_value=session))
-    monkeypatch.setattr(diagnostics_mcp, "load_agent_profile_ai", profile_ai)
+    monkeypatch.setattr(diagnostics_mcp, "load_effective_ai", profile_ai)
     server, mcp_app = diagnostics_mcp.create_debug_mcp()
     app = Starlette(routes=[Mount("/api/debug", app=mcp_app)])
 
@@ -225,8 +225,8 @@ async def test_debug_mcp_uses_session_profile_for_ai_defaults(monkeypatch) -> No
                         "inspect_tool_access", {"session_id": str(session.id)}
                     )
 
-    assert profile_ai.await_args_list[0].args[1:] == (user.id, session.agent_profile_id)
-    assert profile_ai.await_args_list[1].args[1:] == (user.id, session.agent_profile_id)
+    assert profile_ai.await_args_list[0].args[1:] == (user.id,)
+    assert profile_ai.await_args_list[1].args[1:] == (user.id,)
 
 
 async def test_debug_mcp_postgres_isolates_two_admins(request) -> None:

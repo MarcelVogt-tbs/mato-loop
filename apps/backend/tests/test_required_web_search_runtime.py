@@ -56,8 +56,8 @@ from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
     AgentIdentitySettings,
-    AgentProfilesSettings,
     AgentRuntimeSettings,
+    AiProviderSettings,
     AiSettings,
     InstanceLimits,
     IntegrationInstance,
@@ -70,9 +70,9 @@ from mato_loop_backend.settings import (
     UserProfileSettings,
 )
 from mato_loop_backend.settings.models import (
-    AgentProfileAccessOverrides,
     LlmProviderConfig,
     ModelConfig,
+    ModelDefaultsSettings,
     ModelInputModality,
     TrustLevel,
 )
@@ -159,17 +159,7 @@ async def _runtime_setup(
         providers=[provider],
         models=[item for item in (model, vision_model, builder_model) if item is not None],
     )
-    profile_settings = AgentProfilesSettings(
-        builtin_access_overrides={
-            GENERAL_PROFILE_ID: AgentProfileAccessOverrides(
-                default_model_id=model.id,
-                vision_model_id=vision_model.id if vision_model is not None else None,
-                skill_creation_model_id=(
-                    builder_model.id if builder_model is not None else None
-                ),
-            )
-        }
-    )
+    model_defaults = ModelDefaultsSettings(default_model_id=model.id, vision_model_id=vision_model.id if vision_model else None, skill_creation_model_id=builder_model.id if builder_model else None)
     runtime_settings = AgentRuntimeSettings(safety_reserve_tokens=safety_reserve_tokens)
     session = ChatSession(
         id=uuid4(),
@@ -250,7 +240,7 @@ async def _runtime_setup(
 
     async def load_settings(_db, settings_type, **_kwargs):
         return {
-            AiSettings: ai_settings,
+            AiProviderSettings: ai_settings,
             AgentIdentitySettings: AgentIdentitySettings(),
             AgentRuntimeSettings: runtime_settings,
             InstanceLimits: InstanceLimits(),
@@ -264,7 +254,7 @@ async def _runtime_setup(
         }[settings_type]
 
     async def load_optional(_db, settings_type, **_kwargs):
-        return profile_settings if settings_type is AgentProfilesSettings else None
+        return model_defaults if settings_type is ModelDefaultsSettings else None
 
     projections = []
 
@@ -525,7 +515,7 @@ async def test_child_reuses_context_and_only_inherited_computer_files(
                       )}})
     db.get.side_effect = lambda model, _key, **kw: message if model is Message else session
     _mock_value = AsyncMock(return_value=profile)
-    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
         monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
     _mock_value = AsyncMock(return_value=(settings, profile))
     for _mock_target in (mock_agent_runtime, mock_agent_loop,):
@@ -3434,7 +3424,7 @@ async def test_native_media_uses_loaded_runtime_safety(monkeypatch, kind) -> Non
         ],
         search_policy=WebSearchPolicy.AVAILABLE, safety_reserve_tokens=128,
     )
-    ai = await SettingsStore.load(db, AiSettings)
+    ai = await SettingsStore.load(db, AiProviderSettings)
     ai.models[0].input_modalities = [ModelInputModality.TEXT, ModelInputModality(kind)]
 
     async def execute(_call, context, _tool):

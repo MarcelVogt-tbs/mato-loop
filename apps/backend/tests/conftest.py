@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from mato_loop_backend.settings import AgentRuntimeSettings, SettingsStore
+from mato_loop_backend.settings.models import ModelDefaultsSettings, UserModelDefaultsSettings
 
 _load = SettingsStore.load
 _load_optional = SettingsStore.load_optional
@@ -24,6 +25,8 @@ def no_personal_settings_by_default(monkeypatch):
     async def load_optional(session, settings_type, **kwargs):
         if isinstance(session, AsyncMock):
             record = session.scalar.return_value
+            if settings_type in (ModelDefaultsSettings, UserModelDefaultsSettings) and getattr(record, "key", None) != settings_type.settings_key:
+                return None
             if isinstance(record, AsyncMock) or (
                 record is not None and not hasattr(record, "data")
             ):

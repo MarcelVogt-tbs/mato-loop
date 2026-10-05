@@ -3,6 +3,8 @@ const DRAFT_STORAGE_KEY = 'matoLoopChatDrafts'
 export function defaultSessionOptions() {
   return {
     agentProfileId: null,
+    sessionTemplateId: null,
+    sessionProfile: null,
     modelId: null,
     reasoningEffort: null,
     memoryMode: 'full',
@@ -25,6 +27,8 @@ export function sanitizedSessionOptions(options) {
 export function sessionCreatePayload(options, projectId, controlCenter) {
   return {
     project_id: projectId,
+    ...(options.sessionTemplateId ? { session_template_id: options.sessionTemplateId } : {}),
+    ...(options.sessionProfile ? { session_profile: options.sessionProfile } : {}),
     ...(options.agentProfileId ? { agent_profile_id: options.agentProfileId } : {}),
     model_id: options.modelId,
     reasoning_effort: options.reasoningEffort,
@@ -39,6 +43,8 @@ export function sessionCreatePayload(options, projectId, controlCenter) {
 export function optionsFromSession(session) {
   return sanitizedSessionOptions({
     agentProfileId: session.agentProfileId ?? null,
+    sessionTemplateId: session.sessionProfile?.templateId || null,
+    sessionProfile: session.sessionProfile || null,
     modelId: session.modelId,
     reasoningEffort: session.reasoningEffort ?? null,
     memoryMode: session.memoryMode,
@@ -105,6 +111,8 @@ export function normalizedNewSessionDraft(value) {
     message: typeof value?.message === 'string' ? value.message : '',
     options: sanitizedSessionOptions({
       agentProfileId: typeof options.agentProfileId === 'string' ? options.agentProfileId : null,
+      sessionTemplateId: typeof options.sessionTemplateId === 'string' ? options.sessionTemplateId : null,
+      sessionProfile: options.sessionProfile || null,
       modelId: typeof options.modelId === 'string' ? options.modelId : null,
       reasoningEffort: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(options.reasoningEffort)
         ? options.reasoningEffort

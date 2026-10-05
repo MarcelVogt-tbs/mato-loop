@@ -59,7 +59,7 @@ from mato_loop_backend.settings import (
     TrustLevel,
     UserProfileSettings,
     effective_model_trust,
-    load_agent_profile_ai,
+    load_effective_ai,
 )
 from mato_loop_backend.settings.models import (
     LlmProviderConfig,
@@ -1016,7 +1016,7 @@ class DreamingService:
         for session in sessions:
             ai = ai_by_user.get(session.user_id)
             if ai is None:
-                ai, _profile = await load_agent_profile_ai(db, session.user_id, None)
+                ai = await load_effective_ai(db, session.user_id)
                 ai_by_user[session.user_id] = ai
             model, _provider = _model_and_provider(ai)
             if model is None:
@@ -1185,7 +1185,7 @@ class DreamingService:
         for session, run in rows:
             ai = ai_by_user.get(session.user_id)
             if ai is None:
-                ai, _profile = await load_agent_profile_ai(db, session.user_id, None)
+                ai = await load_effective_ai(db, session.user_id)
                 ai_by_user[session.user_id] = ai
             model, _provider = _model_and_provider(ai)
             if model is None:
@@ -1307,7 +1307,7 @@ class DreamingService:
         memory = await SettingsStore.load(
             db, MemorySettings, user_id=session.user_id
         )
-        ai, _profile = await load_agent_profile_ai(db, session.user_id, None)
+        ai = await load_effective_ai(db, session.user_id)
         available, reason = dreaming_availability(
             memory,
             ai,
@@ -1586,9 +1586,7 @@ class DreamingService:
         memory = await SettingsStore.load(
             db, MemorySettings, user_id=locked_session.user_id, for_update=True
         )
-        current_ai, _profile = await load_agent_profile_ai(
-            db, locked_session.user_id, None
-        )
+        current_ai = await load_effective_ai(db, locked_session.user_id)
         available, reason = dreaming_availability(
             memory,
             current_ai,

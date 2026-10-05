@@ -77,14 +77,17 @@ from mato_loop_backend.sessions.serialization import (
 from mato_loop_backend.sessions.serialization import (
     session_payload as _serialize_session_payload,
 )
+from mato_loop_backend.sessions.templates import load_template
 from mato_loop_backend.settings import (
     InstanceLimits,
     MemorySettings,
     SettingsStore,
     UserPreferences,
+    apply_session_ai,
+    load_effective_ai,
 )
-from mato_loop_backend.settings.effective import default_agent_profile_id
 from mato_loop_backend.settings.models import ReasoningEffort
+from mato_loop_backend.settings.session_profiles import SessionProfileSnapshot
 
 router = APIRouter(prefix="/sessions", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
@@ -333,21 +336,25 @@ class ActiveFileRequest(BaseModel):
     dirty: bool
 
 
-class SessionCreateRequest(BaseModel):
+class SessionOptionsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    content: str | None = Field(max_length=200_000)
-    voice_attachment_indices: list[StrictInt] = Field(
-        default_factory=list, alias="voiceAttachmentIndices"
-    )
-    run_id: UUID | None = None
     project_id: UUID | None = None
+    session_template_id: UUID | None = None
+    session_profile: SessionProfileSnapshot | None = None
     model_id: UUID | None = None
     agent_profile_id: UUID | None = Field(
         default=None,
         validation_alias=AliasChoices("agentProfileId", "agent_profile_id"),
     )
     reasoning_effort: ReasoningEffort | None = None
+    memory_mode: MemoryMode | None = None
+
+
+class SessionCreateRequest(SessionOptionsRequest):
+    content: str | None = Field(max_length=200_000)
+    voice_attachment_indices: list[StrictInt] = Field(default_factory=list, alias="voiceAttachmentIndices")
+    run_id: UUID | None = None
     memory_mode: MemoryMode = MemoryMode.FULL
     web_search_policy: WebSearchPolicy = WebSearchPolicy.AVAILABLE
     preferred_execution_agent_id: UUID | None = None
@@ -359,6 +366,8 @@ class SessionCreateRequest(BaseModel):
 
 
 class SessionUpdateRequest(BaseModel):
+    session_template_id: UUID | None = None
+    session_profile: SessionProfileSnapshot | None = None
     title: str | None = Field(default=None, max_length=240)
     pinned: bool | None = None
     todos_collapsed: StrictBool | None = None
@@ -574,9 +583,9 @@ async def _session_payload(
             has_unread_messages=has_unread_messages,
             default_channel=default_channel,
         ), "archived": archived}
-    ai = await session_service._profile_ai(db, item.user_id, item.agent_profile_id)
+    ai = apply_session_ai(await load_effective_ai(db, item.user_id), item)
     memory = await SettingsStore.load(db, MemorySettings, user_id=item.user_id)
-    model_id = item.model_config_id or ai.default_model_id
+    model_id = ai.default_model_id
     model = _model_for_session(ai, model_id) if _model_available(ai, model_id) else None
     state = effective_memory(item, memory, _provider_for_session(ai, model), model)
     return {**session_payload(
@@ -717,44 +726,44 @@ async def create_session_with_attachments(
         raise _attachment_api_error(exc) from exc
 
 
-@router.get("/defaults")
+@router.post("/defaults")
 async def session_defaults(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
-    model_id: Annotated[UUID | None, Query(alias="modelId")] = None,
-    memory_mode: Annotated[MemoryMode, Query(alias="memoryMode")] = MemoryMode.FULL,
-    agent_profile_id: Annotated[
-        UUID | None, Query(alias="agentProfileId")
-    ] = None,
-    project_id: Annotated[UUID | None, Query(alias="projectId")] = None,
+    payload: SessionOptionsRequest,
 ) -> dict:
     memory = await SettingsStore.load(db, MemorySettings, user_id=user.id)
     preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id)
     try:
-        selected_agent_profile_id = agent_profile_id or await default_agent_profile_id(db)
+        template = await load_template(db, user.id, payload.session_template_id)
+        selected_agent_profile_id = payload.agent_profile_id or template.start_agent_id
         await session_service.validate_agent_profile(
             db, user.id, selected_agent_profile_id
         )
     except session_service.SessionServiceError as exc:
         _raise_api_error(exc)
-    ai, profile = await session_service._profile_ai_and_profile(
-        db, user.id, selected_agent_profile_id
-    )
-    selected_model_id = model_id or ai.default_model_id
+    ai = await load_effective_ai(db, user.id)
+
+    configuration = payload.session_profile or template.snapshot()
+    configured_model = payload.model_id if "model_id" in payload.model_fields_set else template.model_id
+    configured_reasoning = payload.reasoning_effort if "reasoning_effort" in payload.model_fields_set else template.reasoning_effort
+    memory_mode = payload.memory_mode or MemoryMode(template.memory_mode)
+    draft = ChatSession(user_id=user.id, agent_profile_id=selected_agent_profile_id, model_config_id=configured_model, reasoning_effort=configured_reasoning, session_profile=configuration.model_dump(mode="json"), memory_mode=memory_mode.value)
+    ai = apply_session_ai(ai, draft)
+    selected_model_id = ai.default_model_id
     model = (
         _model_for_session(ai, selected_model_id)
         if _model_available(ai, selected_model_id)
         else None
     )
-    default_session = ChatSession(user_id=user.id, memory_mode=memory_mode.value)
     state = effective_memory(
-        default_session, memory, _provider_for_session(ai, model), model
+        draft, memory, _provider_for_session(ai, model), model
     )
     preferred_agent_id = preferences.default_execution_agent_id
     current_directory = None
-    if project_id is not None:
+    if payload.project_id is not None:
         project = await db.scalar(
-            select(Project).where(Project.id == project_id, Project.user_id == user.id)
+            select(Project).where(Project.id == payload.project_id, Project.user_id == user.id)
         )
         if project is None:
             raise ApiError(404, "project.notFound", field="projectId")
@@ -772,9 +781,13 @@ async def session_defaults(
         if agent is not None and current_directory is None:
             current_directory = await _execution_home(db, agent)
     return {
-        "modelId": str(selected_model_id) if selected_model_id else None,
+        "modelId": str(configured_model) if configured_model else None,
+        "effectiveModelId": str(selected_model_id) if selected_model_id else None,
+        "sessionTemplateId": str(template.id),
+        "sessionProfile": configuration.model_dump(mode="json", by_alias=True),
         "agentProfileId": str(selected_agent_profile_id),
-        "reasoningEffort": profile.reasoning_effort,
+        "reasoningEffort": configured_reasoning,
+        "effectiveReasoningEffort": ai.reasoning_effort,
         "modelAvailable": bool(model and model.supports_tools),
         "modelUnavailableReason": (
             None

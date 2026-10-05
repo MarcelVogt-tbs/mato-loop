@@ -24,15 +24,15 @@ Neu erkannte Modelle beginnen in der Regel deaktiviert; vom Provider als natives
 
 Bei Providern ohne Modellerkennung kann eine Modell-ID manuell eingetragen werden.
 
-Manuell eingetragene und automatisch erkannte Modelle können gelöscht werden. Dabei entfernt MatoLoop Verweise auf dieses Modell aus betroffenen Agentenprofilen und die ausdrückliche Modellwahl betroffener Sessions. Diese Sessions verwenden anschließend das Modell ihres Profils, sofern dort eines gewählt ist. Bietet ein Provider ein gelöschtes Modell weiterhin an, erscheint es bei der nächsten Synchronisierung erneut als neu erkanntes Modell. Auch Synchronisierung, Deaktivierung, geänderte Fähigkeiten und eine getrennte Codex-Verbindung bereinigen ungültig gewordene Profilverweise.
+Deleting a model clears matching model defaults and explicit session-wide selections. Explicit per-agent session or template overrides remain visible as unavailable until changed. Synchronization, deactivation, capability changes, and Codex disconnection also clear invalid default assignments. A later synchronization may discover the same external model again with a new internal ID.
 
 ## Laufzeiteinstellungen
 
 Je Modell können unter anderem Kontextfenster, Ausgabelimit, Streaming, Tool-Unterstützung, Bildunterstützung, Datenfreigabe, Memory-Policy und Reasoning-Zusammenfassungen konfiguriert werden. Webfetch folgt stattdessen den Rechten des gewählten Agentenprofils für die effektive private oder öffentliche Modellklasse. MatoLoop bietet den Reasoning-Aufwand im Chat nur für ausdrücklich unterstützte Modelle an und berücksichtigt deren verfügbare Stufen und Providerformat. Qwen3.8-27B unterstützt **Aus**, **Niedrig**, **Mittel** und **Sehr hoch**; MatoLoop verwendet **Mittel** als Modellstandard. Codex übernimmt die unterstützten Stufen einschließlich **Maximum** und **Ultra** sowie den Modellstandard aus dem synchronisierten Katalog.
 
-## Profilmodelle
+## Model defaults and session templates
 
-Unter **Einstellungen > Agenten > Modelle** wählen Sie je Agentenprofil Modelle für verschiedene Aufgaben:
+Configure global assignments under **Administration > Standardmodelle > Verwaltung** and permitted personal overrides under **Einstellungen > Standardmodelle**. The administrative **Einstellungen** tab controls the personal-setting gate. Available purposes include:
 
 - Agent
 - Bildanalyse
@@ -41,4 +41,6 @@ Unter **Einstellungen > Agenten > Modelle** wählen Sie je Agentenprofil Modelle
 - Bild-, Sprach- und Audiogenerierung
 - Transkription
 
-**Allgemein**, **Plan**, **Build** und **Sysadmin** sind unabhängige geschützte Instanz-Basisprofile. Ein eigenes Instanz- oder persönliches Profil wählt genau eines davon als Basis und übernimmt jedes nicht angepasste Feld fortlaufend. Es gibt keine globalen oder persönlichen Standardmodelle außerhalb der Profile. Eine ausdrückliche Modellwahl der Session hat Vorrang vor dem Agentmodell des Profils. Sessiongebundene Hilfsaufrufe verwenden die Modellfelder dieses Profils; profilunabhängiges Dreaming verwendet **Allgemein**. Nicht jede Hilfsaufgabe muss konfiguriert sein. Fehlt jedoch sowohl in der Session als auch im Profil ein Agentmodell, kann kein Chatlauf starten.
+Agent profiles contain no model settings. **Sessionvorlagen** configures available agents, the start agent, memory, and optional chat-model/reasoning overrides for the whole session or individual agents. Select a template before the project on Home or when starting a new session. **Allgemein** offers Allgemein and Sysadmin; **Coding** offers Plan and Build. Both start with full memory. Under **Session**, changing the template replaces the session's agent selection, memory, model, and reasoning settings. You can then change the active agent's model and reasoning, memory, computer, and web search directly. Template changes in administration do not affect existing sessions.
+
+An agent-specific session override wins over a session-wide value, followed by personal and global model defaults. Empty fields inherit their displayed defaults. Helper and media models always use **Standardmodelle** and the existing fallbacks.

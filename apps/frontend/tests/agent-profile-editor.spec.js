@@ -117,7 +117,7 @@ it('inherits, overrides, and clears runtime instructions', async () => {
 it('validates finite limits and preserves content after a failed save', async () => {
   const page = await mountEditor()
   page.form.maxToolCalls = 0
-  page.section = 'models'
+  page.section = 'access'
   await page.saveAgent()
   expect(api.put).not.toHaveBeenCalled()
   page.form.maxToolCalls = 7
@@ -140,10 +140,10 @@ it('preserves all session write path meanings and validates paths', async () => 
   expect(page.sessionWritePathsRule()).not.toBe(true)
 })
 
-it('edits built-in models in administration while protecting their workflow', async () => {
+it('keeps built-in workflows read-only without model configuration', async () => {
   const page = await mountEditor(`/admin/agents/${builtinId}`)
-  page.setModelValue('titleVisionFallbackEnabled', false)
   expect(page.isProtected).toBe(true)
   await page.saveAgent()
-  expect(api.put).toHaveBeenCalledWith(`/agent-profiles/${builtinId}/access`, { titleVisionFallbackEnabled: false }, { params: { scope: 'instance' } })
+  expect(api.put).not.toHaveBeenCalled()
+  expect([...root.querySelectorAll('[role="tab"]')].map((item) => item.textContent)).not.toContain('Modelle')
 })

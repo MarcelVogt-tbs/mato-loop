@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.integration_access import _load_scoped_integrations
 from mato_loop_backend.settings import (
+    AiProviderSettings,
     AiSettings,
     IntegrationAdapterAvailability,
     IntegrationInstance,
@@ -23,14 +24,19 @@ from mato_loop_backend.settings import (
     load_effective_tools,
 )
 from mato_loop_backend.settings.effective import personal_integration_tool_settings
-from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+from mato_loop_backend.settings.models import (
+    LlmProviderConfig,
+    ModelConfig,
+    ModelDefaults,
+    ModelDefaultsSettings,
+)
 
 
 def test_personal_settings_models_and_instance_flags_have_safe_defaults() -> None:
     assert AiSettings().personal_providers_enabled is False
     assert ToolSettings().personal_settings_enabled is False
     assert AiSettings().title_vision_fallback_enabled is True
-    assert UserAiSettings().title_vision_fallback_enabled is True
+    assert "title_vision_fallback_enabled" not in UserAiSettings.model_fields
     integrations = IntegrationSettings(adapter_availability={"caldav": "full"})
     assert integrations.adapter_availability == {}
     assert (
@@ -42,11 +48,11 @@ def test_personal_settings_models_and_instance_flags_have_safe_defaults() -> Non
     assert UserToolSettings.settings_scope == SettingsScope.USER
 
 
-def test_ai_settings_discard_removed_global_enabled_flag() -> None:
-    for settings_type in (AiSettings, UserAiSettings):
-        settings = settings_type.model_validate({"enabled": False})
+def test_provider_settings_do_not_persist_obsolete_defaults() -> None:
+    for settings_type in (AiProviderSettings, UserAiSettings):
+        settings = settings_type.model_validate({"enabled": False, "default_model_id": str(uuid4()), "reasoning_effort": "high"})
 
-        assert "enabled" not in settings.model_dump()
+        assert not ({"enabled"} | set(ModelDefaults.model_fields)) & settings.model_dump().keys()
 
 
 def test_integration_settings_normalizes_legacy_availability() -> None:
@@ -109,7 +115,7 @@ async def test_effective_ai_combines_provider_inventory_without_personal_default
         }
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
-    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=personal))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=lambda _db, model, **_kw: personal if model is UserAiSettings else ModelDefaultsSettings(**instance.model_dump(include=set(ModelDefaults.model_fields))) if model is ModelDefaultsSettings else None))
 
     effective = await load_effective_ai(AsyncMock(spec=AsyncSession), user_id)
 
@@ -229,13 +235,13 @@ async def test_effective_ai_ignores_legacy_personal_default(monkeypatch) -> None
     provider = LlmProviderConfig(name="Instance", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="instance")
     instance = AiSettings(providers=[provider], models=[model])
-    personal = UserAiSettings(default_model_id=model.id)
+    personal = UserAiSettings(default_model_id=uuid4())
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
-    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=personal))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=lambda _db, model, **_kw: personal if model is UserAiSettings else None))
 
     effective = await load_effective_ai(AsyncMock(spec=AsyncSession), user_id)
 
-    assert effective.default_model_id is None
+    assert effective.default_model_id == model.id
 
 
 async def test_effective_tools_uses_personal_snapshot_with_instance_web_fetch_limits(

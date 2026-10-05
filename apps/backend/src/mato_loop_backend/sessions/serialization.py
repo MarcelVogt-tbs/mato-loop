@@ -28,6 +28,7 @@ from mato_loop_backend.models import (
     MessageAttachment,
     WebSearchPolicy,
 )
+from mato_loop_backend.settings.session_profiles import SessionProfileSnapshot
 from mato_loop_backend.tools.display import enrich_tool_calls
 from mato_loop_backend.web.fetch import WebFetchError, canonicalize_url
 
@@ -330,6 +331,7 @@ def session_payload(
             },
         },
         "modelId": str(item.model_config_id) if item.model_config_id else None,
+        "sessionProfile": SessionProfileSnapshot.model_validate(item.session_profile or {}).model_dump(mode="json", by_alias=True),
         "agentProfileId": (
             str(item.agent_profile_id) if item.agent_profile_id else None
         ),

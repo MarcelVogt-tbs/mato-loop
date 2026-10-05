@@ -16,13 +16,8 @@ from mato_loop_backend.providers.settings_service import model_reference_availab
 from mato_loop_backend.settings import (
     AiSettings,
     TrustLevel,
-    apply_agent_profile_ai,
-    general_profile,
-    resolve_agent_profile,
 )
 from mato_loop_backend.settings.models import (
-    AgentProfileOverrides,
-    CustomAgentProfile,
     LlmProviderConfig,
     ModelConfig,
 )
@@ -47,19 +42,13 @@ async def analyze(data, **kwargs):
 
 
 @pytest.mark.parametrize("api_type", ["chat_completions", "responses"])
-def test_audio_model_requires_native_transport_and_inherits_profile(api_type):
+def test_audio_model_requires_native_transport_and_uses_default(api_type):
     provider = LlmProviderConfig(
         name="Audio", adapter_type="openai-compatible", config={"api_type": api_type},
     )
     active = ModelConfig(provider_id=provider.id, model_id="text")
     audio = ModelConfig(provider_id=provider.id, model_id="audio", input_modalities={"audio"})
-    settings = AiSettings(providers=[provider], models=[active, audio])
-    base = general_profile()
-    base.audio_analysis_model_id = audio.id
-    profile = CustomAgentProfile(
-        name="Audio", description="", base_profile_id=base.id, overrides=AgentProfileOverrides(),
-    )
-    settings = apply_agent_profile_ai(settings, resolve_agent_profile(profile, base, None))
+    settings = AiSettings(providers=[provider], models=[active, audio], audio_analysis_model_id=audio.id)
     target = resolve_audio_target(settings, active_model_id=active.id)
     assert (target.model.id if target else None) == (audio.id if api_type == "chat_completions" else None)
     assert model_reference_available(settings, "audio_analysis_model_id", audio.id) == (target is not None)

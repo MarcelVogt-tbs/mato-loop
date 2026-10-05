@@ -174,7 +174,7 @@ describe('voice attachment composer', () => {
     await nextTick()
     const input = root.querySelector('.chat-input-dock textarea')
     expect(document.activeElement).not.toBe(input)
-    expect(mocks.api.post).not.toHaveBeenCalled()
+    expect(mocks.api.post).not.toHaveBeenCalledWith('/sessions', expect.anything())
 
     await router.push('/?new=1')
     await vi.waitFor(() => expect(root.querySelector('h1')?.textContent).toBe('Neue Session'))

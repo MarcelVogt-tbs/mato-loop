@@ -646,7 +646,7 @@ async def test_start_persists_effective_run_policy_snapshot(
 
     profile = AgentProfile(name="Custom", instructions="Follow the task.", maxToolCalls=tool_limit)
     _mock_value = AsyncMock(return_value=profile)
-    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
         monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
     provider = LlmProviderConfig(
         name="Provider",
@@ -749,7 +749,7 @@ async def test_start_switches_profile_with_run_and_discards_session_grants(monke
     profile = AgentProfile(name="Next", instructions="Follow the task.")
     load_profile = AsyncMock(return_value=profile)
     _mock_value = load_profile
-    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
         monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
     provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="model")

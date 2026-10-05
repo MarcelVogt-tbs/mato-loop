@@ -1,5 +1,5 @@
 <template>
-  <div :class="compact ? 'row items-center q-gutter-xs' : 'column q-gutter-md'">
+  <div :class="equalFields ? 'session-start-fields' : compact ? 'row items-center q-gutter-xs' : 'column q-gutter-md'">
     <slot name="before" />
     <q-banner v-if="showWarning && warning" dense rounded class="app-surface-tonal">
       <template #avatar><q-icon name="warning_amber" color="warning" /></template>
@@ -11,6 +11,7 @@
         Session-Einstellungen
       </div>
       <div class="column q-gutter-md">
+        <TemplateField v-if="has('template')" />
         <AgentField v-if="has('agent')" />
         <ComputerField v-if="has('computer')" />
         <MemoryField v-if="has('memory')" />
@@ -29,6 +30,7 @@
     </section>
 
     <template v-if="!grouped">
+      <TemplateField v-if="has('template')" />
       <AgentField v-if="has('agent')" />
       <ModelField v-if="has('model')" />
       <ReasoningField v-if="has('reasoning') && (!compact || reasoningEffortOptions.length)" />
@@ -48,10 +50,12 @@ import { useIntegrationStore } from 'stores/integrations'
 import { useProviderStore } from 'stores/providers'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { modelReasoningEffortOptions } from 'src/utils/model-runtime'
+import { sessionModel } from '../session-model'
+import { useSessionTemplateStore } from 'src/features/settings/session-templates-store'
 
 defineOptions({ name: 'SessionSettingsFields' })
 
-const SESSION_FIELDS = ['agent', 'computer', 'memory', 'webSearch']
+const SESSION_FIELDS = ['template', 'agent', 'computer', 'memory', 'webSearch']
 const LLM_FIELDS = ['model', 'reasoning']
 const props = defineProps({
   session: { type: Object, default: null },
@@ -59,6 +63,7 @@ const props = defineProps({
   agentSelectable: Boolean,
   agentProfileId: { type: String, default: null },
   compact: Boolean,
+  equalFields: Boolean,
   grouped: Boolean,
   showWarning: Boolean,
   fields: { type: Array, default: () => ['agent', 'model', 'reasoning', 'computer', 'memory', 'webSearch'] }
@@ -69,18 +74,24 @@ const agentProfiles = useAgentProfileStore()
 const executionAgents = useExecutionAgentStore()
 const integrations = useIntegrationStore()
 const providers = useProviderStore()
+const templates = useSessionTemplateStore()
 
 const has = (field) => props.fields.includes(field)
 const hasSessionFields = computed(() => SESSION_FIELDS.some(has))
 const hasLlmFields = computed(() => LLM_FIELDS.some(has))
-const selectedAgent = computed(() => agentProfiles.byId(
-  props.session?.agentProfileId || agentProfiles.defaultAgentProfileId
-))
+const templateId = computed(() => props.session?.sessionProfile?.templateId || props.session?.sessionTemplateId || null)
+const templateOptions = computed(() => {
+  const options = templates.templates.map((item) => ({ label: `${item.name}${item.scope === 'personal' ? ' (Persönlich)' : ''}`, value: item.id }))
+  if (templateId.value && !options.some((item) => item.value === templateId.value)) {
+    options.push({ label: 'Nicht verfügbare Vorlage', value: templateId.value, disable: true })
+  }
+  return options
+})
 const displayedAgentProfileId = computed(() => (
   props.agentProfileId || props.session?.agentProfileId || agentProfiles.defaultAgentProfileId
 ))
 const agentProfileOptions = computed(() => {
-  const options = agentProfiles.agents.map((agent) => ({
+  const options = agentProfiles.agents.filter((agent) => !props.session?.sessionProfile?.agentIds || props.session.sessionProfile.agentIds.includes(agent.id)).map((agent) => ({
     label: agent.name,
     value: agent.id,
     icon: 'smart_toy',
@@ -139,7 +150,8 @@ const executionAgentMessage = computed(() => {
   if (!liveWorkspaceContext.value.connected) return 'Der ausgewählte Computer ist nicht verfügbar.'
   return ''
 })
-const effectiveModelId = computed(() => props.session?.modelId || selectedAgent.value?.defaultModelId)
+const effectiveSelection = computed(() => sessionModel(props.session, providers.modelDefaults, displayedAgentProfileId.value))
+const effectiveModelId = computed(() => effectiveSelection.value.modelId)
 const modelSelectionOptions = computed(() => providers.selectionOptions(effectiveModelId.value, true))
 const selectedModelConfig = computed(() => providers.models.find((model) => model.id === effectiveModelId.value))
 const selectedModelTrustIcon = computed(() => selectedModelConfig.value?.effectiveTrustLevel === 'private' ? 'lock' : 'public')
@@ -224,11 +236,10 @@ function update(patch) {
 
 function selectModel(modelId) {
   const model = providers.models.find((item) => item.id === modelId)
-  const effort = props.session?.reasoningEffort
-  update({
-    model_id: modelId,
-    ...(effort && !model?.reasoningEfforts?.includes(effort) ? { reasoning_effort: null } : {})
-  })
+  const effort = effectiveSelection.value.reasoningEffort
+  const agentModels = { ...props.session?.sessionProfile?.agentModels }
+  agentModels[displayedAgentProfileId.value] = { ...agentModels[displayedAgentProfileId.value], modelId, ...(effort && !model?.reasoningEfforts?.includes(effort) ? { reasoningEffort: null } : {}) }
+  update({ session_profile: { ...props.session?.sessionProfile, agentModels } })
 }
 
 function selectExecutionAgent(value) {
@@ -246,7 +257,9 @@ const selectProps = (extra = {}) => ({
   optionsDense: true,
   emitValue: true,
   mapOptions: true,
+  behavior: $q.screen.lt.sm ? 'dialog' : 'menu',
   popupContentClass: 'app-menu-popup',
+  popupContentStyle: $q.screen.lt.sm ? undefined : { width: 'min-content' },
   disable: props.disabled,
   ...extra
 })
@@ -261,6 +274,15 @@ const optionSlot = (scope, icon) => h(QItem, scope.itemProps, {
   ]
 })
 
+const TemplateField = defineComponent(() => () => h(QSelect, selectProps({
+  modelValue: templateId.value,
+  options: templateOptions.value,
+  label: 'Sessionvorlage',
+  disable: props.disabled || templates.loading,
+  hint: 'Ein Wechsel übernimmt Agenten, Memory sowie Modell- und Reasoningvorgaben neu.',
+  persistentHint: true,
+  'onUpdate:modelValue': (value) => update({ session_template_id: value })
+}), { prepend: () => h(QIcon, { name: 'dashboard_customize' }) }))
 const AgentField = defineComponent(() => () => h(QSelect, selectProps({
   modelValue: displayedAgentProfileId.value,
   options: agentProfileOptions.value,
@@ -280,7 +302,7 @@ const ModelField = defineComponent(() => () => h(QSelect, selectProps({
   options: modelSelectionOptions.value,
   label: props.compact ? 'LLM' : 'Modell',
   class: props.compact ? 'composer-model' : undefined,
-  hint: props.compact ? undefined : modelSupportsTools.value ? 'Modell für diese Session.' : 'Das ausgewählte Modell unterstützt keine Tools.',
+  hint: props.compact ? undefined : modelSupportsTools.value ? 'Modell für diesen Agenten in dieser Session.' : 'Das ausgewählte Modell unterstützt keine Tools.',
   persistentHint: !props.compact,
   clearable: true,
   'onUpdate:modelValue': selectModel
@@ -289,16 +311,16 @@ const ModelField = defineComponent(() => () => h(QSelect, selectProps({
   option: (scope) => optionSlot(scope, (option) => option.trustIcon)
 }))
 const ReasoningField = defineComponent(() => () => h(QSelect, selectProps({
-  modelValue: props.session?.reasoningEffort ?? selectedAgent.value?.reasoningEffort ?? null,
+  modelValue: effectiveSelection.value.reasoningEffort,
   options: reasoningEffortOptions.value,
   label: 'Denken',
   class: props.compact ? 'composer-reasoning' : undefined,
   hint: props.compact ? undefined : reasoningEffortOptions.value.length
-    ? 'Reasoning-Aufwand für diese Session.'
+    ? 'Reasoning-Aufwand für diesen Agenten in dieser Session.'
     : 'Das ausgewählte Modell bietet keine Reasoning-Stufen an.',
   persistentHint: !props.compact,
   disable: props.disabled || !reasoningEffortOptions.value.length,
-  'onUpdate:modelValue': (value) => update({ reasoning_effort: value })
+  'onUpdate:modelValue': (value) => update({ session_profile: { ...props.session?.sessionProfile, agentModels: { ...props.session?.sessionProfile?.agentModels, [displayedAgentProfileId.value]: { ...props.session?.sessionProfile?.agentModels?.[displayedAgentProfileId.value], reasoningEffort: value } } } })
 }), props.compact ? {
   default: () => h(QTooltip, null, () => 'Reasoning-Aufwand für diese Session')
 } : undefined))
@@ -308,7 +330,6 @@ const ComputerField = defineComponent(() => () => [
     options: executionAgentOptions.value,
     label: props.compact ? undefined : 'Computer',
     class: props.compact ? 'chat-start-select col-auto q-px-sm text-body2' : undefined,
-    behavior: props.compact ? 'menu' : 'default',
     hideBottomSpace: props.compact,
     'aria-label': 'Computer auswählen',
     hint: props.compact ? undefined : 'Der Computer wird für den nächsten Lauf verwendet.',
@@ -340,7 +361,6 @@ const MemoryField = defineComponent(() => () => h(QSelect, selectProps({
   options: memoryModeOptions,
   label: props.compact ? undefined : 'Memory',
   class: props.compact ? 'chat-start-select col-auto q-px-sm text-body2' : undefined,
-  behavior: props.compact ? 'menu' : 'default',
   hideBottomSpace: props.compact,
   'aria-label': 'Memory-Modus auswählen',
   hint: props.compact ? undefined : memoryMessage.value,
@@ -362,7 +382,6 @@ const WebSearchField = defineComponent(() => () => h(QSelect, selectProps({
   options: webSearchOptions.value,
   label: props.compact ? undefined : 'Websuche',
   class: props.compact ? 'chat-start-select col-auto q-px-sm text-body2' : undefined,
-  behavior: props.compact ? 'menu' : 'default',
   hideBottomSpace: props.compact,
   'aria-label': 'Websuche konfigurieren',
   hint: props.compact ? undefined : webSearchMessage.value,

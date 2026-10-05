@@ -7,7 +7,6 @@ import time
 from collections.abc import Callable
 from functools import partial
 from typing import Any
-from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -61,7 +60,6 @@ def media_model_handlers(
     model_trust_level: TrustLevel,
     runtime_settings: AgentRuntimeSettings,
     tool_settings: ToolSettings,
-    agent_profile_id: UUID | None,
     tool_phase: dict[str, Any],
     next_model_request: Callable[[], int],
     count_model_request: Callable[[], None],
@@ -190,7 +188,7 @@ def media_model_handlers(
         assert speech_target is not None
         result = await MediaService.transcribe_audio(
             db, audio=audio, language=language, timeout=timeout,
-            active_model_id=model.id, agent_profile_id=agent_profile_id, user_id=session.user_id,
+            active_model_id=model.id, user_id=session.user_id,
             expected_model_id=speech_target.model.id,
             expected_trust_level=effective_model_trust(speech_target.provider, speech_target.model),
         )

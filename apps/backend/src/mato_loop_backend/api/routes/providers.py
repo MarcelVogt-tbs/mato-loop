@@ -48,6 +48,7 @@ from mato_loop_backend.security import (
     store_credential,
 )
 from mato_loop_backend.settings import (
+    AiProviderSettings,
     AiSettings,
     SettingsStore,
     effective_model_pseudonymization,
@@ -309,11 +310,14 @@ def _settings_payload(
     *,
     include_configuration: bool = True,
 ) -> dict[str, Any]:
+    from mato_loop_backend.settings.models import ModelDefaults
+
     providers_by_id = {provider.id: provider for provider in settings.providers}
     return {
+        **({"modelDefaults": settings.model_dump(mode="json", by_alias=True, include=set(ModelDefaults.model_fields))} if isinstance(settings, AiSettings) else {}),
         **(
             {"personalProvidersEnabled": settings.personal_providers_enabled}
-            if isinstance(settings, AiSettings)
+            if isinstance(settings, AiProviderSettings)
             else {}
         ),
         "providers": [
@@ -494,7 +498,7 @@ async def list_providers(
             include_configuration=False,
         )
     if scope == "personal" and user is not None and not (
-        await SettingsStore.load(db, AiSettings)
+        await SettingsStore.load(db, AiProviderSettings)
     ).personal_providers_enabled:
         # Keep the owner's stored configuration visible while mutations remain gated.
         settings, owner_id = await SettingsStore.load(db, UserAiSettings, user_id=user.id), user.id
@@ -523,7 +527,7 @@ async def get_personal_provider_policy(
     _user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, bool]:
-    settings = await SettingsStore.load(db, AiSettings)
+    settings = await SettingsStore.load(db, AiProviderSettings)
     return {"personalProvidersEnabled": settings.personal_providers_enabled}
 
 
@@ -692,7 +696,7 @@ async def set_personal_providers_enabled(
     settings, _owner_id = await _load_scoped_ai(
         db, "instance", user, for_update=True, mutation=True
     )
-    assert isinstance(settings, AiSettings)
+    assert isinstance(settings, AiProviderSettings)
     await ProviderSettingsService.set_personal_providers_enabled(
         db, settings, payload.enabled
     )

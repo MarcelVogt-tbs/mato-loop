@@ -29,6 +29,7 @@ from mato_loop_backend.providers.media import (
 from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
     AgentProfilesSettings,
+    AiProviderSettings,
     AiSettings,
     IntegrationSettings,
     SettingsStore,
@@ -40,6 +41,8 @@ from mato_loop_backend.settings.models import (
     LlmProviderConfig,
     ModelCapability,
     ModelConfig,
+    ModelDefaults,
+    ModelDefaultsSettings,
     TrustLevel,
 )
 from mato_loop_backend.tools.catalog import effective_tool_capabilities, tool_registry
@@ -121,11 +124,13 @@ def codex_edit_settings() -> tuple[AiSettings, ModelConfig]:
 
 def mock_settings_load(monkeypatch, tools: ToolSettings, ai: AiSettings) -> AsyncMock:
     async def load(_db, settings_type, **_kwargs):
-        return tools if settings_type is ToolSettings else ai if settings_type is AiSettings else settings_type()
+        return tools if settings_type is ToolSettings else ai if settings_type is AiProviderSettings else settings_type()
 
     mocked = AsyncMock(side_effect=load)
     monkeypatch.setattr(SettingsStore, "load", mocked)
     async def load_optional(_db, settings_type, **_kwargs):
+        if settings_type is ModelDefaultsSettings:
+            return ModelDefaultsSettings(**ai.model_dump(include=set(ModelDefaults.model_fields)))
         return (
             _profile_settings(tools, ai)
             if settings_type is AgentProfilesSettings
@@ -142,10 +147,6 @@ def _profile_settings(tools: ToolSettings, ai: AiSettings) -> AgentProfilesSetti
             GENERAL_PROFILE_ID: AgentProfileAccessOverrides(
                 private_permissions=tools.private_permissions,
                 public_permissions=tools.public_permissions,
-                image_generation_model_id=ai.image_generation_model_id,
-                speech_generation_model_id=ai.speech_generation_model_id,
-                audio_generation_model_id=ai.audio_generation_model_id,
-                audio_transcription_model_id=ai.audio_transcription_model_id,
             )
         }
     )
@@ -686,7 +687,7 @@ async def test_policy_revocation_during_approval_stops_media_service(
     tool_context = context(tmp_path, call)
     ai = media_settings(ModelCapability.IMAGE_GENERATION)
     async def load(_db, settings_type, **_kwargs):
-        if settings_type is AiSettings:
+        if settings_type is AiProviderSettings:
             return ai
         return ask_settings if settings_type is ToolSettings else settings_type()
 
@@ -698,6 +699,8 @@ async def test_policy_revocation_during_approval_stops_media_service(
 
     async def load_optional(_db, settings_type, **_kwargs):
         nonlocal profile_loads
+        if settings_type is ModelDefaultsSettings:
+            return ModelDefaultsSettings(**ai.model_dump(include=set(ModelDefaults.model_fields)))
         if settings_type is not AgentProfilesSettings:
             return None
         profile_loads += 1

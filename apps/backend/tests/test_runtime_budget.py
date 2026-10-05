@@ -12,7 +12,6 @@ from test_required_web_search_runtime import (
 import mato_loop_backend.agent.loop as mock_agent_loop
 import mato_loop_backend.agent.run_support as mock_agent_run_support
 import mato_loop_backend.agent.runtime as mock_agent_runtime
-import mato_loop_backend.agent.titles as mock_agent_titles
 from mato_loop_backend.agent.run_contracts import AgentRunError
 from mato_loop_backend.agent.run_support import _retryable_transient_read, _tool_call_signature
 from mato_loop_backend.agent.runtime import AgentRuntime
@@ -279,7 +278,7 @@ async def test_retry_snapshots_current_budget_without_overwriting_failed_run(mon
     profile = AgentProfile(name="Custom", instructions="Follow the task.", maxToolCalls=new_limit)
     failed.agent_profile_id = session.agent_profile_id = profile.id
     _mock_value = AsyncMock(return_value=profile)
-    for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):
+    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
         monkeypatch.setattr(_mock_target, 'load_agent_profile', _mock_value)
     _mock_value = AsyncMock(return_value=(ToolSettings(), profile))
     for _mock_target in (mock_agent_runtime, mock_agent_loop,):

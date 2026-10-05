@@ -88,7 +88,7 @@ from mato_loop_backend.settings import (
     InstanceLimits,
     SettingsStore,
     ToolExecutionPolicy,
-    apply_agent_profile_ai,
+    apply_session_ai,
     effective_model_pseudonymization,
     effective_model_trust,
     load_agent_profile,
@@ -197,6 +197,10 @@ class AgentRuntime:
             raise AgentRunError("session.runAlreadyActive")
         await cls._ensure_user_active(db, chat_session.user_id, for_update=True)
         profile_id = agent_profile_id_override or chat_session.agent_profile_id
+        from mato_loop_backend.settings.effective import session_agent_allowed
+
+        if not session_agent_allowed(chat_session, profile_id):
+            raise AgentRunError("agentProfile.selectedUnavailable")
         try:
             profile = await load_agent_profile(
                 db, chat_session.user_id, profile_id
@@ -205,11 +209,11 @@ class AgentRuntime:
             raise AgentRunError("agentProfile.selectedUnavailable") from exc
         if not profile.enabled:
             raise AgentRunError("agentProfile.selectedUnavailable")
-        ai_settings = apply_agent_profile_ai(
-            await load_effective_ai(db, chat_session.user_id), profile
+        ai_settings = apply_session_ai(
+            await load_effective_ai(db, chat_session.user_id), chat_session, profile.id
         )
         instance_limits = await SettingsStore.load(db, InstanceLimits)
-        model_id = model_id_override or chat_session.model_config_id or ai_settings.default_model_id
+        model_id = model_id_override or ai_settings.default_model_id
         model = agent_run_support._model_for_id(ai_settings, model_id)
         if model is None:
             raise AgentRunError("session.modelUnavailable")
@@ -746,7 +750,6 @@ class AgentRuntime:
                     result = await MediaService.transcribe_audio(
                         db, audio=audio, language=None,
                         timeout=tools.transcribe_audio.timeout_seconds,
-                        agent_profile_id=run.agent_profile_id or chat_session.agent_profile_id,
                         user_id=user_id,
                     )
                     text = result.text.strip()

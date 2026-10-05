@@ -216,6 +216,9 @@ async def run_tasks(
             # Keep both policy layers: scoped overrides and shell prefixes cannot widen the old offer.
             snapshot["offeredCeiling"] = offered_snapshot
             prepared = []
+            from mato_loop_backend.settings import apply_session_ai, load_effective_ai
+
+            session_ai = apply_session_ai(await load_effective_ai(child_db, session.user_id), session, parent.agent_profile_id or session.agent_profile_id)
             storage = SessionStorage()
             try:
                 for index, task in enumerate(arguments.tasks, start=count):
@@ -228,7 +231,7 @@ async def run_tasks(
                         spawned_by_tool_call_id=tool_call_id, spawn_index=index,
                         agent_profile_id=parent.agent_profile_id or session.agent_profile_id,
                         model_config_id=parent.model_config_id,
-                        reasoning_effort=session.reasoning_effort,
+                        reasoning_effort=session_ai.reasoning_effort,
                         preferred_execution_agent_id=parent.execution_agent_id,
                         current_directory=parent.current_directory_snapshot,
                         memory_mode="disabled",

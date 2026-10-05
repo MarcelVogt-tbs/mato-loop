@@ -590,7 +590,7 @@ describe('chat drafts', () => {
   })
 
   it('applies and persists the backend default current directory', async () => {
-    api.get.mockResolvedValue({
+    api.post.mockResolvedValue({
       data: {
         modelId: 'model-1',
         preferredExecutionAgentId: 'agent-1',
@@ -608,7 +608,8 @@ describe('chat drafts', () => {
   })
 
   it('loads execution defaults for the selected project', async () => {
-    api.get.mockResolvedValueOnce(sessionPage()).mockResolvedValueOnce({
+    api.get.mockResolvedValueOnce(sessionPage())
+    api.post.mockResolvedValueOnce({
       data: {
         modelId: 'model-1',
         preferredExecutionAgentId: 'agent-1',
@@ -620,13 +621,26 @@ describe('chat drafts', () => {
     await chat.setSessionScope('project-1')
     await chat.fetchDefaults('project-1')
 
-    expect(api.get).toHaveBeenCalledWith('/sessions/defaults', {
-      params: { projectId: 'project-1' }
+    expect(api.post).toHaveBeenCalledWith('/sessions/defaults', {
+      project_id: 'project-1', session_template_id: null
     })
     expect(chat.drafts.newSessions['project-1'].options).toMatchObject({
       preferredExecutionAgentId: 'agent-1',
       currentDirectory: '/srv/project'
     })
+  })
+
+  it('keeps the latest template choice when previews overlap', async () => {
+    const responses = []
+    api.post.mockImplementation(() => new Promise((resolve) => responses.push(resolve)))
+    const chat = useChatStore()
+    const first = chat.updateActive({ session_template_id: 'first' })
+    const latest = chat.updateActive({ session_template_id: 'latest' })
+    responses[0]({ data: { sessionTemplateId: 'first' } })
+    await first
+    responses[1]({ data: { sessionTemplateId: 'latest' } })
+    await latest
+    expect(chat.activeContext.sessionTemplateId).toBe('latest')
   })
 
   it('does not start a run while a persisted session setting is being saved', async () => {
@@ -972,6 +986,7 @@ describe('chat drafts', () => {
   })
 
   it('keeps the effective memory mode in sync for a new session draft', async () => {
+    api.post.mockResolvedValue({ data: { effectiveMemoryMode: 'read_only' } })
     const chat = useChatStore()
 
     await chat.updateActive({ memory_mode: 'read_only' })
@@ -981,6 +996,7 @@ describe('chat drafts', () => {
   })
 
   it('keeps instant memory active without model tool support', async () => {
+    api.post.mockResolvedValue({ data: { effectiveMemoryMode: 'read_only', memoryToolsAvailable: false } })
     const chat = useChatStore()
     chat.activeContext.memoryUnavailableReason = 'memory.modelToolsUnavailable'
     chat.activeContext.memoryToolsAvailable = false
@@ -991,7 +1007,7 @@ describe('chat drafts', () => {
   })
 
   it('refreshes effective memory when the draft model changes', async () => {
-    api.get.mockResolvedValue({
+    api.post.mockResolvedValue({
       data: {
         modelId: 'private-model',
         effectiveMemoryMode: 'disabled',
@@ -1003,9 +1019,7 @@ describe('chat drafts', () => {
 
     await chat.updateActive({ model_id: 'private-model' })
 
-    expect(api.get).toHaveBeenCalledWith('/sessions/defaults', {
-      params: { modelId: 'private-model', memoryMode: 'full' }
-    })
+    expect(api.post).toHaveBeenCalledWith('/sessions/defaults', expect.objectContaining({ model_id: 'private-model', memory_mode: 'full' }))
     expect(chat.activeContext).toMatchObject({
       modelId: 'private-model',
       effectiveMemoryMode: 'disabled',
@@ -1018,8 +1032,7 @@ describe('chat drafts', () => {
     const chat = useChatStore()
     chat.activeContext.modelId = 'saved-model'
     chat.activeContext.memoryMode = 'read_only'
-    api.get
-      .mockResolvedValueOnce({ data: { modelId: 'default-model', memoryMode: 'full' } })
+    api.post
       .mockResolvedValueOnce({
         data: {
           effectiveMemoryMode: 'read_only',
@@ -1030,9 +1043,7 @@ describe('chat drafts', () => {
 
     await chat.fetchDefaults()
 
-    expect(api.get).toHaveBeenLastCalledWith('/sessions/defaults', {
-      params: { modelId: 'saved-model', memoryMode: 'read_only' }
-    })
+    expect(api.post).toHaveBeenCalledExactlyOnceWith('/sessions/defaults', expect.objectContaining({ model_id: 'saved-model', memory_mode: 'read_only' }))
     expect(chat.activeContext).toMatchObject({
       modelId: 'saved-model',
       memoryMode: 'read_only',
@@ -1040,7 +1051,8 @@ describe('chat drafts', () => {
     })
   })
 
-  it('applies effective defaults when a persisted model is removed', () => {
+  it('applies effective defaults when a persisted model is removed', async () => {
+    api.post.mockResolvedValue({ data: { effectiveMemoryMode: 'read_only', memoryToolsAvailable: true, memoryUnavailableReason: null } })
     const chat = useChatStore()
     chat.sessionDefaults = {
       modelId: 'default-model',
@@ -1056,7 +1068,7 @@ describe('chat drafts', () => {
       memoryUnavailableReason: 'session.modelUnavailable'
     })
 
-    chat.reconcileNewSession(['default-model'], true)
+    await chat.reconcileNewSession(['default-model'], true)
 
     expect(chat.activeContext).toMatchObject({
       modelId: 'default-model',

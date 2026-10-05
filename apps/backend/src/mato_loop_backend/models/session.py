@@ -136,6 +136,7 @@ class ChatSession(Base):
         ),
     )
     model_config_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    session_profile: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
     agent_profile_id: Mapped[UUID] = mapped_column(
         nullable=False,
         default=GENERAL_PROFILE_ID,

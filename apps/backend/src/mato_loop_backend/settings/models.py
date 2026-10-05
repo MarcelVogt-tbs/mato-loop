@@ -199,20 +199,6 @@ class AgentProfileAccessOverrides(BaseModel):
     private_permissions: AgentProfilePermissions | None = None
     public_permissions: AgentProfilePermissions | None = None
     shell_prefixes: ShellPrefixSettings | None = None
-    default_model_id: UUID | None = None
-    reasoning_effort: ReasoningEffort | None = None
-    compaction_model_id: UUID | None = None
-    title_generation_model_id: UUID | None = None
-    title_vision_fallback_enabled: StrictBool | None = None
-    skill_creation_model_id: UUID | None = None
-    dreaming_model_id: UUID | None = None
-    vision_model_id: UUID | None = None
-    video_model_id: UUID | None = None
-    audio_analysis_model_id: UUID | None = None
-    image_generation_model_id: UUID | None = None
-    speech_generation_model_id: UUID | None = None
-    audio_generation_model_id: UUID | None = None
-    audio_transcription_model_id: UUID | None = None
 
     _validate_availability = field_validator("integration_availability")(
         lambda value: validate_integration_availability(value) if value is not None else value
@@ -220,25 +206,9 @@ class AgentProfileAccessOverrides(BaseModel):
 
     @model_validator(mode="after")
     def reject_null_overrides(self) -> Self:
-        nullable = {
-            "default_model_id",
-            "reasoning_effort",
-            "compaction_model_id",
-            "title_generation_model_id",
-            "skill_creation_model_id",
-            "dreaming_model_id",
-            "vision_model_id",
-            "video_model_id",
-            "audio_analysis_model_id",
-            "image_generation_model_id",
-            "speech_generation_model_id",
-            "audio_generation_model_id",
-            "audio_transcription_model_id",
-        }
         if any(
             getattr(self, field) is None
             for field in self.model_fields_set
-            if field not in nullable
         ):
             raise ValueError("access overrides must not be null")
         return self
@@ -282,20 +252,6 @@ class AgentProfile(BaseModel):
         default_factory=AgentProfilePermissions
     )
     shell_prefixes: ShellPrefixSettings = Field(default_factory=ShellPrefixSettings)
-    default_model_id: UUID | None = None
-    reasoning_effort: ReasoningEffort | None = None
-    compaction_model_id: UUID | None = None
-    title_generation_model_id: UUID | None = None
-    title_vision_fallback_enabled: StrictBool = True
-    skill_creation_model_id: UUID | None = None
-    dreaming_model_id: UUID | None = None
-    vision_model_id: UUID | None = None
-    video_model_id: UUID | None = None
-    audio_analysis_model_id: UUID | None = None
-    image_generation_model_id: UUID | None = None
-    speech_generation_model_id: UUID | None = None
-    audio_generation_model_id: UUID | None = None
-    audio_transcription_model_id: UUID | None = None
     delegation_enabled: StrictBool = False
     session_write_paths: list[str] | None = None
     base_profile_id: UUID | None = Field(default=None, exclude=True)
@@ -354,20 +310,6 @@ class AgentProfileOverrides(BaseModel):
     private_permissions: AgentProfilePermissions | None = None
     public_permissions: AgentProfilePermissions | None = None
     shell_prefixes: ShellPrefixSettings | None = None
-    default_model_id: UUID | None = None
-    reasoning_effort: ReasoningEffort | None = None
-    compaction_model_id: UUID | None = None
-    title_generation_model_id: UUID | None = None
-    title_vision_fallback_enabled: StrictBool | None = None
-    skill_creation_model_id: UUID | None = None
-    dreaming_model_id: UUID | None = None
-    vision_model_id: UUID | None = None
-    video_model_id: UUID | None = None
-    audio_analysis_model_id: UUID | None = None
-    image_generation_model_id: UUID | None = None
-    speech_generation_model_id: UUID | None = None
-    audio_generation_model_id: UUID | None = None
-    audio_transcription_model_id: UUID | None = None
     delegation_enabled: StrictBool | None = None
     session_write_paths: list[str] | None = None
 
@@ -383,19 +325,6 @@ class AgentProfileOverrides(BaseModel):
         nullable = {
             "max_tool_calls",
             "session_write_paths",
-            "default_model_id",
-            "reasoning_effort",
-            "compaction_model_id",
-            "title_generation_model_id",
-            "skill_creation_model_id",
-            "dreaming_model_id",
-            "vision_model_id",
-            "video_model_id",
-            "audio_analysis_model_id",
-            "image_generation_model_id",
-            "speech_generation_model_id",
-            "audio_generation_model_id",
-            "audio_transcription_model_id",
         }
         if any(
             field in self.model_fields_set and getattr(self, field) is None
@@ -1269,13 +1198,14 @@ class InstanceLimits(SettingsDocument):
         return self._mib(self.max_archive_entry_mib)
 
 
-class AiSettingsBase(SettingsDocument):
-    providers: list[LlmProviderConfig] = Field(default_factory=list)
-    models: list[ModelConfig] = Field(default_factory=list)
+class ModelDefaults(BaseModel):
+    model_config = ConfigDict(alias_generator=_camel_case, populate_by_name=True, extra="forbid")
+
     default_model_id: UUID | None = None
+    reasoning_effort: ReasoningEffort | None = None
     compaction_model_id: UUID | None = None
     title_generation_model_id: UUID | None = None
-    title_vision_fallback_enabled: bool = True
+    title_vision_fallback_enabled: StrictBool | None = None
     skill_creation_model_id: UUID | None = None
     dreaming_model_id: UUID | None = None
     vision_model_id: UUID | None = None
@@ -1287,10 +1217,31 @@ class AiSettingsBase(SettingsDocument):
     audio_transcription_model_id: UUID | None = None
 
 
-class AiSettings(AiSettingsBase):
+class ModelDefaultsSettings(SettingsDocument, ModelDefaults):
+    settings_key = "model-defaults"
+    personal_settings_enabled: bool = True
+
+
+class UserModelDefaultsSettings(SettingsDocument, ModelDefaults):
+    settings_key = "model-defaults"
+    settings_scope = SettingsScope.USER
+
+
+class AiSettingsBase(SettingsDocument):
+    model_config = ConfigDict(alias_generator=_camel_case, populate_by_name=True, extra="ignore")
+    providers: list[LlmProviderConfig] = Field(default_factory=list)
+    models: list[ModelConfig] = Field(default_factory=list)
+
+
+class AiProviderSettings(AiSettingsBase):
     settings_key = "ai"
 
     personal_providers_enabled: bool = False
+
+
+class AiSettings(AiProviderSettings, ModelDefaults):
+    """Resolved runtime inventory and defaults; not a persisted settings document."""
+    title_vision_fallback_enabled: bool = True
 
 
 class UserAiSettings(AiSettingsBase):

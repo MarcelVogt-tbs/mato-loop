@@ -48,6 +48,7 @@ from mato_loop_backend.models import (
     ChatSession,
     ContextSummary,
     ExecutionAgent,
+    MemoryMode,
     Message,
     MessageAttachment,
     PermissionGrant,
@@ -56,14 +57,14 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.permissions.policy import execution_directory_scope
 from mato_loop_backend.settings import (
-    AgentProfile,
     AgentProfileUnavailable,
     AiSettings,
     InstanceLimits,
     SettingsStore,
+    apply_session_ai,
     effective_model_trust,
     load_agent_profile,
-    load_agent_profile_ai,
+    load_effective_ai,
 )
 from mato_loop_backend.settings.effective import default_agent_profile_id
 from mato_loop_backend.settings.models import ModelAvailability, ModelCapability
@@ -74,20 +75,6 @@ logger = logging.getLogger(__name__)
 VISIBLE_MESSAGE_ROLES = ("user", "assistant")
 ACTIVE_RUN_STATUSES = ("queued", "running", "waiting_approval", "waiting_input")
 
-
-async def _profile_ai(
-    db: AsyncSession, user_id: UUID, profile_id: UUID | None
-) -> AiSettings:
-    return (await _profile_ai_and_profile(db, user_id, profile_id))[0]
-
-
-async def _profile_ai_and_profile(
-    db: AsyncSession, user_id: UUID, profile_id: UUID | None
-) -> tuple[AiSettings, AgentProfile]:
-    try:
-        return await load_agent_profile_ai(db, user_id, profile_id)
-    except AgentProfileUnavailable as exc:
-        raise SessionServiceError(409, "agentProfile.selectedUnavailable") from exc
 
 PayloadSerializer = Callable[..., Awaitable[dict[str, Any]]]
 MessageSerializer = Callable[..., dict[str, Any]]
@@ -996,15 +983,25 @@ async def create_session(
             raise SessionServiceError(404, "project.notFound", field="projectId")
         if project.archived_at is not None:
             raise SessionServiceError(409, "project.archived")
-    agent_profile_id = payload.agent_profile_id or await default_agent_profile_id(db)
-    await validate_agent_profile(db, user.id, agent_profile_id)
-    ai = await _profile_ai(db, user.id, agent_profile_id)
-    model_id = payload.model_id or ai.default_model_id
-    if content is not None and not model_available(ai, model_id):
-        raise SessionServiceError(409, "session.modelUnavailable", field="modelId")
-    if content is not None and not model_supports_tools(ai, model_id):
-        raise SessionServiceError(409, "session.modelToolsUnavailable", field="modelId")
+    from mato_loop_backend.sessions.templates import (
+        load_template,
+        validate_chat_model,
+        validate_session_profile,
+    )
+    from mato_loop_backend.settings.session_profiles import ChatModelOverride
+
+    template = await load_template(db, user.id, payload.session_template_id)
+    configuration = payload.session_profile or template.snapshot()
+    configuration.template_id = template.id
+    agent_profile_id = payload.agent_profile_id or template.start_agent_id
+    if configuration.agent_ids is not None and agent_profile_id not in configuration.agent_ids:
+        raise SessionServiceError(422, "agentProfile.selectedUnavailable")
     fields = payload.model_fields_set
+    configured_model = payload.model_id if "model_id" in fields else template.model_id
+    configured_reasoning = payload.reasoning_effort if "reasoning_effort" in fields else template.reasoning_effort
+    ai = await validate_session_profile(db, user.id, configuration, model_id=configured_model)
+    validate_chat_model(ai, ChatModelOverride(model_id=configured_model, reasoning_effort=configured_reasoning))
+    await validate_agent_profile(db, user.id, agent_profile_id)
     agent_id = (
         payload.preferred_execution_agent_id
         if "preferred_execution_agent_id" in fields or project is None
@@ -1019,27 +1016,29 @@ async def create_session(
             else None
         )
     )
-    current_directory, directory_policy = await validate_execution_preferences(
-        db,
-        user.id,
-        agent_id,
-        requested_directory,
-    )
     item = ChatSession(
         id=uuid4(),
         user_id=user.id,
         project_id=payload.project_id,
         title="Neue Session",
         title_generation_status=TitleGenerationStatus.PENDING.value,
-        model_config_id=payload.model_id,
+        model_config_id=configured_model,
+        session_profile=configuration.model_dump(mode="json"),
         agent_profile_id=agent_profile_id,
-        reasoning_effort=payload.reasoning_effort.value if payload.reasoning_effort else None,
-        memory_mode=payload.memory_mode.value,
+        reasoning_effort=configured_reasoning.value if configured_reasoning else None,
+        memory_mode=payload.memory_mode.value if "memory_mode" in fields else template.memory_mode,
         web_search_policy=payload.web_search_policy.value,
         preferred_execution_agent_id=agent_id,
-        current_directory=current_directory,
         control_center=payload.control_center.model_dump(mode="json"),
     )
+    ai = apply_session_ai(ai, item)
+    model_id = ai.default_model_id
+    if content is not None and not model_available(ai, model_id):
+        raise SessionServiceError(409, "session.modelUnavailable", field="modelId")
+    if content is not None and not model_supports_tools(ai, model_id):
+        raise SessionServiceError(409, "session.modelToolsUnavailable", field="modelId")
+    current_directory, directory_policy = await validate_execution_preferences(db, user.id, agent_id, requested_directory)
+    item.current_directory = current_directory
     db.add(item)
     item_id = item.id
     item_project_id = item.project_id
@@ -1283,8 +1282,9 @@ async def send_message(
         if "agent_profile_id" in payload.model_fields_set
         else item.agent_profile_id
     )
-    ai = await _profile_ai(db, user.id, requested_profile)
-    model_id = item.model_config_id or ai.default_model_id
+    await validate_agent_profile(db, user.id, requested_profile)
+    ai = apply_session_ai(await load_effective_ai(db, user.id), item, requested_profile)
+    model_id = ai.default_model_id
     if not model_available(ai, model_id):
         raise SessionServiceError(409, "session.modelUnavailable")
     if not model_supports_tools(ai, model_id):
@@ -1350,6 +1350,8 @@ async def update_session(
         "current_directory",
     }
     policy_fields = {
+        "session_template_id",
+        "session_profile",
         "project_id",
         "memory_mode",
         "model_id",
@@ -1368,6 +1370,18 @@ async def update_session(
     item = await owned_session_query(db, session_id, user.id)
     if item is None:
         raise SessionServiceError(404, "session.notFound")
+    if "session_template_id" in fields:
+        from mato_loop_backend.sessions.templates import load_template
+
+        template = await load_template(db, user.id, payload.session_template_id)
+        payload = payload.model_copy(update={
+            "session_profile": template.snapshot(),
+            "agent_profile_id": template.start_agent_id,
+            "model_id": template.model_id,
+            "reasoning_effort": template.reasoning_effort,
+            "memory_mode": MemoryMode(template.memory_mode),
+        })
+        fields = payload.model_fields_set
     target_profile_id = (
         payload.agent_profile_id or await default_agent_profile_id(db)
         if "agent_profile_id" in fields
@@ -1416,7 +1430,7 @@ async def update_session(
         "agent_profile_id" in fields
         and target_profile_id
         != item.agent_profile_id
-    ) or ("model_id" in fields and payload.model_id != item.model_config_id):
+    ) or ("model_id" in fields and payload.model_id != item.model_config_id) or "session_profile" in fields:
         await db.execute(
             delete(PermissionGrant).where(PermissionGrant.session_id == session_id)
         )
@@ -1442,20 +1456,31 @@ async def update_session(
         item.control_center = {
             **(item.control_center or {}), "todos_collapsed": payload.todos_collapsed,
         }
-    if fields & {"model_id", "agent_profile_id"}:
-        ai = await _profile_ai(db, user.id, target_profile_id)
+    if "session_profile" in fields and payload.session_profile is not None:
+        from mato_loop_backend.sessions.templates import validate_session_profile
+
+        await validate_session_profile(db, user.id, payload.session_profile, model_id=payload.model_id if "model_id" in fields else item.model_config_id)
+        item.session_profile = payload.session_profile.model_dump(mode="json")
+    if fields & {"session_profile", "agent_profile_id"}:
+        from mato_loop_backend.settings.effective import session_agent_allowed
+
+        if not session_agent_allowed(item, target_profile_id):
+            raise SessionServiceError(422, "agentProfile.selectedUnavailable")
+    if fields & {"model_id", "agent_profile_id", "session_profile"}:
+        ai = await load_effective_ai(db, user.id)
         requested_model_id = (
             payload.model_id if "model_id" in fields else item.model_config_id
         )
         if requested_model_id is not None and not model_available(ai, requested_model_id):
             raise SessionServiceError(400, "session.modelUnavailable")
-        effective_model_id = requested_model_id or ai.default_model_id
+        if "model_id" in fields:
+            item.model_config_id = payload.model_id
+        ai = apply_session_ai(ai, item, target_profile_id)
+        effective_model_id = ai.default_model_id
         if not model_available(ai, effective_model_id):
             raise SessionServiceError(409, "session.modelUnavailable")
         if not model_supports_tools(ai, effective_model_id):
             raise SessionServiceError(409, "session.modelToolsUnavailable")
-        if "model_id" in fields:
-            item.model_config_id = payload.model_id
     if "agent_profile_id" in fields:
         agent_profile_id = target_profile_id
         await validate_agent_profile(db, user.id, agent_profile_id)
@@ -1468,14 +1493,14 @@ async def update_session(
         item.memory_mode = payload.memory_mode.value
     if "web_search_policy" in fields and payload.web_search_policy is not None:
         if payload.web_search_policy.value == "required":
-            ai = await _profile_ai(db, user.id, target_profile_id)
-            model_id = item.model_config_id or ai.default_model_id
+            ai = apply_session_ai(await load_effective_ai(db, user.id), item, target_profile_id)
+            model_id = ai.default_model_id
             if not model_supports_tools(ai, model_id):
                 raise SessionServiceError(409, "session.modelToolsUnavailable")
         item.web_search_policy = payload.web_search_policy.value
     if fields & execution_fields:
-        ai = await _profile_ai(db, user.id, target_profile_id)
-        model = model_for_session(ai, item.model_config_id or ai.default_model_id)
+        ai = apply_session_ai(await load_effective_ai(db, user.id), item, target_profile_id)
+        model = model_for_session(ai, ai.default_model_id)
         provider = provider_for_session(ai, model)
         agent_id = (
             payload.preferred_execution_agent_id

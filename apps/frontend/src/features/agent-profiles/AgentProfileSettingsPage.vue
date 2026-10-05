@@ -5,7 +5,7 @@
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Agenten</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          {{ admin ? 'Globale Agentenprofile und den Standard für neue Sessions verwalten.' : 'Eigene Agentenprofile mit Anweisungen und Modellen verwalten.' }}
+          {{ admin ? 'Globale Agentenprofile und den Fallback-Agenten verwalten.' : 'Eigene Agentenprofile mit Anweisungen und Arbeitsweise verwalten.' }}
         </p>
       </div>
       <div v-if="showManagement" class="settings-scope-actions row items-center col-auto">
@@ -31,7 +31,7 @@
 
     <PersonalSettingsGate v-if="admin && section === 'general'" :model-value="agents.personalAgentsEnabled" title="Persönliche Agentenprofile erlauben" description="Benutzer können eigene Agentenprofile erstellen und verwenden." :disabled="gateSaving || agents.loading || agents.loadFailed" @update:model-value="setPersonalAgentsEnabled" />
 
-    <q-select dense v-if="admin && showManagement" :model-value="agents.defaultAgentProfileId" outlined emit-value map-options label="Standardprofil" class="q-mb-md" :options="visibleAgents.filter((agent) => agent.enabled !== false).map((agent) => ({ label: agent.name, value: agent.id }))" :disable="agents.loading || gateSaving" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" @update:model-value="setDefaultProfile" />
+    <q-select dense v-if="admin && showManagement" :model-value="agents.defaultAgentProfileId" outlined emit-value map-options label="Fallback-Agent" hint="Für Funktionen ohne explizite Agentenauswahl. Neue Chats verwenden den Startagenten ihrer Sessionvorlage." class="q-mb-md" :options="visibleAgents.filter((agent) => agent.enabled !== false).map((agent) => ({ label: agent.name, value: agent.id }))" :disable="agents.loading || gateSaving" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" @update:model-value="setDefaultProfile" />
 
     <q-banner v-if="personalBlocked" rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="person" color="primary" /></template>

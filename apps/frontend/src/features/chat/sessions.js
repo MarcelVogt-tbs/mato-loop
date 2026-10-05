@@ -432,14 +432,21 @@ export const sessionsActions = {
           return
         }
         await this.updateCurrent(patch)
-        if (Object.hasOwn(patch, 'agent_profile_id')) {
+        if (Object.hasOwn(patch, 'agent_profile_id') || Object.hasOwn(patch, 'session_template_id')) {
           delete this.drafts.sessionAgentProfiles[sessionId]
           this.persistDrafts()
         }
         return
       }
+      if (Object.hasOwn(patch, 'session_template_id')) {
+        this.sessionSettingsPending += 1
+        try { await this.fetchDefaults(this.sessionsProjectId, patch.session_template_id) }
+        finally { this.sessionSettingsPending = Math.max(0, this.sessionSettingsPending - 1) }
+        return
+      }
       const options = this.drafts.newSession.options
       const fields = {
+        session_profile: 'sessionProfile',
         agent_profile_id: 'agentProfileId',
         model_id: 'modelId',
         reasoning_effort: 'reasoningEffort',
@@ -457,28 +464,9 @@ export const sessionsActions = {
       }
       for (const [field, value] of Object.entries(normalizedPatch)) {
         if (fields[field]) options[fields[field]] = value
-        if (field === 'memory_mode') {
-          options.effectiveMemoryMode = options.memoryUnavailableReason
-            && options.memoryUnavailableReason !== 'memory.modelToolsUnavailable'
-            ? 'disabled'
-            : value
-        }
       }
       Object.assign(options, sanitizedSessionOptions(options))
-      if (Object.hasOwn(patch, 'model_id')) {
-        const selectedModelId = patch.model_id
-        const { data } = await api.get('/sessions/defaults', {
-          params: {
-            modelId: selectedModelId,
-            memoryMode: options.memoryMode || 'full'
-          }
-        })
-        if (options.modelId === selectedModelId) {
-          options.effectiveMemoryMode = data.effectiveMemoryMode
-          options.memoryToolsAvailable = data.memoryToolsAvailable
-          options.memoryUnavailableReason = data.memoryUnavailableReason
-        }
-      }
+      if (['model_id', 'agent_profile_id', 'session_profile', 'memory_mode', 'reasoning_effort'].some((field) => Object.hasOwn(patch, field))) await this.fetchDefaults()
       this.persistDrafts()
     },
     async updateCurrent(patch) {

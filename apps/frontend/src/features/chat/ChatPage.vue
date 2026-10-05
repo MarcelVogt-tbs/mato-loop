@@ -360,13 +360,17 @@
           v-if="isNewConversation"
           :session="chat.activeContext"
           :disabled="draftProjectDisabled"
-          :fields="['memory', 'webSearch']"
-          compact
+           :fields="['memory', 'webSearch']"
+            compact
+            equal-fields
           class="q-mb-sm"
           @update="chat.updateActive"
         >
           <template #before>
-            <div class="chat-start-project row no-wrap items-center col-auto">
+            <q-select :model-value="chat.activeContext.sessionTemplateId || templates.defaultTemplateId" :options="templates.templates.map((item) => ({ label: `${item.name}${item.scope === 'personal' ? ' (Persönlich)' : ''}`, value: item.id }))" :disable="draftProjectDisabled" :loading="templates.loading" borderless dense emit-value map-options options-dense hide-bottom-space class="chat-start-select q-px-sm text-body2" aria-label="Sessionvorlage auswählen" @update:model-value="changeTemplate">
+              <template #prepend><q-icon name="dashboard_customize" size="18px" /></template>
+            </q-select>
+            <div class="chat-start-project row no-wrap items-center">
               <q-select
                 id="draft-project-select"
                 :model-value="routeProjectId"
@@ -376,8 +380,7 @@
                 :clearable="Boolean(routeProjectId)"
                 borderless dense emit-value map-options options-dense hide-bottom-space
                 behavior="menu" popup-content-class="app-menu-popup"
-                class="draft-project-select q-px-sm text-body2"
-                :class="$q.screen.lt.sm ? 'col' : 'col-shrink'"
+                class="draft-project-select q-px-sm text-body2 col"
                 aria-label="Projekt wählen oder wechseln"
                 @popup-show="loadDraftProjects"
                 @update:model-value="changeDraftProject"
@@ -385,13 +388,12 @@
                 <template #prepend><q-icon name="folder_open" size="18px" /></template>
                 <template #selected><span class="ellipsis">{{ draftProjectLabel }}</span></template>
                 <template #after-options>
-                  <q-item v-if="$q.screen.lt.sm" clickable v-close-popup :disable="draftProjectDisabled" aria-label="Neues Projekt erstellen" @click="openDraftProjectCreation">
+                  <q-item clickable v-close-popup :disable="draftProjectDisabled" aria-label="Neues Projekt erstellen" @click="openDraftProjectCreation">
                     <q-item-section avatar><q-icon name="add" /></q-item-section>
                     <q-item-section>Neues Projekt erstellen</q-item-section>
                   </q-item>
                 </template>
               </q-select>
-              <q-btn v-if="$q.screen.gt.xs" flat round dense size="sm" icon="add" class="col-auto q-ml-xs" aria-label="Neues Projekt erstellen" :disable="draftProjectDisabled" @click="openDraftProjectCreation" />
             </div>
           </template>
         </SessionSettingsFields>
@@ -541,6 +543,7 @@ import { useIntegrationStore } from 'stores/integrations'
 import { useMailStore } from 'stores/mail'
 import { useProviderStore } from 'stores/providers'
 import { useProjectStore } from 'stores/projects'
+import { useSessionTemplateStore } from 'src/features/settings/session-templates-store'
 import { useQuestionStore } from 'stores/questions'
 import { useToolSettingsStore } from 'stores/tool-settings'
 import { useInstanceLimitsStore } from 'stores/instance-limits'
@@ -581,6 +584,10 @@ const integrations = useIntegrationStore()
 const mail = useMailStore()
 const providers = useProviderStore()
 const projects = useProjectStore()
+const templates = useSessionTemplateStore()
+async function changeTemplate(id) {
+  try { await chat.updateActive({ session_template_id: id }) } catch { /* Central API toast. */ }
+}
 const toolSettings = useToolSettingsStore()
 const controlCenter = useControlCenterStore()
 const workspace = useWorkspaceStore()
@@ -1071,8 +1078,9 @@ function handleVirtualScroll({ from, direction }) {
 }
 
 async function loadBackgroundData() {
-  const [providerResult, integrationResult, , , , defaultsResult] = await Promise.allSettled([
+  const [providerResult, , integrationResult, , , , defaultsResult] = await Promise.allSettled([
     providers.fetchEffective(),
+    templates.load(),
     integrations.fetchEffectiveSearch(),
     mail.fetchAccounts(),
     approvals.fetchPending(),
@@ -1088,12 +1096,12 @@ async function loadBackgroundData() {
     && integrationResult.status === 'fulfilled'
     && defaultsResult.status === 'fulfilled'
   ) {
-    chat.reconcileNewSession(
+    await chat.reconcileNewSession(
       providers.selectionOptions(null, true)
         .filter((option) => !option.disable)
         .map((option) => option.value),
       integrations.search.effectiveEnabled
-    )
+    ).catch(() => {})
   }
 }
 

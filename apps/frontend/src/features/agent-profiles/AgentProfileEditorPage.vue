@@ -16,7 +16,6 @@
     <q-form v-else ref="formRef" @submit.prevent="saveAgent">
       <q-tabs v-model="section" dense no-caps align="left" active-color="primary">
         <q-tab name="profile" icon="badge" label="Profil" />
-        <q-tab name="models" icon="stars" label="Modelle" />
         <q-tab name="access" icon="tune" label="Weitere Einstellungen" />
       </q-tabs>
       <q-tab-panels v-model="section" class="bg-transparent">
@@ -40,16 +39,6 @@
               <q-btn-toggle v-if="!isProtected" :model-value="ownership.sessionWritePaths ? 'own' : 'inherit'" unelevated no-caps toggle-color="primary" :options="inheritOptions" @update:model-value="setOwnership('sessionWritePaths', $event)" />
               <q-select dense v-model="form.sessionWriteMode" outlined emit-value map-options label="Schreiben in die Session-Ablage" :options="sessionWriteModeOptions" :disable="isProtected || !ownership.sessionWritePaths" />
               <q-input dense v-if="form.sessionWriteMode === 'paths'" v-model="form.sessionWritePathsText" outlined type="textarea" autogrow label="Erlaubte relative Pfade" :disable="isProtected || !ownership.sessionWritePaths" :rules="[sessionWritePathsRule]" />
-            </q-card-section>
-          </q-card>
-        </q-tab-panel>
-        <q-tab-panel name="models" class="q-pa-none">
-          <q-card flat class="app-surface q-mt-md">
-            <q-card-section class="q-gutter-md">
-              <q-select dense :model-value="modelValue('defaultModelId')" outlined clearable emit-value map-options label="Agentmodell" :options="modelOptions({ field: 'defaultModelId', requiresTools: true })" :disable="accessProtected" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" hint="Benötigt Tool-Unterstützung. Ohne Auswahl kann dieses Profil keine Agentenläufe starten." @update:model-value="setModelValue('defaultModelId', $event)" />
-              <q-select dense :model-value="modelValue('reasoningEffort')" outlined emit-value map-options label="Reasoning-Stufe" :options="reasoningSelectionOptions" :disable="accessProtected" @update:model-value="setModelValue('reasoningEffort', $event)" />
-              <q-select dense v-for="setting in additionalModelSettings" :key="setting.field" :model-value="modelValue(setting.field)" outlined clearable emit-value map-options :label="setting.label" :options="modelOptions(setting)" :disable="accessProtected" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" @update:model-value="setModelValue(setting.field, $event)" />
-              <q-select dense :model-value="modelValue('titleVisionFallbackEnabled')" outlined emit-value map-options label="Bei Bildinhalten auf das Visionmodell ausweichen" :options="titleVisionFallbackOptions" :disable="accessProtected" @update:model-value="setModelValue('titleVisionFallbackEnabled', $event)" />
             </q-card-section>
           </q-card>
         </q-tab-panel>
@@ -102,10 +91,8 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { useConfirm } from 'src/composables/confirm'
-import { modelReasoningEffortOptions } from 'src/utils/model-runtime'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useAuthStore } from 'stores/auth'
-import { useProviderStore } from 'stores/providers'
 
 defineOptions({ name: 'AgentProfileEditorPage' })
 const $q = useQuasar()
@@ -114,7 +101,6 @@ const router = useRouter()
 const { confirm } = useConfirm()
 const agents = useAgentProfileStore()
 const auth = useAuthStore()
-const providers = useProviderStore()
 const formRef = ref(null)
 const editingAgent = ref(null)
 const loadFailed = ref(false)
@@ -130,7 +116,7 @@ const isProtected = computed(() => editingAgent.value?.protected === true)
 const inheritedAccess = computed(() => admin.value && editingAgent.value && !isProtected.value)
 const accessProfileId = computed(() => inheritedAccess.value ? editingAgent.value.baseProfileId : editingAgent.value?.id)
 const accessProfileName = computed(() => agents.baseProfiles.find((profile) => profile.id === accessProfileId.value)?.name || 'Basisprofil')
-const accessProtected = computed(() => admin.value && !auth.isAdmin || isProtected.value && !editingAgent.value?.accessEditable)
+const accessProtected = computed(() => admin.value && !auth.isAdmin || isProtected.value)
 const blocked = computed(() => !admin.value && !auth.isAdmin && !agents.personalAgentsEnabled)
 const inheritOptions = [{ label: 'Erben', value: 'inherit' }, { label: 'Eigener Wert', value: 'own' }]
 const INHERIT_MODEL_VALUE = '__inherit__'
@@ -141,30 +127,12 @@ const answerDisplayOptions = [
   { label: 'Kompakt', value: 'compact', hint: 'Zeigt die aktuelle Aktivität sofort und den bisherigen Verlauf auf Wunsch.' }
 ]
 const sessionWriteModeOptions = [{ label: 'Unbeschränkt', value: 'unrestricted' }, { label: 'Alles verweigern', value: 'denied' }, { label: 'Nur angegebene Pfade', value: 'paths' }]
-const additionalModelSettings = [
-  { field: 'compactionModelId', label: 'Komprimierungsmodell' },
-  { field: 'titleGenerationModelId', label: 'Titelmodell' },
-  { field: 'skillCreationModelId', label: 'Modell für Skill-Erstellung', requiresTools: true },
-  { field: 'dreamingModelId', label: 'Dreaming-Modell', requiresTools: true },
-  { field: 'visionModelId', label: 'Visionmodell', options: 'vision' },
-  { field: 'videoModelId', label: 'Videomodell', options: 'video' },
-  { field: 'audioAnalysisModelId', label: 'Audioanalyse-Modell', options: 'audio' },
-  { field: 'imageGenerationModelId', label: 'Bildmodell', capability: 'image_generation' },
-  { field: 'speechGenerationModelId', label: 'Sprachmodell', capability: 'speech_generation' },
-  { field: 'audioGenerationModelId', label: 'Audiomodell', capability: 'audio_generation' },
-  { field: 'audioTranscriptionModelId', label: 'Transkriptionsmodell', capability: 'audio_transcription' }
-]
-const modelFields = ['defaultModelId', 'reasoningEffort', 'titleVisionFallbackEnabled', ...additionalModelSettings.map((item) => item.field)]
-const scalarFields = ['instructions', 'runtimeInstructions', 'answerDisplay', 'maxToolCalls', 'todoEnabled', 'delegationEnabled', ...modelFields]
-const form = reactive({ name: '', description: '', baseProfileId: null, instructions: '', runtimeInstructions: '', answerDisplay: 'compact', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false, ...Object.fromEntries(modelFields.map((field) => [field, null])), titleVisionFallbackEnabled: true, sessionWriteMode: 'unrestricted', sessionWritePathsText: '' })
+const scalarFields = ['instructions', 'runtimeInstructions', 'answerDisplay', 'maxToolCalls', 'todoEnabled', 'delegationEnabled']
+const form = reactive({ name: '', description: '', baseProfileId: null, instructions: '', runtimeInstructions: '', answerDisplay: 'compact', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false, sessionWriteMode: 'unrestricted', sessionWritePathsText: '' })
 const ownership = reactive(Object.fromEntries([...scalarFields, 'sessionWritePaths'].map((field) => [field, false])))
 const baseProfiles = computed(() => agents.baseProfiles)
 const baseProfileOptions = computed(() => baseProfiles.value.map((agent) => ({ label: agent.name, value: agent.id })))
 const baseProfile = computed(() => editingAgent.value?.accessBaseline || baseProfiles.value.find((agent) => agent.id === form.baseProfileId))
-const selectedAgentModel = computed(() => (providers.availableModels || providers.models).find((model) => model.id === form.defaultModelId))
-const reasoningOptions = computed(() => modelReasoningEffortOptions(selectedAgentModel.value))
-const reasoningSelectionOptions = computed(() => [{ label: 'Erben: Providerstandard', value: INHERIT_MODEL_VALUE }, ...reasoningOptions.value])
-const titleVisionFallbackOptions = computed(() => [{ label: `Erben: ${baseProfile.value?.titleVisionFallbackEnabled === false ? 'Deaktiviert' : 'Aktiviert'}`, value: INHERIT_MODEL_VALUE }, { label: 'Aktiviert', value: true }, { label: 'Deaktiviert', value: false }])
 const dirty = computed(() => !accessProtected.value && Boolean(savedPayload.value) && JSON.stringify(requestPayload()) !== savedPayload.value)
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Pflichtfeld'
 const toolLimitRule = (value) => Number.isSafeInteger(value) && value > 0 || 'Eine positive ganze Zahl eingeben.'
@@ -177,7 +145,7 @@ function requestPayload() {
   return { name: form.name.trim(), description: form.description.trim(), baseProfileId: form.baseProfileId, overrides }
 }
 function assignValues(agent) {
-  for (const field of scalarFields) form[field] = agent?.[field] ?? ({ instructions: '', runtimeInstructions: '', answerDisplay: 'compact', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false, titleVisionFallbackEnabled: true }[field] ?? null)
+  for (const field of scalarFields) form[field] = agent?.[field] ?? ({ instructions: '', runtimeInstructions: '', answerDisplay: 'compact', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false }[field] ?? null)
   if (agent?.maxToolCalls === null) form.maxToolCalls = null
   const paths = agent?.sessionWritePaths
   form.sessionWriteMode = paths == null ? 'unrestricted' : paths.length ? 'paths' : 'denied'
@@ -196,11 +164,6 @@ function setModelValue(field, value) {
   ownership[field] = value !== INHERIT_MODEL_VALUE
   if (ownership[field]) form[field] = value
   else applyInheritedValues()
-  if (field === 'defaultModelId' && ownership.reasoningEffort && !selectedAgentModel.value?.reasoningEfforts?.includes(form.reasoningEffort)) form.reasoningEffort = null
-}
-function modelOptions(setting) {
-  const options = setting.options === 'vision' ? providers.visionModelOptions : setting.options === 'video' ? providers.videoModelOptions : setting.options === 'audio' ? providers.audioAnalysisModelOptions : providers.selectionOptions(form[setting.field], setting.requiresTools === true, setting.capability || 'chat')
-  return inheritedOptions(setting.field, options, 'Kein Modell')
 }
 function inheritedOptions(field, options, emptyLabel = 'Standard') {
   const inherited = baseProfile.value?.[field]
@@ -221,9 +184,8 @@ async function load() {
   loadFailed.value = false
   notFound.value = false
   agents.selectScope(scope.value)
-  providers.selectScope(scope.value)
   try {
-    await Promise.all([agents.fetchAgents(scope.value), auth.isAdmin ? providers.fetchAll() : providers.fetchEffective()])
+    await agents.fetchAgents(scope.value)
     if (token !== loadToken) return
     if (blocked.value) return
     if (!isCreate.value) {

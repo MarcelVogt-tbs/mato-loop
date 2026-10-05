@@ -32,8 +32,7 @@ from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
     AgentRuntimeSettings,
     SettingsStore,
-    apply_agent_profile_ai,
-    load_agent_profile,
+    apply_session_ai,
     load_effective_ai,
 )
 
@@ -75,11 +74,8 @@ async def generate_title(
                 )
                 await db.commit()
                 return
-            profile = await load_agent_profile(
-                db, chat_session.user_id, chat_session.agent_profile_id
-            )
-            ai_settings = apply_agent_profile_ai(
-                await load_effective_ai(db, chat_session.user_id), profile
+            ai_settings = apply_session_ai(
+                await load_effective_ai(db, chat_session.user_id), chat_session
             )
             runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
             input_message = await db.get(

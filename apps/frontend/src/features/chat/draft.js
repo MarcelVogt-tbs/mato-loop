@@ -84,61 +84,41 @@ export const draftActions = {
         }
       }
     },
-    async fetchDefaults(projectId = this.sessionsProjectId) {
+    async fetchDefaults(projectId = this.sessionsProjectId, templateId = null) {
+      const version = ++this.draftPreviewVersion
       const scope = sessionScopeKey(projectId)
       const targetDraft = this.drafts.newSessions[scope] || this.drafts.newSession
-      const response = projectId
-        ? await api.get('/sessions/defaults', { params: { projectId } })
-        : await api.get('/sessions/defaults')
-      const defaults = sanitizedSessionOptions({
-        ...defaultSessionOptions(),
-        ...response.data
-      })
-      if (sessionScopeKey(this.sessionsProjectId) === scope) this.sessionDefaults = defaults
       const options = targetDraft.options
-      if (options.modelId === null) {
+      const initial = !options.sessionTemplateId && !options.modelId && !options.sessionProfile && !options.agentProfileId && options.memoryMode === 'full' && !options.reasoningEffort
+      const snapshot = JSON.stringify(options)
+      const { data } = await api.post('/sessions/defaults', {
+        project_id: projectId,
+        session_template_id: templateId || options.sessionTemplateId,
+        ...(!initial && !templateId ? {
+          agent_profile_id: options.agentProfileId, model_id: options.modelId,
+          reasoning_effort: options.reasoningEffort, memory_mode: options.memoryMode,
+          session_profile: options.sessionProfile
+        } : {})
+      })
+      if (version !== this.draftPreviewVersion || (this.drafts.newSessions[scope] || this.drafts.newSession) !== targetDraft || JSON.stringify(options) !== snapshot) return
+      if (initial && !templateId) {
+        const defaults = sanitizedSessionOptions({ ...defaultSessionOptions(), ...data })
+        if (sessionScopeKey(this.sessionsProjectId) === scope) this.sessionDefaults = defaults
         Object.assign(options, defaults)
       } else {
-        const { data } = await api.get('/sessions/defaults', {
-          params: {
-            ...(projectId ? { projectId } : {}),
-            modelId: options.modelId,
-            memoryMode: options.memoryMode || 'full'
-          }
-        })
-        options.effectiveMemoryMode = data.effectiveMemoryMode
-        options.memoryToolsAvailable = data.memoryToolsAvailable
-        options.memoryUnavailableReason = data.memoryUnavailableReason
-      }
-      if (!options.agentProfileId && defaults.agentProfileId) {
-        options.agentProfileId = defaults.agentProfileId
+        for (const field of ['sessionTemplateId', 'sessionProfile', 'agentProfileId', 'modelId', 'reasoningEffort', 'memoryMode', 'effectiveMemoryMode', 'memoryToolsAvailable', 'memoryUnavailableReason']) {
+          if (Object.hasOwn(data, field)) options[field] = data[field]
+        }
       }
       this.persistDrafts()
     },
-    reconcileNewSession(validModelIds, searchAvailable) {
+    async reconcileNewSession(validModelIds, searchAvailable) {
       const options = this.drafts.newSession.options
-      if (!validModelIds.includes(options.modelId)) {
+      if (options.modelId && !validModelIds.includes(options.modelId)) {
         options.modelId = validModelIds.includes(this.sessionDefaults.modelId)
           ? this.sessionDefaults.modelId
           : null
-        if (options.modelId) {
-          const memoryDenied = this.sessionDefaults.effectiveMemoryMode === 'disabled'
-          if (options.memoryMode === 'disabled') {
-            options.effectiveMemoryMode = 'disabled'
-            options.memoryToolsAvailable = false
-            options.memoryUnavailableReason = 'memory.sessionDisabled'
-          } else {
-            options.effectiveMemoryMode = memoryDenied
-              ? 'disabled'
-              : options.memoryMode
-            options.memoryToolsAvailable = this.sessionDefaults.memoryToolsAvailable
-            options.memoryUnavailableReason = this.sessionDefaults.memoryUnavailableReason
-          }
-        } else {
-          options.effectiveMemoryMode = 'disabled'
-          options.memoryToolsAvailable = false
-          options.memoryUnavailableReason = 'session.modelUnavailable'
-        }
+        await this.fetchDefaults()
       }
       if (!searchAvailable && options.webSearchPolicy === 'required') {
         options.webSearchPolicy = 'available'

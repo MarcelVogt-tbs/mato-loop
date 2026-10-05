@@ -10,37 +10,25 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.permission_settings import SettingsApiScope, _load_scoped
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import ChatSession, PermissionGrant, UserAccount
-from mato_loop_backend.providers.reasoning import reasoning_profile
-from mato_loop_backend.providers.settings_service import (
-    DEFAULT_MODEL_FIELDS,
-    available_model,
-    model_reference_available,
-)
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
     AgentProfile,
     AgentProfileOverrides,
     AgentProfilesSettings,
-    AiSettings,
     CustomAgentProfile,
     IntegrationSettings,
-    ModelCapability,
     SettingsStore,
     ToolSettings,
     UserAgentIdentitySettings,
     UserAgentProfilesSettings,
     load_effective_agent_profiles,
-    load_effective_ai,
     load_effective_integrations,
     resolve_agent_persona,
     resolve_agent_profile,
     shipped_profiles,
 )
 from mato_loop_backend.settings.effective import personal_settings_allowed
-from mato_loop_backend.settings.models import (
-    AgentProfileAccessOverrides,
-)
 
 router = APIRouter(prefix="/agent-profiles", dependencies=[Depends(require_user)])
 
@@ -166,7 +154,6 @@ async def _response(
             continue
         access = instance_profiles.builtin_access_overrides.get(builtin.id)
         profile.update(
-            accessEditable=scope == "instance" and user.is_admin,
             accessBaseline=builtin.model_dump(mode="json", by_alias=True),
             overrides=access.model_dump(mode="json", by_alias=True) if access else {},
         )
@@ -219,40 +206,6 @@ async def _profile_from_request(
     if existing is not None:
         values.update(existing.overrides.model_dump(include=permission_fields, exclude_unset=True))
     overrides = AgentProfileOverrides.model_validate(values)
-    ai = (
-        await load_effective_ai(db, user.id)
-        if owner_id is not None
-        else await SettingsStore.load(db, AiSettings)
-    )
-    for field, (api_field, _capability) in DEFAULT_MODEL_FIELDS.items():
-        if field not in overrides.model_fields_set:
-            continue
-        model_id = getattr(overrides, field)
-        if model_id is None:
-            continue
-        selected = available_model(ai, model_id)
-        if selected is None:
-            raise ApiError(422, "provider.modelUnavailable", field=api_field)
-        if model_reference_available(ai, field, model_id):
-            continue
-        if field in {
-            "default_model_id",
-            "skill_creation_model_id",
-            "dreaming_model_id",
-        } and not selected.supports_tools:
-            raise ApiError(422, "session.modelToolsUnavailable", field=api_field)
-        raise ApiError(422, "provider.modelCapabilityUnavailable", field=api_field)
-    if "reasoning_effort" in overrides.model_fields_set and overrides.reasoning_effort is not None:
-        model_id = (
-            overrides.default_model_id
-            if "default_model_id" in overrides.model_fields_set
-            else bases[payload.base_profile_id].default_model_id
-        )
-        selected = available_model(ai, model_id, ModelCapability.CHAT)
-        profile = reasoning_profile(selected.model_id, selected.discovery_metadata) if selected else None
-        if profile is None or overrides.reasoning_effort not in profile.options:
-            raise ApiError(422, "validation.invalidChoice", field="reasoningEffort")
-
     return CustomAgentProfile(
         id=profile_id or uuid4(),
         name=payload.name,
@@ -383,47 +336,6 @@ async def set_agent_profile_enabled(
     if profile is None:
         raise ApiError(404, "agentProfile.notFound")
     profile.enabled = payload.enabled
-    await SettingsStore.save(db, settings, user_id=owner_id)
-    await db.commit()
-    return await _response(db, user, settings, scope)
-
-
-@router.put("/{profile_id}/access")
-async def update_builtin_access(
-    profile_id: UUID,
-    payload: AgentProfileAccessOverrides,
-    user: Annotated[UserAccount, Depends(require_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-    scope: SettingsApiScope = "instance",
-) -> dict:
-    if scope != "instance":
-        raise ApiError(409, "agentProfile.defaultProtected")
-    settings, owner_id = await _load_scoped(db, scope, user, for_update=True)
-    base = next((profile for profile in shipped_profiles() if profile.id == profile_id), None)
-    if base is None:
-        raise ApiError(404, "agentProfile.notFound")
-    existing = CustomAgentProfile(
-        id=base.id, name=base.name, description=base.description, base_profile_id=base.id,
-        overrides=AgentProfileOverrides.model_validate(
-            settings.builtin_access_overrides.get(profile_id, AgentProfileAccessOverrides()).model_dump()
-        ),
-    )
-    permission_fields = {"private_permissions", "public_permissions", "shell_prefixes", "integration_availability", "integrations_enabled_by_default"}
-    if permission_fields & payload.model_fields_set:
-        raise ApiError(422, "tools.usePermissionSettings")
-    values = payload.model_dump()
-    values.update(existing.overrides.model_dump(include=permission_fields, exclude_unset=True))
-    await _profile_from_request(
-        db, user, owner_id,
-        AgentProfileRequest(name=base.name, description=base.description, base_profile_id=base.id,
-                            overrides=AgentProfileOverrides.model_validate(payload.model_dump())),
-        existing=existing,
-    )
-    payload = AgentProfileAccessOverrides.model_validate(values)
-    if payload.model_fields_set:
-        settings.builtin_access_overrides[profile_id] = payload
-    else:
-        settings.builtin_access_overrides.pop(profile_id, None)
     await SettingsStore.save(db, settings, user_id=owner_id)
     await db.commit()
     return await _response(db, user, settings, scope)

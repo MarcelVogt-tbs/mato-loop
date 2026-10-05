@@ -57,7 +57,7 @@ async def test_prepare_uses_general_profile_for_ai_defaults(monkeypatch) -> None
 
     profile_ai = AsyncMock(side_effect=RuntimeError("stop after profile lookup"))
     monkeypatch.setattr(session_cache_eval, "AsyncSessionFactory", session_factory)
-    monkeypatch.setattr(session_cache_eval, "load_agent_profile_ai", profile_ai)
+    monkeypatch.setattr(session_cache_eval, "load_effective_ai", profile_ai)
     evaluator = SessionCacheEvaluator(Namespace(user_id=None, recover=False))
 
     try:
@@ -65,7 +65,7 @@ async def test_prepare_uses_general_profile_for_ai_defaults(monkeypatch) -> None
     except RuntimeError as exc:
         assert str(exc) == "stop after profile lookup"
 
-    assert profile_ai.await_args.args[1:] == (user.id, None)
+    assert profile_ai.await_args.args[1:] == (user.id,)
 
 
 def test_report_includes_cache_reads_and_writes() -> None:

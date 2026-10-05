@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 from collections.abc import Collection
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import select
@@ -13,11 +16,14 @@ from mato_loop_backend.settings.models import (
     AgentProfile,
     AgentProfilePermissions,
     AgentProfilesSettings,
+    AiProviderSettings,
     AiSettings,
     EffectiveAgentIdentity,
     InstanceSkillsSettings,
     IntegrationAdapterAvailability,
     IntegrationSettings,
+    ModelDefaults,
+    ModelDefaultsSettings,
     PersonaProfile,
     SkillDefinition,
     SkillsSettings,
@@ -27,33 +33,28 @@ from mato_loop_backend.settings.models import (
     UserAgentProfilesSettings,
     UserAiSettings,
     UserIntegrationSettings,
+    UserModelDefaultsSettings,
     UserToolSettings,
     resolve_agent_profile,
 )
+from mato_loop_backend.settings.session_profiles import ChatModelOverride, SessionProfileSnapshot
 from mato_loop_backend.settings.store import SettingsStore
 
-_AI_DEFAULT_FIELDS = (
-    "default_model_id",
-    "compaction_model_id",
-    "title_generation_model_id",
-    "skill_creation_model_id",
-    "dreaming_model_id",
-    "vision_model_id",
-    "video_model_id",
-    "audio_analysis_model_id",
-    "image_generation_model_id",
-    "speech_generation_model_id",
-    "audio_generation_model_id",
-    "audio_transcription_model_id",
-)
+if TYPE_CHECKING:
+    from mato_loop_backend.models import ChatSession
 
-
-def apply_agent_profile_ai(settings: AiSettings, profile: AgentProfile) -> AiSettings:
+def apply_session_ai(settings: AiSettings, session: ChatSession, profile_id: UUID | None = None) -> AiSettings:
     effective = settings.model_copy(deep=True)
-    for field in _AI_DEFAULT_FIELDS:
-        setattr(effective, field, getattr(profile, field))
-    effective.title_vision_fallback_enabled = profile.title_vision_fallback_enabled
+    configuration = SessionProfileSnapshot.model_validate(session.session_profile or {})
+    override = configuration.agent_models.get(profile_id or session.agent_profile_id, ChatModelOverride())
+    effective.default_model_id = override.model_id or session.model_config_id or effective.default_model_id
+    effective.reasoning_effort = override.reasoning_effort or session.reasoning_effort or effective.reasoning_effort
     return effective
+
+
+def session_agent_allowed(session: ChatSession, profile_id: UUID) -> bool:
+    configuration = SessionProfileSnapshot.model_validate(session.session_profile or {})
+    return configuration.agent_ids is None or profile_id in configuration.agent_ids
 
 _INTEGRATION_TOOL_FIELDS = (
     "resource_labels",
@@ -129,22 +130,31 @@ async def load_effective_agent_identity(
     )
 
 
-async def load_effective_ai(db: AsyncSession, user_id: UUID) -> AiSettings:
-    instance = (await SettingsStore.load(db, AiSettings)).model_copy(deep=True)
-    personal = await SettingsStore.load_optional(db, UserAiSettings, user_id=user_id)
+async def load_effective_ai(db: AsyncSession, user_id: UUID, *, include_personal: bool = True) -> AiSettings:
+    inventory = await SettingsStore.load(db, AiProviderSettings)
+    defaults = await SettingsStore.load_optional(db, ModelDefaultsSettings) or ModelDefaultsSettings()
+    values = defaults.model_dump(include=set(ModelDefaults.model_fields), exclude_none=True)
+    if include_personal and await personal_settings_allowed(db, user_id, defaults.personal_settings_enabled):
+        personal_defaults = await SettingsStore.load_optional(db, UserModelDefaultsSettings, user_id=user_id) or UserModelDefaultsSettings()
+        values.update(personal_defaults.model_dump(exclude_none=True))
+    instance = AiSettings.model_validate({**inventory.model_dump(include=set(AiProviderSettings.model_fields)), **values})
+    personal = await SettingsStore.load_optional(db, UserAiSettings, user_id=user_id) if include_personal else None
     for provider in instance.providers:
         provider.owner_id = None
-    if personal is None or not await personal_settings_allowed(db, user_id, instance.personal_providers_enabled):
-        return instance
+    if personal is not None and await personal_settings_allowed(db, user_id, instance.personal_providers_enabled):
+        personal = personal.model_copy(deep=True)
+        personal_provider_ids = {provider.id for provider in personal.providers}
+        for provider in personal.providers:
+            provider.owner_id = user_id
+        instance.providers.extend(personal.providers)
+        instance.models.extend(
+            model for model in personal.models if model.provider_id in personal_provider_ids
+        )
 
-    personal = personal.model_copy(deep=True)
-    personal_provider_ids = {provider.id for provider in personal.providers}
-    for provider in personal.providers:
-        provider.owner_id = user_id
-    instance.providers.extend(personal.providers)
-    instance.models.extend(
-        model for model in personal.models if model.provider_id in personal_provider_ids
-    )
+    if instance.default_model_id is None:
+        from mato_loop_backend.providers.settings_service import first_available_agent_model
+
+        instance.default_model_id = first_available_agent_model(instance)
 
     return instance
 
@@ -402,15 +412,6 @@ async def load_agent_profile(
     if profile is None:
         raise AgentProfileUnavailable
     return profile
-
-
-async def load_agent_profile_ai(
-    db: AsyncSession,
-    user_id: UUID,
-    profile_id: UUID | None,
-) -> tuple[AiSettings, AgentProfile]:
-    profile = await load_agent_profile(db, user_id, profile_id)
-    return apply_agent_profile_ai(await load_effective_ai(db, user_id), profile), profile
 
 
 async def load_agent_profile_tools(

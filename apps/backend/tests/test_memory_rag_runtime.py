@@ -50,6 +50,7 @@ from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
     AgentIdentitySettings,
     AgentRuntimeSettings,
+    AiProviderSettings,
     AiSettings,
     InstanceLimits,
     IntegrationSettings,
@@ -364,7 +365,7 @@ async def _runtime_setup(
 
     async def load_settings(_db, settings_type, **_kwargs):
         return {
-            AiSettings: ai_settings,
+            AiProviderSettings: ai_settings,
             AgentIdentitySettings: AgentIdentitySettings(),
             AgentRuntimeSettings: runtime_settings,
             InstanceLimits: InstanceLimits(),

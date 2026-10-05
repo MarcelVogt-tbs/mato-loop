@@ -188,6 +188,7 @@ import { useConfirm } from 'src/composables/confirm'
 import { recorderErrorMessage, useAudioRecorder } from 'src/features/chat/audio-recorder'
 import { clipboardAttachmentFiles } from 'src/utils/attachment-drafts'
 import { formatAttachmentDuration } from 'src/utils/attachments'
+import { sessionModel } from '../session-model'
 
 defineOptions({ name: 'ChatComposer' })
 
@@ -241,18 +242,15 @@ const audioScope = computed(() => ({
 }))
 const currentDictation = computed(() => chat.getAudioDictation(audioScope.value.sessionId, audioScope.value.projectId))
 const recordingDuration = computed(() => formatAttachmentDuration(recordingDurationMs.value) || '0:00')
-const selectedAgent = computed(() => agentProfiles.byId(
-  props.session?.agentProfileId || agentProfiles.defaultAgentProfileId
-))
-const effectiveModelId = computed(() => props.session?.modelId || selectedAgent.value?.defaultModelId)
+const effectiveModelId = computed(() => sessionModel(props.session, providers.modelDefaults, chat.activeAgentProfileId).modelId)
 const selectedModelConfig = computed(() => providers.models.find((model) => (
   model.id === effectiveModelId.value
 )))
 const modelSupportsTools = computed(() => selectedModelConfig.value?.supportsTools !== false)
 const transcriptionModelAvailable = computed(() => (
-  Boolean(selectedAgent.value?.audioTranscriptionModelId)
+  Boolean(providers.modelDefaults.audioTranscriptionModelId)
   && providers.capabilityOptions('audio_transcription')
-    .some((option) => option.value === selectedAgent.value.audioTranscriptionModelId)
+    .some((option) => option.value === providers.modelDefaults.audioTranscriptionModelId)
 ))
 const transcriptionUnavailableReason = computed(() => {
   if (toolSettings.loading || !toolSettings.loaded && !toolSettings.loadFailed) {
@@ -316,7 +314,8 @@ function handleComposerKeydown(event) {
     sendMode.value = sendMode.value === 'queue' ? 'interrupt' : 'queue'
   } else {
     if (inputDisabled.value || agentProfiles.loading || agentProfiles.agents.length < 2) return
-    const agents = agentProfiles.agents
+    const agents = agentProfiles.agents.filter((agent) => !props.session?.sessionProfile?.agentIds || props.session.sessionProfile.agentIds.includes(agent.id))
+    if (agents.length < 2) return
     const current = chat.activeAgentProfileId || agentProfiles.defaultAgentProfileId
     const index = agents.findIndex((agent) => agent.id === current)
     void chat.updateActive({ agent_profile_id: agents[(index + 1) % agents.length].id }, { draftOnly: true })

@@ -8,6 +8,7 @@ export const settingsRoutes = [
     path: 'providers', name: 'settings-providers', component: () => import('src/features/providers/ProviderSettingsPage.vue'),
     meta: { settingsLabel: 'Provider', settingsIcon: 'dns' }
   },
+  { path: 'model-defaults', name: 'settings-model-defaults', component: () => import('./ModelDefaultsPage.vue'), meta: { settingsLabel: 'Standardmodelle', settingsIcon: 'stars' } },
   {
     path: 'execution-agents', name: 'settings-execution-agents', component: () => import('src/features/computers/ExecutionAgentSettingsPage.vue'),
     meta: { settingsLabel: 'Computer', settingsIcon: 'computer' }
@@ -34,6 +35,10 @@ export const settingsRoutes = [
       { path: 'new', name: 'settings-agent-create', component: () => import('src/features/agent-profiles/AgentProfileEditorPage.vue') },
       { path: ':agentId', name: 'settings-agent-edit', component: () => import('src/features/agent-profiles/AgentProfileEditorPage.vue') }
     ]
+  },
+  {
+    path: 'session-templates', name: 'settings-session-templates', component: () => import('./SessionTemplatesPage.vue'),
+    meta: { settingsLabel: 'Sessionvorlagen', settingsIcon: 'dashboard_customize' }
   },
   {
     path: 'tools', name: 'settings-tools', component: () => import('src/features/settings/ToolSettingsPage.vue'),
@@ -78,6 +83,7 @@ export const adminRoutes = [
     path: 'providers', name: 'admin-providers', component: () => import('src/features/providers/ProviderSettingsPage.vue'),
     props: { admin: true }, meta: { settingsLabel: 'Provider', settingsIcon: 'dns' }
   },
+  { path: 'model-defaults', name: 'admin-model-defaults', component: () => import('./ModelDefaultsPage.vue'), props: { admin: true }, meta: { settingsLabel: 'Standardmodelle', settingsIcon: 'stars' } },
   {
     path: 'tools', name: 'admin-tools', component: () => import('src/features/settings/ToolSettingsPage.vue'),
     props: { admin: true }, meta: { settingsLabel: 'Tools', settingsIcon: 'build' }
@@ -107,6 +113,10 @@ export const adminRoutes = [
       { path: 'new', name: 'admin-agent-create', component: () => import('src/features/agent-profiles/AgentProfileEditorPage.vue') },
       { path: ':agentId', name: 'admin-agent-edit', component: () => import('src/features/agent-profiles/AgentProfileEditorPage.vue') }
     ]
+  },
+  {
+    path: 'session-templates', name: 'admin-session-templates', component: () => import('./SessionTemplatesPage.vue'),
+    props: { admin: true }, meta: { settingsLabel: 'Sessionvorlagen', settingsIcon: 'dashboard_customize' }
   },
   {
     path: 'channels', name: 'admin-channels', component: () => import('src/features/channels/ChannelSettingsPage.vue'),
