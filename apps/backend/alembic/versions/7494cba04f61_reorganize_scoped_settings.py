@@ -136,4 +136,27 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError("Independent integration permissions cannot be safely downgraded to profile-owned permissions.")
+    # Default documents need no conversion; refuse to silently discard scoped rules.
+    settings = sa.table("settings", sa.column("key", sa.String()), sa.column("data", JSONB()))
+    rows = op.get_bind().execute(sa.select(settings).where(
+        settings.c.key.in_(("tools", "integrations", "agent-identity"))
+    )).mappings()
+    for row in rows:
+        data = row["data"]
+        permissions = []
+        if row["key"] == "tools":
+            permissions = [data]
+            configured = any(data.get("shell_prefixes", {}).values())
+        elif row["key"] == "integrations":
+            instances = data.get("instances", [])
+            permissions = [instance.get("permissions", {}) for instance in instances]
+            configured = any(instance.get("profile_permissions") for instance in instances)
+        else:
+            configured = bool(data.get("profile_personas"))
+        if configured or any(
+            branch.get(field, {}).get(rules)
+            for branch in permissions
+            for field in ("private_permissions", "public_permissions")
+            for rules in ("policies", "resource_policies")
+        ):
+            raise RuntimeError("Downgrade requires default permissions and no profile persona assignments.")

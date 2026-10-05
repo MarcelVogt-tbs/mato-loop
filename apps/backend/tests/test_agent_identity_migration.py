@@ -2,6 +2,8 @@ import importlib.util
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
 
 def _migration_module(filename="e224cc43e462_add_scoped_persona_profiles.py"):
     path = (
@@ -133,6 +135,21 @@ class _Connection:
     def execute(self, statement):
         self.statements.append(statement)
         return _Result(self.rows) if len(self.statements) == 1 else _Result()
+
+
+@pytest.mark.parametrize(("key", "data"), [
+    ("tools", {"private_permissions": {"policies": {"shell.read": "deny"}}}),
+    ("tools", {"shell_prefixes": {"read": ["git status"]}}),
+    ("integrations", {"instances": [{"permissions": {"public_permissions": {"resource_policies": {"calendar": {"read": "deny"}}}}}]}),
+    ("integrations", {"instances": [{"profile_permissions": {"profile": {"available": False}}}]}),
+    ("agent-identity", {"profile_personas": {"profile": "persona"}}),
+])
+def test_scoped_settings_downgrade_rejects_configured_rules(monkeypatch, key, data):
+    migration = _migration_module("7494cba04f61_reorganize_scoped_settings.py")
+    connection = _Connection([{"key": key, "data": data}])
+    monkeypatch.setattr(migration.op, "get_bind", lambda: connection)
+    with pytest.raises(RuntimeError, match="Downgrade requires default permissions"):
+        migration.downgrade()
 
 
 def test_persona_downgrade_preserves_explicit_empty_persona(monkeypatch) -> None:
