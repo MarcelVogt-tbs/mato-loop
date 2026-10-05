@@ -1,23 +1,20 @@
 <template>
   <div v-if="computers.length || agents.loadFailed">
-    <q-tabs
-      :model-value="session.preferredExecutionAgentId || null"
-      dense no-caps inline-label outside-arrows align="left" :breakpoint="0"
-      active-class="app-surface-tonal text-primary" indicator-color="transparent"
-      aria-label="Computer auswählen"
-      @update:model-value="() => {}"
-    >
-      <q-tab
-        v-for="computer in computers" :key="computer.id" :name="computer.id"
-        class="rounded-borders q-px-sm q-mr-xs" content-class="row no-wrap items-center"
+    <div class="row items-center q-gutter-xs" role="group" aria-label="Computer auswählen">
+      <q-btn
+        v-for="computer in computers" :key="computer.id"
+        rounded dense unelevated no-caps no-wrap size="sm"
+        class="col-auto q-px-sm text-weight-regular"
+        :class="session.preferredExecutionAgentId === computer.id ? 'app-surface-tonal text-primary' : 'computer-choice app-muted'"
         :disable="disabled"
+        :aria-pressed="session.preferredExecutionAgentId === computer.id"
         :aria-label="`${computer.alias}: ${computer.connected ? 'Online' : 'Offline'}. ${session.preferredExecutionAgentId === computer.id ? 'Computer abwählen' : 'Computer auswählen'}`"
         @click="selectComputer(computer)"
       >
-        <q-icon :name="computer.connected ? 'computer' : 'desktop_access_disabled'" :color="computer.connected ? 'positive' : 'grey'" size="18px" class="q-mr-xs" />
+        <q-icon :name="computer.connected ? 'computer' : 'desktop_access_disabled'" :color="computer.connected ? 'positive' : undefined" size="16px" class="q-mr-xs" />
         <span class="text-caption">{{ computer.alias }}</span>
-      </q-tab>
-    </q-tabs>
+      </q-btn>
+    </div>
     <div v-if="agents.loadFailed" class="text-caption text-warning q-mt-xs" role="status">Computerstatus konnte nicht aktualisiert werden.</div>
   </div>
 </template>
@@ -40,7 +37,6 @@ const computers = computed(() => {
 
 function selectComputer(computer) {
   if (props.disabled) return
-  // Handle clicks rather than QTabs model updates so an active tab can be cleared.
   const selected = props.session.preferredExecutionAgentId !== computer.id
   emit('update', {
     preferred_execution_agent_id: selected ? computer.id : null,
@@ -48,3 +44,9 @@ function selectComputer(computer) {
   })
 }
 </script>
+
+<style scoped>
+.computer-choice {
+  background: var(--app-surface);
+}
+</style>

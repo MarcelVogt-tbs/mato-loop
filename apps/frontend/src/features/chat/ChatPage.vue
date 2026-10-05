@@ -356,6 +356,13 @@
       />
       <div class="chat-input-dock q-pa-md" :class="{ 'chat-input-dock--with-todos': chat.current?.todos?.length }">
         <h2 v-if="showHome" class="text-weight-medium q-mt-none q-mb-sm" :class="$q.screen.lt.sm ? 'text-subtitle2' : 'text-subtitle1'">Neue Session</h2>
+        <ComputerChoiceStrip
+          v-if="isNewConversation"
+          :session="chat.activeContext"
+          :disabled="draftProjectDisabled"
+          class="q-mb-sm"
+          @update="chat.updateActive"
+        />
         <SessionSettingsFields
           v-if="isNewConversation"
           :session="chat.activeContext"
@@ -367,9 +374,6 @@
           @update="chat.updateActive"
         >
           <template #before>
-            <q-select :model-value="chat.activeContext.sessionTemplateId || templates.defaultTemplateId" :options="templates.templates.map((item) => ({ label: `${item.name}${item.scope === 'personal' ? ' (Persönlich)' : ''}`, value: item.id }))" :disable="draftProjectDisabled" :loading="templates.loading" borderless dense emit-value map-options options-dense hide-bottom-space class="chat-start-select q-px-sm text-body2" aria-label="Sessionvorlage auswählen" @update:model-value="changeTemplate">
-              <template #prepend><q-icon name="dashboard_customize" size="18px" /></template>
-            </q-select>
             <div class="chat-start-project row no-wrap items-center">
               <q-select
                 id="draft-project-select"
@@ -387,23 +391,21 @@
               >
                 <template #prepend><q-icon name="folder_open" size="18px" /></template>
                 <template #selected><span class="ellipsis">{{ draftProjectLabel }}</span></template>
-                <template #after-options>
-                  <q-item clickable v-close-popup :disable="draftProjectDisabled" aria-label="Neues Projekt erstellen" @click="openDraftProjectCreation">
-                    <q-item-section avatar><q-icon name="add" /></q-item-section>
-                    <q-item-section>Neues Projekt erstellen</q-item-section>
-                  </q-item>
+                <template #append>
+                  <q-btn
+                    flat round dense icon="add"
+                    :disable="draftProjectDisabled"
+                    aria-label="Neues Projekt erstellen"
+                    @click.stop="openDraftProjectCreation"
+                  />
                 </template>
               </q-select>
             </div>
+            <q-select :model-value="chat.activeContext.sessionTemplateId || templates.defaultTemplateId" :options="templates.templates.map((item) => ({ label: `${item.name}${item.scope === 'personal' ? ' (Persönlich)' : ''}`, value: item.id }))" :disable="draftProjectDisabled" :loading="templates.loading" borderless dense emit-value map-options options-dense hide-bottom-space class="chat-start-select q-px-sm text-body2" aria-label="Sessionvorlage auswählen" @update:model-value="changeTemplate">
+              <template #prepend><q-icon name="dashboard_customize" size="18px" /></template>
+            </q-select>
           </template>
         </SessionSettingsFields>
-        <ComputerChoiceStrip
-          v-if="isNewConversation"
-          :session="chat.activeContext"
-          :disabled="draftProjectDisabled"
-          class="q-mb-sm"
-          @update="chat.updateActive"
-        />
         <SessionTodoStrip
           :todos="chat.current?.todos || []"
           :collapsed="chat.current?.todosCollapsed || false"

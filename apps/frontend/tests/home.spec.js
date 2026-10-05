@@ -3,7 +3,7 @@ import { createApp, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Quasar, QBanner, QBtn, QIcon, QItem, QItemLabel, QItemSection, QLayout, QList, QPageContainer, QSkeleton, QTabs, QTab, Ripple } from 'quasar'
+import { Quasar, QBanner, QBtn, QIcon, QItem, QItemLabel, QItemSection, QLayout, QList, QPageContainer, QSkeleton, Ripple } from 'quasar'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 const mocks = vi.hoisted(() => ({ get: vi.fn() }))
@@ -101,10 +101,10 @@ it('selects, switches and clears a computer while keeping offline computers last
   const chat = useChatStore()
   root = document.createElement('div'); document.body.append(root)
   app = createApp({ render: () => h(ComputerChoiceStrip, { session: chat.activeContext, onUpdate: chat.updateActive }) })
-  app.use(pinia).use(Quasar, { components: { QTabs, QTab, QIcon } })
+  app.use(pinia).use(Quasar, { components: { QBtn, QIcon } })
   app.mount(root)
   await nextTick()
-  expect([...root.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).toEqual([
+  expect([...root.querySelectorAll('button')].map(button => button.textContent)).toEqual([
     'computerNotebook', 'computerDesktop', 'desktop_access_disabledServer'
   ])
   const selections = []
@@ -114,7 +114,7 @@ it('selects, switches and clears a computer while keeping offline computers last
     selections.push({
       id: chat.activeContext.preferredExecutionAgentId,
       directory: chat.activeContext.currentDirectory,
-      active: root.querySelectorAll('[role="tab"][aria-selected="true"]').length
+      active: root.querySelectorAll('button[aria-pressed="true"]').length
     })
   }
   expect(selections).toEqual([
