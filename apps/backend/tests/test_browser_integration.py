@@ -1161,7 +1161,7 @@ async def test_stored_browser_family_disable_is_projected_into_effective_setting
 
     stored = ToolSettings(tool_availability={"browser": False, "browser_run_code": True})
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=stored))
-    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=personal))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=lambda _db, model, **_kwargs: personal if model is UserToolSettings else None))
     effective = await load_effective_tools(AsyncMock(), uuid4())
     assert all(effective.tool_availability[name] is False for name in BROWSER_TOOL_ACTIONS)
     assert stored.tool_availability == {"browser": False, "browser_run_code": True}
