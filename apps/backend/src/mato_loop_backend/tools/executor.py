@@ -6,8 +6,10 @@ if TYPE_CHECKING:
     from mato_loop_backend.tools.registry import BoundTool
 
 import inspect
+from collections import deque
 from dataclasses import replace
 from datetime import UTC, datetime
+from traceback import walk_tb
 from uuid import UUID
 
 from jsonschema import SchemaError
@@ -18,6 +20,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from mato_loop_backend.agent.audio_analysis import audio_analysis_available
 from mato_loop_backend.agent.video_analysis import video_analysis_available
+from mato_loop_backend.diagnostics.service import schedule_diagnostic_event
 from mato_loop_backend.execution import ExecutionClientError
 from mato_loop_backend.files.service import RootFileError
 from mato_loop_backend.integrations.contracts import IntegrationResource
@@ -451,6 +454,24 @@ async def execute_definition(
         return ToolResult.error(exc.public_code, params=exc.params)
     except SQLAlchemyError:
         raise
-    except Exception:
+    except Exception as exc:
         logger.exception("Tool %s failed", call.name)
+        schedule_diagnostic_event(
+            context.session.user_id, "tool.failed", component="tool",
+            session_id=context.session.id, run_id=context.run_id, correlation_id=call.id,
+            payload={
+                "name": call.name,
+                "errorCode": "tool.executionFailed",
+                "exceptionClass": type(exc).__name__,
+                # Keep code locations only; exception text, source and locals may contain secrets.
+                "stackTrace": [
+                    {
+                        "module": frame.f_globals.get("__name__"),
+                        "function": frame.f_code.co_name,
+                        "line": line,
+                    }
+                    for frame, line in deque(walk_tb(exc.__traceback__), maxlen=12)
+                ],
+            },
+        )
         return ToolResult.error("tool.executionFailed")

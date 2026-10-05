@@ -411,15 +411,35 @@ async def test_tools_without_resource_argument_skip_metadata_discovery(preflight
     case.credential.assert_not_awaited()
 
 
-async def test_authorization_factory_value_error_is_safely_rejected(preflight):
+async def test_authorization_factory_value_error_is_safely_rejected(preflight, monkeypatch):
     case = preflight
     case.authorization_factory.side_effect = ValueError("invalid host-only-token")
+    record = Mock()
+    monkeypatch.setattr(mock_tools_executor, "schedule_diagnostic_event", record)
 
     result = await case.effective.execute(case.call, case.context)
 
     assert result.is_error
     assert result.metadata == {"errorCode": "tool.executionFailed"}
     assert "host-only" not in repr(result)
+    record.assert_called_once_with(
+        case.context.session.user_id, "tool.failed", component="tool",
+        session_id=case.context.session.id, run_id=case.context.run_id,
+        correlation_id=case.call.id, payload=record.call_args.kwargs["payload"],
+    )
+    payload = record.call_args.kwargs["payload"]
+    assert set(payload) == {"name", "errorCode", "exceptionClass", "stackTrace"}
+    assert payload["name"] == case.call.name
+    assert payload["errorCode"] == "tool.executionFailed"
+    assert payload["exceptionClass"] == "ValueError"
+    assert 0 < len(payload["stackTrace"]) <= 12
+    assert all(set(frame) == {"module", "function", "line"} for frame in payload["stackTrace"])
+    assert any(
+        frame["module"] == mock_tools_executor.__name__
+        and frame["function"] == "execute_definition" and frame["line"] > 0
+        for frame in payload["stackTrace"]
+    )
+    assert "host-only" not in repr(payload)
     case.context.ask_handler.assert_not_awaited()
     case.loader.assert_not_awaited()
     case.handler.assert_not_awaited()

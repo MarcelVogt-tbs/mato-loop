@@ -27,7 +27,7 @@ async def run_shared_shell(
     *,
     environment: dict[str, str] | None = None,
 ) -> ToolResult:
-    requested = arguments.model_dump(exclude_none=True)
+    requested = arguments.model_dump(mode="json", exclude_none=True)
     environment = environment or {}
     redacted_values = tuple(environment.values())
     await runtime.check_access()

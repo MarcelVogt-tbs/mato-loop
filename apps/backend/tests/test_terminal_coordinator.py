@@ -234,11 +234,12 @@ def env(monkeypatch):
         timeout=None,
         *,
         environment=None,
+        environment_refs=None,
     ):
         call.arguments = {"command": command}
         return asyncio.create_task(shared_shell.run_shared_shell(
             context,
-            ShellRunArguments(command=command, timeout=timeout),
+            ShellRunArguments(command=command, timeout=timeout, environment=environment_refs or {}),
             terminal,
             environment=environment,
         ))
@@ -288,6 +289,7 @@ async def test_shared_shell_passes_temporary_environment_and_redacts_output(env,
     result = await env.start(
         command,
         environment={"TOKEN": "exact secret"},
+        environment_refs={"TOKEN": secret_id},
     )
 
     assert not result.is_error
