@@ -9,6 +9,7 @@
     <q-toolbar class="file-viewer__toolbar q-px-md">
       <q-toolbar-title class="text-subtitle1 text-weight-bold ellipsis">{{ image.name || 'Bild' }}</q-toolbar-title>
       <q-btn
+        v-if="!image.url.startsWith('blob:')"
         class="file-icon-action"
         flat
         round

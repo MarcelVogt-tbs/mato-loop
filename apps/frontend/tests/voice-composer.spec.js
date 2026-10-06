@@ -30,7 +30,6 @@ vi.mock('src/features/chat/components/AgentActivityPanel.vue', () => ({ default:
 vi.mock('src/shared/ui/AppLogo.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/home/HomeContent.vue', () => ({ default: { render: () => h('section', { class: 'home-stub' }, 'Übersicht') } }))
 vi.mock('src/features/chat/components/ComputerChoiceStrip.vue', () => ({ default: { render: () => null } }))
-vi.mock('src/features/chat/components/ChatQueuedMessages.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/app/control-center/ControlCenterPanel.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/chat/components/MessageContent.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/chat/components/MessageAttachments.vue', () => ({ default: { render: () => null } }))
@@ -144,7 +143,10 @@ beforeEach(async () => {
   app.component('QPage', { render() { return h('div', this.$slots.default?.()) } })
   app.component('QSplitter', { render() { return h('div', this.$slots.before?.()) } })
   app.component('QScrollArea', { methods: { getScrollTarget() { return null } }, render() { return h('div', this.$slots.default?.()) } })
-  app.component('QVirtualScroll', { render: () => null })
+  app.component('QVirtualScroll', {
+    props: ['items'],
+    render() { return h('div', this.items.map((item) => this.$slots.default?.({ item }))) }
+  })
   app.component('QSkeleton', { render: () => null })
   app.component('QDialog', { render: () => null })
   app.mount(root)
@@ -160,6 +162,43 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
+  it('shows the first outgoing message in the transcript with its delivery state', async () => {
+    mocks.api.get.mockResolvedValue({ data: {} })
+    await router.push('/')
+    showPage.value = true
+    await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
+    const entry = { id: 'pending', content: 'Erste Nachricht', attachments: [], paused: false }
+    chat.queuedMessages[chat.activeQueueKey] = [entry]
+    const states = []
+    for (const status of ['queued', 'sending', 'failed']) {
+      chat.queueSendingEntryId = status === 'sending' ? entry.id : null
+      chat.activeQueuedMessages[0].paused = status === 'failed'
+      await nextTick()
+      const message = root.querySelector('.chat-transcript .chat-message--user')
+      states.push([message?.querySelector('.chat-message__content')?.textContent, message?.querySelector('[role="status"]')?.textContent])
+    }
+    expect(states).toEqual([
+      ['Erste Nachricht', 'Noch nicht gesendet'],
+      ['Erste Nachricht', 'Wird gesendet …'],
+      ['Erste Nachricht', 'Nicht gesendet']
+    ])
+  })
+
+  it('keeps sent-message undo and queue recovery visible after local cleanup fails', async () => {
+    mocks.api.get.mockResolvedValue({ data: {} })
+    await router.push('/')
+    showPage.value = true
+    await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
+    const message = { id: 'sent', role: 'user', content: 'Angenommen', createdAt: new Date().toISOString() }
+    chat.current = { id: 'session-1', messages: [message] }
+    chat.queuedMessages['session-1'] = [{ id: 'pending', sentMessageId: 'sent', paused: true, attachments: [] }]
+    const undo = vi.spyOn(chat, 'undoUserMessage').mockResolvedValue(null)
+    await nextTick()
+    await click('Nachricht rückgängig machen')
+    expect([Boolean(root.querySelector('[aria-label="Versand fortsetzen"]')), undo.mock.calls[0]?.[0]?.id])
+      .toEqual([true, 'sent'])
+  })
+
   it.each([false, true])('keeps the Home composer and draft through chat transitions (mobile=%s)', async (mobile) => {
     mocks.mobile = mobile
     chat.outboxLoaded = true

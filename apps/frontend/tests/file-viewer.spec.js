@@ -211,11 +211,11 @@ it('plays audio through the binary content endpoint', async () => {
   expect(root.querySelector('audio[controls]').getAttribute('src')).toBe(workspace.fileUrl('content', 'song.mp3'))
 })
 
-it('offers an exit for a fullscreen image without enabling the fullscreen toggle', () => {
+it.each(['/image.png', 'blob:local-svg'])('offers fullscreen exit and only safe document navigation for %s', (url) => {
   const root = document.createElement('div')
   const exit = vi.fn()
   app = createApp({ render: () => h(ImageViewerPanel, {
-    image: { url: '/image.png', name: 'image.png' }, fullscreen: true, onToggleFullscreen: exit
+    image: { url, name: 'image.png' }, fullscreen: true, onToggleFullscreen: exit
   }) })
   for (const name of ['QToolbar', 'QToolbarTitle', 'QTooltip', 'QSeparator', 'QSpinner']) {
     app.component(name, { render() { return h('div', this.$attrs, this.$slots.default?.()) } })
@@ -225,6 +225,8 @@ it('offers an exit for a fullscreen image without enabling the fullscreen toggle
 
   button(root, 'Vollbild verlassen').click()
   expect(exit).toHaveBeenCalledOnce()
+  expect(root.querySelector('[aria-label="Bild in neuem Tab öffnen"]')?.getAttribute('href'))
+    .toBe(url.startsWith('blob:') ? undefined : url)
 })
 
 it.each(['image', 'text'])('offers an exit for fullscreen %s without enabling the fullscreen toggle', async (kind) => {

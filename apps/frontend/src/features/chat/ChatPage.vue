@@ -62,7 +62,7 @@
         <HomeContent
           v-else-if="showHome && !runPresentation.showActivity"
         />
-        <div v-else-if="isNewConversation" class="chat-session-state text-center q-pa-lg">
+        <div v-else-if="isNewConversation && !chat.activeQueuedMessages.length" class="chat-session-state text-center q-pa-lg">
           <template v-if="!runPresentation.showActivity">
             <h1 class="text-h5 text-weight-bold q-mb-sm">Neue Session</h1>
             <p class="text-body1 app-muted">Was möchtest du besprechen?</p>
@@ -83,8 +83,8 @@
         </div>
 
         <q-virtual-scroll
-          v-else-if="chat.current"
-          :key="chat.current.id"
+          v-else-if="chat.current || chat.activeQueuedMessages.length"
+          :key="chat.activeQueueKey"
           ref="virtualScroll"
           class="chat-transcript q-pa-md"
           :items="displayMessages"
@@ -209,10 +209,10 @@
               <span>Anfrage gestoppt</span>
             </div>
             <div
-              v-if="message.createdAt
+              v-if="message.deliveryStatus || message.queueRecoveryId || message.createdAt
                 || showMessageModel(message)
                 || isMessageTrustLevel(message.trustLevel)"
-              class="chat-message__meta items-center"
+              class="chat-message__meta items-center wrap"
             >
               <q-btn
                 v-if="message.role === 'user' && !chat.current?.archived && !String(message.id).startsWith('local-')"
@@ -223,9 +223,9 @@
                 icon="undo"
                 class="chat-message__meta-action chat-message__meta-action--undo"
                 :loading="messageActionId === message.id"
-                :disable="messageActionId !== null && messageActionId !== message.id"
+                :disable="message.deliveryStatus === 'sending' || (messageActionId !== null && messageActionId !== message.id)"
                 aria-label="Nachricht rückgängig machen"
-                @click.stop="undoMessage(message)"
+                @click.stop="message.outboxId ? undoQueuedMessage(message.outboxId) : undoMessage(message)"
               >
                 <q-tooltip>Nachricht rückgängig machen</q-tooltip>
               </q-btn>
@@ -266,6 +266,29 @@
               >
                 {{ formatRelativeDateTime(message.createdAt, messageTimestampNow) }}
               </time>
+              <span
+                v-if="message.deliveryStatus"
+                class="row inline items-center q-gutter-x-xs"
+                :class="{ 'text-negative': message.deliveryStatus === 'failed' }"
+                role="status"
+              >
+                <q-icon :name="message.deliveryStatus === 'failed' ? 'error_outline' : 'schedule'" size="1em" aria-hidden="true" />
+                <span>{{ message.deliveryStatus === 'sending' ? 'Wird gesendet …' : message.deliveryStatus === 'failed' ? 'Nicht gesendet' : 'Noch nicht gesendet' }}</span>
+              </span>
+              <span v-if="message.queueRecoveryId" class="text-negative" role="status">Lokaler Versand pausiert</span>
+              <q-btn
+                v-if="(message.deliveryStatus === 'failed' && message.outboxId === chat.activeQueuedMessages[0]?.id)
+                  || (message.queueRecoveryId && message.queueRecoveryId === chat.activeQueuedMessages[0]?.id)"
+                flat
+                round
+                dense
+                size="sm"
+                icon="refresh"
+                color="negative"
+                class="chat-message__meta-action"
+                :aria-label="message.queueRecoveryId ? 'Versand fortsetzen' : 'Nachricht erneut senden'"
+                @click.stop="chat.resumeQueuedSend()"
+              />
               <q-btn
                 v-if="canRetryMessage(message)"
                 flat
@@ -347,13 +370,6 @@
           <q-btn flat dense no-caps label="Erneut versuchen" @click="chat.loadQueuedMessages()" />
         </template>
       </q-banner>
-      <ChatQueuedMessages
-        :messages="chat.activeQueuedMessages"
-        :paused="chat.queuedSendPaused"
-        :sending-id="chat.queueSendingEntryId"
-        @resume="chat.resumeQueuedSend"
-        @undo="undoQueuedMessage"
-      />
       <div class="chat-input-dock q-pa-md" :class="{ 'chat-input-dock--with-todos': chat.current?.todos?.length }">
         <h2 v-if="showHome" class="text-weight-medium q-mt-none q-mb-sm" :class="$q.screen.lt.sm ? 'text-subtitle2' : 'text-subtitle1'">Neue Session</h2>
         <ComputerChoiceStrip
@@ -521,7 +537,6 @@ import HomeContent from 'src/features/home/HomeContent.vue'
 import ComputerChoiceStrip from 'src/features/chat/components/ComputerChoiceStrip.vue'
 import ProjectDialog from 'src/features/projects/ProjectDialog.vue'
 import ChatComposer from 'src/features/chat/components/ChatComposer.vue'
-import ChatQueuedMessages from 'src/features/chat/components/ChatQueuedMessages.vue'
 import SessionTodoStrip from 'src/features/chat/components/SessionTodoStrip.vue'
 import SessionSettingsFields from 'src/features/chat/components/SessionSettingsFields.vue'
 import ControlCenterPanel from 'src/app/control-center/ControlCenterPanel.vue'
@@ -562,7 +577,8 @@ import {
 import {
   buildChatTranscript,
   retryAvailableForMessage,
-  withLiveTranscriptMessage
+  withLiveTranscriptMessage,
+  withQueuedTranscriptMessages
 } from 'src/utils/chat-transcript'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { notifyError } from 'src/utils/notifications'
@@ -647,7 +663,7 @@ const routeProjectId = computed(() => (
 ))
 const isNewConversation = computed(() => !routeSessionId.value && !chat.current && !chat.loading && !chat.loadError)
 const newSessionRequested = computed(() => Object.hasOwn(route.query, 'new'))
-const showHome = computed(() => isNewConversation.value && !newSessionRequested.value)
+const showHome = computed(() => isNewConversation.value && !newSessionRequested.value && !chat.activeQueuedMessages.length)
 const draftProjectLabel = computed(() => routeProjectId.value
   ? projects.items.find(project => project.id === routeProjectId.value)?.name || 'Projekt'
   : $q.screen.lt.sm ? 'Projekt' : 'Projekt wählen')
@@ -720,7 +736,7 @@ const hasCurrentWorkHistory = computed(() => (
 ))
 const displayMessages = computed(() => {
   const messages = transcript.value.messages
-  const liveHistory = chat.running && !hasCurrentWorkHistory.value
+  const liveHistory = chat.running && chat.activity.phase !== 'submitting' && !hasCurrentWorkHistory.value
     ? liveWorkHistory.value
     : null
   const liveMessage = {
@@ -735,7 +751,9 @@ const displayMessages = computed(() => {
     streaming: Boolean(chat.streamContent),
     workHistory: liveHistory
   }
-  return withLiveTranscriptMessage(messages, liveMessage)
+  return withQueuedTranscriptMessages(
+    withLiveTranscriptMessage(messages, liveMessage), chat.activeQueuedMessages, chat.queueSendingEntryId
+  )
 })
 const runPresentation = computed(() => agentRunPresentation({
   runId: chat.runId || chat.current?.activeRun?.id,
@@ -1144,7 +1162,7 @@ function addAttachmentFiles(files, done, options) {
 }
 
 function scheduleVirtualScrollRefresh(preservePosition = true) {
-  if (!virtualScroll.value || transcript.value.messages.length === 0) return
+  if (!virtualScroll.value || displayMessages.value.length === 0) return
   const request = {
     anchor: preservePosition && !followingBottom.value
       ? readingAnchor || captureReadingAnchor()
@@ -1183,7 +1201,7 @@ async function completeVirtualScrollRefresh() {
   ) {
     const element = findMessageElement(request.anchor.id)
     if (!element && !request.revealing) {
-      const index = transcript.value.messages.findIndex((message) => message.id === request.anchor.id)
+      const index = displayMessages.value.findIndex((message) => message.id === request.anchor.id)
       if (index >= 0) {
         request.revealing = true
         virtualScroll.value?.scrollTo(index, 'start-force')
@@ -1423,9 +1441,10 @@ watch(routeSessionId, (id) => {
 watch(routeProjectId, () => void reconcileRouteProject())
 watch(routeMessageId, () => void revealRouteMessage())
 watch(
-  () => transcript.value.messages,
+  [() => transcript.value.messages, () => chat.activeQueuedMessages.map((entry) => [entry.id, entry.paused, entry.sentMessageId])],
   () => {
-    if (!followingBottom.value) scheduleVirtualScrollRefresh()
+    if (followingBottom.value) scheduleFollowScroll()
+    else scheduleVirtualScrollRefresh()
   },
   { flush: 'pre' }
 )

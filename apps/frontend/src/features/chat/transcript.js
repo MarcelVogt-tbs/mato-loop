@@ -50,6 +50,23 @@ export function withLiveTranscriptMessage(messages, liveMessage) {
   return liveMessage.workHistory ? [...messages, liveMessage] : messages
 }
 
+export function withQueuedTranscriptMessages(messages, queuedMessages, sendingId) {
+  const sentIds = new Set(messages.map((message) => message.id))
+  const pausedEntries = new Map(queuedMessages.filter((entry) => entry.paused)
+    .map((entry) => [entry.sentMessageId || entry.id, entry.id]))
+  return [...messages.map((message) => pausedEntries.has(message.id)
+    ? { ...message, queueRecoveryId: pausedEntries.get(message.id) } : message), ...queuedMessages
+    .filter((entry) => !sentIds.has(entry.sentMessageId || entry.id))
+    .map((entry) => ({
+      id: entry.id,
+      outboxId: entry.id,
+      role: 'user',
+      content: entry.content,
+      attachments: entry.attachments,
+      deliveryStatus: entry.id === sendingId ? 'sending' : entry.paused ? 'failed' : 'queued'
+    }))]
+}
+
 export function groupWorkHistoryEntries(entries = [], current = null, includePending = false) {
   const grouped = []
   for (const entry of entries) {

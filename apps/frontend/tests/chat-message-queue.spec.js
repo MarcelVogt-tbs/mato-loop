@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto'
 import { createPinia, setActivePinia } from 'pinia'
+import { watch } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { api } = vi.hoisted(() => ({
@@ -21,6 +22,7 @@ import { useQuestionStore } from '../src/stores/questions'
 import { useWorkspaceStore } from '../src/stores/workspace'
 import { clearChatOutbox, loadChatOutbox } from '../src/utils/chat-outbox'
 import { buildAttachmentFormData } from '../src/features/chat/attachments'
+import { withQueuedTranscriptMessages } from '../src/utils/chat-transcript'
 
 const originalURL = globalThis.URL
 
@@ -171,6 +173,10 @@ describe('chat message queue', () => {
     const chat = useChatStore()
     activeSession(chat)
     vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+    const displayed = []
+    const stopWatching = watch(() => withQueuedTranscriptMessages(
+      chat.current.messages, chat.activeQueuedMessages, chat.queueSendingEntryId
+    ), (messages) => displayed.push(messages.filter((message) => message.content === 'Jetzt senden').length))
 
     const sending = chat.send('Jetzt senden')
 
@@ -186,11 +192,21 @@ describe('chat message queue', () => {
       }
     })
     await sending
+    stopWatching()
 
     expect(chat.activeQueuedMessages).toEqual([])
+    expect(displayed.every((count) => count === 1)).toBe(true)
     expect(chat.current.messages).toEqual([
       { id: 'message-1', role: 'user', content: 'Jetzt senden' }
     ])
+  })
+
+  it('persists the first queued message with a reactive session profile', async () => {
+    const chat = useChatStore()
+    const profile = { agentModels: { plan: { modelId: 'plan-model', reasoningEffort: 'high' } } }
+    chat.drafts.newSession.options.sessionProfile = profile
+    await chat.queueMessage('Test')
+    expect((await loadChatOutbox('user-1'))[0]?.options.sessionProfile).toEqual(profile)
   })
 
   it('restores the outbox with its stable id and file after a reload', async () => {
@@ -801,6 +817,33 @@ describe('chat message queue', () => {
     } finally {
       globalThis.indexedDB = indexedDB
     }
+  })
+
+  it.each([false, true])('keeps recovery on an accepted message when local cleanup fails (new session: %s)', async (newSession) => {
+    const chat = useChatStore()
+    if (!newSession) activeSession(chat)
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+    vi.spyOn(useControlCenterStore(), 'attachCreatedSession').mockResolvedValue(null)
+    const entry = await chat.queueMessage('Angenommen')
+    api.post.mockResolvedValue({ data: {
+      session: { id: 'session-1' }, runId: entry.id,
+      message: { id: 'accepted', role: 'user', content: entry.content }
+    } })
+    const indexedDB = globalThis.indexedDB
+    globalThis.indexedDB = undefined
+    try {
+      await chat.submitOutboxEntry(entry)
+    } finally {
+      globalThis.indexedDB = indexedDB
+    }
+    const displayed = withQueuedTranscriptMessages(chat.current.messages, chat.activeQueuedMessages, null)
+    chat.running = false
+    await chat.resumeQueuedSend()
+    chat.cancelQueueDrain()
+    await chat.drainOutbox()
+    expect([displayed, chat.activeQueuedMessages, api.post.mock.calls.length]).toEqual([
+      [{ id: 'accepted', role: 'user', content: entry.content, queueRecoveryId: entry.id }], [], 1
+    ])
   })
 
   it('removes project outbox entries before deletion and restores them after failure', async () => {

@@ -3,7 +3,7 @@ import { api } from 'src/boot/axios'
 import { controlCenterRequestState, useControlCenterStore } from 'src/stores/control-center'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { buildAttachmentFormData, releaseAttachmentDrafts } from 'src/features/chat/attachments'
-import { queueKeyForEntry, sanitizedSessionOptions, sessionCreatePayload, sortSessions } from 'src/features/chat/state'
+import { newSessionQueueKey, queueKeyForEntry, sanitizedSessionOptions, sessionCreatePayload, sortSessions } from 'src/features/chat/state'
 import { errorDescriptor } from 'src/utils/api-errors'
 import { compareChatOutboxEntries, deleteChatOutboxEntry, deleteChatOutboxEntries, saveChatOutboxEntry } from 'src/utils/chat-outbox'
 import { notifyError } from 'src/utils/notifications'
@@ -69,7 +69,9 @@ export const outboxActions = {
           mimeType: attachment.mimeType,
           voiceMessage: attachment.voiceMessage === true
         })),
-        options: sessionId ? null : sanitizedSessionOptions({ ...this.drafts.newSession.options }),
+        options: sessionId ? null : JSON.parse(JSON.stringify(
+          sanitizedSessionOptions(this.drafts.newSession.options)
+        )),
         agentProfileId: sessionId ? this.activeAgentProfileId || null : null,
         controlCenter: sessionId ? null : controlCenterRequestState(useControlCenterStore()),
         activeFile: useWorkspaceStore().activeFileSnapshot(
@@ -234,11 +236,12 @@ export const outboxActions = {
       return this.submitOutboxEntry(entry)
     },
     async submitOutboxEntry(entry) {
-      const key = queueKeyForEntry(entry)
       this.queueSendingEntryId = entry.id
       try {
         let result
-        if (!entry.sessionId) {
+        if (entry.sentMessageId) {
+          result = { created: false, sessionId: entry.sessionId }
+        } else if (!entry.sessionId) {
           result = await this.startSession(entry.content, entry.attachments, {
             options: entry.options,
             projectId: entry.projectId,
@@ -294,6 +297,7 @@ export const outboxActions = {
                 config
               )
             : api.post(`/sessions/${entry.sessionId}/messages`, payload, config))
+          entry.sentMessageId = data.message?.id
           if (data?.runId && this.current?.id === entry.sessionId && this.selectedSessionId === entry.sessionId) {
             if (data.agentProfileId) this.current.agentProfileId = data.agentProfileId
             if (data.message && !this.current.messages.some((message) => message.id === data.message.id)) {
@@ -315,6 +319,7 @@ export const outboxActions = {
           delete this.drafts.sessionAgentProfiles[entry.sessionId]
           this.persistDrafts()
         }
+        const key = queueKeyForEntry(entry)
         await deleteChatOutboxEntry(entry.id)
         const queue = this.queuedMessages[key] || []
         this.queuedMessages[key] = queue.filter((item) => item.id !== entry.id)
@@ -324,6 +329,7 @@ export const outboxActions = {
         releaseAttachmentDrafts(entry.attachments)
         return result
       } catch (error) {
+        const key = queueKeyForEntry(entry)
         const stillQueued = this.queuedMessages[key]?.some((item) => item.id === entry.id)
         if (!stillQueued) return null
         if (entry.continuationRunId && errorDescriptor(error)?.code === 'session.runInactive') {
@@ -418,6 +424,8 @@ export const outboxActions = {
           ? await api.post('/sessions/with-attachments', buildAttachmentFormData(payload, attachments), ...config)
           : await api.post('/sessions', payload, ...config)
         const userMessage = data.message || { id: `local-${Date.now()}`, role: 'user', content }
+        const queuedEntry = this.queuedMessages[newSessionQueueKey(projectId)]?.find((entry) => entry.id === runId)
+        if (queuedEntry) queuedEntry.sentMessageId = userMessage.id
         const session = {
           ...data.session,
           userRequestCount: Number.isInteger(data.session.userRequestCount)
@@ -465,6 +473,13 @@ export const outboxActions = {
         if (recordings) this.setAudioDictation(recordings, session.id)
         this.resetNewDraft(projectId)
         if (stillSelected) {
+          if (queuedEntry) {
+            const key = newSessionQueueKey(projectId)
+            const queue = this.queuedMessages[key]
+            for (const entry of queue) entry.sessionId = session.id
+            this.queuedMessages[session.id] = queue
+            delete this.queuedMessages[key]
+          }
           this.current = session
           this.selectedSessionId = session.id
           this.watchRun(session.id, data.runId, {
@@ -527,6 +542,8 @@ export const outboxActions = {
               ...config
             )
           : await api.post(`/sessions/${session.id}/messages`, payload, ...config)
+        const queuedEntry = this.queuedMessages[session.id]?.find((entry) => entry.id === runId)
+        if (queuedEntry) queuedEntry.sentMessageId = data.message?.id
         if (data.message) {
           const targetSession = this.selectedSessionId === session.id && this.current?.id === session.id
             ? this.current : session

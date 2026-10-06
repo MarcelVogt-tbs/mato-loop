@@ -9,7 +9,6 @@ vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() } }))
 vi.mock('src/features/chat/components/ChatComposer.vue', () => ({ default: { methods: { focus() {} }, render: () => null } }))
 vi.mock('src/app/control-center/ControlCenterPanel.vue', () => ({ default: { render: () => null } }))
-vi.mock('src/features/chat/components/ChatQueuedMessages.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/chat/components/MessageContent.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/chat/components/MessageAttachments.vue', () => ({ default: { render: () => null } }))
 

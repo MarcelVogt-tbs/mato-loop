@@ -32,7 +32,7 @@
           <strong class="ellipsis" :title="attachment.filename || 'Bild'">{{ attachment.filename || 'Bild' }}</strong>
           <div v-if="attachment.safeUrl" class="attachment-preview__actions row items-center no-wrap">
             <q-btn
-              v-if="attachment.safeUrl"
+              v-if="attachment.safeUrl && !attachment.safeUrl.startsWith('blob:')"
               flat
               round
               dense
@@ -190,7 +190,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watchEffect } from 'vue'
 import {
   attachmentIcon,
   attachmentMetadata,
@@ -206,7 +206,23 @@ const props = defineProps({
   attachments: { type: Array, default: () => [] },
   label: { type: String, default: '' }
 })
-const items = computed(() => supportedAttachments(props.attachments))
+const items = ref([])
+watchEffect((onCleanup) => {
+  const urls = []
+  items.value = supportedAttachments(props.attachments).map((attachment) => {
+    if (!(attachment.file instanceof Blob)) return attachment
+    const url = URL.createObjectURL(attachment.file)
+    urls.push(url)
+    return {
+      ...attachment,
+      filename: attachment.file.name || attachment.name,
+      sizeBytes: attachment.file.size,
+      safeUrl: url,
+      audioSources: attachment.kind === 'audio' ? [{ src: url, type: attachment.mimeType }] : []
+    }
+  })
+  onCleanup(() => urls.forEach((url) => URL.revokeObjectURL(url)))
+})
 const images = computed(() => items.value.filter((attachment) => attachment.kind === 'image'))
 const audio = computed(() => items.value.filter((attachment) => attachment.kind === 'audio'))
 const videos = computed(() => items.value.filter((attachment) => attachment.kind === 'video'))

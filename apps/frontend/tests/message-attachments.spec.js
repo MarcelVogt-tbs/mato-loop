@@ -10,6 +10,7 @@ const url = '/api/sessions/550e8400-e29b-41d4-a716-446655440000/messages/550e840
 let app
 afterEach(() => {
   app?.unmount()
+  vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
@@ -35,3 +36,22 @@ it.each(['audio/ogg', 'audio/mpeg', 'audio/webm', 'audio/mp4'])(
     }
   }
 )
+
+it('previews a queued SVG without document navigation and releases its URL on unmount', () => {
+  const createObjectURL = vi.fn(() => 'blob:local-image')
+  const revokeObjectURL = vi.fn()
+  vi.stubGlobal('URL', { createObjectURL, revokeObjectURL })
+  const root = document.createElement('div')
+  app = createApp({ render: () => h(MessageAttachments, { attachments: [{
+    id: 'local', kind: 'image', file: new File(['<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'], 'foto.svg', { type: 'image/svg+xml' })
+  }] }) })
+  for (const name of ['QIcon', 'QTooltip', 'QBanner', 'QDialog', 'QCard', 'QBtn']) {
+    app.component(name, { render() { return h('div', this.$attrs, this.$slots.default?.()) } })
+  }
+  app.mount(root)
+  const preview = root.querySelector('img')?.getAttribute('src')
+  const navigation = root.querySelector('[target="_blank"]')
+  app.unmount()
+  app = null
+  expect([preview, navigation, revokeObjectURL.mock.calls]).toEqual(['blob:local-image', null, [['blob:local-image']]])
+})
