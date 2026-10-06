@@ -1,6 +1,7 @@
 import json
 from copy import deepcopy
 from datetime import UTC, datetime
+from functools import partial
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -8,6 +9,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.context import ContextManager
+from mato_loop_backend.agent.memory_context import MemoryTurn
 from mato_loop_backend.agent.projection import (
     _SHORTENED_TOOL_OUTPUT,
     MAX_ATTACHMENT_EXCERPT_CHARACTERS,
@@ -24,7 +26,22 @@ from mato_loop_backend.agent.projection import (
     model_browser_observations,
 )
 from mato_loop_backend.agent.prompts import general_system_prompt, memory_context_prompt
-from mato_loop_backend.models import ChatSession, ContextSummary, Message, MessageAttachment
+from mato_loop_backend.agent.repository_instructions import repository_instructions_prompt
+from mato_loop_backend.agent.turn_context import build_turn_context
+from mato_loop_backend.execution import (
+    ExecutionClient,
+    WorkspaceReadResult,
+    WorkspaceStatResult,
+)
+from mato_loop_backend.media.attachments import AttachmentService
+from mato_loop_backend.models import (
+    AgentRun,
+    ChatSession,
+    ContextSummary,
+    Message,
+    MessageAttachment,
+)
+from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.providers import service as service_module
 from mato_loop_backend.providers.base import ProviderError, ProviderResult
 from mato_loop_backend.providers.output_budget import (
@@ -39,6 +56,8 @@ from mato_loop_backend.settings import (
     AgentIdentitySettings,
     AgentProfile,
     AgentRuntimeSettings,
+    AiSettings,
+    InstanceLimits,
     PersonaProfile,
     SkillDefinition,
     TrustLevel,
@@ -2417,6 +2436,38 @@ def _settings(**values) -> AgentRuntimeSettings:
     return AgentRuntimeSettings(**(defaults | values))
 
 
+async def test_repository_instructions_fit_small_model_request_budget(monkeypatch) -> None:
+    session = _session()
+    run = AgentRun(id=uuid4(), session_id=session.id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    model = _model(context_window_tokens=8_192).model_copy(update={"characters_per_token": 4, "max_output_tokens": None})
+    provider = LlmProviderConfig(id=model.provider_id, name="Test", adapter_type="openai-compatible", pseudonymization_enabled=False)
+    content = "Use project conventions.\n" * 1_200
+    monkeypatch.setattr(ExecutionClient, "request", AsyncMock(side_effect=[
+        WorkspaceStatResult(path="/work/.git", kind="directory", size=0, modified_at=0.0),
+        WorkspaceStatResult(path="/work/AGENTS.md", kind="file", size=len(content), modified_at=0.0),
+        WorkspaceReadResult(content=content, lines_read=1_200, has_more=False, truncated_lines=[], sha256="a" * 64),
+    ]))
+    records = [_message(session.id, "user", "Inspect the repository.")]
+    projection, _, _ = await build_turn_context(
+        None, db, run, session,
+        ai_settings=AiSettings(providers=[provider], models=[model]), model=model,
+        trust_level=TrustLevel.PRIVATE, settings=_settings(safety_reserve_tokens=512),
+        instance_limits=InstanceLimits(), records=records, system_prompt="System", runtime_instructions="",
+        schemas=[], offered_tool_names=frozenset(), memory_turn=MemoryTurn(candidates=[(None, 0, 0)]),
+        memory_read_enabled=False, request_options={"provider": provider, "model": model, "tools": [],
+                                                   "target_trust_level": TrustLevel.PRIVATE, "pseudonymization_enabled": False},
+        live_tool_calls={}, ephemeral_images={}, attachment_service=AttachmentService,
+        repository_context_loader=partial(
+            repository_instructions_prompt,
+            ExecutionClient(uuid4(), frozenset({"filesystem.stat", "filesystem.read"}), "/work"),
+            records, AsyncMock(return_value=PermissionDecision.ALLOW),
+        ),
+    )
+    assert json.loads(projection.messages[0]["content"].splitlines()[-2])["files"][0]["status"] == "context_budget_exceeded"
+
+
 async def test_current_tool_output_budget_scales_with_model_context() -> None:
     session = _session()
     user = _message(session.id, "user", "Analysiere die Seite")
@@ -3100,10 +3151,9 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     assert "do not lift those constraints or switch profiles" in work
     assert "plan discussed earlier in the conversation" in work
     assert "plan.md" not in work
-    assert "Read AGENTS.md before relevant repository work" in main
-    assert "Read AGENTS.md before relevant repository work" in work
+    assert "Read AGENTS.md" not in main
+    assert "Read AGENTS.md" not in work
     assert "Read AGENTS.md" not in general
-    assert "skip unrelated tasks" in work
     assert "Use file tools for supported file changes" in general
     assert "file.accessDenied is not permission.userDenied" not in general
     assert "file.accessDenied is not permission.userDenied" in general_system_prompt(

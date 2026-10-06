@@ -247,7 +247,14 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
             offset=arguments.offset,
             limit=arguments.limit,
         )
-    return _read_text_result(arguments, target_session_id, result)
+    tool_result = _read_text_result(arguments, target_session_id, result)
+    if arguments.root == "workspace":
+        client = files_access.workspace_client(context)
+        tool_result.metadata["computerRead"] = {
+            "executionAgentId": str(client.agent_id), "currentDirectory": client.current_directory,
+            "path": normalized_path,
+        }
+    return tool_result
 
 
 def _read_text_result(arguments: ReadArguments, target_session_id: UUID, result) -> ToolResult:

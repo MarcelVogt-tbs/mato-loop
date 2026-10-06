@@ -30,6 +30,12 @@ from mato_loop_backend.agent.run_contracts import (
 )
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.events import run_events
+from mato_loop_backend.execution import (
+    ExecutionClient,
+    ExecutionClientError,
+    WorkspaceReadResult,
+    WorkspaceStatResult,
+)
 from mato_loop_backend.execution.manager import ExecutionAgentConnectionManager
 from mato_loop_backend.execution.protocol import HelloMessage, SystemInfo
 from mato_loop_backend.files.service import RootFileService
@@ -54,6 +60,7 @@ from mato_loop_backend.permissions.policy import (
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings import (
+    BUILD_PROFILE_ID,
     GENERAL_PROFILE_ID,
     AgentIdentitySettings,
     AgentRuntimeSettings,
@@ -128,6 +135,7 @@ async def _runtime_setup(
     reasoning_effort: str | None = None,
     model_id: str = "local-model",
     safety_reserve_tokens: int = 4_096,
+    input_budget_tokens: int = 1_000,
 ):
     provider = LlmProviderConfig(
         name="Local",
@@ -270,7 +278,7 @@ async def _runtime_setup(
         return ContextProjection(
             messages=messages,
             estimated_input_tokens=await kwargs["estimate_request"](messages),
-            input_budget_tokens=1_000,
+            input_budget_tokens=input_budget_tokens,
         )
 
     requests = []
@@ -332,6 +340,59 @@ def _clear_continuation_test_state(run_id) -> None:
     AgentRuntime._continuations.pop(run_id, None)
     AgentRuntime._pending_continuations.discard(run_id)
     AgentRuntime._provider_active_runs.discard(run_id)
+
+
+@pytest.mark.parametrize("profile_id,read_available", [
+    (BUILD_PROFILE_ID, True), (BUILD_PROFILE_ID, False), (GENERAL_PROFILE_ID, True),
+])
+async def test_repository_rules_arrive_before_model_and_follow_successful_reads(monkeypatch, profile_id, read_available) -> None:
+    execute = tool_registry._execute_definition
+    call = ToolCall("source", "read", {"root": "computer", "path": "src/main.py"})
+    db, run, requests, _projections, _events = await _runtime_setup(
+        monkeypatch, [ProviderResult(content="", tool_calls=[call]), ProviderResult(content="Done")],
+        search_policy=WebSearchPolicy.DISABLED, execution_agent_id=uuid4(),
+        execution_operations=("filesystem.stat", "filesystem.read"),
+        input_budget_tokens=100_000,
+    )
+    load_settings = SettingsStore.load
+
+    async def load(_db, kind, **kwargs):
+        settings = await load_settings(_db, kind, **kwargs)
+        if kind is ToolSettings:
+            settings.tool_availability["read"] = read_available
+        return settings
+
+    monkeypatch.setattr(SettingsStore, "load", load)
+    session = db.get.return_value
+    session.agent_profile_id = run.agent_profile_id = profile_id
+    session.current_directory = run.current_directory_snapshot = "/work"
+    agent = ExecutionAgent(id=run.execution_agent_id, user_id=session.user_id, alias="Computer")
+    records = AgentRuntime._records.return_value
+    db.get.side_effect = lambda model, _id: agent if model is ExecutionAgent else records[0] if model is Message else session
+    db.add.side_effect = lambda record: records.append(record) if isinstance(record, Message) else None
+    monkeypatch.setattr(tool_registry, "_execute_definition", execute)
+    authorize = AsyncMock(return_value=PermissionDecision.ALLOW)
+    monkeypatch.setattr(AgentRuntime, "_authorize", authorize)
+    files = {"/work/AGENTS.md": "Use project conventions.", "/work/src/AGENTS.md": "Use backend conventions.", "/work/src/main.py": "pass"}
+
+    async def remote(_client, operation, arguments, result_model, **_kwargs):
+        path = arguments["path"]
+        if operation == "filesystem.stat":
+            if path not in files and path != "/work/.git":
+                raise ExecutionClientError("file.pathNotFound")
+            return WorkspaceStatResult(path=path, kind="directory" if path.endswith(".git") else "file",
+                                       size=len(files.get(path, "")), modified_at=0.0)
+        return WorkspaceReadResult(content=files[path], lines_read=1, has_more=False,
+                                   truncated_lines=[], sha256="a" * 64)
+
+    monkeypatch.setattr(ExecutionClient, "request", remote)
+    await AgentRuntime._execute_loop(db, run)
+
+    assert len(requests) == 2
+    enabled = profile_id == BUILD_PROFILE_ID and read_available
+    assert ("Use project conventions." in requests[0]["messages"][0]["content"]) == enabled
+    assert "Use backend conventions." not in requests[0]["messages"][0]["content"]
+    assert requests[1]["messages"][0]["content"].count("Use backend conventions.") == int(enabled)
 
 
 async def test_completed_response_persists_canonical_markdown(monkeypatch) -> None:

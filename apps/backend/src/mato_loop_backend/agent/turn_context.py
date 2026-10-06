@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID
 
@@ -48,6 +49,7 @@ async def build_turn_context(
     ephemeral_images: dict[tuple[UUID, int, str, int], ProviderImageInput],
     attachment_service: type[AttachmentService],
     tool_snapshots: list[dict[str, Any]] | None = None,
+    repository_context_loader: Callable[..., Awaitable[str]] | None = None,
 ) -> tuple[ContextProjection, int, int]:
     async def summarize(source: str, output_tokens: int) -> SummaryResult:
         await run_support._publish_run_phase(run.id, "compacting_context")
@@ -126,6 +128,20 @@ async def build_turn_context(
                 raise
     if projection is None:
         raise ContextError("agent.contextWindowExceeded")
+    if repository_context_loader is not None:
+        candidate_tokens = projection.estimated_input_tokens
+
+        async def fits_context(context: str) -> bool:
+            nonlocal candidate_tokens
+            messages = [{**projection.messages[0], "content": system_prompt + "\n\n" + context},
+                        *projection.messages[1:]]
+            candidate_tokens = await estimate_request(messages)
+            return candidate_tokens <= projection.input_budget_tokens
+
+        repository_context = await repository_context_loader(fits_context=fits_context)
+        if repository_context:
+            projection.messages[0]["content"] = system_prompt + "\n\n" + repository_context
+            projection.estimated_input_tokens = candidate_tokens
     if projection.compacted:
         summary = projection.context_summary
         assert summary is not None

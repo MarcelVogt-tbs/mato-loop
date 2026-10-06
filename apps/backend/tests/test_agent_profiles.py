@@ -56,6 +56,7 @@ def test_builtin_agent_profile_defaults() -> None:
         SYSADMIN_PROFILE_ID,
     ]
     assert [profile.name for profile in profiles] == ["Allgemein", "Plan", "Build", "Sysadmin"]
+    assert [profile.repository_instructions_enabled for profile in profiles] == [False, True, True, False]
     assert AgentProfilesSettings().profiles == []
     assert "persona_id" not in type(default).model_fields
     assert default.private_permissions == AgentProfilePermissions()
@@ -239,6 +240,7 @@ def test_custom_profile_stores_only_sparse_typed_overrides() -> None:
         baseProfileId=PLAN_PROFILE_ID,
         overrides={
             "todoEnabled": False,
+            "repositoryInstructionsEnabled": False,
             "maxToolCalls": None,
             "integrationAvailability": {},
             "privatePermissions": {},
@@ -249,6 +251,7 @@ def test_custom_profile_stores_only_sparse_typed_overrides() -> None:
 
     assert saved["profiles"][0]["overrides"] == {
         "todoEnabled": False,
+        "repositoryInstructionsEnabled": False,
         "maxToolCalls": None,
         "integrationAvailability": {},
         "privatePermissions": {},
@@ -257,6 +260,7 @@ def test_custom_profile_stores_only_sparse_typed_overrides() -> None:
     assert AgentProfilesSettings.model_validate(saved).model_dump(mode="json", by_alias=True) == saved
     effective = resolve_agent_profile(profile, core_profiles()[1], None)
     assert effective.todo_enabled is False
+    assert effective.repository_instructions_enabled is False
     assert effective.session_write_paths == []
     assert effective.public_permissions == core_profiles()[1].public_permissions
 

@@ -34,7 +34,7 @@
               <q-checkbox dense :model-value="form.maxToolCalls === null" label="Tool-Aufrufe unbegrenzt" :disable="isProtected || !ownership.maxToolCalls" @update:model-value="form.maxToolCalls = $event ? null : 25" />
               <q-input dense v-if="form.maxToolCalls !== null" v-model.number="form.maxToolCalls" outlined type="number" min="1" label="Maximale Tool-Aufrufe" :disable="isProtected || !ownership.maxToolCalls" :rules="[toolLimitRule]" />
               <div class="text-caption app-muted">Unbegrenzte Aufrufe können Modell- und Dienstkosten erhöhen.</div>
-               <AppSelect dense v-for="field in booleanFields" :key="field.key" :model-value="modelValue(field.key)" outlined emit-value map-options :label="field.label" :options="inheritedOptions(field.key, [{ label: 'An', value: true }, { label: 'Aus', value: false }])" :disable="isProtected" @update:model-value="setModelValue(field.key, $event)" />
+                <AppSelect dense v-for="field in booleanFields" :key="field.key" :model-value="modelValue(field.key)" outlined emit-value map-options :label="field.label" :hint="field.hint" :options="inheritedOptions(field.key, [{ label: 'An', value: true }, { label: 'Aus', value: false }])" :disable="isProtected" @update:model-value="setModelValue(field.key, $event)" />
               <q-btn-toggle v-if="!isProtected" :model-value="ownership.sessionWritePaths ? 'own' : 'inherit'" unelevated no-caps toggle-color="primary" :options="inheritOptions" @update:model-value="setOwnership('sessionWritePaths', $event)" />
               <AppSelect dense v-model="form.sessionWriteMode" outlined emit-value map-options label="Schreiben in die Session-Ablage" :options="sessionWriteModeOptions" :disable="isProtected || !ownership.sessionWritePaths" />
               <q-input dense v-if="form.sessionWriteMode === 'paths'" v-model="form.sessionWritePathsText" outlined type="textarea" autogrow label="Erlaubte relative Pfade" :disable="isProtected || !ownership.sessionWritePaths" :rules="[sessionWritePathsRule]" />
@@ -121,10 +121,10 @@ const blocked = computed(() => !admin.value && !auth.isAdmin && !agents.personal
 const inheritOptions = [{ label: 'Erben', value: 'inherit' }, { label: 'Eigener Wert', value: 'own' }]
 const INHERIT_MODEL_VALUE = '__inherit__'
 const textFields = [{ key: 'instructions', label: 'Anweisungen', max: 16000 }, { key: 'runtimeInstructions', label: 'Laufzeit-Hinweis', max: 4000 }]
-const booleanFields = [{ key: 'todoEnabled', label: 'Session-Aufgaben' }, { key: 'delegationEnabled', label: 'Delegation erlauben' }]
+const booleanFields = [{ key: 'todoEnabled', label: 'Session-Aufgaben' }, { key: 'delegationEnabled', label: 'Delegation erlauben' }, { key: 'repositoryInstructionsEnabled', label: 'AGENTS.md automatisch laden', hint: 'Lädt Projekt- und Verzeichnisanweisungen automatisch in den Modellkontext. Bestehende Zugriffsrechte gelten weiterhin.' }]
 const sessionWriteModeOptions = [{ label: 'Unbeschränkt', value: 'unrestricted' }, { label: 'Alles verweigern', value: 'denied' }, { label: 'Nur angegebene Pfade', value: 'paths' }]
-const scalarFields = ['instructions', 'runtimeInstructions', 'maxToolCalls', 'todoEnabled', 'delegationEnabled']
-const form = reactive({ name: '', description: '', baseProfileId: null, instructions: '', runtimeInstructions: '', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false, sessionWriteMode: 'unrestricted', sessionWritePathsText: '' })
+const scalarFields = ['instructions', 'runtimeInstructions', 'maxToolCalls', 'todoEnabled', 'delegationEnabled', 'repositoryInstructionsEnabled']
+const form = reactive({ name: '', description: '', baseProfileId: null, instructions: '', runtimeInstructions: '', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false, repositoryInstructionsEnabled: false, sessionWriteMode: 'unrestricted', sessionWritePathsText: '' })
 const ownership = reactive(Object.fromEntries([...scalarFields, 'sessionWritePaths'].map((field) => [field, false])))
 const baseProfiles = computed(() => agents.baseProfiles)
 const baseProfileOptions = computed(() => baseProfiles.value.map((agent) => ({ label: agent.name, value: agent.id })))
@@ -141,7 +141,7 @@ function requestPayload() {
   return { name: form.name.trim(), description: form.description.trim(), baseProfileId: form.baseProfileId, overrides }
 }
 function assignValues(agent) {
-  for (const field of scalarFields) form[field] = agent?.[field] ?? ({ instructions: '', runtimeInstructions: '', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false }[field] ?? null)
+  for (const field of scalarFields) form[field] = agent?.[field] ?? ({ instructions: '', runtimeInstructions: '', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false, repositoryInstructionsEnabled: false }[field] ?? null)
   if (agent?.maxToolCalls === null) form.maxToolCalls = null
   const paths = agent?.sessionWritePaths
   form.sessionWriteMode = paths == null ? 'unrestricted' : paths.length ? 'paths' : 'denied'

@@ -13,6 +13,7 @@ import mato_loop_backend.agent.run_support as agent_run_support
 from mato_loop_backend.agent.memory_context import MemoryCache, prepare_memory_context
 from mato_loop_backend.agent.model_turn import complete_model_turn, persist_model_response
 from mato_loop_backend.agent.prompts import general_system_prompt
+from mato_loop_backend.agent.repository_instructions import repository_instructions_prompt
 from mato_loop_backend.agent.run_contracts import AgentRunError, _VisibleResponse
 from mato_loop_backend.agent.run_support import (
     _OPENSCAD_FENCE_PATTERN,
@@ -351,6 +352,21 @@ async def execute_loop_body(
         tool_schema_tokens = turn_tools.schema_tokens
         inactive_capability_groups = turn_tools.inactive_groups
         search_pending = turn_tools.search_pending
+        repository_context_loader = None
+        if (_active_agent_profile is not None and _active_agent_profile.repository_instructions_enabled
+                and tool_settings.tool_availability.get("read", True)
+                and selected_execution_agent is not None and execution_client is not None
+                and execution_client.supports("filesystem.stat") and execution_client.supports("filesystem.read")):
+            repository_context_loader = partial(
+                repository_instructions_prompt,
+                execution_client, records,
+                partial(
+                    cls._authorize, db, run, chat_session,
+                    ToolCall(id=f"repository-instructions:{run.id}", name="read",
+                             arguments={"root": "computer", "path": "AGENTS.md"}),
+                    root_files=root_files, check_only=True,
+                ),
+            )
         render_system_prompt = partial(
             general_system_prompt,
             chat_session,
@@ -465,6 +481,7 @@ async def execute_loop_body(
             live_tool_calls=live_tool_calls,
             ephemeral_images=ephemeral_images,
             attachment_service=AttachmentService,
+            repository_context_loader=repository_context_loader,
         )
 
         hold_response = (

@@ -56,13 +56,13 @@ async function mountEditor(path = '/agents/agent', extraAgents = [], personalAge
 afterEach(() => { app?.unmount(); root?.remove(); vi.clearAllMocks() })
 
 it('starts a sparse profile from Allgemein and retains explicit content when changing its base', async () => {
-  const page = await mountEditor('/agents/new?copyFrom=agent', [{ id: 'plan', scope: 'instance', protected: true, name: 'Plan', instructions: 'Create a plan.', maxToolCalls: null, delegationEnabled: true }])
+  const page = await mountEditor('/agents/new?copyFrom=agent', [{ id: 'plan', scope: 'instance', protected: true, name: 'Plan', instructions: 'Create a plan.', maxToolCalls: null, delegationEnabled: true, repositoryInstructionsEnabled: true }])
   expect(page.requestPayload()).toEqual({ name: '', description: '', baseProfileId: builtinId, overrides: {} })
   page.setOwnership('instructions', 'own')
   page.form.instructions = 'Eigene Aufgabe'
   page.form.baseProfileId = 'plan'
   page.applyInheritedValues()
-  expect(page.form).toMatchObject({ instructions: 'Eigene Aufgabe', maxToolCalls: null, delegationEnabled: true })
+  expect(page.form).toMatchObject({ instructions: 'Eigene Aufgabe', maxToolCalls: null, delegationEnabled: true, repositoryInstructionsEnabled: true })
 })
 
 it('uses the administration route for global creation', async () => {
@@ -98,9 +98,10 @@ it('blocks a regular users personal editor when personal profiles are disabled',
 it('round-trips profile content without sending permissions through the profile API', async () => {
   const page = await mountEditor()
   page.setModelValue('todoEnabled', false)
+  page.setModelValue('repositoryInstructionsEnabled', true)
   await page.saveAgent()
   expect(api.put).toHaveBeenCalledWith('/agent-profiles/agent', expect.objectContaining({ overrides: {
-    maxToolCalls: null, todoEnabled: false, delegationEnabled: true, sessionWritePaths: []
+    maxToolCalls: null, todoEnabled: false, delegationEnabled: true, repositoryInstructionsEnabled: true, sessionWritePaths: []
   } }), { params: { scope: 'personal' } })
 })
 

@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 import mato_loop_backend.tools.interaction as mock_tools_interaction
 from mato_loop_backend.agent.question_decisions import answer_question
+from mato_loop_backend.agent.repository_instructions import repository_instructions_prompt
 from mato_loop_backend.agent.run_support import _external_working_directory_policy, _tool_policy
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.session_secrets import session_secrets
@@ -390,6 +391,62 @@ async def test_workspace_read_dispatches_absolute_filesystem_path(tmp_path) -> N
     assert client.requests[0] == (
         "filesystem.stat",
         {"path": "/home/user/project/README.md"},
+    )
+
+
+@pytest.mark.parametrize("decision", [PermissionDecision.ASK, PermissionDecision.DENY])
+async def test_repository_prefetch_does_not_access_unapproved_paths(decision) -> None:
+    client = FakeExecutionClient({}, {"filesystem.stat", "filesystem.read"}, "/work")
+    prompt = await repository_instructions_prompt(client, [], AsyncMock(return_value=decision))
+    assert client.requests == []
+    assert json.loads(prompt.splitlines()[-2])["files"] == [{
+        "path": "/work/AGENTS.md", "directory": "/work",
+        "status": "approval_required" if decision == PermissionDecision.ASK else "denied",
+    }]
+
+
+@pytest.mark.parametrize("kind,size,status", [
+    ("symlink", 12, "file.unsupportedType"),
+    ("file", 33 * 1024, "file.tooLarge"),
+    ("file", 12, "missing"),
+])
+async def test_repository_prefetch_reports_unreadable_files(kind, size, status) -> None:
+    def stat(arguments):
+        path = arguments["path"]
+        if path.endswith("AGENTS.md") and status == "missing":
+            raise ExecutionClientError("file.pathNotFound")
+        return WorkspaceStatResult(path=path, kind="directory" if path.endswith(".git") else kind,
+                                   size=size, modified_at=0.0)
+
+    client = FakeExecutionClient({"filesystem.stat": stat}, {"filesystem.stat", "filesystem.read"}, "/work")
+    prompt = await repository_instructions_prompt(client, [], AsyncMock(return_value=PermissionDecision.ALLOW))
+    assert json.loads(prompt.splitlines()[-2])["files"][0]["status"] == status
+    assert all(operation != "filesystem.read" for operation, _arguments in client.requests)
+
+
+@pytest.mark.parametrize("root", ["/work", "C:/work"])
+@pytest.mark.parametrize("external", [PermissionDecision.ALLOW, PermissionDecision.ASK])
+async def test_repository_prefetch_stops_at_git_and_permission_boundaries(root, external) -> None:
+    cwd = root + "/src"
+
+    def stat(arguments):
+        path = arguments["path"]
+        if path == root + "/.git" or path.endswith("AGENTS.md"):
+            return WorkspaceStatResult(path=path, kind="file", size=10, modified_at=0.0)
+        raise ExecutionClientError("file.pathNotFound")
+
+    async def authorize(request):
+        return PermissionDecision.ALLOW if json.loads(request.resource_scope)["path"].startswith(cwd + "/") else external
+
+    client = FakeExecutionClient({
+        "filesystem.stat": stat,
+        "filesystem.read": WorkspaceReadResult(content="Use conventions.", lines_read=1, has_more=False,
+                                               truncated_lines=[], sha256="a" * 64),
+    }, {"filesystem.stat", "filesystem.read"}, cwd)
+    prompt = await repository_instructions_prompt(client, [], authorize)
+    assert [entry["path"] for entry in json.loads(prompt.splitlines()[-2])["files"]] == (
+        [root + "/AGENTS.md", cwd + "/AGENTS.md"] if external == PermissionDecision.ALLOW
+        else [cwd + "/AGENTS.md"]
     )
 
 

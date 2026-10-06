@@ -242,6 +242,7 @@ class AgentProfile(BaseModel):
     runtime_instructions: str = Field(default="", max_length=4000)
     max_tool_calls: ProfileToolCallLimit = 25
     todo_enabled: StrictBool = False
+    repository_instructions_enabled: StrictBool = False
     integrations_enabled_by_default: StrictBool = True
     integration_availability: dict[str, StrictBool] = Field(default_factory=dict)
     private_permissions: AgentProfilePermissions = Field(
@@ -303,6 +304,7 @@ class AgentProfileOverrides(BaseModel):
     runtime_instructions: str | None = Field(default=None, max_length=4000)
     max_tool_calls: ProfileToolCallLimit = None
     todo_enabled: StrictBool | None = None
+    repository_instructions_enabled: StrictBool | None = None
     integrations_enabled_by_default: StrictBool | None = None
     integration_availability: dict[str, StrictBool] | None = None
     private_permissions: AgentProfilePermissions | None = None
@@ -466,6 +468,7 @@ def plan_profile() -> AgentProfile:
         ),
         max_tool_calls=None,
         todo_enabled=True,
+        repository_instructions_enabled=True,
         integrations_enabled_by_default=False,
         private_permissions=AgentProfilePermissions(policies=policies),
         public_permissions=AgentProfilePermissions(policies=policies),
@@ -504,6 +507,7 @@ def build_profile() -> AgentProfile:
         ),
         max_tool_calls=None,
         todo_enabled=True,
+        repository_instructions_enabled=True,
         integrations_enabled_by_default=False,
         private_permissions=AgentProfilePermissions(policies=policies),
         public_permissions=AgentProfilePermissions(policies=policies),
