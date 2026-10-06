@@ -12,6 +12,7 @@
       </div>
       <div class="column q-gutter-md">
         <TemplateField v-if="has('template')" />
+        <MessageSizeField v-if="has('messageSize')" />
         <AgentField v-if="has('agent')" />
         <ComputerField v-if="has('computer')" />
         <MemoryField v-if="has('memory')" />
@@ -31,6 +32,7 @@
 
     <template v-if="!grouped">
       <TemplateField v-if="has('template')" />
+      <MessageSizeField v-if="has('messageSize')" />
       <AgentField v-if="has('agent')" />
       <ModelField v-if="has('model')" />
       <ReasoningField v-if="has('reasoning') && (!compact || reasoningEffortOptions.length)" />
@@ -55,7 +57,7 @@ import { useSessionTemplateStore } from 'src/features/settings/session-templates
 
 defineOptions({ name: 'SessionSettingsFields' })
 
-const SESSION_FIELDS = ['template', 'agent', 'computer', 'memory', 'webSearch']
+const SESSION_FIELDS = ['template', 'messageSize', 'agent', 'computer', 'memory', 'webSearch']
 const LLM_FIELDS = ['model', 'reasoning']
 const props = defineProps({
   session: { type: Object, default: null },
@@ -66,7 +68,7 @@ const props = defineProps({
   equalFields: Boolean,
   grouped: Boolean,
   showWarning: Boolean,
-  fields: { type: Array, default: () => ['agent', 'model', 'reasoning', 'computer', 'memory', 'webSearch'] }
+  fields: { type: Array, default: () => ['agent', 'model', 'reasoning', 'computer', 'memory', 'webSearch', 'messageSize'] }
 })
 const emit = defineEmits(['update', 'agent-popup-hide'])
 const $q = useQuasar()
@@ -279,10 +281,18 @@ const TemplateField = defineComponent(() => () => h(QSelect, selectProps({
   options: templateOptions.value,
   label: 'Sessionvorlage',
   disable: props.disabled || templates.loading,
-  hint: 'Ein Wechsel übernimmt Agenten, Memory sowie Modell- und Reasoningvorgaben neu.',
+  hint: 'Ein Wechsel übernimmt Agenten, Memory, Nachrichtengröße sowie Modell- und Reasoningvorgaben neu.',
   persistentHint: true,
   'onUpdate:modelValue': (value) => update({ session_template_id: value })
 }), { prepend: () => h(QIcon, { name: 'dashboard_customize' }) }))
+const MessageSizeField = defineComponent(() => () => h(QSelect, selectProps({
+  modelValue: props.session?.sessionProfile?.messageSize || 'standard',
+  options: [{ label: 'Standard', value: 'standard' }, { label: 'Klein', value: 'small' }],
+  label: 'Nachrichtengröße',
+  hint: 'Klein reduziert die Schriftgröße und die Abstände der Nachrichten.',
+  persistentHint: true,
+  'onUpdate:modelValue': (messageSize) => update({ session_profile: { ...props.session?.sessionProfile, messageSize } })
+}), { prepend: () => h(QIcon, { name: 'format_size' }) }))
 const AgentField = defineComponent(() => () => h(QSelect, selectProps({
   modelValue: displayedAgentProfileId.value,
   options: agentProfileOptions.value,

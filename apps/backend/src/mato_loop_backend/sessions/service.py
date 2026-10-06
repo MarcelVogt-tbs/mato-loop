@@ -68,6 +68,7 @@ from mato_loop_backend.settings import (
 )
 from mato_loop_backend.settings.effective import default_agent_profile_id
 from mato_loop_backend.settings.models import ModelAvailability, ModelCapability
+from mato_loop_backend.settings.session_profiles import SessionProfileSnapshot
 
 from .cleanup import descendant_sessions
 
@@ -1430,7 +1431,12 @@ async def update_session(
         "agent_profile_id" in fields
         and target_profile_id
         != item.agent_profile_id
-    ) or ("model_id" in fields and payload.model_id != item.model_config_id) or "session_profile" in fields:
+    ) or ("model_id" in fields and payload.model_id != item.model_config_id) or (
+        "session_profile" in fields
+        and payload.session_profile is not None
+        and payload.session_profile.model_dump(exclude={"message_size"})
+        != SessionProfileSnapshot.model_validate(item.session_profile or {}).model_dump(exclude={"message_size"})
+    ):
         await db.execute(
             delete(PermissionGrant).where(PermissionGrant.session_id == session_id)
         )

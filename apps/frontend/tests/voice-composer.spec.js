@@ -4,7 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ notify: vi.fn(), api: { post: vi.fn(), get: vi.fn(), patch: vi.fn(), delete: vi.fn() }, recorder: null, mobile: false }))
+const mocks = vi.hoisted(() => ({ notify: vi.fn(), api: { post: vi.fn(), get: vi.fn(), patch: vi.fn(), delete: vi.fn() }, recorder: null, mobile: false, resetMessageSizes: vi.fn() }))
 vi.mock('src/boot/axios', () => ({ api: mocks.api }))
 vi.mock('quasar', () => ({ useQuasar: () => ({ notify: mocks.notify, platform: { is: { mobile: mocks.mobile } }, screen: { gt: { xs: !mocks.mobile, sm: !mocks.mobile }, lt: { sm: mocks.mobile } } }) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: async () => true }) }))
@@ -145,6 +145,7 @@ beforeEach(async () => {
   app.component('QScrollArea', { methods: { getScrollTarget() { return null } }, render() { return h('div', this.$slots.default?.()) } })
   app.component('QVirtualScroll', {
     props: ['items'],
+    methods: { reset: mocks.resetMessageSizes, refresh() {} },
     render() { return h('div', this.items.map((item) => this.$slots.default?.({ item }))) }
   })
   app.component('QSkeleton', { render: () => null })
@@ -162,6 +163,20 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
+  it('invalidates cached message heights when the session message size changes', async () => {
+    mocks.api.get.mockResolvedValue({ data: {} })
+    await router.push('/')
+    showPage.value = true
+    await nextTick()
+    chat.current = { id: 'session-1', sessionProfile: { messageSize: 'standard' }, messages: [{ id: 'message', role: 'user', content: 'Text' }] }
+    await nextTick()
+    mocks.resetMessageSizes.mockClear()
+
+    chat.current.sessionProfile.messageSize = 'small'
+
+    await vi.waitFor(() => expect(mocks.resetMessageSizes).toHaveBeenCalled())
+  })
+
   it('shows the first outgoing message in the transcript with its delivery state', async () => {
     mocks.api.get.mockResolvedValue({ data: {} })
     await router.push('/')

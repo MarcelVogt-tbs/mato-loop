@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Annotated, Any, ClassVar, Literal, Self
+from typing import Annotated, Any, ClassVar, Self
 from unicodedata import category as unicode_category
 from uuid import UUID, uuid4
 
@@ -240,7 +240,6 @@ class AgentProfile(BaseModel):
     description: str = Field(default="", max_length=500)
     instructions: str = Field(min_length=1, max_length=16_000)
     runtime_instructions: str = Field(default="", max_length=4000)
-    answer_display: Literal["timeline", "compact"] = "compact"
     max_tool_calls: ProfileToolCallLimit = 25
     todo_enabled: StrictBool = False
     integrations_enabled_by_default: StrictBool = True
@@ -302,7 +301,6 @@ class AgentProfileOverrides(BaseModel):
 
     instructions: str | None = Field(default=None, max_length=16_000)
     runtime_instructions: str | None = Field(default=None, max_length=4000)
-    answer_display: Literal["timeline", "compact"] | None = None
     max_tool_calls: ProfileToolCallLimit = None
     todo_enabled: StrictBool | None = None
     integrations_enabled_by_default: StrictBool | None = None
@@ -466,7 +464,6 @@ def plan_profile() -> AgentProfile:
             "implementation requires Build. Do not announce implementation or mark implementation "
             "tasks as in progress or completed. Do not invent project details."
         ),
-        answer_display="timeline",
         max_tool_calls=None,
         todo_enabled=True,
         integrations_enabled_by_default=False,
@@ -505,7 +502,6 @@ def build_profile() -> AgentProfile:
             "that materially blocks the work; decide ordinary implementation details from the project. "
             "Verify the result appropriately and report the outcome, checks, and remaining blockers concisely."
         ),
-        answer_display="timeline",
         max_tool_calls=None,
         todo_enabled=True,
         integrations_enabled_by_default=False,
@@ -543,7 +539,6 @@ def sysadmin_profile() -> AgentProfile:
             "data-loss risks before the applicable tool call. Verify approved changes and report the outcome, "
             "checks, and remaining problems concisely. Never expose secrets."
         ),
-        answer_display="timeline",
         max_tool_calls=None,
         todo_enabled=True,
         integrations_enabled_by_default=False,

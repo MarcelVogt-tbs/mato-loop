@@ -62,8 +62,8 @@ def test_todo_tool_follows_profile_availability(profile, enabled):
 
 
 @pytest.mark.parametrize("model", [AgentProfile, AgentProfileOverrides])
-@pytest.mark.parametrize("value", [None, "cards", 1])
-def test_answer_display_rejects_invalid_explicit_values(model, value):
+@pytest.mark.parametrize("value", ["timeline", "compact"])
+def test_removed_answer_display_is_rejected(model, value):
     values = {"answerDisplay": value}
     if model is AgentProfile:
         values.update(name="Agent", instructions="Task")

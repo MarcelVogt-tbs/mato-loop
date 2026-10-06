@@ -2741,6 +2741,35 @@ async def test_template_switch_replaces_session_overrides(monkeypatch) -> None:
     }
 
 
+@pytest.mark.parametrize("field,revokes", [("message_size", False), ("agent_ids", True), ("agent_models", True)])
+async def test_session_profile_changes_preserve_grants_only_for_message_size(monkeypatch, field, revokes) -> None:
+    from mato_loop_backend.settings.session_profiles import (
+        ChatModelOverride,
+        SessionTemplatesSettings,
+    )
+
+    user = _user()
+    provider = LlmProviderConfig(name="Cloud", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="chat")
+    ai = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_: ai if kind is AiProviderSettings else kind()))
+    template = SessionTemplatesSettings().templates[1]
+    profile = template.snapshot()
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Test", agent_profile_id=template.start_agent_id, model_config_id=model.id, memory_mode="disabled", session_profile=profile.model_dump(mode="json"))
+    profile = profile.model_copy(update={field: {
+        "message_size": "standard",
+        "agent_ids": [template.start_agent_id],
+        "agent_models": {template.start_agent_id: ChatModelOverride(model_id=model.id)},
+    }[field]})
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    db.scalar.return_value = None
+
+    await update_session(session.id, SessionUpdateRequest(session_profile=profile), user, db)
+
+    assert db.execute.await_count == int(revokes)
+
+
 async def test_manual_title_change_skips_automatic_generation(monkeypatch) -> None:
     user = _user()
     session = ChatSession(

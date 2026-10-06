@@ -28,6 +28,7 @@ class SessionProfileConfig(BaseModel):
     model_config = ChatModelOverride.model_config
     agent_ids: list[UUID] | None = Field(default=None, min_length=1)
     agent_models: dict[UUID, ChatModelOverride] = Field(default_factory=dict)
+    message_size: Literal["standard", "small"] = "standard"
 
     @model_validator(mode="after")
     def validate_agents(self):
@@ -48,7 +49,7 @@ class SessionTemplate(SessionProfileConfig, ChatModelOverride):
     memory_mode: Literal["full", "read_only", "disabled"] = "full"
 
     def snapshot(self) -> SessionProfileSnapshot:
-        return SessionProfileSnapshot(template_id=self.id, agent_ids=self.agent_ids, agent_models=self.agent_models).model_copy(deep=True)
+        return SessionProfileSnapshot(template_id=self.id, agent_ids=self.agent_ids, agent_models=self.agent_models, message_size=self.message_size).model_copy(deep=True)
 
     @model_validator(mode="after")
     def validate_start(self):
@@ -62,7 +63,7 @@ class SessionTemplatesSettings(SettingsDocument):
     personal_settings_enabled: bool = True
     templates: list[SessionTemplate] = Field(default_factory=lambda: [
         SessionTemplate(id=DEFAULT_TEMPLATE_ID, name="Default", agent_ids=[GENERAL_PROFILE_ID, SYSADMIN_PROFILE_ID], start_agent_id=GENERAL_PROFILE_ID),
-        SessionTemplate(id=CODING_TEMPLATE_ID, name="Coding", agent_ids=[PLAN_PROFILE_ID, BUILD_PROFILE_ID], start_agent_id=PLAN_PROFILE_ID),
+        SessionTemplate(id=CODING_TEMPLATE_ID, name="Coding", agent_ids=[PLAN_PROFILE_ID, BUILD_PROFILE_ID], start_agent_id=PLAN_PROFILE_ID, message_size="small"),
     ])
 
 

@@ -67,7 +67,7 @@ async def test_template_copy_and_agent_model_resolution(documents):
     ai = await load_effective_ai(AsyncMock(), user_id)
     plan = apply_session_ai(ai, session)
     build = apply_session_ai(ai, session, BUILD_PROFILE_ID)
-    assert (ai.default_model_id, plan.default_model_id, plan.reasoning_effort, build.default_model_id, plan.title_generation_model_id, session_agent_allowed(session, SYSADMIN_PROFILE_ID)) == (personal_model, plan_model, "high", session_model, global_model, False)
+    assert (ai.default_model_id, plan.default_model_id, plan.reasoning_effort, build.default_model_id, plan.title_generation_model_id, session_agent_allowed(session, SYSADMIN_PROFILE_ID), snapshot.message_size) == (personal_model, plan_model, "high", session_model, global_model, False, "small")
 
 
 async def test_preview_resolves_the_current_draft_not_the_original_template(documents):
@@ -75,7 +75,7 @@ async def test_preview_resolves_the_current_draft_not_the_original_template(docu
     model_id = uuid4()
     payload = SessionOptionsRequest(session_template_id=CODING_TEMPLATE_ID, agent_profile_id=PLAN_PROFILE_ID, memory_mode="read_only", session_profile=SessionProfileSnapshot(agent_ids=[PLAN_PROFILE_ID, BUILD_PROFILE_ID], agent_models={PLAN_PROFILE_ID: ChatModelOverride(model_id=model_id, reasoning_effort="high")}))
     result = await session_defaults(user, AsyncMock(spec=AsyncSession), payload)
-    assert (result["effectiveModelId"], result["effectiveReasoningEffort"], result["memoryMode"]) == (str(model_id), "high", "read_only")
+    assert (result["effectiveModelId"], result["effectiveReasoningEffort"], result["memoryMode"], result["sessionProfile"]["messageSize"]) == (str(model_id), "high", "read_only", "standard")
 
 
 @pytest.mark.parametrize("explicit", [False, True])
@@ -110,12 +110,17 @@ async def test_automatic_model_display_respects_scope_and_provider_gate(document
 
 def test_default_templates_and_invalid_agent_selection():
     default, coding = SessionTemplatesSettings().templates
-    assert [(item.name, item.agent_ids, item.start_agent_id, item.memory_mode) for item in (default, coding)] == [
-        ("Default", [GENERAL_PROFILE_ID, SYSADMIN_PROFILE_ID], GENERAL_PROFILE_ID, "full"),
-        ("Coding", [PLAN_PROFILE_ID, BUILD_PROFILE_ID], PLAN_PROFILE_ID, "full"),
+    assert [(item.name, item.agent_ids, item.start_agent_id, item.memory_mode, item.message_size) for item in (default, coding)] == [
+        ("Default", [GENERAL_PROFILE_ID, SYSADMIN_PROFILE_ID], GENERAL_PROFILE_ID, "full", "standard"),
+        ("Coding", [PLAN_PROFILE_ID, BUILD_PROFILE_ID], PLAN_PROFILE_ID, "full", "small"),
     ]
     with pytest.raises(ValidationError):
         SessionTemplate(name="Invalid", agent_ids=[PLAN_PROFILE_ID], start_agent_id=BUILD_PROFILE_ID)
+
+
+def test_session_message_size_rejects_unknown_values():
+    with pytest.raises(ValidationError):
+        SessionProfileSnapshot(message_size="compact")
 
 
 @pytest.mark.parametrize("admin", [False, True])

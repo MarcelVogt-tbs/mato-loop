@@ -805,7 +805,7 @@ async def test_agent_profile_request_replaces_sparse_overrides(monkeypatch) -> N
     existing = CustomAgentProfile(
         name="Agent", description="Old", baseProfileId=GENERAL_PROFILE_ID,
         enabled=False,
-        overrides={"instructions": "Old task", "answerDisplay": "timeline"},
+        overrides={"instructions": "Old task", "todoEnabled": True},
     )
     user = UserAccount(
         id=uuid4(), username="admin", password_hash="hash", is_admin=True

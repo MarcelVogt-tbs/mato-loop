@@ -32,7 +32,7 @@
       @keydown="handleScrollKey"
       @mousedown="handleScrollAreaMouseDown"
     >
-      <div ref="scrollContent" class="chat-page__scroll-content" :class="{ 'chat-page__scroll-content--mobile-home': $q.screen.lt.md && showHome && !runPresentation.showActivity && !chat.loading && !chat.loadError }">
+      <div ref="scrollContent" class="chat-page__scroll-content" :class="{ 'chat-messages--small': chat.activeContext.sessionProfile?.messageSize === 'small', 'chat-page__scroll-content--mobile-home': $q.screen.lt.md && showHome && !runPresentation.showActivity && !chat.loading && !chat.loadError }">
         <div v-if="chat.loading" class="chat-transcript q-pa-md" aria-label="Session wird geladen">
           <div v-for="width in ['42%', '86%', '64%']" :key="width" class="chat-session-skeleton">
             <q-skeleton type="text" width="88px" />
@@ -1161,13 +1161,14 @@ function addAttachmentFiles(files, done, options) {
   done?.(result)
 }
 
-function scheduleVirtualScrollRefresh(preservePosition = true) {
+function scheduleVirtualScrollRefresh(preservePosition = true, resetSizes = false) {
   if (!virtualScroll.value || displayMessages.value.length === 0) return
   const request = {
     anchor: preservePosition && !followingBottom.value
       ? readingAnchor || captureReadingAnchor()
       : null,
     revealing: false,
+    resetSizes: resetSizes || virtualScrollRefreshPending?.resetSizes,
     version: ++virtualScrollRefreshVersion
   }
   if (userScrollActive || virtualScrollRefreshInProgress) {
@@ -1183,7 +1184,8 @@ function startVirtualScrollRefresh(request) {
   virtualScrollRefreshFrame = window.requestAnimationFrame(() => {
     virtualScrollRefreshFrame = null
     if (virtualScrollRefreshRequest !== request) return
-    virtualScroll.value?.refresh(-1)
+    if (request.resetSizes) virtualScroll.value?.reset()
+    else virtualScroll.value?.refresh(-1)
   })
 }
 
@@ -1440,6 +1442,10 @@ watch(routeSessionId, (id) => {
 }, { immediate: true })
 watch(routeProjectId, () => void reconcileRouteProject())
 watch(routeMessageId, () => void revealRouteMessage())
+watch(() => chat.activeContext.sessionProfile?.messageSize || 'standard', () => {
+  scheduleVirtualScrollRefresh(true, true)
+  scheduleFollowScroll()
+}, { flush: 'pre' })
 watch(
   [() => transcript.value.messages, () => chat.activeQueuedMessages.map((entry) => [entry.id, entry.paused, entry.sentMessageId])],
   () => {

@@ -30,7 +30,6 @@
                 <q-btn-toggle v-if="!isProtected" :model-value="ownership[field.key] ? 'own' : 'inherit'" unelevated no-caps toggle-color="primary" :options="inheritOptions" role="group" :aria-label="`${field.label} übernehmen oder anpassen`" @update:model-value="setOwnership(field.key, $event)" />
                 <q-input dense v-model="form[field.key]" outlined type="textarea" autogrow :label="field.label" :maxlength="field.max" :disable="isProtected || !ownership[field.key]" :rules="field.key === 'instructions' && ownership.instructions ? [requiredRule] : []" />
               </template>
-               <q-select dense :model-value="modelValue('answerDisplay')" outlined emit-value map-options label="Antwortdarstellung" :options="inheritedOptions('answerDisplay', answerDisplayOptions)" :hint="answerDisplayOptions.find((option) => option.value === form.answerDisplay)?.hint" persistent-hint :disable="isProtected" @update:model-value="setModelValue('answerDisplay', $event)" />
               <q-btn-toggle v-if="!isProtected" :model-value="ownership.maxToolCalls ? 'own' : 'inherit'" unelevated no-caps toggle-color="primary" :options="inheritOptions" @update:model-value="setOwnership('maxToolCalls', $event)" />
               <q-checkbox dense :model-value="form.maxToolCalls === null" label="Tool-Aufrufe unbegrenzt" :disable="isProtected || !ownership.maxToolCalls" @update:model-value="form.maxToolCalls = $event ? null : 25" />
               <q-input dense v-if="form.maxToolCalls !== null" v-model.number="form.maxToolCalls" outlined type="number" min="1" label="Maximale Tool-Aufrufe" :disable="isProtected || !ownership.maxToolCalls" :rules="[toolLimitRule]" />
@@ -122,13 +121,9 @@ const inheritOptions = [{ label: 'Erben', value: 'inherit' }, { label: 'Eigener 
 const INHERIT_MODEL_VALUE = '__inherit__'
 const textFields = [{ key: 'instructions', label: 'Anweisungen', max: 16000 }, { key: 'runtimeInstructions', label: 'Laufzeit-Hinweis', max: 4000 }]
 const booleanFields = [{ key: 'todoEnabled', label: 'Session-Aufgaben' }, { key: 'delegationEnabled', label: 'Delegation erlauben' }]
-const answerDisplayOptions = [
-  { label: 'Ablauf', value: 'timeline', hint: 'Zeigt alle Arbeitsschritte direkt in zeitlicher Reihenfolge.' },
-  { label: 'Kompakt', value: 'compact', hint: 'Zeigt die aktuelle Aktivität sofort und den bisherigen Verlauf auf Wunsch.' }
-]
 const sessionWriteModeOptions = [{ label: 'Unbeschränkt', value: 'unrestricted' }, { label: 'Alles verweigern', value: 'denied' }, { label: 'Nur angegebene Pfade', value: 'paths' }]
-const scalarFields = ['instructions', 'runtimeInstructions', 'answerDisplay', 'maxToolCalls', 'todoEnabled', 'delegationEnabled']
-const form = reactive({ name: '', description: '', baseProfileId: null, instructions: '', runtimeInstructions: '', answerDisplay: 'compact', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false, sessionWriteMode: 'unrestricted', sessionWritePathsText: '' })
+const scalarFields = ['instructions', 'runtimeInstructions', 'maxToolCalls', 'todoEnabled', 'delegationEnabled']
+const form = reactive({ name: '', description: '', baseProfileId: null, instructions: '', runtimeInstructions: '', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false, sessionWriteMode: 'unrestricted', sessionWritePathsText: '' })
 const ownership = reactive(Object.fromEntries([...scalarFields, 'sessionWritePaths'].map((field) => [field, false])))
 const baseProfiles = computed(() => agents.baseProfiles)
 const baseProfileOptions = computed(() => baseProfiles.value.map((agent) => ({ label: agent.name, value: agent.id })))
@@ -145,7 +140,7 @@ function requestPayload() {
   return { name: form.name.trim(), description: form.description.trim(), baseProfileId: form.baseProfileId, overrides }
 }
 function assignValues(agent) {
-  for (const field of scalarFields) form[field] = agent?.[field] ?? ({ instructions: '', runtimeInstructions: '', answerDisplay: 'compact', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false }[field] ?? null)
+  for (const field of scalarFields) form[field] = agent?.[field] ?? ({ instructions: '', runtimeInstructions: '', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false }[field] ?? null)
   if (agent?.maxToolCalls === null) form.maxToolCalls = null
   const paths = agent?.sessionWritePaths
   form.sessionWriteMode = paths == null ? 'unrestricted' : paths.length ? 'paths' : 'denied'

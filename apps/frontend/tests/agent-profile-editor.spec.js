@@ -16,8 +16,8 @@ import { useAuthStore } from '../src/stores/auth'
 let app, root
 const builtinId = '00000000-0000-4000-8000-000000000001'
 async function mountEditor(path = '/agents/agent', extraAgents = [], personalAgentsEnabled = true, isAdmin = true) {
-  const builtin = { id: builtinId, scope: 'instance', protected: true, accessEditable: true, name: 'Allgemein', description: 'Standard', instructions: 'Follow the request.', answerDisplay: 'compact', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false, sessionWritePaths: null, overrides: {}, accessBaseline: { instructions: 'Follow the request.', titleVisionFallbackEnabled: true } }
-  let agents = [builtin, { id: 'agent', scope: 'personal', protected: false, name: 'Recherche', instructions: 'Check sources.', answerDisplay: 'timeline', maxToolCalls: null, todoEnabled: true, delegationEnabled: true, sessionWritePaths: [], baseProfileId: builtinId, overrides: { answerDisplay: 'timeline', maxToolCalls: null, todoEnabled: true, delegationEnabled: true, sessionWritePaths: [], privatePermissions: { policies: { 'shell.write': 'ask' } } } }, ...extraAgents]
+  const builtin = { id: builtinId, scope: 'instance', protected: true, accessEditable: true, name: 'Allgemein', description: 'Standard', instructions: 'Follow the request.', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false, sessionWritePaths: null, overrides: {}, accessBaseline: { instructions: 'Follow the request.', titleVisionFallbackEnabled: true } }
+  let agents = [builtin, { id: 'agent', scope: 'personal', protected: false, name: 'Recherche', instructions: 'Check sources.', maxToolCalls: null, todoEnabled: true, delegationEnabled: true, sessionWritePaths: [], baseProfileId: builtinId, overrides: { maxToolCalls: null, todoEnabled: true, delegationEnabled: true, sessionWritePaths: [], privatePermissions: { policies: { 'shell.write': 'ask' } } } }, ...extraAgents]
   api.get.mockImplementation(async () => ({ data: { defaultAgentProfileId: builtinId, baseProfiles: agents.filter((item) => item.protected), agents, effectiveAgents: agents, personalAgentsEnabled } }))
   api.put.mockImplementation(async (url, payload) => {
     const id = url.split('/')[2]
@@ -97,10 +97,10 @@ it('blocks a regular users personal editor when personal profiles are disabled',
 
 it('round-trips profile content without sending permissions through the profile API', async () => {
   const page = await mountEditor()
-  page.setModelValue('answerDisplay', 'compact')
+  page.setModelValue('todoEnabled', false)
   await page.saveAgent()
   expect(api.put).toHaveBeenCalledWith('/agent-profiles/agent', expect.objectContaining({ overrides: {
-    answerDisplay: 'compact', maxToolCalls: null, todoEnabled: true, delegationEnabled: true, sessionWritePaths: []
+    maxToolCalls: null, todoEnabled: false, delegationEnabled: true, sessionWritePaths: []
   } }), { params: { scope: 'personal' } })
 })
 

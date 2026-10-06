@@ -501,8 +501,17 @@
   padding-bottom: 32px;
 }
 
+.chat-messages--small {
+  --chat-message-font-size: 0.75rem;
+  --chat-message-gap: 12px;
+  --chat-message-padding: 8px 12px;
+  --chat-message-line-height: 1.5;
+  --chat-paragraph-gap: 0.6em;
+  --chat-heading-gap: 0.9em;
+}
+
 .chat-message {
-  margin-bottom: 22px;
+  margin-bottom: var(--chat-message-gap, 22px);
 }
 
 .chat-message--turn-continues {
@@ -513,7 +522,7 @@
   width: fit-content;
   max-width: min(720px, 88%);
   margin-left: auto;
-  padding: 10px 14px;
+  padding: var(--chat-message-padding, 10px 14px);
   border-radius: 16px 16px 4px 16px;
   background: var(--app-active);
 }
@@ -585,9 +594,10 @@
 }
 
 .chat-message__content {
+  font-size: var(--chat-message-font-size, inherit);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  line-height: 1.6;
+  line-height: var(--chat-message-line-height, 1.6);
 }
 
 .chat-runtime-error {
@@ -596,10 +606,11 @@
 }
 
 .chat-markdown {
+  font-size: var(--chat-message-font-size, inherit);
   min-width: 0;
   white-space: normal;
   overflow-wrap: anywhere;
-  line-height: 1.65;
+  line-height: var(--chat-message-line-height, 1.65);
 }
 
 .chat-markdown > :first-child {
@@ -616,7 +627,7 @@
 .chat-markdown blockquote,
 .chat-markdown table,
 .chat-markdown pre {
-  margin: 0 0 0.9em;
+  margin: 0 0 var(--chat-paragraph-gap, 0.9em);
 }
 
 .chat-markdown h1,
@@ -625,7 +636,7 @@
 .chat-markdown h4,
 .chat-markdown h5,
 .chat-markdown h6 {
-  margin: 1.25em 0 0.5em;
+  margin: var(--chat-heading-gap, 1.25em) 0 0.5em;
   color: var(--app-text);
   font-weight: 650;
   line-height: 1.3;

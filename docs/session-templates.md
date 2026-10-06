@@ -6,12 +6,14 @@ Persisted `ai` documents use `AiProviderSettings` and `UserAiSettings` for provi
 
 `session-templates` settings contain global or personal named templates. Each template selects available agents, a start agent, the existing `full`, `read_only`, or `disabled` memory mode, an optional session-wide chat model and reasoning effort, and optional chat-model/reasoning overrides by agent ID. Auxiliary model overrides do not belong to templates.
 
-- **Allgemein** (internally Default) selects Allgemein and Sysadmin, starting with Allgemein.
-- **Coding** selects Plan and Build, starting with Plan.
+- **Allgemein** (internally Default) selects Allgemein and Sysadmin, starting with Allgemein, with standard-size messages.
+- **Coding** selects Plan and Build, starting with Plan, with small messages.
 - Both start with full memory and inherit model defaults unless configured otherwise.
 - Global and personal management use the existing administrative scope and owner boundary. Each feature has its own personal-setting gate, initially enabled. Administrators retain the established personal exception.
 
 ## Session behavior
+
+Templates and the Session Control Center expose `messageSize` (`standard` or `small`). The size is copied into `chat_sessions.session_profile` on creation and template selection and can then be changed per session. Small messages use smaller text, Markdown headings, and code, with tighter line, paragraph, message, and user-bubble spacing. Switching sizes recalculates the virtual transcript heights. Existing sessions without a size remain standard; template edits do not rewrite sessions. Agent profiles have no presentation setting.
 
 Home and the blank-session composer show four equal-size fields in this order: template, project, memory, web search. At less than 600px they use a centered two-column grid. Project defaults continue to supply the computer and working directory independently.
 
@@ -28,6 +30,8 @@ When no agent-model default is configured, the runtime selects the first availab
 The runtime checks the session's available-agent list as well as current owner and instance availability. This list is session configuration, not an additional authority grant. Changes follow the existing session-settings lock and active-run restrictions. A removed or disabled explicitly selected model is unavailable until changed; it is not silently substituted by another model.
 
 ## Migration
+
+Revision `ee5db377dca5` removes obsolete answer-display values from agent-profile documents and initializes template message sizes, using small for the shipped Coding template and standard for other templates. Existing sessions are untouched. Downgrade removes template/session sizes; removed answer-display values are not restored.
 
 Revision `870fad9fb7e7` adds the JSONB session configuration, initializes both templates, moves the former global default agent's model settings into `model-defaults`, and removes model fields from agent documents. It transfers built-in chat-model/reasoning overrides to the matching templates and preserves effective chat-model choices for existing sessions without constraining their formerly unrestricted agent selection. Explicit session choices retain precedence during migration.
 

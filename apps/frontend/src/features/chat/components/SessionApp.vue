@@ -4,7 +4,7 @@
       <SessionSettingsFields
         :session="chat.activeContext"
         :disabled="settingsDisabled"
-        :fields="['template', 'agent', 'computer', 'memory', 'webSearch', 'model', 'reasoning']"
+        :fields="['template', 'messageSize', 'agent', 'computer', 'memory', 'webSearch', 'model', 'reasoning']"
         grouped
         show-warning
         class="q-pa-md"

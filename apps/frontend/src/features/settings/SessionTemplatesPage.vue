@@ -1,7 +1,7 @@
 <template>
   <section>
     <header class="settings-section-header">
-      <div><h2 class="text-h6 text-weight-bold q-my-none">Sessionvorlagen</h2><p class="text-body2 app-muted q-mb-none q-mt-xs">Agenten, Modelle und Memory für neue Sessions vorbelegen.</p></div>
+      <div><h2 class="text-h6 text-weight-bold q-my-none">Sessionvorlagen</h2><p class="text-body2 app-muted q-mb-none q-mt-xs">Agenten, Modelle, Memory und Nachrichtengröße für neue Sessions vorbelegen.</p></div>
       <q-btn v-if="showManagement" unelevated no-caps color="primary" icon="add" label="Vorlage erstellen" :disable="blocked" @click="edit()" />
     </header>
     <q-tabs v-if="admin" v-model="section" dense no-caps align="left" active-color="primary" class="q-mb-lg"><q-tab name="settings" label="Einstellungen" icon="settings" /><q-tab name="management" label="Verwaltung" icon="dashboard_customize" /></q-tabs>
@@ -28,6 +28,7 @@
               <q-select :model-value="form.agentIds" outlined dense multiple use-chips emit-value map-options label="Verfügbare Agenten" :options="agentOptions" :disable="store.saving" :rules="[(value) => value?.length > 0 || 'Mindestens einen Agenten auswählen.']" @update:model-value="setAgents" />
               <q-select v-model="form.startAgentId" outlined dense emit-value map-options label="Startagent" :options="agentOptions.filter((item) => form.agentIds?.includes(item.value))" :disable="store.saving" />
               <q-select v-model="form.memoryMode" outlined dense emit-value map-options label="Memory" :options="memoryOptions" :disable="store.saving" />
+              <q-select v-model="form.messageSize" outlined dense emit-value map-options label="Nachrichtengröße" :options="[{ label: 'Standard', value: 'standard' }, { label: 'Klein', value: 'small' }]" hint="Klein reduziert die Schriftgröße und die Abstände der Nachrichten." persistent-hint :disable="store.saving" />
               <div class="text-subtitle2">Modell für die gesamte Session</div>
               <ChatModelFields :model-value="form" :inherited="defaults" :disabled="store.saving" @update:model-value="Object.assign(form, $event)" />
               <q-expansion-item label="Modell-Overrides je Agent" icon="smart_toy">
@@ -88,7 +89,7 @@ async function load() {
   } catch { failed.value = true }
 }
 function edit(item) {
-  form.value = item ? JSON.parse(JSON.stringify(item)) : { id: randomUuid(), name: '', agentIds: [agents.defaultAgentProfileId], startAgentId: agents.defaultAgentProfileId, memoryMode: 'full', modelId: null, reasoningEffort: null, agentModels: {} }
+  form.value = item ? JSON.parse(JSON.stringify(item)) : { id: randomUuid(), name: '', agentIds: [agents.defaultAgentProfileId], startAgentId: agents.defaultAgentProfileId, memoryMode: 'full', messageSize: 'standard', modelId: null, reasoningEffort: null, agentModels: {} }
   delete form.value.scope
   saved.value = JSON.stringify(form.value); dialogOpen.value = true
 }

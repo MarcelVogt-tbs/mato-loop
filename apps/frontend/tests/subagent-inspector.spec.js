@@ -214,7 +214,7 @@ describe('subagent inspector navigation and presentation', () => {
     vi.stubGlobal('EventSource', class { addEventListener() {} close() {} })
     const pinia = createPinia()
     setActivePinia(pinia)
-    useAgentProfileStore().agents = [{ id: 'agent', name: 'Allgemein', answerDisplay: 'timeline' }]
+    useAgentProfileStore().agents = [{ id: 'agent', name: 'Allgemein' }]
     store = useSubagentStore()
     const child = { id: 'child', parentSessionId: 'parent', title: 'Dateien untersuchen', run: { id: 'run', status: 'waiting_approval' } }
     api.get.mockImplementation(async (url) => ({ data: url.endsWith('/children') ? [child]
