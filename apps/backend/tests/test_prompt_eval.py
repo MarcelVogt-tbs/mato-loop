@@ -345,10 +345,11 @@ def test_agent_web_routing_production_prompt_is_conditional() -> None:
     )
     assert messages[0]["content"].count(command_rule) == 1
     assert command_rule not in offline_messages[0]["content"]
+    assert "[██████████████░░░░░░] 72 % · 12,000 / 16,556 files" in messages[0]["content"]
     growth = prompt_eval.estimate_tokens(messages[0]["content"], 4.0) - prompt_eval.estimate_tokens(
         offline_messages[0]["content"], 4.0
     )
-    assert 100 <= growth <= 260
+    assert 100 <= growth <= 520
 
     shell_only_messages, _tools = build_case(
         replace(case, tools=("shell_run",))

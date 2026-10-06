@@ -379,6 +379,18 @@ def general_system_prompt(
             "reviewable; skip needless pre-checks and fallbacks."
         )
         parts.append(
+            "Shell progress: For long-running commands, reuse existing progress options. In custom scripts, "
+            "print a short task title once, then use this format when the total is known: "
+            "[██████████████░░░░░░] 72 % · 12,000 / 16,556 files. Use 20 cells (█ done, ░ remaining); "
+            "derive the bar, percentage, and counters from measured work. Use the user's language and "
+            "number formatting for titles and units. If the total is unknown, show a running status, "
+            "processed count when available, and elapsed time; do not invent percentages or remaining time. "
+            "Write progress to stderr and flush immediately at startup, every 2–5 seconds, and at the end. "
+            "Update one line with carriage returns only when stderr is a terminal; otherwise use newlines. "
+            "End with a newline and report success only after the command succeeds. Keep stdout clean for "
+            "results and pipes. Skip extra progress for short commands; do not install dependencies for it."
+        )
+        parts.append(
             "Tool routing: For direct HTTP/API requests, use shell_run with an established HTTP client "
             "such as curl. Use custom scripts only when available command-line tools cannot reasonably "
             "handle the required processing. Simple GET or POST requests do not need a script. "
