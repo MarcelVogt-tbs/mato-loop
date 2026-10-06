@@ -37,7 +37,7 @@
     </q-toolbar>
 
     <q-banner v-if="loadFailed" rounded class="app-surface-tonal q-mb-md">
-      Die Standardressourcen konnten nicht geladen werden.
+      Die Berechtigungen und Ressourcen konnten nicht geladen werden.
       <template #action>
         <q-btn flat no-caps color="primary" label="Erneut laden" @click="load" />
       </template>

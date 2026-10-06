@@ -32,7 +32,8 @@ it('keeps the ownership selected by the administration or settings page', async 
   integrations.selectScope('personal')
   integrations.catalog = [
     { adapterType: 'caldav', executionLocation: 'backend', availability: 'full' },
-    { adapterType: 'browser', executionLocation: 'agent', availability: 'full' }
+    { adapterType: 'browser', executionLocation: 'agent', availability: 'full' },
+    { adapterType: 'sonobin', executionLocation: 'backend', availability: 'full' }
   ]
   vi.spyOn(useExecutionAgentStore(pinia), 'fetchAll').mockResolvedValue()
   let page
@@ -55,4 +56,6 @@ it('keeps the ownership selected by the administration or settings page', async 
   page.selectIntegrationType('browser')
   await nextTick()
   expect(document.querySelector('.integration-dialog .q-checkbox')).toBeNull()
+  page.form.integration_type = 'music'
+  expect(page.urlRule('https://sonobin.example.com')).toBe(true)
 })

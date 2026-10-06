@@ -94,7 +94,7 @@ const musicResponse = {
     providerType: 'sonobin',
     enabled: true,
     hasCredential: true,
-    config: { baseUrl: 'https://sonobin.example.com/mcp/' },
+    config: { baseUrl: 'https://sonobin.example.com' },
     toolCount: 28
   }]
 }
@@ -473,7 +473,7 @@ describe('integration store', () => {
       integration_type: 'music',
       provider_type: 'sonobin',
       name: 'SonoBin',
-      baseUrl: 'https://sonobin.example.com/mcp/',
+      baseUrl: 'https://sonobin.example.com',
       bearerToken: 'secret',
       enabled: true
     }
@@ -492,7 +492,7 @@ describe('integration store', () => {
         integration_type: 'music',
         provider_type: 'sonobin',
         name: 'SonoBin',
-        baseUrl: 'https://sonobin.example.com/mcp/',
+        baseUrl: 'https://sonobin.example.com',
         enabled: true
       },
       { params: { scope: 'instance' } }

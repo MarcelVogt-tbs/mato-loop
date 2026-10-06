@@ -213,8 +213,10 @@ async def execute_definition(
     except (SchemaError, Unresolvable):
         return ToolResult.error("tool.invalidArguments")
     except ValidationError as exc:
-        errors = exc.errors(include_url=False, include_input=False, include_context=False)
+        errors = exc.errors(include_url=False, include_input=False)
         for error in errors:
+            if error["type"] == "personal_settings_invalid":
+                return ToolResult.error("tool.invalidArguments", field=error["ctx"]["field"])
             if error["type"] == "question_placeholder_not_allowed":
                 return ToolResult.error(
                     "question.placeholderNotAllowed",

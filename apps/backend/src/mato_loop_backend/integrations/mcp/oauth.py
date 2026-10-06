@@ -81,6 +81,8 @@ logging.getLogger("mcp.client.auth.oauth2").addFilter(lambda _record: False)
 
 
 class _OAuthTransport(_BoundedTransport):
+    interactive_auth = True
+
     def __init__(self, scope: str | None = None, transport=None):
         super().__init__(transport)
         self.scope = scope
@@ -334,9 +336,12 @@ class OAuthLoginManager:
                     event_hooks={"response": [metadata_response]},
                 ) as client:
                     # Only read-only discovery uses interactive auth; tools/call uses prepared tokens.
-                    tools = await McpClient(endpoint, http_client=client).discover_tools(
+                    probe = McpClient(endpoint, http_client=client)
+                    tools = await probe.discover_tools(
                         read_timeout_seconds=LOGIN_TTL
                     )
+                    endpoint = probe.endpoint
+                    attempt.draft["endpoint"] = endpoint
                 if (
                     attempt.tokens is None
                     or attempt.client_info is None
@@ -450,6 +455,33 @@ async def _save_oauth_credential(db, credential, payload):
         credential=credential,
     )
     await db.commit()
+
+
+async def rebind_oauth_endpoint(db, instance: IntegrationInstance, endpoint: str) -> None:
+    """Stage a validated binding change in the connection's transaction."""
+    credential = await db.scalar(
+        scoped_credentials(instance.owner_id)
+        .where(Credential.id == instance.credential_id)
+        .with_for_update()
+    )
+    if credential is None or credential.kind != OAUTH_CREDENTIAL_KIND:
+        raise McpClientError("mcp.authorizationRequired")
+    try:
+        payload = read_credential(credential)
+        endpoint = validate_oauth_url(endpoint)
+        if (httpx.URL(payload["endpoint"]) != httpx.URL(instance.config["endpoint"])
+            or not check_resource_allowed(requested_resource=endpoint, configured_resource=payload["resource"])):
+            raise McpClientError("mcp.oauthConfigurationInvalid")
+        if oauth_status(payload) != "authorized":
+            raise McpClientError("mcp.authorizationRequired")
+    except McpClientError:
+        raise
+    except Exception as exc:
+        raise McpClientError("mcp.oauthConfigurationInvalid") from exc
+    await store_credential(
+        db, owner_id=credential.user_id, kind=credential.kind, label=credential.label,
+        payload={**payload, "endpoint": endpoint}, credential=credential,
+    )
 
 
 async def oauth_token(instance: IntegrationInstance) -> str:

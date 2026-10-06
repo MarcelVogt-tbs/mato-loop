@@ -94,6 +94,7 @@ from mato_loop_backend.integrations.service import (
     _load_tools,
     save_search_selection,
 )
+from mato_loop_backend.integrations.sonobin.adapter import sonobin_base_url
 from mato_loop_backend.integrations.sonobin.service import SonoBinIntegrationService
 from mato_loop_backend.models import ExecutionAgent, UserAccount
 from mato_loop_backend.security import load_credential, read_credential, require_admin, require_user
@@ -294,16 +295,8 @@ class SonoBinIntegrationRequest(BaseModel):
     enabled: bool = True
 
     @model_validator(mode="after")
-    def require_sonobin_endpoint(self) -> SonoBinIntegrationRequest:
-        if (
-            self.base_url.scheme != "https"
-            or self.base_url.username is not None
-            or self.base_url.password is not None
-            or self.base_url.query is not None
-            or self.base_url.fragment is not None
-            or not self.base_url.path.endswith("/mcp/")
-        ):
-            raise ValueError("SonoBin requires an HTTPS /mcp/ endpoint")
+    def validate_base_url(self) -> SonoBinIntegrationRequest:
+        sonobin_base_url(self.base_url)
         return self
 
 
@@ -424,8 +417,10 @@ def _provider_payload(provider: IntegrationInstance) -> dict:
             }
             if provider.integration_type == "mail"
             else {
-                "baseUrl": provider.config.get("base_url")
-                or provider.config.get("endpoint"),
+                "baseUrl": sonobin_base_url(provider.config.get("endpoint"))
+                if provider.adapter_type == "sonobin" else (
+                    provider.config.get("base_url") or provider.config.get("endpoint")
+                ),
                 **(
                     {"username": provider.config.get("username")}
                     if "username" in provider.config

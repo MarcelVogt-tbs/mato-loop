@@ -30,6 +30,7 @@ from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
+    ToolSettings,
     UserIntegrationSettings,
 )
 
@@ -324,6 +325,56 @@ async def test_rebind_during_token_preparation_stops_dispatch(monkeypatch):
     assert (
         await adapter.MCP_ADAPTER.contributions(instance).tools[0].handler({}, context)
     ).is_error
+
+
+@pytest.mark.parametrize("operation", ["refresh", "update"])
+async def test_slash_recovery_keeps_oauth_credential_usable(monkeypatch, transport, payload, operation):
+    def reply(request):
+        if str(request.url) == ENDPOINT:
+            return httpx.Response(404)
+        if request.method != "POST":
+            return httpx.Response(405)
+        message = json.loads(request.content)
+        if "id" not in message:
+            return httpx.Response(202)
+        result = (
+            dict(protocolVersion=LATEST_PROTOCOL_VERSION, capabilities={"tools": {}}, serverInfo={"name": "test", "version": "1"})
+            if message["method"] == "initialize" else {"tools": []}
+        )
+        return httpx.Response(200, json=dict(jsonrpc="2.0", id=message["id"], result=result))
+
+    transport(reply)
+    payload["expires_at"] = time.time() + 3600
+    credential = SimpleNamespace(id=uuid4(), user_id=None, kind=oauth.OAUTH_CREDENTIAL_KIND, label="Server")
+    instance = IntegrationInstance(name="Server", integration_type="mcp", adapter_type="mcp_streamable_http",
+                                   credential_id=credential.id, config={"endpoint": ENDPOINT, "oauth": {}})
+    db = AsyncMock()
+    db.scalar.return_value = credential
+    db.__aenter__.return_value = db
+    monkeypatch.setattr(oauth, "AsyncSessionFactory", lambda: db)
+    monkeypatch.setattr(oauth, "read_credential", lambda _record: payload)
+    monkeypatch.setattr(oauth, "store_credential", AsyncMock(side_effect=lambda _db, **kwargs: payload.update(kwargs["payload"])))
+    monkeypatch.setattr(service, "_load_integrations", AsyncMock(return_value=IntegrationSettings(instances=[instance])))
+    monkeypatch.setattr(service, "_load_tools", AsyncMock(return_value=ToolSettings()))
+    monkeypatch.setattr(service, "_save_settings", AsyncMock())
+    monkeypatch.setattr(service, "clear_profile_integration_policies", AsyncMock())
+    if operation == "refresh":
+        await service.McpIntegrationService.refresh(db, instance.id, owner_id=None)
+    else:
+        await service.McpIntegrationService.update(db, instance.id, name="Server", endpoint=ENDPOINT,
+                                                 token=None, remove_token=False, enabled=True, owner_id=None)
+    assert await oauth.oauth_token(instance) == "old"
+
+
+async def test_oauth_endpoint_rebind_cannot_expand_resource(monkeypatch, payload):
+    credential = SimpleNamespace(kind=oauth.OAUTH_CREDENTIAL_KIND)
+    db = AsyncMock()
+    db.scalar.return_value = credential
+    instance = IntegrationInstance(name="Server", integration_type="mcp", adapter_type="mcp_streamable_http",
+                                   credential_id=uuid4(), config={"endpoint": ENDPOINT, "oauth": {}})
+    monkeypatch.setattr(oauth, "read_credential", lambda _record: payload)
+    with pytest.raises(McpClientError, match="mcp.oauthConfigurationInvalid"):
+        await oauth.rebind_oauth_endpoint(db, instance, "https://other.example.test/mcp/")
 
 
 async def test_duplicate_finish_does_not_cancel_original(login, monkeypatch):

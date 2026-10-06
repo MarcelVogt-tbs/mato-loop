@@ -97,6 +97,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'mcp.protocolError', message: 'private server detail' } })).toBe(
       'Der MCP-Server hat einen Protokollfehler gemeldet.'
     )
+    expect(apiErrorMessage({ error: { code: 'mcp.endpointNotFound' } })).toBe(
+      'Der MCP-Endpunkt wurde nicht gefunden. Prüfe die Server-URL und den Pfad.'
+    )
     expect(apiErrorMessage({ error: { code: 'mcp.toolNotFound' } })).toContain('Tools des Servers')
     expect(apiErrorMessage({ error: { code: 'mcp.outcomeUnknown', message: 'private transport detail' } })).toContain('nicht blind')
     expect(apiErrorMessage({ error: { code: 'mcp.authorizationRequired', message: 'private OAuth detail' } })).toContain('MCP-Einstellungen')

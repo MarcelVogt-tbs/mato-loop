@@ -35,6 +35,8 @@ class _BoundedStream(httpx.AsyncByteStream):
 
 
 class _BoundedTransport(httpx.AsyncBaseTransport):
+    interactive_auth = False
+
     def __init__(
         self,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -56,6 +58,19 @@ class _BoundedTransport(httpx.AsyncBaseTransport):
             await response.aclose()
             await self.authentication_failed()
             raise McpClientError("mcp.authorizationRequired")
+        if request.method == "POST" and response.status_code >= 400:
+            try:
+                mcp_request = json.loads(request.content).get("jsonrpc") == "2.0"
+            except (ValueError, AttributeError, httpx.RequestNotRead):
+                mcp_request = False
+            code = (
+                "mcp.endpointNotFound" if response.status_code == 404 else
+                "mcp.authenticationFailed" if response.status_code in {401, 403} else
+                "mcp.protocolError" if response.status_code < 500 else "mcp.unavailable"
+            )
+            if mcp_request and not (self.interactive_auth and response.status_code in {401, 403}):
+                await response.aclose()
+                raise McpClientError(code)
         return response
 
     async def aclose(self) -> None:
@@ -71,6 +86,10 @@ class McpClientError(RuntimeError):
 def _nested_client_error(exc: BaseException) -> McpClientError | None:
     if isinstance(exc, McpClientError):
         return exc
+    if isinstance(exc, httpx.TimeoutException):
+        return McpClientError("mcp.timeout")
+    if isinstance(exc, httpx.TransportError):
+        return McpClientError("mcp.connectionFailed")
     if isinstance(exc, OAuthRegistrationError):
         return McpClientError("mcp.oauthRegistrationFailed")
     if isinstance(exc, BaseExceptionGroup):
@@ -109,12 +128,14 @@ class McpClient:
                 yield streams
 
     async def discover_tools(self, *, read_timeout_seconds: int = 30) -> list[dict[str, Any]]:
+        initialized = False
         try:
             async with self._session() as (read, write, _session_id):
                 async with ClientSession(
                     read, write, read_timeout_seconds=timedelta(seconds=read_timeout_seconds)
                 ) as session:
                     await session.initialize()
+                    initialized = True
                     result = await session.list_tools()
                     discovered = list(result.tools)
                     cursors = set()
@@ -130,10 +151,16 @@ class McpClient:
                         result = await session.list_tools(cursor=result.nextCursor)
                         discovered.extend(result.tools)
                         pages += 1
-        except McpClientError:
-            raise
         except Exception as exc:
-            raise _nested_client_error(exc) or McpClientError("mcp.refreshFailed") from exc
+            error = _nested_client_error(exc)
+            url = httpx.URL(self.endpoint)
+            if (error is not None and error.code == "mcp.endpointNotFound" and not initialized
+                and not url.raw_path.endswith(b"/") and not url.query and not url.fragment):
+                self.endpoint = str(url.copy_with(raw_path=url.raw_path + b"/"))
+                return await self.discover_tools(read_timeout_seconds=read_timeout_seconds)
+            if error is exc:
+                raise
+            raise error or McpClientError("mcp.refreshFailed") from exc
         tools = [
             {
                 "name": tool.name,

@@ -16,6 +16,7 @@ from pydantic import (
     model_validator,
 )
 
+from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.execution.client import ExecutionClientError
 from mato_loop_backend.integrations.arcane.service import ArcaneIntegrationService
 from mato_loop_backend.integrations.bookstack.service import BookStackIntegrationService
@@ -44,6 +45,7 @@ from mato_loop_backend.integrations.service import (
     _load_tools,
     save_search_selection,
 )
+from mato_loop_backend.integrations.sonobin.adapter import sonobin_base_url
 from mato_loop_backend.integrations.sonobin.service import SonoBinIntegrationService
 from mato_loop_backend.integrations.tbs_desk.adapter import TbsDeskIntegrationService
 from mato_loop_backend.integrations.tbs_desk.client import TbsDeskError
@@ -72,7 +74,7 @@ _CONFIG_FIELDS = {
     "bookstack": ("base_url",),
     "mealie": ("base_url",),
     "arcane": ("base_url",),
-    "sonobin": ("endpoint",),
+    "sonobin": ("base_url",),
     "openscad": ("execution_agent_id", "binary_path"),
     "opencode": ("base_url", "username"),
     "browser": ("execution_agent_id",),
@@ -162,7 +164,8 @@ def _payload(item: IntegrationInstance) -> dict[str, Any]:
         "id": str(item.id), "adapterType": item.adapter_type, "name": item.name,
         "enabled": item.enabled, "config": {
             field: str(value) if isinstance(value, UUID) else value
-            for field, value in item.config.items()
+            for field, value in ({"base_url": sonobin_base_url(item.config.get("endpoint") or item.config.get("base_url"))}
+                                 if item.adapter_type == "sonobin" else item.config).items()
             if field in _CONFIG_FIELDS[item.adapter_type] and field != "username"
         },
         "hasCredential": item.credential_id is not None,
@@ -328,15 +331,17 @@ async def manage_integrations(
         ):
             return ToolResult.error("tool.invalidArguments")
         config = dict(current.config) if current is not None else {}
+        if adapter_type == "sonobin" and current is not None:
+            config["base_url"] = sonobin_base_url(current.config["endpoint"])
         for field in _CONFIG_FIELDS[adapter_type]:
             value = getattr(changes, field)
             if value is not None:
                 config[field] = str(value) if isinstance(value, (UUID, HttpUrl)) else value
         if adapter_type in {"mcp_streamable_http", "sonobin"}:
             try:
-                (integration_adapter("mcp" if adapter_type == "mcp_streamable_http" else "music", adapter_type).config_model)(
-                    endpoint=config["endpoint"]
-                )
+                config["endpoint"] = str(_SERVICES[adapter_type].config_model(
+                    endpoint=config["base_url"] if adapter_type == "sonobin" else config["endpoint"],
+                ).endpoint)
             except (ValueError, KeyError):
                 return ToolResult.error("tool.invalidArguments")
         elif adapter_type not in {"opencode", "browser"}:
@@ -402,9 +407,9 @@ async def manage_integrations(
                 {"user_id": owner_id, "settings_owner_id": owner_id}
                 if adapter_type == "openscad" else {"owner_id": owner_id}
             )
-            await _SERVICES[adapter_type].delete(context.db, arguments.integration_id, **kwargs)
+            async with AsyncSessionFactory() as service_db:
+                await _SERVICES[adapter_type].delete(service_db, arguments.integration_id, **kwargs)
         except (IntegrationSettingsError, McpClientError, OpenCodeSettingsError, OpenCodeError, ExecutionClientError, TbsDeskError) as exc:
-            await context.db.rollback()
             logger.warning("Personal integration deletion failed with %s", type(exc).__name__)
             return ToolResult.error(exc.code)
         return ToolResult.json({"deleted": True, "id": str(arguments.integration_id)})
@@ -445,9 +450,10 @@ async def manage_integrations(
                 kwargs = {"owner_id": owner_id, "changes": {
                     key: getattr(changes, key) for key in changes.model_fields_set if key in {"name", "enabled", "execution_agent_id"}
                 }}
-        result = await getattr(service, operation)(context.db, *identifier, **kwargs)
+        # Product services commit or roll back their own transaction, never the agent's state.
+        async with AsyncSessionFactory() as service_db:
+            result = await getattr(service, operation)(service_db, *identifier, **kwargs)
     except (IntegrationSettingsError, McpClientError, OpenCodeSettingsError, OpenCodeError, ExecutionClientError, TbsDeskError) as exc:
-        await context.db.rollback()
         logger.warning("Personal integration configuration failed with %s", type(exc).__name__)
         return ToolResult.error(exc.code)
     instances = result.instances if isinstance(result, UserIntegrationSettings) else (

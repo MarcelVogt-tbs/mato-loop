@@ -986,16 +986,18 @@ class PersonalSettingsArguments(ToolArguments):
     @model_validator(mode="after")
     def validate_operation(self) -> PersonalSettingsArguments:
         if self.action == "list":
-            if self.area is not None or self.changes is not None or self.integration_id is not None:
-                raise ValueError("list does not take an area or changes")
+            if self.changes is not None:
+                raise PydanticCustomError("personal_settings_invalid", "Changes are not allowed for list", {"field": "changes"})
+            if self.integration_id is not None:
+                raise PydanticCustomError("personal_settings_invalid", "Integration IDs are not allowed for list", {"field": "integration_id"})
         elif self.area is None:
-            raise ValueError("area is required")
+            raise PydanticCustomError("personal_settings_invalid", "Area is required", {"field": "area"})
         elif self.action in {"create", "delete"} and self.area not in {"integrations", "variables"}:
             raise ValueError("only integrations and variables can be created or deleted")
         elif self.action in {"create", "update"} and not self.changes:
-            raise ValueError("changes are required")
+            raise PydanticCustomError("personal_settings_invalid", "Changes are required", {"field": "changes"})
         elif self.action in {"get", "delete"} and self.changes is not None:
-            raise ValueError("changes are not allowed")
+            raise PydanticCustomError("personal_settings_invalid", "Changes are not allowed", {"field": "changes"})
         if self.integration_id is not None and self.area != "integrations":
             raise ValueError("integration_id requires the integrations area")
         if self.area == "integrations" and self.action in {"update", "delete"} and self.integration_id is None and self.adapter_type != "search_selection":

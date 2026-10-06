@@ -4,7 +4,7 @@ import json
 from datetime import UTC, datetime
 from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import ANY, AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -13,6 +13,7 @@ from PIL import Image
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import make_transient_to_detached
 
 import mato_loop_backend.files.access as mock_files_access
 import mato_loop_backend.integrations.registry as integration_registry
@@ -2438,14 +2439,21 @@ async def test_personal_settings_exposes_one_tool_and_reuses_profile_rules(monke
     context.db.commit.assert_awaited_once()
 
 
-async def test_personal_settings_advertises_mcp_oauth_ui_setup(monkeypatch, tmp_path):
-    call = ToolCall("mcp-list", "customize_matoloop", {"action": "list"})
+@pytest.mark.parametrize("area", [None, "integrations"])
+async def test_personal_settings_advertises_mcp_oauth_ui_setup(monkeypatch, tmp_path, area):
+    call = ToolCall("mcp-list", "customize_matoloop", {"action": "list", "area": area})
     context = _context(tmp_path, call)
     monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=IntegrationSettings(adapter_availability={"mcp_streamable_http": "full"})))
     result = await tool_registry.execute(call, context)
     info = json.loads(result.content)["areas"]["integrations"]["mcp_streamable_http"]
     assert "oauth" in info["authenticationModes"] and info["oauthSetup"]["settingsPath"] == "/settings/mcp"
+
+
+async def test_personal_settings_invalid_list_reports_changes_field(tmp_path):
+    call = ToolCall("invalid-list", "customize_matoloop", {"action": "list", "changes": {"enabled": True}})
+    result = await tool_registry.execute(call, _context(tmp_path, call))
+    assert json.loads(result.content)["error"]["field"] == "changes"
 
 
 def test_secret_input_available_without_shell_and_with_shell() -> None:
@@ -2669,6 +2677,31 @@ async def test_personal_settings_mcp_uses_owned_service_and_secret_reference(mon
     assert result.metadata["errorCode"] == "integration.notFound"
 
 
+async def test_personal_integration_failure_preserves_agent_session(monkeypatch, tmp_path):
+    from mato_loop_backend.integrations.mcp.client import McpClientError
+
+    call = ToolCall("mcp", "customize_matoloop", {
+        "action": "create", "area": "integrations", "adapter_type": "mcp_streamable_http",
+        "changes": {"name": "Server", "endpoint": "https://example.com/mcp/"},
+    })
+    context = _context(tmp_path, call)
+    owner_id = context.session.user_id
+    make_transient_to_detached(context.session)
+    monkeypatch.setattr(mock_tools_access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, model, **_kw: {
+        IntegrationSettings: IntegrationSettings(adapter_availability={"mcp_streamable_http": "full"}),
+        UserIntegrationSettings: UserIntegrationSettings(),
+    }[model]))
+    monkeypatch.setattr(mock_personal_integrations.McpIntegrationService, "create",
+                        AsyncMock(side_effect=McpClientError("mcp.endpointNotFound")))
+    async with AsyncSession(expire_on_commit=False) as db:
+        db.add(context.session)
+        monkeypatch.setattr(db, "get", AsyncMock(return_value=None))
+        context.db = db
+        result = await tool_registry.execute(call, context)
+        assert (result.metadata["errorCode"], context.session.user_id) == ("mcp.endpointNotFound", owner_id)
+
+
 async def test_personal_settings_mcp_update_keeps_owner_and_existing_connection(monkeypatch, tmp_path) -> None:
     server = IntegrationInstance(
         name="Haus", integration_type="mcp", adapter_type="mcp_streamable_http",
@@ -2728,7 +2761,7 @@ async def test_personal_settings_refuses_disabled_mcp_before_network_access(monk
     ("bookstack", "knowledge", {"base_url": "https://books.example.com"}, "token_id"),
     ("mealie", "recipes", {"base_url": "https://recipes.example.com"}, "token"),
     ("arcane", "infrastructure", {"base_url": "https://arcane.example.com"}, "api_key"),
-    ("sonobin", "music", {"endpoint": "https://music.example.com/mcp/"}, "bearer_token"),
+    ("sonobin", "music", {"base_url": "https://music.example.com"}, "bearer_token"),
     ("openscad", "openscad", {"execution_agent_id": str(uuid4()), "binary_path": "/usr/bin/openscad"}, None),
     ("opencode", "coding", {"base_url": "https://coding.example.com", "username": "opencode"}, None),
     ("browser", "browser", {"execution_agent_id": str(uuid4())}, None),
@@ -2823,7 +2856,7 @@ async def test_personal_integration_delete_disabled_existing_entry(monkeypatch, 
     result = await tool_registry.execute(call, context)
 
     assert not result.is_error
-    delete.assert_awaited_once_with(context.db, item.id, owner_id=context.session.user_id)
+    delete.assert_awaited_once_with(ANY, item.id, owner_id=context.session.user_id)
 
 
 async def test_personal_search_selection_rejects_unavailable_provider(monkeypatch, tmp_path) -> None:

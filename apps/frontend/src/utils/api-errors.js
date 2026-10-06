@@ -353,6 +353,7 @@ const messages = {
   'mcp.catalogTooLarge': () => 'Der MCP-Server stellt zu viele oder zu umfangreiche Tools bereit.',
   'mcp.configurationInvalid': () => 'Die MCP-Server-Konfiguration ist ungültig.',
   'mcp.connectionFailed': () => 'Die Verbindung zum MCP-Server ist fehlgeschlagen.',
+  'mcp.endpointNotFound': () => 'Der MCP-Endpunkt wurde nicht gefunden. Prüfe die Server-URL und den Pfad.',
   'mcp.discoveryFailed': () => 'Die Tools des MCP-Servers konnten nicht erkannt werden.',
   'mcp.invalidCatalog': () => 'Der MCP-Server hat einen ungültigen Tool-Katalog geliefert.',
   'mcp.invalidResponse': () => 'Der MCP-Server hat eine ungültige Antwort geliefert.',

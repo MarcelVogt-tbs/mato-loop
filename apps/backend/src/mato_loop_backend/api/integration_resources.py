@@ -41,9 +41,8 @@ async def _integration_resources(
         raise ApiError(409, "integration.resourcePoliciesUnsupported")
     if instance.integration_type == "calendar" and instance.adapter_type == "caldav":
         try:
-            return await discover_caldav_resources(db, instance, release_connection=True)
+            return await discover_caldav_resources(db, instance)
         except IntegrationSettingsError as exc:
-            await db.rollback()
             raise ApiError(
                 409 if exc.code == "integration.resourcePoliciesUnsupported" else 502,
                 exc.code,
@@ -68,10 +67,8 @@ async def _integration_resources(
             if instance.adapter_type == "sonobin" and record.kind != MCP_CREDENTIAL_KIND:
                 raise ValueError("invalid integration credential kind")
             credential = read_credential(record)
-        await db.rollback()
         resources = await adapter.resources(instance, credential)
     except Exception as exc:
-        await db.rollback()
         logger.warning(
             "Resource discovery for integration %s failed with %s",
             instance.id,

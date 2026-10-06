@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import model_validator
+from pydantic import HttpUrl, field_validator
 
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
@@ -46,9 +46,9 @@ SONOBIN = SonoBinMetadata(
     label="SonoBin",
     description="Verwaltet Aufnahmen, Audio-Assets, Metadaten und Bibliothekstitel.",
     setup_instructions=(
-        "Verwende die SonoBin-Backend-Adresse mit /mcp/ als Endpunkt.",
-        "Der Bearer-Token muss SONOBIN_MCP_BEARER_TOKEN entsprechen.",
-        "SONOBIN_MCP_USER muss ein aktiver Administrator sein und SONOBIN_MCP_PUBLIC_BASE_URL muss gesetzt sein.",
+        "Verwende die SonoBin-Basis-URL. Der MCP-Endpunkt wird automatisch ergänzt.",
+        "Verwende einen in SonoBin erstellten MCP-Token oder den konfigurierten statischen Bearer-Token.",
+        "Für Download-Links muss SONOBIN_MCP_PUBLIC_BASE_URL in SonoBin gesetzt sein.",
     ),
     server_policy=ToolExecutionPolicy.ASK,
     tools={
@@ -112,12 +112,19 @@ SONOBIN = SonoBinMetadata(
 )
 
 
+def sonobin_base_url(value: str | HttpUrl) -> str:
+    url = HttpUrl(str(value))
+    if (url.scheme != "https" or url.username is not None or url.password is not None
+        or url.query is not None or url.fragment is not None):
+        raise ValueError("SonoBin requires an HTTPS base URL without credentials, query, or fragment")
+    return str(url).rstrip("/").removesuffix("/mcp")
+
+
 class SonoBinConfig(McpConfig):
-    @model_validator(mode="after")
-    def require_mcp_endpoint(self) -> SonoBinConfig:
-        if self.endpoint.scheme != "https" or not self.endpoint.path.endswith("/mcp/"):
-            raise ValueError("SonoBin requires an HTTPS /mcp/ endpoint")
-        return self
+    @field_validator("endpoint", mode="before")
+    @classmethod
+    def normalize_endpoint(cls, value: Any) -> str:
+        return sonobin_base_url(value) + "/mcp/"
 
 
 def _contributions(instance) -> IntegrationContributions:

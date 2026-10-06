@@ -176,6 +176,62 @@ async def test_mcp_client_uses_streamable_http_transport(monkeypatch, endpoint) 
     assert all(settings["trust_env"] is False for settings in client_settings)
 
 
+@pytest.mark.parametrize("oauth", [False, True])
+@pytest.mark.parametrize("path", ["/mcp", "/webhook/a%2Fb", "/mcp%3Fabc"])
+async def test_discovery_recovers_missing_slash_and_persists_endpoint(monkeypatch, oauth, path):
+    def reply(request):
+        if request.url.raw_path == path.encode():
+            return httpx.Response(404)
+        if request.method == "GET":
+            return httpx.Response(405)
+        body = json.loads(request.content)
+        if "id" not in body:
+            return httpx.Response(202)
+        result = (
+            {"protocolVersion": body["params"]["protocolVersion"], "capabilities": {"tools": {}},
+             "serverInfo": {"name": "Test", "version": "1"}}
+            if body["method"] == "initialize" else {"tools": []}
+        )
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": result})
+
+    monkeypatch.setattr(client_module.httpx, "AsyncHTTPTransport", lambda **_kwargs: httpx.MockTransport(reply))
+    instance = IntegrationInstance(
+        name="Server", integration_type="mcp", adapter_type="mcp_streamable_http",
+        config={"endpoint": "https://mcp.example.test" + path, **({"oauth": {}} if oauth else {})},
+    )
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=IntegrationSettings(instances=[instance])))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    if oauth:
+        monkeypatch.setattr(service_module, "connection_token", AsyncMock(return_value="secret"))
+        with pytest.raises(McpClientError, match="mcp.authorizationRequired"):
+            await McpIntegrationService.refresh(AsyncMock(), instance.id, owner_id=None)
+    else:
+        instance = await McpIntegrationService.create(
+            AsyncMock(), name="Server", endpoint="https://mcp.example.test" + path,
+            token=None, enabled=True, owner_id=None,
+        )
+    assert instance.config["endpoint"] == "https://mcp.example.test" + path + ("" if oauth else "/")
+
+
+@pytest.mark.parametrize("status, code", [(401, "mcp.authenticationFailed"), (403, "mcp.authenticationFailed"),
+                                         (404, "mcp.endpointNotFound"), (500, "mcp.unavailable")])
+async def test_discovery_maps_http_errors(monkeypatch, status, code):
+    monkeypatch.setattr(client_module.httpx, "AsyncHTTPTransport",
+                        lambda **_kwargs: httpx.MockTransport(lambda _request: httpx.Response(status)))
+    with pytest.raises(McpClientError) as error:
+        await McpClient("https://mcp.example.test/mcp/").discover_tools()
+    assert error.value.code == code
+
+
+@pytest.mark.parametrize("value", ["https://sonobin.example.test/app", "https://sonobin.example.test/app/",
+                                 "https://sonobin.example.test/app/mcp", "https://sonobin.example.test/app/mcp/"])
+def test_sonobin_api_accepts_base_url_and_preserves_installation_path(value):
+    from mato_loop_backend.api.routes.integrations import SonoBinIntegrationCreateRequest
+
+    request = SonoBinIntegrationCreateRequest(name="SonoBin", baseUrl=value, bearerToken="secret")
+    assert SonoBinIntegrationService._validate_connection(str(request.base_url), "secret") == "https://sonobin.example.test/app/mcp/"
+
+
 class ChunkStream(httpx.AsyncByteStream):
     async def __aiter__(self):
         yield b"a" * 600_000
@@ -783,7 +839,7 @@ async def test_service_allows_retained_bearer_over_http(monkeypatch) -> None:
     )
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     monkeypatch.setattr(service_module, "connection_token", AsyncMock(return_value="secret"))
-    discover = AsyncMock(return_value=[])
+    discover = AsyncMock(return_value=("http://192.168.1.30:9000/mcp", []))
     monkeypatch.setattr(McpIntegrationService, "_discover", discover)
 
     await McpIntegrationService.update(
@@ -1016,7 +1072,9 @@ def test_sonobin_still_requires_https() -> None:
         )
 
 
-async def test_sonobin_create_initializes_both_trust_branches(monkeypatch) -> None:
+@pytest.mark.parametrize("base_url", ["https://sonobin.example.test", "https://sonobin.example.test/",
+                                      "https://sonobin.example.test/mcp", "https://sonobin.example.test/mcp/"])
+async def test_sonobin_create_initializes_both_trust_branches(monkeypatch, base_url) -> None:
     integrations = IntegrationSettings()
     tools = ToolSettings()
 
@@ -1046,13 +1104,14 @@ async def test_sonobin_create_initializes_both_trust_branches(monkeypatch) -> No
     instance = await SonoBinIntegrationService.create(
         db,
         name="SonoBin",
-        endpoint="https://sonobin.example.test/mcp/",
+        endpoint=base_url,
         token="secret",
         enabled=True,
         owner_id=None,
     )
 
     assert (instance.integration_type, instance.adapter_type) == ("music", "sonobin")
+    assert instance.config["endpoint"] == "https://sonobin.example.test/mcp/"
     integration_id = str(instance.id)
     for permissions in (tools.private_permissions, tools.public_permissions):
         assert permissions.integration_policies[integration_id] == {

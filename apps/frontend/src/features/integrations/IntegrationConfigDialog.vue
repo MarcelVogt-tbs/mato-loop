@@ -95,8 +95,8 @@
             <q-banner v-if="form.integration_type === 'music'" rounded class="app-surface-tonal">
               <template #avatar><q-icon name="library_music" color="primary" /></template>
               <div class="text-weight-medium">SonoBin verbinden</div>
-              <div class="text-caption q-mt-xs">Verwende die SonoBin-Backend-Adresse mit <code>/mcp/</code> als Endpunkt.</div>
-              <div class="text-caption">Der Token muss <code>SONOBIN_MCP_BEARER_TOKEN</code> entsprechen. Außerdem müssen <code>SONOBIN_MCP_USER</code> und <code>SONOBIN_MCP_PUBLIC_BASE_URL</code> in SonoBin konfiguriert sein.</div>
+              <div class="text-caption q-mt-xs">Gib die SonoBin-Basis-URL ein. Der MCP-Endpunkt wird automatisch ergänzt.</div>
+              <div class="text-caption">Verwende einen in SonoBin erstellten MCP-Token oder den konfigurierten statischen Bearer-Token. Für Download-Links muss <code>SONOBIN_MCP_PUBLIC_BASE_URL</code> in SonoBin gesetzt sein.</div>
             </q-banner>
             <div v-if="['openscad', 'browser'].includes(form.integration_type)" class="row items-start q-col-gutter-sm">
               <AppSelect dense
@@ -316,7 +316,7 @@ const PROVIDER_DEFAULTS = {
   knowledge: { provider: 'bookstack', label: 'BookStack', placeholder: 'https://wiki.example.com' },
   recipes: { provider: 'mealie', label: 'Mealie', placeholder: 'http://mealie.example.com' },
   infrastructure: { provider: 'arcane', label: 'Arcane', placeholder: 'https://arcane.example.com' },
-  music: { provider: 'sonobin', label: 'SonoBin', placeholder: 'https://sonobin.example.com/mcp/' },
+  music: { provider: 'sonobin', label: 'SonoBin', placeholder: 'https://sonobin.example.com' },
   openscad: { provider: 'openscad', label: 'OpenSCAD', placeholder: '' },
   coding: { provider: 'opencode', label: 'OpenCode', placeholder: 'http://localhost:4096' },
   browser: { provider: 'browser', label: 'Browser', placeholder: '' }
@@ -463,9 +463,6 @@ function urlRule(value) {
     const allowed = requiresHttps.value
       ? protocol === 'https:'
       : ['http:', 'https:'].includes(protocol)
-    if (form.integration_type === 'music' && !new URL(value).pathname.endsWith('/mcp/')) {
-      return 'Der SonoBin-Endpunkt muss mit /mcp/ enden.'
-    }
     return allowed || (requiresHttps.value
       ? `${label} erfordert eine HTTPS-URL.`
       : 'Bitte gib eine gültige HTTP-URL ein.')

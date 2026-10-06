@@ -228,6 +228,7 @@ _MESSAGES = {
     "mcp.callbackUrlInvalid": "Configure a valid public MatoLoop URL in Administration > General before starting OAuth.",
     "mcp.connectionFailed": "The MCP server connection failed.",
     "mcp.configurationInvalid": "The MCP server configuration is invalid.",
+    "mcp.endpointNotFound": "The MCP endpoint was not found. Check the server URL and path.",
     "mcp.invalidResponse": "The MCP server returned an invalid response.",
     "mcp.notFound": "The MCP server was not found.",
     "mcp.oauthConfigurationInvalid": "The MCP OAuth configuration is invalid. Check HTTPS, callback URL and client settings.",

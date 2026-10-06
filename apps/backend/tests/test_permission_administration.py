@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import make_transient_to_detached
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.agent_profiles import (
@@ -106,6 +107,29 @@ async def test_integration_permission_page_lists_configured_rights_and_resources
     response = await get_integration_permissions(integration.id, user, db, "personal")
     assert (response["permissions"]["privatePermissions"]["policies"],
             {resource["key"] for resource in response["inherited"]["private"]["resources"]}) == ({"calendar.read": "ask"}, {"calendar:work"})
+
+
+@pytest.mark.parametrize("save", [False, True])
+async def test_sonobin_permissions_preserve_loaded_user(monkeypatch, save):
+    import mato_loop_backend.api.routes.integrations as routes
+
+    user = UserAccount(id=uuid4(), username="owner", password_hash="hash", is_admin=False)
+    make_transient_to_detached(user)
+    integration = IntegrationInstance(name="SonoBin", integration_type="music", adapter_type="sonobin",
+                                     config={"endpoint": "https://music.example/mcp/", "tools": [
+                                         {"name": "list_recordings", "input_schema": {"type": "object"}},
+                                     ]})
+    settings = UserIntegrationSettings(instances=[integration])
+    monkeypatch.setattr(routes, "_permission_instance", AsyncMock(return_value=(settings, user.id, integration)))
+    monkeypatch.setattr(routes, "load_effective_agent_profiles", AsyncMock(return_value=AgentProfilesSettings()))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    async with AsyncSession(expire_on_commit=False) as db:
+        db.add(user)
+        if save:
+            result = await update_integration_permissions(integration.id, IntegrationPermissions(), user, db, "personal")
+        else:
+            result = await get_integration_permissions(integration.id, user, db, "personal")
+        assert result["inherited"]["public"]["resources"][0]["label"] == "Aufnahmen auflisten"
 
 
 async def test_reset_builtin_tool_permissions_preserves_integration_selection(monkeypatch):

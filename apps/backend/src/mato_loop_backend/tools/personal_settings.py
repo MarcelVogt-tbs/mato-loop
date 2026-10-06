@@ -165,16 +165,15 @@ async def _personal_settings(
                     "instructions": "MatoLoop supports OAuth. Start the browser login in Settings > MCP servers. This tool configures static Bearer credentials; it cannot complete interactive OAuth setup.",
                 },
             }
-        return ToolResult.json({
-            "areas": {
-                **{key: list(fields) for key, (_type, fields) in _SCALAR_SETTINGS.items()},
-                "user_profile": sorted(_PROFILE_FIELDS),
-                "agent_identity": ["display_name", "instructions"],
-                "variables": ["name", "secret", "description", "value_ref"],
-                "integrations": adapters,
-                "integrationOptions": ["search_selection", "caldav_defaults"],
-            },
-        })
+        areas = {
+            **{key: list(fields) for key, (_type, fields) in _SCALAR_SETTINGS.items()},
+            "user_profile": sorted(_PROFILE_FIELDS),
+            "agent_identity": ["display_name", "instructions"],
+            "variables": ["name", "secret", "description", "value_ref"],
+            "integrations": adapters,
+            "integrationOptions": ["search_selection", "caldav_defaults"],
+        }
+        return ToolResult.json({"areas": {area: areas[area]} if area else areas})
 
     assert area is not None
     if area == "integrations":
@@ -369,7 +368,9 @@ CUSTOMIZE_MATOLOOP = ToolDefinition(
     "For integrations use area=integrations, adapter_type from list, and changes with name, "
     "listed fields, and secret_refs keyed by listed credentialFields. "
     "Never put secret values in changes. "
-    "Use list to discover supported areas and fields. Changes apply from the next run. "
+    "Use action=list to discover supported areas and fields; area is an optional filter. "
+    "Use action=get to read saved values. SonoBin takes base_url and builds its MCP endpoint automatically. "
+    "Changes apply from the next run. "
     "MCP supports no authentication, Bearer tokens, and OAuth. Interactive OAuth setup requires "
     "Settings > MCP servers.",
     PersonalSettingsArguments,
