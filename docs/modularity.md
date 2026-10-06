@@ -86,6 +86,22 @@ move with Python modules.
 
 ## Frontend
 
+### Menus and selections
+
+Use `shared/ui/AppMenu.vue` for application action and context menus and
+`shared/ui/AppSelect.vue` for selection fields. Both reuse Quasar and the surface,
+selection, spacing, and responsive rules in `shared/styles/_menus.scss`. Feature
+components control their content, placement, and width; the composer anchors its
+menus above the field. Mobile selections use Quasar dialogs by default.
+
+Both components forward Quasar attributes, events, and slots. `AppSelect` supplies
+the default option row: `label`, optional `primaryLabel`, `icon` or `trustIcon`,
+`caption`, `description`, and a selected checkmark. Keep `label` as the complete
+selected-field and accessible label. Custom `option`, `selected`, and `no-option`
+slots remain available for specialized content. Multi-selection, chips, filtering,
+disabled options, and form validation remain Quasar behavior. Informational
+popovers and tooltips use their own Quasar components rather than action menus.
+
 `features/<domain>/` owns each domain's components, pages, Pinia store
 implementation, and domain-specific helpers. Chat owns its draft, session,
 outbox, and stream actions; files owns the explorer, viewer, editor, and file

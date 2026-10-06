@@ -98,7 +98,7 @@
                 :aria-label="`Agent-Wartung für ${agent.alias}`"
                 :disable="!agent.connected || agent.maintenance?.status === 'running' || maintenanceBusy"
               >
-                <q-menu class="app-menu-popup app-action-menu" anchor="bottom right" self="top right">
+                <AppMenu anchor="bottom right" self="top right">
                   <q-list>
                     <q-item clickable v-close-popup @click="maintain(agent, 'update')">
                       <q-item-section avatar><q-icon name="update" /></q-item-section>
@@ -109,7 +109,7 @@
                       <q-item-section>Agent deinstallieren</q-item-section>
                     </q-item>
                   </q-list>
-                </q-menu>
+                </AppMenu>
               </q-btn>
               <q-btn flat round dense icon="edit" :aria-label="`${agent.alias} bearbeiten`" @click="openEdit(agent)">
                 <q-tooltip>Bearbeiten</q-tooltip>
@@ -172,7 +172,7 @@
             </q-banner>
           </q-card-section>
           <q-card-section class="q-pt-none">
-            <q-select dense
+            <AppSelect dense
               v-model="pairingDurationSeconds"
               outlined
               emit-value
@@ -224,6 +224,8 @@
 </template>
 
 <script setup>
+import AppMenu from 'src/shared/ui/AppMenu.vue'
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { copyToClipboard, useQuasar } from 'quasar'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import ExecutionAgentConfigDialog from 'src/features/computers/ExecutionAgentConfigDialog.vue'

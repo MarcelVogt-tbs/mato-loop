@@ -52,6 +52,8 @@ export function modelOption(model, provider, disable = false) {
   const trustLevel = effectiveTrustLevel(model, provider)
   return {
     label: `${model.name || model.modelId} · ${provider?.name || 'Provider'}`,
+    primaryLabel: model.name || model.modelId,
+    caption: provider?.name || 'Provider',
     value: model.id,
     trustLevel,
     trustIcon: trustLevel === 'private' ? 'lock' : 'public',

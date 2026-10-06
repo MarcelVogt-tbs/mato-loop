@@ -24,7 +24,7 @@
     <template v-else>
       <div class="row q-col-gutter-sm q-pa-sm">
         <div class="col-12 col-sm">
-          <q-select
+          <AppSelect
             v-model="selectedAccountId"
             outlined
             dense
@@ -32,12 +32,11 @@
             map-options
             label="Konto"
             :options="accountOptions"
-            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
             @update:model-value="selectAccount"
           />
         </div>
         <div class="col-12 col-sm">
-          <q-select
+          <AppSelect
             v-model="selectedMailboxKey"
             outlined
             dense
@@ -47,7 +46,6 @@
             :options="mailboxOptions"
             :loading="mail.mailboxesLoading"
             :disable="mail.mailboxesLoading || !mail.mailboxes.length"
-            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
             @update:model-value="selectMailbox"
           />
         </div>
@@ -228,6 +226,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'

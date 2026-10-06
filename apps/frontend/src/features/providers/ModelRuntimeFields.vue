@@ -71,7 +71,7 @@
         lazy-rules
         :rules="[positiveNumberRule]"
       />
-      <q-select dense
+      <AppSelect dense
         :model-value="form.trustLevel ?? 'inherit'"
         outlined
         hide-bottom-space
@@ -82,7 +82,7 @@
         :hint="`Effektiv: ${effectiveTrustLevel === 'private' ? 'Privat' : 'Öffentlich'}`"
         @update:model-value="form.trustLevel = $event === 'inherit' ? null : $event"
       />
-      <q-select dense
+      <AppSelect dense
         :model-value="form.pseudonymizationEnabled ?? 'inherit'"
         outlined
         hide-bottom-space
@@ -93,7 +93,7 @@
         :hint="`Effektiv: ${effectivePseudonymizationEnabled ? 'Aktiv' : 'Inaktiv'}. Personen und Orte werden nicht erkannt.`"
         @update:model-value="form.pseudonymizationEnabled = $event === 'inherit' ? null : $event"
       />
-      <q-select dense
+      <AppSelect dense
         v-model="form.memoryPolicy"
         outlined
         hide-bottom-space
@@ -120,7 +120,7 @@
           color="primary"
           label="Streaming unterstützt"
         />
-        <q-select dense
+        <AppSelect dense
           v-model="form.inputModalities"
           class="model-runtime-wide"
           outlined
@@ -154,6 +154,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed } from 'vue'
 
 defineOptions({ name: 'ModelRuntimeFields' })

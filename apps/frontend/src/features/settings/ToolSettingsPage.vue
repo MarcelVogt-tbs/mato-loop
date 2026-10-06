@@ -21,11 +21,11 @@
       <q-tab name="management" icon="build" label="Verwaltung" />
     </q-tabs>
 
-    <q-select dense
+    <AppSelect dense
       v-if="showManagement"
       :model-value="selectedId" outlined emit-value map-options label="Agentenprofil"
       class="q-mb-md" :options="profileOptions" :disable="loading || saving"
-      :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" @update:model-value="selectProfile"
+      @update:model-value="selectProfile"
     />
     <q-banner v-if="!canEdit && !loading" rounded class="app-surface-tonal">
       <template #avatar><q-icon name="admin_panel_settings" color="primary" /></template>
@@ -49,7 +49,7 @@
       <q-card flat class="app-surface q-mb-md">
         <q-card-section>
           <div class="text-subtitle1 text-weight-bold">Shell-Präfixe</div>
-          <q-select dense v-if="selectedId" v-model="form.shellCustom" outlined emit-value map-options label="Shell-Präfixe" :options="[{ label: 'Vom Basisprofil übernehmen', value: false }, { label: 'Eigene Werte', value: true }]" />
+          <AppSelect dense v-if="selectedId" v-model="form.shellCustom" outlined emit-value map-options label="Shell-Präfixe" :options="[{ label: 'Vom Basisprofil übernehmen', value: false }, { label: 'Eigene Werte', value: true }]" />
           <div class="row q-col-gutter-md q-mt-sm">
             <q-input dense v-model="form.shellRead" class="col-12 col-md-6" outlined type="textarea" autogrow label="Lesende Befehle" hint="Ein Präfix pro Zeile, z. B. git status." :disable="!form.shellCustom" />
             <q-input dense v-model="form.shellWrite" class="col-12 col-md-6" outlined type="textarea" autogrow label="Schreibende Befehle" hint="Ein Präfix pro Zeile, z. B. npm install." :disable="!form.shellCustom" />
@@ -99,6 +99,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, useRoute } from 'vue-router'

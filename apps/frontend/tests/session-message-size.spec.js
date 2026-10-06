@@ -2,7 +2,7 @@
 import { createApp, h, nextTick } from 'vue'
 import { createPinia } from 'pinia'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Quasar } from 'quasar'
+import { Quasar, QSelect, QIcon, QItem, QItemLabel, QItemSection } from 'quasar'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: {} }))
@@ -20,10 +20,10 @@ it('changes message size while retaining the session configuration', async () =>
   app = createApp({ render: () => h(SessionSettingsFields, {
     session: { sessionProfile }, fields: ['messageSize'], onUpdate: update
   }) })
-  app.use(createPinia()).use(Quasar)
+  app.use(createPinia()).use(Quasar, { components: { QSelect, QIcon, QItem, QItemLabel, QItemSection } })
   app.mount(root)
   root.querySelector('.q-field__native').click()
-  const option = await vi.waitUntil(() => [...document.querySelectorAll('.q-item')].find((item) => item.textContent.trim() === 'Klein'))
+  const option = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find((item) => item.querySelector('.q-item__label')?.textContent === 'Klein'))
   option.click()
   await nextTick()
   expect(update).toHaveBeenCalledWith({ session_profile: { ...sessionProfile, messageSize: 'small' } })

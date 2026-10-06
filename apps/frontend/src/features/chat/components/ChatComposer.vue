@@ -141,7 +141,7 @@
               type="button"
               :disable="stopping"
             >
-              <q-menu anchor="top right" self="bottom right" auto-close @hide="input?.focus()">
+              <AppMenu anchor="top right" self="bottom right" auto-close @hide="input?.focus()">
                 <q-list>
                   <q-item clickable @click="sendMode = 'interrupt'">
                     <q-item-section>Jetzt senden</q-item-section>
@@ -152,7 +152,7 @@
                     <q-item-section side><q-icon v-if="sendMode === 'queue'" name="check" /></q-item-section>
                   </q-item>
                 </q-list>
-              </q-menu>
+              </AppMenu>
             </q-btn>
             <q-btn
               v-if="!running"
@@ -175,6 +175,7 @@
 </template>
 
 <script setup>
+import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import ComposerAttachments from 'src/features/chat/components/ComposerAttachments.vue'

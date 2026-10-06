@@ -49,7 +49,7 @@
           :disable="controlCenter.saving || !controlCenter.ready || (!chat.current && chat.activeQueuedMessages.length > 0)"
         >
           <q-tooltip>App hinzufügen</q-tooltip>
-          <q-menu anchor="bottom right" self="top right" class="app-action-menu">
+          <AppMenu anchor="bottom right" self="top right">
             <q-list padding>
               <q-item
                 v-for="item in launcherIntegrations"
@@ -63,7 +63,7 @@
                 <q-item-section>{{ item.label }}</q-item-section>
               </q-item>
             </q-list>
-          </q-menu>
+          </AppMenu>
         </q-btn>
       </q-tabs>
 
@@ -77,7 +77,7 @@
         aria-label="Geöffnete Tabs anzeigen"
       >
         <q-tooltip>Geöffnete Tabs</q-tooltip>
-        <q-menu anchor="bottom right" self="top right" class="app-action-menu">
+        <AppMenu anchor="bottom right" self="top right">
           <q-list padding>
             <q-item
               v-for="tab in flexibleTabs"
@@ -94,7 +94,7 @@
               <q-item-section v-if="activeFlexibleTabId === tab.tabId" side><q-icon name="check" color="primary" /></q-item-section>
             </q-item>
           </q-list>
-        </q-menu>
+        </AppMenu>
       </q-btn>
 
       <q-btn
@@ -197,14 +197,14 @@
               label="App hinzufügen"
               :disable="!launcherIntegrations.length || !controlCenter.ready || (!chat.current && chat.activeQueuedMessages.length > 0)"
             >
-              <q-menu anchor="bottom middle" self="top middle" class="app-action-menu">
+              <AppMenu anchor="bottom middle" self="top middle">
                 <q-list padding>
                   <q-item v-for="item in launcherIntegrations" :key="item.id" clickable v-ripple v-close-popup @click="openContent(item.id)">
                     <q-item-section avatar><q-icon :name="item.icon" /></q-item-section>
                     <q-item-section>{{ item.label }}</q-item-section>
                   </q-item>
                 </q-list>
-              </q-menu>
+              </AppMenu>
             </q-btn>
           </template>
         </AppStateMessage>
@@ -220,6 +220,7 @@
 </template>
 
 <script setup>
+import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, nextTick, ref } from 'vue'
 import { Notify } from 'quasar'
 import AppClosableTab from 'src/shared/ui/AppClosableTab.vue'

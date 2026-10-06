@@ -1,13 +1,14 @@
 <template>
   <div>
     <div class="row q-col-gutter-md">
-      <q-select :model-value="modelValue.modelId" :display-value="modelValue.modelId ? undefined : inheritedModelLabel" class="col-12 col-sm-6" outlined dense clearable emit-value map-options label="Agentmodell" :options="providers.selectionOptions(modelValue.modelId || inherited.modelId, true)" :disable="disabled" :hint="inheritedModelLabel" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" @update:model-value="selectModel" />
-      <q-select :model-value="modelValue.reasoningEffort" class="col-12 col-sm-6" outlined dense emit-value map-options label="Reasoning-Stufe" :options="reasoningOptions" :disable="disabled || reasoningOptions.length < 2" @update:model-value="$emit('update:modelValue', { ...modelValue, reasoningEffort: $event })" />
+      <AppSelect :model-value="modelValue.modelId" :display-value="modelValue.modelId ? undefined : inheritedModelLabel" class="col-12 col-sm-6" outlined dense clearable emit-value map-options label="Agentmodell" :options="providers.selectionOptions(modelValue.modelId || inherited.modelId, true)" :disable="disabled" :hint="inheritedModelLabel" @update:model-value="selectModel" />
+      <AppSelect :model-value="modelValue.reasoningEffort" class="col-12 col-sm-6" outlined dense emit-value map-options label="Reasoning-Stufe" :options="reasoningOptions" :disable="disabled || reasoningOptions.length < 2" @update:model-value="$emit('update:modelValue', { ...modelValue, reasoningEffort: $event })" />
     </div>
   </div>
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed } from 'vue'
 import { useProviderStore } from 'stores/providers'
 import { modelReasoningEffortOptions, reasoningEffortLabel } from 'src/utils/model-runtime'

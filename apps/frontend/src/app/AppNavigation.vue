@@ -222,7 +222,7 @@
           </template>
           <template #actions><q-icon name="keyboard_arrow_up" size="22px" /></template>
 
-          <q-menu anchor="top right" self="bottom right" :offset="[0, 8]" class="app-user-popup app-action-menu">
+          <AppMenu anchor="top right" self="bottom right" class="app-user-popup">
             <q-list padding>
               <SidebarNavItem v-if="auth.isAdmin" icon="admin_panel_settings" label="Administration" :to="{ name: 'admin' }" v-close-popup @click="closeDrawerOnMobile" />
               <SidebarNavItem icon="tune" label="Einstellungen" to="/settings" v-close-popup @click="closeDrawerOnMobile" />
@@ -232,7 +232,7 @@
               <q-separator class="q-my-sm" />
               <SidebarNavItem icon="logout" label="Abmelden" v-close-popup class="text-negative" @click="logout" />
             </q-list>
-          </q-menu>
+          </AppMenu>
         </SidebarNavItem>
       </div>
     </div>
@@ -266,6 +266,7 @@
 </template>
 
 <script setup>
+import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { mdiFolderOpenOutline, mdiFolderOutline } from '@quasar/extras/mdi-v7'

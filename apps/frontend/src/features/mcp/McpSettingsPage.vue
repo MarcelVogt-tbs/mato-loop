@@ -66,7 +66,7 @@
                <q-btn flat dense :round="$q.screen.lt.md" no-caps icon="construction" :label="$q.screen.gt.sm ? 'Tools / Rechte' : undefined" aria-label="Tools und Berechtigungen anzeigen" :disable="!canEdit(server)" :to="{ name: admin ? 'admin-mcp-tools' : 'settings-mcp-tools', params: { serverId: server.id } }" />
               <template v-if="$q.screen.lt.md">
                 <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${server.name}`" :loading="refreshingId === server.id">
-                  <q-menu auto-close>
+                  <AppMenu auto-close>
                     <q-list>
                       <q-item clickable :disable="refreshingId !== null || !canEdit(server)" @click="refreshServer(server)">
                         <q-item-section avatar><q-icon name="refresh" /></q-item-section>
@@ -81,7 +81,7 @@
                         <q-item-section class="text-negative">Löschen</q-item-section>
                       </q-item>
                     </q-list>
-                  </q-menu>
+                  </AppMenu>
                 </q-btn>
               </template>
               <template v-else>
@@ -100,6 +100,7 @@
 </template>
 
 <script setup>
+import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'

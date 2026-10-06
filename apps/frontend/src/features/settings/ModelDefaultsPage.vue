@@ -11,14 +11,15 @@
     <q-card v-if="showManagement && ready" flat class="app-surface">
       <q-card-section class="q-gutter-md">
         <ChatModelFields :model-value="{ modelId: form.defaultModelId, reasoningEffort: form.reasoningEffort }" :inherited="{ modelId: store.inherited.defaultModelId || store.automaticModelId, reasoningEffort: store.inherited.reasoningEffort }" :automatic="!store.inherited.defaultModelId" :disabled="blocked" @update:model-value="form.defaultModelId = $event.modelId; form.reasoningEffort = $event.reasoningEffort" />
-        <q-select v-for="field in fields" :key="field.key" v-model="form[field.key]" outlined dense clearable emit-value map-options :label="field.label" :options="options(field)" :disable="blocked" :hint="inheritedLabel(field)" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" />
-        <q-select v-model="form.titleVisionFallbackEnabled" outlined dense emit-value map-options label="Titel bei Bildinhalten mit Visionmodell erzeugen" :options="[{ label: `Vorgabe (${store.inherited.titleVisionFallbackEnabled === false ? 'Aus' : 'An'})`, value: null }, { label: 'An', value: true }, { label: 'Aus', value: false }]" :disable="blocked" />
+        <AppSelect v-for="field in fields" :key="field.key" v-model="form[field.key]" outlined dense clearable emit-value map-options :label="field.label" :options="options(field)" :disable="blocked" :hint="inheritedLabel(field)" />
+        <AppSelect v-model="form.titleVisionFallbackEnabled" outlined dense emit-value map-options label="Titel bei Bildinhalten mit Visionmodell erzeugen" :options="[{ label: `Vorgabe (${store.inherited.titleVisionFallbackEnabled === false ? 'Aus' : 'An'})`, value: null }, { label: 'An', value: true }, { label: 'Aus', value: false }]" :disable="blocked" />
       </q-card-section>
     </q-card>
   </section>
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'

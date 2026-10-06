@@ -20,7 +20,7 @@
       <q-separator />
       <q-form ref="formRef" class="col column no-wrap">
         <q-card-section class="col scroll q-gutter-md">
-          <q-select dense
+          <AppSelect dense
             v-model="form.integration_type"
             outlined
             emit-value
@@ -30,7 +30,7 @@
             :disable="isEditing"
             @update:model-value="selectIntegrationType"
           />
-          <q-select dense
+          <AppSelect dense
             v-model="form.provider_type"
             outlined
             emit-value
@@ -62,13 +62,13 @@
               <div class="row q-col-gutter-sm">
                 <q-input dense v-model="form.imap_host" outlined label="IMAP-Host" class="col-12 col-sm" lazy-rules :rules="[requiredRule]" />
                 <q-input dense v-model.number="form.imap_port" outlined type="number" label="IMAP-Port" class="col-5 col-sm-3" lazy-rules :rules="[portRule]" />
-                <q-select dense v-model="form.imap_security" outlined emit-value map-options label="IMAP-Sicherheit" class="col-7 col-sm-4" :options="securityOptions" />
+                <AppSelect dense v-model="form.imap_security" outlined emit-value map-options label="IMAP-Sicherheit" class="col-7 col-sm-4" :options="securityOptions" />
               </div>
               <div class="text-subtitle2 text-weight-medium">Postausgang (SMTP)</div>
               <div class="row q-col-gutter-sm">
                 <q-input dense v-model="form.smtp_host" outlined label="SMTP-Host" class="col-12 col-sm" lazy-rules :rules="[requiredRule]" />
                 <q-input dense v-model.number="form.smtp_port" outlined type="number" label="SMTP-Port" class="col-5 col-sm-3" lazy-rules :rules="[portRule]" />
-                <q-select dense v-model="form.smtp_security" outlined emit-value map-options label="SMTP-Sicherheit" class="col-7 col-sm-4" :options="securityOptions" />
+                <AppSelect dense v-model="form.smtp_security" outlined emit-value map-options label="SMTP-Sicherheit" class="col-7 col-sm-4" :options="securityOptions" />
               </div>
               <q-input dense v-model="form.username" outlined label="Benutzername" lazy-rules :rules="[requiredRule]" />
               <q-input dense v-model="form.from_address" outlined type="email" label="Fester Absender" hint="Diese Absenderadresse wird für ausgehende E-Mails verwendet." lazy-rules :rules="[requiredRule, emailRule]" />
@@ -99,14 +99,13 @@
               <div class="text-caption">Der Token muss <code>SONOBIN_MCP_BEARER_TOKEN</code> entsprechen. Außerdem müssen <code>SONOBIN_MCP_USER</code> und <code>SONOBIN_MCP_PUBLIC_BASE_URL</code> in SonoBin konfiguriert sein.</div>
             </q-banner>
             <div v-if="['openscad', 'browser'].includes(form.integration_type)" class="row items-start q-col-gutter-sm">
-              <q-select dense
+              <AppSelect dense
                 v-model="form.executionAgentId"
                 class="col"
                 outlined
                 emit-value
                 map-options
                 label="Computer"
-                :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                 :options="executionAgentOptions"
                 :loading="executionAgents.loading"
                 lazy-rules
@@ -118,7 +117,7 @@
                     <q-item-section class="app-muted">Kein Computer eingerichtet</q-item-section>
                   </q-item>
                 </template>
-              </q-select>
+              </AppSelect>
               <div v-if="form.integration_type === 'openscad'" class="col-auto q-pt-sm">
                 <q-btn
                   outline
@@ -275,6 +274,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useExecutionAgentStore } from 'stores/execution-agents'

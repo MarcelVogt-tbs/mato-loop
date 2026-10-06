@@ -37,11 +37,11 @@
               </q-item-section>
               <q-item-section side @click.stop @keydown.stop>
                 <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${item.name}`" :disable="saving || starting">
-                  <q-menu><q-list dense>
+                  <AppMenu><q-list dense>
                     <q-item clickable v-close-popup :disable="archived || Boolean(item.effectiveState?.activeRunStatus)" @click="runNow(item)"><q-item-section>Jetzt ausführen</q-item-section></q-item>
                     <q-item clickable v-close-popup :disable="archived" @click="toggleEnabled(item)"><q-item-section>{{ item.enabled ? 'Deaktivieren' : 'Aktivieren' }}</q-item-section></q-item>
                     <q-item clickable v-close-popup class="text-negative" @click="remove(item)"><q-item-section>Entfernen</q-item-section></q-item>
-                  </q-list></q-menu>
+                  </q-list></AppMenu>
                 </q-btn>
               </q-item-section>
             </q-item>
@@ -115,6 +115,7 @@
 </template>
 
 <script setup>
+import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'

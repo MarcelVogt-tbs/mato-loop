@@ -94,7 +94,7 @@
               >
                 <template #prepend><q-icon name="search" /></template>
               </q-input>
-              <q-select
+              <AppSelect
                 v-model="filters.sourceType"
                 outlined
                 dense
@@ -105,7 +105,7 @@
                 :options="sourceTypeOptions"
                 @update:model-value="applyFilters"
               />
-              <q-select
+              <AppSelect
                 v-model="filters.audience"
                 outlined
                 dense
@@ -116,7 +116,7 @@
                 :options="audienceOptions"
                 @update:model-value="applyFilters"
               />
-              <q-select
+              <AppSelect
                 v-model="filters.pinned"
                 outlined
                 dense
@@ -234,7 +234,7 @@
           <q-card-actions v-if="memories.total" class="memory-pagination q-pa-md">
             <span class="text-caption app-muted">{{ resultRange }} von {{ memories.total }}</span>
             <q-space />
-            <q-select
+            <AppSelect
               v-model="pageSize"
               dense
               outlined
@@ -329,7 +329,7 @@
                 <div class="text-body2 app-muted q-mt-xs q-mb-md">
                   Legt fest, ob Dreaming Änderungen verwirft, zur Freigabe vorlegt oder automatisch anwendet.
                 </div>
-                <q-select dense
+                <AppSelect dense
                   v-model="settingsForm.dreamingUpdatePolicy"
                   outlined
                   emit-value
@@ -337,10 +337,9 @@
                   label="Bestehende Erinnerungen ändern"
                   :options="dreamingPolicyOptions"
                   :disable="memories.settingsLoading"
-                  :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                   class="q-mb-md"
                 />
-                <q-select dense
+                <AppSelect dense
                   v-model="settingsForm.dreamingRemovePolicy"
                   outlined
                   emit-value
@@ -348,7 +347,6 @@
                   label="Erinnerungen entfernen"
                   :options="dreamingPolicyOptions"
                   :disable="memories.settingsLoading"
-                  :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                   class="q-mb-lg"
                 />
                 <div class="text-body2 app-muted q-mb-lg">
@@ -402,7 +400,7 @@
                 <template #avatar><q-icon name="info_outline" color="warning" /></template>
                 {{ manualUnavailableReasonMessage }}
               </q-banner>
-              <q-select dense
+              <AppSelect dense
                 v-model="dreamSessionId"
                 outlined
                 clearable
@@ -412,7 +410,6 @@
                 label="Session (optional)"
                 :options="sessionOptions"
                 class="q-mt-lg"
-                :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
               />
               <q-btn
                 unelevated
@@ -499,7 +496,7 @@
               :rules="[requiredRule]"
             />
             <div class="memory-dialog__fields q-mt-sm">
-              <q-select dense
+              <AppSelect dense
                 v-model="memoryForm.category"
                 outlined
                 emit-value
@@ -509,7 +506,7 @@
                 lazy-rules
                 :rules="[requiredRule]"
               />
-              <q-select dense
+              <AppSelect dense
                 v-model="memoryForm.audience"
                 outlined
                 emit-value
@@ -553,6 +550,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'

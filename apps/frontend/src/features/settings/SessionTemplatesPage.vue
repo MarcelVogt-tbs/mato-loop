@@ -25,10 +25,10 @@
           <q-card-section class="col scroll q-gutter-md">
             <q-input v-model.trim="form.name" outlined dense label="Name" maxlength="80" :rules="[(value) => Boolean(value?.trim()) || 'Name eingeben.']" :disable="store.saving" />
             <div class="column q-gutter-y-md">
-              <q-select :model-value="form.agentIds" outlined dense multiple use-chips emit-value map-options label="Verfügbare Agenten" :options="agentOptions" :disable="store.saving" :rules="[(value) => value?.length > 0 || 'Mindestens einen Agenten auswählen.']" @update:model-value="setAgents" />
-              <q-select v-model="form.startAgentId" outlined dense emit-value map-options label="Startagent" :options="agentOptions.filter((item) => form.agentIds?.includes(item.value))" :disable="store.saving" />
-              <q-select v-model="form.memoryMode" outlined dense emit-value map-options label="Memory" :options="memoryOptions" :disable="store.saving" />
-              <q-select v-model="form.messageSize" outlined dense emit-value map-options label="Nachrichtengröße" :options="[{ label: 'Standard', value: 'standard' }, { label: 'Klein', value: 'small' }]" hint="Klein reduziert die Schriftgröße und die Abstände der Nachrichten." persistent-hint :disable="store.saving" />
+              <AppSelect :model-value="form.agentIds" outlined dense multiple use-chips emit-value map-options label="Verfügbare Agenten" :options="agentOptions" :disable="store.saving" :rules="[(value) => value?.length > 0 || 'Mindestens einen Agenten auswählen.']" @update:model-value="setAgents" />
+              <AppSelect v-model="form.startAgentId" outlined dense emit-value map-options label="Startagent" :options="agentOptions.filter((item) => form.agentIds?.includes(item.value))" :disable="store.saving" />
+              <AppSelect v-model="form.memoryMode" outlined dense emit-value map-options label="Memory" :options="memoryOptions" :disable="store.saving" />
+              <AppSelect v-model="form.messageSize" outlined dense emit-value map-options label="Nachrichtengröße" :options="[{ label: 'Standard', value: 'standard' }, { label: 'Klein', value: 'small' }]" hint="Klein reduziert die Schriftgröße und die Abstände der Nachrichten." persistent-hint :disable="store.saving" />
               <div class="text-subtitle2">Modell für die gesamte Session</div>
               <ChatModelFields :model-value="form" :inherited="defaults" :disabled="store.saving" @update:model-value="Object.assign(form, $event)" />
               <q-expansion-item label="Modell-Overrides je Agent" icon="smart_toy">
@@ -48,6 +48,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'

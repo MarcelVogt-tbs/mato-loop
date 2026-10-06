@@ -39,7 +39,7 @@
             :rules="[requiredRule]"
           />
 
-          <q-select dense
+          <AppSelect dense
             v-for="field in policyFields"
             :key="field.key"
             v-model="settings[field.key]"
@@ -69,7 +69,7 @@
             </div>
           </template>
 
-          <q-select dense
+          <AppSelect dense
             v-else
             v-model="pairingDurationSeconds"
             outlined
@@ -100,6 +100,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useExecutionAgentStore } from 'stores/execution-agents'

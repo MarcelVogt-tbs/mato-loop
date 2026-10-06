@@ -15,7 +15,7 @@
       <q-separator />
 
       <q-card-section class="provider-dialog__body q-gutter-md scroll">
-        <q-select dense
+        <AppSelect dense
           v-model="providerType"
           outlined
           emit-value
@@ -23,22 +23,10 @@
           label="Provider"
           :options="providerOptions"
           :disable="isEditing"
-        >
-          <template #option="scope">
-            <q-item v-bind="scope.itemProps">
-              <q-item-section avatar>
-                <q-icon :name="scope.opt.icon" />
-              </q-item-section>
-              <q-item-section>
-                <q-item-label>{{ scope.opt.label }}</q-item-label>
-                <q-item-label caption>{{ scope.opt.description }}</q-item-label>
-              </q-item-section>
-            </q-item>
-          </template>
-        </q-select>
+        />
 
         <div v-if="providerType" class="provider-form-grid">
-          <q-select dense
+          <AppSelect dense
             v-model="form.trust_level"
             outlined
             emit-value
@@ -51,7 +39,7 @@
             color="primary"
             label="Kennungen und Secrets für öffentliche Modelle schützen"
           />
-          <q-select dense
+          <AppSelect dense
             v-model="form.memory_policy"
             class="provider-form-section"
             outlined
@@ -80,7 +68,7 @@
             lazy-rules
             :rules="[requiredRule, urlRule]"
           />
-          <q-select dense
+          <AppSelect dense
             v-if="providerType === 'openai-compatible'"
             v-model="form.api_type"
             outlined
@@ -203,6 +191,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { copyToClipboard, useQuasar } from 'quasar'
 import { useConfirm } from 'src/composables/confirm'

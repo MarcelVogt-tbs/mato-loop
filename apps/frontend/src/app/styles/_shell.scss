@@ -315,36 +315,9 @@ body.body--dark .app-floating-control--flat {
 .app-user-popup {
   width: 264px;
   max-width: calc(100vw - 16px);
-  border: 1px solid var(--app-surface-border);
-  border-radius: 12px;
-  background: var(--app-surface);
-  color: var(--app-text);
 }
 
 @media (min-width: 1024px) and (hover: hover) and (pointer: fine) {
-  .app-action-menu .q-list--padding {
-    padding-block: 4px;
-  }
-
-  .app-action-menu .q-item {
-    min-height: 32px;
-    padding: 2px 10px;
-    font-size: 0.875rem;
-  }
-
-  .app-action-menu .q-item__section--avatar {
-    min-width: 28px;
-    padding-right: 8px;
-  }
-
-  .app-action-menu .q-item__section--avatar .q-icon {
-    font-size: 19px;
-  }
-
-  .app-action-menu .q-separator {
-    margin-block: 4px;
-  }
-
   .app-action-menu .session-actions-menu {
     min-width: 156px;
   }

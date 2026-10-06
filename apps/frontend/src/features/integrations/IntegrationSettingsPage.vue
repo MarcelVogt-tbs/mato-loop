@@ -83,14 +83,13 @@
                   </div>
                 </div>
                 <div class="col-12 col-sm-5">
-                  <q-select
+                  <AppSelect
                     :model-value="adapter.availability"
                     outlined
                     dense
                     emit-value
                     map-options
                     label="Verfügbarkeit"
-                    :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
                     :options="availabilityOptions(adapter)"
                     :disable="integrations.catalogLoading"
                     :loading="integrations.catalogLoading"
@@ -134,13 +133,12 @@
       <q-separator />
       <q-card-section class="row q-col-gutter-md">
         <div class="col-12 col-md-6">
-          <q-select dense
+          <AppSelect dense
             :model-value="searchSelection.primaryProvider"
             outlined
             emit-value
             map-options
             label="Primärprovider"
-            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
             :options="searchProviderOptions"
             :loading="searchSelectionSaving"
             :disable="integrations.loading || searchSelectionSaving"
@@ -148,7 +146,7 @@
           />
         </div>
         <div class="col-12 col-md-6">
-          <q-select dense
+          <AppSelect dense
             :model-value="searchSelection.fallbackProvider"
             outlined
             emit-value
@@ -156,7 +154,6 @@
             clearable
             label="Fallback-Provider"
             hint="Wird nur bei temporären Fehlern des Primärproviders verwendet."
-            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
             :options="fallbackSearchProviderOptions"
             :loading="searchSelectionSaving"
             :disable="integrations.loading || searchSelectionSaving"
@@ -170,14 +167,14 @@
       <q-card-section class="q-gutter-md">
         <div class="text-subtitle1 text-weight-bold">Profilzuordnungen</div>
         <div class="text-body2 app-muted">Legt fest, welche Integrationen ein Profil verwenden darf. Abweichungen an einer persönlichen Verbindung haben Vorrang.</div>
-        <q-select dense v-model="assignmentProfileId" outlined emit-value map-options label="Agentenprofil" :options="profileOptions" :disable="assignmentsLoading" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" />
+        <AppSelect dense v-model="assignmentProfileId" outlined emit-value map-options label="Agentenprofil" :options="profileOptions" :disable="assignmentsLoading" />
         <q-banner v-if="assignmentsFailed" rounded class="app-surface-tonal">
           Die Profilzuordnungen konnten nicht geladen werden.
           <template #action><q-btn flat no-caps color="primary" label="Erneut laden" @click="loadAssignments" /></template>
         </q-banner>
         <template v-if="assignments">
-          <q-select dense :model-value="assignments.integrationsEnabledByDefault" outlined emit-value map-options label="Integrationen standardmäßig" :options="availabilityChoices(assignments.inheritedIntegrationsEnabledByDefault)" :disable="assignmentsLoading" @update:model-value="saveAssignments({ integrationsEnabledByDefault: $event })" />
-          <q-select dense v-for="integration in agents.integrations" :key="integration.id" :model-value="assignments.integrationAvailability[integration.id] ?? null" outlined emit-value map-options :label="integration.name" :options="availabilityChoices(assignments.inheritedIntegrationAvailability[integration.id] ?? assignments.integrationsEnabledByDefault ?? assignments.inheritedIntegrationsEnabledByDefault)" :disable="assignmentsLoading" @update:model-value="setIntegrationAvailability(integration.id, $event)" />
+          <AppSelect dense :model-value="assignments.integrationsEnabledByDefault" outlined emit-value map-options label="Integrationen standardmäßig" :options="availabilityChoices(assignments.inheritedIntegrationsEnabledByDefault)" :disable="assignmentsLoading" @update:model-value="saveAssignments({ integrationsEnabledByDefault: $event })" />
+          <AppSelect dense v-for="integration in agents.integrations" :key="integration.id" :model-value="assignments.integrationAvailability[integration.id] ?? null" outlined emit-value map-options :label="integration.name" :options="availabilityChoices(assignments.inheritedIntegrationAvailability[integration.id] ?? assignments.integrationsEnabledByDefault ?? assignments.inheritedIntegrationsEnabledByDefault)" :disable="assignmentsLoading" @update:model-value="setIntegrationAvailability(integration.id, $event)" />
         </template>
       </q-card-section>
     </q-card>
@@ -300,6 +297,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'

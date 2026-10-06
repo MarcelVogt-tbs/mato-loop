@@ -45,7 +45,8 @@
 
 <script setup>
 import { computed, defineComponent, h } from 'vue'
-import { QBanner, QIcon, QItem, QItemLabel, QItemSection, QSelect, QTooltip, useQuasar } from 'quasar'
+import { QBanner, QIcon, useQuasar } from 'quasar'
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
@@ -118,11 +119,12 @@ const selectedExecutionAgent = computed(() => (
 ))
 const executionAgentOptions = computed(() => {
   const options = [
-    { label: 'Kein Computer', value: null, connected: null, caption: 'Nur Backend-Funktionen verwenden' },
+    { label: 'Kein Computer', value: null, connected: null, icon: 'computer', caption: 'Nur Backend-Funktionen verwenden' },
     ...executionAgents.items.map((agent) => ({
       label: agent.alias,
       value: agent.id,
       connected: agent.connected,
+      icon: agent.connected === false ? 'cloud_off' : 'computer',
       caption: agent.pairingState === 'pending'
         ? 'Kopplung ausstehend'
         : agent.pairingState === 'unpaired'
@@ -135,6 +137,7 @@ const executionAgentOptions = computed(() => {
       label: 'Nicht verfügbarer Computer',
       value: props.session.preferredExecutionAgentId,
       connected: false,
+      icon: 'cloud_off',
       caption: 'Nicht mehr eingerichtet'
     })
   }
@@ -256,27 +259,15 @@ const selectProps = (extra = {}) => ({
   outlined: !props.compact,
   borderless: props.compact,
   dense: true,
-  optionsDense: true,
   emitValue: true,
   mapOptions: true,
-  behavior: $q.screen.lt.sm ? 'dialog' : 'menu',
-  popupContentClass: 'app-menu-popup',
-  popupContentStyle: $q.screen.lt.sm ? undefined : { width: 'min-content' },
+  menuShrink: true,
+  menuAnchor: props.compact ? 'top start' : 'bottom start',
+  menuSelf: props.compact ? 'bottom start' : 'top start',
   disable: props.disabled,
   ...extra
 })
-const optionSlot = (scope, icon) => h(QItem, scope.itemProps, {
-  default: () => [
-    h(QItemSection, { avatar: true }, () => h(QIcon, { name: icon(scope.opt) })),
-    h(QItemSection, null, () => [
-      h(QItemLabel, null, () => scope.opt.label),
-      scope.opt.caption ? h(QItemLabel, { caption: true }, () => scope.opt.caption) : null,
-      scope.opt.description ? h(QItemLabel, { caption: true }, () => scope.opt.description) : null
-    ])
-  ]
-})
-
-const TemplateField = defineComponent(() => () => h(QSelect, selectProps({
+const TemplateField = defineComponent(() => () => h(AppSelect, selectProps({
   modelValue: templateId.value,
   options: templateOptions.value,
   label: 'Sessionvorlage',
@@ -285,7 +276,7 @@ const TemplateField = defineComponent(() => () => h(QSelect, selectProps({
   persistentHint: true,
   'onUpdate:modelValue': (value) => update({ session_template_id: value })
 }), { prepend: () => h(QIcon, { name: 'dashboard_customize' }) }))
-const MessageSizeField = defineComponent(() => () => h(QSelect, selectProps({
+const MessageSizeField = defineComponent(() => () => h(AppSelect, selectProps({
   modelValue: props.session?.sessionProfile?.messageSize || 'standard',
   options: [{ label: 'Standard', value: 'standard' }, { label: 'Klein', value: 'small' }],
   label: 'Nachrichtengröße',
@@ -293,7 +284,7 @@ const MessageSizeField = defineComponent(() => () => h(QSelect, selectProps({
   persistentHint: true,
   'onUpdate:modelValue': (messageSize) => update({ session_profile: { ...props.session?.sessionProfile, messageSize } })
 }), { prepend: () => h(QIcon, { name: 'format_size' }) }))
-const AgentField = defineComponent(() => () => h(QSelect, selectProps({
+const AgentField = defineComponent(() => () => h(AppSelect, selectProps({
   modelValue: displayedAgentProfileId.value,
   options: agentProfileOptions.value,
   label: props.compact ? 'Agent' : 'Agent-Profil',
@@ -304,10 +295,9 @@ const AgentField = defineComponent(() => () => h(QSelect, selectProps({
   onPopupHide: () => emit('agent-popup-hide'),
   'onUpdate:modelValue': (value) => update({ agent_profile_id: value })
 }), {
-  prepend: () => h(QIcon, { name: selectedAgentIcon.value, size: props.compact ? '18px' : undefined }),
-  option: (scope) => optionSlot(scope, (option) => option.icon)
+  prepend: () => h(QIcon, { name: selectedAgentIcon.value, size: props.compact ? '18px' : undefined })
 }))
-const ModelField = defineComponent(() => () => h(QSelect, selectProps({
+const ModelField = defineComponent(() => () => h(AppSelect, selectProps({
   modelValue: effectiveModelId.value,
   options: modelSelectionOptions.value,
   label: props.compact ? 'LLM' : 'Modell',
@@ -317,10 +307,9 @@ const ModelField = defineComponent(() => () => h(QSelect, selectProps({
   clearable: true,
   'onUpdate:modelValue': selectModel
 }), {
-  prepend: () => h(QIcon, { name: selectedModelTrustIcon.value, size: props.compact ? '18px' : undefined }),
-  option: (scope) => optionSlot(scope, (option) => option.trustIcon)
+  prepend: () => h(QIcon, { name: selectedModelTrustIcon.value, size: props.compact ? '18px' : undefined })
 }))
-const ReasoningField = defineComponent(() => () => h(QSelect, selectProps({
+const ReasoningField = defineComponent(() => () => h(AppSelect, selectProps({
   modelValue: effectiveSelection.value.reasoningEffort,
   options: reasoningEffortOptions.value,
   label: 'Denken',
@@ -331,11 +320,9 @@ const ReasoningField = defineComponent(() => () => h(QSelect, selectProps({
   persistentHint: !props.compact,
   disable: props.disabled || !reasoningEffortOptions.value.length,
   'onUpdate:modelValue': (value) => update({ session_profile: { ...props.session?.sessionProfile, agentModels: { ...props.session?.sessionProfile?.agentModels, [displayedAgentProfileId.value]: { ...props.session?.sessionProfile?.agentModels?.[displayedAgentProfileId.value], reasoningEffort: value } } } })
-}), props.compact ? {
-  default: () => h(QTooltip, null, () => 'Reasoning-Aufwand für diese Session')
-} : undefined))
+})))
 const ComputerField = defineComponent(() => () => [
-  h(QSelect, selectProps({
+  h(AppSelect, selectProps({
     modelValue: props.session?.preferredExecutionAgentId,
     options: executionAgentOptions.value,
     label: props.compact ? undefined : 'Computer',
@@ -353,8 +340,7 @@ const ComputerField = defineComponent(() => () => [
     }),
     selected: props.compact ? () => h('span', { class: 'ellipsis' }, executionAgentOptions.value.find(
       (option) => option.value === (props.session?.preferredExecutionAgentId || null)
-    )?.label) : undefined,
-    option: (scope) => optionSlot(scope, (option) => option.connected === false ? 'cloud_off' : 'computer')
+    )?.label) : undefined
   }),
   executionAgentMessage.value && !props.showWarning && !props.compact
     ? h(QBanner, { dense: true, rounded: true, class: 'app-surface-tonal' }, {
@@ -366,7 +352,7 @@ const ComputerField = defineComponent(() => () => [
       })
     : null
 ])
-const MemoryField = defineComponent(() => () => h(QSelect, selectProps({
+const MemoryField = defineComponent(() => () => h(AppSelect, selectProps({
   modelValue: props.session?.memoryMode,
   options: memoryModeOptions,
   label: props.compact ? undefined : 'Memory',
@@ -384,10 +370,9 @@ const MemoryField = defineComponent(() => () => h(QSelect, selectProps({
   }),
   selected: props.compact ? () => h('span', { class: 'ellipsis' }, `Memory: ${memoryModeOptions.find(
     (option) => option.value === props.session?.memoryMode
-  )?.label || 'Nicht verfügbar'}`) : undefined,
-  option: (scope) => optionSlot(scope, (option) => option.icon)
+  )?.label || 'Nicht verfügbar'}`) : undefined
 }))
-const WebSearchField = defineComponent(() => () => h(QSelect, selectProps({
+const WebSearchField = defineComponent(() => () => h(AppSelect, selectProps({
   modelValue: props.session?.webSearchPolicy,
   options: webSearchOptions.value,
   label: props.compact ? undefined : 'Websuche',
@@ -401,8 +386,7 @@ const WebSearchField = defineComponent(() => () => h(QSelect, selectProps({
   prepend: () => h(QIcon, { name: webSearchIcon.value, size: props.compact ? '18px' : undefined, color: props.compact && requiredSearchUnavailable.value ? 'warning' : undefined }),
   selected: props.compact ? () => h('span', { class: 'ellipsis' }, `${$q.screen.lt.sm ? 'Web' : 'Websuche'}: ${webSearchOptions.value.find(
     (option) => option.value === props.session?.webSearchPolicy
-  )?.[$q.screen.lt.sm ? 'shortLabel' : 'label'] || 'Nicht verfügbar'}`) : undefined,
-  option: (scope) => optionSlot(scope, (option) => option.icon)
+  )?.[$q.screen.lt.sm ? 'shortLabel' : 'label'] || 'Nicht verfügbar'}`) : undefined
 }))
 
 defineExpose({ warning })

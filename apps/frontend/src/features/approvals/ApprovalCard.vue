@@ -67,19 +67,19 @@
               :disable="Boolean(loadingDecision)"
               :rules="[(value) => Boolean(value?.trim()) || 'Bitte einen Inhalt eingeben.']"
             />
-            <q-select dense
+            <AppSelect dense
               v-model="memoryEdit.category"
               outlined emit-value map-options label="Kategorie" class="q-mt-sm"
               :options="memoryCategoryOptions" :disable="Boolean(loadingDecision)"
             />
-            <q-select dense
+            <AppSelect dense
               v-model="memoryEdit.audience"
               outlined emit-value map-options label="Verfügbar für" class="q-mt-md"
               hint="Legt fest, welche Modellarten diese Erinnerung verwenden dürfen."
               :options="memoryAudienceOptions" :disable="Boolean(loadingDecision)"
             >
               <template #selected><span>{{ memoryAudienceLabel(memoryEdit.audience) }}</span></template>
-            </q-select>
+            </AppSelect>
             <q-toggle dense
               v-model="memoryEdit.pinned"
               color="primary" label="Immer im Kontext" class="q-mt-md"
@@ -301,6 +301,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, ref } from 'vue'
 import ToolPresentation from 'src/features/chat/components/ToolPresentation.vue'
 import SubagentRequestLink from 'src/features/subagents/SubagentRequestLink.vue'

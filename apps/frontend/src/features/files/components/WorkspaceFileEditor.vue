@@ -25,7 +25,7 @@
         <q-space />
         <q-btn flat round dense icon="more_vert" aria-label="Weitere Editor-Aktionen">
           <q-tooltip>Weitere Aktionen</q-tooltip>
-          <q-menu class="file-actions-menu" anchor="bottom right" self="top right">
+          <AppMenu class="file-actions-menu" anchor="bottom right" self="top right">
             <q-list padding>
               <q-item clickable v-close-popup :active="wrap" aria-label="Zeilenumbruch umschalten" @click="toggleWrap">
                 <q-item-section avatar><q-icon name="wrap_text" /></q-item-section>
@@ -39,7 +39,7 @@
                 <q-item-section>Änderungen verwerfen</q-item-section>
               </q-item>
             </q-list>
-          </q-menu>
+          </AppMenu>
         </q-btn>
       </q-toolbar>
       <q-separator />
@@ -53,6 +53,7 @@
 </template>
 
 <script setup>
+import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { basicSetup } from 'codemirror'

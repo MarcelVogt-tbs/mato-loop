@@ -59,44 +59,40 @@
       <q-expansion-item icon="tune" label="Modelle" header-class="text-weight-medium">
         <q-card-section class="row q-col-gutter-sm q-pt-none">
           <div class="col-12 col-sm-6">
-            <q-select
+            <AppSelect
               :model-value="analysisModel"
               outlined dense emit-value map-options
               label="Analysemodell"
               :options="modelOptions"
               :disable="savingModels"
-              :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
               @update:model-value="updateAnalysisModel"
             />
-            <q-select
+            <AppSelect
               v-if="analysisVariantVisible"
               :model-value="analysisVariant"
               outlined dense emit-value map-options class="q-mt-sm"
               label="Denken (Analyse)"
               :options="analysisVariantOptions"
               :disable="savingModels"
-              :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
               @update:model-value="updateAnalysisVariant"
             />
           </div>
           <div class="col-12 col-sm-6">
-            <q-select
+            <AppSelect
               :model-value="executionModel"
               outlined dense emit-value map-options
               label="Ausführungsmodell"
               :options="modelOptions"
               :disable="savingModels"
-              :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
               @update:model-value="updateExecutionModel"
             />
-            <q-select
+            <AppSelect
               v-if="executionVariantVisible"
               :model-value="executionVariant"
               outlined dense emit-value map-options class="q-mt-sm"
               label="Denken (Ausführung)"
               :options="executionVariantOptions"
               :disable="savingModels"
-              :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
               @update:model-value="updateExecutionVariant"
             />
           </div>
@@ -265,7 +261,7 @@
             <div class="text-h6">{{ bound ? 'OpenCode-Zuordnung ändern' : 'OpenCode verbinden' }}</div>
           </q-card-section>
           <q-card-section class="col scroll q-pt-none">
-            <q-select dense
+            <AppSelect dense
               v-model="bindingIntegrationId"
               outlined
               emit-value
@@ -273,7 +269,6 @@
               label="OpenCode-Server"
               :options="bindingIntegrationOptions"
               :loading="bindingLoading"
-              :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
               lazy-rules
               :rules="[requiredRule]"
               @update:model-value="loadBindings"
@@ -281,8 +276,8 @@
               <template #no-option>
                 <q-item><q-item-section class="app-muted">Keine aktive OpenCode-Integration verfügbar</q-item-section></q-item>
               </template>
-            </q-select>
-            <q-select dense
+            </AppSelect>
+            <AppSelect dense
               v-model="bindingIndex"
               outlined
               emit-value
@@ -291,14 +286,13 @@
               :options="bindingOptions"
               :loading="bindingsLoading"
               :disable="!bindingIntegrationId"
-              :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
               lazy-rules
               :rules="[requiredRule]"
             >
               <template #no-option>
                 <q-item><q-item-section class="app-muted">Keine Projekte gefunden</q-item-section></q-item>
               </template>
-            </q-select>
+            </AppSelect>
             <div v-if="bound" class="text-caption app-muted">
               Beim Wechsel wird die bisherige Modellauswahl zurückgesetzt.
             </div>
@@ -317,6 +311,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'

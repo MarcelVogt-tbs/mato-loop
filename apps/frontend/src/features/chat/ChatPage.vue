@@ -391,7 +391,7 @@
         >
           <template #before>
             <div class="chat-start-project row no-wrap items-center">
-              <q-select
+              <AppSelect
                 id="draft-project-select"
                 :model-value="routeProjectId"
                 :options="draftProjectOptions"
@@ -399,7 +399,7 @@
                 :loading="projects.loading || changingDraftProject"
                 :clearable="Boolean(routeProjectId)"
                 borderless dense emit-value map-options options-dense hide-bottom-space
-                behavior="menu" popup-content-class="app-menu-popup"
+                behavior="menu"
                 class="draft-project-select q-px-sm text-body2 col"
                 aria-label="Projekt wählen oder wechseln"
                 @popup-show="loadDraftProjects"
@@ -415,11 +415,11 @@
                     @click.stop="openDraftProjectCreation"
                   />
                 </template>
-              </q-select>
+              </AppSelect>
             </div>
-            <q-select :model-value="chat.activeContext.sessionTemplateId || templates.defaultTemplateId" :options="templates.templates.map((item) => ({ label: `${item.name}${item.scope === 'personal' ? ' (Persönlich)' : ''}`, value: item.id }))" :disable="draftProjectDisabled" :loading="templates.loading" borderless dense emit-value map-options options-dense hide-bottom-space class="chat-start-select q-px-sm text-body2" aria-label="Sessionvorlage auswählen" @update:model-value="changeTemplate">
+            <AppSelect :model-value="chat.activeContext.sessionTemplateId || templates.defaultTemplateId" :options="templates.templates.map((item) => ({ label: `${item.name}${item.scope === 'personal' ? ' (Persönlich)' : ''}`, value: item.id }))" :disable="draftProjectDisabled" :loading="templates.loading" borderless dense emit-value map-options hide-bottom-space class="chat-start-select q-px-sm text-body2" aria-label="Sessionvorlage auswählen" @update:model-value="changeTemplate">
               <template #prepend><q-icon name="dashboard_customize" size="18px" /></template>
-            </q-select>
+            </AppSelect>
           </template>
         </SessionSettingsFields>
         <SessionTodoStrip
@@ -527,6 +527,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'

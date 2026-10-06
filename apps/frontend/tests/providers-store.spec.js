@@ -35,6 +35,8 @@ describe('provider store', () => {
 
     expect(store.modelOptions).toEqual([{
       label: 'Alpha · Aktiv',
+      primaryLabel: 'Alpha',
+      caption: 'Aktiv',
       value: 'm1',
       trustLevel: 'public',
       trustIcon: 'public',
@@ -345,6 +347,7 @@ describe('provider store', () => {
     )
     expect(store.capabilityOptions('audio_transcription')).toEqual([{
       label: 'Fast Transcription · Azure Speech', value: 'transcription',
+      primaryLabel: 'Fast Transcription', caption: 'Azure Speech',
       trustLevel: 'public', trustIcon: 'public', disable: false
     }])
     expect(store.modelOptions).toEqual([])
@@ -373,8 +376,8 @@ describe('provider store', () => {
     ]
 
     expect(store.selectionOptions('public')).toEqual([
-      { label: 'Öffentlich · Lokal', value: 'public', trustLevel: 'public', trustIcon: 'public', disable: false },
-      { label: 'Privat · Lokal', value: 'private', trustLevel: 'private', trustIcon: 'lock', disable: false }
+      { label: 'Öffentlich · Lokal', primaryLabel: 'Öffentlich', caption: 'Lokal', value: 'public', trustLevel: 'public', trustIcon: 'public', disable: false },
+      { label: 'Privat · Lokal', primaryLabel: 'Privat', caption: 'Lokal', value: 'private', trustLevel: 'private', trustIcon: 'lock', disable: false }
     ])
     expect(store.selectedModelState('public')).toMatchObject({
       available: true,
@@ -392,8 +395,8 @@ describe('provider store', () => {
 
     expect(store.modelOptions.map((option) => option.value)).toEqual(['available'])
     expect(store.selectionOptions('stored')).toEqual([
-      { label: 'Alt · Lokal', value: 'stored', trustLevel: 'private', trustIcon: 'lock', disable: true },
-      { label: 'Neu · Lokal', value: 'available', trustLevel: 'public', trustIcon: 'public', disable: false }
+      { label: 'Alt · Lokal', primaryLabel: 'Alt', caption: 'Lokal', value: 'stored', trustLevel: 'private', trustIcon: 'lock', disable: true },
+      { label: 'Neu · Lokal', primaryLabel: 'Neu', caption: 'Lokal', value: 'available', trustLevel: 'public', trustIcon: 'public', disable: false }
     ])
   })
 

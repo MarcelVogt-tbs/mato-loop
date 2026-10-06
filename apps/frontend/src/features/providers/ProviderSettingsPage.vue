@@ -88,7 +88,7 @@
               />
               <div @click.stop>
                 <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${provider.name}`">
-                  <q-menu class="app-menu-popup app-action-menu">
+                  <AppMenu>
                     <q-list dense style="min-width: 190px">
                       <q-item v-close-popup clickable :disable="!canEdit(provider)" @click="openEditDialog(provider)">
                         <q-item-section avatar><q-icon name="edit" /></q-item-section>
@@ -105,7 +105,7 @@
                         <q-item-section>Löschen</q-item-section>
                       </q-item>
                     </q-list>
-                  </q-menu>
+                  </AppMenu>
                 </q-btn>
               </div>
             </q-item-section>
@@ -144,14 +144,14 @@
                 @click="openModelDialog(provider)"
               />
               <q-btn v-else-if="supportsManualModels(provider)" flat round dense icon="more_vert" aria-label="Weitere Modellaktionen">
-                <q-menu class="app-menu-popup app-action-menu">
+                <AppMenu>
                   <q-list dense style="min-width: 230px">
                     <q-item v-close-popup clickable :disable="!canEdit(provider)" @click="openModelDialog(provider)">
                       <q-item-section avatar><q-icon name="add" /></q-item-section>
                       <q-item-section>Modell manuell hinzufügen</q-item-section>
                     </q-item>
                   </q-list>
-                </q-menu>
+                </AppMenu>
               </q-btn>
             </div>
 
@@ -225,7 +225,7 @@
                     @update:model-value="toggleModel(model, provider, $event)"
                   />
                   <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${model.name || model.modelId}`">
-                    <q-menu class="app-menu-popup app-action-menu">
+                    <AppMenu>
                       <q-list dense style="min-width: 210px">
                         <q-item
                           v-if="modelSupportsCapability(model, 'chat')"
@@ -247,7 +247,7 @@
                           <q-item-section>Löschen</q-item-section>
                         </q-item>
                       </q-list>
-                    </q-menu>
+                    </AppMenu>
                   </q-btn>
                 </q-item-section>
               </q-item>
@@ -278,6 +278,7 @@
 </template>
 
 <script setup>
+import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRouter } from 'vue-router'

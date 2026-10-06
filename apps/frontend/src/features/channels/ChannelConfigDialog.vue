@@ -22,13 +22,12 @@
       <q-separator />
       <q-form ref="formRef" class="col column no-wrap" @submit.prevent="save">
         <q-card-section class="col scroll q-gutter-md">
-          <q-select dense
+          <AppSelect dense
             v-model="form.provider"
             outlined
             emit-value
             map-options
             label="Anbieter"
-            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
             :options="providerOptions"
             :disable="Boolean(endpoint) || createdEndpointId !== null"
             lazy-rules
@@ -134,6 +133,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { copyToClipboard, useQuasar } from 'quasar'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'

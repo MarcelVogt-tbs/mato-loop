@@ -27,7 +27,7 @@
           />
           <q-separator class="q-my-lg" />
           <div class="text-subtitle1 text-weight-bold q-mb-sm">Session-Vorgaben</div>
-          <q-select dense
+          <AppSelect dense
             v-model="executionAgentId"
             outlined
             emit-value
@@ -36,19 +36,7 @@
             :options="executionAgentOptions"
             :loading="executionAgents.loading"
             @update:model-value="selectExecutionAgent"
-          >
-            <template #option="scope">
-              <q-item v-bind="scope.itemProps">
-                <q-item-section avatar>
-                  <q-icon :name="scope.opt.connected === false ? 'computer_off' : 'computer'" />
-                </q-item-section>
-                <q-item-section>
-                  <q-item-label>{{ scope.opt.label }}</q-item-label>
-                  <q-item-label caption>{{ scope.opt.caption }}</q-item-label>
-                </q-item-section>
-              </q-item>
-            </template>
-          </q-select>
+          />
           <q-input dense
             v-model="currentDirectory"
             outlined
@@ -90,6 +78,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useProjectStore } from 'stores/projects'
@@ -121,7 +110,7 @@ const executionAgentOptions = computed(() => {
   if (executionAgentId.value && !selectedAgent.value) {
     options.push({ label: 'Nicht verfügbarer Computer', value: executionAgentId.value, connected: false, caption: 'Nicht mehr eingerichtet' })
   }
-  return options
+  return options.map((option) => ({ ...option, icon: option.connected === false ? 'computer_off' : 'computer' }))
 })
 const directoryPickerAvailable = computed(() => selectedAgent.value?.connected === true
   && selectedAgent.value.operations?.includes('filesystem.list'))

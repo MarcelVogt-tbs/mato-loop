@@ -30,7 +30,7 @@
             <template #avatar><q-icon name="warning_amber" color="warning" /></template>
             HTTP überträgt MCP-Daten und Zugangsdaten unverschlüsselt. Verwende es nur in einem vertrauenswürdigen lokalen Netz.
           </q-banner>
-          <q-select dense v-model="authMode" outlined label="Authentifizierung" emit-value map-options :options="authModes" :disable="locked" />
+          <AppSelect dense v-model="authMode" outlined label="Authentifizierung" emit-value map-options :options="authModes" :disable="locked" />
           <q-input dense
             v-if="authMode === 'static'"
             v-model="form.bearerToken"
@@ -58,7 +58,7 @@
             <q-toggle dense v-model="registeredClient" label="Vorregistrierten Client verwenden" :disable="locked" />
             <template v-if="registeredClient">
               <q-input dense v-model.trim="oauth.client_id" outlined label="Client-ID" maxlength="1024" lazy-rules :rules="[requiredRule]" :disable="locked" />
-              <q-select dense v-model="oauth.token_endpoint_auth_method" outlined label="Client-Authentifizierung" emit-value map-options :options="clientMethods" :disable="locked" />
+              <AppSelect dense v-model="oauth.token_endpoint_auth_method" outlined label="Client-Authentifizierung" emit-value map-options :options="clientMethods" :disable="locked" />
               <q-input dense v-if="oauth.token_endpoint_auth_method !== 'none'" v-model="clientSecret" outlined type="password" autocomplete="new-password" label="Client-Secret" :hint="server?.hasClientSecret ? 'Leer lassen, um das gespeicherte Secret bei unveränderten Client-Einstellungen zu verwenden.' : undefined" persistent-hint maxlength="10000" :disable="locked" />
             </template>
             <q-banner v-if="servers.oauthAttempt" rounded class="app-surface-tonal" role="status">
@@ -82,6 +82,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useMcpServerStore } from 'stores/mcp-servers'

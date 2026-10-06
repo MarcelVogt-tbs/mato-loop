@@ -67,8 +67,8 @@
       :inert="adapterBlocked"
       @submit.prevent="save"
     >
-      <q-select dense v-if="scope === 'personal'" :model-value="profileId" outlined emit-value map-options label="Agentenprofil" :options="profileOptions" :disable="saving || loading" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" @update:model-value="selectProfile" />
-      <q-select dense v-if="profileId" v-model="permissions.available" outlined emit-value map-options label="Integration für dieses Profil" :options="[{ label: `Erben: ${permissionsData?.inheritedAvailable ? 'Verfügbar' : 'Nicht verfügbar'}`, value: null }, { label: 'Verfügbar', value: true }, { label: 'Nicht verfügbar', value: false }]" :disable="saving || loading" />
+      <AppSelect dense v-if="scope === 'personal'" :model-value="profileId" outlined emit-value map-options label="Agentenprofil" :options="profileOptions" :disable="saving || loading" @update:model-value="selectProfile" />
+      <AppSelect dense v-if="profileId" v-model="permissions.available" outlined emit-value map-options label="Integration für dieses Profil" :options="[{ label: `Erben: ${permissionsData?.inheritedAvailable ? 'Verfügbar' : 'Nicht verfügbar'}`, value: null }, { label: 'Verfügbar', value: true }, { label: 'Nicht verfügbar', value: false }]" :disable="saving || loading" />
       <q-banner rounded class="app-surface-tonal">
         {{ profileId ? 'Diese Abweichungen gelten nur für diese persönliche Integration und das gewählte Profil.' : 'Diese Integration hat eigene Berechtigungen, unabhängig von globalen Tool-Defaults.' }}
       </q-banner>
@@ -86,7 +86,7 @@
         <q-card-section>
           <div class="row q-col-gutter-md">
             <div v-if="calendarResourceList.length" class="col-12 col-md-6">
-              <q-select
+              <AppSelect
                 v-model="defaultResourceKey"
                 outlined
                 dense
@@ -98,7 +98,7 @@
               />
             </div>
             <div v-if="taskListResourceList.length" class="col-12 col-md-6">
-              <q-select
+              <AppSelect
                 v-model="defaultTaskListKey"
                 outlined
                 dense
@@ -137,6 +137,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'

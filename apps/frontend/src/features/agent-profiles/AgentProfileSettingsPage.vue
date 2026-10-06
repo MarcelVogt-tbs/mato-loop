@@ -31,7 +31,7 @@
 
     <PersonalSettingsGate v-if="admin && section === 'general'" :model-value="agents.personalAgentsEnabled" title="Persönliche Agentenprofile erlauben" description="Benutzer können eigene Agentenprofile erstellen und verwenden." :disabled="gateSaving || agents.loading || agents.loadFailed" @update:model-value="setPersonalAgentsEnabled" />
 
-    <q-select dense v-if="admin && showManagement" :model-value="agents.defaultAgentProfileId" outlined emit-value map-options label="Fallback-Agent" hint="Für Funktionen ohne explizite Agentenauswahl. Neue Chats verwenden den Startagenten ihrer Sessionvorlage." class="q-mb-md" :options="visibleAgents.filter((agent) => agent.enabled !== false).map((agent) => ({ label: agent.name, value: agent.id }))" :disable="agents.loading || gateSaving" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" @update:model-value="setDefaultProfile" />
+    <AppSelect dense v-if="admin && showManagement" :model-value="agents.defaultAgentProfileId" outlined emit-value map-options label="Fallback-Agent" hint="Für Funktionen ohne explizite Agentenauswahl. Neue Chats verwenden den Startagenten ihrer Sessionvorlage." class="q-mb-md" :options="visibleAgents.filter((agent) => agent.enabled !== false).map((agent) => ({ label: agent.name, value: agent.id }))" :disable="agents.loading || gateSaving" @update:model-value="setDefaultProfile" />
 
     <q-banner v-if="personalBlocked" rounded class="app-surface-tonal q-mb-md">
       <template #avatar><q-icon name="person" color="primary" /></template>
@@ -109,6 +109,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'

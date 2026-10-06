@@ -26,7 +26,7 @@
       </template>
       <q-btn ref="controlsButton" flat round dense icon="more_vert" aria-label="Weitere Browseraktionen">
         <q-tooltip>Weitere Browseraktionen</q-tooltip>
-        <q-menu class="app-action-menu" anchor="bottom right" self="top right" max-width="calc(100vw - 24px)">
+        <AppMenu anchor="bottom right" self="top right" max-width="calc(100vw - 24px)">
           <q-list padding>
             <template v-if="$q.screen.lt.sm">
               <q-item v-for="action in fileActions" :key="action.label" clickable v-close-popup :disable="!browser.manual" @click="action.run"><q-item-section avatar><q-icon :name="action.icon" /></q-item-section><q-item-section>{{ action.label }}</q-item-section></q-item>
@@ -35,8 +35,8 @@
             <q-item><q-item-section><q-toggle :model-value="navigation?.nativeChrome === true" dense label="Browseroberfläche anzeigen" :disable="!browser.canNavigate"
               @update:model-value="browser.navigate('chrome', { nativeChrome: $event })" /></q-item-section></q-item>
             <q-item v-if="options.length > 1"><q-item-section>
-              <q-select v-model="selectedId" outlined dense emit-value map-options label="Browser-Integration"
-                :options="options" :disable="browser.ownsDisplay && !['closed', 'replaced'].includes(browser.status)" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" />
+              <AppSelect v-model="selectedId" outlined dense emit-value map-options label="Browser-Integration"
+                :options="options" :disable="browser.ownsDisplay && !['closed', 'replaced'].includes(browser.status)" />
             </q-item-section></q-item>
             <q-item><q-item-section><q-item-label>{{ options.find((item) => item.value === selectedId)?.label || 'Browser' }}</q-item-label><q-item-label caption role="status">{{ browserStatusLabel(status) }}</q-item-label></q-item-section></q-item>
             <q-item clickable v-close-popup :disable="!available || checking" @click="checkStatus"><q-item-section avatar><q-icon name="refresh" /></q-item-section><q-item-section>Status prüfen</q-item-section></q-item>
@@ -45,7 +45,7 @@
             <q-item clickable v-close-popup :to="{ name: 'settings-integrations', query: { scope: 'personal' } }"><q-item-section avatar><q-icon name="settings" /></q-item-section><q-item-section>Einrichtung</q-item-section></q-item>
             <q-item clickable v-close-popup :disable="!browser.ownsDisplay || browser.status !== 'open'" @click="browser.release({ close: true })"><q-item-section avatar><q-icon name="link_off" /></q-item-section><q-item-section>Browser schließen</q-item-section></q-item>
           </q-list>
-        </q-menu>
+        </AppMenu>
       </q-btn>
     </q-toolbar>
     <AppStateMessage
@@ -148,6 +148,8 @@
 </template>
 
 <script setup>
+import AppMenu from 'src/shared/ui/AppMenu.vue'
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'

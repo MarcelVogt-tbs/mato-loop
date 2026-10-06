@@ -92,7 +92,7 @@
           aria-label="Datei oder Ordner erstellen"
         >
           <q-tooltip>Neu</q-tooltip>
-          <q-menu anchor="bottom right" self="top right">
+          <AppMenu anchor="bottom right" self="top right">
             <q-list padding class="file-actions-menu">
               <q-item v-if="canCreateFile" clickable v-ripple v-close-popup @click="openCreateDialog('file')">
                 <q-item-section avatar><q-icon name="note_add" /></q-item-section>
@@ -103,7 +103,7 @@
                 <q-item-section>Neuer Ordner</q-item-section>
               </q-item>
             </q-list>
-          </q-menu>
+          </AppMenu>
         </q-btn>
         <q-btn
           v-if="canUpload"
@@ -128,7 +128,7 @@
           aria-label="Weitere Dateiaktionen"
         >
           <q-tooltip>Weitere Aktionen</q-tooltip>
-          <q-menu anchor="bottom right" self="top right" class="app-action-menu">
+          <AppMenu anchor="bottom right" self="top right">
             <q-list padding>
               <q-item
                 v-if="directoryArchiveUrl"
@@ -177,7 +177,7 @@
                 <q-item-section>Dateien hochladen</q-item-section>
               </q-item>
             </q-list>
-          </q-menu>
+          </AppMenu>
         </q-btn>
       </q-toolbar>
       <input ref="uploadInput" type="file" multiple class="hidden" @change="uploadSelected">
@@ -297,7 +297,7 @@
             <div class="text-caption app-muted q-mt-xs ellipsis">{{ mutationDirectory }}</div>
           </q-card-section>
           <q-card-section class="q-pt-none q-gutter-y-md">
-            <q-select dense
+            <AppSelect dense
               v-if="createKind === 'file'"
               v-model="createSuffix"
               outlined
@@ -337,6 +337,8 @@
 </template>
 
 <script setup>
+import AppMenu from 'src/shared/ui/AppMenu.vue'
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, nextTick, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import FileTreeNode from 'src/features/files/components/FileTreeNode.vue'

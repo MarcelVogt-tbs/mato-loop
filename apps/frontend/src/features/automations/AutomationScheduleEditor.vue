@@ -9,17 +9,17 @@
     <div class="q-pa-md">
       <div class="row q-col-gutter-sm">
         <div class="col-12">
-          <q-select v-model="schedule.kind" :readonly="readonly" outlined dense emit-value map-options label="Wann?" :options="[{ label: 'Einmalig', value: 'once' }, { label: 'Regelmäßig', value: 'cron' }]" />
+          <AppSelect v-model="schedule.kind" :readonly="readonly" outlined dense emit-value map-options label="Wann?" :options="[{ label: 'Einmalig', value: 'once' }, { label: 'Regelmäßig', value: 'cron' }]" />
         </div>
         <template v-if="schedule.kind === 'cron'">
           <div class="col-12 col-sm-6">
-            <q-select v-model="schedule.preset" :readonly="readonly" outlined dense emit-value map-options label="Wiederholung" :options="schedulePresets" @update:model-value="applySchedulePreset(schedule)" />
+            <AppSelect v-model="schedule.preset" :readonly="readonly" outlined dense emit-value map-options label="Wiederholung" :options="schedulePresets" @update:model-value="applySchedulePreset(schedule)" />
           </div>
           <div v-if="schedule.preset !== 'custom'" class="col-12 col-sm-6">
             <q-input v-model="schedule.time" :readonly="readonly" outlined dense type="time" stack-label label="Uhrzeit" @update:model-value="applySchedulePreset(schedule)" />
           </div>
           <div v-if="schedule.preset === 'weekly'" class="col-12">
-            <q-select v-model="schedule.weekday" :readonly="readonly" outlined dense emit-value map-options label="Wochentag" :options="weekdays" @update:model-value="applySchedulePreset(schedule)" />
+            <AppSelect v-model="schedule.weekday" :readonly="readonly" outlined dense emit-value map-options label="Wochentag" :options="weekdays" @update:model-value="applySchedulePreset(schedule)" />
           </div>
           <div v-if="schedule.preset === 'monthly'" class="col-12">
             <q-input v-model.number="schedule.monthDay" :readonly="readonly" outlined dense type="number" min="1" max="31" label="Tag im Monat" hint="In Monaten ohne diesen Tag entfällt der Termin." @update:model-value="applySchedulePreset(schedule)" />
@@ -50,6 +50,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed } from 'vue'
 import { applySchedulePreset, browserTimezone, schedulePresets, scheduleSummary, weekdays } from 'src/utils/automation-schedules'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'

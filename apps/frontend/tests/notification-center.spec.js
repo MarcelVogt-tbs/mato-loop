@@ -90,7 +90,7 @@ async function selectOption(card, label, option) {
   const field = [...card.querySelectorAll('label')].find((item) => item.textContent.includes(label))
   field.querySelector('[role="combobox"]').click()
   await vi.waitFor(() => expect(document.querySelector('[role="option"]')).not.toBeNull())
-  const choice = [...document.querySelectorAll('[role="option"]')].find((item) => item.textContent === option)
+  const choice = [...document.querySelectorAll('[role="option"]')].find((item) => item.querySelector('.q-item__label')?.textContent === option)
   choice.click()
   await vi.waitFor(() => expect(field.textContent).toContain(option))
   await vi.waitFor(() => expect(document.querySelector('[role="option"]')).toBeNull())

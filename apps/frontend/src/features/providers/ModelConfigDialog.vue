@@ -47,7 +47,7 @@
               aria-label="Modell aktiv"
               :disable="model?.availability === 'missing'"
             />
-            <q-select dense
+            <AppSelect dense
               v-model="form.capabilities"
               class="provider-form-section"
               outlined
@@ -97,6 +97,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import ModelRuntimeFields from 'src/features/providers/ModelRuntimeFields.vue'

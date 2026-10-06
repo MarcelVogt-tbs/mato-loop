@@ -38,7 +38,7 @@
           <q-card-section>
             <div class="text-subtitle1 text-weight-bold">{{ admin ? 'Globale Personas' : 'Meine Personas' }}</div>
             <div class="text-caption app-muted">Eine Persona kann mehreren Agenten dienen. Änderungen gelten für alle ihre Zuordnungen.</div>
-            <q-select dense v-if="admin" class="q-mt-md" :model-value="identity.defaultPersonaId" outlined emit-value map-options label="Globale Standard-Persona" :options="personaOptions" :disable="mutationBlocked" @update:model-value="setDefaultPersona" />
+            <AppSelect dense v-if="admin" class="q-mt-md" :model-value="identity.defaultPersonaId" outlined emit-value map-options label="Globale Standard-Persona" :options="personaOptions" :disable="mutationBlocked" @update:model-value="setDefaultPersona" />
           </q-card-section>
           <q-separator />
           <q-list separator>
@@ -88,9 +88,9 @@
           <q-card-section class="col scroll q-gutter-md">
             <q-banner v-if="personalBlocked" rounded class="app-surface-tonal">Persönliche Anpassungen sind deaktiviert.</q-banner>
             <template v-if="assignmentDialog">
-              <q-select dense :model-value="profileId" outlined emit-value map-options label="Agentenprofil" :options="identity.profiles.filter((profile) => profile.id === profileId || !Object.hasOwn(identity.profilePersonas, profile.id)).map((profile) => ({ label: profile.name, value: profile.id }))" :disable="mutationBlocked" :rules="[requiredRule]" @update:model-value="selectProfile" />
+              <AppSelect dense :model-value="profileId" outlined emit-value map-options label="Agentenprofil" :options="identity.profiles.filter((profile) => profile.id === profileId || !Object.hasOwn(identity.profilePersonas, profile.id)).map((profile) => ({ label: profile.name, value: profile.id }))" :disable="mutationBlocked" :rules="[requiredRule]" @update:model-value="selectProfile" />
               <div v-if="selectedProfile" class="text-caption app-muted">Vorgabe ohne Override: {{ personaName(selectedProfile.inheritedPersonaId) }}</div>
-              <q-select dense v-model="selectedPersonaId" outlined emit-value map-options label="Persona" :options="personaOptions" :disable="mutationBlocked" :rules="[requiredRule]" />
+              <AppSelect dense v-model="selectedPersonaId" outlined emit-value map-options label="Persona" :options="personaOptions" :disable="mutationBlocked" :rules="[requiredRule]" />
               <q-input dense :model-value="selectedPersona?.instructions || ''" outlined type="textarea" rows="8" label="Persona-Anweisungen" readonly />
             </template>
             <template v-else>
@@ -109,6 +109,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'

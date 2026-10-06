@@ -38,7 +38,7 @@
           <div class="text-h6">Session verschieben</div>
         </q-card-section>
         <q-card-section class="q-pt-none">
-          <q-select dense
+          <AppSelect dense
             v-model="moveProjectId"
             outlined
             emit-value
@@ -81,6 +81,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 defineProps({
   renaming: Boolean,
   movingSession: Boolean,

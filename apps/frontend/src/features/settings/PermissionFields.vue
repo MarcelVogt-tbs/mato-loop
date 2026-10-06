@@ -13,11 +13,10 @@
           <div v-if="action.available === false" class="text-caption text-warning">Technisch nicht verfügbar</div>
         </div>
         <div v-for="audience in audiences" :key="audience.value" class="col-12 col-sm-6 col-md-3">
-          <q-select
+          <AppSelect
             :model-value="policyOverride(branch(audience.value).policies, [action.capability])"
             outlined dense emit-value map-options :label="audience.label" :aria-label="`${action.label}: ${audience.label}`"
             :options="options(action)" :disable="disabled || action.available === false"
-            :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
             :hint="`Wirksam: ${label(effective(audience.value, action))}`" persistent-hint
             @update:model-value="setPolicyOverride(branch(audience.value).policies, [action.capability], $event)"
           />
@@ -29,12 +28,11 @@
     <q-card-section v-for="action in resourceActions(resource)" :key="action.capability" class="row q-col-gutter-md">
       <div class="col-12 col-md text-weight-medium">{{ action.label }}</div>
       <div v-for="audience in audiences" :key="audience.value" class="col-12 col-sm-6 col-md-3">
-        <q-select
+        <AppSelect
           :model-value="policyOverride(branch(audience.value).resourcePolicies, [resource.key, action.capability])"
           outlined dense emit-value map-options :label="audience.label" :aria-label="`${resource.label}: ${action.label}, ${audience.label}`"
           :options="options(action)"
           :disable="disabled || resource.hardUnavailableCapabilities?.includes(action.capability)"
-          :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'"
           :hint="`Wirksam: ${label(effective(audience.value, action, resource))}`" persistent-hint
           @update:model-value="setPolicyOverride(branch(audience.value).resourcePolicies, [resource.key, action.capability], $event)"
         />
@@ -44,6 +42,7 @@
 </template>
 
 <script setup>
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed } from 'vue'
 import { policyOverride, setPolicyOverride } from 'src/utils/agent-permissions'
 

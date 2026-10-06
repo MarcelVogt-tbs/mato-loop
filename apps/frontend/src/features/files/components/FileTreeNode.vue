@@ -35,7 +35,7 @@
         @click.stop="selectOnly"
       >
         <q-tooltip>Aktionen</q-tooltip>
-        <q-menu anchor="bottom right" self="top right" :offset="[0, 6]" class="app-action-menu">
+        <AppMenu anchor="bottom right" self="top right">
           <q-list padding class="file-actions-menu">
             <q-item v-if="canDownload" clickable v-ripple v-close-popup @click="emit('download-entry', entry)">
               <q-item-section avatar><q-icon name="download" /></q-item-section>
@@ -58,13 +58,14 @@
               <q-item-section>Löschen</q-item-section>
             </q-item>
           </q-list>
-        </q-menu>
+        </AppMenu>
       </q-btn>
     </div>
   </div>
 </template>
 
 <script setup>
+import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed } from 'vue'
 import { attachmentIcon } from 'src/utils/attachments'
 import { useWorkspaceStore } from 'stores/workspace'
