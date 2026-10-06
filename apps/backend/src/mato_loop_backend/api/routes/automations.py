@@ -101,6 +101,12 @@ class AutomationEffectiveState(BaseModel):
     next_run_at: datetime | None = Field(alias="nextRunAt")
 
 
+class AutomationLastRunResponse(BaseModel):
+    status: str
+    started_at: datetime = Field(alias="startedAt")
+    message_id: UUID | None = Field(alias="messageId")
+
+
 class AutomationStatusResponse(BaseModel):
     id: UUID
     revision: int
@@ -108,6 +114,7 @@ class AutomationStatusResponse(BaseModel):
     triggers: list[str] = Field(default_factory=list)
     schedule_count: int = Field(alias="scheduleCount")
     effective_state: AutomationEffectiveState = Field(alias="effectiveState")
+    last_run: AutomationLastRunResponse | None = Field(default=None, alias="lastRun")
 
 
 class AutomationSummaryResponse(AutomationStatusResponse):
@@ -169,8 +176,33 @@ async def _active_run_statuses(
     return dict(rows.all())
 
 
+async def _last_runs(
+    db: AsyncSession, automation_ids: list[UUID],
+) -> dict[UUID, AutomationLastRunResponse]:
+    if not automation_ids:
+        return {}
+    rows = await db.execute(
+        select(
+            AutomationRun.automation_id, AgentRun.status,
+            func.coalesce(AutomationRun.started_at, AgentRun.created_at).label("started_at"),
+            func.coalesce(AgentRun.result_message_id, AgentRun.input_message_id).label("message_id"),
+        )
+        .join(AgentRun, AgentRun.id == AutomationRun.agent_run_id)
+        .where(AutomationRun.automation_id.in_(automation_ids))
+        .distinct(AutomationRun.automation_id)
+        .order_by(AutomationRun.automation_id, AgentRun.created_at.desc(), AutomationRun.id.desc())
+    )
+    return {
+        row.automation_id: AutomationLastRunResponse(
+            status=row.status, startedAt=row.started_at,
+            messageId=row.message_id,
+        ) for row in rows.all()
+    }
+
+
 def _automation_status(
     item: Automation, active_run_status: str | None, *, archived: bool = False,
+    last_run: AutomationLastRunResponse | None = None,
 ) -> AutomationStatusResponse:
     next_at = min(
         (schedule.next_run_at for schedule in item.schedules if schedule.enabled),
@@ -187,6 +219,7 @@ def _automation_status(
             activeRunStatus=active_run_status,
             nextRunAt=next_at,
         ),
+        lastRun=last_run,
     )
 
 
@@ -256,6 +289,8 @@ async def _automation_payload(
         "lastActivityAt": (await _session_activity_times(db, [item.execution_session_id])).get(item.execution_session_id),
         "runtime": runtime_snapshot(execution_session),
         "schedules": schedules,
+        "lastRun": last_run.model_dump(mode="json", by_alias=True)
+        if (last_run := (await _last_runs(db, [item.id])).get(item.id)) else None,
         "effectiveState": {
             "enabled": effective_enabled,
             "activeRunStatus": active.status if active else None,
@@ -381,12 +416,15 @@ async def list_automations(
     if summary:
         active_statuses = await _active_run_statuses(db, [item.id for item in items])
         activity_times = await _session_activity_times(db, [item.execution_session_id for item in items])
+        last_runs = await _last_runs(db, [item.id for item in items])
         archived = session_id is not None and await db.scalar(select(ChatSession.id).where(
             ChatSession.id == session_id, ChatSession.user_id == user.id, active_session_clause(),
         )) is None
         return AutomationSummaryListResponse(items=[
             AutomationSummaryResponse(
-                **_automation_status(item, active_statuses.get(item.id), archived=archived).model_dump(by_alias=True),
+                **_automation_status(
+                    item, active_statuses.get(item.id), archived=archived, last_run=last_runs.get(item.id),
+                ).model_dump(by_alias=True),
                 name=item.name,
                 executionSessionId=item.execution_session_id,
                 taskExcerpt=item.task[:240],
@@ -448,7 +486,10 @@ async def get_automation_status(
         active_session = await db.scalar(select(ChatSession.id).where(
             ChatSession.id == item.execution_session_id, active_session_clause(),
         ))
-        return _automation_status(item, active_statuses.get(item.id), archived=active_session is None)
+        return _automation_status(
+            item, active_statuses.get(item.id), archived=active_session is None,
+            last_run=(await _last_runs(db, [item.id])).get(item.id),
+        )
     except AutomationError as exc:
         _raise(exc)
 

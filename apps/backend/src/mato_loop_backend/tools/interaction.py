@@ -29,6 +29,7 @@ from mato_loop_backend.tools.arguments import (
     SecretInputArguments,
     TaskArguments,
     TodoWriteArguments,
+    ToolArguments,
     VariableReadArguments,
     VariableWriteArguments,
 )
@@ -251,16 +252,34 @@ async def _notify(arguments: NotifyArguments, context: ToolContext) -> ToolResul
     await context.db.commit()
     if notification_id is not None:
         await NotificationService.deliver_after_commit(notification_id)
-    return ToolResult.json({"created": notification_id is not None})
+    return ToolResult.json(
+        {"created": notification_id is not None}, metadata={"suppressResponseNotification": True},
+    )
+
+
+async def _silence(_arguments: ToolArguments, _context: ToolContext) -> ToolResult:
+    return ToolResult.json(
+        {"silenced": True}, metadata={"suppressResponseNotification": True},
+    )
 
 
 NOTIFY = ToolDefinition(
     "notify",
     "Create a persistent notification for the current user, linked to this session. "
     "Use for requested alerts or important findings, including during automations. "
-    "Ordinary replies and failures already notify the user; do not duplicate them. "
+    "A successful call replaces this run's automatic completion notification. "
     "Use a short plain-text title and body in the user's language.",
     NotifyArguments, _notify, group="agent", label="Benachrichtigung erstellen", icon="notifications",
+)
+
+
+SILENCE = ToolDefinition(
+    "silence",
+    "Suppress this run's automatic completion notification, but keep the final response in the session. "
+    "Use for automation checks with no reportable change, or when the user asks for a quiet response. "
+    "Do not silence a normal chat response merely because it is short. Still provide a final response. "
+    "Errors, approvals, questions, and explicit notify notices are unaffected.",
+    ToolArguments, _silence, group="agent", label="Abschluss ohne Benachrichtigung", icon="notifications_off",
 )
 
 

@@ -148,6 +148,18 @@ class NotificationService:
             or session_is_present(session.user_id, session.id)
         ):
             return None
+        runtime_data = (message.provider_data or {}).get("_matoloop", {})
+        run_id = runtime_data.get("runId") if isinstance(runtime_data, dict) else None
+        if not message.error_code and run_id is not None and await db.scalar(
+            select(Message.id).where(
+                Message.session_id == session.id,
+                Message.role == "tool",
+                Message.provider_data["_matoloop"]["runId"].as_string() == run_id,
+                Message.provider_data["_matoloop"]["toolName"].as_string().in_(("notify", "silence")),
+                Message.provider_data["_matoloop"]["suppressResponseNotification"].as_boolean().is_(True),
+            ).limit(1)
+        ) is not None:
+            return None
         return await NotificationService.create(
             db,
             NotificationDraft(

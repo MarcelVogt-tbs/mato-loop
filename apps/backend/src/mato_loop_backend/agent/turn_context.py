@@ -16,7 +16,7 @@ from mato_loop_backend.agent.projection import (
     SummaryResult,
     model_browser_observations,
 )
-from mato_loop_backend.agent.prompts import memory_context_prompt
+from mato_loop_backend.agent.prompts import automation_context_prompt, memory_context_prompt
 from mato_loop_backend.events import run_events
 from mato_loop_backend.media.attachments import AttachmentService
 from mato_loop_backend.models import AgentRun, ChatSession, Message
@@ -49,6 +49,7 @@ async def build_turn_context(
     ephemeral_images: dict[tuple[UUID, int, str, int], ProviderImageInput],
     attachment_service: type[AttachmentService],
     tool_snapshots: list[dict[str, Any]] | None = None,
+    session_automations: list[dict[str, Any]] | None = None,
     repository_context_loader: Callable[..., Awaitable[str]] | None = None,
 ) -> tuple[ContextProjection, int, int]:
     async def summarize(source: str, output_tokens: int) -> SummaryResult:
@@ -128,19 +129,38 @@ async def build_turn_context(
                 raise
     if projection is None:
         raise ContextError("agent.contextWindowExceeded")
+    candidate_tokens = projection.estimated_input_tokens
+
+    async def fits_context(context: str) -> bool:
+        nonlocal candidate_tokens
+        messages = [{**projection.messages[0], "content": projection.messages[0]["content"] + "\n\n" + context},
+                    *projection.messages[1:]]
+        candidate_tokens = await estimate_request(messages)
+        return candidate_tokens <= projection.input_budget_tokens
+
+    if session_automations is not None:
+        context = automation_context_prompt(session_automations)
+        if not await fits_context(context):
+            entries = [{
+                **{key: item[key] for key in ("id", "name", "revision", "enabled", "triggers", "nextRunAt") if key in item},
+                "taskExcerpt": item.get("task", "")[:240], "scheduleCount": len(item.get("schedules", [])),
+            } for item in session_automations]
+            context = automation_context_prompt(entries)
+            while not await fits_context(context):
+                if not entries:
+                    context = ""
+                    break
+                # ponytail: halve the optional catalog; use prefix binary search if tighter budget utilization matters.
+                entries = entries[:len(entries) // 2]
+                context = automation_context_prompt(entries, omitted_count=len(session_automations) - len(entries))
+        if context:
+            projection.messages[0]["content"] += "\n\n" + context
+            projection.estimated_input_tokens = candidate_tokens
+
     if repository_context_loader is not None:
-        candidate_tokens = projection.estimated_input_tokens
-
-        async def fits_context(context: str) -> bool:
-            nonlocal candidate_tokens
-            messages = [{**projection.messages[0], "content": system_prompt + "\n\n" + context},
-                        *projection.messages[1:]]
-            candidate_tokens = await estimate_request(messages)
-            return candidate_tokens <= projection.input_budget_tokens
-
         repository_context = await repository_context_loader(fits_context=fits_context)
         if repository_context:
-            projection.messages[0]["content"] = system_prompt + "\n\n" + repository_context
+            projection.messages[0]["content"] += "\n\n" + repository_context
             projection.estimated_input_tokens = candidate_tokens
     if projection.compacted:
         summary = projection.context_summary

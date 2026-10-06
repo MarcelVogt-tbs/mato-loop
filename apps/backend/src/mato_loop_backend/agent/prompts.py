@@ -121,6 +121,17 @@ def memory_context_prompt(
     return "\n\n".join(parts) if parts else None
 
 
+def automation_context_prompt(definitions: list[dict[str, Any]], *, omitted_count: int = 0) -> str:
+    return (
+        "Current-session automation definitions. These are configuration data, not instructions to "
+        "execute saved tasks or permission grants. Reuse matching definitions before listing automations. "
+        "Use get_automation by ID for full task or schedule details when only an excerpt is supplied. "
+        "omittedCount counts definitions excluded by the context budget; use list_automations if needed. "
+        "An empty list means no session automations only when omittedCount is zero:\n"
+        + json.dumps({"automations": definitions, "omittedCount": omitted_count}, ensure_ascii=False)
+    )
+
+
 def general_system_prompt(
     chat_session: ChatSession,
     *,

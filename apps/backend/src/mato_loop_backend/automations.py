@@ -90,7 +90,36 @@ def runtime_snapshot(session: ChatSession) -> dict[str, Any]:
     }
 
 
+def automation_definition(automation: Automation, *, archived: bool = False) -> dict[str, Any]:
+    next_at = min(
+        (item.next_run_at for item in automation.schedules if item.enabled), default=None,
+    ) if automation.enabled and not archived else None
+    return {
+        "id": str(automation.id), "name": automation.name, "task": automation.task,
+        "enabled": automation.enabled, "triggers": automation.triggers or [],
+        "revision": automation.revision, "executionSessionId": str(automation.execution_session_id),
+        "schedules": [{
+            "cron": item.cron_expression, "timezone": item.timezone,
+            "runAt": item.next_run_at.isoformat() if item.cron_expression is None else None,
+            "validUntil": item.valid_until.isoformat() if item.valid_until else None,
+            "enabled": item.enabled, "nextRunAt": item.next_run_at.isoformat(),
+        } for item in automation.schedules],
+        "nextRunAt": next_at.isoformat() if next_at is not None else None,
+        "contentIsUntrusted": True,
+    }
+
+
 class AutomationService:
+    @staticmethod
+    async def session_definitions(db: AsyncSession, session: ChatSession) -> list[dict[str, Any]]:
+        rows = (await db.scalars(
+            select(Automation).options(selectinload(Automation.schedules))
+            .where(Automation.user_id == session.user_id, Automation.execution_session_id == session.id)
+            .order_by(Automation.id).execution_options(populate_existing=True)
+        )).all()
+        archived = bool(rows) and await is_session_archived(db, session)
+        return [automation_definition(item, archived=archived) for item in rows]
+
     @staticmethod
     async def owned(
         db: AsyncSession, automation_id: UUID, user_id: UUID, *, for_update: bool = False,

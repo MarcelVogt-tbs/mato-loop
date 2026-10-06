@@ -96,6 +96,10 @@ async def persist_tool_result(
                 **({"toolSnapshot": metadata["toolSnapshot"]} if isinstance(metadata.get("toolSnapshot"), dict) else {}),
                 **({"computerRead": metadata["computerRead"]} if isinstance(metadata.get("computerRead"), dict) else {}),
                 **({"preparedReply": metadata["preparedReply"]} if isinstance(metadata.get("preparedReply"), dict) else {}),
+                **({"suppressResponseNotification": True}
+                   if call.name in {"notify", "silence"}
+                   and metadata.get("suppressResponseNotification") is True
+                   and not metadata.get("errorCode") else {}),
                 "fileOutputsPending": not ephemeral_output or bool(attachments or file_actions),
                 "fileActions": [
                     {

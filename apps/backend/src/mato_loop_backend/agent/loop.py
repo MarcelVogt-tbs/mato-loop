@@ -35,6 +35,7 @@ from mato_loop_backend.agent.subagents import (
 from mato_loop_backend.agent.tool_round import execute_tool_batch
 from mato_loop_backend.agent.turn_context import build_turn_context
 from mato_loop_backend.agent.turn_tools import select_turn_tools
+from mato_loop_backend.automations import AutomationService
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.diagnostics.service import schedule_diagnostic_event
 from mato_loop_backend.execution import execution_agent_connections
@@ -481,6 +482,7 @@ async def execute_loop_body(
             live_tool_calls=live_tool_calls,
             ephemeral_images=ephemeral_images,
             attachment_service=AttachmentService,
+            session_automations=await AutomationService.session_definitions(db, chat_session) if not delegated else None,
             repository_context_loader=repository_context_loader,
         )
 

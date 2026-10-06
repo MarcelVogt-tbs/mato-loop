@@ -21,7 +21,13 @@ Model, agent profile, computer, working directory, and permissions come from the
 - Chat messages do not change the saved task automatically. Their conversation context can influence later runs.
 - If the agent is already working in the session, a queued automation waits. Further due occurrences of an already queued or running automation are recorded as skipped.
 
-The **Bisherige Ausführungen** section shows scheduling status and links to messages in the conversation. Automation input messages identify the originating task by name. Answers and failures remain in that conversation and use the same unread indicators and response notifications as interactive sessions. A focused, visible session does not create an automatic response notice; configured Web Push is sent only while the app is inactive. For specific findings, the task can ask the agent to create a notification using `notify`.
+The app shows **Letzter Lauf** with the start time and status of the most recent actual execution. Skipped occurrences do not replace it. Select the row to jump to its result or error message in the conversation. An active execution may link to its input until a result exists. **Abgeschlossen** means the execution finished normally, not that a monitored condition was met. Definitions without an execution show **Noch nicht ausgeführt**.
+
+The conversation is the execution log: automation input messages identify the originating task by name, and intermediate findings, results, tools, and failures remain there. The app contains configuration, controls, and the compact last-run overview, without a separate execution transcript or history detail view.
+
+Normal answers use the same unread indicators and response notifications as interactive sessions. The agent decides whether to use `notify` for a targeted alert or `silence` for a check without a reportable change. A successful `notify` replaces the run's automatic completion notice; `silence` suppresses that notice while keeping the final response and unread indicator. Neither suppresses runtime errors, approvals, questions, or explicit notices already created. Both tools are also available in ordinary chats; `silence` is appropriate when the user requests a quiet response, not merely because an answer is short. A focused, visible session does not create an automatic response notice; configured Web Push is sent only while the app is inactive.
+
+Within the available context budget, the agent receives current automation definitions for its own session before each model request, including disabled tasks, revisions, schedules, and the next effective scheduled start. It can reuse a matching task without first listing automations. When full definitions do not fit, the context contains a compact catalog with task excerpts and schedule counts; full details remain available through `get_automation`. If the catalog also needs shortening, it explicitly reports how many definitions were omitted. Automation context never makes an otherwise fitting chat request exceed the model's input budget. These definitions are configuration data, not instructions to start every task. Reading other sessions' automations and changing definitions still use the normal tool permission paths.
 
 ## Schedules
 
@@ -37,7 +43,7 @@ Archived sessions remain readable, but new agent work and automation starts requ
 
 **Automation entfernen** removes the task, schedules, and scheduling history. The conversation, files, permissions, and any running agent remain. Deleting the session or project also deletes its automation after confirmation.
 
-Existing hidden automation sessions become visible with their original history and files. Former output chats retain previously delivered messages, but new work appears in the execution session. Old settings links open that session and its Automation app.
+Existing hidden automation sessions become visible with their original history and files. Former output chats retain previously delivered messages, but new work appears in the execution session. Old configuration links open that session and its Automation app; run links jump to the corresponding conversation message.
 
 Previously archived automations become disabled. Existing skill bindings become explicit instructions in the saved task, including the original skill ID. Historical run snapshots remain available.
 

@@ -1,13 +1,24 @@
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
 
-export function automationStatus(automation) {
-  const active = {
+export function automationRunStatus(run) {
+  return ({
     queued: { label: 'Eingereiht', icon: 'schedule', color: 'primary' },
     running: { label: 'Läuft', icon: 'play_circle', color: 'primary' },
     waiting_approval: { label: 'Freigabe erforderlich', icon: 'pending_actions', color: 'warning' },
-    waiting_input: { label: 'Eingabe erforderlich', icon: 'help_outline', color: 'warning' }
-  }[automation?.effectiveState?.activeRunStatus]
-  if (active) return active
+    waiting_input: { label: 'Eingabe erforderlich', icon: 'help_outline', color: 'warning' },
+    completed: { label: 'Abgeschlossen', icon: 'check_circle', color: 'positive' },
+    failed: { label: 'Fehlgeschlagen', icon: 'error', color: 'negative' },
+    cancelled: { label: 'Abgebrochen', icon: 'cancel', color: 'grey-7' }
+  })[run?.status] || { label: 'Unbekannt', icon: 'help_outline', color: 'grey-7' }
+}
+
+export function automationLastRunLabel(automation) {
+  const run = automation?.lastRun
+  return run ? `Letzter Lauf: ${formatAbsoluteDateTime(run.startedAt)} · ${automationRunStatus(run).label}` : 'Noch nicht ausgeführt'
+}
+
+export function automationStatus(automation) {
+  if (automation?.effectiveState?.activeRunStatus) return automationRunStatus({ status: automation.effectiveState.activeRunStatus })
   if (!automation) return { label: 'Noch nicht gespeichert', icon: 'edit', color: 'grey-6' }
   if (!automation.enabled) return { label: 'Deaktiviert', icon: 'pause_circle_outline', color: 'grey-6' }
   if (automation.triggers?.length) return { label: 'Wartet auf Ereignisse', icon: 'bolt', color: 'primary' }

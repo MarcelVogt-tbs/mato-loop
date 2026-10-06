@@ -2468,6 +2468,38 @@ async def test_repository_instructions_fit_small_model_request_budget(monkeypatc
     assert json.loads(projection.messages[0]["content"].splitlines()[-2])["files"][0]["status"] == "context_budget_exceeded"
 
 
+@pytest.mark.parametrize("count,task_length", [(3, 39_000), (300, 1)])
+async def test_session_automations_fit_model_budget_with_compact_catalog(count, task_length) -> None:
+    session = _session()
+    run = AgentRun(id=uuid4(), session_id=session.id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    model = _model(context_window_tokens=32_768).model_copy(update={"characters_per_token": 4, "max_output_tokens": None})
+    provider = LlmProviderConfig(id=model.provider_id, name="Test", adapter_type="openai-compatible", pseudonymization_enabled=False)
+    definitions = [{
+        "id": str(uuid4()), "name": "n" * 240, "revision": 1, "enabled": False,
+        "task": "x" * task_length, "schedules": [], "triggers": [], "nextRunAt": None,
+    } for _ in range(count)]
+    projection, _, _ = await build_turn_context(
+        None, db, run, session,
+        ai_settings=AiSettings(providers=[provider], models=[model]), model=model,
+        trust_level=TrustLevel.PRIVATE, settings=_settings(safety_reserve_tokens=512),
+        instance_limits=InstanceLimits(), records=[_message(session.id, "user", "Hello")],
+        system_prompt=general_system_prompt(session), runtime_instructions="",
+        schemas=[], offered_tool_names=frozenset(), memory_turn=MemoryTurn(candidates=[(None, 0, 0)]),
+        memory_read_enabled=False, request_options={"provider": provider, "model": model, "tools": [],
+                                                   "target_trust_level": TrustLevel.PRIVATE, "pseudonymization_enabled": False},
+        live_tool_calls={}, ephemeral_images={}, attachment_service=AttachmentService,
+        session_automations=definitions,
+    )
+    catalog = json.loads(projection.messages[0]["content"].splitlines()[-1])
+    assert (
+        projection.estimated_input_tokens <= projection.input_budget_tokens,
+        len(catalog["automations"]) + catalog["omittedCount"],
+        bool(catalog["automations"]) and all("taskExcerpt" in item for item in catalog["automations"]),
+    ) == (True, count, True)
+
+
 async def test_current_tool_output_budget_scales_with_model_context() -> None:
     session = _session()
     user = _message(session.id, "user", "Analysiere die Seite")

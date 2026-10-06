@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -6,7 +6,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.routes import automations as routes
@@ -20,6 +21,7 @@ from mato_loop_backend.automations import (
     next_run_at,
     runtime_snapshot,
 )
+from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import (
     AgentRun,
@@ -188,12 +190,13 @@ def test_status_and_list_summary_are_compact_and_batch_active_statuses(automatio
     db.execute.side_effect = [
         active_rows,
         MagicMock(all=MagicMock(return_value=[(item.execution_session_id, now) for item in items])),
+        MagicMock(all=MagicMock(return_value=[])),
     ]
     db.get.side_effect = AssertionError("Compact reads must not load sessions or results")
     response = client.get("/automations?summary=true")
     assert response.status_code == 200
     payload = response.json()["items"]
-    status_keys = {"id", "revision", "enabled", "triggers", "scheduleCount", "effectiveState"}
+    status_keys = {"id", "revision", "enabled", "triggers", "scheduleCount", "effectiveState", "lastRun"}
     assert all(set(item) == status_keys | {"name", "taskExcerpt", "executionSessionId", "lastActivityAt"} for item in payload)
     assert [datetime.fromisoformat(item["lastActivityAt"]) for item in payload] == [now, now]
     assert payload[0]["taskExcerpt"] == "x" * 240
@@ -204,7 +207,7 @@ def test_status_and_list_summary_are_compact_and_batch_active_statuses(automatio
     assert payload[1]["effectiveState"] == {
         "enabled": False, "activeRunStatus": None, "nextRunAt": None,
     }
-    assert db.execute.await_count == 2
+    assert db.execute.await_count == 3
     db.scalars.assert_awaited_once()
     query = db.scalars.await_args.args[0].compile()
     assert user.id in query.params.values()
@@ -212,8 +215,7 @@ def test_status_and_list_summary_are_compact_and_batch_active_statuses(automatio
     active_query = db.execute.await_args_list[0].args[0].compile()
     assert [item.id for item in items] in active_query.params.values()
     assert "definition_snapshot" not in str(active_query)
-    db.execute.side_effect = None
-    db.execute.return_value = active_rows
+    db.execute.side_effect = [active_rows, MagicMock(all=MagicMock(return_value=[]))] * len(items)
     for item, summary in zip(items, payload, strict=True):
         db.scalar.return_value = item
         response = client.get(f"/automations/{item.id}/status")
@@ -399,6 +401,49 @@ async def test_create_attaches_automation_to_existing_session(monkeypatch, manua
     db.add.assert_called_once_with(automation)
     assert any(tab["app_id"] == "automation" for tab in session.control_center["tabs"])
     assert len(automation.schedules) == (0 if manual else 1)
+
+
+async def test_session_context_and_last_run_use_owned_definitions_and_actual_executions(request) -> None:
+    if not request.config.getoption("--memory-db"):
+        pytest.skip("requires the migrated development PostgreSQL database")
+    engine = create_async_engine(get_runtime_config().database_url, poolclass=NullPool)
+    try:
+        async with engine.connect() as connection:
+            await connection.begin()
+            async with AsyncSession(connection, join_transaction_mode="create_savepoint", expire_on_commit=False) as db:
+                owner = UserAccount(id=uuid4(), username=f"automation-{uuid4()}", password_hash="hash")
+                other = UserAccount(id=uuid4(), username=f"automation-{uuid4()}", password_hash="hash")
+                db.add_all([owner, other])
+                await db.flush()
+                session = ChatSession(user_id=owner.id, title="Check")
+                sibling = ChatSession(user_id=owner.id, title="Other check")
+                db.add_all([session, sibling])
+                await db.flush()
+                automation = Automation(user_id=owner.id, execution_session_id=session.id, name="Check", task="Watch the job", enabled=False, schedules=[])
+                db.add_all([
+                    automation,
+                    Automation(user_id=owner.id, execution_session_id=sibling.id, name="Sibling", task="Other job"),
+                    Automation(user_id=other.id, execution_session_id=session.id, name="Foreign", task="Private job"),
+                ])
+                await db.flush()
+                now = datetime.now(UTC)
+                message = Message(session_id=session.id, role="assistant", content="Failed")
+                db.add(message)
+                await db.flush()
+                agent_run = AgentRun(session_id=session.id, status="failed", created_at=now, completed_at=now, result_message_id=message.id)
+                db.add(agent_run)
+                await db.flush()
+                run = AutomationRun(automation_id=automation.id, automation_revision=1, trigger="manual", status="running", definition_snapshot={}, started_at=now, agent_run_id=agent_run.id)
+                db.add_all([run, AutomationRun(automation_id=automation.id, automation_revision=1, trigger="scheduled", status="skipped", definition_snapshot={}, created_at=now + timedelta(seconds=1))])
+                await db.flush()
+                definitions = await AutomationService.session_definitions(db, session)
+                last = (await routes._last_runs(db, [automation.id]))[automation.id]
+                assert (
+                    [(item["name"], item["task"], item["enabled"], item["nextRunAt"]) for item in definitions],
+                    last.status, last.started_at, last.message_id,
+                ) == ([("Check", "Watch the job", False, None)], "failed", now, message.id)
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.parametrize("manual", [False, True])

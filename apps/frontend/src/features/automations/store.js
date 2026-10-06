@@ -1,22 +1,16 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 
-const PAGE_SIZE = 20
-
 export const useAutomationStore = defineStore('automations', {
   state: () => ({
     items: [],
     sessionItems: [],
     sessionItemsRevision: 0,
-    runs: [],
-    page: 0,
-    hasMore: false,
     loading: false,
     loaded: false,
     loadFailed: false,
     dirty: false,
-    listRevision: 0,
-    runsRevision: 0
+    listRevision: 0
   }),
   actions: {
     async fetchForSession(sessionId) {
@@ -80,22 +74,6 @@ export const useAutomationStore = defineStore('automations', {
       this.sessionItemsRevision += 1
       this.sessionItems = this.sessionItems.filter((item) => item.id !== id)
     },
-    async fetchRuns(id, page = 1, { suppressErrorToast = false, preserveLoaded = false } = {}) {
-      const revision = page === 1 ? ++this.runsRevision : this.runsRevision
-      const { data } = await api.get(`/automations/${id}/runs`, {
-        params: { page, pageSize: PAGE_SIZE, summary: true },
-        ...(suppressErrorToast ? { suppressErrorToast: true } : {})
-      })
-      if (revision !== this.runsRevision) return data
-      this.runs = page === 1
-        ? preserveLoaded
-          ? [...data.items, ...this.runs.filter((run) => !data.items.some((item) => item.id === run.id))]
-          : data.items
-        : [...this.runs, ...data.items.filter((run) => !this.runs.some((item) => item.id === run.id))]
-      this.page = preserveLoaded ? Math.max(this.page, data.page) : data.page
-      if (!preserveLoaded || this.page === 1) this.hasMore = data.hasMore
-      return data
-    },
     async fetchRun(automationId, runId, { suppressErrorToast = false } = {}) {
       const url = `/automations/${automationId}/runs/${runId}`
       const { data } = await (suppressErrorToast
@@ -106,9 +84,7 @@ export const useAutomationStore = defineStore('automations', {
     async runNow(id, expectedRevision) {
       const { data } = await api.post(`/automations/${id}/runs`, { expectedRevision })
       this.listRevision += 1
-      this.runsRevision += 1
       this.loading = false
-      this.runs = [data, ...this.runs.filter((run) => run.id !== data.id)]
       const update = (automation) => automation?.id === id
         ? { ...automation, effectiveState: { ...automation.effectiveState, activeRunStatus: data.status } }
         : automation

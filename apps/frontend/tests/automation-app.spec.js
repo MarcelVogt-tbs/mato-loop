@@ -19,28 +19,27 @@ const definition = () => ({
   enabled: true, archivedAt: null, schedules: [], effectiveState: { activeRunStatus: null }
 })
 
-async function mount(value = definition(), selected = value ? 'automation' : 'new') {
+async function mount(value = definition(), selected = value ? 'automation' : 'new', query = {}) {
   let saved = value ? (Array.isArray(value) ? value : [value]) : []
   const store = reactive({
-    items: saved, sessionItems: saved, runs: [], page: 0, hasMore: false,
+    items: saved, sessionItems: saved,
     fetchForSession: vi.fn(async () => { store.sessionItems = saved; return saved }),
     fetchAutomation: vi.fn(async (id) => saved.find((item) => item.id === id)),
     createAutomation: vi.fn(async (payload) => { const item = { ...definition(), ...payload }; saved = [...saved, item]; store.items = saved; store.sessionItems = saved; return item }),
     updateAutomation: vi.fn(async (id, payload) => { const item = { ...saved.find((item) => item.id === id), ...payload, revision: payload.expectedRevision + 1 }; saved = saved.map((value) => value.id === id ? item : value); store.items = saved; store.sessionItems = saved; return item }),
     deleteAutomation: vi.fn(async (id) => { saved = saved.filter((item) => item.id !== id); store.items = saved; store.sessionItems = saved }),
     runNow: vi.fn(async () => ({ id: 'run', status: 'queued' })),
-    fetchRuns: vi.fn(async () => { store.runs = [{ id: 'run', status: 'completed', trigger: 'manual', automationId: 'automation' }]; return { items: store.runs } }),
     fetchRun: vi.fn(async () => ({ id: 'run', status: 'completed', trigger: 'manual', messageId: 'message', definition: {} }))
   })
   mocks.stores = {
     automations: store,
     chat: reactive({ current: { id: 'session', title: 'Meine Session' }, running: false }),
-    controlCenter: reactive({ sessionId: 'session', activeAppId: 'automation', ensureApp: vi.fn() })
+    controlCenter: reactive({ sessionId: 'session', activeAppId: 'automation', ensureApp: vi.fn(), setOpen: vi.fn() })
   }
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/', name: 'chat', component: AutomationApp }
   ] })
-  await router.push({ name: 'chat', query: { session: 'session', ...(selected ? { automation: selected } : {}) } })
+  await router.push({ name: 'chat', query: { session: 'session', ...(selected ? { automation: selected } : {}), ...query } })
   root = document.createElement('div'); document.body.append(root)
   let page
   app = createApp({ render: () => h(RouterView, null, { default: ({ Component }) => h(Component, { ref: (value) => { if (value) page = value.$.setupState } }) }) })
@@ -152,9 +151,24 @@ it('removes the automation without navigating away from its session', async () =
   expect(router.currentRoute.value.query.session).toBe('session')
 })
 
-it('links historical runs to the original session message', async () => {
-  const { page } = await mount()
-  page.historyOpen = true
-  await nextTick()
-  await vi.waitFor(() => expect(root.querySelector('a[href="/?session=session&message=message"]')).not.toBeNull())
+it.each(['completed', 'failed'])('opens the last %s run at its original session message', async (status) => {
+  const { router } = await mount({ ...definition(), lastRun: {
+    id: 'run', status, startedAt: '2026-10-06T14:32:00Z', messageId: 'message'
+  } })
+  const button = [...root.querySelectorAll('button')].find((item) => item.textContent.includes('Letzter Lauf:'))
+  expect(button.textContent).toContain(status === 'failed' ? 'Fehlgeschlagen' : 'Abgeschlossen')
+  expect(root.textContent).not.toContain('Bisherige Ausführungen')
+  button.click()
+  await vi.waitFor(() => expect(router.currentRoute.value.query).toEqual({ session: 'session', message: 'message' }))
+  await vi.waitFor(() => expect(mocks.stores.controlCenter.setOpen).toHaveBeenCalledWith(false))
+  await vi.waitFor(() => expect([...root.querySelectorAll('button')].some((item) => item.textContent.includes('Letzter Lauf:'))).toBe(true))
+  mocks.stores.controlCenter.setOpen.mockClear()
+  const repeatedButton = [...root.querySelectorAll('button')].find((item) => item.textContent.includes('Letzter Lauf:'))
+  repeatedButton.click()
+  await vi.waitFor(() => expect(mocks.stores.controlCenter.setOpen).toHaveBeenCalledWith(false))
+})
+
+it('resolves an old session-bound run link to its message', async () => {
+  const { router } = await mount(definition(), 'automation', { run: 'run' })
+  await vi.waitFor(() => expect(router.currentRoute.value.query).toEqual({ session: 'session', message: 'message' }))
 })

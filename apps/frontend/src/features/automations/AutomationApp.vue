@@ -34,6 +34,8 @@
                 <q-item-label lines="1" class="text-weight-medium">{{ item.name }}</q-item-label>
                 <q-item-label caption>{{ timingLabel(item) }}</q-item-label>
                 <q-item-label caption>{{ archived ? 'Ruhend' : automationStatus(item).label }}</q-item-label>
+                <q-btn v-if="item.lastRun?.messageId" flat dense no-caps :color="automationRunStatus(item.lastRun).color" :icon="automationRunStatus(item.lastRun).icon" :label="automationLastRunLabel(item)" class="q-mt-xs" @click.stop="openLastRun(item)" @keydown.stop />
+                <q-item-label v-else caption>{{ automationLastRunLabel(item) }}</q-item-label>
               </q-item-section>
               <q-item-section side @click.stop @keydown.stop>
                 <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${item.name}`" :disable="saving || starting">
@@ -94,9 +96,10 @@
               </div>
             </q-expansion-item>
           </q-form>
-          <q-expansion-item v-if="definition" v-model="historyOpen" dense label="Bisherige Ausführungen">
-            <AutomationRunHistory v-if="historyOpen" :key="definition.id" :automation-id="definition.id" :session-id="sessionId" :visible="controlCenter.activeAppId === 'automation'" :run-id="String(route.query.run || '')" />
-          </q-expansion-item>
+          <template v-if="definition">
+            <q-btn v-if="savedState.lastRun?.messageId" flat dense no-caps :color="automationRunStatus(savedState.lastRun).color" :icon="automationRunStatus(savedState.lastRun).icon" :label="automationLastRunLabel(savedState)" class="q-mt-md" @click="openLastRun(savedState)" />
+            <div v-else class="text-caption app-muted q-mt-md">{{ automationLastRunLabel(savedState) }}</div>
+          </template>
         </template>
       </div>
     </q-scroll-area>
@@ -118,12 +121,11 @@
 import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import { onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
+import { isNavigationFailure, NavigationFailureType, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import AutomationScheduleEditor from 'src/features/automations/AutomationScheduleEditor.vue'
-import AutomationRunHistory from 'src/features/automations/AutomationRunHistory.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { scheduleDraft, scheduleError, schedulePayload, scheduleSummary } from 'src/utils/automation-schedules'
-import { automationStatus, automationTiming } from 'src/utils/automation-status'
+import { automationLastRunLabel, automationRunStatus, automationStatus, automationTiming } from 'src/utils/automation-status'
 import { isPwaUpdateReload } from 'src/utils/pwa-update'
 import { useAutomationStore } from 'stores/automations'
 import { useChatStore } from 'stores/chat'
@@ -146,7 +148,6 @@ const saving = ref(false)
 const starting = ref(false)
 const savedDraft = ref('')
 const validationAttempted = ref(false)
-const historyOpen = ref(false)
 const optionsOpen = ref(false)
 const editingTask = ref(false)
 const taskExpanded = ref(false)
@@ -195,7 +196,6 @@ async function load() {
   starting.value = false
   expandedSchedule.value = null
   taskExpanded.value = false
-  historyOpen.value = Boolean(route.query.run)
   optionsOpen.value = false
   try {
     const values = await automations.fetchForSession(sessionId.value)
@@ -203,6 +203,11 @@ async function load() {
     const value = values.find((item) => item.id === selectedId.value)
     if (selectedId.value && selectedId.value !== 'new' && !value) { loadFailed.value = true; return }
     assign(value || null)
+    if (value && typeof route.query.run === 'string') {
+      const run = await automations.fetchRun(value.id, route.query.run)
+      if (current !== version) return
+      if (!await router.replace({ name: 'chat', query: { session: sessionId.value, ...(run.messageId ? { message: run.messageId } : {}) } })) await controlCenter.setOpen(false)
+    }
   } catch {
     if (current === version) loadFailed.value = true
   } finally {
@@ -212,6 +217,17 @@ async function load() {
 
 async function select(id) {
   await router.replace({ query: { ...route.query, automation: id || undefined, run: undefined } })
+}
+
+async function openLastRun(item) {
+  if (!item.lastRun?.messageId) return
+  try {
+    const failure = await router.push({ name: 'chat', query: { session: sessionId.value, message: item.lastRun.messageId } })
+    if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
+    await controlCenter.setOpen(false)
+  } catch {
+    // The Axios interceptor displays panel persistence errors.
+  }
 }
 
 function payload() {
@@ -319,9 +335,9 @@ function beforeUnload(event) {
   event.returnValue = ''
 }
 
-onBeforeRouteUpdate((to, from) => to.query.session !== from.query.session || to.query.automation === from.query.automation || confirmDiscard())
+onBeforeRouteUpdate((to, from) => to.query.session !== from.query.session || (to.query.automation === from.query.automation && to.query.run === from.query.run) || confirmDiscard())
 watch(dirty, (value) => { automations.dirty = value }, { flush: 'sync' })
-watch([sessionId, selectedId], () => { if (sessionId.value) void load(); else version += 1 }, { immediate: true })
+watch([sessionId, selectedId, () => route.query.run], () => { if (sessionId.value) void load(); else version += 1 }, { immediate: true })
 watch(() => automations.items.filter((item) => item.executionSessionId === sessionId.value).map((item) => `${item.id}:${item.revision}`).join(','), () => {
   if (sessionId.value && !selectedId.value && !loading.value && !saving.value) void load()
 })

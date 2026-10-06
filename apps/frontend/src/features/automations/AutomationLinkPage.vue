@@ -25,11 +25,15 @@ async function open() {
   try {
     const id = route.params.automationId || [route.query.automation].flat()[0]
     const automation = id ? await automations.fetchAutomation(id) : null
+    const run = automation && typeof route.query.run === 'string' ? await automations.fetchRun(automation.id, route.query.run) : null
     if (current !== version) return
-    await router.replace({ name: 'chat', query: {
-      ...(automation ? { session: automation.executionSessionId, automation: automation.id } : { automation: 'new' }),
-      controlCenter: 'automation', ...(route.query.run ? { run: route.query.run } : {})
-    } })
+    await router.replace({ name: 'chat', query: run
+      ? { session: automation.executionSessionId, ...(run.messageId ? { message: run.messageId } : {}) }
+      : {
+          ...(automation ? { session: automation.executionSessionId, automation: automation.id } : { automation: 'new' }),
+          controlCenter: 'automation'
+        }
+    })
   } catch {
     if (current === version) failed.value = true
   }

@@ -1,4 +1,4 @@
-"""Freeze the public model contract, including agent-created notifications."""
+"""Freeze the public model contract, including notifications and quiet completions."""
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -30,4 +30,4 @@ def test_model_contract_survives_module_extraction():
                 ),
             })
     digest = hashlib.sha256(json.dumps(contracts, sort_keys=True).encode()).hexdigest()
-    assert digest == "2e131911cdd64d68c5cf05f43764177b838ba3c69afe9a24c0ad6e33234df641"
+    assert digest == "87584c53ba8b199e4f8a0c5cae23739b8f5e5d8f1cf727a21500e209582d2f64"

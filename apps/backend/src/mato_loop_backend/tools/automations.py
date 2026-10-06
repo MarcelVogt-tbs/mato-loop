@@ -14,6 +14,7 @@ from mato_loop_backend.automations import (
     AutomationError,
     AutomationScheduler,
     AutomationService,
+    automation_definition,
     runtime_snapshot,
 )
 from mato_loop_backend.models import Automation, ChatSession
@@ -136,34 +137,11 @@ async def _automation_definition_payload(
     execution_session = await db.get(ChatSession, automation.execution_session_id)
     if execution_session is None:
         raise AutomationError("automation.executionSessionMissing")
+    archived = await is_session_archived(db, execution_session)
     return {
-        "id": str(automation.id),
-        "name": automation.name,
-        "task": automation.task,
-        "enabled": automation.enabled,
-        "triggers": automation.triggers or [],
-        "revision": automation.revision,
-        "schedules": [
-            {
-                "cron": item.cron_expression,
-                "timezone": item.timezone,
-                "runAt": (
-                    item.next_run_at.isoformat()
-                    if item.cron_expression is None
-                    else None
-                ),
-                "validUntil": (
-                    item.valid_until.isoformat() if item.valid_until else None
-                ),
-                "enabled": item.enabled,
-                "nextRunAt": item.next_run_at.isoformat(),
-            }
-            for item in automation.schedules
-        ],
-        "executionSessionId": str(automation.execution_session_id),
-        "sessionArchived": await is_session_archived(db, execution_session),
+        **automation_definition(automation, archived=archived),
+        "sessionArchived": archived,
         "runtime": runtime_snapshot(execution_session),
-        "contentIsUntrusted": True,
     }
 
 

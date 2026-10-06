@@ -471,3 +471,65 @@ async def test_agent_notification_uses_current_owner_and_session(monkeypatch) ->
     assert (draft.user_id, draft.session_id, draft.kind) == (session.user_id, session.id, "agent.notice")
     db.commit.assert_awaited_once()
     deliver.assert_awaited_once_with(create.return_value)
+
+
+@pytest.mark.parametrize("outcome", ["notify", "silence", "normal", "other_run", "tool_error", "runtime_error"])
+async def test_response_notification_uses_persisted_current_run_tool_outcome(request, monkeypatch, outcome) -> None:
+    if not request.config.getoption("--memory-db"):
+        pytest.skip("requires the migrated development PostgreSQL database")
+    from types import SimpleNamespace
+
+    from mato_loop_backend.agent.tool_round import persist_tool_result
+    from mato_loop_backend.media.attachments import AttachmentService
+    from mato_loop_backend.models import AgentRun
+    from mato_loop_backend.providers.base import ToolCall
+    from mato_loop_backend.settings import InstanceLimits, TrustLevel
+    from mato_loop_backend.tools.arguments import NotifyArguments, ToolArguments
+    from mato_loop_backend.tools.contracts import ToolResult
+    from mato_loop_backend.tools.interaction import _notify, _silence
+
+    monkeypatch.setattr("mato_loop_backend.notifications.session_is_present", lambda *_: False)
+    monkeypatch.setattr(NotificationService, "deliver_after_commit", AsyncMock())
+    engine = create_async_engine(get_runtime_config().database_url, poolclass=NullPool)
+    try:
+        async with engine.connect() as connection:
+            await connection.begin()
+            async with AsyncSession(connection, join_transaction_mode="create_savepoint", expire_on_commit=False) as db:
+                user = _user()
+                user.username = f"quiet-{user.id}"
+                db.add(user)
+                await db.flush()
+                session = ChatSession(user_id=user.id, title="Check", last_read_at=datetime.now(UTC) - timedelta(seconds=1))
+                db.add(session)
+                await db.flush()
+                run = AgentRun(id=uuid4(), session_id=session.id)
+                db.add(run)
+                await db.flush()
+                call = ToolCall("notice", "notify" if outcome == "notify" else "silence", {})
+                context = SimpleNamespace(db=db, session=session, run_id=run.id, tool_call=call)
+                result = await _notify(NotifyArguments(title="Done", body="Finished"), context) if outcome == "notify" else await _silence(ToolArguments(), context)
+                if outcome == "notify":
+                    # Removing a notice must not restore the duplicate completion notification.
+                    await db.execute(delete(Notification).where(Notification.user_id == user.id))
+                if outcome == "tool_error":
+                    result = ToolResult.error("tool.unavailable")
+                if outcome != "normal":
+                    await persist_tool_result(
+                        db, SimpleNamespace(id=uuid4()) if outcome == "other_run" else run, session, call,
+                        content=result.content, metadata=result.metadata, attachments=(), file_actions=(),
+                        trust_level=TrustLevel.PUBLIC, ephemeral_output=False,
+                        limits=InstanceLimits(), attachment_service=AttachmentService,
+                    )
+                message = Message(
+                    session_id=session.id, role="assistant", content="Still running",
+                    error_code="agent.failed" if outcome == "runtime_error" else None,
+                    error_run_id=run.id if outcome == "runtime_error" else None,
+                    provider_data={"_matoloop": {"runId": str(run.id)}},
+                )
+                db.add(message)
+                await db.flush()
+                await NotificationService.create_for_message(db, message)
+                kinds = list((await db.scalars(select(Notification.kind).where(Notification.user_id == user.id))).all())
+                assert kinds == ([] if outcome in {"notify", "silence"} else ["session.response"])
+    finally:
+        await engine.dispose()

@@ -1288,6 +1288,14 @@ CASES = (
         },
     ),
     PromptCase(
+        id="quiet_response_uses_silence",
+        kind="general",
+        user="Die Prüfung hat keine Änderung ergeben. Protokolliere das nur im Chat, ohne Abschlussbenachrichtigung.",
+        tools=("notify", "silence"),
+        expected_tool="silence",
+        expected_tool_call_count=1,
+    ),
+    PromptCase(
         id="automation_list_uses_bounded_tool",
         kind="general",
         user="Liste meine Automationen auf.",

@@ -424,6 +424,7 @@ async def _runtime_setup(
     )
     monkeypatch.setattr(SettingsStore, "load", load_settings)
     monkeypatch.setattr(AgentRuntime, "_records", AsyncMock(return_value=records))
+    monkeypatch.setattr("mato_loop_backend.automations.AutomationService.session_definitions", AsyncMock(return_value=[]))
     monkeypatch.setattr(AgentRuntime, "_finalize_run_files", AsyncMock())
     monkeypatch.setattr(ContextManager, "build", build_context)
     monkeypatch.setattr(ProviderService, "complete", staticmethod(complete))

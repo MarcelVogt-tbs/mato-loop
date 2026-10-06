@@ -87,23 +87,6 @@ describe('automation store', () => {
     expect(store.items).toEqual([automation])
   })
 
-  it('loads and appends run pages without duplicates', async () => {
-    api.get
-      .mockResolvedValueOnce({ data: { items: [run], page: 1, hasMore: true } })
-      .mockResolvedValueOnce({ data: { items: [run, { ...run, id: 'run-2' }], page: 2, hasMore: false } })
-    const store = useAutomationStore()
-
-    await store.fetchRuns(automation.id)
-    await store.fetchRuns(automation.id, 2)
-
-    expect(api.get).toHaveBeenNthCalledWith(1, '/automations/automation-1/runs', {
-      params: { page: 1, pageSize: 20, summary: true }
-    })
-    expect(store.runs.map((item) => item.id)).toEqual(['run-1', 'run-2'])
-    expect(store.page).toBe(2)
-    expect(store.hasMore).toBe(false)
-  })
-
   it('starts a manual run and updates state after the response', async () => {
     let resolveRun
     api.post.mockReturnValue(new Promise((resolve) => { resolveRun = resolve }))
@@ -111,31 +94,13 @@ describe('automation store', () => {
     store.items = [automation]
     const request = store.runNow(automation.id, automation.revision)
 
-    expect(store.runs).toEqual([])
     expect(store.items[0].effectiveState.activeRunStatus).toBeNull()
 
     resolveRun({ data: run })
     await request
 
     expect(api.post).toHaveBeenCalledWith('/automations/automation-1/runs', { expectedRevision: 1 })
-    expect(store.runs).toEqual([run])
     expect(store.items[0].effectiveState.activeRunStatus).toBe('queued')
-  })
-
-  it('updates first-page pagination on refresh while retaining already loaded later pages', async () => {
-    const store = useAutomationStore()
-    api.get.mockResolvedValueOnce({ data: { items: [run], page: 1, hasMore: false } })
-    await store.fetchRuns(automation.id)
-    api.get.mockResolvedValueOnce({ data: { items: [run], page: 1, hasMore: true } })
-    await store.fetchRuns(automation.id, 1, { preserveLoaded: true })
-    expect(store.hasMore).toBe(true)
-    api.get.mockResolvedValueOnce({ data: { items: [{ ...run, id: 'older' }], page: 2, hasMore: false } })
-    await store.fetchRuns(automation.id, 2)
-    api.get.mockResolvedValueOnce({ data: { items: [run], page: 1, hasMore: true } })
-    await store.fetchRuns(automation.id, 1, { preserveLoaded: true })
-    expect(store.runs.map((item) => item.id)).toEqual(['run-1', 'older'])
-    expect(store.page).toBe(2)
-    expect(store.hasMore).toBe(false)
   })
 
   it('loads a run for its session history', async () => {

@@ -29,6 +29,7 @@ from mato_loop_backend.agent.run_contracts import (
     _VisibleResponse,
 )
 from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.automations import AutomationService
 from mato_loop_backend.events import run_events
 from mato_loop_backend.execution import (
     ExecutionClient,
@@ -303,6 +304,7 @@ async def _runtime_setup(
     monkeypatch.setattr(SettingsStore, "load", load_settings)
     monkeypatch.setattr(SettingsStore, "load_optional", load_optional)
     monkeypatch.setattr(AgentRuntime, "_records", AsyncMock(return_value=records))
+    monkeypatch.setattr(AutomationService, "session_definitions", AsyncMock(return_value=[]))
     monkeypatch.setattr(AgentRuntime, "_finalize_run_files", AsyncMock())
     monkeypatch.setattr(ContextManager, "build", build_context)
     monkeypatch.setattr(ProviderService, "complete", staticmethod(complete))
@@ -313,6 +315,24 @@ async def _runtime_setup(
     )
     monkeypatch.setattr(run_events, "publish", publish)
     return db, run, requests, projections, events
+
+
+async def test_session_automation_context_refreshes_between_model_requests(monkeypatch) -> None:
+    db, run, requests, _, _ = await _runtime_setup(
+        monkeypatch,
+        [ProviderResult(content="", tool_calls=[ToolCall("quiet", "silence", {})]), ProviderResult(content="Logged")],
+        search_policy=WebSearchPolicy.DISABLED,
+        input_budget_tokens=100_000,
+    )
+    monkeypatch.setattr(AutomationService, "session_definitions", AsyncMock(side_effect=[
+        [{"name": "Check", "task": "Watch the job", "revision": 1}],
+        [{"name": "Check", "task": "Watch the updated job", "revision": 2}],
+    ]))
+    await AgentRuntime._execute_loop(db, run)
+    assert [
+        task in request["messages"][0]["content"]
+        for task, request in zip(("Watch the job", "Watch the updated job"), requests, strict=True)
+    ] == [True, True]
 
 
 def _assistant_messages(db) -> list[Message]:
