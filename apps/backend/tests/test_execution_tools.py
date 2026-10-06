@@ -810,7 +810,8 @@ async def test_process_masks_split_authentication_headers_without_environment(tm
         {"command": "inspect"} if operation == "shell.run" else {"operation": "shell.run", "arguments": {"command": "inspect"}},
         requested_arguments={}, executed_arguments={},
     )
-    visible = result.content + str(published.await_args_list)
+    replay = terminal_coordinator._shell_outputs[(context.session.user_id, context.session.id, client.agent_id)]
+    visible = result.content + str(published.await_args_list) + replay.data.decode()
     assert "session-credential" not in visible and "session-" not in visible and "HTTP 403" in visible
 
 
@@ -852,8 +853,7 @@ async def test_elevated_shell_displays_command_and_safe_output_in_terminal(tmp_p
         if operation == "shell.classify" or _arguments["operation"] == "shell.inspect":
             return ShellInspectResult(classification="read", read_only=True, analysis_complete=True, inspection_revision="a" * 64, targets=[], commands=[])
         assert operation == "administrator.run"
-        if mode != "detached":
-            assert terminal.personal_buffer == b"\r\nsudo id -u\r\n"
+        assert terminal.personal_buffer == b"\r\nsudo id -u\r\n"
         chunks = [("stdout", "0\n"), ("stderr", "warning\r\n")]
         if protected:
             chunks = [("stdout", "private-"), ("stdout", "password\n"), ("stderr", "warning\n")]
@@ -872,17 +872,19 @@ async def test_elevated_shell_displays_command_and_safe_output_in_terminal(tmp_p
     monkeypatch.setattr(client, "request", request)
     result = await _shell_run(arguments, context)
     assert result.is_error
-    if mode in {"denied", "detached"}:
+    if mode == "denied":
         assert terminal.personal_buffer == b""
     else:
         expected = {
             "live": b"0\r\nwarning\r\n",
+            "detached": b"0\r\nwarning\r\n",
             "secret": b"[redacted]\r\nwarning\r\n",
             "truncated": b"[redacted][redacted]",
         }[mode]
         assert terminal.personal_buffer == b"\r\nsudo id -u\r\n" + expected
         delivered = b"".join(
-            terminal.viewer.queue.get_nowait()[0] for _ in range(terminal.viewer.queue.qsize())
+            data for data, _size in (terminal.viewer.queue.get_nowait() for _ in range(terminal.viewer.queue.qsize()))
+            if isinstance(data, bytes)
         )
         assert delivered == terminal.personal_buffer
         assert b"private-password" not in delivered

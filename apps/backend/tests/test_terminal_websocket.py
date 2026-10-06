@@ -15,12 +15,14 @@ import mato_loop_backend.api.routes.terminals as api_routes_terminals
 import mato_loop_backend.api.websocket_access as api_websocket_access
 from mato_loop_backend.execution import (
     ExecutionClientError,
+    ProcessResult,
     SharedTerminalStatus,
     TerminalControlResult,
     TerminalOpenResult,
 )
 from mato_loop_backend.execution import terminals as execution
 from mato_loop_backend.models import ChatSession, ExecutionAgent, LoginSession, UserAccount
+from mato_loop_backend.tools import computer
 
 
 class FakeWebSocket:
@@ -108,6 +110,51 @@ async def open_viewer(env):
     return await env.coordinator.open(env.user.id, env.session.id, env.agent.id, env.login.id, FakeWebSocket())
 
 
+@pytest.mark.parametrize("opened_before_shell", [False, True])
+async def test_opening_terminal_replays_completed_and_running_isolated_shell_output(env, monkeypatch, opened_before_shell):
+    monkeypatch.setattr(computer, "terminal_coordinator", env.coordinator)
+    viewer = snapshot = None
+
+    async def execute(_operation, arguments, _model, *, on_event, **_kwargs):
+        nonlocal viewer, snapshot
+        await on_event(SimpleNamespace(event="stdout", data=arguments["command"] + "\n"))
+        if arguments["command"] == "running":
+            viewer = await open_viewer(env)
+            viewer.queue.get_nowait()
+            snapshot = json.loads(viewer.queue.get_nowait()[0])
+            await on_event(SimpleNamespace(event="stderr", data="live\n"))
+        return ProcessResult(
+            exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=8, stderr_bytes=5,
+            stdout_truncated=False, stderr_truncated=False,
+        )
+
+    context = SimpleNamespace(
+        session=env.session, tool_call=SimpleNamespace(id="isolated"), run_id=uuid4(),
+        execution_client=SimpleNamespace(agent_id=env.agent.id, request=execute),
+    )
+    try:
+        if opened_before_shell:
+            await env.coordinator.release(await open_viewer(env))
+        for command in ("completed", "running"):
+            await computer._run_process(
+                context, "shell.run", {"command": command},
+                requested_arguments={}, executed_arguments={},
+            )
+        delivered = b"".join(
+            data for data, _size in (viewer.queue.get_nowait() for _ in range(viewer.queue.qsize()))
+            if isinstance(data, bytes)
+        )
+        assert (
+            snapshot["attached"], snapshot["busy"], base64.b64decode(snapshot["personalData"]),
+            delivered, viewer.runtime.status()["busy"],
+        ) == (
+            True, True, b"\r\n$ completed\r\ncompleted\r\n\r\n$ running\r\nrunning\r\n",
+            b"live\r\n", False,
+        )
+    finally:
+        await env.coordinator.shutdown()
+
+
 async def test_attachment_preference_survives_restart_until_explicit_detach(env):
     first = await open_viewer(env)
     try:
@@ -165,11 +212,22 @@ async def test_failed_preference_save_reports_error_and_actual_attachment(env):
         await env.coordinator.shutdown()
 
 
-@pytest.mark.parametrize("attached", [False, True])
-async def test_resume_keeps_output_and_partial_input_without_clearing_screen(env, attached):
+@pytest.mark.parametrize("attached, acquire_busy", [(False, False), (True, False), (False, True)])
+async def test_resume_keeps_output_and_partial_input_without_clearing_screen(env, monkeypatch, attached, acquire_busy):
     first = await open_viewer(env)
     first.runtime.attached = attached
-    env.session.control_center["terminal_auto_attach"] = True
+    if acquire_busy:
+        first.runtime.shell_output = execution.ShellOutputReplay()
+        request = first.runtime.client.request
+
+        async def reject_busy_acquire(operation, *args, **kwargs):
+            if operation == "terminal.shared.acquire":
+                raise ExecutionClientError("terminal.commandActive")
+            return await request(operation, *args, **kwargs)
+
+        monkeypatch.setattr(first.runtime.client, "request", reject_busy_acquire)
+    else:
+        env.session.control_center["terminal_auto_attach"] = True
     history = b"$ ls\r\none.txt  two.txt\r\n$ cat \x1b[2D"
     try:
         await first.runtime.send_bytes(history)

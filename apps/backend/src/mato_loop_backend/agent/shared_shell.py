@@ -32,7 +32,9 @@ async def run_shared_shell(
     environment = environment or {}
     redacted_values = tuple(environment.values())
     await runtime.check_access()
-    if runtime.command_id is not None or runtime.closed or not runtime.attached:
+    if runtime.command_id is not None or runtime.closed or not runtime.attached or (
+        runtime.shell_output is not None and runtime.shell_output.active_tool_calls
+    ):
         return ToolResult.error("terminal.commandActive")
     command_id = uuid4()
     runtime.command_id = command_id

@@ -4,7 +4,8 @@ import asyncio
 import base64
 import json
 import logging
-from contextlib import suppress
+from collections import OrderedDict
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -127,6 +128,13 @@ class BrowserTerminalConnection:
 
 
 @dataclass(slots=True)
+class ShellOutputReplay:
+    data: bytes = b""
+    truncated: bool = False
+    active_tool_calls: set[str] = field(default_factory=set)
+
+
+@dataclass(slots=True)
 class TerminalRuntime:
     user_id: UUID
     owner_session_id: UUID
@@ -148,6 +156,7 @@ class TerminalRuntime:
     suspended_since: float | None = None
     personal_buffer: bytes = b""
     personal_truncated: bool = False
+    shell_output: ShellOutputReplay | None = None
     native_status: SharedTerminalStatus | None = None
     rows: int = 24
     columns: int = 80
@@ -156,14 +165,17 @@ class TerminalRuntime:
 
     def status(self) -> dict[str, Any]:
         native = self.native_status
+        isolated_call = next(iter(self.shell_output.active_tool_calls), None) if self.shell_output else None
         return {
             "terminalId": self.terminal_id,
             "attached": self.attached,
-            "busy": self.command_id is not None or (native is not None and native.state == "running"),
+            "busy": self.command_id is not None or isolated_call is not None
+            or (native is not None and native.state == "running"),
             "state": "closed" if self.closed or self.shell_exited else
-            "running" if self.command_task is not None and not self.command_task.done() else
+            "running" if isolated_call is not None
+            or (self.command_task is not None and not self.command_task.done()) else
             native.state if native else "busy",
-            "activeToolCallId": self.active_tool_call_id,
+            "activeToolCallId": self.active_tool_call_id or isolated_call,
             "currentDirectory": native.current_directory if native else self.client.current_directory,
             "suspended": self.suspended_since is not None,
         }
@@ -251,7 +263,46 @@ class TerminalCoordinator:
     def __init__(self) -> None:
         self._runtimes: dict[tuple[UUID, UUID, UUID], TerminalRuntime] = {}
         self._opening: dict[tuple[UUID, UUID, UUID], asyncio.Task] = {}
+        self._shell_outputs: OrderedDict[tuple[UUID, UUID, UUID], ShellOutputReplay] = OrderedDict()
         self._stopping = False
+
+    @asynccontextmanager
+    async def capture_shell_output(
+        self, *, user_id: UUID, session_id: UUID, agent_id: UUID, tool_call_id: str,
+    ):
+        key = (user_id, session_id, agent_id)
+        replay = self._shell_outputs.setdefault(key, ShellOutputReplay())
+        self._shell_outputs.move_to_end(key)
+        replay.active_tool_calls.add(tool_call_id)
+
+        async def send_status() -> None:
+            runtime = self._runtimes.get(key)
+            if runtime is not None and not runtime.closed:
+                runtime.shell_output = replay
+                await runtime.send_status()
+
+        async def display(text: str) -> None:
+            if not text:
+                return
+            data = text.replace("\r\n", "\n").replace("\n", "\r\n").encode()
+            replay.truncated |= len(replay.data) + len(data) > REPLAY_BYTES
+            replay.data = (replay.data + data)[-REPLAY_BYTES:]
+            runtime = self._runtimes.get(key)
+            if runtime is not None and not runtime.closed and not runtime.shell_exited:
+                await runtime.send_bytes(data)
+
+        try:
+            await send_status()
+            yield display
+        finally:
+            replay.active_tool_calls.discard(tool_call_id)
+            await send_status()
+            # ponytail: keep 64 idle histories plus active calls/runtimes; use tool results for restart recovery.
+            for previous in tuple(self._shell_outputs):
+                if len(self._shell_outputs) <= MAX_RUNTIMES:
+                    break
+                if previous not in self._runtimes and not self._shell_outputs[previous].active_tool_calls:
+                    self._shell_outputs.pop(previous)
 
     async def open(
         self, user_id: UUID, session_id: UUID, agent_id: UUID, login_id: UUID,
@@ -296,6 +347,20 @@ class TerminalCoordinator:
             await runtime.refresh_status()
             if runtime.closed or runtime.native_status.state == "closed":
                 raise ExecutionClientError("terminal.disconnected")
+            if not runtime.attached and runtime.shell_output is not None:
+                async with asyncio.timeout(3), AsyncSessionFactory() as db:
+                    session = await db.get(ChatSession, session_id)
+                    auto_attach = (
+                        session is not None and session.user_id == user_id
+                        and session.preferred_execution_agent_id == agent_id
+                        and "terminal_auto_attach" not in (session.control_center or {})
+                    )
+                if auto_attach:
+                    try:
+                        await self.attach(runtime, remember=False)
+                    except ExecutionClientError as exc:
+                        if exc.code != "terminal.commandActive":
+                            raise
             async with runtime.send_lock:
                 if runtime.viewer is not None:
                     runtime.viewer.stop("replaced")
@@ -321,6 +386,10 @@ class TerminalCoordinator:
             ExecutionClient(agent_id, TERMINAL_OPERATIONS, home, expected_generation=generation), generation,
         )
         key = (user_id, session_id, agent_id)
+        runtime.shell_output = self._shell_outputs.get(key)
+        if runtime.shell_output is not None:
+            runtime.personal_buffer = runtime.shell_output.data
+            runtime.personal_truncated = runtime.shell_output.truncated
         runtime.opening_task = asyncio.current_task()
         self._runtimes[key] = runtime
         try:
@@ -513,7 +582,7 @@ class TerminalCoordinator:
         await runtime.refresh_status()
 
     async def detach(self, runtime: TerminalRuntime) -> None:
-        if runtime.command_id is not None:
+        if runtime.command_id is not None or (runtime.shell_output and runtime.shell_output.active_tool_calls):
             raise ValueError("terminal.commandActive")
         await runtime.client.request(
             "terminal.shared.release", {"terminalId": runtime.terminal_id},

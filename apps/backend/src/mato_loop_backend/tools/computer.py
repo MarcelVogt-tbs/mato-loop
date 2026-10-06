@@ -180,55 +180,50 @@ async def _run_process(
     output = {"stdout": "", "stderr": ""}
     published_output = dict(output)
     client = files_access.workspace_client(context)
-    terminal = terminal_coordinator.attached_for(
+    async with terminal_coordinator.capture_shell_output(
         user_id=context.session.user_id,
         session_id=context.session.id,
         agent_id=client.agent_id,
-    ) if operation == "administrator.run" else None
-
-    async def display(text: str) -> None:
-        if (
-            text and terminal is not None and terminal.attached
-            and not terminal.closed and not terminal.shell_exited
-            and terminal.suspended_since is None
-        ):
-            await terminal.send_bytes(text.replace("\r\n", "\n").replace("\n", "\r\n").encode())
-
-    if terminal is not None:
-        command = arguments["arguments"]["command"]
+        tool_call_id=context.tool_call.id,
+    ) as display:
+        command = arguments["arguments"]["command"] if operation == "administrator.run" else arguments["command"]
         for secret in sorted(set(redacted_values), key=len, reverse=True):
             if secret:
                 command = command.replace(secret, "[redacted]")
-        await display(f"\nsudo {command}\n")
+        prefix = "sudo " if operation == "administrator.run" else "$ "
+        await display(f"\n{prefix}{command}\n")
 
-    async def publish(event: Any) -> None:
-        output[event.event] += event.data
-        if not redacted_values:
-            safe = redact_process_output(output, complete=False)
-            if safe != published_output:
-                await display(safe[event.event][len(published_output[event.event]):])
-                await run_events.publish(context.run_id, {
-                    "type": "process.output", "toolCallId": context.tool_call.id, "output": safe,
-                })
-                published_output.update(safe)
+        async def publish(event: Any) -> None:
+            output[event.event] += event.data
+            if not redacted_values:
+                safe = redact_process_output(output, complete=False)
+                if safe != published_output:
+                    await display(safe[event.event][len(published_output[event.event]):])
+                    await run_events.publish(context.run_id, {
+                        "type": "process.output", "toolCallId": context.tool_call.id, "output": safe,
+                    })
+                    published_output.update(safe)
 
-    result = await client.request(
-        operation, arguments, ProcessResult, timeout=3_610, on_event=publish,
-    )
-    assert isinstance(result, ProcessResult)
-    truncated = result.stdout_truncated or result.stderr_truncated
-    safe_output = redact_process_output(output, redacted_values, truncated=truncated)
-    if safe_output != published_output:
-        for channel, text in safe_output.items():
-            await display(text[len(published_output[channel]):])
-        await run_events.publish(
-            context.run_id,
-            {
-                "type": "process.output",
-                "toolCallId": context.tool_call.id,
-                "output": safe_output,
-            },
-        )
+        result = None
+        try:
+            result = await client.request(
+                operation, arguments, ProcessResult, timeout=3_610, on_event=publish,
+            )
+            assert isinstance(result, ProcessResult)
+        finally:
+            truncated = (result.stdout_truncated or result.stderr_truncated) if result else bool(redacted_values)
+            safe_output = redact_process_output(output, redacted_values, truncated=truncated)
+            if safe_output != published_output:
+                for channel, text in safe_output.items():
+                    await display(text[len(published_output[channel]):])
+                await run_events.publish(
+                    context.run_id,
+                    {
+                        "type": "process.output",
+                        "toolCallId": context.tool_call.id,
+                        "output": safe_output,
+                    },
+                )
     tool_result = ToolResult.json(
         {
             **result.model_dump(by_alias=True),

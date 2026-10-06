@@ -1455,8 +1455,10 @@ async def update_session(
         if "todos_collapsed" in (item.control_center or {}):
             control_center["todos_collapsed"] = item.control_center["todos_collapsed"]
         # The terminal WebSocket owns this preference, not browser layout snapshots.
-        if any(tab.app_id == "terminal" and tab.kind == "app" for tab in payload.control_center.tabs):
-            control_center["terminal_auto_attach"] = (item.control_center or {}).get("terminal_auto_attach", False)
+        if "terminal_auto_attach" in (item.control_center or {}) and any(
+            tab.app_id == "terminal" and tab.kind == "app" for tab in payload.control_center.tabs
+        ):
+            control_center["terminal_auto_attach"] = item.control_center["terminal_auto_attach"]
         item.control_center = control_center
     if "todos_collapsed" in fields and payload.todos_collapsed is not None:
         item.control_center = {

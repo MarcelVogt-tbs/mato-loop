@@ -2951,13 +2951,15 @@ async def test_changing_computer_preserves_terminal_preference(monkeypatch) -> N
     assert session.control_center["tabs"][0]["app_id"] == "terminal"
 
 
-async def test_control_center_layout_preserves_terminal_preference_until_tab_removal() -> None:
+@pytest.mark.parametrize("preference", [None, False, True])
+async def test_control_center_layout_preserves_terminal_preference_until_tab_removal(preference) -> None:
     user = _user()
     session = ChatSession(
         id=uuid4(), user_id=user.id, title="Test", memory_mode="disabled",
         control_center={
             "tabs": [{"app_id": "terminal", "pinned": False}],
-            "active_app_id": "terminal", "terminal_auto_attach": True,
+            "active_app_id": "terminal",
+            **({"terminal_auto_attach": preference} if preference is not None else {}),
         },
     )
     db = AsyncMock(spec=AsyncSession)
@@ -2969,7 +2971,9 @@ async def test_control_center_layout_preserves_terminal_preference_until_tab_rem
             "active_app_id": "terminal", "open": True,
         }), user, db,
     )
-    assert session.control_center["terminal_auto_attach"] is True
+    assert ("terminal_auto_attach" in session.control_center, session.control_center.get("terminal_auto_attach")) == (
+        preference is not None, preference,
+    )
     assert result["controlCenter"]["activeAppId"] == "terminal"
     assert "FOR UPDATE" in str(db.scalar.await_args.args[0])
 

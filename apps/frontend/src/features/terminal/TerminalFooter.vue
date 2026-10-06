@@ -2,8 +2,11 @@
   <div class="row items-center q-gutter-xs q-px-sm q-py-xs">
     <div v-if="agent" class="col-12 col-sm row items-center no-wrap text-caption app-muted">
       <q-icon name="computer" size="18px" class="q-mr-xs" />
-      <span class="ellipsis">{{ agent.alias || agent.computerName }}</span>
+      <span class="col ellipsis">{{ agent.alias || agent.computerName }}</span>
       <q-spinner-dots v-if="['connecting', 'acquiring', 'syncing'].includes(terminal.status)" class="q-ml-xs" color="primary" size="20px" />
+      <span v-if="terminal.controlsEnabled && (terminal.attached || terminal.activeToolCallId)" class="col-auto q-ml-sm text-primary" role="status" aria-live="polite">
+        {{ terminal.activeToolCallId ? 'Agent aktiv' : 'Agent verbunden' }}
+      </span>
     </div>
     <q-toggle
       class="col-auto"
