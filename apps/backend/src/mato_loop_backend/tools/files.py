@@ -1152,7 +1152,8 @@ PROVIDE_FILE = ToolDefinition(
 
 WRITE_FILE = ToolDefinition(
             "write_file",
-            "Write complete UTF-8 content to one file, creating or replacing it. content may "
+            "Write complete UTF-8 content to one file. Pass root explicitly. Parent directories must exist; "
+            "use create_directory first when missing. Creating needs no hash; replacing requires the current expectedSha256. content may "
             "contain protected text parts with value_ref from secret_input; resolve only after "
              "file access is authorized. elevated=true uses administrator rights for root=computer; "
               "pass sudo_password_ref from an existing variable or secret_input with administrator=true on the masked field.",

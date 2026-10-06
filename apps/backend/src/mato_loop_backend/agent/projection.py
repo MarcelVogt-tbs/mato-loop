@@ -40,6 +40,8 @@ _HOST_TOOL_RESULT_REFERENCE = "_matoloopToolResultReference"
 
 _HOST_CHECKLIST_RESULT = "_matoloopChecklistResult"
 
+_HOST_RETAINED_TOOL_RESULT = "_matoloopRetainedToolResult"
+
 
 _SUMMARY_EVIDENCE_MARKER = "\n\n[Untrusted operational tool evidence]\n"
 
@@ -139,11 +141,11 @@ def _tool_result_reference(message_id: UUID, content: str) -> dict[str, Any]:
     }
 
 
-def _omitted_tool_result(message_id: UUID, content: str) -> str:
+def _omitted_tool_result(message_id: UUID, content: str, reference: dict[str, Any] | None = None) -> str:
     return json.dumps(
         {
             "toolResultOmitted": True,
-            "toolResultReference": _tool_result_reference(message_id, content),
+            "toolResultReference": reference or _tool_result_reference(message_id, content),
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -633,6 +635,7 @@ def _projection_messages(
         else None
     )
     tool_names = _tool_names_by_message_id(records)
+    original_references = _original_tool_result_references(available_records or records)
     latest_user_id = next(
         (item.id for item in reversed(records) if item.role == "user"),
         None,
@@ -658,6 +661,17 @@ def _projection_messages(
              != continuation_run_id),
             0,
         )
+    previous_tool_index = next(
+        (index for index in range(latest_user_index - 1, -1, -1) if records[index].role == "tool"),
+        -1,
+    )
+    previous_run_id = (
+        (records[previous_tool_index].provider_data or {}).get("_matoloop", {}).get("runId")
+        if previous_tool_index >= 0 else None
+    )
+    previous_turn_start = max(
+        (index for index in range(previous_tool_index) if records[index].role == "user"), default=-1,
+    )
     projected_attachment_ids: set[str] = set()
     snapshot_message = snapshot_context(
         tool_snapshots or [],
@@ -669,6 +683,7 @@ def _projection_messages(
     current_tool_indices: list[int] = []
     browser_inspect_calls: set[str] = set()
     user_edited_tool_arguments = False
+    projected_assistant = None
     for record_index, item in enumerate(records):
         if item.id == latest_user_id and snapshot_message is not None:
             messages.append(snapshot_message)
@@ -698,6 +713,7 @@ def _projection_messages(
         if live_tool_calls is not None and item.id in live_tool_calls:
             projected["tool_calls"] = _model_tool_calls(live_tool_calls[item.id])
         if item.role == "assistant":
+            projected_assistant = projected
             browser_inspect_calls = {
                 call["id"] for call in (projected["tool_calls"] or [])
                 if call.get("id") and _browser_action(call) == "inspect"
@@ -712,6 +728,15 @@ def _projection_messages(
             projected_attachment_ids.add(str(attachment.get("id") or ""))
         if item.role == "tool":
             tool_name = tool_names.get(item.id)
+            binding = tool_execution_binding(item)
+            if binding and projected_assistant is not None and any(
+                call.get("id") == item.tool_call_id for call in projected_assistant.get("tool_calls") or []
+            ):
+                projected_assistant["content"] = (projected_assistant.get("content") or "") + (
+                    "\n[Host computer context for this recorded call (not the current selection): "
+                    + json.dumps({"toolCallId": item.tool_call_id, **binding}, ensure_ascii=False)
+                    + ". This is selection context, not the result's storage location; use its root and source binding.]"
+                )
             projected["content"] = _target_tool_result(
                 tool_name,
                 str(projected.get("content") or ""),
@@ -728,14 +753,21 @@ def _projection_messages(
             )
             if record_index < latest_user_index:
                 original_content = str(projected.get("content") or "")
-                projected["content"] = _historical_tool_result(
-                    tool_name, original_content, item.id
+                fallback = _omitted_tool_result(item.id, original_content, original_references.get(item.id))
+                recent = (
+                    (item.provider_data or {}).get("_matoloop", {}).get("runId") == previous_run_id
+                    if previous_run_id else previous_turn_start < record_index <= previous_tool_index
                 )
-                historical_tool_indices.append(len(messages))
-                projected[_HOST_TOOL_RESULT_REFERENCE] = True
-                historical_omitted_markers[len(messages)] = _omitted_tool_result(
-                    item.id, original_content
-                )
+                if recent and tool_name != "secret_input":
+                    projected[_HOST_RETAINED_TOOL_RESULT] = fallback
+                    current_tool_indices.append(len(messages))
+                else:
+                    projected["content"] = _historical_tool_result(
+                        tool_name, original_content, item.id, reference=original_references.get(item.id),
+                    )
+                    historical_tool_indices.append(len(messages))
+                    projected[_HOST_TOOL_RESULT_REFERENCE] = True
+                    historical_omitted_markers[len(messages)] = fallback
             else:
                 if tool_name == "todo_write":
                     projected[_HOST_CHECKLIST_RESULT] = True
@@ -825,6 +857,7 @@ def _historical_tool_result(
     message_id: UUID,
     *,
     include_reference: bool = True,
+    reference: dict[str, Any] | None = None,
 ) -> str:
     content = _sanitize_tool_result_reference_fields(content)
     try:
@@ -861,7 +894,7 @@ def _historical_tool_result(
             separators=(",", ":"),
         )
     return (
-        _omitted_tool_result(message_id, content)
+        _omitted_tool_result(message_id, content, reference)
         if include_reference
         else _OMITTED_TOOL_OUTPUT
     )
@@ -872,13 +905,19 @@ def _shorten_evidence_output(
     max_characters: int,
     *,
     preserve_tool_result_reference: bool = False,
+    omitted_marker: str | None = None,
 ) -> str | None:
+    preserve_tool_result_reference = preserve_tool_result_reference or omitted_marker is not None
     try:
         payload = json.loads(content)
     except (TypeError, json.JSONDecodeError):
         return None
 
     def serialized(value: Any) -> str:
+        if omitted_marker is not None and value in (
+            {"toolOutputOmitted": True}, {"evidenceOmitted": True}, [{"evidenceOmitted": True}],
+        ):
+            return omitted_marker
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
     if isinstance(payload, dict) and any(key in payload for key in ("batch", "script", "playwrightCode")):
@@ -1152,10 +1191,11 @@ def _limit_tool_output_tokens(
                 content,
                 max_characters,
                 preserve_tool_result_reference=preserve_tool_result_references,
+                omitted_marker=messages[index].get(_HOST_RETAINED_TOOL_RESULT),
             )
             if replacement is None:
                 keep_characters = max(200, max_characters) - len(_SHORTENED_TOOL_OUTPUT)
-                exact_marker = (omitted_markers or {}).get(index)
+                exact_marker = (omitted_markers or {}).get(index, messages[index].get(_HOST_RETAINED_TOOL_RESULT))
                 if exact_marker is not None:
                     replacement = exact_marker
                 else:
@@ -1210,9 +1250,10 @@ def _limit_tool_output_tokens(
             content,
             max(0, len(content) - excess_chars),
             preserve_tool_result_reference=preserve_tool_result_references,
+            omitted_marker=messages[index].get(_HOST_RETAINED_TOOL_RESULT),
         )
         if replacement is None:
-            exact_marker = (omitted_markers or {}).get(index)
+            exact_marker = (omitted_markers or {}).get(index, messages[index].get(_HOST_RETAINED_TOOL_RESULT))
             if exact_marker is not None:
                 replacement = exact_marker
             else:
@@ -1227,22 +1268,62 @@ def _limit_tool_output_tokens(
         total += estimate_tokens(replacement, characters_per_token) - before
 
 
-def _tool_names_by_message_id(records: list[Message]) -> dict[UUID, str]:
-    names: dict[UUID, str] = {}
-    active_calls: dict[str, str] = {}
+def _tool_calls_by_message_id(records: list[Message]) -> dict[UUID, dict[str, Any]]:
+    calls: dict[UUID, dict[str, Any]] = {}
+    active_calls: dict[str, dict[str, Any]] = {}
     for record in records:
         if record.role == "assistant":
             active_calls = {
-                str(call["id"]): str(call.get("name") or "")
+                str(call["id"]): call
                 for call in (record.tool_calls or [])
                 if call.get("id")
             }
         elif record.role == "tool" and record.tool_call_id:
-            if tool_name := active_calls.get(record.tool_call_id):
-                names[record.id] = tool_name
+            if call := active_calls.get(record.tool_call_id):
+                calls[record.id] = call
         else:
             active_calls = {}
-    return names
+    return calls
+
+
+def _tool_names_by_message_id(records: list[Message]) -> dict[UUID, str]:
+    return {key: str(call.get("name") or "") for key, call in _tool_calls_by_message_id(records).items()}
+
+
+def _original_tool_result_references(records: list[Message]) -> dict[UUID, dict[str, Any]]:
+    """Follow only earlier same-session sources authorized by persisted reader calls."""
+    from mato_loop_backend.tools.arguments import SessionToolResultReadArguments
+
+    calls = _tool_calls_by_message_id(records)
+    earlier: dict[UUID, Message] = {}
+    references: dict[UUID, dict[str, Any]] = {}
+    for item in records:
+        call = calls.get(item.id, {})
+        if call.get("name") == "session_tool_result_read":
+            try:
+                arguments = SessionToolResultReadArguments.model_validate({
+                    key: value for key, value in (call.get("arguments") or {}).items() if key != "_reason"
+                })
+                payload = json.loads(item.content)
+                source = earlier.get(arguments.message_id)
+                if (isinstance(payload, dict) and "error" not in payload and source is not None
+                        and source.session_id == item.session_id and source.id in calls):
+                    references[item.id] = references.get(source.id) or {
+                        **_tool_result_reference(source.id, source.content),
+                        "arguments": {"message_id": str(source.id), "offset": arguments.offset},
+                    }
+            except (ValueError, TypeError, AttributeError):
+                pass
+        if item.role == "tool":
+            earlier[item.id] = item
+    return references
+
+
+def tool_execution_binding(message: Message) -> dict[str, Any]:
+    host = (message.provider_data or {}).get("_matoloop", {})
+    if "executionAgentAlias" not in host:
+        return {}
+    return {key: host.get(key) for key in ("executionAgentId", "executionAgentAlias")}
 
 
 def _target_memory_result(content: str, readable_by: TrustLevel) -> str:
@@ -1537,6 +1618,7 @@ def _operational_tool_evidence(records: list[Message]) -> list[dict[str, Any]]:
             "messageId": str(item.id),
             "toolName": names[item.id],
             "toolCallId": item.tool_call_id,
+            **tool_execution_binding(item),
             "result": model_file_roots(result),
             "toolResultReference": _tool_result_reference(item.id, item.content),
         })
@@ -1650,6 +1732,7 @@ def _strip_projection_metadata(messages: list[dict[str, Any]]) -> None:
     for message in messages:
         message.pop(_HOST_TOOL_RESULT_REFERENCE, None)
         message.pop(_HOST_CHECKLIST_RESULT, None)
+        message.pop(_HOST_RETAINED_TOOL_RESULT, None)
         message.pop(SNAPSHOT_MARKER, None)
 
 
@@ -1661,7 +1744,7 @@ def _current_tool_output_indices(messages: list[dict[str, Any]]) -> list[int]:
     return [
         index
         for index, message in enumerate(messages)
-        if index > latest_user_index and message.get("role") == "tool"
+        if (index > latest_user_index or message.get(_HOST_RETAINED_TOOL_RESULT)) and message.get("role") == "tool"
         and not message.get(_HOST_CHECKLIST_RESULT)
     ]
 
@@ -1692,15 +1775,19 @@ async def _prune_tool_outputs_to_budget(
                 preserve_tool_result_reference=bool(
                     message.get(_HOST_TOOL_RESULT_REFERENCE)
                 ),
+                omitted_marker=message.get(_HOST_RETAINED_TOOL_RESULT),
             )
             if shortened is None:
-                if len(content) <= 200:
+                if fallback := message.get(_HOST_RETAINED_TOOL_RESULT):
+                    shortened = fallback
+                elif len(content) <= 200:
                     continue
-                shortened = (
-                    content[:keep_chars]
-                    + "\n[Tool output shortened in active context. Use session_read without a message "
-                    "cursor to locate the original.]"
-                )
+                else:
+                    shortened = (
+                        content[:keep_chars]
+                        + "\n[Tool output shortened in active context. Use session_read without a message "
+                        "cursor to locate the original.]"
+                    )
             if len(shortened) >= len(content):
                 continue
             message["content"] = shortened

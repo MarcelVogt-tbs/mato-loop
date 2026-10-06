@@ -11,12 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent.context import ContextManager
 from mato_loop_backend.agent.memory_context import MemoryTurn
 from mato_loop_backend.agent.projection import (
+    _HOST_RETAINED_TOOL_RESULT,
     _SHORTENED_TOOL_OUTPUT,
     MAX_ATTACHMENT_EXCERPT_CHARACTERS,
     ContextError,
     SummaryResult,
     _compaction_boundary,
     _limit_tool_output_tokens,
+    _omitted_tool_result,
     _projection_messages,
     _prune_tool_outputs_to_budget,
     _shorten_evidence_output,
@@ -805,6 +807,52 @@ def test_projection_discards_orphaned_tool_results() -> None:
     assert all("verwaistes Ergebnis" not in item["content"] for item in projected)
 
 
+def test_historical_reader_reference_targets_original_page_and_keeps_computer_binding() -> None:
+    session = _session()
+    records = [_message(session.id, "user", "Inspect")]
+    source_call = _message(session.id, "assistant", "")
+    source_call.tool_calls = [{"id": "source", "name": "read", "arguments": {}}]
+    source = _message(session.id, "tool", "source content")
+    source.tool_call_id = "source"
+    source.provider_data = {"_matoloop": {"executionAgentId": str(uuid4()), "executionAgentAlias": "WS-Linux"}}
+    reader = _message(session.id, "assistant", "")
+    reader.tool_calls = [{"id": "reader", "name": "session_tool_result_read",
+                          "arguments": {"message_id": str(source.id), "offset": 5}}]
+    page = _message(session.id, "tool", json.dumps({"content": "content", "toolName": "read"}))
+    page.tool_call_id = "reader"
+    records += [source_call, source, reader, page, _message(session.id, "user", "Other work")]
+    records += [*_tool_segment(session.id, 0), _message(session.id, "user", "Continue")]
+    projected = _projection_messages("System", None, records, TrustLevel.PRIVATE)
+    payload = json.loads(next(item["content"] for item in projected if item.get("tool_call_id") == "reader"))
+    assert payload["toolResultReference"]["arguments"] == {"message_id": str(source.id), "offset": 5}
+    assert "WS-Linux" in next(item["content"] for item in projected if item.get("tool_calls"))
+
+
+@pytest.mark.parametrize("stage", ["fair_share", "sequential", "pruning"])
+async def test_retained_result_keeps_original_reference_after_budget_shortening(stage) -> None:
+    original_id = uuid4()
+    reference = _omitted_tool_result(original_id, "x" * 10_000)
+    messages = [{"role": "tool", "content": "x" * 10_000, _HOST_RETAINED_TOOL_RESULT: reference}]
+    if stage == "pruning":
+        async def estimate(items):
+            return sum(len(item["content"]) // 4 for item in items)
+        await _prune_tool_outputs_to_budget(messages, estimate_request=estimate, characters_per_token=4, input_budget=20)
+    else:
+        _limit_tool_output_tokens(messages, [0], 20, 4, omitted_marker="omitted", fair_share=stage == "fair_share")
+    assert messages[0]["content"] == reference
+
+
+def test_selected_computer_marker_does_not_relocate_session_files() -> None:
+    session = _session()
+    call = _message(session.id, "assistant", "")
+    call.tool_calls = [{"id": "write", "name": "write_file", "arguments": {"root": "files", "path": "report.md"}}]
+    result = _message(session.id, "tool", '{"root":"files","written":"report.md"}')
+    result.tool_call_id = "write"
+    result.provider_data = {"_matoloop": {"executionAgentId": str(uuid4()), "executionAgentAlias": "Server"}}
+    projected = _projection_messages("System", None, [call, result], TrustLevel.PRIVATE)
+    assert "not the result's storage location" in projected[1]["content"]
+
+
 def test_projection_compacts_tool_outputs_before_latest_user_turn() -> None:
     session = _session()
     first_user = _message(session.id, "user", "Recherchiere das Thema")
@@ -837,6 +885,11 @@ def test_projection_compacts_tool_outputs_before_latest_user_turn() -> None:
     fetch_result = _message(session.id, "tool", "y" * 10_000)
     fetch_result.tool_call_id = "fetch-1"
     answer = _message(session.id, "assistant", "Zusammengefasste Antwort")
+    recent_user = _message(session.id, "user", "Prüfe die Konfiguration")
+    recent_call = _message(session.id, "assistant", "")
+    recent_call.tool_calls = [{"id": "recent", "name": "read", "arguments": {"root": "computer", "path": "compose.yaml"}}]
+    recent_result = _message(session.id, "tool", "services: monario")
+    recent_result.tool_call_id = "recent"
     latest_user = _message(session.id, "user", "Erzähle mehr")
 
     projected = _projection_messages(
@@ -849,6 +902,7 @@ def test_projection_compacts_tool_outputs_before_latest_user_turn() -> None:
             fetch_call,
             fetch_result,
             answer,
+            recent_user, recent_call, recent_result,
             latest_user,
         ],
         TrustLevel.PRIVATE,
@@ -873,6 +927,7 @@ def test_projection_compacts_tool_outputs_before_latest_user_turn() -> None:
     assert "y" * 1_000 not in str(projected)
     assert len(search_result.content) > 5_000
     assert len(fetch_result.content) == 10_000
+    assert tool_results[-1] == "services: monario"
     summary_source = _summary_source(
         None,
         [first_user, search_call, search_result, fetch_call, fetch_result, answer],
@@ -920,7 +975,7 @@ def test_public_projection_receives_authorized_private_history() -> None:
 
     assert projected == private_projection
     content = next(item["content"] for item in projected if item["role"] == "tool")
-    assert str(tool_result.id) in content
+    assert content == tool_result.content
     projected_assistant = next(
         item for item in projected if item["role"] == "assistant"
     )
@@ -1024,14 +1079,7 @@ def test_browser_inspection_projection_is_lossless_and_append_stable() -> None:
         assert type(compacted["text"]["elements"][0]["index"]) is int
         assert len(by_id[tool.id]["content"]) < len(tool.content)
     assert all(by_id[item.id]["content"] == item.content for item in unchanged)
-    assert json.loads(by_id[historical.id]["content"]) == {
-        "toolResultOmitted": True,
-        "toolResultReference": {
-            "tool": "session_tool_result_read",
-            "arguments": {"message_id": str(historical.id), "offset": 0},
-            "totalCharacters": len(original),
-        },
-    }
+    assert by_id[historical.id]["content"] == original
     assert by_id[latest_user.id] == message_dict(latest_user)
     assert [item["provider_data"] for item in projected[1:]] == [
         message_dict(item)["provider_data"] for item in records
@@ -2115,7 +2163,7 @@ def test_system_prompt_enforces_managed_writing_contract() -> None:
 
     assert "Saved artifacts:" in prompt
     assert "one file per artifact" in prompt
-    assert "default root=files, computer only when explicit" in prompt
+    assert "pass root=files, computer only when explicit" in prompt
     assert "descriptive .md; never files/" in prompt
     assert "one file per artifact with write_file" in prompt
     assert "Read before edit_file; reuse the path" in prompt
@@ -2500,7 +2548,8 @@ async def test_session_automations_fit_model_budget_with_compact_catalog(count, 
     ) == (True, count, True)
 
 
-async def test_current_tool_output_budget_scales_with_model_context() -> None:
+@pytest.mark.parametrize("continuing", [False, True])
+async def test_current_tool_output_budget_scales_with_model_context(continuing) -> None:
     session = _session()
     user = _message(session.id, "user", "Analysiere die Seite")
     assistant = _message(session.id, "assistant", "")
@@ -2524,6 +2573,8 @@ async def test_current_tool_output_budget_scales_with_model_context() -> None:
     )
     tool_result.tool_call_id = "fetch"
     records = [user, assistant, tool_result]
+    if continuing:
+        records.append(_message(session.id, "user", "Mach weiter"))
 
     async def build(context_window_tokens: int):
         db = AsyncMock(spec=AsyncSession)
@@ -2541,8 +2592,8 @@ async def test_current_tool_output_budget_scales_with_model_context() -> None:
 
     small = await build(1_500)
     large = await build(5_000)
-    small_content = json.loads(small.messages[-1]["content"])["content"]
-    large_content = json.loads(large.messages[-1]["content"])["content"]
+    small_content = json.loads(next(item["content"] for item in small.messages if item["role"] == "tool"))["content"]
+    large_content = json.loads(next(item["content"] for item in large.messages if item["role"] == "tool"))["content"]
 
     assert len(large_content) > len(small_content)
     assert small.estimated_input_tokens <= raw_input_budget(int(1_500 * 0.8) - 100)

@@ -142,6 +142,15 @@ class SharedTerminalTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"original:", terminal_output)
         self.assertIn(os.fsencode(self.home / "sub"), terminal_output)
 
+    async def test_changed_inspection_reports_that_execution_never_started(self):
+        prepared = await self.prepare("printf evidence")
+        with patch.object(self.shared, "_inspect", return_value={"inspectionRevision": "changed"}):
+            with self.assertRaises(AgentError) as error:
+                await self.execute(prepared)
+        self.assertEqual(
+            error.exception.params, {"reason": "inspectionChanged", "executionStarted": False}
+        )
+
     async def test_persisted_errexit_closes_shell_without_unhandled_future(self):
         errors = []
         loop = asyncio.get_running_loop()

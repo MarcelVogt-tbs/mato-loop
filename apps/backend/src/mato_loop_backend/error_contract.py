@@ -386,7 +386,7 @@ _MESSAGES = {
         "failure without verification."
     ),
     "tool.invalidArguments": (
-        "The tool arguments are invalid. Inspect error.field and retry with arguments "
+        "The tool arguments are invalid. Inspect error.field and error.params.reason and retry with arguments "
         "that match the tool schema."
     ),
     "tool.cursorInvalid": (

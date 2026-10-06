@@ -6,6 +6,7 @@ import base64
 import codecs
 import hashlib
 import json
+import logging
 import os
 import shlex
 import shutil
@@ -400,10 +401,30 @@ class SharedTerminal:
                 or self.inspection is None
                 or self.inspection["inspectionRevision"] != expected_inspection_revision
             ):
-                raise AgentError("terminal.stale", "Execution does not match prepared command")
+                raise AgentError(
+                    "terminal.stale",
+                    "Execution does not match prepared command",
+                    {"reason": "preparedStateChanged", "executionStarted": False},
+                )
             fresh = await asyncio.to_thread(self._inspect, self.command, self._cwd())
             if fresh["inspectionRevision"] != expected_inspection_revision:
-                raise AgentError("terminal.stale", "Inspection targets changed")
+                changed_fields = sorted(
+                    key
+                    for key in fresh.keys() | self.inspection.keys()
+                    if key != "inspectionRevision" and fresh.get(key) != self.inspection.get(key)
+                )
+                logging.getLogger(__name__).warning(
+                    "Shared command %s inspection changed: fields=%s previous=%s current=%s",
+                    command_id,
+                    changed_fields,
+                    expected_inspection_revision,
+                    fresh["inspectionRevision"],
+                )
+                raise AgentError(
+                    "terminal.stale",
+                    "Inspection targets changed",
+                    {"reason": "inspectionChanged", "executionStarted": False},
+                )
             self.capture = bytearray()
             self.capture_start, self.capture_end = self._boundary(), None
             self.truncated = False

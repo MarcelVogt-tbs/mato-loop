@@ -778,7 +778,7 @@ class SessionReadArguments(ToolArguments):
 
 
 class SessionToolResultReadArguments(ToolArguments):
-    message_id: UUID
+    message_id: UUID = Field(description="Copy the current-session tool-message UUID from toolResultReference.arguments.message_id or session_read's tool message id. Never use a toolCallId or resource ID.")
     offset: int = Field(default=0, ge=0)
 
 
@@ -850,7 +850,7 @@ class MemoryRetrieveArguments(ToolArguments):
         description="Use write when this lookup prepares a memory_write; otherwise context.",
     )
     mode: Literal["search", "browse"] = Field(
-        description="search for a topic; browse for an overview."
+        description="Required: pass search with query for a topic, or browse without query for an overview."
     )
     query: str | None = Field(
         default=None,

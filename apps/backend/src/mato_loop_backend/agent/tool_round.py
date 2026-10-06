@@ -80,6 +80,7 @@ async def persist_tool_result(
     ephemeral_output: bool,
     limits: InstanceLimits,
     attachment_service: type[AttachmentService],
+    execution_binding: dict[str, Any] | None = None,
 ) -> tuple[Message, str, dict[str, Any]]:
     tool_message = Message(
         session_id=session.id,
@@ -91,6 +92,7 @@ async def persist_tool_result(
             "_matoloop": {
                 "runId": str(run.id),
                 "toolName": call.name,
+                **(execution_binding or {}),
                 **({"userEditedArguments": True} if metadata.get("userEdited") is True else {}),
                 **({"errorCode": metadata["errorCode"]} if isinstance(metadata.get("errorCode"), str) else {}),
                 **({"toolSnapshot": metadata["toolSnapshot"]} if isinstance(metadata.get("toolSnapshot"), dict) else {}),
@@ -197,6 +199,7 @@ async def persist_tool_result(
             tool_call_id=call.id, trust_level=trust_level.value,
             provider_data={"_matoloop": {
                 "runId": str(run.id), "toolName": call.name,
+                **(execution_binding or {}),
                 "errorCode": exc.code, "fileOutputsPending": True,
             }},
         )
@@ -262,6 +265,8 @@ async def execute_tool_batch(
     excluded_memory_content_hashes: frozenset[str],
     delegated: bool,
     max_tool_calls: int | None,
+    tool_calls_used: int,
+    execution_binding: dict[str, Any],
     rejected_batch_code: str | None,
     truncated_batch: bool,
     tool_batch_exceeds_budget: bool,
@@ -374,6 +379,9 @@ async def execute_tool_batch(
         elif state.user_denied_batch:
             content = json.dumps(error_payload("tool.skippedAfterUserDenial"), ensure_ascii=False)
             metadata = {"errorCode": "tool.skippedAfterUserDenial"}
+        elif call.name == "secret_input" and max_tool_calls is not None and tool_calls_used >= max_tool_calls:
+            content = json.dumps(error_payload("agent.toolCallLimitReached"), ensure_ascii=False)
+            metadata = {"errorCode": "agent.toolCallLimitReached"}
         elif repeated_research_call:
             state.repeated_tool_call_seen = True
             if not repeated_tool_call_repair_available:
@@ -576,6 +584,7 @@ async def execute_tool_batch(
             attachments=attachments, file_actions=file_actions,
             trust_level=tool_trust, ephemeral_output=ephemeral_output,
             limits=limits, attachment_service=attachment_service,
+            execution_binding=execution_binding,
         )
         error_code = metadata.get("errorCode")
         await run_events.publish(run.id, {
@@ -659,7 +668,9 @@ async def execute_tool_batch(
         elif isinstance(error_code, str):
             # Validation repairs may change metadata; execution retries must change the action.
             failure_signature = validation_signature if error_code == "tool.invalidArguments" else call_signature
-            failed_tool_call_signatures[failure_signature] = error_code
+            failed_tool_call_signatures[failure_signature] = (
+                "approval.targetChanged:notStarted" if metadata.get("retryAfterFreshApproval") is True else error_code
+            )
         else:
             if bound_tool is not None and any(action.mutates for action in bound_tool.definition.actions):
                 # A successful mutation changes preconditions, not earlier outcomes.

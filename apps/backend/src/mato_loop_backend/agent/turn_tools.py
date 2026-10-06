@@ -66,6 +66,7 @@ def select_turn_tools(
     source_review_pending: tuple[str, str] | None,
     render_pending: bool,
     tool_budget_exhausted: bool,
+    remaining_tool_calls: int | None = None,
 ) -> TurnTools:
     capabilities = effective_tool_capabilities(
         tool_settings,
@@ -167,6 +168,8 @@ def select_turn_tools(
     )
     if tool_budget_exhausted and toolset is not None:
         toolset = toolset.only()
+    elif remaining_tool_calls == 1 and toolset is not None:
+        toolset = toolset.without("secret_input")
     schemas = toolset.schemas() if toolset else []
     if delegated:
         for schema in schemas:

@@ -137,6 +137,7 @@ async def _select_execution_agent(
     return ToolResult.json({
         "id": str(agent.id), "alias": agent.alias, "currentDirectory": directory,
         "selected": True,
+        "instruction": "The selected computer changed. Files on the previous computer were not transferred. Use their recorded computer binding.",
     }, metadata={"executionAgentChanged": True})
 
 

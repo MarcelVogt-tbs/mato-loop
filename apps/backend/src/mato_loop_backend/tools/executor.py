@@ -235,7 +235,14 @@ async def execute_definition(
                     field_parts.append(str(part))
                 break
         field_name = ".".join(field_parts) or None
-        return ToolResult.error("tool.invalidArguments", field=field_name)
+        reason = {
+            "missing": "missing", "uuid_parsing": "invalid_uuid", "uuid_type": "invalid_uuid",
+            "literal_error": "invalid_choice", "enum": "invalid_choice",
+        }.get(errors[0]["type"])
+        return ToolResult.error(
+            "tool.invalidArguments", field=field_name,
+            params={"reason": reason} if reason else None,
+        )
     selected_integration_id = tool.source_id
     aggregate_integration_ids: tuple[str, ...] = ()
     if definition.instance_argument is not None:

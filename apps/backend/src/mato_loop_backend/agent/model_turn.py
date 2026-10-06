@@ -66,6 +66,7 @@ async def complete_model_turn(
     visible_response.reset()
     started_at = time.monotonic()
     timing: dict[str, int | None] = {"firstReasoningMs": None, "firstTextMs": None}
+    held_text: list[str] = []
 
     def mark_first_signal(key: str) -> None:
         if timing[key] is None:
@@ -74,6 +75,7 @@ async def complete_model_turn(
     async def on_delta(text: str) -> None:
         mark_first_signal("firstTextMs")
         if hold_response:
+            held_text.append(text)
             return
         visible_response.content_parts.append(text)
         await run_events.publish(run.id, {"type": "message.delta", "delta": text})
@@ -207,6 +209,8 @@ async def complete_model_turn(
     if await runtime._await_continuations(run.id):
         await runtime._resume_continuation(db, run, visible_response)
         return None
+    if hold_response and not result.content.strip():
+        result.content = "".join(held_text)
     return ModelTurn(
         result, started_at, max(0, round((time.monotonic() - started_at) * 1_000)),
         timing, streamed_reasoning, diagnostics_active,

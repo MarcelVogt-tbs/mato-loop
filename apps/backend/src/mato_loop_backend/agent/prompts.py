@@ -155,6 +155,7 @@ def general_system_prompt(
     memory_write_pending: bool = False,
     memory_write_outcome: str | None = None,
     tool_call_limit: int | None = None,
+    remaining_tool_calls: int | None = None,
     tool_budget_exhausted: bool = False,
     research_tool_calls_used: int = 0,
     research_tool_call_limit: int | None = None,
@@ -247,13 +248,20 @@ def general_system_prompt(
         if tool_budget_exhausted:
             runtime_parts.append(
                 "Tool budget exhausted. No tools are available. Finalize from confirmed results "
-                "and explicitly state any requested actions that were not completed."
+                "and explicitly state any requested actions that were not completed. "
+                "Return a user-facing summary, never simulated tool calls or promises to execute more actions."
             )
         else:
             runtime_parts.append(
                 f"Tool budget: {tool_call_limit} calls; parallel calls count individually. "
                 "Prioritize required actions; exhausted budget removes tools."
             )
+            if remaining_tool_calls is not None and remaining_tool_calls <= 3:
+                runtime_parts.append(
+                    f"Remaining tool calls: {remaining_tool_calls}. "
+                    "Reserve calls for required actions and verification. "
+                    "Do not request credentials without a remaining call to use them."
+                )
     if "question" in offered_tool_names:
         parts.append(
             "Missing-information contract: For missing required stable non-credential user context, call "
@@ -471,7 +479,7 @@ def general_system_prompt(
         )
     if "write_file" in offered_tool_names:
         parts.append(
-            "Saved artifacts: one file per artifact with write_file; default root=files, computer only "
+            "Saved artifacts: one file per artifact with write_file; pass root=files, computer only "
             "when explicit. Requested path or descriptive .md; never files/. Read before edit_file; reuse "
             "the path, no version copies. Never overwrite dirty files. Ask if ambiguous. Report paths; "
             "otherwise answer inline unless a workflow requires an artifact."
@@ -599,7 +607,9 @@ def general_system_prompt(
     if "select_execution_agent" in offered_tool_names:
         parts.append(
             "To change computers, call select_execution_agent alone. After approval, use the returned "
-            "computer and directory for subsequent tool calls; previous computer results remain historical."
+            "computer and directory for subsequent tool calls; previous computer results remain historical. "
+            "File and shell tools have no per-call computer or session selector. "
+            "If a required path belongs to another computer, switch to that computer first."
         )
     if "build_skill" in offered_tool_names:
         if "question" in offered_tool_names:

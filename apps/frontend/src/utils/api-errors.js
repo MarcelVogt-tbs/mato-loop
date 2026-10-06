@@ -533,7 +533,11 @@ const messages = {
   'tool.executionFailed': () => 'Die Tool-Aktion ist fehlgeschlagen.',
   'tool.executionInterrupted': () => 'Die Tool-Aktion wurde unterbrochen.',
   'tool.superseded': () => 'Die ausstehende Aktion wurde wegen deiner neuen Nachricht übersprungen.',
-  'tool.invalidArguments': () => 'Das Modell hat ungültige Tool-Argumente erzeugt.',
+  'tool.invalidArguments': ({ params }) => ({
+    missing: 'Das Modell hat ein erforderliches Tool-Argument ausgelassen.',
+    invalid_uuid: 'Das Modell hat eine ungültige ID als Tool-Argument verwendet.',
+    invalid_choice: 'Das Modell hat einen nicht erlaubten Wert als Tool-Argument verwendet.'
+  }[params?.reason] || 'Das Modell hat ungültige Tool-Argumente erzeugt.'),
   'tool.unknown': () => 'Das angeforderte Tool ist nicht bekannt.',
   'tool.unavailable': () => 'Dieses Tool ist für das ausgewählte Modell nicht verfügbar.',
   'tool.personalSettingsDisabled': () => 'Persönliche Tool-Einstellungen sind für diese Instanz deaktiviert.',

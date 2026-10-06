@@ -3419,9 +3419,10 @@ async def test_disabled_user_profile_tool_is_not_offered_or_executed(
                 "code": "tool.invalidArguments",
                 "field": "value",
                 "message": (
-                    "The tool arguments are invalid. Inspect error.field and retry with "
+                    "The tool arguments are invalid. Inspect error.field and error.params.reason and retry with "
                     "arguments that match the tool schema."
                 ),
+                "params": {"reason": "missing"},
             },
         ),
     ],
@@ -4580,10 +4581,11 @@ async def test_memory_write_reports_invalid_identifier_field(tmp_path) -> None:
         "error": {
             "code": "tool.invalidArguments",
             "message": (
-                "The tool arguments are invalid. Inspect error.field and retry with arguments "
+                "The tool arguments are invalid. Inspect error.field and error.params.reason and retry with arguments "
                 "that match the tool schema."
             ),
             "field": "memory_id",
+            "params": {"reason": "invalid_uuid"},
         }
     }
 

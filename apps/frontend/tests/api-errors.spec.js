@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { apiErrorMessage, decodeBlobApiError, errorDescriptor } from '../src/utils/api-errors'
 
 describe('API error messages', () => {
+  it('explains a missing tool argument using controlled reason metadata', () => {
+    expect(apiErrorMessage({ error: { code: 'tool.invalidArguments', params: { reason: 'missing' } } })).toBe(
+      'Das Modell hat ein erforderliches Tool-Argument ausgelassen.'
+    )
+  })
   it('explains unavailable native audio analysis', () => {
     expect(apiErrorMessage({ error: { code: 'audio.analysisUnavailable' } })).toBe(
       'Für die direkte Audioanalyse ist kein audiofähiges Chatmodell verfügbar.'

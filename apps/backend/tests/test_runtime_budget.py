@@ -13,7 +13,11 @@ import mato_loop_backend.agent.loop as mock_agent_loop
 import mato_loop_backend.agent.run_support as mock_agent_run_support
 import mato_loop_backend.agent.runtime as mock_agent_runtime
 from mato_loop_backend.agent.run_contracts import AgentRunError
-from mato_loop_backend.agent.run_support import _retryable_transient_read, _tool_call_signature
+from mato_loop_backend.agent.run_support import (
+    _has_simulated_tool_call,
+    _retryable_transient_read,
+    _tool_call_signature,
+)
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.subagents import integration_ceiling_ids, permission_snapshot
 from mato_loop_backend.models import Message, WebSearchPolicy
@@ -130,6 +134,55 @@ async def test_output_truncated_batch_has_no_effects_and_full_batch_can_be_repai
     assert all(message.provider_data["_matoloop"]["errorCode"] == "agent.outputLimitReached" for message in tools[:2])
     assert all("complete batch" in message.content for message in tools[:2])
     assert [item.args[0].arguments for item in tool_registry._execute_definition.await_args_list] == [call.arguments for call in calls]
+
+
+async def test_exhausted_budget_rejects_simulated_call_without_streaming_it(monkeypatch):
+    text = "Ich lege den Stack jetzt an.\n\n<tool_call>\n<function=write_file>\n</function>\n</tool_call>"
+    db, run, _requests, _projections, events = await _runtime_setup(
+        monkeypatch, [ProviderResult(tool_calls=[_search_call("search", "Deployment")]), ProviderResult(content="")],
+        max_tool_calls=1, search_policy=WebSearchPolicy.AVAILABLE, streamed_contents=["", text],
+    )
+    with pytest.raises(AgentRunError, match="agent.toolCallLimitReached"):
+        await AgentRuntime._execute_loop(db, run)
+    assert not any(text in str(event) for event in events)
+
+
+@pytest.mark.parametrize("wrapper", ["```xml\n{}\n```", "    {}", "`{}`", "> {}"])
+def test_simulated_call_detector_preserves_markdown_examples(wrapper):
+    assert not _has_simulated_tool_call(wrapper.format("<tool_call><function=write_file></function></tool_call>"))
+
+
+async def test_last_budget_slot_does_not_open_secret_input(monkeypatch):
+    db, run, _requests, _projections, _events = await _runtime_setup(
+        monkeypatch, [ProviderResult(tool_calls=[ToolCall("secret", "secret_input", {"inputs": []})]),
+                      ProviderResult(content="Zugangsdaten können erst im nächsten Lauf verwendet werden.")],
+        max_tool_calls=1, search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    await AgentRuntime._execute_loop(db, run)
+    tool_registry._execute_definition.assert_not_awaited()
+
+
+async def test_exhausted_budget_retains_streamed_only_summary(monkeypatch):
+    db, run, _requests, _projections, _events = await _runtime_setup(
+        monkeypatch, [ProviderResult(tool_calls=[_search_call("search", "Deployment")]), ProviderResult(content="")],
+        max_tool_calls=1, search_policy=WebSearchPolicy.AVAILABLE, streamed_contents=["", "Deployment noch offen."],
+    )
+    await AgentRuntime._execute_loop(db, run)
+    assert _assistant_messages(db)[-1].content == "Deployment noch offen."
+
+
+async def test_only_pre_execution_stale_shell_refusal_can_be_retried_once(monkeypatch):
+    call = ToolCall("shell", "shell_run", {"command": "cat README.md"})
+    db, run, _requests, _projections, _events = await _runtime_setup(
+        monkeypatch, [ProviderResult(tool_calls=[call])] * 3 + [ProviderResult(content="Blockiert.")],
+        search_policy=WebSearchPolicy.AVAILABLE, execution_agent_id=uuid4(), execution_operations=("shell.run",),
+    )
+    run.current_directory_snapshot = "/work"
+    refusal = ToolResult.error("approval.targetChanged")
+    refusal.metadata["retryAfterFreshApproval"] = True
+    tool_registry._execute_definition.return_value = refusal
+    await AgentRuntime._execute_loop(db, run)
+    assert tool_registry._execute_definition.await_count == 2
 
 
 async def test_truncated_repairs_are_bounded_even_with_unlimited_budget(monkeypatch):

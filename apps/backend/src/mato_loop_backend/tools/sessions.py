@@ -16,6 +16,7 @@ from mato_loop_backend.agent.projection import (
     _target_tool_result,
     _tool_names_by_message_id,
     _tool_result_reference,
+    tool_execution_binding,
 )
 from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.media.attachments import model_attachments
@@ -100,6 +101,7 @@ def _message_item(
         "content": content,
         "generationStatus": message.generation_status,
         "createdAt": message.created_at.isoformat() if message.created_at else None,
+        **tool_execution_binding(message),
     }
     if len(full_content) > content_limit:
         item["truncated"] = True
@@ -163,6 +165,7 @@ async def _session_tool_result_read(
         "nextOffset": end if has_more else None,
         "contentIsUntrusted": True,
         "toolName": tool_name,
+        **tool_execution_binding(message),
     }
     if attachments := _attachment_items(message):
         payload["attachments"] = attachments
@@ -295,7 +298,7 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
                 _available_secret_references(context) if target_id == context.session.id else set()
             ),
         )
-        if message.id in agent_by_message:
+        if "executionAgentId" not in item and message.id in agent_by_message:
             agent_id = agent_by_message[message.id]
             item["executionAgentId"] = str(agent_id) if agent_id is not None else None
         messages.append(item)

@@ -343,6 +343,7 @@ async def execute_loop_body(
             source_review_pending=openscad_source_review_pending,
             render_pending=openscad_render_pending,
             tool_budget_exhausted=tool_budget_exhausted,
+            remaining_tool_calls=(None if tool_call_limit is None else max(0, tool_call_limit - tool_calls_used)),
         )
         integration_settings = turn_tools.integration_settings
         execution_client = turn_tools.execution_client
@@ -390,6 +391,7 @@ async def execute_loop_body(
             memory_write_pending=memory_write_pending,
             memory_write_outcome=memory_write_outcome,
             tool_call_limit=tool_call_limit,
+            remaining_tool_calls=(None if tool_call_limit is None else max(0, tool_call_limit - tool_calls_used)),
             tool_budget_exhausted=tool_budget_exhausted,
             research_tool_calls_used=research_tool_calls_used,
             research_tool_call_limit=None,
@@ -487,7 +489,8 @@ async def execute_loop_body(
         )
 
         hold_response = (
-            search_pending
+            tool_budget_exhausted
+            or search_pending
             or memory_write_pending
             or openscad_render_pending
         )
@@ -660,6 +663,8 @@ async def execute_loop_body(
         assistant_content = canonical_assistant_content(result.content)
         if not assistant_content.strip() and visible_response.content.strip():
             assistant_content = canonical_assistant_content(visible_response.content)
+        if tool_budget_exhausted and not normalized_calls and agent_run_support._has_simulated_tool_call(assistant_content):
+            raise AgentRunError("agent.toolCallLimitReached")
         if not normalized_calls and (
             openscad_render_pending
             or (
@@ -724,6 +729,11 @@ async def execute_loop_body(
                 trust_level=model_trust_level,
                 excluded_memory_content_hashes=excluded_memory_content_hashes,
                 delegated=delegated, max_tool_calls=tool_call_limit,
+                tool_calls_used=tool_calls_used,
+                execution_binding={
+                    "executionAgentId": str(execution_client.agent_id) if execution_client else None,
+                    "executionAgentAlias": selected_execution_agent.alias if selected_execution_agent else None,
+                },
                 rejected_batch_code=rejected_batch_code,
                 truncated_batch=truncated_batch,
                 tool_batch_exceeds_budget=tool_batch_exceeds_budget,

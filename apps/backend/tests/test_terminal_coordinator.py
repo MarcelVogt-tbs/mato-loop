@@ -147,6 +147,7 @@ def env(monkeypatch):
             self.timed_out = False
             self.execute_error = None
             self.output = "evidence"
+            self.revision_suffix = ""
 
         def status(self, terminal_id):
             return SharedTerminalStatus(
@@ -169,7 +170,7 @@ def env(monkeypatch):
             if operation == "terminal.shared.prepare":
                 command = arguments["command"]
                 classification = "write" if command.startswith("touch ") else "read"
-                revision = hashlib.sha256(command.encode()).hexdigest()
+                revision = hashlib.sha256((command + self.revision_suffix).encode()).hexdigest()
                 return SharedPrepareResult(
                     command=command,
                     current_directory="/home/user/project",
@@ -277,6 +278,32 @@ async def test_shared_shell_prepares_immutable_command_then_uses_ordinary_approv
         "timeoutSeconds": 4.0,
     }
     assert all("command" not in arguments for operation, arguments in env.native.calls if operation == "terminal.shared.execute")
+
+
+async def test_changed_shared_preparation_requires_new_once_approval(env):
+    # Exact-action consent, rather than the ordinary run-scoped directory grant.
+    authorize = env.context.ask_handler
+
+    async def ask_exact(permission):
+        return await authorize(replace(permission, force_ask=True, available_decisions=("allow_once", "deny")))
+
+    env.context.ask_handler = ask_exact
+    task = env.start()
+    approval = await pending(env)
+    await decide_agent_action(env.db, approval, "allow_once")
+    await task
+    env.native.revision_suffix = "changed"
+    task = env.start()
+    try:
+        async with asyncio.timeout(2):
+            while len(env.approvals) < 2:
+                await asyncio.sleep(0)
+        assert approval.payload["runActionScope"] != env.approvals[-1].payload["runActionScope"]
+        await decide_agent_action(env.db, env.approvals[-1], "allow_once")
+        assert not (await task).is_error
+    finally:
+        if not task.done():
+            task.cancel()
 
 
 @pytest.mark.parametrize("command,classification", [("printf output", "read"), ("touch output", "write")])

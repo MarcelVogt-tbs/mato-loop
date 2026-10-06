@@ -500,7 +500,9 @@ async def test_runtime_rebinds_computer_after_exclusive_switch_without_new_run(m
         "agent_id": str(new_id), "_reason": "Den ausgewählten Computer wechseln.",
     })
     db, run, requests, _projections, events = await _runtime_setup(
-        monkeypatch, [ProviderResult(tool_calls=[call]), ProviderResult(content="Fertig", finish_reason="stop")],
+        monkeypatch, [ProviderResult(tool_calls=[call]),
+                      ProviderResult(tool_calls=[ToolCall("inspect", "shell_run", {"command": "pwd"})]),
+                      ProviderResult(content="Fertig", finish_reason="stop")],
         search_policy=WebSearchPolicy.AVAILABLE,
     )
     session = db.get.return_value
@@ -511,6 +513,8 @@ async def test_runtime_rebinds_computer_after_exclusive_switch_without_new_run(m
     monkeypatch.setattr(mock_agent_runtime.execution_agent_connections, "is_connected", lambda _id: True)
 
     async def switch(_tool, _context, _bound):
+        if _tool.name != "select_execution_agent":
+            return ToolResult.json({"exitCode": 0})
         session.preferred_execution_agent_id = new_id
         session.current_directory = "/srv/new"
         run.execution_agent_id = new_id
@@ -522,13 +526,15 @@ async def test_runtime_rebinds_computer_after_exclusive_switch_without_new_run(m
 
     await AgentRuntime._execute_loop(db, run)
 
-    assert len(requests) == 2
+    assert len(requests) == 3
     assert "No MatoLoop Agent is selected" in requests[0]["messages"][0]["content"]
     second = requests[1]["messages"][0]["content"]
     assert f'"id": "{new_id}"' in second
     assert '"currentDirectory": "/srv/new"' in second
     assert any(tool["name"] == "shell_run" for tool in requests[1]["tools"])
     assert any(event["type"] == "session.executionAgentChanged" for event in events)
+    binding = _tool_messages(db)[-1].provider_data["_matoloop"]
+    assert (binding["executionAgentId"], binding["executionAgentAlias"]) == (str(new_id), "Other computer")
 
 
 async def test_runtime_rejects_computer_switch_in_tool_batch(monkeypatch) -> None:
@@ -2120,6 +2126,8 @@ async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) 
         "_matoloop": {
             "runId": str(run.id),
             "toolName": "write_file",
+            "executionAgentId": None,
+            "executionAgentAlias": None,
             "fileOutputsPending": True,
             "fileActions": [
                 {

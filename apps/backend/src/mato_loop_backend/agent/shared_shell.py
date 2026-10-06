@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
+from dataclasses import replace
 from uuid import uuid4
 
 from mato_loop_backend.events import run_events
@@ -71,6 +72,10 @@ async def run_shared_shell(
         permission = shell_command_permission(
             runtime.agent_id, prepared.current_directory, prepared.command, inspection,
         )
+        permission = replace(permission, approval_details={
+            **(permission.approval_details or {}),
+            "inspectionRevision": prepared.inspection.inspection_revision,
+        })
         decision = await context.ask(permission)
         if decision != PermissionDecision.ALLOW:
             return ToolResult.error(
@@ -145,7 +150,16 @@ async def run_shared_shell(
             code = "process.outcomeUnknown" if runtime.shell_exited else "process.interrupted"
         else:
             code = exc.code
-        result = ToolResult.error(code)
+        params = {}
+        if isinstance(exc, ExecutionClientError) and code == "approval.targetChanged":
+            params = {key: value for key, value in (exc.params or {}).items()
+                      if key in {"reason", "executionStarted"}}
+        not_started = params.get("executionStarted") is False and params.get("reason") in {
+            "preparedStateChanged", "inspectionChanged",
+        }
+        result = ToolResult.error(code, params=params or None)
+        if not_started:
+            result.metadata["retryAfterFreshApproval"] = True
         if executing:
             safe_output = redact_process_output(output, redacted_values)
             if safe_output != published_output:
@@ -157,7 +171,7 @@ async def run_shared_shell(
             result.content = json.dumps({
                 **json.loads(result.content),
                 "requestedArguments": requested,
-                "executedArguments": requested,
+                **({"executedArguments": requested} if not not_started else {"executionStarted": False}),
                 "userEdited": False,
                 "output": safe_output,
             })

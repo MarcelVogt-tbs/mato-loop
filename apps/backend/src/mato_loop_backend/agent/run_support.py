@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 import httpx
+from markdown_it import MarkdownIt
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -154,6 +155,27 @@ TRUNCATED_TOOL_BATCH_RETRIES = 2
 
 
 _OUTPUT_LIMIT_REASONS = frozenset({"length", "max_tokens", "max_output_tokens", "MAX_TOKENS"})
+
+
+def _has_simulated_tool_call(content: str) -> bool:
+    """Recognize raw call envelopes outside Markdown examples, never execute them."""
+    if "<tool_call>" not in content:
+        return False
+    quoted = 0
+    for token in MarkdownIt("commonmark", {"html": False}).parse(content):
+        if token.type == "blockquote_open":
+            quoted += 1
+        elif token.type == "blockquote_close":
+            quoted -= 1
+        elif token.type == "inline" and not quoted:
+            text = "".join(
+                child.content if child.type == "text" else
+                "\n" if child.type in {"softbreak", "hardbreak"} else "\0"
+                for child in token.children or []
+            )
+            if re.search(r"(?:^|\n)<tool_call>\s*<function=[A-Za-z_]\w*>", text):
+                return True
+    return False
 
 
 _RESEARCH_TOOL_NAMES = frozenset({"web_search", "webfetch", "fetch_transcript"})
@@ -622,6 +644,7 @@ def _retryable_transient_read(
         in {
             ("browser_snapshot", "browser.observationUnstable"),
             ("webfetch", "webfetch.emptyResponse"),
+            ("shell_run", "approval.targetChanged:notStarted"),
         }
         and signature not in retried
     )

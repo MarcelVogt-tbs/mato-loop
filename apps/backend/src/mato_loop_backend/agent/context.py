@@ -192,6 +192,7 @@ class ContextManager:
             index
             for index in current_tool_indices
             if messages[index].get("tool_call_id") in protected_tool_call_ids
+            or messages[index].get(agent_projection._HOST_RETAINED_TOOL_RESULT)
         ]
         compaction_request_tokens = (
             minimum_request_tokens
