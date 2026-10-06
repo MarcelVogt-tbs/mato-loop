@@ -542,7 +542,8 @@ async def test_project_move_rejects_references_to_another_sessions_files(monkeyp
     storage.stage_session_move.assert_not_called()
 
 
-async def test_mark_session_read_uses_owned_assistant_message_monotonically() -> None:
+@pytest.mark.parametrize("has_message", [True, False])
+async def test_mark_session_read_uses_owned_assistant_message_monotonically(has_message) -> None:
     user = _user()
     session = ChatSession(
         id=uuid4(),
@@ -553,11 +554,11 @@ async def test_mark_session_read_uses_owned_assistant_message_monotonically() ->
     message_id = uuid4()
     read_at = datetime(2026, 7, 24, 12, 0, tzinfo=UTC)
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, read_at]
+    db.scalar.side_effect = [session, read_at] if has_message else [session]
 
     result = await mark_session_read(
         session.id,
-        SessionReadRequest(throughMessageId=message_id),
+        SessionReadRequest(throughMessageId=message_id if has_message else None),
         user,
         db,
     )
@@ -565,6 +566,9 @@ async def test_mark_session_read_uses_owned_assistant_message_monotonically() ->
     assert result == {"read": True}
     statements = [call.args[0] for call in db.scalar.await_args_list]
     assert "FOR UPDATE" in str(statements[0])
+    if not has_message:
+        assert "UPDATE notifications" in str(db.execute.await_args.args[0])
+        return
     assert message_id in statements[1].compile().params.values()
     update_statement = db.execute.await_args_list[0].args[0]
     sql = str(update_statement)

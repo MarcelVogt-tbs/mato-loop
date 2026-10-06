@@ -1,9 +1,13 @@
 import asyncio
+import runpy
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from pydantic import ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -279,7 +283,7 @@ async def test_mark_all_read_commits_and_returns_authoritative_count(monkeypatch
     db.commit.assert_awaited_once()
 
 
-@pytest.mark.parametrize("mode", ["session", "individual", "all"])
+@pytest.mark.parametrize("mode", ["session", "individual", "all", "migration"])
 async def test_response_notices_are_deleted_on_read_without_losing_other_notices(request, mode) -> None:
     if not request.config.getoption("--memory-db"):
         pytest.skip("requires the migrated development PostgreSQL database")
@@ -295,13 +299,17 @@ async def test_response_notices_are_deleted_on_read_without_losing_other_notices
                 session = ChatSession(user_id=user.id, title="Read boundary")
                 db.add(session)
                 await db.flush()
-                through = datetime.now(UTC)
+                through = datetime.now(UTC) - timedelta(seconds=2)
                 items = [_notification(owner.id, created_at=through + timedelta(seconds=offset))
-                         for owner, offset in [(user, 0), (user, 1), (user, 0), (other, 0)]]
-                for item in [items[0], items[1], items[3]]:
+                         for owner, offset in [(user, 0), (user, 1), (user, 0), (other, 0), (user, -1), (user, 0.5)]]
+                for item in [items[0], items[1], items[3], items[4]]:
                     item.kind = "session.response"
-                for item in items[:3]:
+                items[5].kind = "agent.notice"
+                for item in [*items[:3], *items[4:]]:
                     item.session_id = session.id
+                if mode == "migration":
+                    for item in [items[0], items[2], items[4]]:
+                        item.read_at = through
                 db.add_all(items)
                 await db.flush()
                 ids = [item.id for item in items]
@@ -312,14 +320,25 @@ async def test_response_notices_are_deleted_on_read_without_losing_other_notices
                     result = await mark_notification_read(items[0].id, user, db)
                     assert result.notification is None
                     await mark_notification_read(items[3].id, user, db)
-                else:
+                elif mode == "all":
                     await mark_all_notifications_read(user, db)
+                else:
+                    path = Path(__file__).parents[1] / "alembic/versions/b92e7594d532_remove_read_response_notifications.py"
+                    upgrade = runpy.run_path(path)["upgrade"]
+
+                    def cleanup(connection):
+                        with Operations.context(MigrationContext.configure(connection)):
+                            upgrade()
+
+                    await connection.run_sync(cleanup)
                 remaining = (await db.execute(select(Notification.id, Notification.read_at).where(
                     Notification.id.in_(ids),
                 ))).all()
                 assert {(item.id, item.read_at is not None) for item in remaining} == {
-                    (ids[2], mode == "all"), (ids[3], False),
+                    (ids[2], mode != "individual"), (ids[3], False),
+                    (ids[5], mode in {"session", "all"}),
                     *([] if mode == "all" else [(ids[1], False)]),
+                    *([(ids[4], False)] if mode == "individual" else []),
                 }
     finally:
         await engine.dispose()

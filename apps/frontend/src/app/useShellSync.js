@@ -177,9 +177,9 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   }, { immediate: true })
 
   watch(visibleSessionId, refreshAppPresence)
-  watch(() => [visibleSessionId.value, chat.current?.hasUnreadMessages, chat.current?.messages?.length], ([id, unread]) => {
-    if (id && unread) void chat.markSessionRead(chat.current).catch(() => {})
-  }, { flush: 'post' })
+  watch(() => [visibleSessionId.value, chat.current?.hasUnreadMessages, chat.current?.messages?.length], ([id, unread], previous = []) => {
+    if (id && (unread || id !== previous[0])) void chat.markSessionRead(chat.current).catch(() => {})
+  }, { immediate: true, flush: 'post' })
 
   watch(
     () => [controlCenterVisible.value, $q.screen.lt.lg],

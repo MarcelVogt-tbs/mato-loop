@@ -1105,27 +1105,27 @@ describe('chat drafts', () => {
     expect(chat.loadError).toBeNull()
   })
 
-  it('marks the latest loaded assistant message as read', async () => {
+  it.each([true, false])('acknowledges the session with or without an unread assistant message (%s)', async (hasMessage) => {
     api.get.mockResolvedValue({
       data: {
         id: 'session-1',
-        hasUnreadMessages: true,
+        hasUnreadMessages: hasMessage,
         activeRun: null,
-        messages: [
+        messages: hasMessage ? [
           { id: 'user-message', role: 'user' },
           { id: 'assistant-message', role: 'assistant' }
-        ]
+        ] : []
       }
     })
     api.post.mockResolvedValue({ data: { read: true } })
     const chat = useChatStore()
-    setSessions(chat, [{ id: 'session-1', hasUnreadMessages: true }])
+    setSessions(chat, [{ id: 'session-1', hasUnreadMessages: hasMessage }])
 
     await chat.loadSession('session-1')
     await chat.markSessionRead(chat.current)
     await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith(
       '/sessions/session-1/read',
-      { throughMessageId: 'assistant-message' },
+      hasMessage ? { throughMessageId: 'assistant-message' } : {},
       { suppressErrorToast: true }
     ))
 

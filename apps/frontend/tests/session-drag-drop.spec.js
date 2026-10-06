@@ -241,11 +241,11 @@ it.each([
   expect(root.querySelector('[role="dialog"]')).not.toBeNull()
 })
 
-it('reports the visible session, reads it only when focused and releases presence when hidden', async () => {
+it.each([true, false])('acknowledges only a focused visible session (unread=%s)', async (unread) => {
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
   const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
   notifications.markPresent.mockClear()
-  useChatStore().current = { id: 'standalone', hasUnreadMessages: true, messages: [] }
+  useChatStore().current = { id: 'standalone', hasUnreadMessages: unread, messages: [] }
   useRoute().query = { session: 'standalone' }
 
   window.dispatchEvent(new Event('focus'))

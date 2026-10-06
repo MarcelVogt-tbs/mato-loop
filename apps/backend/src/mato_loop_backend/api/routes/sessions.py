@@ -415,7 +415,7 @@ class ContinueRunRequest(BaseModel):
 
 
 class SessionReadRequest(BaseModel):
-    through_message_id: UUID = Field(alias="throughMessageId")
+    through_message_id: UUID | None = Field(default=None, alias="throughMessageId")
 
 
 def _multipart_payload(value: str, model: type[BaseModel]) -> BaseModel:
@@ -937,23 +937,25 @@ async def mark_session_read(
     item = await _mutable_session(db, session_id, user.id, for_update=True)
     if item is None:
         raise ApiError(404, "session.notFound")
-    read_at = await db.scalar(
-        select(Message.created_at).where(
-            Message.id == payload.through_message_id,
-            Message.session_id == session_id,
-            Message.role == "assistant",
+    read_at = None
+    if payload.through_message_id is not None:
+        read_at = await db.scalar(
+            select(Message.created_at).where(
+                Message.id == payload.through_message_id,
+                Message.session_id == session_id,
+                Message.role == "assistant",
+            )
         )
-    )
-    if read_at is None:
-        raise ApiError(400, "validation.invalid", field="throughMessageId")
-    await db.execute(
-        update(ChatSession)
-        .where(
-            ChatSession.id == session_id,
-            ChatSession.last_read_at < read_at,
+        if read_at is None:
+            raise ApiError(400, "validation.invalid", field="throughMessageId")
+        await db.execute(
+            update(ChatSession)
+            .where(
+                ChatSession.id == session_id,
+                ChatSession.last_read_at < read_at,
+            )
+            .values(last_read_at=read_at, updated_at=ChatSession.updated_at)
         )
-        .values(last_read_at=read_at, updated_at=ChatSession.updated_at)
-    )
     from mato_loop_backend.notifications import NotificationService
 
     await NotificationService.mark_session_read(db, user.id, session_id, read_at)

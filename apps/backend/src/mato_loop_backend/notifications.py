@@ -190,12 +190,19 @@ class NotificationService:
 
     @staticmethod
     async def mark_session_read(
-        db: AsyncSession, user_id: UUID, session_id: UUID, through: datetime,
+        db: AsyncSession, user_id: UUID, session_id: UUID, through: datetime | None,
     ) -> None:
-        await db.execute(delete(Notification).where(
+        if through is not None:
+            await db.execute(delete(Notification).where(
+                Notification.user_id == user_id, Notification.session_id == session_id,
+                Notification.kind == "session.response", Notification.created_at <= through,
+            ))
+        seen_at = datetime.now(UTC)
+        await db.execute(update(Notification).where(
             Notification.user_id == user_id, Notification.session_id == session_id,
-            Notification.kind == "session.response", Notification.created_at <= through,
-        ))
+            Notification.kind != "session.response", Notification.read_at.is_(None),
+            Notification.created_at <= seen_at,
+        ).values(read_at=seen_at))
 
     @staticmethod
     async def delete(db: AsyncSession, user_id: UUID, notification_id: UUID) -> None:

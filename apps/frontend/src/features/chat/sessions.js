@@ -644,21 +644,22 @@ export const sessionsActions = {
       this.updateSessionSummary(session)
     },
     async markSessionRead(session) {
-      if (!session?.hasUnreadMessages) return
+      if (!session?.id) return
       const message = lastAssistantMessage(session.messages)
-      if (!message) return
       await api.post(
         `/sessions/${session.id}/read`,
-        { throughMessageId: message.id },
+        message ? { throughMessageId: message.id } : {},
         { suppressErrorToast: true }
       )
-      if (this.current?.id === session.id && lastAssistantMessage(this.current.messages)?.id !== message.id) return
-      if (this.current?.id === session.id) this.current.hasUnreadMessages = false
-      this.updateCachedSession(session.id, (summary) => ({ ...summary, hasUnreadMessages: false }))
+      if (message) {
+        if (this.current?.id === session.id && lastAssistantMessage(this.current.messages)?.id !== message.id) return
+        if (this.current?.id === session.id) this.current.hasUnreadMessages = false
+        this.updateCachedSession(session.id, (summary) => ({ ...summary, hasUnreadMessages: false }))
+      }
       const notifications = useInAppNotificationStore()
       const projects = useProjectStore()
       await Promise.allSettled([
-        ...(notifications.loaded ? [notifications.fetchLatest({ suppressErrorToast: true })] : []),
+        notifications.fetchLatest({ suppressErrorToast: true }),
         ...(session.projectId && projects.loaded ? [projects.fetchAll({ suppressErrorToast: true })] : [])
       ])
     },
