@@ -115,14 +115,17 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
     async markRead(id) {
       if (this.markingId || this.markingAll || this.deletingId) return
       const current = this.items.find((item) => item.id === id)
-      if (current?.readAt) return current
+      if (current?.readAt && current.kind !== 'session.response') return current
       this.markingId = id
       try {
         const { data } = await api.post(`/notifications/${id}/read`)
         this.revision += 1
         this.loading = false
         const index = this.items.findIndex((item) => item.id === id)
-        if (index !== -1) this.items[index] = data.notification
+        if (index !== -1) {
+          if (data.notification) this.items[index] = data.notification
+          else this.items.splice(index, 1)
+        }
         this.unreadCount = Number(data.unreadCount) || 0
         return data.notification
       } finally {
@@ -134,11 +137,8 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
       this.markingAll = true
       try {
         const { data } = await api.post('/notifications/read-all')
-        this.revision += 1
-        this.loading = false
-        const readAt = new Date().toISOString()
-        this.items = this.items.map((item) => item.readAt ? item : { ...item, readAt })
         this.unreadCount = Number(data.unreadCount) || 0
+        await this.fetchLatest()
       } finally {
         this.markingAll = false
       }

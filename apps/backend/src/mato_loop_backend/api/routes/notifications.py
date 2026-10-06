@@ -48,6 +48,13 @@ class AutomationNotificationTargetResponse(BaseModel):
     run_id: UUID = Field(alias="runId")
 
 
+class MemoryApprovalNotificationTargetResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["memoryApproval"]
+    approval_id: UUID = Field(alias="approvalId")
+
+
 class NotificationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -55,7 +62,7 @@ class NotificationResponse(BaseModel):
     kind: str
     title: str
     body: str | None
-    target: SessionNotificationTargetResponse | AutomationNotificationTargetResponse | None
+    target: SessionNotificationTargetResponse | AutomationNotificationTargetResponse | MemoryApprovalNotificationTargetResponse | None
     read_at: datetime | None = Field(alias="readAt")
     created_at: datetime = Field(alias="createdAt")
 
@@ -71,7 +78,7 @@ class NotificationListResponse(BaseModel):
 class NotificationReadResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    notification: NotificationResponse
+    notification: NotificationResponse | None
     unread_count: int = Field(alias="unreadCount")
 
 
@@ -106,7 +113,9 @@ def _notification_payload(item: Notification) -> NotificationResponse:
         title=item.title,
         body=item.body,
         target=(
-            SessionNotificationTargetResponse(type="session", sessionId=item.session_id)
+            MemoryApprovalNotificationTargetResponse(type="memoryApproval", approvalId=item.approval_id)
+            if item.kind == "memory.approval" and item.approval_id is not None
+            else SessionNotificationTargetResponse(type="session", sessionId=item.session_id)
             if item.session_id is not None
             else AutomationNotificationTargetResponse(
                 type="automationRun",
@@ -329,14 +338,11 @@ async def mark_notification_read(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> NotificationReadResponse:
-    try:
-        item = await NotificationService.mark_read(db, user.id, notification_id)
-    except NotificationError as exc:
-        raise ApiError(404, exc.code) from exc
+    item = await NotificationService.mark_read(db, user.id, notification_id)
     unread_count = await NotificationService.unread_count(db, user.id)
     await db.commit()
     return NotificationReadResponse(
-        notification=_notification_payload(item),
+        notification=_notification_payload(item) if item is not None else None,
         unreadCount=unread_count,
     )
 

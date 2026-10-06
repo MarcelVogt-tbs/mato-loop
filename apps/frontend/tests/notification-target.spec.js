@@ -18,6 +18,12 @@ describe('notification target navigation', () => {
     })
   })
 
+  it('opens the exact Dreaming proposal', () => {
+    expect(notificationTargetRoute({ type: 'memoryApproval', approvalId: 'approval-1' })).toEqual({
+      name: 'settings-memory', query: { tab: 'dreaming', approval: 'approval-1' }
+    })
+  })
+
   it('ignores incomplete and unknown targets', () => {
     expect(notificationTargetRoute({ type: 'automationRun', automationId: 'automation-1' })).toBeNull()
     expect(notificationTargetRoute({ type: 'unknown' })).toBeNull()

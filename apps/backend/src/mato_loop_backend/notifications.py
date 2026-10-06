@@ -10,17 +10,25 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.message_content import canonical_assistant_content
 from mato_loop_backend.models import (
+    ApprovalRequest,
     Automation,
     AutomationRun,
     ChatSession,
     Message,
     Notification,
+    QuestionRequest,
     UserAccount,
 )
 from mato_loop_backend.sessions.presence import session_is_present
-from mato_loop_backend.web_push import WebPushService, WebPushSessionTarget, web_push_payload
+from mato_loop_backend.web_push import (
+    WebPushMemoryApprovalTarget,
+    WebPushService,
+    WebPushSessionTarget,
+    web_push_payload,
+)
 
 
 class NotificationDraft(BaseModel):
@@ -33,6 +41,7 @@ class NotificationDraft(BaseModel):
     deduplication_key: Annotated[str, Field(min_length=1, max_length=255)]
     session_id: UUID | None = None
     automation_run_id: UUID | None = None
+    approval_id: UUID | None = None
 
     @field_validator("title", "deduplication_key")
     @classmethod
@@ -59,6 +68,10 @@ class NotificationService:
     async def create(
         db: AsyncSession, draft: NotificationDraft, *, created_at: datetime | None = None,
     ) -> UUID | None:
+        if draft.approval_id is not None and await db.scalar(select(ApprovalRequest.id).where(
+            ApprovalRequest.id == draft.approval_id, ApprovalRequest.user_id == draft.user_id,
+        )) is None:
+            raise NotificationError("notification.targetNotFound")
         if draft.session_id is not None:
             owned_session = await db.scalar(
                 select(ChatSession.id)
@@ -66,7 +79,8 @@ class NotificationService:
                     ChatSession.id == draft.session_id,
                     ChatSession.user_id == draft.user_id,
                 )
-                .with_for_update()
+                # Match foreign-key locks held by concurrent requests for this session.
+                .with_for_update(read=True, key_share=True)
             )
             if owned_session is None:
                 raise NotificationError("notification.targetNotFound")
@@ -93,6 +107,28 @@ class NotificationService:
             .returning(Notification.id)
         )
         return await db.scalar(statement)
+
+    @staticmethod
+    async def create_for_approval(db: AsyncSession, approval: ApprovalRequest) -> UUID | None:
+        return await NotificationService.create(db, NotificationDraft(
+            user_id=approval.user_id,
+            session_id=approval.session_id,
+            approval_id=approval.id,
+            kind="memory.approval" if approval.request_type == "memory_change" else "approval.requested",
+            title=approval.title[:240], body=approval.summary[:4_000],
+            deduplication_key=f"approval:{approval.id}",
+        ), created_at=approval.created_at)
+
+    @staticmethod
+    async def create_for_question(db: AsyncSession, request: QuestionRequest) -> UUID | None:
+        owner_id = await db.scalar(select(ChatSession.user_id).where(ChatSession.id == request.session_id))
+        if owner_id is None:
+            raise NotificationError("notification.targetNotFound")
+        return await NotificationService.create(db, NotificationDraft(
+            user_id=owner_id, session_id=request.session_id, kind="question.requested",
+            title="Rückfrage vom Agenten", body=request.questions[0]["question"][:4_000],
+            deduplication_key=f"question:{request.id}",
+        ), created_at=request.created_at)
 
     @staticmethod
     async def create_for_message(db: AsyncSession, message: Message) -> UUID | None:
@@ -124,40 +160,42 @@ class NotificationService:
         )
 
     @staticmethod
-    async def deliver_after_commit(db: AsyncSession, notification_id: UUID) -> None:
-        item = await db.get(Notification, notification_id)
-        if item is None or item.read_at is not None:
-            return
-        await WebPushService.deliver_after_commit(
-            item.user_id,
-            web_push_payload(
+    async def deliver_after_commit(notification_id: UUID) -> None:
+        async with AsyncSessionFactory() as db:
+            item = await db.get(Notification, notification_id)
+            if item is None or item.read_at is not None:
+                return
+            user_id = item.user_id
+            payload = web_push_payload(
                 title=item.title, body=item.body, tag=f"notification:{item.id}",
                 notification_id=item.id,
-                target=WebPushSessionTarget(type="session", sessionId=item.session_id)
+                target=WebPushMemoryApprovalTarget(type="memoryApproval", approvalId=item.approval_id)
+                if item.kind == "memory.approval" and item.approval_id is not None
+                else WebPushSessionTarget(type="session", sessionId=item.session_id)
                 if item.session_id else None,
-            ),
-        )
+            )
+        await WebPushService.deliver_after_commit(user_id, payload)
 
     @staticmethod
-    async def deliver_message_after_commit(db: AsyncSession, message_id: UUID | None) -> None:
+    async def deliver_message_after_commit(message_id: UUID | None) -> None:
         if message_id is None:
             return
-        notification_id = await db.scalar(select(Notification.id).where(
-            Notification.deduplication_key == f"message:{message_id}",
-            Notification.kind == "session.response", Notification.read_at.is_(None),
-        ))
+        async with AsyncSessionFactory() as db:
+            notification_id = await db.scalar(select(Notification.id).where(
+                Notification.deduplication_key == f"message:{message_id}",
+                Notification.kind == "session.response", Notification.read_at.is_(None),
+            ))
         if notification_id is not None:
-            await NotificationService.deliver_after_commit(db, notification_id)
+            await NotificationService.deliver_after_commit(notification_id)
 
     @staticmethod
     async def mark_session_read(
         db: AsyncSession, user_id: UUID, session_id: UUID, through: datetime,
     ) -> None:
-        await db.execute(update(Notification).where(
+        await db.execute(delete(Notification).where(
             Notification.user_id == user_id, Notification.session_id == session_id,
             Notification.kind == "session.response", Notification.created_at <= through,
-            Notification.read_at.is_(None),
-        ).values(read_at=func.now()))
+        ))
 
     @staticmethod
     async def delete(db: AsyncSession, user_id: UUID, notification_id: UUID) -> None:
@@ -219,7 +257,7 @@ class NotificationService:
     @staticmethod
     async def mark_read(
         db: AsyncSession, user_id: UUID, notification_id: UUID
-    ) -> Notification:
+    ) -> Notification | None:
         await db.scalar(
             select(UserAccount.id).where(UserAccount.id == user_id).with_for_update()
         )
@@ -234,7 +272,11 @@ class NotificationService:
             .with_for_update()
         )
         if item is None:
-            raise NotificationError("notification.notFound")
+            return None
+        if item.kind == "session.response":
+            await db.delete(item)
+            await db.flush()
+            return None
         if item.read_at is None:
             item.read_at = datetime.now(UTC)
         return item
@@ -249,4 +291,8 @@ class NotificationService:
             .where(Notification.user_id == user_id, Notification.read_at.is_(None))
             .values(read_at=func.now())
         )
+        await db.execute(delete(Notification).where(
+            Notification.user_id == user_id,
+            Notification.kind == "session.response", Notification.read_at.is_not(None),
+        ))
         return int(result.rowcount or 0)

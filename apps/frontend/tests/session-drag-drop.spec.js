@@ -200,6 +200,24 @@ it('badges unread notifications received in the background until read', async ()
   visibility.mockRestore()
 })
 
+it('opens notifications from the Control Center badge and otherwise restores the active app', async () => {
+  const store = useInAppNotificationStore()
+  const center = useControlCenterStore()
+  center.activeContentId = 'session'
+  store.unreadCount = 3
+  await nextTick()
+  root.querySelector('#control-center-toggle').click()
+  await nextTick()
+  expect(center.openApp).toHaveBeenLastCalledWith('notifications')
+  center.open = false
+  store.unreadCount = 0
+  await nextTick()
+  root.querySelector('#control-center-toggle').click()
+  await nextTick()
+  expect(center.openApp).toHaveBeenLastCalledWith('session')
+  delete center.activeContentId
+})
+
 it.each([
   [true, false], [true, true], [false, false], [false, true]
 ])('restores the panel beside chat but not the fullscreen dialog (phone=%s, dark=%s)', async (phone, dark) => {

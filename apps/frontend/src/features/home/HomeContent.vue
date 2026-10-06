@@ -1,9 +1,9 @@
 <template>
-  <section class="chat-home q-mx-auto" aria-label="Home">
-    <header class="text-center q-px-md q-pb-sm">
+  <section class="chat-home q-mx-auto" :class="$q.screen.lt.md ? 'q-mt-none' : 'q-mt-md'" aria-label="Home">
+    <header class="text-center q-px-md" :class="{ 'q-pt-sm': $q.screen.lt.md }">
       <AppLogo :size="36" />
       <h1 class="text-h5 text-weight-bold q-mt-md q-mb-sm">{{ greeting }}</h1>
-      <p class="text-body1 app-muted q-mt-none q-mb-md">Was möchtest du tun?</p>
+      <p class="text-body1 app-muted q-mt-none q-mb-sm">Was möchtest du tun?</p>
     </header>
     <div class="q-pa-md">
       <q-banner v-if="failedSources.length" rounded class="app-surface-tonal q-mb-md" role="status">
@@ -112,7 +112,6 @@ onMounted(() => { void Promise.allSettled([home.load(), profile.fetchProfile()])
 <style scoped>
 .chat-home {
   width: min(900px, 100%);
-  margin-top: clamp(24px, 6vh, 72px);
   margin-bottom: 24px;
 }
 </style>

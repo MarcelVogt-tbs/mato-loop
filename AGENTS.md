@@ -107,7 +107,7 @@ Example:
 
 - Use stores for server state and components for presentation and user interaction.
 - Display effective runtime policy state, not only stored desired values.
-- Use `useConfirm` or `v-confirm` for destructive user actions.
+- Use `useConfirm` or `v-confirm` for destructive user actions. Dismissing an individual notification needs no confirmation because its source message, session, or pending request remains unchanged; remove the notice from the UI only after successful server deletion.
 - Use Quasar dialogs for input and decisions beyond simple confirmation.
 - Show local success messages with Quasar Notify; do not duplicate API error notifications.
 - Keep dialogs and drawers fully usable on small viewports.

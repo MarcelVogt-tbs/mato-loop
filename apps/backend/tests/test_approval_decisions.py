@@ -647,7 +647,9 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch, reusable) ->
     db.flush.side_effect = flush
     monkeypatch.setattr(run_events, "publish", publish)
     push = AsyncMock(side_effect=deliver)
-    monkeypatch.setattr(mock_permissions_requests.WebPushService, "deliver_after_commit", push)
+    notification_id = uuid4()
+    monkeypatch.setattr(mock_permissions_requests.NotificationService, "create_for_approval", AsyncMock(return_value=notification_id))
+    monkeypatch.setattr(mock_permissions_requests.NotificationService, "deliver_after_commit", push)
     enqueue = AsyncMock()
     _mock_value = enqueue
     for _mock_target in (mock_permissions_requests,):
@@ -702,9 +704,7 @@ async def test_approval_wait_has_no_inactivity_timeout(monkeypatch, reusable) ->
     assert AgentRuntime.resolve_approval(approval_id, "allow_once") is True
     async with asyncio.timeout(1):
         assert await task == "allow_once"
-    assert push.await_args.args[0] == session.user_id
-    assert push.await_args.args[1].notification.target.type == "actions"
-    assert push.await_args.kwargs == {}
+    push.assert_awaited_once_with(notification_id)
     wait_for.assert_not_awaited()
 
 

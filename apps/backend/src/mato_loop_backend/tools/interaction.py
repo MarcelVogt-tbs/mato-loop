@@ -250,7 +250,7 @@ async def _notify(arguments: NotifyArguments, context: ToolContext) -> ToolResul
     ))
     await context.db.commit()
     if notification_id is not None:
-        await NotificationService.deliver_after_commit(context.db, notification_id)
+        await NotificationService.deliver_after_commit(notification_id)
     return ToolResult.json({"created": notification_id is not None})
 
 

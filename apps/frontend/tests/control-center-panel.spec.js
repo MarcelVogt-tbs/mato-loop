@@ -145,7 +145,7 @@ describe('control center panel', () => {
     terminal.release()
   })
 
-  it('combines approvals, questions and unread hints and retains the pending badge at zero unread', async () => {
+  it('counts only unread notices even when approvals and questions remain pending', async () => {
     const approvals = useApprovalStore()
     const questions = useQuestionStore()
     const notifications = useInAppNotificationStore()
@@ -155,20 +155,16 @@ describe('control center panel', () => {
     await mountPanel()
 
     const button = notificationButton()
-    expect(button.querySelector('.q-badge').textContent).toBe('5')
-    expect(button.getAttribute('aria-label')).toBe('Benachrichtigungen öffnen, 2 offene Aufgaben, 3 ungelesene Hinweise')
+    expect(button.querySelector('.q-badge').textContent).toBe('3')
+    expect(button.getAttribute('aria-label')).toBe('Benachrichtigungen öffnen, 3 ungelesen')
 
     notifications.unreadCount = 0
     await nextTick()
-    expect(button.querySelector('.q-badge').textContent).toBe('2')
-    expect(button.getAttribute('aria-label')).toBe('Benachrichtigungen öffnen, 2 offene Aufgaben, 0 ungelesene Hinweise')
+    expect(button.querySelector('.q-badge')).toBeNull()
+    expect(button.getAttribute('aria-label')).toBe('Benachrichtigungen öffnen, 0 ungelesen')
     expect(approvals.pending).toHaveLength(1)
     expect(questions.pending).toHaveLength(1)
 
-    approvals.pending = []
-    questions.pending = []
-    await nextTick()
-    expect(button.querySelector('.q-badge')).toBeNull()
   })
 
   it.each(['files', 'computer-files', 'file-viewer'])('keeps %s mounted but hidden while global notifications are shown', async (appId) => {

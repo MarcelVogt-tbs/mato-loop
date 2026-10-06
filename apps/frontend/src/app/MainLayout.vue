@@ -19,7 +19,7 @@
         round
         flat
         icon="menu"
-        :aria-label="navigationLabel"
+        aria-label="Navigation öffnen"
         aria-controls="app-navigation-drawer"
         :aria-expanded="drawerOpen"
         @click="openNavigation"
@@ -27,37 +27,24 @@
       <q-space />
       <q-btn
         v-if="showFloatingControlCenter"
-        id="notification-center-toggle"
-        class="app-floating-control app-floating-control--flat q-mr-xs"
-        flat round icon="notifications_none"
-        :aria-label="`Benachrichtigungen öffnen, ${notifications.unreadCount} ungelesen`"
-        aria-controls="control-center-panel"
-        @click="controlCenter.openApp('notifications').catch(() => {})"
-      >
-        <q-badge v-if="notifications.unreadCount" floating rounded color="negative" :label="notifications.unreadCount > 99 ? '99+' : notifications.unreadCount" aria-hidden="true" />
-      </q-btn>
-      <q-btn
-        v-if="showFloatingControlCenter"
         id="control-center-toggle"
         class="app-floating-control"
         round
         unelevated
         icon="apps"
-        aria-label="Control Center öffnen"
+        :aria-label="controlCenterLabel"
         :aria-expanded="controlCenterVisible"
         aria-controls="control-center-panel"
         @click="openControlCenter"
       >
         <q-badge
-          v-if="attentionCount"
+          v-if="notifications.unreadCount"
           floating
           rounded
-          color="warning"
-          text-color="dark"
-          :label="attentionCount > 99 ? '99+' : attentionCount"
+          color="negative"
+          :label="notifications.unreadCount > 99 ? '99+' : notifications.unreadCount"
           aria-hidden="true"
         />
-        <q-tooltip>Control Center öffnen</q-tooltip>
       </q-btn>
     </div>
 
@@ -88,12 +75,10 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
 import AppNavigation from 'src/app/AppNavigation.vue'
 import ControlCenterPanel from 'src/app/control-center/ControlCenterPanel.vue'
 import { useShellSync } from 'src/app/useShellSync'
-import { useApprovalStore } from 'stores/approvals'
 import { useAutomationStore } from 'stores/automations'
 import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
-import { useQuestionStore } from 'stores/questions'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
 
@@ -106,10 +91,8 @@ const chat = useChatStore()
 const controlCenter = useControlCenterStore()
 const workspace = useWorkspaceStore()
 const { confirm } = useConfirm()
-const approvals = useApprovalStore()
 const automations = useAutomationStore()
 const notifications = useInAppNotificationStore()
-const questions = useQuestionStore()
 const showFloatingNavigation = computed(() => !drawerOpen.value)
 const controlCenterVisible = computed(() => (
   controlCenter.open && (!$q.screen.lt.md || !controlCenter.restoredOpen)
@@ -118,23 +101,9 @@ const showFloatingControlCenter = computed(() => route.name === 'chat' && !contr
 const showFloatingControls = computed(() => (
   showFloatingNavigation.value || showFloatingControlCenter.value
 ))
-const attentionCount = computed(() => (
-  approvals.pending.length + questions.pending.length
-))
-const notificationBellLabel = computed(() => {
-  const parts = []
-  if (attentionCount.value) {
-    parts.push(`${attentionCount.value} ${attentionCount.value === 1 ? 'Aktion' : 'Aktionen'} erforderlich`)
-  }
-  if (notifications.unreadCount) {
-    parts.push(`${notifications.unreadCount} ungelesene ${notifications.unreadCount === 1 ? 'Benachrichtigung' : 'Benachrichtigungen'}`)
-  }
-  return parts.length ? `Benachrichtigungen öffnen, ${parts.join(', ')}` : 'Benachrichtigungen öffnen'
-})
-const navigationLabel = computed(() => {
-  if (!attentionCount.value && !notifications.unreadCount) return 'Navigation öffnen'
-  return `Navigation öffnen, ${notificationBellLabel.value.replace('Benachrichtigungen öffnen, ', '')}`
-})
+const controlCenterLabel = computed(() => notifications.unreadCount
+  ? `Benachrichtigungen im Control Center öffnen, ${notifications.unreadCount} ungelesen`
+  : 'Control Center öffnen')
 const { visualViewportStyle } = useShellSync({ drawerOpen, controlCenterVisible })
 
 function openNavigation() {
@@ -157,7 +126,7 @@ async function confirmDiscardedEdit({ discard = true } = {}) {
 
 async function openControlCenter() {
   try {
-    await controlCenter.openApp(controlCenter.activeContentId || 'files')
+    await controlCenter.openApp(notifications.unreadCount ? 'notifications' : controlCenter.activeContentId || 'files')
   } catch {
     // The central API interceptor displays the error and restores the previous tabs.
   }

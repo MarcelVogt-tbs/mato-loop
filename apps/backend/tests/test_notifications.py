@@ -1,23 +1,35 @@
-from datetime import UTC, datetime
+import asyncio
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.notifications import (
     NotificationPresenceRequest,
     _decode_cursor,
     _encode_cursor,
+    _notification_payload,
     delete_notification,
     list_notifications,
     mark_all_notifications_read,
     mark_notification_presence,
     mark_notification_read,
 )
-from mato_loop_backend.models import ChatSession, Message, Notification, UserAccount
+from mato_loop_backend.config import get_runtime_config
+from mato_loop_backend.models import (
+    ApprovalRequest,
+    ChatSession,
+    Message,
+    Notification,
+    QuestionRequest,
+    UserAccount,
+)
 from mato_loop_backend.notifications import (
     NotificationDraft,
     NotificationError,
@@ -109,12 +121,13 @@ async def test_notification_creation_is_idempotent_and_does_not_commit() -> None
     db.commit.assert_not_awaited()
 
 
-async def test_notification_creation_rejects_foreign_session_target() -> None:
+@pytest.mark.parametrize("target", ["session_id", "approval_id"])
+async def test_notification_creation_rejects_foreign_target(target) -> None:
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = None
     draft = NotificationDraft(
         user_id=uuid4(),
-        session_id=uuid4(),
+        **{target: uuid4()},
         kind="automation.completed",
         title="Fertig",
         deduplication_key="automation-run:1:completed",
@@ -124,6 +137,40 @@ async def test_notification_creation_rejects_foreign_session_target() -> None:
         await NotificationService.create(db, draft)
 
     db.commit.assert_not_awaited()
+
+
+@pytest.mark.parametrize("request_type", ["agent_action", "memory_change"])
+async def test_approval_notice_preserves_snapshot_and_links_to_its_decision_context(monkeypatch, request_type) -> None:
+    approval = ApprovalRequest(
+        id=uuid4(), user_id=uuid4(), session_id=uuid4(), request_type=request_type,
+        title="Freigabe erforderlich", summary="Vorschlag prüfen", created_at=datetime.now(UTC),
+    )
+    create = AsyncMock(return_value=uuid4())
+    monkeypatch.setattr(NotificationService, "create", create)
+    db = AsyncMock(spec=AsyncSession)
+    await NotificationService.create_for_approval(db, approval)
+    draft = create.await_args.args[1]
+    item = Notification(id=uuid4(), **draft.model_dump(), created_at=approval.created_at)
+    payload = _notification_payload(item).model_dump(mode="json", by_alias=True)
+    assert (payload["title"], payload["body"], payload["target"]) == (
+        approval.title, approval.summary,
+        {"type": "memoryApproval", "approvalId": str(approval.id)} if request_type == "memory_change"
+        else {"type": "session", "sessionId": str(approval.session_id)},
+    )
+
+
+async def test_question_notice_uses_its_source_session(monkeypatch) -> None:
+    owner_id = uuid4()
+    request = QuestionRequest(id=uuid4(), session_id=uuid4(), questions=[{"question": "Welche Datei?"}])
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = owner_id
+    create = AsyncMock()
+    monkeypatch.setattr(NotificationService, "create", create)
+    await NotificationService.create_for_question(db, request)
+    draft = create.await_args.args[1]
+    assert (draft.user_id, draft.session_id, draft.body, draft.deduplication_key) == (
+        owner_id, request.session_id, "Welche Datei?", f"question:{request.id}",
+    )
 
 
 async def test_notification_page_is_owner_scoped_and_uses_full_keyset() -> None:
@@ -232,6 +279,103 @@ async def test_mark_all_read_commits_and_returns_authoritative_count(monkeypatch
     db.commit.assert_awaited_once()
 
 
+@pytest.mark.parametrize("mode", ["session", "individual", "all"])
+async def test_response_notices_are_deleted_on_read_without_losing_other_notices(request, mode) -> None:
+    if not request.config.getoption("--memory-db"):
+        pytest.skip("requires the migrated development PostgreSQL database")
+    engine = create_async_engine(get_runtime_config().database_url, poolclass=NullPool)
+    try:
+        async with engine.connect() as connection:
+            await connection.begin()
+            async with AsyncSession(connection, join_transaction_mode="create_savepoint", expire_on_commit=False) as db:
+                user, other = _user(), _user()
+                user.username, other.username = f"notice-{user.id}", f"notice-{other.id}"
+                db.add_all([user, other])
+                await db.flush()
+                session = ChatSession(user_id=user.id, title="Read boundary")
+                db.add(session)
+                await db.flush()
+                through = datetime.now(UTC)
+                items = [_notification(owner.id, created_at=through + timedelta(seconds=offset))
+                         for owner, offset in [(user, 0), (user, 1), (user, 0), (other, 0)]]
+                for item in [items[0], items[1], items[3]]:
+                    item.kind = "session.response"
+                for item in items[:3]:
+                    item.session_id = session.id
+                db.add_all(items)
+                await db.flush()
+                ids = [item.id for item in items]
+                if mode == "session":
+                    await NotificationService.mark_session_read(db, user.id, session.id, through)
+                elif mode == "individual":
+                    await mark_notification_read(items[0].id, user, db)
+                    result = await mark_notification_read(items[0].id, user, db)
+                    assert result.notification is None
+                    await mark_notification_read(items[3].id, user, db)
+                else:
+                    await mark_all_notifications_read(user, db)
+                remaining = (await db.execute(select(Notification.id, Notification.read_at).where(
+                    Notification.id.in_(ids),
+                ))).all()
+                assert {(item.id, item.read_at is not None) for item in remaining} == {
+                    (ids[2], mode == "all"), (ids[3], False),
+                    *([] if mode == "all" else [(ids[1], False)]),
+                }
+    finally:
+        await engine.dispose()
+
+
+async def test_parallel_request_notices_release_connections_before_push(request, monkeypatch) -> None:
+    if not request.config.getoption("--memory-db"):
+        pytest.skip("requires the migrated development PostgreSQL database")
+    engine = create_async_engine(get_runtime_config().database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    user = _user()
+    user.username = f"parallel-notice-{user.id}"
+    user_id = user.id
+    monkeypatch.setattr("mato_loop_backend.notifications.AsyncSessionFactory", sessions)
+
+    async def deliver(*_args):
+        assert engine.pool.checkedout() == 0
+
+    push = AsyncMock(side_effect=deliver)
+    monkeypatch.setattr("mato_loop_backend.notifications.WebPushService.deliver_after_commit", push)
+    try:
+        async with sessions() as db:
+            db.add(user)
+            await db.flush()
+            session = ChatSession(user_id=user_id, title="Concurrent requests")
+            db.add(session)
+            await db.commit()
+            session_id = session.id
+        flushed = asyncio.Barrier(2)
+
+        async def create_request():
+            async with sessions() as db:
+                approval = ApprovalRequest(
+                    user_id=user_id, session_id=session_id, request_type="agent_action",
+                    action_kind="read", title="Lesen erlauben?", summary="Datei lesen",
+                    capability="filesystem.read", resource_type="path", resource_scope="/notes",
+                )
+                db.add(approval)
+                await db.flush()
+                await flushed.wait()
+                notification_id = await NotificationService.create_for_approval(db, approval)
+                await db.commit()
+                return notification_id
+
+        async with asyncio.timeout(10), asyncio.TaskGroup() as tasks:
+            pending = [tasks.create_task(create_request()) for _ in range(2)]
+        for task in pending:
+            await NotificationService.deliver_after_commit(task.result())
+        assert push.await_count == 2
+    finally:
+        async with sessions() as db:
+            await db.execute(delete(UserAccount).where(UserAccount.id == user_id))
+            await db.commit()
+        await engine.dispose()
+
+
 @pytest.mark.parametrize("already_read", [False, True])
 async def test_response_notification_is_skipped_when_seen(monkeypatch, already_read) -> None:
     now = datetime.now(UTC)
@@ -287,4 +431,4 @@ async def test_agent_notification_uses_current_owner_and_session(monkeypatch) ->
     draft = create.await_args.args[1]
     assert (draft.user_id, draft.session_id, draft.kind) == (session.user_id, session.id, "agent.notice")
     db.commit.assert_awaited_once()
-    deliver.assert_awaited_once_with(db, create.return_value)
+    deliver.assert_awaited_once_with(create.return_value)

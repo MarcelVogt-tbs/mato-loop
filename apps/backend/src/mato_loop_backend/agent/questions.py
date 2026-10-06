@@ -12,6 +12,7 @@ from mato_loop_backend.agent.subagents import permission_origin, provenance
 from mato_loop_backend.events import run_events
 from mato_loop_backend.messaging.questions import enqueue_question_prompt
 from mato_loop_backend.models import AgentRun, ChatSession, Message, QuestionRequest
+from mato_loop_backend.notifications import NotificationService
 from mato_loop_backend.permissions.coordinator import question_coordinator
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.tools.arguments import (
@@ -19,7 +20,6 @@ from mato_loop_backend.tools.arguments import (
     QuestionArguments,
     QuestionRequestArguments,
 )
-from mato_loop_backend.web_push import WebPushService, WebPushSessionTarget, web_push_payload
 
 
 async def request_question(
@@ -45,6 +45,7 @@ async def request_question(
     db.add(request)
     transition_run_status(run, "waiting_input")
     await db.flush()
+    notification_id = await NotificationService.create_for_question(db, request)
     if isinstance(questions, QuestionArguments) and run.input_message_id is not None:
         input_message = await db.get(Message, run.input_message_id)
         if (
@@ -72,15 +73,8 @@ async def request_question(
                 "activityLabel": run_activity_label("waiting_input"),
             },
         )
-        await WebPushService.deliver_after_commit(
-            chat_session.user_id,
-            web_push_payload(
-                title="Rückfrage vom Agenten",
-                body=questions.questions[0].question,
-                tag=f"question:{request.id}",
-                target=WebPushSessionTarget(type="session", sessionId=origin.id),
-            ),
-        )
+        if notification_id is not None:
+            await NotificationService.deliver_after_commit(notification_id)
         answers = await asyncio.shield(waiter)
     except asyncio.CancelledError:
         await db.rollback()

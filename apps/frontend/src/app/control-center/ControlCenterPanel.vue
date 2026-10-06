@@ -122,7 +122,7 @@
         :icon="item.icon"
         :color="controlCenter.activeGlobalSectionId === item.id ? 'primary' : undefined"
         :loading="!controlCenter.ready && controlCenter.requestedAppId === item.id"
-        :aria-label="`${item.label} öffnen, ${approvals.pending.length + questions.pending.length} offene Aufgaben, ${notifications.unreadCount} ungelesene Hinweise`"
+        :aria-label="`${item.label} öffnen, ${notifications.unreadCount} ungelesen`"
         @click="openContent(item.id)"
       >
         <q-badge
@@ -224,12 +224,10 @@ import { computed, nextTick, ref } from 'vue'
 import { Notify } from 'quasar'
 import AppClosableTab from 'src/shared/ui/AppClosableTab.vue'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
-import { useApprovalStore } from 'stores/approvals'
 import { useAutomationStore } from 'stores/automations'
 import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
-import { useQuestionStore } from 'stores/questions'
 import { useMailStore } from 'stores/mail'
 import { useChatStore } from 'stores/chat'
 import { useBrowserStore } from 'stores/browser'
@@ -257,9 +255,7 @@ defineOptions({ name: 'ControlCenterPanel' })
 const emit = defineEmits(['close'])
 const { confirm } = useConfirm()
 const controlCenter = useControlCenterStore()
-const approvals = useApprovalStore()
 const automations = useAutomationStore()
-const questions = useQuestionStore()
 const notifications = useInAppNotificationStore()
 const mail = useMailStore()
 const browser = useBrowserStore()
@@ -311,7 +307,7 @@ function tabLabel(tab) {
 
 function badge(appId) {
   const count = appId === 'notifications'
-    ? approvals.pending.length + questions.pending.length + notifications.unreadCount
+    ? notifications.unreadCount
     : 0
   return count > 99 ? '99+' : count || null
 }

@@ -32,7 +32,7 @@
       @keydown="handleScrollKey"
       @mousedown="handleScrollAreaMouseDown"
     >
-      <div ref="scrollContent" class="chat-page__scroll-content">
+      <div ref="scrollContent" class="chat-page__scroll-content" :class="{ 'chat-page__scroll-content--mobile-home': $q.screen.lt.md && showHome && !runPresentation.showActivity && !chat.loading && !chat.loadError }">
         <div v-if="chat.loading" class="chat-transcript q-pa-md" aria-label="Session wird geladen">
           <div v-for="width in ['42%', '86%', '64%']" :key="width" class="chat-session-skeleton">
             <q-skeleton type="text" width="88px" />

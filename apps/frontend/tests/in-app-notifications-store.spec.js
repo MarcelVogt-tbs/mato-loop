@@ -148,6 +148,14 @@ describe('in-app notification store', () => {
     expect(store.unreadCount).toBe(1)
   })
 
+  it('removes an acknowledged response notice when the server returns no record', async () => {
+    const store = useInAppNotificationStore()
+    store.items = [{ id: 'response', kind: 'session.response', readAt: null }]
+    api.post.mockResolvedValue({ data: { notification: null, unreadCount: 0 } })
+    await store.markRead('response')
+    expect(store.items).toEqual([])
+  })
+
   it('keeps unread state when marking one notification fails', async () => {
     api.post.mockRejectedValue(new Error('request failed'))
     const store = useInAppNotificationStore()
@@ -185,11 +193,16 @@ describe('in-app notification store', () => {
     expect(store.unreadCount).toBe(1)
   })
 
-  it('marks all loaded notifications after the bulk request succeeds', async () => {
+  it('reloads after bulk read, removing responses and preserving newer unread arrivals', async () => {
     api.post.mockResolvedValue({ data: { updatedCount: 8, unreadCount: 0 } })
+    const remaining = [
+      { id: 'notification-2', readAt: '2026-08-13T10:00:00Z' },
+      { id: 'new-response', kind: 'session.response', readAt: null }
+    ]
+    api.get.mockResolvedValue({ data: { items: remaining, unreadCount: 1, nextCursor: null } })
     const store = useInAppNotificationStore()
     store.items = [
-      { id: 'notification-1', readAt: null },
+      { id: 'notification-1', kind: 'session.response', readAt: null },
       { id: 'notification-2', readAt: '2026-08-13T10:00:00Z' }
     ]
     store.unreadCount = 8
@@ -197,8 +210,7 @@ describe('in-app notification store', () => {
     await store.markAllRead()
 
     expect(api.post).toHaveBeenCalledWith('/notifications/read-all')
-    expect(store.items.every((item) => item.readAt)).toBe(true)
-    expect(store.unreadCount).toBe(0)
+    expect([store.items, store.unreadCount]).toEqual([remaining, 1])
   })
 
   it('reconciles an existing granted push subscription without prompting', async () => {

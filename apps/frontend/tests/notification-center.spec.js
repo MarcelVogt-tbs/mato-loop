@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { createApp, nextTick } from 'vue'
+import { createApp, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { Quasar, QAvatar, QBadge, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QItem, QItemLabel, QItemSection, QList, QRadio, QScrollArea, QSelect, QSeparator, QSkeleton, QSpace, QToggle, QTooltip } from 'quasar'
+import { Quasar, QAvatar, QBadge, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QDialog, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QItem, QItemLabel, QItemSection, QList, QPagination, QRadio, QScrollArea, QSelect, QSeparator, QSkeleton, QSpace, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QTooltip } from 'quasar'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
@@ -10,13 +10,14 @@ vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), delete: v
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm }) }))
 
 import NotificationCenterApp from '../src/features/notifications/NotificationCenterApp.vue'
+import ApprovalCard from '../src/features/approvals/ApprovalCard.vue'
+import MemorySettingsPage from '../src/features/memory/MemorySettingsPage.vue'
 import { useApprovalStore } from '../src/stores/approvals'
-import { useQuestionStore } from '../src/stores/questions'
 import { useInAppNotificationStore } from '../src/stores/in-app-notifications'
 import { api } from 'src/boot/axios'
 
 const { confirm } = vi.hoisted(() => ({ confirm: vi.fn() }))
-const components = { QAvatar, QBadge, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QItem, QItemLabel, QItemSection, QList, QRadio, QScrollArea, QSelect, QSeparator, QSkeleton, QSpace, QToggle, QTooltip }
+const components = { QAvatar, QBadge, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QDialog, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QItem, QItemLabel, QItemSection, QList, QPagination, QRadio, QScrollArea, QSelect, QSeparator, QSkeleton, QSpace, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QTooltip }
 const createdAt = '2026-09-06T10:00:00Z'
 let app, root, pinia, responses
 
@@ -31,10 +32,6 @@ beforeEach(() => {
       sourceSession: { title: 'Quellsession' }, riskLevel: 'low',
       resourceType: 'path', resourceScope: '/notes', availableDecisions: ['allow_once', 'deny']
     }],
-    '/questions/pending': [{
-      id: 'question', sessionId: 'parent', createdAt,
-      questions: [{ id: 'answer', type: 'free_text', question: 'Welche Datei?' }]
-    }],
     '/notifications': {
       items: [{ id: 'notice', title: 'Automation abgeschlossen', createdAt, readAt: null }],
       unreadCount: 1, nextCursor: null
@@ -48,22 +45,33 @@ afterEach(() => {
   app?.unmount()
   root?.remove()
   vi.unstubAllGlobals()
+  delete Element.prototype.scrollIntoView
 })
 
-async function mountCenter(dark = false) {
+async function mountCenter(dark = false, approvalOnly = false) {
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: '/', name: 'chat', component: { render: () => null } }]
+    routes: [
+      { path: '/', name: 'chat', component: { render: () => null } },
+      { path: '/settings/memory', name: 'settings-memory', component: { render: () => null } }
+    ]
   })
   await router.push('/')
   root = document.createElement('div')
   document.body.append(root)
-  app = createApp(NotificationCenterApp)
+  app = createApp(approvalOnly ? {
+    setup() {
+      const store = useApprovalStore()
+      store.pending = responses['/approvals/pending']
+      return () => store.pending.map((approval) => h(ApprovalCard, { approval, showDraftAction: false }))
+    }
+  } : NotificationCenterApp)
   app.use(pinia).use(router).use(Quasar, { components, config: { dark } })
   app.config.globalProperties.$q.dark.set(dark)
   app.mount(root)
-  await vi.waitFor(() => expect(api.get).toHaveBeenCalledTimes(3))
+  if (!approvalOnly) await vi.waitFor(() => expect(api.get).toHaveBeenCalledTimes(1))
   await nextTick()
+  if (!approvalOnly) await vi.waitFor(() => expect(root.querySelector('[aria-label="Benachrichtigungen aktualisieren"] .q-spinner')).toBeNull())
   return router
 }
 
@@ -89,14 +97,17 @@ async function selectOption(card, label, option) {
 }
 
 describe('notification center', () => {
-  it('deletes a notice with confirmation without navigating or marking it read', async () => {
+  it('deletes a notice directly without confirmation, navigation or marking it read', async () => {
     const router = await mountCenter()
     api.delete.mockResolvedValue({ data: { unreadCount: 0 } })
     root.querySelector('[aria-label="Benachrichtigung löschen"]').click()
     await vi.waitFor(() => expect(useInAppNotificationStore().items).toHaveLength(0))
-    expect(confirm).toHaveBeenCalledOnce()
+    expect(confirm).not.toHaveBeenCalled()
     expect(api.post).not.toHaveBeenCalled()
     expect(router.currentRoute.value.query).toEqual({})
+    useInAppNotificationStore().loading = true
+    await nextTick()
+    expect([root.textContent.includes('Keine Benachrichtigungen'), root.querySelector('[aria-label="Benachrichtigungen aktualisieren"] .q-spinner')]).toEqual([true, null])
   })
 
   it('submits administrator session approval without collecting a password', async () => {
@@ -105,7 +116,7 @@ describe('notification center', () => {
       capability: 'filesystem.write', availableDecisions: ['allow_once', 'allow_session', 'deny'],
       payload: {}
     }
-    await mountCenter()
+    await mountCenter(false, true)
     const card = root.querySelector('.approval-card')
     expect(card.querySelector('input[type="password"]')).toBeNull()
     card.querySelector('.q-checkbox').click()
@@ -116,90 +127,51 @@ describe('notification center', () => {
     }))
   })
 
-  it.each([false, true])('keeps required actions after read-all and removes only resolved requests (dark=%s)', async (dark) => {
+  it.each([false, true])('renders every notification as an ordinary notice and acknowledges them together (dark=%s)', async (dark) => {
+    responses['/notifications'] = {
+      items: ['question.requested', 'approval.requested', 'memory.approval', 'session.response'].map((kind) => ({
+        id: kind, kind, title: kind, createdAt, readAt: null
+      })), unreadCount: 4, nextCursor: null
+    }
     await mountCenter(dark)
-    const approvals = useApprovalStore()
-    const questions = useQuestionStore()
     const notifications = useInAppNotificationStore()
-    const actions = root.querySelector('[aria-label="Benachrichtigungen"]')
-    expect(root.querySelectorAll('.q-scrollarea')).toHaveLength(1)
-    expect([...actions.children].map((item) => item.classList.contains('q-expansion-item') ? 'task' : 'notice')).toEqual(['task', 'task', 'notice'])
-    expect(actions.querySelector('.approval-card')).not.toBeNull()
-    expect(actions.querySelector('.question-dock')).not.toBeNull()
-    expect(root.querySelector('#notification-app-title .q-badge').textContent).toBe('3')
-    expect(root.textContent.indexOf('Datei lesen')).toBeLessThan(root.textContent.indexOf('Automation abgeschlossen'))
-    expect(root.textContent.indexOf('Welche Datei?')).toBeLessThan(root.textContent.indexOf('Automation abgeschlossen'))
-    expect(root.querySelector('[aria-label="Agent-Anfrage stoppen"]')).toBeNull()
-
+    const notices = root.querySelector('[aria-label="Benachrichtigungen"]')
+    expect([...notices.children].map((item) => item.classList.contains('q-item'))).toEqual([true, true, true, true])
+    expect(notices.querySelector('.approval-card, .question-dock, .q-expansion-item')).toBeNull()
     const readAll = root.querySelector('[aria-label="Alle Benachrichtigungen als gelesen markieren"]')
+    responses['/notifications'] = {
+      items: responses['/notifications'].items.filter((item) => item.kind !== 'session.response')
+        .map((item) => ({ ...item, readAt: createdAt })), unreadCount: 0, nextCursor: null
+    }
     readAll.click()
     await vi.waitFor(() => expect(notifications.unreadCount).toBe(0))
-    expect(notifications.items[0].readAt).toBeTruthy()
-    expect(readAll.disabled).toBe(true)
-    expect(approvals.pending).toHaveLength(1)
-    expect(questions.pending).toHaveLength(1)
-    expect(root.querySelector('#notification-app-title .q-badge').textContent).toBe('2')
-    expect(actions.querySelector('.approval-card')).not.toBeNull()
-    expect(actions.querySelector('.question-dock')).not.toBeNull()
+    await vi.waitFor(() => expect(notifications.items).toHaveLength(3))
+    expect(notifications.items.every((item) => item.readAt)).toBe(true)
     expect(api.post).toHaveBeenCalledExactlyOnceWith('/notifications/read-all')
-
-    button(actions.querySelector('.approval-card'), 'Für diesen Lauf erlauben').click()
-    await vi.waitFor(() => expect(actions.querySelector('.approval-card')).toBeNull())
-    expect(api.post).toHaveBeenCalledWith('/approvals/approval/decisions', { decision: 'allow_once' })
-    expect(actions.querySelector('.question-dock')).not.toBeNull()
-    const input = actions.querySelector('textarea')
-    input.value = 'notes.md'
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-    await nextTick()
-    button(actions.querySelector('.question-dock'), 'Antworten senden').click()
-    await vi.waitFor(() => expect(actions.querySelector('.question-dock')).toBeNull())
-    expect(api.post).toHaveBeenCalledWith('/questions/question/answers', { answers: { answer: ['notes.md'] } })
-    expect(root.querySelector('#notification-app-title .q-badge')).toBeNull()
-    expect(root.textContent).toContain('Automation abgeschlossen')
   })
 
-  it('keeps tasks compact and exposes their existing controls and session links when expanded', async () => {
-    responses['/approvals/pending'].push({
-      id: 'memory', requestType: 'memory_change', actionKind: 'memory_pin', createdAt,
-      availableDecisions: ['deny'], payload: {}
-    })
+  it.each([
+    [{ type: 'session', sessionId: 'parent' }, 'chat', { session: 'parent' }],
+    [{ type: 'memoryApproval', approvalId: 'memory' }, 'settings-memory', { tab: 'dreaming', approval: 'memory' }]
+  ])('opens the target and marks the notice read (%j)', async (target, name, query) => {
+    const notice = responses['/notifications'].items[0]
+    notice.target = target
+    api.post.mockResolvedValue({ data: { notification: { ...notice, readAt: createdAt }, unreadCount: 0 } })
     const router = await mountCenter()
-    const headers = root.querySelectorAll('.q-expansion-item__container > .q-item')
-    expect([...headers].every((header) => header.getAttribute('aria-expanded') === 'false')).toBe(true)
-    for (const header of headers) header.click()
-    await nextTick()
-    expect(root.querySelectorAll('.approval-card')).toHaveLength(2)
-    expect(root.textContent).toContain('Dreaming im Hintergrund')
-    const source = [...root.querySelectorAll('a')].find((link) => link.textContent.includes('Quellsession'))
-    source.click()
-    await vi.waitFor(() => expect(router.currentRoute.value.query.session).toBe('parent'))
-
-    expect(root.querySelector('.question-dock')).not.toBeNull()
-    expect(root.textContent).toContain('Automation abgeschlossen')
-    expect(useApprovalStore().pending).toHaveLength(2)
+    root.querySelector('[aria-label="Benachrichtigungen"] > .q-item').click()
+    await vi.waitFor(() => expect(useInAppNotificationStore().unreadCount).toBe(0))
+    expect([router.currentRoute.value.name, router.currentRoute.value.query]).toEqual([name, query])
+    expect(api.post).toHaveBeenCalledExactlyOnceWith('/notifications/notice/read')
   })
 
-  it.each(['/approvals/pending', '/questions/pending', '/notifications'])('refreshes healthy feeds when %s fails and allows retry', async (failedUrl) => {
-    api.get.mockImplementation(async (url) => {
-      if (url === failedUrl) throw new Error('Unavailable')
-      return { data: responses[url] }
-    })
+  it('allows retry when notifications fail to load', async () => {
+    api.get.mockRejectedValueOnce(new Error('Unavailable'))
     await mountCenter()
-    expect(useApprovalStore().loaded).toBe(failedUrl !== '/approvals/pending')
-    expect(useQuestionStore().loaded).toBe(failedUrl !== '/questions/pending')
-    expect(useInAppNotificationStore().loaded).toBe(failedUrl !== '/notifications')
-    if (failedUrl !== '/approvals/pending') expect(root.querySelector('.approval-card')).not.toBeNull()
-    if (failedUrl !== '/questions/pending') expect(root.querySelector('.question-dock')).not.toBeNull()
-    if (failedUrl !== '/notifications') expect(root.textContent).toContain('Automation abgeschlossen')
     expect(root.querySelector('.q-banner').textContent).toContain('konnten nicht')
-
-    api.get.mockImplementation(async (url) => ({ data: responses[url] }))
     button(root, 'Erneut laden').click()
-    await vi.waitFor(() => expect(api.get).toHaveBeenCalledTimes(6))
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledTimes(2))
     await nextTick()
     expect(root.querySelector('.q-banner')).toBeNull()
-    expect(root.querySelector('.approval-card')).not.toBeNull()
-    expect(root.querySelector('.question-dock')).not.toBeNull()
     expect(root.textContent).toContain('Automation abgeschlossen')
   })
 })
@@ -220,13 +192,46 @@ describe('inline memory approval edits', () => {
   })
 
   async function openEdit(dark = false) {
-    await mountCenter(dark)
+    await mountCenter(dark, true)
     const card = root.querySelector('.approval-card')
     card.querySelector('[aria-label="Vorschlag bearbeiten"]').click()
     await nextTick()
     expect(card.querySelector('form')).not.toBeNull()
     return card
   }
+
+  it('opens the linked proposal in Dreaming and allows its decision there', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    responses['/memories'] = { items: [], total: 0, offset: 0, limit: 20 }
+    responses['/memories/settings'] = {}
+    responses['/memories/dream-runs'] = { items: [] }
+    responses['/sessions'] = { items: [], nextCursor: null }
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/settings/memory', name: 'settings-memory', component: { render: () => null } }]
+    })
+    await router.push('/settings/memory?tab=dreaming&approval=memory')
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp(MemorySettingsPage)
+    app.use(pinia).use(router).use(Quasar, { components })
+    app.mount(root)
+    await vi.waitFor(() => expect(document.activeElement?.id).toBe('memory-proposal-memory'))
+    const card = root.querySelector('.approval-card')
+    card.querySelector('[aria-label="Vorschlag bearbeiten"]').click()
+    await nextTick()
+    const input = card.querySelector('textarea')
+    input.focus()
+    responses['/approvals/pending'] = [structuredClone(approval)]
+    await useApprovalStore().fetchPending()
+    await nextTick()
+    expect(document.activeElement).toBe(input)
+    button(card, 'Bearbeitung verwerfen').click()
+    await nextTick()
+    button(root.querySelector('.approval-card'), 'Genehmigen').click()
+    await vi.waitFor(() => expect(root.querySelector('.approval-card')).toBeNull())
+    expect(api.post).toHaveBeenCalledExactlyOnceWith('/approvals/memory/decisions', { decision: 'approve' })
+  })
 
   it.each([
     ['pin', { actionKind: 'memory_pin' }],
@@ -239,7 +244,7 @@ describe('inline memory approval edits', () => {
     ['missing result', { payload: { targetMemories: [{ content: 'Original' }] } }]
   ])('does not offer editing for %s', async (_, overrides) => {
     Object.assign(approval, overrides)
-    await mountCenter()
+    await mountCenter(false, true)
     expect(root.querySelector('[aria-label="Vorschlag bearbeiten"]')).toBeNull()
     expect(root.querySelector('.approval-card form')).toBeNull()
     expect(api.post).not.toHaveBeenCalled()

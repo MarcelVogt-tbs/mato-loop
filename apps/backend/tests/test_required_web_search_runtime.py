@@ -2338,7 +2338,7 @@ async def test_direct_message_supersedes_approval_and_replans(monkeypatch, tmp_p
             session_id, session_storage=storage,
         ))
     monkeypatch.setattr(PermissionPolicy, "evaluate", AsyncMock(return_value=PermissionDecision.ASK))
-    monkeypatch.setattr(mock_permissions_requests.WebPushService, "deliver_after_commit", AsyncMock())
+    monkeypatch.setattr(mock_permissions_requests.NotificationService, "create_for_approval", AsyncMock(return_value=None))
     db.scalars.return_value = SimpleNamespace(all=lambda: [])
     db.scalar.side_effect = lambda statement: True if statement.column_descriptions[0]["entity"] is UserAccount else None
     db.get.side_effect = lambda model, key: records[0] if model is Message else session

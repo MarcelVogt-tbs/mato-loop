@@ -183,10 +183,11 @@ class WebPushAutomationRunTarget(BaseModel):
     run_id: UUID = Field(alias="runId")
 
 
-class WebPushActionsTarget(BaseModel):
+class WebPushMemoryApprovalTarget(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
-    type: Literal["actions"]
+    type: Literal["memoryApproval"]
+    approval_id: UUID = Field(alias="approvalId")
 
 
 class WebPushNotificationPayload(BaseModel):
@@ -195,7 +196,7 @@ class WebPushNotificationPayload(BaseModel):
     title: Annotated[str, Field(min_length=1, max_length=240)]
     body: Annotated[str | None, Field(default=None, max_length=500)]
     tag: Annotated[str | None, Field(default=None, min_length=1, max_length=120)]
-    target: WebPushSessionTarget | WebPushAutomationRunTarget | WebPushActionsTarget | None = None
+    target: WebPushSessionTarget | WebPushAutomationRunTarget | WebPushMemoryApprovalTarget | None = None
     notification_id: UUID | None = Field(default=None, alias="notificationId")
 
 
@@ -211,7 +212,7 @@ def web_push_payload(
     title: str,
     body: str | None,
     tag: str,
-    target: WebPushSessionTarget | WebPushAutomationRunTarget | WebPushActionsTarget | None,
+    target: WebPushSessionTarget | WebPushAutomationRunTarget | WebPushMemoryApprovalTarget | None,
     notification_id: UUID | None = None,
 ) -> WebPushPayload:
     preview = " ".join(body.split())[:500] if body else None

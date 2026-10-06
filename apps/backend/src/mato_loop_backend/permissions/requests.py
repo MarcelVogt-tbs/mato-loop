@@ -17,6 +17,7 @@ from mato_loop_backend.agent.subagents import permission_origin, provenance
 from mato_loop_backend.events import run_events
 from mato_loop_backend.messaging.approvals import enqueue_approval_prompt
 from mato_loop_backend.models import AgentRun, ApprovalRequest, ChatSession, ExecutionAgent, Message
+from mato_loop_backend.notifications import NotificationService
 from mato_loop_backend.permissions.coordinator import approval_coordinator
 from mato_loop_backend.permissions.policy import (
     PermissionRequest,
@@ -27,7 +28,6 @@ from mato_loop_backend.permissions.policy import (
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.tools.contracts import PERMISSION_REASON_ARGUMENT, ToolCallSuperseded
 from mato_loop_backend.tools.display import tool_display
-from mato_loop_backend.web_push import WebPushActionsTarget, WebPushService, web_push_payload
 
 
 async def request_approval(
@@ -136,6 +136,7 @@ async def request_approval(
     db.add(approval)
     transition_run_status(run, "waiting_approval")
     await db.flush()
+    notification_id = await NotificationService.create_for_approval(db, approval)
     if run.input_message_id is not None:
         input_message = await db.get(Message, run.input_message_id)
         if (
@@ -162,15 +163,8 @@ async def request_approval(
                 "activityLabel": run_activity_label("waiting_approval"),
             },
         )
-        await WebPushService.deliver_after_commit(
-            chat_session.user_id,
-            web_push_payload(
-                title=approval.title,
-                body=permission.summary,
-                tag=f"approval:{approval.id}",
-                target=WebPushActionsTarget(type="actions"),
-            ),
-        )
+        if notification_id is not None:
+            await NotificationService.deliver_after_commit(notification_id)
         decision = await asyncio.shield(waiter)
     except asyncio.CancelledError:
         await db.rollback()

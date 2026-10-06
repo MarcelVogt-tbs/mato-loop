@@ -260,6 +260,21 @@
       </q-tab-panel>
 
       <q-tab-panel name="dreaming" class="q-pa-none">
+        <section aria-labelledby="dreaming-proposals" class="q-mb-lg">
+          <h3 id="dreaming-proposals" class="text-subtitle1 text-weight-medium q-mt-none q-mb-sm">Offene Vorschläge</h3>
+          <q-skeleton v-if="approvals.loading && !approvals.loaded" type="text" />
+          <q-banner v-if="approvals.loadFailed" rounded class="app-surface-tonal">
+            Vorschläge konnten nicht geladen werden.
+            <template #action><q-btn flat no-caps label="Erneut laden" @click="refreshProposals" /></template>
+          </q-banner>
+          <p v-else-if="approvals.loaded && !memoryProposals.length" class="app-muted">Keine offenen Vorschläge.</p>
+          <q-banner v-if="route.query.approval && approvals.loaded && !approvals.loadFailed && !memoryProposals.some((item) => item.id === route.query.approval)" rounded class="app-surface-tonal q-mb-sm">
+            Dieser Vorschlag ist nicht mehr offen.
+          </q-banner>
+          <div v-for="proposal in memoryProposals" :id="`memory-proposal-${proposal.id}`" :key="proposal.id" tabindex="-1" class="q-mb-sm" :class="{ 'app-surface-tonal rounded-borders q-pa-sm': proposal.id === route.query.approval }">
+            <ApprovalCard :approval="proposal" :show-draft-action="false" />
+          </div>
+        </section>
         <div class="dreaming-grid">
           <q-card flat class="app-surface dreaming-settings-card">
             <q-card-section class="dreaming-settings-header row items-start no-wrap q-gutter-md">
@@ -540,9 +555,12 @@
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
+import { useRoute, useRouter } from 'vue-router'
+import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { useChatStore } from 'stores/chat'
+import { useApprovalStore } from 'stores/approvals'
 import { useMemoryStore } from 'stores/memories'
 import { apiErrorMessage } from 'src/utils/api-errors'
 
@@ -552,7 +570,14 @@ const $q = useQuasar()
 const { confirm } = useConfirm()
 const chat = useChatStore()
 const memories = useMemoryStore()
-const section = ref('memories')
+const approvals = useApprovalStore()
+const route = useRoute()
+const router = useRouter()
+const section = computed({
+  get: () => route.query.tab === 'dreaming' ? 'dreaming' : 'memories',
+  set: (tab) => router.replace({ query: { ...route.query, tab, approval: undefined } })
+})
+const memoryProposals = computed(() => approvals.pending.filter((item) => item.requestType === 'memory_change'))
 const page = ref(1)
 const pageSize = ref(20)
 const memoryDialogOpen = ref(false)
@@ -957,7 +982,18 @@ watch(section, (value, previous) => {
   }
 })
 
+function refreshProposals() { return approvals.fetchPending().catch(() => {}) }
+
+watch([section, () => route.query.approval, () => memoryProposals.value.some((item) => item.id === route.query.approval)], async ([tab, id, present]) => {
+  if (tab !== 'dreaming' || !present) return
+  await nextTick()
+  const proposal = document.getElementById(`memory-proposal-${id}`)
+  proposal?.scrollIntoView({ block: 'start' })
+  proposal?.focus({ preventScroll: true })
+}, { immediate: true, flush: 'post' })
+
 onMounted(() => {
+  void refreshProposals()
   void loadMemories(0)
   void refreshDreamRuns()
   void chat.fetchSessionCatalog().catch(() => {})

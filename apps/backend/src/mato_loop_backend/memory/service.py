@@ -29,6 +29,7 @@ from mato_loop_backend.models import (
     MemorySourceType,
     Message,
 )
+from mato_loop_backend.notifications import NotificationService
 from mato_loop_backend.settings import (
     MemorySettings,
     SettingsStore,
@@ -994,6 +995,7 @@ class MemoryService:
         )
         db.add(approval)
         await db.flush()
+        await NotificationService.create_for_approval(db, approval)
         if created is not None:
             created.append(approval)
         return approval

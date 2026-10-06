@@ -371,7 +371,7 @@ class AutomationService:
         if message is not None:
             from mato_loop_backend.notifications import NotificationService
 
-            await NotificationService.deliver_message_after_commit(db, message.id)
+            await NotificationService.deliver_message_after_commit(message.id)
 
     @staticmethod
     async def process_next(db: AsyncSession) -> bool:

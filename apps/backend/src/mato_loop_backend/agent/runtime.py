@@ -893,7 +893,7 @@ class AgentRuntime:
                             **run_timing_payload(run),
                         },
                     )
-                    await NotificationService.deliver_message_after_commit(db, run.result_message_id)
+                    await NotificationService.deliver_message_after_commit(run.result_message_id)
                 except asyncio.CancelledError:
                     if run_completed:
                         raise
@@ -941,7 +941,7 @@ class AgentRuntime:
                         await cls._persist_run_duration(db, cancelled_run)
                         await db.commit()
                         if error_message is not None:
-                            await NotificationService.deliver_message_after_commit(db, error_message.id)
+                            await NotificationService.deliver_message_after_commit(error_message.id)
                         if diagnostics_active:
                             schedule_diagnostic_event(
                                 diagnostic_owner,
@@ -1110,7 +1110,7 @@ class AgentRuntime:
                         },
                     )
                     if failure_committed and failed_run is not None:
-                        await NotificationService.deliver_message_after_commit(db, failed_run.result_message_id)
+                        await NotificationService.deliver_message_after_commit(failed_run.result_message_id)
         finally:
             cls._cancellable_runs.discard(run_id)
             cls._user_cancelled_runs.discard(run_id)

@@ -12,7 +12,12 @@
 }
 
 .app-shell--floating-chat-controls .chat-page__scroll-content {
-  padding-top: calc(60px + env(safe-area-inset-top));
+  --chat-content-top-inset: 60px;
+  padding-top: calc(var(--chat-content-top-inset) + env(safe-area-inset-top));
+}
+
+.app-shell--floating-chat-controls .chat-page__scroll-content--mobile-home {
+  --chat-content-top-inset: calc(var(--app-floating-control-inset) + (var(--app-floating-control-size) - 36px) / 2);
 }
 
 .chat-workspace-splitter,

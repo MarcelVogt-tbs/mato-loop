@@ -189,7 +189,9 @@ async def test_agent_question_push_is_sent_after_commit(monkeypatch) -> None:
     db.flush.side_effect = flush
     monkeypatch.setattr(run_events, "publish", publish)
     push = AsyncMock(side_effect=deliver)
-    monkeypatch.setattr(mock_agent_questions.WebPushService, "deliver_after_commit", push)
+    notification_id = uuid4()
+    monkeypatch.setattr(mock_agent_questions.NotificationService, "create_for_question", AsyncMock(return_value=notification_id))
+    monkeypatch.setattr(mock_agent_questions.NotificationService, "deliver_after_commit", push)
     task = asyncio.create_task(
         AgentRuntime._request_question(
             db,
@@ -204,10 +206,7 @@ async def test_agent_question_push_is_sent_after_commit(monkeypatch) -> None:
     assert AgentRuntime.claim_question_resolution(request_id) is True
     assert AgentRuntime.resolve_question(request_id, {"format": ["Kurz"]}) is True
     assert await task == {"format": ["Kurz"]}
-    user_id, payload = push.await_args.args
-    assert user_id == session.user_id
-    assert payload.notification.body == "Welches Format?"
-    assert payload.notification.target.session_id == session.id
+    push.assert_awaited_once_with(notification_id)
 
 
 async def test_answer_is_persisted_before_agent_resumes(monkeypatch) -> None:

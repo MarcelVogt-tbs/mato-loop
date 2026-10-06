@@ -6,9 +6,8 @@
           <div class="col">
             <h2 id="notification-app-title" class="text-subtitle1 text-weight-bold q-my-none">
               Benachrichtigungen
-              <q-badge v-if="attentionCount + notifications.unreadCount" rounded color="primary" :label="attentionCount + notifications.unreadCount" />
+              <q-badge v-if="notifications.unreadCount" rounded color="primary" :label="notifications.unreadCount" />
             </h2>
-            <div class="text-caption app-muted">Antworten, Hinweise und offene Aufgaben</div>
           </div>
           <q-btn
             flat
@@ -28,7 +27,7 @@
             dense
             icon="refresh"
             aria-label="Benachrichtigungen aktualisieren"
-            :loading="loading"
+            :loading="refreshing"
             @click="refresh"
           >
             <q-tooltip>Benachrichtigungen aktualisieren</q-tooltip>
@@ -60,54 +59,27 @@
             />
           </q-item-section>
         </q-item>
-        <div v-if="(notifications.loading && !notifications.loaded) || (approvals.loading && !approvals.loaded) || (questions.loading && !questions.loaded)">
+        <div v-if="notifications.loading && !notifications.loaded">
           <div v-for="index in 3" :key="index" class="row items-center no-wrap q-gutter-md q-py-sm">
             <q-skeleton type="QAvatar" />
             <div class="col"><q-skeleton type="text" width="45%" /><q-skeleton type="text" width="80%" /></div>
           </div>
         </div>
-        <q-banner v-if="approvals.loadFailed || questions.loadFailed" rounded class="bg-negative text-white q-mb-md">
-          Freigaben oder Rückfragen konnten nicht vollständig geladen werden.
-          <template #action><q-btn flat no-caps color="white" label="Erneut laden" @click="refresh" /></template>
-        </q-banner>
         <q-banner v-if="notifications.loadFailed" class="bg-negative text-white q-mb-md" rounded>
           Die Benachrichtigungen konnten nicht geladen werden.
           <template #action><q-btn flat no-caps color="white" label="Erneut laden" @click="refresh" /></template>
         </q-banner>
         <AppStateMessage
-          v-if="approvals.loaded && questions.loaded && notifications.loaded && !loading && !approvals.loadFailed && !questions.loadFailed && !notifications.loadFailed && !entries.length"
+          v-if="notifications.loaded && !notifications.loadFailed && !notifications.items.length"
           class="q-pa-xl"
           icon="notifications_none"
           title="Keine Benachrichtigungen"
           description="Neue Antworten, Hinweise, Freigaben und Rückfragen erscheinen hier."
         />
-        <q-list v-if="entries.length" bordered separator class="rounded-borders app-surface" aria-label="Benachrichtigungen">
-          <template v-for="{ kind, item: notification } in entries" :key="`${kind}:${notification.id}`">
-            <q-expansion-item v-if="kind !== 'notification'" expand-separator>
-              <template #header>
-                <q-item-section avatar>
-                  <q-avatar color="warning" text-color="dark" :icon="kind === 'question' ? 'help_outline' : 'verified_user'" />
-                </q-item-section>
-                <q-item-section>
-                  <q-item-label class="text-weight-bold">{{ kind === 'question' ? 'Rückfrage vom Agenten' : notification.title || 'Freigabe erforderlich' }}</q-item-label>
-                  <q-item-label caption>{{ kind === 'question' ? 'Antwort erforderlich' : 'Freigabe erforderlich' }}</q-item-label>
-                  <q-item-label caption>{{ kind === 'question' ? notification.questions?.[0]?.question : notification.summary }}</q-item-label>
-                  <q-item-label caption class="q-mt-xs">
-                    <time :datetime="notification.createdAt" :title="formatAbsoluteDateTime(notification.createdAt)">{{ formatRelativeDateTime(notification.createdAt, timestampNow) }}</time>
-                  </q-item-label>
-                </q-item-section>
-              </template>
-              <div class="q-pa-sm">
-                <div class="row items-center q-gutter-sm q-mb-sm">
-                  <q-btn v-if="notification.sessionId" flat dense no-caps color="primary" :label="notification.sourceSession?.title || sessionTitle(notification.sessionId)" :to="{ name: 'chat', query: { session: notification.sessionId } }" />
-                  <span v-else-if="kind === 'approval'" class="text-weight-medium">Dreaming im Hintergrund</span>
-                </div>
-                <QuestionDock v-if="kind === 'question'" :request="notification" :show-stop="false" class="full-width" />
-                <ApprovalCard v-else :approval="notification" :show-draft-action="false" />
-              </div>
-            </q-expansion-item>
+        <q-list v-if="notifications.items.length" bordered separator class="rounded-borders app-surface" aria-label="Benachrichtigungen">
             <q-item
-              v-else
+              v-for="notification in notifications.items"
+              :key="notification.id"
               :clickable="!notification.readAt || Boolean(notificationTargetRoute(notification.target))"
               :disable="Boolean(notifications.markingId || notifications.markingAll || notifications.deletingId)"
               :class="['relative-position', { 'app-surface-tonal': !notification.readAt }]"
@@ -135,7 +107,6 @@
               </q-item-section>
               <q-inner-loading :showing="notifications.markingId === notification.id" />
             </q-item>
-          </template>
         </q-list>
         <div v-if="notifications.nextCursor || notifications.loadMoreFailed" class="q-pt-md">
           <q-banner v-if="notifications.loadMoreFailed" rounded class="app-surface-tonal q-mb-sm">Weitere Hinweise konnten nicht geladen werden.</q-banner>
@@ -150,36 +121,19 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { isNavigationFailure, NavigationFailureType, useRouter } from 'vue-router'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
-import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
-import QuestionDock from 'src/features/questions/QuestionDock.vue'
-import { useApprovalStore } from 'stores/approvals'
 import { useAuthStore } from 'stores/auth'
-import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
-import { useQuestionStore } from 'stores/questions'
 import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-time'
 import { notificationTargetRoute } from 'src/utils/notification-target'
-import { useConfirm } from 'src/composables/confirm'
 
 defineOptions({ name: 'NotificationCenterApp' })
 
 const router = useRouter()
-const { confirm } = useConfirm()
-const approvals = useApprovalStore()
 const auth = useAuthStore()
-const chat = useChatStore()
 const controlCenter = useControlCenterStore()
 const notifications = useInAppNotificationStore()
-const questions = useQuestionStore()
-const attentionCount = computed(() => approvals.pending.length + questions.pending.length)
-const entries = computed(() => [
-  ...questions.pending.map((item) => ({ kind: 'question', item })),
-  ...approvals.pending.map((item) => ({ kind: 'approval', item })),
-  ...notifications.items.map((item) => ({ kind: 'notification', item }))
-].sort((left, right) => Number(left.kind === 'notification') - Number(right.kind === 'notification')
-  || new Date(right.item.createdAt) - new Date(left.item.createdAt)))
-const loading = computed(() => approvals.loading || questions.loading || notifications.loading)
+const refreshing = ref(false)
 const timestampNow = ref(new Date())
 const pushToggleDisabled = computed(() => (
   !notifications.pushSupported
@@ -207,10 +161,6 @@ const pushStatus = computed(() => {
 })
 let timestampTimer = null
 
-function sessionTitle(sessionId) {
-  return chat.cachedSessions.find((session) => session.id === sessionId)?.title || 'Agent-Auftrag'
-}
-
 async function setPushEnabled(enabled) {
   try {
     if (enabled) await notifications.enablePush()
@@ -221,8 +171,11 @@ async function setPushEnabled(enabled) {
 }
 
 async function refresh() {
+  if (refreshing.value) return
+  refreshing.value = true
   timestampNow.value = new Date()
-  await Promise.allSettled([approvals.fetchPending(), questions.fetchPending(), notifications.fetchLatest()])
+  await notifications.fetchLatest().catch(() => {})
+  refreshing.value = false
 }
 
 async function openNotification(notification) {
@@ -233,15 +186,14 @@ async function openNotification(notification) {
     if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
   }
   try {
+    if (target && controlCenter.open) await controlCenter.setOpen(false)
     if (!notification.readAt) await notifications.markRead(notification.id)
-    if (target?.name === 'chat' && controlCenter.open) await controlCenter.setOpen(false)
   } catch {
     // Navigation already succeeded; the unread notification remains available for retry.
   }
 }
 
 async function deleteNotification(notification) {
-  if (!await confirm('Soll diese Benachrichtigung gelöscht werden?', 'Benachrichtigung löschen?', { okLabel: 'Löschen' })) return
   try {
     await notifications.remove(notification.id)
   } catch {
@@ -271,10 +223,3 @@ onMounted(() => {
 })
 onBeforeUnmount(() => window.clearInterval(timestampTimer))
 </script>
-
-<style scoped>
-.notification-center-app :deep(.question-dock),
-.notification-center-app :deep(.question-dock__body) {
-  max-height: none;
-}
-</style>

@@ -49,6 +49,9 @@ class Notification(Base):
         nullable=True,
         index=True,
     )
+    approval_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("approval_requests.id", ondelete="SET NULL"), nullable=True
+    )
     kind: Mapped[str] = mapped_column(String(80), nullable=False)
     title: Mapped[str] = mapped_column(String(240), nullable=False)
     body: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -1,4 +1,7 @@
 export function notificationTargetRoute(target) {
+  if (target?.type === 'memoryApproval' && target.approvalId) {
+    return { name: 'settings-memory', query: { tab: 'dreaming', approval: target.approvalId } }
+  }
   if (target?.type === 'session' && target.sessionId) {
     return { name: 'chat', query: { session: target.sessionId } }
   }

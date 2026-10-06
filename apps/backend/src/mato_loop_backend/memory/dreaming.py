@@ -43,8 +43,10 @@ from mato_loop_backend.models import (
     MemoryMode,
     MemoryRecord,
     Message,
+    Notification,
     UserAccount,
 )
+from mato_loop_backend.notifications import NotificationService
 from mato_loop_backend.providers.base import ProviderError, ProviderResult, ToolCall
 from mato_loop_backend.providers.output_budget import output_token_limit, raw_input_budget
 from mato_loop_backend.providers.reasoning import reasoning_profile
@@ -69,11 +71,6 @@ from mato_loop_backend.settings.models import (
     ModelConfig,
 )
 from mato_loop_backend.user_profile import user_profile_content_hashes
-from mato_loop_backend.web_push import (
-    WebPushActionsTarget,
-    WebPushService,
-    web_push_payload,
-)
 
 logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3
@@ -1791,21 +1788,14 @@ class DreamingService:
         run.removed_memory_count = removed
         run.completed_at = datetime.now(UTC)
         run.next_attempt_at = None
+        notification_ids = []
+        if created_approvals:
+            notification_ids = list(await db.scalars(select(Notification.id).where(
+                Notification.approval_id.in_([approval.id for approval in created_approvals]),
+            )))
         await db.commit()
-        await asyncio.gather(
-            *(
-                WebPushService.deliver_after_commit(
-                    session.user_id,
-                    web_push_payload(
-                        title=approval.title,
-                        body=approval.summary,
-                        tag=f"approval:{approval.id}",
-                        target=WebPushActionsTarget(type="actions"),
-                    ),
-                )
-                for approval in created_approvals
-            )
-        )
+        for notification_id in notification_ids:
+            await NotificationService.deliver_after_commit(notification_id)
 
     @staticmethod
     async def _block(db: AsyncSession, run: MemoryDreamRun, code: str) -> None:
