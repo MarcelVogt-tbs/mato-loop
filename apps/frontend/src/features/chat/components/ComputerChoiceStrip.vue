@@ -1,6 +1,6 @@
 <template>
   <div v-if="computers.length || agents.loadFailed">
-    <div class="row items-center q-gutter-xs" role="group" aria-label="Computer auswählen">
+    <div class="row no-wrap items-center q-gutter-xs scroll" role="group" aria-label="Computer auswählen">
       <q-btn
         v-for="computer in computers" :key="computer.id"
         rounded dense unelevated no-caps no-wrap size="sm"
