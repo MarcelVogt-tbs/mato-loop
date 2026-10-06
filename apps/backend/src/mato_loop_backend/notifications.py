@@ -30,6 +30,9 @@ from mato_loop_backend.web_push import (
     web_push_payload,
 )
 
+SESSION_REQUEST_KINDS = ("approval.requested", "question.requested")
+READ_ONCE_KINDS = ("session.response", *SESSION_REQUEST_KINDS)
+
 
 class NotificationDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -84,6 +87,8 @@ class NotificationService:
             )
             if owned_session is None:
                 raise NotificationError("notification.targetNotFound")
+            if draft.kind in SESSION_REQUEST_KINDS and session_is_present(draft.user_id, draft.session_id):
+                return None
         if draft.automation_run_id is not None:
             owned_run = await db.scalar(
                 select(AutomationRun.id)
@@ -198,9 +203,13 @@ class NotificationService:
                 Notification.kind == "session.response", Notification.created_at <= through,
             ))
         seen_at = datetime.now(UTC)
+        await db.execute(delete(Notification).where(
+            Notification.user_id == user_id, Notification.session_id == session_id,
+            Notification.kind.in_(SESSION_REQUEST_KINDS), Notification.created_at <= seen_at,
+        ))
         await db.execute(update(Notification).where(
             Notification.user_id == user_id, Notification.session_id == session_id,
-            Notification.kind != "session.response", Notification.read_at.is_(None),
+            Notification.kind.not_in(READ_ONCE_KINDS), Notification.read_at.is_(None),
             Notification.created_at <= seen_at,
         ).values(read_at=seen_at))
 
@@ -280,7 +289,7 @@ class NotificationService:
         )
         if item is None:
             return None
-        if item.kind == "session.response":
+        if item.kind in READ_ONCE_KINDS:
             await db.delete(item)
             await db.flush()
             return None
@@ -300,6 +309,6 @@ class NotificationService:
         )
         await db.execute(delete(Notification).where(
             Notification.user_id == user_id,
-            Notification.kind == "session.response", Notification.read_at.is_not(None),
+            Notification.kind.in_(READ_ONCE_KINDS), Notification.read_at.is_not(None),
         ))
         return int(result.rowcount or 0)

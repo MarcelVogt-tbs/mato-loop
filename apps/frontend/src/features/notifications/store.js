@@ -115,7 +115,7 @@ export const useInAppNotificationStore = defineStore('in-app-notifications', {
     async markRead(id) {
       if (this.markingId || this.markingAll || this.deletingId) return
       const current = this.items.find((item) => item.id === id)
-      if (current?.readAt && current.kind !== 'session.response') return current
+      if (current?.readAt && !['session.response', 'approval.requested', 'question.requested'].includes(current.kind)) return current
       this.markingId = id
       try {
         const { data } = await api.post(`/notifications/${id}/read`)

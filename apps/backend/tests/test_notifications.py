@@ -283,8 +283,12 @@ async def test_mark_all_read_commits_and_returns_authoritative_count(monkeypatch
     db.commit.assert_awaited_once()
 
 
-@pytest.mark.parametrize("mode", ["session", "individual", "all", "migration"])
-async def test_response_notices_are_deleted_on_read_without_losing_other_notices(request, mode) -> None:
+@pytest.mark.parametrize("mode,kind", [
+    (mode, kind)
+    for mode in ["session", "individual", "all"]
+    for kind in ["session.response", "approval.requested", "question.requested"]
+] + [("migration", "session.response")])
+async def test_session_notices_are_deleted_on_read_without_losing_other_notices(request, mode, kind) -> None:
     if not request.config.getoption("--memory-db"):
         pytest.skip("requires the migrated development PostgreSQL database")
     engine = create_async_engine(get_runtime_config().database_url, poolclass=NullPool)
@@ -303,7 +307,8 @@ async def test_response_notices_are_deleted_on_read_without_losing_other_notices
                 items = [_notification(owner.id, created_at=through + timedelta(seconds=offset))
                          for owner, offset in [(user, 0), (user, 1), (user, 0), (other, 0), (user, -1), (user, 0.5)]]
                 for item in [items[0], items[1], items[3], items[4]]:
-                    item.kind = "session.response"
+                    item.kind = kind
+                items[2].kind = "memory.approval"
                 items[5].kind = "agent.notice"
                 for item in [*items[:3], *items[4:]]:
                     item.session_id = session.id
@@ -314,7 +319,9 @@ async def test_response_notices_are_deleted_on_read_without_losing_other_notices
                 await db.flush()
                 ids = [item.id for item in items]
                 if mode == "session":
-                    await NotificationService.mark_session_read(db, user.id, session.id, through)
+                    await NotificationService.mark_session_read(
+                        db, user.id, session.id, through if kind == "session.response" else None,
+                    )
                 elif mode == "individual":
                     await mark_notification_read(items[0].id, user, db)
                     result = await mark_notification_read(items[0].id, user, db)
@@ -337,7 +344,8 @@ async def test_response_notices_are_deleted_on_read_without_losing_other_notices
                 assert {(item.id, item.read_at is not None) for item in remaining} == {
                     (ids[2], mode != "individual"), (ids[3], False),
                     (ids[5], mode in {"session", "all"}),
-                    *([] if mode == "all" else [(ids[1], False)]),
+                    *([(ids[1], False)] if mode in {"individual", "migration"}
+                      or (mode == "session" and kind == "session.response") else []),
                     *([(ids[4], False)] if mode == "individual" else []),
                 }
     finally:
@@ -411,6 +419,18 @@ async def test_response_notification_is_skipped_when_seen(monkeypatch, already_r
         id=uuid4(), session_id=session.id, role="assistant", content="Done", created_at=now,
     ))
     create.assert_not_awaited()
+
+
+@pytest.mark.parametrize("kind", ["approval.requested", "question.requested", "memory.approval", "agent.notice"])
+async def test_session_request_notices_are_skipped_while_present(monkeypatch, kind) -> None:
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = uuid4()
+    monkeypatch.setattr("mato_loop_backend.notifications.session_is_present", lambda *_: True)
+    result = await NotificationService.create(db, NotificationDraft(
+        user_id=uuid4(), session_id=uuid4(), kind=kind,
+        title="Bitte prüfen", deduplication_key="request:1",
+    ))
+    assert (result is None) == (kind in {"approval.requested", "question.requested"})
 
 
 async def test_presence_rejects_another_owners_session() -> None:

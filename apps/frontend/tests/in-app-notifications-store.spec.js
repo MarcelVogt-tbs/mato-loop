@@ -148,9 +148,9 @@ describe('in-app notification store', () => {
     expect(store.unreadCount).toBe(1)
   })
 
-  it('removes an acknowledged response notice when the server returns no record', async () => {
+  it.each(['session.response', 'approval.requested', 'question.requested'])('removes an acknowledged %s notice when the server returns no record', async (kind) => {
     const store = useInAppNotificationStore()
-    store.items = [{ id: 'response', kind: 'session.response', readAt: null }]
+    store.items = [{ id: 'response', kind, readAt: null }]
     api.post.mockResolvedValue({ data: { notification: null, unreadCount: 0 } })
     await store.markRead('response')
     expect(store.items).toEqual([])
