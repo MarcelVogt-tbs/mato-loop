@@ -22,12 +22,26 @@ from mato_loop_backend.tools.contracts import ToolDefinition, ToolResult
 
 
 class PermissionTarget(ToolArguments):
-    tool: str = Field(min_length=1, max_length=200)
-    arguments: dict[str, Any]
+    tool: str = Field(
+        min_length=1, max_length=200,
+        description="Exact offered tool name, such as shell_run. Do not add a functions. prefix.",
+    )
+    arguments: dict[str, Any] = Field(
+        description=(
+            "Arguments matching the named tool's schema, as a JSON object, not a JSON string. "
+            "If the target tool offers _reason, its optional explanation belongs inside this object."
+        ),
+    )
 
 
 class RequestSessionPermissionsArguments(ToolArguments):
-    requests: list[PermissionTarget] = Field(min_length=1, max_length=8)
+    requests: list[PermissionTarget] = Field(
+        min_length=1, max_length=8,
+        description=(
+            "Proposed tool calls. Each item contains only tool and arguments. "
+            "An optional explanation for the whole preparation belongs in _reason alongside requests."
+        ),
+    )
 
 
 async def builtin_permissions(arguments, context: ToolContext, name: str):
@@ -106,10 +120,14 @@ async def request_session_permissions(arguments: RequestSessionPermissionsArgume
 REQUEST_SESSION_PERMISSIONS = ToolDefinition(
     "request_session_permissions",
     "Prepare session permissions for proposed tool calls without executing them. Pass tool names and their "
-    "normal arguments. Supports file access, isolated shell inspection without environment overrides, "
-    "session reading/search and integrations with declared permissions. "
+    "normal arguments. Supports non-elevated file access in the current session or workspace, "
+    "shell inspection without elevation or environment overrides, session reading/search/browsing, "
+    "and integrations with declared permissions. Automation management, notify and silence are not supported targets. "
     "Already allowed access needs no prompt. Disabled actions remain blocked. Action-specific or one-time-only "
-    "approvals must be requested during actual execution. Use for known required or recommended automation access.",
+    "approvals must be requested during actual execution. Use for known required or recommended automation access. "
+    "Wait for a result with permissionsReady=true before treating the requested access as prepared. "
+    'Example: {"requests":[{"tool":"shell_run","arguments":{"command":"pwd",'
+    '"_reason":"Read the working directory."}}],"_reason":"Prepare access for the planned task."}',
     RequestSessionPermissionsArguments, request_session_permissions,
     label="Session-Freigaben anfragen", icon="verified_user",
     actions=(ToolAction("permissions.request", "Freigaben anfragen", ToolExecutionPolicy.AUTO,

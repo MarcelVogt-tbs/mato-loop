@@ -157,7 +157,7 @@ def check():
     print(f"Offline checks passed; {len(TOOLS)} tools, exactly one prompt replacement.", flush=True)
 
 
-async def complete_request(row, messages, tools, provider, model, effort, remaining, save):
+async def complete_request(row, messages, tools, provider, model, effort, remaining, save, check_result=structural_checks):
     began = time.monotonic()
     try:
         async with asyncio.timeout(min(90, remaining)), AsyncSessionFactory() as db:
@@ -169,7 +169,7 @@ async def complete_request(row, messages, tools, provider, model, effort, remain
         row.update(status="completed", content=result.content,
                    toolCalls=[asdict(call) for call in result.tool_calls], usage=result.usage,
                    finishReason=result.finish_reason, outputBudget=result.provider_data.get("output_budget"))
-        row["failures"] = structural_checks(row["scenario"], result.tool_calls, result.content)
+        row["failures"] = check_result(row["scenario"], result.tool_calls, result.content)
     except TimeoutError:
         row["status"] = "timeout"
     except Exception as exc:
