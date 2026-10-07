@@ -127,7 +127,7 @@
             <div v-if="message.role === 'user' || (message.showAgentLabel && !message.workHistory)" class="chat-message__label row items-center wrap q-gutter-x-sm">
               <span>{{ message.role === 'user' ? userMessageLabel(message) : identity.displayName }}</span>
             </div>
-            <template v-if="message.kind === 'runtime_error' && message.error">
+            <template v-if="message.state === 'error' && message.error">
               <q-banner rounded class="chat-runtime-error app-surface-tonal" role="alert">
                 <template #avatar>
                   <q-icon name="error_outline" color="negative" />
@@ -250,9 +250,9 @@
               <span
                 v-if="showMessageModel(message)"
                 class="chat-message__meta-model"
-                :title="message.modelName"
+                :title="message.origin === 'host' ? 'Host' : message.modelName"
               >
-                {{ message.modelName }}
+                {{ message.origin === 'host' ? 'Host' : message.modelName }}
               </span>
               <span
                 v-if="message.createdAt && showMessageModel(message)"
@@ -296,11 +296,10 @@
                 dense
                 size="sm"
                 icon="refresh"
-                color="negative"
                 class="chat-message__meta-action chat-message__meta-action--retry"
                 :loading="messageActionId === message.id"
                 :disable="messageActionId !== null && messageActionId !== message.id"
-                aria-label="Fehlgeschlagene Antwort erneut versuchen"
+                aria-label="Anfrage erneut starten"
                 @click.stop="retryMessage(message)"
               >
                 <q-tooltip>Erneut versuchen</q-tooltip>
@@ -853,6 +852,7 @@ function isMessageTrustLevel(value) {
 }
 
 function showMessageModel(message) {
+  if (message.origin === 'host') return true
   return message.role === 'assistant'
     && Boolean(message.hasAssistantContent || message.content)
     && Boolean(message.modelName)

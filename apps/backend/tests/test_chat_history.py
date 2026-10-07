@@ -130,7 +130,8 @@ async def test_undo_of_first_user_message_preserves_manual_title(monkeypatch) ->
     assert session.title_generation_status == "skipped"
 
 
-async def test_retry_keeps_user_message_and_restarts_original_failed_run(monkeypatch) -> None:
+@pytest.mark.parametrize("before_execution", [False, True])
+async def test_retry_keeps_user_message_and_restarts_original_failed_run(monkeypatch, before_execution) -> None:
     user = UserAccount(id=uuid4(), username="test", password_hash="hash")
     session = ChatSession(id=uuid4(), user_id=user.id, title="Test")
     failed_run = AgentRun(id=uuid4(), session_id=session.id, status="failed")
@@ -142,6 +143,7 @@ async def test_retry_keeps_user_message_and_restarts_original_failed_run(monkeyp
         content="",
         error_code="provider.requestFailed",
         error_run_id=failed_run.id,
+        provider_data={"_matoloop": {"beforeExecution": before_execution}},
     )
     messages.append(error)
     replacement_run = AgentRun(id=uuid4(), session_id=session.id, status="queued")
@@ -162,7 +164,7 @@ async def test_retry_keeps_user_message_and_restarts_original_failed_run(monkeyp
 
     assert result.run is replacement_run
     remove_suffix.assert_awaited_once_with(db, messages, 2, include_boundary=False)
-    retry.assert_awaited_once_with(db, session, failed_run)
+    retry.assert_awaited_once_with(db, session, failed_run, before_execution=before_execution)
 
 
 async def test_retry_rejects_a_non_latest_error(monkeypatch) -> None:

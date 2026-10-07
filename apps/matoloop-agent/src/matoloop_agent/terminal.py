@@ -11,7 +11,6 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 from uuid import uuid4
 
 try:
@@ -38,9 +37,6 @@ MAX_TERMINALS = 8
 MAX_BUFFER_BYTES = 1024 * 1024
 StreamCallback = Callable[[str, str], Awaitable[None]]
 
-if TYPE_CHECKING:
-    from .shared_terminal import SharedTerminal
-
 
 @dataclass
 class _Terminal:
@@ -56,7 +52,6 @@ class _Terminal:
     wait_task: asyncio.Task | None = None
     owner_task: asyncio.Task | None = None
     read_waiter: asyncio.Future | None = None
-    shared: SharedTerminal | None = None
 
 
 class TerminalManager:
@@ -93,7 +88,6 @@ class TerminalManager:
         rows: int,
         columns: int,
         environment: dict[str, str],
-        pass_fds: tuple[int, ...] = (),
     ) -> _Terminal:
         if not PTY_AVAILABLE:
             raise AgentError("operation.unsupported", "POSIX terminal support is unavailable")
@@ -106,12 +100,7 @@ class TerminalManager:
                     os.fchdir(cwd_fd)
                     os.close(cwd_fd)
                     signal.signal(signal.SIGPIPE, signal.SIG_DFL)
-                    start = 3
-                    for fd in sorted(pass_fds):
-                        os.closerange(start, fd)
-                        os.set_inheritable(fd, True)
-                        start = fd + 1
-                    os.closerange(start, os.sysconf("SC_OPEN_MAX"))
+                    os.closerange(3, os.sysconf("SC_OPEN_MAX"))
                     os.execve(argv[0], argv, environment)
                 except BaseException:
                     os._exit(127)
@@ -184,24 +173,18 @@ class TerminalManager:
         try:
             while True:
                 async with entry.condition:
-                    if entry.shared is None:
-                        await entry.condition.wait_for(
-                            lambda: len(entry.buffer) < MAX_BUFFER_BYTES or entry.eof
-                        )
+                    await entry.condition.wait_for(
+                        lambda: len(entry.buffer) < MAX_BUFFER_BYTES or entry.eof
+                    )
                     if entry.eof:
                         return
-                    available = (
-                        MAX_BUFFER_BYTES if entry.shared else MAX_BUFFER_BYTES - len(entry.buffer)
-                    )
+                    available = MAX_BUFFER_BYTES - len(entry.buffer)
                 chunk = await self._read_fd(entry, min(16 * 1024, available))
                 async with entry.condition:
                     if not chunk:
                         entry.eof = True
                     else:
                         entry.buffer.extend(chunk)
-                        if entry.shared is not None:
-                            del entry.buffer[:-MAX_BUFFER_BYTES]
-                            entry.shared.output(chunk)
                     entry.condition.notify_all()
                 if not chunk:
                     return
@@ -224,8 +207,6 @@ class TerminalManager:
             os.close(fd)
 
     async def _terminate(self, entry: _Terminal, *, close_fd: bool = True) -> None:
-        if entry.shared is not None:
-            await entry.shared.shutdown()
         self._signal(entry.pid, signal.SIGTERM)
         if entry.wait_task is not None and not entry.wait_task.done():
             try:
@@ -261,14 +242,14 @@ class TerminalManager:
             raise AgentError("terminal.notFound", "Terminal is unavailable")
         return entry
 
-    async def open(self, rows: int, columns: int) -> dict:
+    async def open(self, rows: int, columns: int, *, terminal_id: str | None = None) -> dict:
         if not self.available:
             raise AgentError("operation.unsupported", "Personal terminal shell is unavailable")
         if len(self._terminals) + len(self._runs) >= MAX_TERMINALS:
             raise AgentError("terminal.limitReached", "Too many terminals are open")
-        terminal_id = str(uuid4())
-        while terminal_id in self._terminals or terminal_id in self._runs:
-            terminal_id = str(uuid4())
+        terminal_id = terminal_id or str(uuid4())
+        if terminal_id in self._terminals or terminal_id in self._runs:
+            raise AgentError("terminal.exists", "Terminal identifier is already in use")
         entry = self._spawn(
             terminal_id,
             [os.fspath(self.shell), "-i"],
@@ -310,12 +291,6 @@ class TerminalManager:
         data = base64.b64decode(encoded, validate=True)
         if len(data) > 65_536:
             raise AgentError("request.invalid", "Terminal input is too large")
-        if entry.shared is not None:
-            async with entry.shared.lock:
-                if entry.shared.state in {"agent", "running"}:
-                    raise AgentError("terminal.busy", "Terminal is owned by the agent")
-                entry.shared.prompt = None
-                return await self._write(entry, data)
         return await self._write(entry, data)
 
     async def _write(self, entry: _Terminal, data: bytes) -> dict:

@@ -11,6 +11,7 @@ vi.mock('src/utils/notifications', () => ({ notifyError }))
 
 function connectedStore(state = {}) {
   const store = useTerminalStore()
+  store.mode = 'terminal'
   store.connect({ sessionId: 'session-1', agentId: 'agent-1' })
   const socket = FakeWebSocket.instances.at(-1)
   socket.open()
@@ -18,7 +19,7 @@ function connectedStore(state = {}) {
   return { store, socket }
 }
 
-describe('shared terminal', () => {
+describe('terminal', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     FakeWebSocket.instances = []
@@ -27,7 +28,7 @@ describe('shared terminal', () => {
   })
   afterEach(() => vi.unstubAllGlobals())
 
-  it('requires native shared capabilities rather than falling back to an isolated terminal', () => {
+  it('requires the personal terminal capabilities', () => {
     const agent = { connected: true, operations: TERMINAL_OPERATIONS }
     const context = { preferredExecutionAgentId: 'agent-1' }
     const agents = { byId: () => agent }
@@ -36,13 +37,10 @@ describe('shared terminal', () => {
     agent.connected = false
     expect(terminalControlCenterState(context, agents).reason).toBe('offline')
     agent.connected = true
-    agent.operations = ['terminal.open', 'terminal.read', 'terminal.write', 'terminal.resize', 'terminal.close', 'terminal.run']
+    agent.operations = ['terminal.open']
     expect(terminalControlCenterState(context, agents).reason).toBe('unsupported')
     expect(TERMINAL_OPERATIONS).toEqual([
-      'terminal.read', 'terminal.write', 'terminal.resize', 'terminal.close',
-      'terminal.shared.open', 'terminal.shared.status', 'terminal.shared.acquire',
-      'terminal.shared.release', 'terminal.shared.prepare', 'terminal.shared.execute',
-      'terminal.shared.cancel'
+      'terminal.open', 'terminal.read', 'terminal.write', 'terminal.resize', 'terminal.close'
     ])
   })
 
@@ -55,15 +53,14 @@ describe('shared terminal', () => {
     store.input('blocked')
     socket.open()
     expect(store.status).toBe('acquiring')
-    store.attach()
     socket.message({ type: 'terminal.opened', terminalId: 'pty-1', restored: true })
     expect(store.status).toBe('syncing')
     store.input('\r')
     expect(socket.send).not.toHaveBeenCalled()
-    socket.snapshot({ attached: true, busy: true, state: 'running', activeToolCallId: 'tool-1',
+    socket.snapshot({ busy: true, state: 'running', activeToolCallId: 'tool-1',
       currentDirectory: '/home/user/terminal', personalData: btoa('retained'), rows: 40, columns: 120 })
     expect(store).toMatchObject({ ready: true, restored: true, controlsEnabled: true, inputEnabled: false,
-      attached: true, busy: true, runtimeState: 'running', activeToolCallId: 'tool-1',
+      runtimeState: 'running', activeToolCallId: 'tool-1',
       currentDirectory: '/home/user/terminal', buffer: 'retained', rows: 40, columns: 120 })
     expect(socket.send).not.toHaveBeenCalled()
     socket.output(' live')
@@ -77,9 +74,8 @@ describe('shared terminal', () => {
     const messages = socket.send.mock.calls.map(([data]) => JSON.parse(data))
     expect(messages.map((message) => message.type)).toEqual(['input'])
     expect(new TextDecoder().decode(Uint8Array.from(atob(messages[0].data), (char) => char.charCodeAt(0)))).toBe(input)
-    expect(store.mode).toBeUndefined()
+    expect(store.mode).toBe('terminal')
     expect(store.resolveProposal).toBeUndefined()
-    expect(store.agentBuffer).toBeUndefined()
   })
 
   it.each([{ suspended: true }, { state: 'closed' }])('blocks input only for unavailable runtime state %j', (state) => {
@@ -93,53 +89,24 @@ describe('shared terminal', () => {
     expect(socket.send).toHaveBeenCalledOnce()
   })
 
-  it('changes ownership only on matching status and enforces busy command boundaries', () => {
-    const { store, socket } = connectedStore({ personalData: btoa('user and agent\r\n') })
-    const revision = store.bufferRevision
-    socket.state({ busy: true })
-    store.attach()
-    expect(socket.send).not.toHaveBeenCalled()
-    socket.state({ busy: false })
-    store.attach()
-    store.attach()
-    expect(socket.send).toHaveBeenCalledTimes(1)
-    expect(JSON.parse(socket.send.mock.calls.at(-1)[0])).toEqual({ type: 'attach', sessionId: 'session-1' })
-    expect(store.attached).toBe(false)
-    socket.state({ attached: false })
-    expect(store.submitting).toBe('attach')
-    socket.state({ attached: true })
-    expect(store.submitting).toBeNull()
-    expect(store.inputEnabled).toBe(false)
-    socket.state({ activeToolCallId: 'tool-1', busy: true })
-    store.detach()
-    expect(socket.send).toHaveBeenCalledTimes(1)
-    socket.state({ activeToolCallId: null, busy: false })
-    store.detach()
-    store.detach()
-    expect(socket.send).toHaveBeenCalledTimes(2)
-    expect(JSON.parse(socket.send.mock.calls.at(-1)[0])).toEqual({ type: 'detach' })
-    expect(store.attached).toBe(true)
-    socket.state({ attached: false })
-    expect(store.attached).toBe(false)
-    expect(store.submitting).toBeNull()
-    expect(store.buffer).toBe('user and agent\r\n')
-    expect(store.bufferRevision).toBe(revision)
-    socket.message({ type: 'command.output', data: btoa('duplicate') })
-    expect(store.buffer).toBe('user and agent\r\n')
-    expect(store.syncAgentOutput).toBeUndefined()
+  it('keeps agent replay and live output separate from the personal shell', () => {
+    const { store, socket } = connectedStore({ personalData: btoa('personal'), agentData: btoa('stored') })
+    store.mode = 'agent'
+    socket.message({ type: 'terminal.agentOutput', data: btoa(' live') })
+    socket.output(' shell')
+    store.input('blocked')
+    expect([store.agentBuffer, store.buffer, socket.send.mock.calls.length]).toEqual(['stored live', 'personal shell', 0])
   })
 
-  it('clears attachment submission on controlled errors without changing authoritative state', () => {
+  it('reports controlled errors', () => {
     const { store, socket } = connectedStore()
-    store.attach()
     socket.message({ type: 'error', error: { code: 'terminal.unavailable' } })
-    expect(store.attached).toBe(false)
-    expect(store.submitting).toBeNull()
+    expect(store.ready).toBe(true)
     expect(notifyError).toHaveBeenCalledWith({ error: { code: 'terminal.unavailable' } }, expect.any(String))
   })
 
-  it('resizes while attached and retries dimensions that could not be sent while suspended', () => {
-    const { store, socket } = connectedStore({ attached: true })
+  it('resizes and retries dimensions that could not be sent while suspended', () => {
+    const { store, socket } = connectedStore()
     store.resize(120, 40)
     store.resize(120, 40)
     expect(socket.send).toHaveBeenCalledExactlyOnceWith(JSON.stringify({ type: 'resize', columns: 120, rows: 40 }))
@@ -178,17 +145,17 @@ describe('shared terminal', () => {
   })
 
   it('replaces same-session replay after restart and ignores stale socket state and bytes', () => {
-    const { store, socket } = connectedStore({ personalData: btoa('old'), attached: true })
+    const { store, socket } = connectedStore({ personalData: btoa('old') })
     socket.onclose({ code: 1006 })
     store.connect({ sessionId: 'session-1', agentId: 'agent-1' })
     const next = FakeWebSocket.instances.at(-1)
     next.open()
     next.snapshot({ terminalId: 'new-pty', personalData: btoa('new shell') }, false)
-    socket.state({ attached: true, currentDirectory: '/stale' })
+    socket.state({ currentDirectory: '/stale' })
     socket.output('stale')
     socket.onclose({ code: 4001 })
     expect(store).toMatchObject({ buffer: 'new shell', restored: false, terminalId: 'new-pty',
-      currentDirectory: '/home/user', attached: false, status: 'open' })
+      currentDirectory: '/home/user', status: 'open' })
   })
 
   it.each(['message', 'close'])('does not reclaim replaced runtimes on stale actions or A-B-A navigation (%s)', (source) => {
@@ -196,7 +163,6 @@ describe('shared terminal', () => {
     if (source === 'message') socket.message({ type: 'terminal.replaced' })
     else socket.onclose({ code: 4001 })
     store.input('x')
-    store.attach()
     socket.open()
     socket.snapshot()
     expect(store.status).toBe('replaced')

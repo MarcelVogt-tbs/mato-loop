@@ -881,6 +881,20 @@ CASES = (
         argument_contains={"new_text": ("Dienstag",)},
     ),
     PromptCase(
+        id="plan_checks_source_before_font_recommendation",
+        kind="general", scope="quality",
+        working_directory="/workspace/project",
+        user=(
+            "Können wir die Schriftgröße für Klein in der Session etwas größer machen, ähnlich wie OpenCode? "
+            "Das Repository liegt im aktuellen Arbeitsverzeichnis. Die relevanten Styles stehen in "
+            "apps/frontend/src/css/chat.scss. Die bisherigen CSS-Werte wurden noch nicht gelesen."
+        ),
+        system_options={"agent_profile": plan_profile(), "execution_agent_name": "Evaluator", "execution_agent_connected": True, "current_directory": "/workspace/project"},
+        tools=("read", "grep", "glob"),
+        expected_tool="read",
+        expected_arguments={"root": "computer", "path": "apps/frontend/src/css/chat.scss"},
+    ),
+    PromptCase(
         id="plan_assessment_matches_requested_feature",
         kind="general", scope="quality",
         user=(

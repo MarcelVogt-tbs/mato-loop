@@ -55,10 +55,11 @@ def _automation_collection_permission(
     summary: str,
     display_items: tuple[PermissionDisplayItem, ...] = (),
     approval_details: dict[str, Any] | None = None,
+    current_session_only: bool = False,
 ) -> PermissionRequest:
     return PermissionRequest(
         capability=capability,
-        resource_type="automation_collection",
+        resource_type="session_automation_collection" if current_session_only else "automation_collection",
         resource_scope=automation_collection_scope(
             context.session.user_id, context.session.id
         ),
@@ -158,6 +159,7 @@ async def _list_automations(
         action_kind="list_automations",
         title="Automationen anzeigen?",
         summary="Der Agent möchte die eigenen Automationen kompakt anzeigen.",
+        current_session_only=arguments.scope == "session",
     )
     if not await tools_access.allow(context, permission):
         return ToolResult.error("permission.denied")
@@ -169,6 +171,7 @@ async def _list_automations(
                 .options(selectinload(Automation.schedules))
                 .where(
                     Automation.user_id == context.session.user_id,
+                    *([Automation.execution_session_id == context.session.id] if arguments.scope == "session" else []),
                     active_session_clause(),
                 )
                 .order_by(Automation.updated_at.desc(), Automation.id.desc())
@@ -523,7 +526,7 @@ async def _delete_automation(
 
 LIST_AUTOMATIONS = ToolDefinition(
             "list_automations",
-            "List.",
+            "List automations in the current session. Use scope=all only for an owner-wide list across sessions.",
             ListAutomationsArguments,
             _list_automations,
             group="automations",

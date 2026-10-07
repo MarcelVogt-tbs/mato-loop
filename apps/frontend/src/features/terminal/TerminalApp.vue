@@ -1,5 +1,5 @@
 <template>
-  <section class="terminal-app column full-height no-wrap" aria-label="Gemeinsames Bash-Terminal">
+  <section class="terminal-app column full-height no-wrap" :aria-label="terminal.mode === 'agent' ? 'Agent-Ausgabe' : 'Terminal'">
     <AppStateMessage
       v-if="!contextState.available"
       class="col q-pa-xl"
@@ -56,6 +56,8 @@ const chat = useChatStore()
 const controlCenter = useControlCenterStore()
 const executionAgents = useExecutionAgentStore()
 const terminal = useTerminalStore()
+const agentOutput = computed(() => terminal.mode === 'agent')
+const visibleBuffer = computed(() => agentOutput.value ? terminal.agentBuffer : terminal.buffer)
 const terminalHost = ref(null)
 const contextState = computed(() => terminalControlCenterState(chat.current, executionAgents))
 const connectionAvailable = computed(() => contextState.value.available
@@ -110,7 +112,7 @@ function initializeTerminal() {
     if (!pendingReplays) terminal.input(data)
   })
   fitVisibleTerminal()
-  replayBuffer(terminal.buffer)
+  replayBuffer(visibleBuffer.value)
   resizeObserver = new ResizeObserver(() => fitVisibleTerminal())
   resizeObserver.observe(terminalHost.value)
 }
@@ -168,13 +170,15 @@ function reconnectWhenVisible() {
 }
 
 watch(
-  () => [terminal.bufferRevision, terminal.outputRevision],
-  ([bufferRevision, outputRevision], [previousBufferRevision, previousOutputRevision]) => {
+  () => [terminal.mode,
+    agentOutput.value ? terminal.agentBufferRevision : terminal.bufferRevision,
+    agentOutput.value ? terminal.agentOutputRevision : terminal.outputRevision],
+  ([mode, bufferRevision, outputRevision], [previousMode, previousBufferRevision, previousOutputRevision]) => {
     if (!xterm) return
-    if (bufferRevision !== previousBufferRevision) {
+    if (mode !== previousMode || bufferRevision !== previousBufferRevision) {
       xterm.reset()
-      replayBuffer(terminal.buffer)
-    } else if (outputRevision !== previousOutputRevision) xterm.write(terminal.output)
+      replayBuffer(visibleBuffer.value)
+    } else if (outputRevision !== previousOutputRevision) xterm.write(agentOutput.value ? terminal.agentOutput : terminal.output)
   },
   { flush: 'sync' }
 )

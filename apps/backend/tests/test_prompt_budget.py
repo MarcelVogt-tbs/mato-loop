@@ -119,7 +119,7 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
         "brief",
         "name_hint",
     }
-    # Includes task continuation, media guidance, automation offers, and permission preparation.
-    assert prompt_tokens <= 8_800, prompt_tokens
-    assert schema_tokens <= 13_200, schema_tokens
-    assert prompt_tokens + schema_tokens <= 22_000, prompt_tokens + schema_tokens
+    # Includes task continuation, source grounding, media guidance, permission preparation, and automation scope.
+    assert prompt_tokens <= 8_950, prompt_tokens
+    assert schema_tokens <= 13_300, schema_tokens
+    assert prompt_tokens + schema_tokens <= 22_250, prompt_tokens + schema_tokens

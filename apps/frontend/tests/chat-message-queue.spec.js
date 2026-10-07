@@ -841,7 +841,7 @@ describe('chat message queue', () => {
     await chat.resumeQueuedSend()
     chat.cancelQueueDrain()
     await chat.drainOutbox()
-    expect([displayed, chat.activeQueuedMessages, api.post.mock.calls.length]).toEqual([
+    expect([displayed, chat.activeQueuedMessages, api.post.mock.calls.filter(([url]) => url !== '/sessions/defaults').length]).toEqual([
       [{ id: 'accepted', role: 'user', content: entry.content, queueRecoveryId: entry.id }], [], 1
     ])
   })

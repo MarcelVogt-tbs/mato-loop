@@ -36,6 +36,7 @@ from mato_loop_backend.sessions.service import (
     SessionServiceError,
     validate_execution_preferences,
 )
+from mato_loop_backend.sessions.templates import load_template
 
 router = APIRouter(prefix="/projects", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
@@ -46,6 +47,10 @@ class ProjectRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=240)
     instructions: str = Field(default="", max_length=4000)
+    default_session_template_id: UUID | None = Field(
+        default=None, strict=False,
+        validation_alias=AliasChoices("defaultSessionTemplateId", "default_session_template_id"),
+    )
     default_execution_agent_id: UUID | None = Field(
         default=None,
         strict=False,
@@ -79,6 +84,7 @@ class ProjectResponse(BaseModel):
     name: str
     archived_at: datetime | None = Field(default=None, alias="archivedAt")
     instructions: str
+    default_session_template_id: UUID | None = Field(default=None, alias="defaultSessionTemplateId")
     default_execution_agent_id: UUID | None = Field(alias="defaultExecutionAgentId")
     default_current_directory: str | None = Field(alias="defaultCurrentDirectory")
     session_count: int = Field(alias="sessionCount")
@@ -100,6 +106,7 @@ def _payload(project: Project, session_count: int, has_unread_messages: bool = F
         name=project.name,
         archivedAt=project.archived_at,
         instructions=project.instructions,
+        defaultSessionTemplateId=project.default_session_template_id,
         defaultExecutionAgentId=project.default_execution_agent_id,
         defaultCurrentDirectory=project.default_current_directory,
         sessionCount=session_count,
@@ -268,6 +275,8 @@ async def create_project(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ProjectResponse:
     try:
+        if payload.default_session_template_id is not None:
+            await load_template(db, user.id, payload.default_session_template_id)
         current_directory, _ = await validate_execution_preferences(
             db,
             user.id,
@@ -280,6 +289,7 @@ async def create_project(
         user_id=user.id,
         name=payload.name,
         instructions=payload.instructions,
+        default_session_template_id=payload.default_session_template_id,
         default_execution_agent_id=payload.default_execution_agent_id,
         default_current_directory=current_directory,
     )
@@ -297,6 +307,13 @@ async def update_project(
 ) -> ProjectResponse:
     project = await _owned_project(db, project_id, user.id)
     session_count = await _session_count(db, project)
+    if "default_session_template_id" in payload.model_fields_set:
+        if payload.default_session_template_id is not None and payload.default_session_template_id != project.default_session_template_id:
+            try:
+                await load_template(db, user.id, payload.default_session_template_id)
+            except SessionServiceError as exc:
+                raise ApiError(exc.status_code, exc.code, field="defaultSessionTemplateId") from exc
+        project.default_session_template_id = payload.default_session_template_id
     project.name = payload.name
     if "instructions" in payload.model_fields_set:
         project.instructions = payload.instructions

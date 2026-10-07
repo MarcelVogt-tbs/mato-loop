@@ -222,6 +222,9 @@ const requiredSearchUnavailable = computed(() => (
 ))
 const warning = computed(() => {
   const warnings = []
+  const profile = agentProfiles.byId(displayedAgentProfileId.value)
+  if (['00000000-0000-4000-8000-000000000003', '00000000-0000-4000-8000-000000000004'].includes(profile?.baseProfileId || displayedAgentProfileId.value)
+    && !props.session?.preferredExecutionAgentId) warnings.push('Plan und Build benötigen einen Computer und ein Arbeitsverzeichnis.')
   if (!modelSupportsTools.value) warnings.push('Wähle ein Agentmodell mit Tool-Unterstützung.')
   if (
     props.session?.memoryMode !== 'disabled'

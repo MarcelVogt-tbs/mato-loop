@@ -250,8 +250,7 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
             without_shell = MatoLoopAgent(configuration(Path(temporary), shell=False), "secret")
             self.assertNotIn("terminal.open", without_shell.operations)
             self.assertNotIn("terminal.run", without_shell.operations)
-            if not without_shell.shared_terminal.available:
-                self.assertTrue(TERMINAL_OPERATIONS.isdisjoint(without_shell.operations))
+            self.assertTrue(TERMINAL_OPERATIONS.isdisjoint(without_shell.operations))
             with patch("matoloop_agent.terminal.PTY_AVAILABLE", False):
                 without_pty = MatoLoopAgent(config, "secret")
             self.assertTrue(TERMINAL_OPERATIONS.isdisjoint(without_pty.operations))

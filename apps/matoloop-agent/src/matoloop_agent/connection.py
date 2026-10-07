@@ -41,13 +41,6 @@ from .protocol import (
     Request,
     ResolveDirectoryArguments,
     Response,
-    SharedAcquireArguments,
-    SharedCancelArguments,
-    SharedExecuteArguments,
-    SharedOpenArguments,
-    SharedPrepareArguments,
-    SharedReleaseArguments,
-    SharedStatusArguments,
     ShellArguments,
     ShellInspectArguments,
     StatArguments,
@@ -116,7 +109,6 @@ class MatoLoopAgent:
         self.process = self.runtime.process
         self.terminal = self.runtime.terminal
         self.browser = self.runtime.browser
-        self.shared_terminal = self.runtime.shared_terminal
         self.search = self.runtime.search
         self.transfer = self.runtime.transfer
         self.openscad = self.runtime.openscad
@@ -351,34 +343,10 @@ class MatoLoopAgent:
                 arguments.command,
                 arguments.current_directory,
             )
-        if isinstance(arguments, SharedOpenArguments):
-            return await self.shared_terminal.open(
+        if isinstance(arguments, TerminalOpenArguments):
+            return await self.terminal.open(
                 arguments.rows, arguments.columns, terminal_id=arguments.terminal_id
             )
-        if isinstance(arguments, SharedStatusArguments):
-            return await self.shared_terminal.get(arguments.terminal_id).status()
-        if isinstance(arguments, SharedAcquireArguments):
-            return await self.shared_terminal.get(arguments.terminal_id).acquire()
-        if isinstance(arguments, SharedReleaseArguments):
-            return await self.shared_terminal.get(arguments.terminal_id).release()
-        if isinstance(arguments, SharedExecuteArguments):
-            return await self.shared_terminal.get(arguments.terminal_id).execute(
-                arguments.command_id,
-                arguments.expected_inspection_revision,
-                arguments.timeout_seconds,
-                stream,
-                arguments.environment,
-            )
-        if isinstance(arguments, SharedPrepareArguments):
-            return await self.shared_terminal.get(arguments.terminal_id).prepare(
-                arguments.command_id, arguments.command
-            )
-        if isinstance(arguments, SharedCancelArguments):
-            return await self.shared_terminal.get(arguments.terminal_id).cancel(
-                arguments.command_id
-            )
-        if isinstance(arguments, TerminalOpenArguments):
-            return await self.terminal.open(arguments.rows, arguments.columns)
         if isinstance(arguments, TerminalReadArguments):
             return await self.terminal.read(
                 arguments.terminal_id,

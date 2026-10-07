@@ -85,8 +85,9 @@ export const draftActions = {
       }
     },
     async fetchDefaults(projectId = this.sessionsProjectId, templateId = null) {
-      const version = ++this.draftPreviewVersion
       const scope = sessionScopeKey(projectId)
+      const version = (this.draftPreviewVersions[scope] || 0) + 1
+      this.draftPreviewVersions[scope] = version
       const targetDraft = this.drafts.newSessions[scope] || this.drafts.newSession
       const options = targetDraft.options
       const initial = !options.sessionTemplateId && !options.modelId && !options.sessionProfile && !options.agentProfileId && options.memoryMode === 'full' && !options.reasoningEffort
@@ -100,7 +101,7 @@ export const draftActions = {
           session_profile: options.sessionProfile
         } : {})
       })
-      if (version !== this.draftPreviewVersion || (this.drafts.newSessions[scope] || this.drafts.newSession) !== targetDraft || JSON.stringify(options) !== snapshot) return
+      if (version !== this.draftPreviewVersions[scope] || (this.drafts.newSessions[scope] || this.drafts.newSession) !== targetDraft || JSON.stringify(options) !== snapshot) return
       if (initial && !templateId) {
         const defaults = sanitizedSessionOptions({ ...defaultSessionOptions(), ...data })
         if (sessionScopeKey(this.sessionsProjectId) === scope) this.sessionDefaults = defaults
@@ -359,7 +360,7 @@ export const draftActions = {
       }
       const draft = {
         message: '',
-        options: sanitizedSessionOptions(this.sessionDefaults)
+        options: defaultSessionOptions()
       }
       this.drafts.newSessions[scope] = draft
       this.attachmentDrafts.newSessions[scope] = []
@@ -370,5 +371,6 @@ export const draftActions = {
         this.audioDictations.newSession = null
       }
       this.persistDrafts()
+      void this.fetchDefaults(projectId).catch(() => {})
     },
 }

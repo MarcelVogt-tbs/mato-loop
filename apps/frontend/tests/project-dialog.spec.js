@@ -15,8 +15,10 @@ afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); vi.unstu
 
 it.each([false, true])('saves project fields through the shared dialog (editing=%s)', async (editing) => {
   vi.stubGlobal('scrollTo', vi.fn())
-  api.get.mockResolvedValue({ data: { items: [{ id: 'computer', alias: 'Rechner', connected: true, operations: [], homeDirectory: '/home/user' }] } })
-  const project = { id: 'project', name: 'Bestehend', instructions: 'Anweisungen', defaultExecutionAgentId: 'computer', defaultCurrentDirectory: '/home/user/project' }
+  api.get.mockImplementation(url => Promise.resolve({ data: url === '/session-templates'
+    ? { templates: [{ id: 'coding', name: 'Coding' }] }
+    : { items: [{ id: 'computer', alias: 'Rechner', connected: true, operations: [], homeDirectory: '/home/user' }] } }))
+  const project = { id: 'project', name: 'Bestehend', instructions: 'Anweisungen', defaultSessionTemplateId: 'coding', defaultExecutionAgentId: 'computer', defaultCurrentDirectory: '/home/user/project' }
   const request = editing ? api.patch : api.post
   request.mockReset().mockRejectedValueOnce(new Error('unavailable')).mockResolvedValue({ data: project })
   const open = ref(true), created = vi.fn()
@@ -37,6 +39,7 @@ it.each([false, true])('saves project fields through the shared dialog (editing=
   await vi.waitFor(() => expect(open.value).toBe(false))
   expect(request).toHaveBeenLastCalledWith(editing ? '/projects/project' : '/projects', {
     name: 'Umbenannt', instructions: editing ? 'Anweisungen' : '',
+    defaultSessionTemplateId: editing ? 'coding' : null,
     defaultExecutionAgentId: editing ? 'computer' : null,
     defaultCurrentDirectory: editing ? '/home/user/project' : null
   })

@@ -1154,6 +1154,7 @@ class AutomationDefinitionArguments(ToolArguments):
 
 
 class ListAutomationsArguments(ToolArguments):
+    scope: Literal["session", "all"] = Field(default="session", description="Current session by default; all lists the owner's automations across sessions.")
     limit: int = Field(default=20, ge=1, le=50)
 
 

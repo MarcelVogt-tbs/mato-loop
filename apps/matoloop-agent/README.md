@@ -1,10 +1,10 @@
 # MatoLoop Agent
 
-The optional [managed shared Bash terminal](SHARED_TERMINAL.md) gives the user and
-agent exclusive turns in one real persistent shell. Shared and isolated inspection
-use the same heuristic: commands without a recognized write remain `shell.read`,
-even when analysis is incomplete. The shared shell is trusted; this is not a
-sandbox guarantee. Isolated command execution remains unchanged.
+Agent commands run in fresh processes with explicit directories and environments.
+The Control Center displays their live output and saved results separately from
+the personal interactive terminal. Shell inspection classifies commands without a
+recognized write as `shell.read`, even when analysis is incomplete; this is not a
+sandbox guarantee.
 
 Standalone agent with a portable connection and dispatch core. Linux provides bounded filesystem, process, POSIX terminal, transfer, OpenSCAD, browser, credential-storage, and session-cache operations. The Windows adapter advertises its native filesystem, PowerShell, search, transfer, and cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
 
@@ -25,8 +25,7 @@ private graphical viewing, interactive prerequisite setup, and bounded browser a
 `homeDirectory` is mandatory and canonicalized at startup. The configuration file's parent directory is the agent data directory for credentials, transfers, and cache data. Native lifecycle installations read `${XDG_DATA_HOME:-~/.local/share}/matoloop-agent/data/config.json` by default. `MATOLOOP_AGENT_CONFIG` or `--config` selects another file, including `/data/config.json`.
 
 Personal terminal.open and terminal.run require POSIX PTYs and a configured
-`shellExecutable`. Managed shared Bash is a separate capability, independent of
-that configured shell. Unsupported operations are omitted from the advertisement.
+`shellExecutable`. Unsupported operations are omitted from the advertisement.
 
 Run `matoloop-agent pair` to enter the backend WebSocket URL, agent ID, and one-time pairing token. Non-interactive pairing uses `MATOLOOP_AGENT_BACKEND_URL`, `MATOLOOP_AGENT_ID`, and `MATOLOOP_AGENT_PAIRING_TOKEN`. `ws://` requires `allowInsecure: true`.
 

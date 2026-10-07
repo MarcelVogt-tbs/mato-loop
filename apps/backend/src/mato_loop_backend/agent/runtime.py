@@ -99,6 +99,8 @@ from mato_loop_backend.settings import (
 )
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
 from mato_loop_backend.settings.models import (
+    BUILD_PROFILE_ID,
+    PLAN_PROFILE_ID,
     ModelConfig,
     TrustLevel,
 )
@@ -215,16 +217,11 @@ class AgentRuntime:
         instance_limits = await SettingsStore.load(db, InstanceLimits)
         model_id = model_id_override or ai_settings.default_model_id
         model = agent_run_support._model_for_id(ai_settings, model_id)
-        if model is None:
-            raise AgentRunError("session.modelUnavailable")
         provider = agent_run_support._provider_for_model(ai_settings, model) if model is not None else None
-        if provider is None:
-            raise AgentRunError("session.modelUnavailable")
-        if model is not None and not model.supports_tools:
-            raise AgentRunError("session.modelToolsUnavailable")
-        trust_level = effective_model_trust(provider, model)
+        trust_level = effective_model_trust(provider, model) if provider and model else TrustLevel.PUBLIC
         pseudonymization_enabled = (
             trust_level == TrustLevel.PUBLIC
+            and provider is not None and model is not None
             and effective_model_pseudonymization(provider, model)
         )
         execution_agent = None
@@ -398,6 +395,8 @@ class AgentRuntime:
         db: AsyncSession,
         chat_session: ChatSession,
         failed_run: AgentRun,
+        *,
+        before_execution: bool = False,
     ) -> AgentRun:
         from mato_loop_backend.sessions.archive import is_session_archived
 
@@ -406,36 +405,34 @@ class AgentRuntime:
         if failed_run.session_id != chat_session.id or failed_run.status != "failed":
             raise AgentRunError("session.retryUnavailable")
         await cls._ensure_user_active(db, chat_session.user_id)
-        ai_settings = await load_effective_ai(db, chat_session.user_id)
-        model = agent_run_support._model_for_id(ai_settings, failed_run.model_config_id)
+        ai_settings = apply_session_ai(await load_effective_ai(db, chat_session.user_id), chat_session)
+        model_id = ai_settings.default_model_id if before_execution else failed_run.model_config_id
+        agent_id = chat_session.preferred_execution_agent_id if before_execution else failed_run.execution_agent_id
+        model = agent_run_support._model_for_id(ai_settings, model_id)
         provider = agent_run_support._provider_for_model(ai_settings, model) if model is not None else None
-        if model is None or provider is None:
-            raise AgentRunError("session.modelUnavailable")
-        if not model.supports_tools:
-            raise AgentRunError("session.modelToolsUnavailable")
         snapshot = (
-            execution_agent_connections.snapshot(failed_run.execution_agent_id)
-            if failed_run.execution_agent_id is not None
+            execution_agent_connections.snapshot(agent_id)
+            if agent_id is not None
             else None
         )
         current_directory = chat_session.current_directory
         execution_agent = (
             await db.scalar(
                 select(ExecutionAgent).where(
-                    ExecutionAgent.id == failed_run.execution_agent_id,
+                    ExecutionAgent.id == agent_id,
                     ExecutionAgent.user_id == chat_session.user_id,
                     ExecutionAgent.revoked_at.is_(None),
                 )
             )
-            if failed_run.execution_agent_id is not None
+            if agent_id is not None
             else None
         )
-        if failed_run.execution_agent_id is not None and execution_agent is None:
+        if agent_id is not None and execution_agent is None:
             raise AgentRunError("executionAgent.unavailable")
         if snapshot is not None and current_directory is not None:
             try:
                 directory = await ExecutionClient(
-                    failed_run.execution_agent_id,
+                    agent_id,
                     snapshot,
                 ).request(
                     "filesystem.resolve",
@@ -454,12 +451,12 @@ class AgentRuntime:
             agent_profile_id=chat_session.agent_profile_id,
             input_message_id=failed_run.input_message_id,
             status="queued",
-            model_config_id=failed_run.model_config_id,
-            model_name=failed_run.model_name or model.name or model.model_id,
-            trust_level=failed_run.trust_level,
-            pseudonymization_enabled=failed_run.pseudonymization_enabled,
-            execution_agent_id=failed_run.execution_agent_id,
-            execution_agent_revision=failed_run.execution_agent_revision,
+            model_config_id=model_id,
+            model_name=(model.name or model.model_id) if before_execution and model else failed_run.model_name,
+            trust_level=(effective_model_trust(provider, model).value if provider and model else TrustLevel.PUBLIC.value) if before_execution else failed_run.trust_level,
+            pseudonymization_enabled=(effective_model_pseudonymization(provider, model) if provider and model else False) if before_execution else failed_run.pseudonymization_enabled,
+            execution_agent_id=agent_id,
+            execution_agent_revision=execution_agent.revision if before_execution and execution_agent else failed_run.execution_agent_revision,
             current_directory_snapshot=current_directory,
             execution_operations=sorted(snapshot) if snapshot is not None else [],
         )
@@ -788,6 +785,53 @@ class AgentRuntime:
             await cls._transcribe_voice_messages(db, run, message_id)
 
     @classmethod
+    async def _prepare_run(cls, db: AsyncSession, run: AgentRun) -> None:
+        """Check execution prerequisites before any model or tool work."""
+        session = await db.get(ChatSession, run.session_id)
+        if session is None:
+            raise AgentRunError("session.notFound")
+        try:
+            profile = await load_agent_profile(db, session.user_id, run.agent_profile_id or session.agent_profile_id)
+        except AgentProfileUnavailable as exc:
+            raise AgentRunError("agentProfile.selectedUnavailable") from exc
+        if not profile.enabled:
+            raise AgentRunError("agentProfile.selectedUnavailable")
+        if (profile.base_profile_id or profile.id) in {PLAN_PROFILE_ID, BUILD_PROFILE_ID}:
+            if run.execution_agent_id is None:
+                raise AgentRunError("session.computerRequired")
+            agent = await db.get(ExecutionAgent, run.execution_agent_id)
+            if agent is None or agent.user_id != session.user_id or agent.revoked_at is not None:
+                raise AgentRunError("executionAgent.unavailable")
+            snapshot = execution_agent_connections.snapshot(agent.id)
+            if snapshot is None:
+                raise AgentRunError("session.computerOffline")
+            required = {"filesystem.resolve", "filesystem.read", "filesystem.glob", "filesystem.grep"}
+            if (profile.base_profile_id or profile.id) == BUILD_PROFILE_ID:
+                required.add("filesystem.write")
+            if not required.issubset(snapshot):
+                raise AgentRunError("session.computerOperationsMissing")
+            if not run.current_directory_snapshot:
+                raise AgentRunError("session.directoryRequired")
+            try:
+                directory = await ExecutionClient(agent.id, snapshot).request(
+                    "filesystem.resolve", {"path": run.current_directory_snapshot}, DirectoryResult,
+                )
+            except ExecutionClientError as exc:
+                raise AgentRunError("session.directoryUnavailable") from exc
+            run.current_directory_snapshot = directory.path
+            run.execution_operations = sorted(snapshot)
+            from mato_loop_backend.sessions.service import execution_filesystem_policy
+
+            if execution_filesystem_policy(agent, directory.path) == "deny":
+                raise AgentRunError("permission.denied")
+        ai = apply_session_ai(await load_effective_ai(db, session.user_id), session, profile.id)
+        model = agent_run_support._model_for_id(ai, run.model_config_id or ai.default_model_id)
+        if model is None or agent_run_support._provider_for_model(ai, model) is None:
+            raise AgentRunError("session.modelUnavailable")
+        if not model.supports_tools:
+            raise AgentRunError("session.modelToolsUnavailable")
+
+    @classmethod
     async def _run(cls, run_id: UUID) -> None:
         try:
             async with AsyncSessionFactory() as db:
@@ -813,6 +857,7 @@ class AgentRuntime:
                         await db.commit()
                 visible_response = _VisibleResponse()
                 run_completed = False
+                before_execution = True
                 cls._cancellable_runs.add(run_id)
                 try:
                     if run_id in cls._user_cancelled_runs:
@@ -857,6 +902,8 @@ class AgentRuntime:
                             **run_timing_payload(run),
                         },
                     )
+                    await cls._prepare_run(db, run)
+                    before_execution = False
                     await cls._transcribe_voice_messages(db, run)
                     await cls._execute_loop(db, run, visible_response)
                     await cls._finalize_run_files(db, run)
@@ -1056,6 +1103,11 @@ class AgentRuntime:
                             error_message = await cls._persist_error_message(
                                 db, failed_run, public_error
                             )
+                            if before_execution:
+                                error_message.provider_data = {"_matoloop": agent_run_support._run_metadata(failed_run, beforeExecution=True)}
+                                session = await db.get(ChatSession, session_id)
+                                if session is not None and session.title_generation_status == TitleGenerationStatus.RUNNING.value:
+                                    session.title_generation_status = TitleGenerationStatus.SKIPPED.value
                             if visible_response.generation_diagnostics is not None:
                                 diagnostics = visible_response.generation_diagnostics
                                 runtime_data = diagnostics.get("_matoloop", {})
@@ -1300,6 +1352,8 @@ class AgentRuntime:
             "id": str(message.id),
             "role": "assistant",
             "kind": "runtime_error",
+            "state": "error",
+            "origin": "host",
             "content": error.message,
             "createdAt": message.created_at.isoformat(),
             "modelName": message.model_name,

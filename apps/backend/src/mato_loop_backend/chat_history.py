@@ -231,6 +231,7 @@ class ChatHistoryService:
         if source is None:
             raise ChatHistoryError("session.retryUnavailable", 409)
         failed_run, user_index = source
+        before_execution = (messages[-1].provider_data or {}).get("_matoloop", {}).get("beforeExecution") is True
 
         try:
             async with deleting_child_sessions(
@@ -239,7 +240,7 @@ class ChatHistoryService:
                 await cls._delete_message_suffix(
                     db, messages, user_index, include_boundary=False
                 )
-                run = await AgentRuntime.retry(db, session, failed_run)
+                run = await AgentRuntime.retry(db, session, failed_run, before_execution=before_execution)
         except (OSError, SessionStorageError) as exc:
             raise ChatHistoryError("session.storageUnavailable", 500) from exc
         except BaseException:

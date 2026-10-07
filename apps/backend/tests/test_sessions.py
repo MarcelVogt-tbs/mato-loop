@@ -582,6 +582,7 @@ async def test_mark_session_read_uses_owned_assistant_message_monotonically(has_
 
 async def test_session_is_created_with_first_message_and_run(monkeypatch) -> None:
     from mato_loop_backend.api.routes import sessions as sessions_route
+    from mato_loop_backend.settings.session_profiles import CODING_TEMPLATE_ID
 
     user = _user()
     provider_id = uuid4()
@@ -605,6 +606,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
         name="Project",
         default_execution_agent_id=uuid4(),
         default_current_directory="/srv/project",
+        default_session_template_id=CODING_TEMPLATE_ID,
     )
 
     async def load_settings(_db, settings_type, **_kwargs):
@@ -665,6 +667,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     assert session.web_search_policy == "available"
     assert session.preferred_execution_agent_id == project.default_execution_agent_id
     assert session.current_directory == "/srv/project"
+    assert session.session_profile["template_id"] == str(CODING_TEMPLATE_ID)
     assert session.control_center == {
         "tabs": [
             _stored_app_tab("session"),
@@ -694,7 +697,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     assert result["modelName"] == "Test"
     assert result["message"]["id"] == str(persisted_message.id)
     validate_execution.assert_awaited_once_with(
-        db, user.id, project.default_execution_agent_id, "/srv/project"
+        db, user.id, project.default_execution_agent_id, "/srv/project", defer_unavailable=True,
     )
     storage.provision.assert_called_once_with(session.id, project.id)
 
@@ -2350,7 +2353,7 @@ async def test_attachment_download_rejects_incomplete_hierarchy() -> None:
     assert exc_info.value.code == "attachment.notFound"
 
 
-async def test_session_rejects_unavailable_model_before_creation(monkeypatch) -> None:
+async def test_session_accepts_unavailable_model_for_host_failure(monkeypatch) -> None:
     user = _user()
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(
@@ -2385,11 +2388,9 @@ async def test_session_rejects_unavailable_model_before_creation(monkeypatch) ->
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = persisted_message
 
-    with pytest.raises(ApiError) as exc_info:
-        await create_session(SessionCreateRequest(content="Test"), user, db)
-
-    assert exc_info.value.code == "session.modelUnavailable"
-    start.assert_not_awaited()
+    result = await create_session(SessionCreateRequest(content="Test"), user, db)
+    assert result["runId"] == str(run.id)
+    start.assert_awaited_once()
 
 
 async def test_required_search_unavailability_does_not_reject_user_message(monkeypatch) -> None:
@@ -2952,7 +2953,7 @@ async def test_changing_computer_preserves_terminal_preference(monkeypatch) -> N
 
 
 @pytest.mark.parametrize("preference", [None, False, True])
-async def test_control_center_layout_preserves_terminal_preference_until_tab_removal(preference) -> None:
+async def test_control_center_layout_discards_legacy_terminal_preference(preference) -> None:
     user = _user()
     session = ChatSession(
         id=uuid4(), user_id=user.id, title="Test", memory_mode="disabled",
@@ -2971,9 +2972,7 @@ async def test_control_center_layout_preserves_terminal_preference_until_tab_rem
             "active_app_id": "terminal", "open": True,
         }), user, db,
     )
-    assert ("terminal_auto_attach" in session.control_center, session.control_center.get("terminal_auto_attach")) == (
-        preference is not None, preference,
-    )
+    assert "terminal_auto_attach" not in session.control_center
     assert result["controlCenter"]["activeAppId"] == "terminal"
     assert "FOR UPDATE" in str(db.scalar.await_args.args[0])
 

@@ -246,7 +246,7 @@ describe('chat drafts', () => {
     expect(api.post).not.toHaveBeenCalled()
     await center.openApp('browser')
 
-    expect(api.post).toHaveBeenCalledOnce()
+    expect(api.post.mock.calls.filter(([url]) => url === '/sessions')).toHaveLength(1)
     expect(api.post.mock.calls[0][1]).toMatchObject({
       content: null,
       control_center: { active_app_id: 'browser', open: true }
@@ -286,7 +286,7 @@ describe('chat drafts', () => {
 
     await center.activate('files')
 
-    expect(api.post).toHaveBeenCalledOnce()
+    expect(api.post.mock.calls.filter(([url]) => url === '/sessions')).toHaveLength(1)
     expect(useChatStore().current.id).toBe('session-files')
     expect(center.activeAppId).toBe('files')
   })
@@ -312,7 +312,7 @@ describe('chat drafts', () => {
     } } } })
     await Promise.all([browser, mail])
 
-    expect(api.post).toHaveBeenCalledOnce()
+    expect(api.post.mock.calls.filter(([url]) => url === '/sessions')).toHaveLength(1)
     expect(api.patch).toHaveBeenCalledOnce()
     expect(chat.current.id).toBe('session-1')
     expect(center.activeAppId).toBe('mail')
@@ -612,6 +612,7 @@ describe('chat drafts', () => {
     api.post.mockResolvedValueOnce({
       data: {
         modelId: 'model-1',
+        sessionTemplateId: 'coding',
         preferredExecutionAgentId: 'agent-1',
         currentDirectory: '/srv/project'
       }
@@ -625,17 +626,22 @@ describe('chat drafts', () => {
       project_id: 'project-1', session_template_id: null
     })
     expect(chat.drafts.newSessions['project-1'].options).toMatchObject({
+      sessionTemplateId: 'coding',
       preferredExecutionAgentId: 'agent-1',
       currentDirectory: '/srv/project'
     })
   })
 
-  it('keeps the latest template choice when previews overlap', async () => {
+  it('keeps the latest template choice when previews overlap with another project reset', async () => {
     const responses = []
     api.post.mockImplementation(() => new Promise((resolve) => responses.push(resolve)))
+    api.get.mockResolvedValue(sessionPage())
     const chat = useChatStore()
+    await chat.setSessionScope('project-b')
     const first = chat.updateActive({ session_template_id: 'first' })
     const latest = chat.updateActive({ session_template_id: 'latest' })
+    chat.resetNewDraft('project-a')
+    responses[2]({ data: { sessionTemplateId: 'project-a-default' } })
     responses[0]({ data: { sessionTemplateId: 'first' } })
     await first
     responses[1]({ data: { sessionTemplateId: 'latest' } })
@@ -2704,7 +2710,7 @@ describe('chat drafts', () => {
     })
     await sending
 
-    expect(api.post).toHaveBeenNthCalledWith(2, '/sessions/session-1/runs/run-1/cancel')
+    expect(api.post).toHaveBeenCalledWith('/sessions/session-1/runs/run-1/cancel')
     expect(chat.running).toBe(false)
     expect(chat.stopping).toBe(false)
   })

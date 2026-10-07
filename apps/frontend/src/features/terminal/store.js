@@ -25,12 +25,12 @@ export const useTerminalStore = defineStore('terminal', {
     terminalId: null,
     socket: null,
     decoder: null,
+    agentDecoder: null,
     generation: 0,
     replacedContexts: [],
     status: 'closed',
     restored: null,
-    attached: false,
-    busy: false,
+    mode: 'agent',
     runtimeState: 'closed',
     suspended: false,
     activeToolCallId: null,
@@ -40,7 +40,11 @@ export const useTerminalStore = defineStore('terminal', {
     bufferRevision: 0,
     output: '',
     outputRevision: 0,
-    submitting: null,
+    agentBuffer: '',
+    agentTruncated: false,
+    agentBufferRevision: 0,
+    agentOutput: '',
+    agentOutputRevision: 0,
     rows: null,
     columns: null,
     errorNotified: false
@@ -49,9 +53,8 @@ export const useTerminalStore = defineStore('terminal', {
     ready: (state) => state.status === 'open',
     controlsEnabled: (state) => state.status === 'open' && !state.suspended && state.runtimeState !== 'closed',
     inputEnabled() {
-      return this.controlsEnabled && !this.attached
-    },
-    removalBlocked: (state) => Boolean(state.busy || state.submitting)
+      return this.controlsEnabled && this.mode === 'terminal'
+    }
   },
   actions: {
     connect({ sessionId, agentId, automatic = false }) {
@@ -87,7 +90,6 @@ export const useTerminalStore = defineStore('terminal', {
         else if (event?.code === 4002 && this.status !== 'replaced') this.status = 'resyncRequired'
         else if (!['replaced', 'resyncRequired'].includes(this.status)) this.status = 'closed'
         this.socket = null
-        this.submitting = null
       }
     },
     async receive(raw, generation = this.generation, socket = this.socket, automatic = false) {
@@ -119,13 +121,24 @@ export const useTerminalStore = defineStore('terminal', {
       } else if (message.type === 'terminal.snapshot') {
         if (this.status !== 'syncing' || message.terminalId !== this.terminalId) return
         this.decoder = markRaw(new TextDecoder())
+        this.agentDecoder = markRaw(new TextDecoder())
         this.truncated = message.personalTruncated === true
         this.buffer = this.decoder.decode(decodedBytes(message.personalData, this.truncated), { stream: true })
+        this.agentTruncated = message.agentTruncated === true
+        this.agentBuffer = this.agentDecoder.decode(decodedBytes(message.agentData, this.agentTruncated), { stream: true })
+        this.agentBufferRevision += 1
         this.applyStatus(message)
         this.rows = message.rows
         this.columns = message.columns
         this.bufferRevision += 1
         this.status = 'open'
+      } else if (message.type === 'terminal.agentOutput') {
+        if (this.ready) {
+          const output = this.agentDecoder.decode(decodedBytes(message.data), { stream: true })
+          this.agentBuffer = (this.agentBuffer + output).slice(-MAX_BUFFER_LENGTH)
+          this.agentOutput = output
+          this.agentOutputRevision += 1
+        }
       } else if (message.type === 'terminal.status') {
         if (this.ready && message.terminalId === this.terminalId) this.applyStatus(message)
       } else if (message.type === 'terminal.replaced') {
@@ -134,20 +147,14 @@ export const useTerminalStore = defineStore('terminal', {
         if (this.status !== 'replaced') this.status = message.reason === 'resyncRequired' ? 'resyncRequired' : 'closed'
       } else if (message.type === 'error') {
         this.errorNotified = true
-        this.submitting = null
         if (!automatic || this.ready) notifyError({ error: message.error }, 'Die Terminalaktion ist fehlgeschlagen.')
       }
     },
     applyStatus(message) {
-      this.attached = message.attached === true
-      this.busy = message.busy === true
       this.runtimeState = message.state
       this.suspended = message.suspended === true
       this.activeToolCallId = message.activeToolCallId ?? null
       this.currentDirectory = message.currentDirectory ?? null
-      if ((this.submitting === 'attach' && this.attached) || (this.submitting === 'detach' && !this.attached)) {
-        this.submitting = null
-      }
     },
     markReplaced() {
       this.status = 'replaced'
@@ -164,16 +171,6 @@ export const useTerminalStore = defineStore('terminal', {
       if (!this.controlsEnabled || this.socket?.readyState !== 1) return false
       this.socket.send(JSON.stringify(message))
       return true
-    },
-    attach() {
-      if (!this.sessionId || this.attached || this.busy || this.submitting || !this.sendControl({
-        type: 'attach', sessionId: this.sessionId
-      })) return
-      this.submitting = 'attach'
-    },
-    detach() {
-      if (!this.attached || this.activeToolCallId || this.submitting || !this.sendControl({ type: 'detach' })) return
-      this.submitting = 'detach'
     },
     input(data) {
       if (!this.inputEnabled) return
@@ -199,7 +196,9 @@ export const useTerminalStore = defineStore('terminal', {
       const bufferRevision = this.bufferRevision + 1
       const outputRevision = this.outputRevision + 1
       const replacedContexts = this.replacedContexts
+      const mode = this.mode
       this.$reset()
+      this.mode = mode
       this.generation = generation
       this.bufferRevision = bufferRevision
       this.outputRevision = outputRevision

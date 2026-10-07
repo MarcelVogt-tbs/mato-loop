@@ -189,6 +189,9 @@ async def test_update_project_validates_changed_session_defaults(monkeypatch) ->
     agent_id = uuid4()
     validate = AsyncMock(return_value=("/srv/project", "ask"))
     monkeypatch.setattr(projects_route, "validate_execution_preferences", validate)
+    template_id = uuid4()
+    load_template = AsyncMock()
+    monkeypatch.setattr(projects_route, "load_template", load_template)
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [project, 0, False]
 
@@ -198,6 +201,7 @@ async def test_update_project_validates_changed_session_defaults(monkeypatch) ->
             name="Project",
             defaultExecutionAgentId=agent_id,
             defaultCurrentDirectory="/srv/project",
+            defaultSessionTemplateId=template_id,
         ),
         user,
         db,
@@ -206,6 +210,8 @@ async def test_update_project_validates_changed_session_defaults(monkeypatch) ->
     validate.assert_awaited_once_with(db, user.id, agent_id, "/srv/project")
     assert updated.default_execution_agent_id == agent_id
     assert updated.default_current_directory == "/srv/project"
+    load_template.assert_awaited_once_with(db, user.id, template_id)
+    assert updated.default_session_template_id == template_id
 
 
 async def test_project_delete_impact_counts_sessions_and_linked_automations() -> None:

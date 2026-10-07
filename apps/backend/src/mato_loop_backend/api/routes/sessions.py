@@ -734,8 +734,15 @@ async def session_defaults(
 ) -> dict:
     memory = await SettingsStore.load(db, MemorySettings, user_id=user.id)
     preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id)
+    project = None
+    if payload.project_id is not None:
+        project = await db.scalar(
+            select(Project).where(Project.id == payload.project_id, Project.user_id == user.id)
+        )
+        if project is None:
+            raise ApiError(404, "project.notFound", field="projectId")
     try:
-        template = await load_template(db, user.id, payload.session_template_id)
+        template = await load_template(db, user.id, payload.session_template_id or (project.default_session_template_id if project else None))
         selected_agent_profile_id = payload.agent_profile_id or template.start_agent_id
         await session_service.validate_agent_profile(
             db, user.id, selected_agent_profile_id
@@ -761,12 +768,7 @@ async def session_defaults(
     )
     preferred_agent_id = preferences.default_execution_agent_id
     current_directory = None
-    if payload.project_id is not None:
-        project = await db.scalar(
-            select(Project).where(Project.id == payload.project_id, Project.user_id == user.id)
-        )
-        if project is None:
-            raise ApiError(404, "project.notFound", field="projectId")
+    if project is not None:
         if project.default_execution_agent_id is not None:
             preferred_agent_id = project.default_execution_agent_id
             current_directory = project.default_current_directory

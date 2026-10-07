@@ -93,6 +93,8 @@ async def persist_tool_result(
                 "runId": str(run.id),
                 "toolName": call.name,
                 **(execution_binding or {}),
+                **({"shellExecution": metadata["shellExecution"]}
+                   if call.name == "shell_run" and isinstance(metadata.get("shellExecution"), dict) else {}),
                 **({"userEditedArguments": True} if metadata.get("userEdited") is True else {}),
                 **({"errorCode": metadata["errorCode"]} if isinstance(metadata.get("errorCode"), str) else {}),
                 **({"toolSnapshot": metadata["toolSnapshot"]} if isinstance(metadata.get("toolSnapshot"), dict) else {}),

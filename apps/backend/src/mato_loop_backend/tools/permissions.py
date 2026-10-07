@@ -47,12 +47,8 @@ async def builtin_permissions(arguments, context: ToolContext, name: str):
     if name == "session_read":
         return (session_permission(arguments.session_id or context.session.id),)
     if name == "shell_run" and not arguments.elevated and not arguments.environment:
-        from mato_loop_backend.execution.terminals import terminal_coordinator
-
         client = context.execution_client
-        if client is None or client.current_directory is None or terminal_coordinator.attached_for(
-            user_id=context.session.user_id, session_id=context.session.id, agent_id=client.agent_id,
-        ) is not None:
+        if client is None or client.current_directory is None:
             return ()
         inspection = await client.request("shell.inspect", {
             "command": arguments.command, "currentDirectory": client.current_directory,

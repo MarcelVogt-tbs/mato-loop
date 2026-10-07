@@ -49,17 +49,11 @@ export function browserControlCenterAvailable(context, executionAgents, integrat
 }
 
 export const TERMINAL_OPERATIONS = Object.freeze([
+  'terminal.open',
   'terminal.read',
   'terminal.write',
   'terminal.resize',
-  'terminal.close',
-  'terminal.shared.open',
-  'terminal.shared.status',
-  'terminal.shared.acquire',
-  'terminal.shared.release',
-  'terminal.shared.prepare',
-  'terminal.shared.execute',
-  'terminal.shared.cancel'
+  'terminal.close'
 ])
 
 export function terminalControlCenterState(context, executionAgents) {

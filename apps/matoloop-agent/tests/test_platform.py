@@ -48,7 +48,6 @@ class PlatformBoundaryTests(unittest.IsolatedAsyncioTestCase):
                 cache=SimpleNamespace(),
                 process=SimpleNamespace(),
                 terminal=SimpleNamespace(),
-                shared_terminal=SimpleNamespace(),
                 search=SimpleNamespace(),
                 browser=SimpleNamespace(),
                 openscad=SimpleNamespace(),

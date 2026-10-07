@@ -461,6 +461,8 @@ def message_payload(
         "id": str(item.id),
         "role": item.role,
         "kind": "runtime_error" if error else "message",
+        "state": "error" if error else "normal",
+        "origin": "host" if error or runtime_data.get("origin") == "host" else item.role,
         "content": (
             error.message
             if error

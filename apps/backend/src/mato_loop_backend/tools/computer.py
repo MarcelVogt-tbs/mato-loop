@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -18,7 +19,7 @@ from mato_loop_backend.execution import (
 )
 from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.execution.protocol import MAX_REQUEST_BYTES, RequestMessage
-from mato_loop_backend.execution.terminals import terminal_coordinator
+from mato_loop_backend.execution.terminals import ShellOutput, terminal_coordinator
 from mato_loop_backend.models import AgentRun, ExecutionAgent
 from mato_loop_backend.permissions.policy import (
     administrator_permission,
@@ -180,11 +181,13 @@ async def _run_process(
     output = {"stdout": "", "stderr": ""}
     published_output = dict(output)
     client = files_access.workspace_client(context)
+    execution = ShellOutput(str(uuid4()), datetime.now(UTC))
     async with terminal_coordinator.capture_shell_output(
         user_id=context.session.user_id,
         session_id=context.session.id,
         agent_id=client.agent_id,
         tool_call_id=context.tool_call.id,
+        execution=execution,
     ) as display:
         command = arguments["arguments"]["command"] if operation == "administrator.run" else arguments["command"]
         for secret in sorted(set(redacted_values), key=len, reverse=True):
@@ -234,7 +237,8 @@ async def _run_process(
                 **safe_output,
                 "truncated": truncated,
             },
-        }
+        },
+        metadata={"shellExecution": {"id": execution.id, "startedAt": execution.started_at.isoformat()}},
     )
     if result.timed_out or result.exit_code != 0:
         tool_result.is_error = True
@@ -295,24 +299,6 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
             if exc.code in {"process.sudoAuthFailed", "process.sudoAuthRequired"}:
                 discard_sudo_reference(context, reference)
             raise
-    terminal = terminal_coordinator.attached_for(
-        user_id=context.session.user_id,
-        session_id=context.session.id,
-        agent_id=client.agent_id,
-    )
-    if terminal is not None:
-        from mato_loop_backend.agent.shared_shell import run_shared_shell
-
-        resolved = await resolve_secret_refs(context, arguments.environment)
-        if isinstance(resolved, ToolResult):
-            return resolved
-        environment = resolved
-        return await run_shared_shell(
-            context,
-            arguments,
-            terminal,
-            environment=environment,
-        )
     requested = arguments.model_dump(
         mode="json", exclude_none=True, exclude_defaults=True
     )
@@ -402,13 +388,8 @@ CHANGE_DIRECTORY = ToolDefinition(
 SHELL_RUN = ToolDefinition(
             "shell_run",
             "Run one command with the host-configured shell in the session directory. "
-            "On Windows, use PowerShell syntax in isolated calls. "
-            "On Linux, an attached terminal uses persistent Bash and its actual directory. "
-            "Shell state and cd persist in an attached terminal, but do not change the session workspace. "
-            "Shell options also persist; set -e can close the entire terminal on a command failure. "
-            "Run self-contained scripts with set -e in a child shell using bash -c, "
-            "rather than enabling it in the persistent shell. "
-            "Without an attached terminal, shell cd applies only to this call. "
+            "On Windows, use PowerShell syntax. Each call starts a fresh shell. "
+            "Shell state and cd apply only to this call; use change_directory for a persistent directory change. "
             "The host inspects the command and its file targets before authorization. "
             "The user can edit a staged command; results report the requested and executed arguments. "
             "Read classification means no known write action was detected, not absence of side effects. "
@@ -417,8 +398,8 @@ SHELL_RUN = ToolDefinition(
             "Optional timeout is in seconds (0 < timeout <= 3600); null uses the agent default, "
             "subject to its local maximum. Nonzero exits and timeouts are errors with bounded "
             "output retained; interpret the exit code and output for the command's meaning. "
-            "elevated=true runs this command as administrator in an isolated shell, even with an "
-             "attached terminal. It uses the same shell.read/shell.write classification as ordinary execution. "
+            "elevated=true runs this command as administrator. "
+             "It uses the same shell.read/shell.write classification as ordinary execution. "
             "Use environment references for explicit variables; elevated commands preserve only "
             "those named variables through sudo. "
              "Select an existing password reference by its name or description and target computer, "

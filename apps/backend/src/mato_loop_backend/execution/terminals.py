@@ -12,6 +12,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import WebSocket
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from mato_loop_backend.db.session import AsyncSessionFactory
@@ -19,13 +20,13 @@ from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.execution.client import (
     ExecutionClient,
     ExecutionClientError,
-    SharedTerminalStatus,
     TerminalControlResult,
     TerminalOpenResult,
     TerminalReadResult,
 )
 from mato_loop_backend.execution.manager import execution_agent_connections
-from mato_loop_backend.models import ChatSession, ExecutionAgent, LoginSession, UserAccount
+from mato_loop_backend.models import ChatSession, ExecutionAgent, LoginSession, Message, UserAccount
+from mato_loop_backend.tools.process_output import redact_process_output
 
 MAX_RUNTIMES = 64
 MAX_OWNER_RUNTIMES = 16
@@ -34,12 +35,8 @@ REPLAY_BYTES = 256 * 1024
 VIEWER_BYTES = 2 * 1024 * 1024
 VALIDITY_INTERVAL = 2
 VALIDITY_GRACE = 30
-COMMAND_RESULT_GRACE = 2
 TERMINAL_OPERATIONS = frozenset({
-    "terminal.read", "terminal.write", "terminal.resize", "terminal.close",
-    "terminal.shared.open", "terminal.shared.status", "terminal.shared.acquire",
-    "terminal.shared.release", "terminal.shared.prepare", "terminal.shared.execute",
-    "terminal.shared.cancel",
+    "terminal.open", "terminal.read", "terminal.write", "terminal.resize", "terminal.close",
 })
 logger = logging.getLogger(__name__)
 
@@ -128,10 +125,72 @@ class BrowserTerminalConnection:
 
 
 @dataclass(slots=True)
-class ShellOutputReplay:
+class ShellOutput:
+    id: str
+    started_at: datetime
     data: bytes = b""
+
+
+@dataclass(slots=True)
+class ShellOutputReplay:
+    calls: dict[str, ShellOutput] = field(default_factory=dict)
     truncated: bool = False
     active_tool_calls: set[str] = field(default_factory=set)
+
+    def append(self, output: ShellOutput, data: bytes) -> None:
+        output.data += data
+        self.calls[output.id] = output
+        overflow = sum(len(item.data) for item in self.calls.values()) - REPLAY_BYTES
+        for key in tuple(self.calls):
+            if overflow <= 0:
+                break
+            self.truncated = True
+            item = self.calls[key]
+            size = len(item.data)
+            item.data = item.data[min(overflow, size):]
+            overflow -= size
+            if not item.data:
+                del self.calls[key]
+
+
+async def shell_history(user_id: UUID, session_id: UUID, agent_id: UUID) -> list[ShellOutput]:
+    """Reuse canonical results; terminal replay is bounded and never a second transcript."""
+    async with AsyncSessionFactory() as db:
+        rows = (await db.scalars(
+            select(Message).join(ChatSession, ChatSession.id == Message.session_id).where(
+                ChatSession.user_id == user_id, Message.session_id == session_id, Message.role == "tool",
+                Message.provider_data["_matoloop"]["toolName"].astext == "shell_run",
+                Message.provider_data["_matoloop"]["executionAgentId"].astext == str(agent_id),
+            ).order_by(Message.created_at.desc(), Message.id.desc()).limit(50)
+        )).all()
+    history = []
+    for message in reversed(rows):
+        try:
+            payload = json.loads(message.content)
+            arguments = payload.get("executedArguments") or payload.get("requestedArguments") or {}
+            command = arguments.get("command")
+            output = payload.get("output", {})
+            if not isinstance(command, str) or not isinstance(output, dict):
+                continue
+            safe = redact_process_output({key: str(output.get(key) or "") for key in ("stdout", "stderr")})
+            prefix = "sudo " if arguments.get("elevated") else "$ "
+            text = f"\n{prefix}{command}\n" + safe["stdout"] + safe["stderr"]
+            execution = (message.provider_data or {}).get("_matoloop", {}).get("shellExecution") or {}
+            history.append(ShellOutput(
+                execution.get("id", str(message.id)),
+                datetime.fromisoformat(execution["startedAt"]) if execution.get("startedAt") else message.created_at,
+                text.replace("\r\n", "\n").replace("\n", "\r\n").encode(),
+            ))
+        except (ValueError, AttributeError, TypeError):
+            continue
+    return history
+
+
+def agent_snapshot(history: list[ShellOutput], replay: ShellOutputReplay | None) -> tuple[bytes, bool]:
+    calls = {**(replay.calls if replay else {}), **{item.id: item for item in history}}
+    ordered = sorted(calls.values(), key=lambda item: (item.started_at, item.id))
+    data = b"".join(item.data for item in ordered[-50:])
+    return data[-REPLAY_BYTES:], len(ordered) > 50 or len(data) > REPLAY_BYTES or bool(replay and replay.truncated) or len(history) == 50
 
 
 @dataclass(slots=True)
@@ -144,10 +203,6 @@ class TerminalRuntime:
     client: ExecutionClient
     generation: int
     viewer: BrowserTerminalConnection | None = None
-    attached: bool = False
-    active_tool_call_id: str | None = None
-    command_id: UUID | None = None
-    command_task: asyncio.Task | None = None
     task: asyncio.Task | None = None
     opening_task: asyncio.Task | None = None
     cleanup_task: asyncio.Task | None = None
@@ -157,26 +212,19 @@ class TerminalRuntime:
     personal_buffer: bytes = b""
     personal_truncated: bool = False
     shell_output: ShellOutputReplay | None = None
-    native_status: SharedTerminalStatus | None = None
     rows: int = 24
     columns: int = 80
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     control_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def status(self) -> dict[str, Any]:
-        native = self.native_status
         isolated_call = next(iter(self.shell_output.active_tool_calls), None) if self.shell_output else None
         return {
             "terminalId": self.terminal_id,
-            "attached": self.attached,
-            "busy": self.command_id is not None or isolated_call is not None
-            or (native is not None and native.state == "running"),
+            "busy": isolated_call is not None,
             "state": "closed" if self.closed or self.shell_exited else
-            "running" if isolated_call is not None
-            or (self.command_task is not None and not self.command_task.done()) else
-            native.state if native else "busy",
-            "activeToolCallId": self.active_tool_call_id or isolated_call,
-            "currentDirectory": native.current_directory if native else self.client.current_directory,
+            "running" if isolated_call is not None else "open",
+            "activeToolCallId": isolated_call,
             "suspended": self.suspended_since is not None,
         }
 
@@ -194,20 +242,6 @@ class TerminalRuntime:
 
     async def send_status(self) -> None:
         await self.send_json({"type": "terminal.status", **self.status()})
-
-    async def refresh_status(self) -> SharedTerminalStatus:
-        result = await self.client.request(
-            "terminal.shared.status", {"terminalId": self.terminal_id},
-            SharedTerminalStatus, timeout=2,
-        )
-        if str(result.terminal_id) != self.terminal_id:
-            raise ExecutionClientError("executionAgent.protocolError")
-        if self.native_status != result:
-            self.native_status = result
-            await self.send_status()
-        if result.state == "closed":
-            raise ExecutionClientError("terminal.disconnected")
-        return result
 
     async def check_access(self) -> None:
         while True:
@@ -252,10 +286,6 @@ async def read_terminal(runtime: TerminalRuntime) -> None:
             await runtime.send_bytes(base64.b64decode(result.data, validate=True))
         if result.eof:
             runtime.shell_exited = True
-            # PTY EOF can arrive before the execute response and its final output.
-            # Keep access supervision active while that response finishes.
-            if runtime.command_task is not None:
-                await asyncio.wait({runtime.command_task}, timeout=COMMAND_RESULT_GRACE)
             return
 
 
@@ -268,7 +298,7 @@ class TerminalCoordinator:
 
     @asynccontextmanager
     async def capture_shell_output(
-        self, *, user_id: UUID, session_id: UUID, agent_id: UUID, tool_call_id: str,
+        self, *, user_id: UUID, session_id: UUID, agent_id: UUID, tool_call_id: str, execution: ShellOutput,
     ):
         key = (user_id, session_id, agent_id)
         replay = self._shell_outputs.setdefault(key, ShellOutputReplay())
@@ -285,11 +315,14 @@ class TerminalCoordinator:
             if not text:
                 return
             data = text.replace("\r\n", "\n").replace("\n", "\r\n").encode()
-            replay.truncated |= len(replay.data) + len(data) > REPLAY_BYTES
-            replay.data = (replay.data + data)[-REPLAY_BYTES:]
             runtime = self._runtimes.get(key)
             if runtime is not None and not runtime.closed and not runtime.shell_exited:
-                await runtime.send_bytes(data)
+                async with runtime.send_lock:
+                    replay.append(execution, data)
+                    if runtime.viewer is not None:
+                        runtime.viewer.enqueue({"type": "terminal.agentOutput", "data": base64.b64encode(data).decode("ascii")})
+            else:
+                replay.append(execution, data)
 
         try:
             await send_status()
@@ -342,25 +375,9 @@ class TerminalCoordinator:
         assert runtime is not None
         async with runtime.control_lock:
             await validate_terminal_access(user_id, session_id, agent_id, login_id)
-            if runtime.closed or runtime.generation != agent_generation(agent_id):
+            if runtime.closed or runtime.shell_exited or runtime.generation != agent_generation(agent_id):
                 raise ExecutionClientError("terminal.disconnected")
-            await runtime.refresh_status()
-            if runtime.closed or runtime.native_status.state == "closed":
-                raise ExecutionClientError("terminal.disconnected")
-            if not runtime.attached and runtime.shell_output is not None:
-                async with asyncio.timeout(3), AsyncSessionFactory() as db:
-                    session = await db.get(ChatSession, session_id)
-                    auto_attach = (
-                        session is not None and session.user_id == user_id
-                        and session.preferred_execution_agent_id == agent_id
-                        and "terminal_auto_attach" not in (session.control_center or {})
-                    )
-                if auto_attach:
-                    try:
-                        await self.attach(runtime, remember=False)
-                    except ExecutionClientError as exc:
-                        if exc.code != "terminal.commandActive":
-                            raise
+            history = await shell_history(user_id, session_id, agent_id)
             async with runtime.send_lock:
                 if runtime.viewer is not None:
                     runtime.viewer.stop("replaced")
@@ -368,11 +385,14 @@ class TerminalCoordinator:
                 runtime.viewer = viewer
                 runtime.login_id = login_id
                 runtime.suspended_since = None
+                agent_data, agent_truncated = agent_snapshot(history, runtime.shell_output)
                 viewer.enqueue({"type": "terminal.opened", "restored": restored, **runtime.status()})
                 viewer.enqueue({
                     "type": "terminal.snapshot", **runtime.status(),
                     "personalData": base64.b64encode(runtime.personal_buffer).decode("ascii"),
                     "personalTruncated": runtime.personal_truncated,
+                    "agentData": base64.b64encode(agent_data).decode("ascii"),
+                    "agentTruncated": agent_truncated,
                     "rows": runtime.rows, "columns": runtime.columns,
                 })
                 return viewer
@@ -387,14 +407,11 @@ class TerminalCoordinator:
         )
         key = (user_id, session_id, agent_id)
         runtime.shell_output = self._shell_outputs.get(key)
-        if runtime.shell_output is not None:
-            runtime.personal_buffer = runtime.shell_output.data
-            runtime.personal_truncated = runtime.shell_output.truncated
         runtime.opening_task = asyncio.current_task()
         self._runtimes[key] = runtime
         try:
             opened = await runtime.client.request(
-                "terminal.shared.open",
+                "terminal.open",
                 {"terminalId": runtime.terminal_id, "rows": 24, "columns": 80},
                 TerminalOpenResult, timeout=5,
             )
@@ -402,16 +419,6 @@ class TerminalCoordinator:
                 raise ExecutionClientError("executionAgent.protocolError")
             if self._stopping or runtime.closed:
                 raise ExecutionClientError("terminal.disconnected")
-            async with asyncio.timeout(3), AsyncSessionFactory() as db:
-                session = await db.get(ChatSession, session_id)
-                restore_attachment = (
-                    session is not None and session.user_id == user_id
-                    and session.preferred_execution_agent_id == agent_id
-                    and (session.control_center or {}).get("terminal_auto_attach") is True
-                )
-            if restore_attachment:
-                await runtime.check_access()
-                await self.attach(runtime, remember=False)
             runtime.task = asyncio.create_task(self._supervise(runtime))
             return runtime
         except BaseException:
@@ -457,21 +464,9 @@ class TerminalCoordinator:
                 runtime.suspended_since = None
                 await runtime.send_status()
 
-    async def _watch_status(self, runtime: TerminalRuntime) -> None:
-        while True:
-            await asyncio.sleep(VALIDITY_INTERVAL)
-            # Native foreground status may take a second; never delay login reconciliation.
-            if runtime.viewer is not None and runtime.command_id is None:
-                try:
-                    await runtime.refresh_status()
-                except ExecutionClientError as exc:
-                    if exc.code != "executionAgent.timeout":
-                        raise
-
     async def _supervise(self, runtime: TerminalRuntime) -> None:
         tasks = {
             asyncio.create_task(read_terminal(runtime)), asyncio.create_task(self._watch(runtime)),
-            asyncio.create_task(self._watch_status(runtime)),
         }
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -482,7 +477,7 @@ class TerminalCoordinator:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("Shared terminal runtime failed")
+            logger.exception("Terminal runtime failed")
         finally:
             runtime.closed = True
             if runtime.viewer is not None:
@@ -515,15 +510,12 @@ class TerminalCoordinator:
                     await runtime.client.request(
                         "terminal.close", {"terminalId": runtime.terminal_id}, TerminalControlResult, timeout=3,
                     )
-            tasks = [task for task in (runtime.task, runtime.command_task)
-                     if task is not None and task is not initiator]
-            for task in tasks:
+            task = runtime.task
+            if task is not None and task is not initiator:
                 task.cancel()
-            if tasks:
-                await asyncio.wait(tasks, timeout=2)
+                await asyncio.wait({task}, timeout=2)
         finally:
             runtime.viewer = None
-            runtime.attached = False
             runtime.personal_buffer = b""
             key = (runtime.user_id, runtime.owner_session_id, runtime.agent_id)
             if self._runtimes.get(key) is runtime:
@@ -538,62 +530,5 @@ class TerminalCoordinator:
         tasks = [asyncio.create_task(self.terminate(runtime)) for runtime in list(self._runtimes.values())]
         if tasks:
             await asyncio.wait(tasks, timeout=16)
-
-    def attached_for(self, *, user_id: UUID, session_id: UUID, agent_id: UUID) -> TerminalRuntime | None:
-        runtime = self._runtimes.get((user_id, session_id, agent_id))
-        # Keep failed/suspended bindings visible: a tool must not fall back to an isolated shell.
-        return runtime if runtime is not None and runtime.attached else None
-
-    async def _remember_attachment(self, runtime: TerminalRuntime) -> None:
-        attached = runtime.attached
-        try:
-            async with asyncio.timeout(3), AsyncSessionFactory() as db:
-                session = await db.get(ChatSession, runtime.owner_session_id, with_for_update=True)
-                if (
-                    session is None or session.user_id != runtime.user_id
-                    or session.preferred_execution_agent_id != runtime.agent_id
-                    or not any(
-                        tab.get("app_id") == "terminal" and tab.get("kind", "app") == "app"
-                        for tab in (session.control_center or {}).get("tabs", [])
-                    )
-                ):
-                    raise ExecutionClientError("terminal.disconnected")
-                session.control_center = {
-                    **(session.control_center or {}), "terminal_auto_attach": attached,
-                }
-                await db.commit()
-        except (SQLAlchemyError, TimeoutError) as exc:
-            logger.warning("Could not persist terminal attachment", exc_info=True)
-            raise ExecutionClientError("terminal.unavailable") from exc
-
-    async def attach(self, runtime: TerminalRuntime, *, remember: bool = True) -> None:
-        if runtime.closed:
-            raise ValueError("terminal.disconnected")
-        await runtime.client.request(
-            "terminal.shared.acquire", {"terminalId": runtime.terminal_id},
-            TerminalControlResult, timeout=3,
-        )
-        runtime.attached = True
-        try:
-            if remember:
-                await self._remember_attachment(runtime)
-        finally:
-            await runtime.send_status()
-        await runtime.refresh_status()
-
-    async def detach(self, runtime: TerminalRuntime) -> None:
-        if runtime.command_id is not None or (runtime.shell_output and runtime.shell_output.active_tool_calls):
-            raise ValueError("terminal.commandActive")
-        await runtime.client.request(
-            "terminal.shared.release", {"terminalId": runtime.terminal_id},
-            TerminalControlResult, timeout=3,
-        )
-        runtime.attached = False
-        try:
-            await self._remember_attachment(runtime)
-        finally:
-            await runtime.send_status()
-        await runtime.refresh_status()
-
 
 terminal_coordinator = TerminalCoordinator()

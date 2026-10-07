@@ -39,6 +39,7 @@ let app, store, socket, xterm, writes, root
 beforeEach(() => {
   setActivePinia(createPinia())
   store = useTerminalStore()
+  store.mode = 'terminal'
   FakeWebSocket.instances = []
   vi.stubGlobal('WebSocket', FakeWebSocket)
   useChatStore().current = { id: 'session-1', preferredExecutionAgentId: 'agent-1', messages: [] }
@@ -84,17 +85,14 @@ async function mountTerminal() {
   for (const name of ['QIcon', 'QBanner', 'QInput', 'QTooltip', 'QSpinnerDots']) {
     app.component(name, { render() { return h('div', this.$slots.default?.()) } })
   }
-  app.component('QToggle', {
-    props: ['modelValue', 'disable', 'label'],
+  app.component('QBtnToggle', {
+    props: ['modelValue', 'options'],
     emits: ['update:modelValue'],
     render() {
-      return h('button', {
-        role: 'switch',
-        'aria-checked': String(this.modelValue),
-        'aria-disabled': String(this.disable),
-        disabled: this.disable,
-        onClick: () => this.$emit('update:modelValue', !this.modelValue)
-      }, this.label)
+      return h('div', this.options.map((option) => h('button', {
+        'aria-pressed': String(this.modelValue === option.value),
+        onClick: () => this.$emit('update:modelValue', option.value)
+      }, option.label)))
     }
   })
   app.component('QBtn', {
@@ -112,8 +110,8 @@ function lines(count) {
   ))
 }
 
-it.each([false, true])('renders raw shared PTY output with attached=%s without duplicate chat output', async (attached) => {
-  socket.state({ attached, busy: true, state: 'running' })
+it('renders raw personal PTY output without duplicate chat output', async () => {
+  socket.state({ busy: true, state: 'running' })
   const output = Array.from({ length: 18 }, (_, index) => `line ${index}`)
   socket.output(`${output.join('\r\n')}\r\n`)
   await mountTerminal()
@@ -167,24 +165,19 @@ it('replays terminal queries without sending historical responses into the shell
   expect(atob(inputs()[0].data)).toBe('\x1b[1;9R')
 })
 
-it('does not reset, redraw or switch buffers on attach and detach', async () => {
-  store.buffer = 'pty\nkept'
+it('switches between agent output and personal terminal without sending shell controls', async () => {
+  store.buffer = 'personal'
+  store.agentBuffer = 'agent\r\nkept'
   await mountTerminal()
-  const reset = vi.spyOn(Terminal.prototype, 'reset')
-  writes.length = 0
-  socket.state({ attached: true })
+  socket.send.mockClear()
+  Array.from(root.querySelectorAll('button')).find((button) => button.textContent === 'Agent-Ausgabe').click()
   await flushOutput()
-  expect(lines(2)).toEqual(['pty', '   kept'])
-  expect(writes.filter(({ data }) => data)).toEqual([])
-  store.appendOutput('\nnext')
-  socket.state({ attached: false })
+  expect(lines(2)).toEqual(['agent', 'kept'])
+  expect(xterm.options.disableStdin).toBe(true)
+  socket.message({ type: 'terminal.agentOutput', data: btoa('\r\nlive') })
   await flushOutput()
-  expect(lines(3)).toEqual(['pty', '   kept', '       next'])
-  expect(writes.filter(({ data }) => data)).toEqual([
-    { data: '\nnext', convertEol: false }
-  ])
-  expect(reset).not.toHaveBeenCalled()
-  expect(xterm.options.convertEol).toBe(false)
+  expect(lines(3)).toEqual(['agent', 'kept', 'live'])
+  expect(socket.send).not.toHaveBeenCalled()
 })
 
 it('keeps streaming across the bounded replay buffer without resetting the terminal', async () => {
@@ -212,7 +205,7 @@ it('reconnects A-B-A while mounted, replaces replay atomically and releases on u
     next.open()
     expect(store.ready).toBe(false)
     next.snapshot({
-      attached: true, busy: true, state: 'running', personalData: btoa('resumed\r\n'),
+      busy: true, state: 'running', personalData: btoa('resumed\r\n'),
       activeToolCallId: 'tool-1'
     })
     next.output('live\r\n')
@@ -220,8 +213,8 @@ it('reconnects A-B-A while mounted, replaces replay atomically and releases on u
     socket.onclose({ code: 4001 })
     await flushOutput()
     expect(lines(3)).toEqual(['resumed', 'live', ''])
-    expect(store).toMatchObject({ sessionId, status: 'open', attached: true, runtimeState: 'running', busy: true })
-    expect(xterm.options.disableStdin).toBe(true)
+    expect(store).toMatchObject({ sessionId, status: 'open', runtimeState: 'running' })
+    expect(xterm.options.disableStdin).toBe(false)
   }
   app.unmount()
   app = null
@@ -231,9 +224,8 @@ it('reconnects A-B-A while mounted, replaces replay atomically and releases on u
   }
 })
 
-it.each([false, true])('restores output and the partial prompt after A-B-A with attached=%s', async (attached) => {
+it('restores output and the partial prompt after A-B-A', async () => {
   const history = '$ ls\r\none.txt  two.txt\r\n$ cat \x1b[2D'
-  socket.state({ attached })
   socket.output(history)
   await mountTerminal()
   const before = lines(3)
@@ -244,7 +236,7 @@ it.each([false, true])('restores output and the partial prompt after A-B-A with 
     await nextTick()
     const viewer = FakeWebSocket.instances.at(-1)
     viewer.open()
-    viewer.snapshot({ attached, personalData: btoa(sessionId === 'session-1' ? history : '$ other session') })
+    viewer.snapshot({ personalData: btoa(sessionId === 'session-1' ? history : '$ other session') })
     await flushOutput()
   }
   expect(lines(3)).toEqual(before)
@@ -335,7 +327,7 @@ it('waits for persisted tab creation and resumes after a failed optimistic remov
   const viewer = FakeWebSocket.instances.at(-1)
   expect(FakeWebSocket.instances).toHaveLength(2)
   viewer.open()
-  viewer.snapshot({ attached: true })
+    viewer.snapshot()
   await flushOutput()
   center.tabs = []
   await nextTick()
@@ -346,15 +338,15 @@ it('waits for persisted tab creation and resumes after a failed optimistic remov
   expect(FakeWebSocket.instances).toHaveLength(3)
   const resumed = FakeWebSocket.instances.at(-1)
   resumed.open()
-  resumed.snapshot({ attached: true })
+  resumed.snapshot()
   await flushOutput()
-  expect(store.attached).toBe(true)
+  expect(store.ready).toBe(true)
 })
 
-it('keeps manual history and tab bytes raw, then disables input while agent-owned', async () => {
+it('keeps manual input raw and disables input in the agent output view', async () => {
   useChatStore().running = true
   useChatStore().current.currentDirectory = '/session/workspace'
-  socket.state({ attached: false, busy: false, state: 'idle', currentDirectory: '/terminal/cwd' })
+  socket.state({ busy: false, state: 'idle', currentDirectory: '/terminal/cwd' })
   await mountTerminal()
   expect(xterm.options.disableStdin).toBe(false)
   socket.send.mockClear()
@@ -362,7 +354,7 @@ it('keeps manual history and tab bytes raw, then disables input while agent-owne
   expect(socket.send.mock.calls.map(([data]) => JSON.parse(data))).toEqual([
     { type: 'input', data: btoa('\t\x1b[A') }
   ])
-  socket.state({ attached: true, busy: true, state: 'running', activeToolCallId: 'tool-1' })
+  store.mode = 'agent'
   await nextTick()
   expect(xterm.options.disableStdin).toBe(true)
   expect(root.textContent).not.toContain('Manuelle Eingaben sind gesperrt')
@@ -372,26 +364,13 @@ it('keeps manual history and tab bytes raw, then disables input while agent-owne
   expect(socket.send).not.toHaveBeenCalled()
 })
 
-it('uses the attachment toggle for both directions and blocks it during an agent command', async () => {
-  socket.state({ attached: true, busy: true, state: 'running', activeToolCallId: 'tool-1' })
+it('shows active agent status without an ownership toggle or explanatory notices', async () => {
+  socket.state({ busy: true, state: 'running', activeToolCallId: 'tool-1' })
   await mountTerminal()
-  const toggle = root.querySelector('[role="switch"]')
-  expect(root.textContent).not.toContain('Agent verbunden.')
+  expect(root.textContent).not.toMatch(/Agent verbinden|Shell-Zustand|nicht geteilt/)
   expect(root.querySelector('[role="status"]').textContent.trim()).toBe('Agent aktiv')
   expect(root.querySelector('.terminal-app [role="status"]')).toBeNull()
-  expect(toggle.getAttribute('aria-checked')).toBe('true')
-  expect(toggle.getAttribute('aria-disabled')).toBe('true')
-  expect(root.textContent).not.toContain('Manuell übernehmen')
   socket.state({ busy: false, state: 'idle', activeToolCallId: null })
   await nextTick()
-  expect(root.querySelector('[role="status"]').textContent.trim()).toBe('Agent verbunden')
-  expect(toggle.getAttribute('aria-disabled')).not.toBe('true')
-  toggle.click()
-  expect(JSON.parse(socket.send.mock.calls.at(-1)[0])).toEqual({ type: 'detach' })
-  expect(store.attached).toBe(true)
-  await nextTick()
-  socket.state({ attached: false })
-  await nextTick()
-  expect(root.textContent).not.toContain('Manuelle Steuerung')
-  expect(root.querySelector('.terminal-app [role="status"]')).toBeNull()
+  expect(root.querySelector('[role="status"]')).toBeNull()
 })

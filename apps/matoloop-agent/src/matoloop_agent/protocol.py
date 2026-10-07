@@ -369,6 +369,7 @@ class AdministratorArguments(StrictModel):
 
 
 class TerminalOpenArguments(StrictModel):
+    terminal_id: str | None = Field(default=None, alias="terminalId", pattern=UUID_PATTERN)
     rows: int = Field(ge=1, le=1000)
     columns: int = Field(ge=1, le=1000)
 
@@ -414,51 +415,6 @@ class TerminalRunArguments(HostDirectoryArguments, TerminalIdArguments):
     expected_inspection_revision: str | None = Field(
         default=None, alias="expectedInspectionRevision", pattern=r"^[0-9a-f]{64}$"
     )
-
-
-class SharedOpenArguments(TerminalOpenArguments):
-    terminal_id: str | None = Field(default=None, alias="terminalId", pattern=UUID_PATTERN)
-
-
-class SharedStatusArguments(TerminalIdArguments):
-    pass
-
-
-class SharedCommandArguments(TerminalIdArguments):
-    command_id: str = Field(alias="commandId", pattern=UUID_PATTERN)
-
-
-class SharedAcquireArguments(TerminalIdArguments):
-    pass
-
-
-class SharedReleaseArguments(TerminalIdArguments):
-    pass
-
-
-class SharedPrepareArguments(SharedCommandArguments):
-    command: str = Field(min_length=1, max_length=256 * 1024, pattern=r"^[^\x00]+$")
-
-
-class SharedCancelArguments(SharedCommandArguments):
-    pass
-
-
-class SharedExecuteArguments(SharedCommandArguments):
-    expected_inspection_revision: str = Field(
-        alias="expectedInspectionRevision", pattern=r"^[0-9a-f]{64}$"
-    )
-    timeout_seconds: float | None = Field(default=None, alias="timeoutSeconds", gt=0, le=3600)
-    environment: dict[EnvironmentName, EnvironmentValue] | None = Field(default=None, max_length=32)
-
-    _environment_is_bounded = field_validator("environment")(_bounded_unprotected_environment)
-
-
-class SharedTerminalStatus(StrictModel):
-    terminal_id: str = Field(alias="terminalId", pattern=UUID_PATTERN)
-    current_directory: str = Field(alias="currentDirectory")
-    state: Literal["human", "agent", "running", "closed"]
-    command_id: str | None = Field(alias="commandId", pattern=UUID_PATTERN)
 
 
 class ArtifactDescriptor(StrictModel):
@@ -588,13 +544,6 @@ ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "terminal.resize": TerminalResizeArguments,
     "terminal.close": TerminalCloseArguments,
     "terminal.run": TerminalRunArguments,
-    "terminal.shared.open": SharedOpenArguments,
-    "terminal.shared.status": SharedStatusArguments,
-    "terminal.shared.acquire": SharedAcquireArguments,
-    "terminal.shared.release": SharedReleaseArguments,
-    "terminal.shared.prepare": SharedPrepareArguments,
-    "terminal.shared.execute": SharedExecuteArguments,
-    "terminal.shared.cancel": SharedCancelArguments,
     "cache.ensure": CacheEnsureArguments,
     "cache.store": CacheStoreArguments,
     "cache.export": CacheExportArguments,

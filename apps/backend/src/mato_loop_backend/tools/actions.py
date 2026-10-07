@@ -79,7 +79,7 @@ _TRANSCRIPT_ROUTING_INSTRUCTION = (
     "call it for camera work, visible UI, objects, actions, or other visual details."
 )
 
-_SESSION_READ = ToolAction("session.read", "Sessions lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK)
+_SESSION_READ = ToolAction("session.read", "Sessions lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO)
 
 _SESSION_SEARCH = ToolAction(
     "session.search", "Sessions durchsuchen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK
@@ -92,8 +92,8 @@ _AUTOMATION_READ = ToolAction(
 _AUTOMATION_CREATE = ToolAction(
     "automation.create",
     "Automationen erstellen",
-    ToolExecutionPolicy.ASK,
-    ToolExecutionPolicy.ASK,
+    ToolExecutionPolicy.AUTO,
+    ToolExecutionPolicy.AUTO,
     mutates=True,
 )
 

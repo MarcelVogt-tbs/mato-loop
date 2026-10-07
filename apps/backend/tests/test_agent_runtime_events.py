@@ -64,6 +64,12 @@ from mato_loop_backend.settings.models import (
 from mato_loop_backend.tools.arguments import QuestionArguments, TaskArguments
 
 
+@pytest.fixture(autouse=True)
+def prepared_execution(monkeypatch):
+    # These tests isolate event delivery; execution prerequisites have their own coverage.
+    monkeypatch.setattr(AgentRuntime, "_prepare_run", AsyncMock())
+
+
 def test_run_timing_sums_active_segments_and_excludes_user_waits() -> None:
     started_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
     run = AgentRun(id=uuid4(), session_id=uuid4(), status="queued")
@@ -700,7 +706,7 @@ async def test_start_persists_effective_run_policy_snapshot(
     AgentRuntime._tasks.pop(run.id, None)
 
 
-async def test_start_rejects_unavailable_model_before_persisting(monkeypatch) -> None:
+async def test_start_accepts_unavailable_model_for_persisted_host_failure(monkeypatch) -> None:
     missing_model_id = uuid4()
     settings = AiSettings(models=[], default_model_id=missing_model_id)
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
@@ -718,14 +724,11 @@ async def test_start_rejects_unavailable_model_before_persisting(monkeypatch) ->
         model_config_id=missing_model_id,
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, True]
-
-    with pytest.raises(AgentRunError) as exc_info:
-        await AgentRuntime.start(db, session, "Nachricht")
-
-    assert exc_info.value.code == "session.modelUnavailable"
-    db.add_all.assert_not_called()
-    db.commit.assert_not_awaited()
+    db.scalar.side_effect = [session, None, True, True]
+    monkeypatch.setattr(mock_agent_runtime.EpisodeIndexService, "enqueue", AsyncMock())
+    run = await AgentRuntime.start(db, session, "Nachricht")
+    assert run.model_config_id == missing_model_id
+    db.commit.assert_awaited_once()
 
 
 async def test_start_rejects_disabled_profile_before_persisting(monkeypatch) -> None:
@@ -1012,7 +1015,8 @@ def test_unknown_runtime_exception_has_safe_descriptor() -> None:
     assert secret not in str(error.payload())
 
 
-async def test_run_failure_persists_structured_message_before_terminal_event(monkeypatch) -> None:
+@pytest.mark.parametrize("preflight", [False, True])
+async def test_run_failure_persists_structured_message_before_terminal_event(monkeypatch, preflight) -> None:
     monkeypatch.setattr(AgentRuntime, "_finalize_run_files", AsyncMock())
     run = AgentRun(
         id=uuid4(),
@@ -1022,7 +1026,8 @@ async def test_run_failure_persists_structured_message_before_terminal_event(mon
         trust_level="private",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = run
+    session = ChatSession(id=run.session_id, title_generation_status="running")
+    db.get.side_effect = lambda model, _id: session if model is ChatSession else run
     db.scalar.return_value = None
     db.add.side_effect = lambda message: setattr(message, "id", uuid4())
     events = []
@@ -1041,6 +1046,8 @@ async def test_run_failure_persists_structured_message_before_terminal_event(mon
     for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_execute_loop", fail)
+    if preflight:
+        monkeypatch.setattr(AgentRuntime, "_prepare_run", AsyncMock(side_effect=AgentRunError("session.computerRequired")))
     monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", AsyncMock())
     monkeypatch.setattr(mock_agent_runtime.NotificationService, "deliver_message_after_commit", AsyncMock())
     monkeypatch.setattr(run_events, "publish", publish)
@@ -1049,18 +1056,21 @@ async def test_run_failure_persists_structured_message_before_terminal_event(mon
 
     message = db.add.call_args.args[0]
     assert message.error_run_id == run.id
-    assert message.error_code == "provider.requestFailed"
+    assert message.error_code == ("session.computerRequired" if preflight else "provider.requestFailed")
     assert message.error_params is None
     assert message.content == ""
     assert run.status == "failed"
-    assert run.error == "provider.requestFailed"
+    assert run.error == message.error_code
+    assert message_payload(message)["origin"] == "host"
+    assert events[1]["message"]["state"] == "error"
+    assert (message.provider_data["_matoloop"].get("beforeExecution") is True) is preflight
     assert [event["type"] for event in events] == [
         "run.started",
         "message.completed",
         "run.failed",
     ]
     assert events[-1]["runId"] == str(run.id)
-    assert events[1]["message"]["content"] == "The model provider request failed."
+    assert events[1]["message"]["content"] == message_payload(message)["content"]
     assert events[1]["message"]["createdAt"] == message.created_at.isoformat()
     assert "secret" not in str(events)
 

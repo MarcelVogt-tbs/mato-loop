@@ -28,6 +28,16 @@
           <q-separator class="q-my-lg" />
           <div class="text-subtitle1 text-weight-bold q-mb-sm">Session-Vorgaben</div>
           <AppSelect dense
+            v-model="sessionTemplateId"
+            outlined
+            emit-value
+            map-options
+            label="Standard-Sessionvorlage"
+            :options="templateOptions"
+            :loading="templates.loading"
+            class="q-mb-md"
+          />
+          <AppSelect dense
             v-model="executionAgentId"
             outlined
             emit-value
@@ -83,6 +93,7 @@ import { computed, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useProjectStore } from 'stores/projects'
 import { useExecutionAgentStore } from 'stores/execution-agents'
+import { useSessionTemplateStore } from 'src/features/settings/session-templates-store'
 import ExecutionAgentDirectoryPickerDialog from 'src/features/computers/ExecutionAgentDirectoryPickerDialog.vue'
 
 const props = defineProps({ project: { type: Object, default: null } })
@@ -91,6 +102,18 @@ const open = defineModel({ type: Boolean, required: true })
 const $q = useQuasar()
 const projects = useProjectStore()
 const executionAgents = useExecutionAgentStore()
+const templates = useSessionTemplateStore()
+const sessionTemplateId = ref(null)
+const templateOptions = computed(() => {
+  const options = [
+    { label: 'Keine Projektvorgabe', value: null },
+    ...templates.templates.map(item => ({ label: `${item.name}${item.scope === 'personal' ? ' (Persönlich)' : ''}`, value: item.id }))
+  ]
+  if (sessionTemplateId.value && !options.some(item => item.value === sessionTemplateId.value)) {
+    options.push({ label: 'Nicht verfügbare Vorlage', value: sessionTemplateId.value, disable: true })
+  }
+  return options
+})
 const name = ref('')
 const instructions = ref('')
 const executionAgentId = ref(null)
@@ -120,10 +143,12 @@ watch(open, (shown) => {
   if (!shown) return
   name.value = props.project?.name || ''
   instructions.value = props.project?.instructions || ''
+  sessionTemplateId.value = props.project?.defaultSessionTemplateId || null
   executionAgentId.value = props.project?.defaultExecutionAgentId || null
   currentDirectory.value = props.project?.defaultCurrentDirectory || null
   directoryPickerOpen.value = false
   void executionAgents.fetchAll({ suppressErrorToast: true }).catch(() => {})
+  void templates.load().catch(() => {})
 }, { immediate: true })
 
 function selectExecutionAgent(id) {
@@ -135,6 +160,7 @@ async function save() {
   const title = name.value.trim()
   if (!title || saving.value) return
   const defaults = {
+    defaultSessionTemplateId: sessionTemplateId.value,
     defaultExecutionAgentId: executionAgentId.value,
     defaultCurrentDirectory: executionAgentId.value ? currentDirectory.value?.trim() || null : null
   }

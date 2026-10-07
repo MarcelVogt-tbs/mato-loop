@@ -28,7 +28,6 @@ from .platform import FilesystemAdapter, RuntimeServices
 from .process import ProcessRunner
 from .protocol import ARGUMENT_MODELS
 from .search import FilesystemSearch
-from .shared_terminal import SHARED_OPERATIONS, SharedTerminals
 from .terminal import TerminalManager
 from .transfer import TransferClient
 
@@ -85,7 +84,6 @@ class LinuxPlatform:
         cache = SessionCache(config.data_dir, config.max_session_cache_bytes)
         process = ProcessRunner(config, filesystem)
         terminal = TerminalManager(config, process)
-        shared_terminal = SharedTerminals(terminal)
         search = FilesystemSearch(filesystem)
         transfer = transfer_client or TransferClient(
             max_bytes=config.max_transfer_bytes,
@@ -124,10 +122,6 @@ class LinuxPlatform:
                 "terminal.close",
                 "terminal.run",
             }
-        if not shared_terminal.available:
-            operations -= SHARED_OPERATIONS
-        else:
-            operations |= {"terminal.read", "terminal.write", "terminal.resize", "terminal.close"}
         if search.executable is None:
             operations -= {"filesystem.glob", "filesystem.grep"}
         if not openscad.render_available:
@@ -138,7 +132,6 @@ class LinuxPlatform:
             cache=cache,
             process=process,
             terminal=terminal,
-            shared_terminal=shared_terminal,
             search=search,
             browser=BrowserManager(config, terminal, filesystem),
             openscad=openscad,

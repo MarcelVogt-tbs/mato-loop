@@ -3,7 +3,7 @@ import base64
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -13,15 +13,17 @@ from sqlalchemy.exc import OperationalError
 
 import mato_loop_backend.api.routes.terminals as api_routes_terminals
 import mato_loop_backend.api.websocket_access as api_websocket_access
+from mato_loop_backend.agent.tool_round import persist_tool_result
 from mato_loop_backend.execution import (
     ExecutionClientError,
     ProcessResult,
-    SharedTerminalStatus,
     TerminalControlResult,
     TerminalOpenResult,
 )
 from mato_loop_backend.execution import terminals as execution
 from mato_loop_backend.models import ChatSession, ExecutionAgent, LoginSession, UserAccount
+from mato_loop_backend.providers.base import ToolCall
+from mato_loop_backend.settings import InstanceLimits, TrustLevel
 from mato_loop_backend.tools import computer
 
 
@@ -82,16 +84,14 @@ def env(monkeypatch):
 
         async def request(self, operation, arguments, _model, **_kwargs):
             calls.append((operation, arguments))
-            if operation == "terminal.shared.open":
+            if operation == "terminal.open":
                 return TerminalOpenResult(terminal_id=arguments["terminalId"])
-            if operation == "terminal.shared.status":
-                return SharedTerminalStatus(terminal_id=arguments["terminalId"], current_directory="/home/user",
-                                            state="human", command_id=None)
             if operation == "terminal.read":
                 await asyncio.Event().wait()
             return TerminalControlResult()
 
     db = Db()
+    db.scalars = AsyncMock(return_value=Mock(all=Mock(return_value=[])))
     db.commit = AsyncMock()
     coordinator = execution.TerminalCoordinator()
     monkeypatch.setattr(api_routes_terminals, "get_runtime_config", lambda: SimpleNamespace(cors_origin_list=["https://ui.test"]))
@@ -111,7 +111,7 @@ async def open_viewer(env):
 
 
 @pytest.mark.parametrize("opened_before_shell", [False, True])
-async def test_opening_terminal_replays_completed_and_running_isolated_shell_output(env, monkeypatch, opened_before_shell):
+async def test_opening_terminal_keeps_output_when_provider_reuses_call_id_in_one_run(env, monkeypatch, opened_before_shell):
     monkeypatch.setattr(computer, "terminal_coordinator", env.coordinator)
     viewer = snapshot = None
 
@@ -132,102 +132,39 @@ async def test_opening_terminal_replays_completed_and_running_isolated_shell_out
         session=env.session, tool_call=SimpleNamespace(id="isolated"), run_id=uuid4(),
         execution_client=SimpleNamespace(agent_id=env.agent.id, request=execute),
     )
+    env.db.add = Mock()
+    env.db.flush = AsyncMock()
     try:
         if opened_before_shell:
             await env.coordinator.release(await open_viewer(env))
         for command in ("completed", "running"):
-            await computer._run_process(
+            result = await computer._run_process(
                 context, "shell.run", {"command": command},
-                requested_arguments={}, executed_arguments={},
+                requested_arguments={"command": command}, executed_arguments={"command": command},
             )
-        delivered = b"".join(
-            data for data, _size in (viewer.queue.get_nowait() for _ in range(viewer.queue.qsize()))
-            if isinstance(data, bytes)
-        )
+            if command == "completed":
+                message, _, _ = await persist_tool_result(
+                    env.db, SimpleNamespace(id=context.run_id), env.session, ToolCall("isolated", "shell_run", {}),
+                    content=result.content, metadata=result.metadata, attachments=(), file_actions=(),
+                    trust_level=TrustLevel.PUBLIC, ephemeral_output=False, limits=InstanceLimits(),
+                    attachment_service=lambda **_kwargs: None,
+                )
+                env.db.scalars.return_value = Mock(all=Mock(return_value=[message]))
+        messages = [json.loads(viewer.queue.get_nowait()[0]) for _ in range(viewer.queue.qsize())]
+        delivered = b"".join(base64.b64decode(item["data"]) for item in messages if item["type"] == "terminal.agentOutput")
         assert (
-            snapshot["attached"], snapshot["busy"], base64.b64decode(snapshot["personalData"]),
+            snapshot["busy"], base64.b64decode(snapshot["agentData"]),
             delivered, viewer.runtime.status()["busy"],
         ) == (
-            True, True, b"\r\n$ completed\r\ncompleted\r\n\r\n$ running\r\nrunning\r\n",
+            True, b"\r\n$ completed\r\ncompleted\r\n\r\n$ running\r\nrunning\r\n",
             b"live\r\n", False,
         )
     finally:
         await env.coordinator.shutdown()
 
 
-async def test_attachment_preference_survives_restart_until_explicit_detach(env):
+async def test_resume_keeps_output_and_partial_input_without_clearing_screen(env):
     first = await open_viewer(env)
-    try:
-        await api_routes_terminals._handle_control(first, {"type": "attach", "sessionId": str(env.session.id)})
-        assert env.session.control_center["terminal_auto_attach"] is True
-        env.db.commit.assert_awaited_once()
-        await env.coordinator.shutdown()
-
-        env.coordinator = execution.TerminalCoordinator()
-        second = await open_viewer(env)
-        assert second.runtime.terminal_id != first.runtime.terminal_id
-        opened = json.loads(second.queue.get_nowait()[0])
-        assert opened["attached"] is True and opened["restored"] is False
-        env.db.commit.assert_awaited_once()  # Restoration does not rewrite the preference.
-
-        await env.coordinator.detach(second.runtime)
-        assert env.session.control_center["terminal_auto_attach"] is False
-        await env.coordinator.shutdown()
-
-        env.coordinator = execution.TerminalCoordinator()
-        third = await open_viewer(env)
-        assert json.loads(third.queue.get_nowait()[0])["attached"] is False
-    finally:
-        await env.coordinator.shutdown()
-
-
-async def test_failed_restore_does_not_publish_an_attached_terminal(env, monkeypatch):
-    env.session.control_center["terminal_auto_attach"] = True
-    request = execution.ExecutionClient.request
-
-    async def fail_acquire(self, operation, *args, **kwargs):
-        if operation == "terminal.shared.acquire":
-            raise ExecutionClientError("terminal.unavailable")
-        return await request(self, operation, *args, **kwargs)
-
-    monkeypatch.setattr(execution.ExecutionClient, "request", fail_acquire)
-    with pytest.raises(ExecutionClientError):
-        await open_viewer(env)
-    assert env.coordinator.attached_for(
-        user_id=env.user.id, session_id=env.session.id, agent_id=env.agent.id,
-    ) is None
-    assert env.session.control_center["terminal_auto_attach"] is True
-    assert env.calls[-1][0] == "terminal.close"
-
-
-async def test_failed_preference_save_reports_error_and_actual_attachment(env):
-    viewer = await open_viewer(env)
-    try:
-        env.db.commit.side_effect = OperationalError("commit", {}, Exception("unavailable"))
-        await api_routes_terminals._handle_control(viewer, {"type": "attach", "sessionId": str(env.session.id)})
-        messages = [json.loads(viewer.queue.get_nowait()[0]) for _ in range(viewer.queue.qsize())]
-        assert any(message["type"] == "terminal.status" and message["attached"] for message in messages)
-        assert messages[-1]["error"]["code"] == "terminal.unavailable"
-    finally:
-        await env.coordinator.shutdown()
-
-
-@pytest.mark.parametrize("attached, acquire_busy", [(False, False), (True, False), (False, True)])
-async def test_resume_keeps_output_and_partial_input_without_clearing_screen(env, monkeypatch, attached, acquire_busy):
-    first = await open_viewer(env)
-    first.runtime.attached = attached
-    if acquire_busy:
-        first.runtime.shell_output = execution.ShellOutputReplay()
-        request = first.runtime.client.request
-
-        async def reject_busy_acquire(operation, *args, **kwargs):
-            if operation == "terminal.shared.acquire":
-                raise ExecutionClientError("terminal.commandActive")
-            return await request(operation, *args, **kwargs)
-
-        monkeypatch.setattr(first.runtime.client, "request", reject_busy_acquire)
-    else:
-        env.session.control_center["terminal_auto_attach"] = True
     history = b"$ ls\r\none.txt  two.txt\r\n$ cat \x1b[2D"
     try:
         await first.runtime.send_bytes(history)
@@ -236,12 +173,7 @@ async def test_resume_keeps_output_and_partial_input_without_clearing_screen(env
         opened = json.loads(second.queue.get_nowait()[0])
         snapshot = json.loads(second.queue.get_nowait()[0])
         assert opened["restored"] and second.runtime is first.runtime
-        assert snapshot["attached"] is attached
         assert base64.b64decode(snapshot["personalData"]) == history
-        assert all(
-            arguments == {"terminalId": first.runtime.terminal_id}
-            for operation, arguments in env.calls if operation == "terminal.shared.status"
-        )
     finally:
         await env.coordinator.shutdown()
 
@@ -281,9 +213,7 @@ def test_actual_websocket_resume_takeover_and_native_input(env):
         with client.websocket_connect(url, headers={"origin": "https://ui.test"}) as first:
             opened = first.receive_json()
             assert not opened["restored"] and "mode" not in opened
-            assert "agentData" not in first.receive_json()
-            first.send_json({"type": "attach", "sessionId": str(env.session.id)})
-            assert first.receive_json()["attached"]
+            assert first.receive_json()["agentData"] == ""
             runtime = next(iter(env.coordinator._runtimes.values()))
             client.portal.call(runtime.send_bytes, b"shared history")
             assert first.receive_bytes() == b"shared history"
@@ -292,7 +222,7 @@ def test_actual_websocket_resume_takeover_and_native_input(env):
             assert first.receive()["type"] == "websocket.close"
         with client.websocket_connect(url, headers={"origin": "https://ui.test"}) as second:
             restored = second.receive_json()
-            assert restored["restored"] and restored["attached"]
+            assert restored["restored"]
             assert restored["terminalId"] == opened["terminalId"]
             assert base64.b64decode(second.receive_json()["personalData"]) == b"shared history"
             with client.websocket_connect(url, headers={"origin": "https://ui.test"}) as third:
@@ -307,23 +237,18 @@ def test_actual_websocket_resume_takeover_and_native_input(env):
                 assert second.receive()["type"] == "websocket.close"
                 third.send_json({"type": "resize", "rows": 30, "columns": 100})
                 third.send_json({"type": "input", "data": "eA=="})
-                assert third.receive_json()["error"]["code"] == "terminal.alreadyAttached"
-                third.send_json({"type": "detach"})
-                assert third.receive_json()["attached"] is False
                 third.send_json({"type": "mode", "mode": "auto"})
                 assert third.receive_json()["error"]["code"] == "terminal.messageInvalid"
                 third.send_json({"type": "close"})
                 assert third.receive_json()["reason"] == "terminated"
                 assert third.receive()["type"] == "websocket.close"
         client.portal.call(env.coordinator.shutdown)
-    assert sum(op == "terminal.shared.open" for op, _ in env.calls) == 1
+    assert sum(op == "terminal.open" for op, _ in env.calls) == 1
     assert sum(op == "terminal.close" for op, _ in env.calls) == 1
-    assert not any(op == "terminal.write" for op, _ in env.calls)
+    assert sum(op == "terminal.write" for op, _ in env.calls) == 1
     assert ("terminal.resize", {
         "terminalId": opened["terminalId"], "rows": 30, "columns": 100,
     }) in env.calls
-    assert sum(op == "terminal.shared.acquire" for op, _ in env.calls) == 1
-    assert sum(op == "terminal.shared.release" for op, _ in env.calls) == 1
 
 
 @pytest.mark.parametrize("invalid", ["login", "expiry", "inactive", "session", "tab", "agent", "generation"])
@@ -390,14 +315,12 @@ async def test_shell_exit_rejects_new_work_but_allows_browser_close(env):
     viewer = await open_viewer(env)
     runtime = viewer.runtime
     runtime.shell_exited = True
-    runtime.command_task = asyncio.create_task(asyncio.Event().wait())
     try:
         assert runtime.status()["state"] == "closed"
         with pytest.raises(ExecutionClientError, match="terminal.disconnected"):
             await runtime.check_access()
         viewer.websocket.receive_json = AsyncMock(return_value={"type": "close"})
         await asyncio.wait_for(api_routes_terminals._handle_browser(viewer), 1)
-        assert runtime.command_task.cancelled()
         assert not env.coordinator._runtimes
         assert env.calls[-1][0] == "terminal.close"
     finally:
@@ -424,7 +347,7 @@ async def test_concurrent_open_cancel_and_uncertain_response_cleanup(env, monkey
     original = execution.ExecutionClient.request
 
     async def request(self, operation, *args, **kwargs):
-        if operation == "terminal.shared.open":
+        if operation == "terminal.open":
             started.set()
             await release.wait()
         return await original(self, operation, *args, **kwargs)
@@ -438,12 +361,12 @@ async def test_concurrent_open_cancel_and_uncertain_response_cleanup(env, monkey
     with pytest.raises(asyncio.CancelledError):
         await first
     viewer = await second
-    assert sum(op == "terminal.shared.open" for op, _ in env.calls) == 1
+    assert sum(op == "terminal.open" for op, _ in env.calls) == 1
     await env.coordinator.terminate(viewer.runtime)
     assert env.calls[-1] == ("terminal.close", {"terminalId": viewer.runtime.terminal_id})
 
     async def uncertain(self, operation, arguments, *args, **kwargs):
-        if operation == "terminal.shared.open":
+        if operation == "terminal.open":
             env.calls.append((operation, arguments))
             raise ExecutionClientError("executionAgent.timeout")
         return await original(self, operation, arguments, *args, **kwargs)
@@ -474,7 +397,7 @@ async def test_slow_open_does_not_hold_a_global_rpc_lock(env, monkeypatch):
     original = execution.ExecutionClient.request
 
     async def request(self, operation, *args, **kwargs):
-        if operation == "terminal.shared.open" and not started.is_set():
+        if operation == "terminal.open" and not started.is_set():
             started.set()
             await release.wait()
         return await original(self, operation, *args, **kwargs)
@@ -497,7 +420,7 @@ async def test_explicit_close_queued_during_open_precedes_failed_snapshot_send(e
     original = execution.ExecutionClient.request
 
     async def request(self, operation, *args, **kwargs):
-        if operation == "terminal.shared.open":
+        if operation == "terminal.open":
             started.set()
             await release.wait()
         return await original(self, operation, *args, **kwargs)

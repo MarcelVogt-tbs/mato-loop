@@ -1,4 +1,6 @@
+import json
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -33,7 +35,10 @@ from mato_loop_backend.models import (
     Notification,
     UserAccount,
 )
+from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.security import require_user
+from mato_loop_backend.tools.arguments import ListAutomationsArguments
+from mato_loop_backend.tools.automations import _list_automations
 
 
 def test_cron_uses_debian_dst_semantics_and_rejects_six_fields() -> None:
@@ -437,6 +442,10 @@ async def test_session_context_and_last_run_use_owned_definitions_and_actual_exe
                 db.add_all([run, AutomationRun(automation_id=automation.id, automation_revision=1, trigger="scheduled", status="skipped", definition_snapshot={}, created_at=now + timedelta(seconds=1))])
                 await db.flush()
                 definitions = await AutomationService.session_definitions(db, session)
+                context = SimpleNamespace(db=db, session=session, ask=AsyncMock(return_value=PermissionDecision.ALLOW))
+                local = json.loads((await _list_automations(ListAutomationsArguments(), context)).content)
+                all_owned = json.loads((await _list_automations(ListAutomationsArguments(scope="all"), context)).content)
+                assert ([item["name"] for item in local["automations"]], sorted(item["name"] for item in all_owned["automations"])) == (["Check"], ["Check", "Sibling"])
                 last = (await routes._last_runs(db, [automation.id]))[automation.id]
                 assert (
                     [(item["name"], item["task"], item["enabled"], item["nextRunAt"]) for item in definitions],

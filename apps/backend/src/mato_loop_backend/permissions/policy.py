@@ -16,7 +16,7 @@ from mato_loop_backend.execution.paths import absolute_path, is_absolute_path, w
 from mato_loop_backend.execution.paths import parent as computer_parent
 from mato_loop_backend.files.service import FileRoot, RootFileError, RootFileService
 from mato_loop_backend.integrations.youtube_transcript.client import canonicalize_youtube_video_url
-from mato_loop_backend.models import ChatSession, ExecutionAgent, PermissionGrant
+from mato_loop_backend.models import Automation, ChatSession, ExecutionAgent, PermissionGrant
 from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
@@ -1509,18 +1509,19 @@ class PermissionPolicy:
             }:
                 return PermissionDecision.DENY
 
-        if request.resource_type in {"automation_collection", "automation"}:
+        if request.resource_type in {"automation_collection", "session_automation_collection", "automation"}:
+            collection = request.resource_type != "automation"
             scope = (
                 _automation_collection_scope(request.resource_scope)
-                if request.resource_type == "automation_collection"
+                if collection
                 else _automation_scope(request.resource_scope)
             )
             user_id, session_id = (
-                scope if request.resource_type == "automation_collection" else scope[2:]
+                scope if collection else scope[2:]
             ) if scope is not None else (None, None)
             valid_capability = request.capability in (
                 {"automation.read", "automation.create"}
-                if request.resource_type == "automation_collection"
+                if collection
                 else {
                     "automation.read",
                     "automation.update",
@@ -1534,6 +1535,19 @@ class PermissionPolicy:
                 or session_id != chat_session.id
             ):
                 return PermissionDecision.DENY
+            if not collection:
+                automation = await db.get(Automation, scope[0], populate_existing=True)
+                if automation is None or automation.user_id != user_id or automation.revision != scope[1]:
+                    return PermissionDecision.DENY
+                if automation.execution_session_id == chat_session.id and request.capability in {
+                    "automation.read", "automation.update",
+                } and policy != ToolExecutionPolicy.DISABLED:
+                    policy = ToolExecutionPolicy.AUTO
+            elif request.resource_type == "session_automation_collection":
+                if request.capability != "automation.read":
+                    return PermissionDecision.DENY
+                if policy != ToolExecutionPolicy.DISABLED:
+                    policy = ToolExecutionPolicy.AUTO
 
         if request.resource_type == "session" and request.capability == "session.read":
             try:

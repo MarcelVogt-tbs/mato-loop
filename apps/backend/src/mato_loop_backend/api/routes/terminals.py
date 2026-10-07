@@ -45,22 +45,11 @@ class _CloseMessage(_BrowserMessage):
     type: Literal["close"]
 
 
-class _AttachMessage(_BrowserMessage):
-    type: Literal["attach"]
-    session_id: UUID = Field(alias="sessionId")
-
-
-class _DetachMessage(_BrowserMessage):
-    type: Literal["detach"]
-
-
 _MESSAGES = TypeAdapter(
     Annotated[
         _InputMessage
         | _ResizeMessage
-        | _CloseMessage
-        | _AttachMessage
-        | _DetachMessage,
+        | _CloseMessage,
         Field(discriminator="type"),
     ]
 )
@@ -92,8 +81,6 @@ async def _handle_control(viewer: BrowserTerminalConnection, raw: object) -> boo
             return True
         await connection.check_access()
         if isinstance(message, _InputMessage):
-            if connection.attached:
-                raise ValueError("terminal.alreadyAttached")
             try:
                 decoded = base64.b64decode(message.data, validate=True)
             except (binascii.Error, ValueError) as exc:
@@ -113,12 +100,6 @@ async def _handle_control(viewer: BrowserTerminalConnection, raw: object) -> boo
                 TerminalControlResult, timeout=3,
             )
             connection.rows, connection.columns = message.rows, message.columns
-        elif isinstance(message, _AttachMessage):
-            if message.session_id != connection.owner_session_id:
-                raise ValueError("terminal.alreadyAttached")
-            await terminal_coordinator.attach(connection)
-        elif isinstance(message, _DetachMessage):
-            await terminal_coordinator.detach(connection)
     except ValidationError:
         await connection.error("terminal.messageInvalid")
     except ValueError as exc:

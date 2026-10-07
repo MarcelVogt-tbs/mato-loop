@@ -159,7 +159,6 @@ class WindowsPlatform:
             cache=cache,
             process=process,
             terminal=unavailable,
-            shared_terminal=unavailable,
             search=WindowsSearch(filesystem),
             browser=unavailable,
             openscad=unavailable,

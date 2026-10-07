@@ -9,7 +9,7 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.model_defaults import get_defaults, save_defaults
 from mato_loop_backend.api.routes.session_templates import delete_template, save_template
 from mato_loop_backend.api.routes.sessions import SessionOptionsRequest, session_defaults
-from mato_loop_backend.models import ChatSession, UserAccount
+from mato_loop_backend.models import ChatSession, Project, UserAccount
 from mato_loop_backend.sessions.service import SessionServiceError
 from mato_loop_backend.sessions.templates import available_templates, load_template
 from mato_loop_backend.settings import SettingsStore, load_effective_ai
@@ -76,6 +76,16 @@ async def test_preview_resolves_the_current_draft_not_the_original_template(docu
     payload = SessionOptionsRequest(session_template_id=CODING_TEMPLATE_ID, agent_profile_id=PLAN_PROFILE_ID, memory_mode="read_only", session_profile=SessionProfileSnapshot(agent_ids=[PLAN_PROFILE_ID, BUILD_PROFILE_ID], agent_models={PLAN_PROFILE_ID: ChatModelOverride(model_id=model_id, reasoning_effort="high")}))
     result = await session_defaults(user, AsyncMock(spec=AsyncSession), payload)
     assert (result["effectiveModelId"], result["effectiveReasoningEffort"], result["memoryMode"], result["sessionProfile"]["messageSize"]) == (str(model_id), "high", "read_only", "standard")
+
+
+@pytest.mark.parametrize("explicit", [None, DEFAULT_TEMPLATE_ID])
+async def test_preview_inherits_project_template_unless_explicit(documents, explicit):
+    user = UserAccount(id=uuid4(), username="owner", password_hash="hash")
+    project = Project(id=uuid4(), user_id=user.id, default_session_template_id=CODING_TEMPLATE_ID)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = project
+    result = await session_defaults(user, db, SessionOptionsRequest(project_id=project.id, session_template_id=explicit))
+    assert result["sessionTemplateId"] == str(explicit or CODING_TEMPLATE_ID)
 
 
 @pytest.mark.parametrize("explicit", [False, True])

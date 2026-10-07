@@ -1519,8 +1519,10 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     assert tool_registry.action_default(
         "automation.read", TrustLevel.PUBLIC
     ) == ToolExecutionPolicy.ASK
+    for capability in ("automation.create", "session.read"):
+        for trust in (TrustLevel.PRIVATE, TrustLevel.PUBLIC):
+            assert tool_registry.action_default(capability, trust) == ToolExecutionPolicy.AUTO
     for capability in (
-        "automation.create",
         "automation.update",
         "automation.run",
         "automation.delete",

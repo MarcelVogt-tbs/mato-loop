@@ -222,7 +222,6 @@
 <script setup>
 import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, nextTick, ref } from 'vue'
-import { Notify } from 'quasar'
 import AppClosableTab from 'src/shared/ui/AppClosableTab.vue'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import { useAutomationStore } from 'stores/automations'
@@ -233,7 +232,6 @@ import { useMailStore } from 'stores/mail'
 import { useChatStore } from 'stores/chat'
 import { useBrowserStore } from 'stores/browser'
 import { useProjectStore } from 'stores/projects'
-import { useTerminalStore } from 'stores/terminal'
 import { useIntegrationStore } from 'stores/integrations'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
@@ -263,7 +261,6 @@ const browser = useBrowserStore()
 const chat = useChatStore()
 const projects = useProjectStore()
 const executionAgents = useExecutionAgentStore()
-const terminal = useTerminalStore()
 const integrations = useIntegrationStore()
 const workspace = useWorkspaceStore()
 const draggedIntegrationId = ref(null)
@@ -329,13 +326,6 @@ async function removeIntegration(appId) {
   const sessionId = controlCenter.sessionId
   const item = content(appId)
   if (!item) return
-  if (appId === 'terminal' && terminal.removalBlocked) {
-    Notify.create({
-      type: 'warning',
-      message: 'Das Terminal kann während eines wartenden oder laufenden Befehls nicht entfernt werden.'
-    })
-    return
-  }
   const terminalHint = appId === 'terminal'
     ? ' Die laufende Shell und ihr sichtbarer Verlauf gehen verloren.'
     : appId === 'automation' && automations.dirty

@@ -150,10 +150,6 @@ class ProcessResult(ExecutionResult):
     stderr_truncated: bool
 
 
-class SharedProcessResult(ProcessResult):
-    exit_code: int | None
-
-
 class TerminalOpenResult(ExecutionResult):
     terminal_id: UUID = Field(strict=False)
 
@@ -285,29 +281,6 @@ class ExecutionClientError(Exception):
         super().__init__(code)
         self.code = code
         self.params = dict(params) if params is not None else None
-
-
-class SharedTerminalStatus(ExecutionResult):
-    terminal_id: UUID = Field(strict=False)
-    current_directory: str
-    state: Literal["human", "agent", "running", "closed"]
-    command_id: UUID | None = Field(strict=False)
-
-    _validate_path = field_validator("current_directory")(_absolute_path)
-
-
-class SharedPrepareResult(ExecutionResult):
-    command: str = Field(min_length=1, max_length=256 * 1024)
-    current_directory: str
-    inspection: ShellInspectResult
-
-    _validate_path = field_validator("current_directory")(_absolute_path)
-
-    @model_validator(mode="after")
-    def validate_command(self) -> Self:
-        if "\0" in self.command or len(self.command.encode()) > 256 * 1024:
-            raise ValueError("invalid shared shell command")
-        return self
 
 
 _REMOTE_ERROR_CODES = {
@@ -540,11 +513,11 @@ class ExecutionClient:
             elif code == "operation.cancelled":
                 mapped_code = (
                     "process.interrupted"
-                    if operation.startswith("shell.") or operation in {"terminal.run", "terminal.shared.execute"}
+                    if operation.startswith("shell.") or operation == "terminal.run"
                     else "tool.executionInterrupted"
                 )
             elif code == "operation.failed" and (
-                operation.startswith("shell.") or operation in {"terminal.run", "terminal.shared.execute"}
+                operation.startswith("shell.") or operation == "terminal.run"
             ):
                 mapped_code = "process.failed"
             else:
@@ -567,9 +540,6 @@ __all__ = [
     "ExecutionClient",
     "ExecutionClientError",
     "ProcessResult",
-    "SharedProcessResult",
-    "SharedPrepareResult",
-    "SharedTerminalStatus",
     "ShellInspectResult",
     "SystemInfoResult",
     "TerminalControlResult",

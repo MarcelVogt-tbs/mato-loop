@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 from dataclasses import replace
@@ -88,7 +89,6 @@ from mato_loop_backend.tools.arguments import ProtectedQuestionResolution, Shell
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.computer import _run_process, _shell_run
 from mato_loop_backend.tools.context import ToolContext
-from mato_loop_backend.tools.contracts import ToolResult
 
 
 class FakeExecutionClient:
@@ -811,7 +811,7 @@ async def test_process_masks_split_authentication_headers_without_environment(tm
         requested_arguments={}, executed_arguments={},
     )
     replay = terminal_coordinator._shell_outputs[(context.session.user_id, context.session.id, client.agent_id)]
-    visible = result.content + str(published.await_args_list) + replay.data.decode()
+    visible = result.content + str(published.await_args_list) + b"".join(item.data for item in replay.calls.values()).decode()
     assert "session-credential" not in visible and "session-" not in visible and "HTTP 403" in visible
 
 
@@ -824,7 +824,7 @@ async def test_invalid_secret_reference_reports_environment_field(tmp_path) -> N
     assert json.loads(result.content)["error"]["field"] == "environment.USERNAME"
 
 
-@pytest.mark.parametrize("mode", ["live", "secret", "truncated", "denied", "detached"])
+@pytest.mark.parametrize("mode", ["live", "secret", "truncated", "denied"])
 async def test_elevated_shell_displays_command_and_safe_output_in_terminal(tmp_path, monkeypatch, mode) -> None:
     client = FakeExecutionClient({}, {"shell.run", "shell.classify", "administrator.run"})
     context = _context(
@@ -834,7 +834,7 @@ async def test_elevated_shell_displays_command_and_safe_output_in_terminal(tmp_p
     terminal = TerminalRuntime(
         user_id=context.session.user_id, owner_session_id=context.session.id,
         agent_id=client.agent_id, login_id=uuid4(), terminal_id=str(uuid4()),
-        client=client, generation=1, attached=mode != "detached",
+        client=client, generation=1,
     )
     terminal.viewer = BrowserTerminalConnection(terminal, Mock())
     monkeypatch.setitem(terminal_coordinator._runtimes, (
@@ -853,16 +853,17 @@ async def test_elevated_shell_displays_command_and_safe_output_in_terminal(tmp_p
         if operation == "shell.classify" or _arguments["operation"] == "shell.inspect":
             return ShellInspectResult(classification="read", read_only=True, analysis_complete=True, inspection_revision="a" * 64, targets=[], commands=[])
         assert operation == "administrator.run"
-        assert terminal.personal_buffer == b"\r\nsudo id -u\r\n"
+        output = next(iter(terminal.shell_output.calls.values()))
+        assert output.data == b"\r\nsudo id -u\r\n"
         chunks = [("stdout", "0\n"), ("stderr", "warning\r\n")]
         if protected:
             chunks = [("stdout", "private-"), ("stdout", "password\n"), ("stderr", "warning\n")]
         for channel, data in chunks:
             await on_event(SimpleNamespace(event=channel, data=data))
             if protected:
-                assert terminal.personal_buffer == b"\r\nsudo id -u\r\n"
+                assert output.data == b"\r\nsudo id -u\r\n"
             elif mode == "live":
-                assert terminal.personal_buffer.endswith(data.replace("\r\n", "\n").replace("\n", "\r\n").encode())
+                assert output.data.endswith(data.replace("\r\n", "\n").replace("\n", "\r\n").encode())
         return ProcessResult(
             exit_code=1, timed_out=False, duration_ms=1, stdout_bytes=17 if protected else 2,
             stderr_bytes=8, stdout_truncated=mode == "truncated", stderr_truncated=False,
@@ -877,16 +878,15 @@ async def test_elevated_shell_displays_command_and_safe_output_in_terminal(tmp_p
     else:
         expected = {
             "live": b"0\r\nwarning\r\n",
-            "detached": b"0\r\nwarning\r\n",
             "secret": b"[redacted]\r\nwarning\r\n",
             "truncated": b"[redacted][redacted]",
         }[mode]
-        assert terminal.personal_buffer == b"\r\nsudo id -u\r\n" + expected
-        delivered = b"".join(
-            data for data, _size in (terminal.viewer.queue.get_nowait() for _ in range(terminal.viewer.queue.qsize()))
-            if isinstance(data, bytes)
-        )
-        assert delivered == terminal.personal_buffer
+        output = terminal.shell_output.calls[result.metadata["shellExecution"]["id"]]
+        assert output.data == b"\r\nsudo id -u\r\n" + expected
+        messages = [json.loads(terminal.viewer.queue.get_nowait()[0]) for _ in range(terminal.viewer.queue.qsize())]
+        delivered = b"".join(base64.b64decode(item["data"]) for item in messages if item["type"] == "terminal.agentOutput")
+        assert delivered == output.data
+        assert terminal.personal_buffer == b""
         assert b"private-password" not in delivered
     if mode == "denied":
         assert request.await_count == 1  # Classification never executes a command.
@@ -1879,70 +1879,28 @@ async def test_shell_copy_separates_classification_and_completeness(
     }
 
 
-@pytest.mark.parametrize("timeout", [None, 0.5, 3600])
-async def test_attached_shell_routes_to_shared_runtime_without_isolated_transport(
-    tmp_path, monkeypatch, timeout
-) -> None:
-    requested = {"command": "cat README.md", **({"timeout": timeout} if timeout else {})}
-    call = ToolCall("shell", "shell_run", requested)
-
-    from mato_loop_backend.agent import shared_shell
-
-    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
-    context = _context(tmp_path, call, client)
-    terminal = object()
-    monkeypatch.setattr(terminal_coordinator, "attached_for", lambda **_kwargs: terminal)
-    run = AsyncMock(return_value=ToolResult.json({"ok": True}))
-    monkeypatch.setattr(shared_shell, "run_shared_shell", run)
-    assert not (await _tools(client.operations).execute(call, context)).is_error
-    assert client.requests == []
-    run.assert_awaited_once()
-    assert run.await_args.args[0] is context and run.await_args.args[2] is terminal
-    assert run.await_args.args[1].model_dump(
-        exclude_none=True, exclude_defaults=True
-    ) == requested
-
-
-async def test_attached_shell_resolves_one_time_environment(
-    tmp_path, monkeypatch
-) -> None:
-    from mato_loop_backend.agent import shared_shell
-
-    secret_id = uuid4()
-    call = ToolCall(
-        "shell",
-        "shell_run",
-        {
-            "command": "env",
-            "environment": {"TOKEN": f"run-secret:{secret_id}"},
-        },
-    )
-    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
-    context = _context(tmp_path, call, client)
-    context.one_time_secrets[secret_id] = "exact secret"
-    terminal = object()
-    monkeypatch.setattr(
-        terminal_coordinator, "attached_for", lambda **_kwargs: terminal
-    )
-    run = AsyncMock(return_value=ToolResult.json({"ok": True}))
-    monkeypatch.setattr(shared_shell, "run_shared_shell", run)
-
-    result = await _tools(client.operations).execute(call, context)
-
-    assert not result.is_error
-    run.assert_awaited_once_with(
-        context,
-        ShellRunArguments.model_validate(call.arguments),
-        terminal,
-        environment={"TOKEN": "exact secret"},
-    )
-    assert client.requests == []
-
-
 @pytest.mark.parametrize("timeout", [0, -1, 3600.1, float("inf"), float("nan"), True, "60"])
 def test_shell_timeout_rejects_invalid_values(timeout) -> None:
     with pytest.raises(ValidationError):
         ShellRunArguments(command="pwd", timeout=timeout)
+
+
+async def test_shell_preparation_uses_the_execution_inspection_without_running_a_command(tmp_path):
+    from mato_loop_backend.tools.permissions import authorize_session_requests, builtin_permissions
+
+    call = ToolCall("prepare", "shell_run", {"command": "pwd"})
+    client = FakeExecutionClient({"shell.inspect": ShellInspectResult(
+        targets=[], commands=[], read_only=True, classification="read", analysis_complete=True,
+        inspection_revision="a" * 64,
+    )}, {"shell.inspect", "shell.run"})
+    context = _context(tmp_path, call, client)
+    context.ask_handler.side_effect = [PermissionDecision.ASK, PermissionDecision.ALLOW]
+    requests = await builtin_permissions(ShellRunArguments(command="pwd"), context, "shell_run")
+    result = await authorize_session_requests(context, requests)
+    assert (result.is_error, client.requests, context.ask_handler.await_args.args[0].available_decisions) == (
+        False, [("shell.inspect", {"command": "pwd", "currentDirectory": client.current_directory})],
+        ("allow_session", "deny"),
+    )
 
 
 @pytest.mark.parametrize("timeout", [None, 0.25, 3600])
@@ -2280,24 +2238,3 @@ async def test_shell_reinspection_keeps_existing_grants_class_bound(tmp_path) ->
     assert await PermissionPolicy.evaluate(
         context.db, context.session, pending, context.root_files, ToolExecutionPolicy.DISABLED,
     ) == PermissionDecision.DENY
-
-
-async def test_terminal_shell_failure_never_falls_back_to_shell_transport(tmp_path, monkeypatch) -> None:
-    from mato_loop_backend.agent import shared_shell
-
-    call = ToolCall("shell", "shell_run", {"command": "pwd"})
-    client = FakeExecutionClient({
-        "shell.inspect": ShellInspectResult(
-            targets=[], analysis_complete=False, classification="read", read_only=True,
-            commands=[], inspection_revision="a" * 64,
-        ),
-    }, {"shell.inspect", "shell.run", "terminal.run"})
-    context = _context(tmp_path, call, client)
-    monkeypatch.setattr(terminal_coordinator, "attached_for", lambda **_kwargs: object())
-    run = AsyncMock(side_effect=ExecutionClientError("process.inspectionChanged"))
-    monkeypatch.setattr(shared_shell, "run_shared_shell", run)
-    result = await _tools(client.operations).execute(call, context)
-    assert result.is_error
-    assert result.metadata["errorCode"] == "process.inspectionChanged"
-    assert client.requests == []
-    run.assert_awaited_once()

@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent.run_contracts import AgentRunError
 from mato_loop_backend.agent.run_support import _effective_execution_operations
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
@@ -21,7 +22,7 @@ from mato_loop_backend.execution import (
 )
 from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.memory.episode_indexing import EpisodeIndexService
-from mato_loop_backend.models import AgentRun, ChatSession, ExecutionAgent, PermissionGrant
+from mato_loop_backend.models import AgentRun, ChatSession, ExecutionAgent, Message, PermissionGrant
 from mato_loop_backend.permissions.policy import (
     PermissionDecision,
     PermissionPolicy,
@@ -33,7 +34,13 @@ from mato_loop_backend.sessions.service import (
     validate_execution_preferences,
 )
 from mato_loop_backend.settings import AiSettings, SettingsStore, ToolExecutionPolicy, TrustLevel
-from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+from mato_loop_backend.settings.models import (
+    LlmProviderConfig,
+    ModelConfig,
+    build_profile,
+    general_profile,
+    plan_profile,
+)
 
 
 def _agent(user_id=None, **values):
@@ -53,6 +60,48 @@ def _agent(user_id=None, **values):
             **values,
         },
     )
+
+
+@pytest.mark.parametrize("profile", [plan_profile(), build_profile(), plan_profile().model_copy(update={"id": uuid4(), "base_profile_id": plan_profile().id})])
+@pytest.mark.parametrize("problem,code", [
+    ("missing", "session.computerRequired"), ("offline", "session.computerOffline"),
+    ("operations", "session.computerOperationsMissing"), ("directory", "session.directoryRequired"),
+    ("unreachable", "session.directoryUnavailable"), ("foreign", "executionAgent.unavailable"),
+])
+async def test_coding_preflight_requires_usable_owned_computer(monkeypatch, profile, problem, code):
+    from mato_loop_backend.execution import ExecutionClientError
+
+    session = ChatSession(id=uuid4(), user_id=uuid4(), agent_profile_id=profile.id)
+    agent = _agent(session.user_id if problem != "foreign" else uuid4())
+    run = AgentRun(session_id=session.id, agent_profile_id=profile.id,
+                   execution_agent_id=None if problem == "missing" else agent.id,
+                   current_directory_snapshot=None if problem == "directory" else "/home/user")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = lambda model, _id: session if model is ChatSession else agent
+    monkeypatch.setattr("mato_loop_backend.agent.runtime.load_agent_profile", AsyncMock(return_value=profile))
+    operations = {"filesystem.resolve", "filesystem.read", "filesystem.glob", "filesystem.grep", "filesystem.write"}
+    monkeypatch.setattr(execution_agent_connections, "snapshot", lambda _id: None if problem == "offline" else set() if problem == "operations" else operations)
+    monkeypatch.setattr(ExecutionClient, "request", AsyncMock(side_effect=ExecutionClientError("file.pathNotFound")))
+    with pytest.raises(AgentRunError, match=code):
+        await AgentRuntime._prepare_run(db, run)
+
+
+@pytest.mark.parametrize("profile", [general_profile(), plan_profile(), build_profile()])
+async def test_preflight_allows_general_without_computer_and_coding_with_computer(monkeypatch, profile):
+    session = ChatSession(id=uuid4(), user_id=uuid4(), agent_profile_id=profile.id)
+    agent = _agent(session.user_id)
+    provider = LlmProviderConfig(name="Test", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="test")
+    run = AgentRun(session_id=session.id, agent_profile_id=profile.id, model_config_id=model.id,
+                   execution_agent_id=None if profile.id == general_profile().id else agent.id,
+                   current_directory_snapshot="/home/user")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = lambda model, _id: session if model is ChatSession else agent
+    monkeypatch.setattr("mato_loop_backend.agent.runtime.load_agent_profile", AsyncMock(return_value=profile))
+    monkeypatch.setattr("mato_loop_backend.agent.runtime.load_effective_ai", AsyncMock(return_value=AiSettings(providers=[provider], models=[model])))
+    monkeypatch.setattr(execution_agent_connections, "snapshot", lambda _id: {"filesystem.resolve", "filesystem.read", "filesystem.glob", "filesystem.grep", "filesystem.write"})
+    monkeypatch.setattr(ExecutionClient, "request", AsyncMock(return_value=DirectoryResult(path="/home/user")))
+    await AgentRuntime._prepare_run(db, run)
 
 
 def test_execution_session_models_define_agent_foreign_keys_and_jsonb_operations() -> None:
@@ -271,3 +320,26 @@ async def test_start_persists_rootless_executor_snapshot(monkeypatch) -> None:
     assert run.execution_agent_id == agent.id
     assert run.current_directory_snapshot == "/home/user/project"
     assert run.execution_operations == ["filesystem.read", "filesystem.resolve"]
+
+
+@pytest.mark.parametrize("before_execution", [False, True])
+async def test_retry_uses_current_computer_only_for_preflight_failure(monkeypatch, before_execution):
+    session = ChatSession(id=uuid4(), user_id=uuid4(), current_directory="/home/user")
+    agent = _agent(session.user_id)
+    session.preferred_execution_agent_id = agent.id
+    provider = LlmProviderConfig(name="Test", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="test")
+    session.model_config_id = model.id
+    message = Message(id=uuid4(), session_id=session.id, role="user", content="Work")
+    failed = AgentRun(id=uuid4(), session_id=session.id, input_message_id=message.id, status="failed", model_config_id=model.id, trust_level="public")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = message
+    db.scalar.return_value = agent
+    monkeypatch.setattr(AgentRuntime, "_ensure_user_active", AsyncMock())
+    monkeypatch.setattr(AgentRuntime, "_schedule_run", Mock())
+    monkeypatch.setattr("mato_loop_backend.sessions.archive.is_session_archived", AsyncMock(return_value=False))
+    monkeypatch.setattr("mato_loop_backend.agent.runtime.load_agent_profile", AsyncMock(return_value=general_profile()))
+    monkeypatch.setattr("mato_loop_backend.agent.runtime.load_effective_ai", AsyncMock(return_value=AiSettings(providers=[provider], models=[model])))
+    monkeypatch.setattr(execution_agent_connections, "snapshot", lambda _id: None)
+    retried = await AgentRuntime.retry(db, session, failed, before_execution=before_execution)
+    assert retried.execution_agent_id == (agent.id if before_execution else None)

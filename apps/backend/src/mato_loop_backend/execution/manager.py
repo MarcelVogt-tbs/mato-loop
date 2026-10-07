@@ -68,7 +68,7 @@ def disconnect_error_code(operation: str, dispatched: bool) -> str:
         return "executionAgent.outcomeUnknown"
     if operation == "maintenance.start":
         return "executionAgent.outcomeUnknown"
-    if operation.startswith("shell.") or operation in {"terminal.run", "terminal.shared.execute"}:
+    if operation.startswith("shell.") or operation == "terminal.run":
         return "process.outcomeUnknown"
     return "executionAgent.unavailable"
 

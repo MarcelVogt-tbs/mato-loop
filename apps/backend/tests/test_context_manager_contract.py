@@ -825,7 +825,7 @@ def test_historical_reader_reference_targets_original_page_and_keeps_computer_bi
     projected = _projection_messages("System", None, records, TrustLevel.PRIVATE)
     payload = json.loads(next(item["content"] for item in projected if item.get("tool_call_id") == "reader"))
     assert payload["toolResultReference"]["arguments"] == {"message_id": str(source.id), "offset": 5}
-    assert "WS-Linux" in next(item["content"] for item in projected if item.get("tool_calls"))
+    assert "WS-Linux" in next(item["content"] for item in projected if item["role"] == "system" and "WS-Linux" in item["content"])
 
 
 @pytest.mark.parametrize("stage", ["fair_share", "sequential", "pruning"])
@@ -850,7 +850,8 @@ def test_selected_computer_marker_does_not_relocate_session_files() -> None:
     result.tool_call_id = "write"
     result.provider_data = {"_matoloop": {"executionAgentId": str(uuid4()), "executionAgentAlias": "Server"}}
     projected = _projection_messages("System", None, [call, result], TrustLevel.PRIVATE)
-    assert "not the result's storage location" in projected[1]["content"]
+    assert [(item["role"], item["content"]) for item in projected if item["role"] == "assistant"] == [("assistant", "")]
+    assert "not the result's storage location" in projected[-1]["content"]
 
 
 def test_projection_compacts_tool_outputs_before_latest_user_turn() -> None:

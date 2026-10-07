@@ -17,6 +17,7 @@ from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.models import (
     AgentRun,
+    Automation,
     ChatSession,
     ExecutionAgent,
     Message,
@@ -702,6 +703,30 @@ async def test_automation_scopes_are_canonical_current_session_and_revision_exac
     assert collection == (
         f'{{"sessionId":"{session.id}","userId":"{session.user_id}"}}'
     )
+
+
+@pytest.mark.parametrize("capability", ["automation.read", "automation.update"])
+@pytest.mark.parametrize("scope, policy, expected", [
+    ("current", ToolExecutionPolicy.ASK, PermissionDecision.ALLOW),
+    ("other", ToolExecutionPolicy.ASK, PermissionDecision.ASK),
+    ("foreign", ToolExecutionPolicy.AUTO, PermissionDecision.DENY),
+    ("stale", ToolExecutionPolicy.AUTO, PermissionDecision.DENY),
+    ("current", ToolExecutionPolicy.DISABLED, PermissionDecision.DENY),
+])
+async def test_session_automation_access_uses_persisted_owner_session_and_revision(tmp_path, capability, scope, policy, expected):
+    session = _session(user_id=uuid4())
+    automation = Automation(
+        id=uuid4(), user_id=uuid4() if scope == "foreign" else session.user_id,
+        execution_session_id=uuid4() if scope == "other" else session.id,
+        revision=2 if scope == "stale" else 1,
+    )
+    db = _db_with_grants()
+    db.get.return_value = automation
+    request = PermissionRequest(
+        capability, "automation", automation_scope(automation.id, 1, session.user_id, session.id),
+        "get_automation" if capability == "automation.read" else "edit_automation", "medium", "Test", "Test",
+    )
+    assert await PermissionPolicy.evaluate(db, session, request, _root_files(tmp_path, session), policy) == expected
 
 
 @pytest.mark.parametrize(

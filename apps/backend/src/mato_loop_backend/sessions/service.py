@@ -243,6 +243,8 @@ async def validate_execution_preferences(
     user_id: UUID,
     agent_id: UUID | None,
     current_directory: str | None,
+    *,
+    defer_unavailable: bool = False,
 ) -> tuple[str | None, str | None]:
     if agent_id is None:
         if current_directory is not None:
@@ -266,14 +268,22 @@ async def validate_execution_preferences(
     selected = current_directory or await execution_home(db, agent)
     if selected is None:
         return None, None
+    try:
+        selected = _absolute_path(selected)
+    except ValueError as exc:
+        raise SessionServiceError(400, "session.invalidWorkingDirectory", field="currentDirectory") from exc
     snapshot = execution_agent_connections.snapshot(agent.id)
     if snapshot is None or "filesystem.resolve" not in snapshot:
+        if defer_unavailable:
+            return selected, None
         raise SessionServiceError(409, "executionAgent.unavailable", field="currentDirectory")
     try:
         result = await ExecutionClient(agent.id, snapshot).request(
             "filesystem.resolve", {"path": selected}, DirectoryResult
         )
     except ExecutionClientError as exc:
+        if defer_unavailable:
+            return selected, None
         raise SessionServiceError(
             400, "session.invalidWorkingDirectory", field="currentDirectory"
         ) from exc
@@ -991,7 +1001,7 @@ async def create_session(
     )
     from mato_loop_backend.settings.session_profiles import ChatModelOverride
 
-    template = await load_template(db, user.id, payload.session_template_id)
+    template = await load_template(db, user.id, payload.session_template_id or (project.default_session_template_id if project else None))
     configuration = payload.session_profile or template.snapshot()
     configuration.template_id = template.id
     agent_profile_id = payload.agent_profile_id or template.start_agent_id
@@ -1034,16 +1044,14 @@ async def create_session(
     )
     ai = apply_session_ai(ai, item)
     model_id = ai.default_model_id
-    if content is not None and not model_available(ai, model_id):
-        raise SessionServiceError(409, "session.modelUnavailable", field="modelId")
-    if content is not None and not model_supports_tools(ai, model_id):
-        raise SessionServiceError(409, "session.modelToolsUnavailable", field="modelId")
-    current_directory, directory_policy = await validate_execution_preferences(db, user.id, agent_id, requested_directory)
+    current_directory, directory_policy = await validate_execution_preferences(
+        db, user.id, agent_id, requested_directory, defer_unavailable=content is not None,
+    )
     item.current_directory = current_directory
     db.add(item)
     item_id = item.id
     item_project_id = item.project_id
-    if content is not None:
+    if content is not None and model_available(ai, model_id):
         selected_model = model_for_session(ai, model_id)
         selected_provider = provider_for_session(ai, selected_model)
         assert selected_model is not None and selected_provider is not None
@@ -1286,20 +1294,15 @@ async def send_message(
     await validate_agent_profile(db, user.id, requested_profile)
     ai = apply_session_ai(await load_effective_ai(db, user.id), item, requested_profile)
     model_id = ai.default_model_id
-    if not model_available(ai, model_id):
-        raise SessionServiceError(409, "session.modelUnavailable")
-    if not model_supports_tools(ai, model_id):
-        raise SessionServiceError(409, "session.modelToolsUnavailable")
     if await db.scalar(select(Message.id).where(Message.session_id == session_id).limit(1)) is None:
         directory, directory_policy = await validate_execution_preferences(
-            db, user.id, item.preferred_execution_agent_id, item.current_directory
+            db, user.id, item.preferred_execution_agent_id, item.current_directory, defer_unavailable=True,
         )
         model = model_for_session(ai, model_id)
         provider = provider_for_session(ai, model)
-        assert model is not None and provider is not None
         await add_directory_grant(
             db, session_id, item.preferred_execution_agent_id, directory, directory_policy,
-            requested_profile, effective_model_trust(provider, model).value,
+            requested_profile, effective_model_trust(provider, model).value if provider and model else None,
         )
     try:
         run = await AgentRuntime.start(
@@ -1454,11 +1457,6 @@ async def update_session(
         control_center = payload.control_center.model_dump(mode="json")
         if "todos_collapsed" in (item.control_center or {}):
             control_center["todos_collapsed"] = item.control_center["todos_collapsed"]
-        # The terminal WebSocket owns this preference, not browser layout snapshots.
-        if "terminal_auto_attach" in (item.control_center or {}) and any(
-            tab.app_id == "terminal" and tab.kind == "app" for tab in payload.control_center.tabs
-        ):
-            control_center["terminal_auto_attach"] = item.control_center["terminal_auto_attach"]
         item.control_center = control_center
     if "todos_collapsed" in fields and payload.todos_collapsed is not None:
         item.control_center = {

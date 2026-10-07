@@ -37,6 +37,7 @@ class Project(Base):
     instructions: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=""
     )
+    default_session_template_id: Mapped[UUID | None] = mapped_column(nullable=True)
     default_execution_agent_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("execution_agents.id", ondelete="SET NULL"), nullable=True, index=True
     )

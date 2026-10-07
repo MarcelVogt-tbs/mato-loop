@@ -1309,6 +1309,7 @@ async def test_pending_audio_and_image_tools_use_owned_live_sources(tmp_path, mo
 
 @pytest.mark.parametrize("terminal", ["completed", "cancelled", "failed"])
 async def test_terminal_events_follow_file_finalization(monkeypatch, terminal):
+    monkeypatch.setattr(AgentRuntime, "_prepare_run", AsyncMock())
     run = AgentRun(id=uuid4(), session_id=uuid4(), status="queued")
     db = AsyncMock(spec=AsyncSession)
     db.get.side_effect = lambda model, _id: run if model is AgentRun else None
