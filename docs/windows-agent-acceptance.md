@@ -7,6 +7,10 @@ machine and run `scripts\install-matoloop-agent.ps1` from that checkout, or pass
 the changes until a release. Run the installer as Administrator under the intended
 task account. Git and Internet access are needed to bootstrap `uv`.
 
+The installer checks the new Agent executable before activating it. Shared
+filesystem helpers must remain importable on Windows; the Linux `renameat2`
+binding is loaded only on Linux.
+
 1. Install with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File
    C:\path\to\checkout\scripts\install-matoloop-agent.ps1 -Source
    C:\path\to\checkout -InstanceUrl https://your-matoloop-host`.
@@ -42,7 +46,12 @@ the target Windows installation. Linux Docker tests exercise protocol and
 backend compatibility but cannot run Windows APIs or Scheduled Tasks.
 
 Filesystem RPCs traverse directories through no-reparse handles and perform
-file mutations relative to those handles. Native tests swap a parent
-directory during reads, writes and deletes and check that only the originally
-opened target changes. This Windows-specific behavior still needs to pass
+file mutations relative to those handles. Relative renames use
+`NtSetInformationFile` with `FILE_RENAME_INFORMATION` and the open destination
+directory handle. Recursive directory creation reopens an existing directory
+handle with an empty relative name instead of `"."`. Native tests swap a parent
+directory after opening its parent handle but before opening the leaf file, and
+check that only the originally opened directory is used for reads, writes and
+deletes. Windows rejects parent-directory renames while a leaf file is open.
+This Windows-specific behavior still needs to pass
 on the target VM before the no-follow contract can be considered verified.

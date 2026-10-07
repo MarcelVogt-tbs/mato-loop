@@ -1,6 +1,7 @@
 import errno
 import hashlib
 import os
+import runpy
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +23,18 @@ def config(home: Path, data: Path, **updates) -> AgentConfig:
     )
     configuration._data_directory = data
     return configuration
+
+
+class FilesystemImportTests(unittest.TestCase):
+    def test_windows_import_does_not_load_linux_rename_library(self) -> None:
+        with (
+            patch("sys.platform", "win32"),
+            patch("ctypes.CDLL", side_effect=TypeError("LoadLibrary requires a library name")),
+        ):
+            module = runpy.run_path(
+                filesystem_module.__file__, run_name="matoloop_agent._filesystem_import"
+            )
+        self.assertIsNone(module["_renameat2"])
 
 
 class FilesystemTests(unittest.TestCase):

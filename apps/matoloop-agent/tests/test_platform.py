@@ -17,7 +17,7 @@ REQUEST_ID = "bbc46aa8-698d-4554-92c2-1cd5c6cc33a6"
 
 
 class FakePlatform:
-    platform_id = "test"
+    platform_id = "win32" if sys.platform == "win32" else "test"
 
     def computer_name(self):
         return "test-computer"
@@ -57,7 +57,7 @@ class PlatformBoundaryTests(unittest.IsolatedAsyncioTestCase):
             agent = MatoLoopAgent(config, "secret", runtime=runtime)
 
             hello = agent.hello()
-            self.assertEqual(hello.platform, "test")
+            self.assertEqual(hello.platform, FakePlatform.platform_id)
             self.assertEqual(hello.computer_name, "test-computer")
             self.assertEqual(hello.operations, ["system.info"])
             self.assertEqual(
@@ -69,7 +69,7 @@ class PlatformBoundaryTests(unittest.IsolatedAsyncioTestCase):
                         arguments={},
                     )
                 ),
-                {"agentVersion": "1.2.3", "platform": "test"},
+                {"agentVersion": "1.2.3", "platform": FakePlatform.platform_id},
             )
             with self.assertRaises(AgentError) as raised:
                 await agent.dispatch(
