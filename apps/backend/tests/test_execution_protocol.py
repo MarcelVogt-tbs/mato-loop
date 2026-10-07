@@ -420,9 +420,13 @@ async def test_dispatched_mutation_and_shell_timeouts_have_unknown_outcomes() ->
         assert json.loads(websocket.sent[-1])["type"] == "cancel"
 
 
-@pytest.mark.parametrize("code", ["file.editTextNotFound", "file.editTextNotUnique"])
-async def test_execution_client_maps_model_edit_errors(monkeypatch, code) -> None:
-    client = ExecutionClient(uuid4(), frozenset({"filesystem.edit"}))
+@pytest.mark.parametrize("operation, code, expected, result_model", [
+    ("filesystem.edit", "file.editTextNotFound", "file.editTextNotFound", WorkspaceWriteResult),
+    ("filesystem.edit", "file.editTextNotUnique", "file.editTextNotUnique", WorkspaceWriteResult),
+    ("terminal.open", "request.invalid", "executionAgent.protocolError", TerminalOpenResult),
+])
+async def test_execution_client_maps_remote_errors(monkeypatch, operation, code, expected, result_model) -> None:
+    client = ExecutionClient(uuid4(), frozenset({operation}))
 
     async def request(*_args, **_kwargs):
         return ResponseMessage.model_validate(
@@ -439,8 +443,8 @@ async def test_execution_client_maps_model_edit_errors(monkeypatch, code) -> Non
     )
 
     with pytest.raises(ExecutionClientError) as exc_info:
-        await client.request("filesystem.edit", {}, WorkspaceWriteResult)
-    assert exc_info.value.code == code
+        await client.request(operation, {}, result_model)
+    assert exc_info.value.code == expected
 
 
 @pytest.mark.parametrize("directory", [

@@ -47,6 +47,7 @@ export const useTerminalStore = defineStore('terminal', {
     agentOutputRevision: 0,
     rows: null,
     columns: null,
+    error: null,
     errorNotified: false
   }),
   getters: {
@@ -59,8 +60,9 @@ export const useTerminalStore = defineStore('terminal', {
   actions: {
     connect({ sessionId, agentId, automatic = false }) {
       if (!sessionId || !agentId) return
+      if (automatic && this.status === 'error' && this.sessionId === sessionId && this.agentId === agentId) return
       if (this.sessionId === sessionId && this.agentId === agentId && this.socket
-        && !['closed', 'resyncRequired'].includes(this.status)) return
+        && !['closed', 'resyncRequired', 'error'].includes(this.status)) return
       this.release()
       this.sessionId = sessionId
       this.agentId = agentId
@@ -87,8 +89,8 @@ export const useTerminalStore = defineStore('terminal', {
       socket.onclose = (event) => {
         if (this.generation !== generation || this.socket !== socket) return
         if (event?.code === 4001) this.markReplaced()
-        else if (event?.code === 4002 && this.status !== 'replaced') this.status = 'resyncRequired'
-        else if (!['replaced', 'resyncRequired'].includes(this.status)) this.status = 'closed'
+        else if (event?.code === 4002 && !['replaced', 'error'].includes(this.status)) this.status = 'resyncRequired'
+        else if (!['replaced', 'resyncRequired', 'error'].includes(this.status)) this.status = 'closed'
         this.socket = null
       }
     },
@@ -144,10 +146,14 @@ export const useTerminalStore = defineStore('terminal', {
       } else if (message.type === 'terminal.replaced') {
         this.markReplaced()
       } else if (message.type === 'terminal.closed') {
-        if (this.status !== 'replaced') this.status = message.reason === 'resyncRequired' ? 'resyncRequired' : 'closed'
+        if (!['replaced', 'error'].includes(this.status)) this.status = message.reason === 'resyncRequired' ? 'resyncRequired' : 'closed'
       } else if (message.type === 'error') {
         this.errorNotified = true
-        if (!automatic || this.ready) notifyError({ error: message.error }, 'Die Terminalaktion ist fehlgeschlagen.')
+        if (['executionAgent.protocolError', 'executionAgent.operationUnavailable'].includes(message.error?.code)) {
+          this.error = message.error
+          this.status = 'error'
+          socket?.close()
+        } else if (!automatic || this.ready) notifyError({ error: message.error }, 'Die Terminalaktion ist fehlgeschlagen.')
       }
     },
     applyStatus(message) {

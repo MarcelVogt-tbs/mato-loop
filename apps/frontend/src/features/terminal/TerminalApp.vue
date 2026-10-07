@@ -13,9 +13,11 @@
       role="status"
       icon="link_off"
       :title="disconnectedTitle"
-      :description="terminal.status === 'replaced'
-          ? 'Diese Ansicht steuert das Terminal nicht mehr. Verwende die andere Ansicht oder lade diese Seite bewusst neu.'
-          : 'Der verfügbare Terminalzustand wird nach der Verbindung geladen.'"
+      :description="terminal.status === 'error'
+          ? apiErrorMessage({ error: terminal.error })
+          : terminal.status === 'replaced'
+            ? 'Diese Ansicht steuert das Terminal nicht mehr. Verwende die andere Ansicht oder lade diese Seite bewusst neu.'
+            : 'Der verfügbare Terminalzustand wird nach der Verbindung geladen.'"
     >
       <template v-if="terminal.status !== 'replaced'" #actions>
         <q-btn unelevated no-caps color="primary" icon="refresh" label="Jetzt verbinden" @click="reconnect()" />
@@ -45,6 +47,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import '@xterm/xterm/css/xterm.css'
 import { terminalControlCenterState } from 'src/app/control-center/manifest'
+import { apiErrorMessage } from 'src/utils/api-errors'
 import { useChatStore } from 'stores/chat'
 import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
@@ -66,12 +69,13 @@ const connectionAvailable = computed(() => contextState.value.available
   && controlCenter.tabs.some((tab) => tab.appId === 'terminal')
   && controlCenter.confirmedState.tabs.some((tab) => tab.appId === 'terminal'))
 const disconnected = computed(() => Boolean(
-  ['closed', 'replaced', 'resyncRequired'].includes(terminal.status)
+  ['closed', 'replaced', 'resyncRequired', 'error'].includes(terminal.status)
   && terminal.sessionId === chat.current?.id
   && terminal.agentId === chat.current?.preferredExecutionAgentId
 ))
 const disconnectedTitle = computed(() => terminal.status === 'replaced'
-  ? 'In einer anderen Ansicht geöffnet' : 'Terminalverbindung wird wiederhergestellt')
+  ? 'In einer anderen Ansicht geöffnet'
+  : terminal.status === 'error' ? 'Terminal nicht verfügbar' : 'Terminalverbindung wird wiederhergestellt')
 const unavailableMessage = computed(() => {
   if (!chat.current) return 'Es ist keine Session geöffnet.'
   if (!chat.current.preferredExecutionAgentId) return 'Für diese Session ist kein Agent ausgewählt.'
@@ -202,7 +206,7 @@ watch(
   () => {
     if (connectionAvailable.value && chat.current?.id) {
       if (terminal.sessionId !== chat.current.id || terminal.agentId !== chat.current.preferredExecutionAgentId
-        || (!terminal.socket && terminal.status !== 'replaced')) reconnect()
+        || (!terminal.socket && terminal.status !== 'replaced')) reconnect(true)
       viewerSocket = terminal.socket
       void nextTick(initializeTerminal)
     } else {

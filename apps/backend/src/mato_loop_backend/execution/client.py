@@ -505,7 +505,11 @@ class ExecutionClient:
             ) from exc
         if not response.ok:
             code = response.error.code if response.error is not None else None
-            if operation.startswith("integration.browser.") and code in {"operation.failed", "operation.cancelled"}:
+            if code == "request.invalid" and operation in {
+                "terminal.open", "terminal.read", "terminal.write", "terminal.resize", "terminal.close",
+            }:
+                mapped_code = "executionAgent.protocolError"
+            elif operation.startswith("integration.browser.") and code in {"operation.failed", "operation.cancelled"}:
                 mapped_code = (
                     "browser.outcomeUnknown" if code == "operation.cancelled"
                     else "browser.actionFailed"

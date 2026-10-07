@@ -306,6 +306,31 @@ it('shows replacement without reclaiming on remount or stale control actions', a
   expect(FakeWebSocket.instances).toHaveLength(1)
 })
 
+it('keeps a rejected terminal visible without automatic retries or error toasts', async () => {
+  store.release()
+  FakeWebSocket.instances = []
+  notifyError.mockClear()
+  await mountTerminal()
+  vi.useFakeTimers()
+  const rejected = FakeWebSocket.instances.at(-1)
+  rejected.open()
+  rejected.message({ type: 'error', error: { code: 'executionAgent.protocolError' } })
+  rejected.onclose({ code: 1000 })
+  await nextTick()
+  useChatStore().current = { ...useChatStore().current }
+  await nextTick()
+  window.dispatchEvent(new Event('online'))
+  document.dispatchEvent(new Event('visibilitychange'))
+  await vi.advanceTimersByTimeAsync(60000)
+  const failed = { connections: FakeWebSocket.instances.length, text: root.textContent, toasts: notifyError.mock.calls.length }
+  Array.from(root.querySelectorAll('button')).find((button) => button.textContent === 'Jetzt verbinden').click()
+  await nextTick()
+  expect({ failed, retrying: store.status, connections: FakeWebSocket.instances.length }).toEqual({
+    failed: { connections: 1, text: expect.stringContaining('Der Computer hat eine ungültige Protokollnachricht gesendet.'), toasts: 0 },
+    retrying: 'connecting', connections: 2
+  })
+})
+
 it('keeps an idle terminal free of informational labels even when replay is truncated', async () => {
   store.$patch({ restored: false, currentDirectory: '/terminal/cwd' })
   await mountTerminal()
