@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -110,14 +111,16 @@ class WindowsRuntimeTests(unittest.TestCase):
         original = self.home / "project"
         original.mkdir()
         moved = self.home / "original-project"
-        rename = windows_handles.rename
+        staged_file = windows_handles.staged_file
 
-        def swap_then_publish(handle, parent, name, *, replace=False):
+        @contextmanager
+        def swap_then_publish(parent, name, *, replace):
             original.rename(moved)
             original.mkdir()
-            return rename(handle, parent, name, replace=replace)
+            with staged_file(parent, name, replace=replace) as handle:
+                yield handle
 
-        with patch.object(windows_handles, "rename", side_effect=swap_then_publish):
+        with patch.object(windows_handles, "staged_file", side_effect=swap_then_publish):
             self.filesystem.write((original / "result.txt").as_posix(), "bounded", None)
         self.assertEqual((moved / "result.txt").read_text(), "bounded")
         self.assertFalse((original / "result.txt").exists())
@@ -129,22 +132,23 @@ class WindowsRuntimeTests(unittest.TestCase):
         original.mkdir()
         (original / "remove.txt").write_text("original", encoding="utf-8")
         moved = self.home / "original-project"
-        remove = windows_handles.remove
+        child = windows_handles.child
 
-        def swap_then_remove(handle):
-            original.rename(moved)
-            original.mkdir()
-            (original / "remove.txt").write_text("replacement", encoding="utf-8")
-            return remove(handle)
+        @contextmanager
+        def swap_then_open(parent, name, **kwargs):
+            if name == "remove.txt":
+                original.rename(moved)
+                original.mkdir()
+                (original / "remove.txt").write_text("replacement", encoding="utf-8")
+            with child(parent, name, **kwargs) as handle:
+                yield handle
 
-        with patch.object(windows_handles, "remove", side_effect=swap_then_remove):
+        with patch.object(windows_handles, "child", side_effect=swap_then_open):
             self.filesystem.delete((original / "remove.txt").as_posix(), False)
         self.assertFalse((moved / "remove.txt").exists())
         self.assertEqual((original / "remove.txt").read_text(), "replacement")
 
     def test_read_uses_the_opened_parent_after_path_swap(self) -> None:
-        from contextlib import contextmanager
-
         from matoloop_agent import windows_handles
 
         original = self.home / "project"

@@ -44,6 +44,15 @@ class _AttributeTag(ctypes.Structure):
     _fields_ = [("attributes", wintypes.DWORD), ("tag", wintypes.DWORD)]
 
 
+class _RenameInformation(ctypes.Structure):
+    _fields_ = [
+        ("replace", wintypes.BOOLEAN),
+        ("root", wintypes.HANDLE),
+        ("length", wintypes.ULONG),
+        ("name", wintypes.WCHAR * 1),
+    ]
+
+
 _kernel = ctypes.WinDLL("kernel32", use_last_error=True)
 _ntdll = ctypes.WinDLL("ntdll")
 _nt_create = _ntdll.NtCreateFile
@@ -61,6 +70,15 @@ _nt_create.argtypes = [
     wintypes.DWORD,
 ]
 _nt_create.restype = ctypes.c_long
+_nt_set = _ntdll.NtSetInformationFile
+_nt_set.argtypes = [
+    wintypes.HANDLE,
+    ctypes.POINTER(_IoStatusBlock),
+    ctypes.c_void_p,
+    wintypes.ULONG,
+    ctypes.c_int,
+]
+_nt_set.restype = ctypes.c_long
 _close = _kernel.CloseHandle
 _close.argtypes = [wintypes.HANDLE]
 _close.restype = wintypes.BOOL
@@ -195,7 +213,8 @@ def directory(path: str, *, create: bool = False, write: bool = False) -> Iterat
             except AgentError as exc:
                 if not create or exc.code != "path.notFound":
                     raise
-                with child(handle, ".", directory=True, write=True) as writable_parent:
+                # An empty relative name reopens this handle; "." is invalid to NtCreateFile.
+                with child(handle, "", directory=True, write=True) as writable_parent:
                     try:
                         handle = stack.enter_context(
                             child(
@@ -228,18 +247,18 @@ def parent(path: str, *, write: bool = False) -> Iterator[tuple[int, str]]:
 
 def rename(handle: int, destination_parent: int, name: str, *, replace: bool = False) -> None:
     encoded = name.encode("utf-16-le")
-    pointer_size = ctypes.sizeof(ctypes.c_void_p)
-    root_offset = pointer_size
-    length_offset = root_offset + pointer_size
-    name_offset = length_offset + 4
-    buffer = ctypes.create_string_buffer(name_offset + len(encoded) + 2)
-    ctypes.c_uint32.from_buffer(buffer, 0).value = int(replace)
-    ctypes.c_void_p.from_buffer(buffer, root_offset).value = destination_parent
-    ctypes.c_uint32.from_buffer(buffer, length_offset).value = len(encoded)
+    buffer = ctypes.create_string_buffer(ctypes.sizeof(_RenameInformation) + len(encoded))
+    information = _RenameInformation.from_buffer(buffer)
+    information.replace = replace
+    information.root = destination_parent
+    information.length = len(encoded)
+    name_offset = _RenameInformation.name.offset
     buffer[name_offset : name_offset + len(encoded)] = encoded
-    if not _set(handle, 3, buffer, len(buffer)):
-        error = ctypes.get_last_error()
-        if error in {80, 183}:
+    # The NT API preserves RootDirectory for handle-relative destination names.
+    status = _IoStatusBlock()
+    result = _nt_set(handle, ctypes.byref(status), buffer, len(buffer), 10)
+    if result < 0:
+        if result & 0xFFFFFFFF == 0xC0000035:
             raise AgentError("path.exists", "Destination already exists")
         raise AgentError("path.unavailable", "Could not rename file")
 

@@ -8,6 +8,7 @@ import json
 import os
 import posixpath
 import stat
+import sys
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -22,7 +23,11 @@ from .file_text import apply_hunks, decode_text, edited_text, parse_patch, read_
 _RENAME_NOREPLACE = 1
 _RENAME_EXCHANGE = 2
 _MAX_EXECUTABLE_LINKS = 40
-_renameat2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+_renameat2 = (
+    getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+    if sys.platform.startswith("linux")
+    else None
+)
 if _renameat2 is not None:
     _renameat2.argtypes = [
         ctypes.c_int,
