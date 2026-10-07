@@ -153,7 +153,7 @@ def _public_research_payload(item: Message) -> dict[str, Any] | None:
             if not isinstance(title, str) or not title.strip() or not isinstance(url, str):
                 continue
             try:
-                safe_url = canonicalize_url(url)
+                safe_url = canonicalize_url(url, preserve_fragment=True)
             except WebFetchError:
                 continue
             linked_sources.append({"title": title.strip()[:500], "url": safe_url})

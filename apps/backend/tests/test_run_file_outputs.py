@@ -806,10 +806,12 @@ async def test_runtime_ephemeral_images_survive_requests_without_files(
     monkeypatch.setattr(ContextManager, "build", compacted_build)
     complete = provider_service.ProviderService.complete
     observed = []
+    observed_messages = []
     direct_references = []
 
     async def observed_complete(*args, **kwargs):
-        assert (kwargs["messages"], kwargs["image_inputs"]) == estimates[-1]
+        # Optional context candidates may be estimated and rejected before this request.
+        assert (kwargs["messages"], kwargs["image_inputs"]) in estimates
         for image in kwargs["image_inputs"]:
             carrier = kwargs["messages"][image.message_index]
             assert carrier["role"] == "assistant" and not carrier.get("tool_calls")
@@ -820,6 +822,7 @@ async def test_runtime_ephemeral_images_survive_requests_without_files(
             for item in kwargs["messages"] if item["role"] == "tool"
         )
         observed.append(deepcopy(kwargs["image_inputs"]))
+        observed_messages.append(deepcopy(kwargs["messages"]))
         direct_references.extend(kwargs["image_inputs"])
         if len(observed) == 3 and terminal in {"cancelled", "failed"}:
             if terminal == "cancelled":
@@ -842,7 +845,7 @@ async def test_runtime_ephemeral_images_survive_requests_without_files(
             "blue" if terminal.startswith("bounded-") or terminal == "reused-two-images" else "red"
         )
         assert all(images[0].trust_level == "private" for images in observed[1:])
-        carrier = estimates[-1][0][observed[-1][0].message_index]
+        carrier = observed_messages[-1][observed[-1][0].message_index]
         assert carrier["role"] == "assistant" and "Ephemeral tool-result image" in carrier["content"]
         assert all(image.data == b"" for image in direct_references)
         if reused_ids:
@@ -851,7 +854,7 @@ async def test_runtime_ephemeral_images_survive_requests_without_files(
             if terminal == "reused-two-images":
                 expected.insert(0, (2, sources[1], png("blue")))
             for image, (request_number, source, data) in zip(observed[-1], expected, strict=True):
-                label = estimates[-1][0][image.message_index]["content"]
+                label = observed_messages[-1][image.message_index]["content"]
                 assert image.data == data
                 assert f"model request {request_number}, assistant message {source.id}, call \"capture\"" in label
     else:

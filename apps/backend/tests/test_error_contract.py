@@ -58,7 +58,7 @@ def test_chat_history_errors_have_controlled_fallbacks() -> None:
         "error.params.retryArguments exactly."
     )
     assert describe_error("tool.invalidArguments").message == (
-        "The tool arguments are invalid. Inspect error.field and retry with arguments "
+        "The tool arguments are invalid. Inspect error.field and error.params.reason and retry with arguments "
         "that match the tool schema."
     )
 

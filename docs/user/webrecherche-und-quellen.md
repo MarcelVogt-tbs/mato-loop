@@ -24,7 +24,7 @@ Der Fallback wird nur bei vorübergehenden Fehlern des primären Providers verwe
 - **Nachfragen**
 - **Automatisch**
 
-Die Richtlinie wird getrennt für private und öffentliche Modelle gespeichert. Administratoren legen unter **Verfügbare Tools** zusätzlich fest, ob Webfetch verfügbar ist und ob nur öffentliche Adressen zulässig sind. Diese Adressbeschränkung ist standardmäßig aktiv. Wird sie deaktiviert, darf Webfetch jedes vom Backend erreichbare HTTP(S)-Ziel aufrufen, einschließlich privater, lokaler und Metadaten-Adressen. Weiterleitungen werden erneut autorisiert und ihre Zieladressen erneut aufgelöst und gebunden.
+The policy is stored separately for private and public models. Administrators configure availability and **Nur öffentliche Adressen zulassen**, enabled by default. With Lightpanda, approving a page also approves its scripts, data requests, and redirects within those network restrictions. HTTP compatibility mode requires separate authorization for redirects. Disabling the address restriction permits targets reachable from the backend. Hash routes remain part of returned source links.
 
 ## Veröffentlichte Untertitel
 

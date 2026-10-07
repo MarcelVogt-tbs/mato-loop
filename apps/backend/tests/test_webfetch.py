@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, Mock
 
 import aiohttp
 import pytest
+from aiohttp import web
 from PIL import Image
 from pypdf import PdfWriter
 from yarl import URL
@@ -47,7 +48,7 @@ def _response(
 
 
 @asynccontextmanager
-async def _server(responder: Responder) -> AsyncIterator[int]:
+async def _server(responder: Responder, *, host: str = "127.0.0.1") -> AsyncIterator[int]:
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             request = await reader.readuntil(b"\r\n\r\n")
@@ -67,7 +68,7 @@ async def _server(responder: Responder) -> AsyncIterator[int]:
             writer.close()
             await writer.wait_closed()
 
-    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    server = await asyncio.start_server(handle, host, 0)
     try:
         yield server.sockets[0].getsockname()[1]
     finally:
@@ -77,6 +78,287 @@ async def _server(responder: Responder) -> AsyncIterator[int]:
 
 def _origin(port: int, host: str = "127.0.0.1") -> str:
     return f"http://{host}:{port}"
+
+
+@pytest.mark.parametrize(("navigation", "approval_wait"), [(False, 0), (True, 0), (False, 3)])
+async def test_lightpanda_executes_javascript_and_fetches_with_configured_user_agent(navigation, approval_wait) -> None:
+    headers_seen = []
+
+    async def responder(path, headers):
+        headers_seen.append(headers["user-agent"])
+        if navigation and path == "/":
+            return _response(b"<html><body><script>location.href='/redirect'</script></body></html>", headers={"Content-Type": "text/html"})
+        if path == "/redirect":
+            return _response(status=302, headers={"Location": "/final"})
+        if path == "/data":
+            return _response(b"Dynamic page content", headers={"Content-Type": "text/plain"})
+        return _response(b"""<html><head><title>Dynamic test</title></head><body><main>Loading</main>
+            <script>fetch('/data').then(r=>r.text()).then(t=>{
+                document.querySelector('main').textContent=t+' '+navigator.userAgent;
+            });</script></body></html>""", headers={"Content-Type": "text/html"})
+
+    async def authorize(url):
+        if approval_wait:
+            await asyncio.sleep(approval_wait)
+
+    async with _server(responder) as port:
+        pending = fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False,
+            user_agent="MatoLoop-Test/1.0", authorize_url=authorize, timeout=2 if approval_wait else 5)
+        result = await pending
+    assert result.content == "Dynamic page content MatoLoop-Test/1.0"
+    assert headers_seen and set(headers_seen) == {"MatoLoop-Test/1.0"}
+    assert result.title == "Dynamic test"
+    assert result.final_url == _origin(port) + ("/final" if navigation else "/")
+
+
+@pytest.mark.xfail(strict=True, reason="Official Lightpanda 1.0.0 loses the base URL for relative imports in redirected ES modules")
+async def test_lightpanda_loads_redirected_module() -> None:
+    async def responder(path, _headers):
+        if path == "/bundle.js":
+            return _response(status=302, headers={"Location": "/assets/main.js"})
+        if path == "/assets/main.js":
+            return _response(b"import value from './chunk.js'; document.querySelector('main').textContent=value;", headers={"Content-Type": "text/javascript"})
+        if path == "/assets/chunk.js":
+            return _response(b"export default 'Redirected module loaded';", headers={"Content-Type": "text/javascript"})
+        return _response(b"<html><body><main>Loading</main><script type='module' src='/bundle.js'></script></body></html>", headers={"Content-Type": "text/html"})
+
+    async with _server(responder) as port:
+        result = await fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False, timeout=10)
+    assert result.content == "Redirected module loaded"
+
+
+@pytest.mark.parametrize("redirect", [False, True])
+async def test_lightpanda_page_approval_includes_subrequests(redirect) -> None:
+    paths = []
+
+    async def responder(path, _headers):
+        paths.append(path)
+        if path == "/redirect":
+            return _response(status=302, headers={"Location": "/secret"})
+        if path == "/secret":
+            return _response(b"Loaded", headers={"Content-Type": "text/plain"})
+        destination = "/redirect" if redirect else "/secret"
+        return _response(f"<html><body><script>fetch('{destination}')</script>Public</body></html>".encode(), headers={"Content-Type": "text/html"})
+
+    authorize = AsyncMock()
+
+    async with _server(responder) as port:
+        await fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False, authorize_url=authorize)
+    authorize.assert_awaited_once_with(_origin(port) + "/")
+    assert "/secret" in paths
+
+
+async def test_lightpanda_native_private_address_block() -> None:
+    from mato_loop_backend.web.lightpanda import render_html
+
+    paths = []
+
+    async def responder(path, _headers):
+        paths.append(path)
+        return _response(b"Unexpected private request")
+
+    async with _server(responder) as port:
+        target = await web_fetch._validate_target(_origin(port), False)
+        assert await _error_code(render_html(target, timeout=5, public_addresses_only=True,
+            max_response_bytes=1024, user_agent="MatoLoop/1.0")) in {"webfetch.addressBlocked", "webfetch.renderFailed"}
+    assert paths == []
+
+
+def test_lightpanda_cidrs_match_public_address_policy_boundaries() -> None:
+    from mato_loop_backend.web.lightpanda import _PUBLIC_ADDRESS_CIDRS
+
+    blocked = [ipaddress.ip_network(value) for value in _PUBLIC_ADDRESS_CIDRS if not value.startswith("-")]
+    allowed = [ipaddress.ip_network(value[1:]) for value in _PUBLIC_ADDRESS_CIDRS if value.startswith("-")]
+    networks = [*blocked, *allowed, *web_fetch._PRIVATE_NETWORKS]
+    # Inspect stdlib registry boundaries only in this test, so runtime upgrades
+    # cannot silently weaken the native filter when is_global/is_reserved change.
+    for address in (ipaddress.IPv4Address("0.0.0.0"), ipaddress.IPv6Address("::")):
+        for value in vars(address._constants).values():
+            networks.extend(item for item in (value if isinstance(value, list) else [value])
+                            if isinstance(item, (ipaddress.IPv4Network, ipaddress.IPv6Network)))
+    addresses = set(web_fetch._METADATA_ADDRESSES)
+    for network in networks:
+        for boundary in (int(network.network_address), int(network.broadcast_address)):
+            for value in (boundary - 1, boundary, boundary + 1):
+                if 0 <= value < 2 ** network.max_prefixlen:
+                    addresses.add(type(network.network_address)(value))
+    addresses.update(ipaddress.IPv6Address(f"::ffff:{address}") for address in list(addresses) if address.version == 4)
+    mismatches = []
+    for raw in addresses:
+        address = web_fetch._normalized_address(str(raw))
+        native_public = any(address in net for net in allowed) or not any(address in net for net in blocked)
+        if native_public != web_fetch._address_is_public(address):
+            mismatches.append(str(raw))
+    assert mismatches == []
+
+
+async def test_lightpanda_waits_for_data_beyond_five_seconds() -> None:
+    async def responder(path, _headers):
+        if path == "/data":
+            await asyncio.sleep(6)
+            return _response(b"Delayed content", headers={"Content-Type": "text/plain"})
+        return _response(b"<html><body><main>Loading</main><script>fetch('/data').then(r=>r.text()).then(t=>document.querySelector('main').textContent=t)</script></body></html>", headers={"Content-Type": "text/html"})
+
+    async with _server(responder) as port:
+        result = await fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False, timeout=12)
+    assert result.content == "Delayed content"
+
+
+async def test_lightpanda_native_filter_blocks_additional_address_classes(monkeypatch) -> None:
+    import mato_loop_backend.web.lightpanda as lightpanda
+
+    addresses = ("100.100.100.200", "192.0.2.1", "fec0::1", "2001:db8::1", "::ffff:100.100.100.200")
+    urls = [f"http://[{address}]/data" if ":" in address else f"http://{address}/data" for address in addresses]
+    readers = []
+    spawn = asyncio.create_subprocess_exec
+
+    async def capture(*args, **kwargs):
+        process = await spawn(*args[:-1], "--block-cidrs", "-127.0.0.1/32", "--log-level", "debug", args[-1],
+                              **{**kwargs, "stderr": asyncio.subprocess.PIPE})
+        readers.append(asyncio.create_task(process.stderr.read()))
+        return process
+
+    async def responder(_path, _headers):
+        script = f"Promise.all({urls!r}.map(url=>fetch(url).catch(()=>null)))"
+        return _response(f"<html><body><script>{script}</script>Page</body></html>".encode(), headers={"Content-Type": "text/html"})
+
+    async with _server(responder) as port:
+        target = await web_fetch._validate_target(_origin(port), False)
+        # Only the local fixture page is exempted; the real engine checks all subrequests.
+        monkeypatch.setattr(lightpanda, "_validate_target", AsyncMock(return_value=target))
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", capture)
+        await lightpanda.render_html(target, timeout=10, public_addresses_only=True,
+                                    max_response_bytes=4096, user_agent="MatoLoop/1.0")
+    logs = b"".join(await asyncio.gather(*readers)).decode()
+    blocked_lines = [line for line in logs.splitlines() if "blocked by IP filter" in line]
+    assert all(any(address in line for line in blocked_lines) for address in addresses[:-1]), logs
+
+
+@pytest.mark.parametrize("transport", ["fetch", "websocket", "redirect"])
+async def test_lightpanda_native_blocks_private_dependencies(monkeypatch, transport) -> None:
+    # Exempt only the fixture page; the second loopback address remains private.
+    spawn = asyncio.create_subprocess_exec
+
+    async def restricted(*args, **kwargs):
+        return await spawn(*args[:-1], "--block-private-networks", "--block-cidrs", "-127.0.0.1/32", args[-1], **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", restricted)
+    paths = []
+
+    async def responder(path, _headers):
+        paths.append(path)
+        target = _origin(port, "127.0.0.2") + "/private"
+        if transport == "websocket":
+            script = f"new WebSocket('{target.replace('http:', 'ws:')}').onerror=()=>document.querySelector('main').textContent='Blocked'"
+        elif transport == "redirect":
+            script = f"location.href='{target}'"
+        else:
+            script = f"fetch('{target}').catch(()=>document.querySelector('main').textContent='Blocked')"
+        return _response(f"<html><body><main>Waiting</main><script>{script}</script></body></html>".encode(), headers={"Content-Type": "text/html"})
+
+    async with _server(responder, host="0.0.0.0") as port:
+        result = await fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False, timeout=5)
+        if transport != "redirect":
+            assert result.content == "Blocked"
+    assert "/private" not in paths
+
+
+async def test_lightpanda_native_cookie_session() -> None:
+    async def responder(path, headers):
+        if path == "/data":
+            return _response(b"Cookie accepted" if "session=native" in headers.get("cookie", "") else b"Cookie missing", headers={"Content-Type": "text/plain"})
+        return _response(b"<html><body><main>Waiting</main><script>fetch('/data').then(r=>r.text()).then(t=>document.querySelector('main').textContent=t)</script></body></html>",
+                         headers={"Content-Type": "text/html", "Set-Cookie": "session=native; Path=/; HttpOnly; SameSite=Lax"})
+
+    async with _server(responder) as port:
+        result = await fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False)
+    assert result.content == "Cookie accepted"
+
+
+async def test_lightpanda_native_binary_post() -> None:
+    received = []
+
+    async def respond(request):
+        if request.method == "POST":
+            received.append(await request.read())
+            return web.Response(text="Posted")
+        return web.Response(content_type="text/html", text="""<html><body><main>Waiting</main><script>
+            fetch('/data', {method:'POST',body:new Uint8Array([0,255,128,65])})
+            .then(r=>r.text()).then(t=>document.querySelector('main').textContent=t);
+            </script></body></html>""")
+
+    app = web.Application()
+    app.router.add_route("*", "/{path:.*}", respond)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    try:
+        await fetch_web(_origin(runner.addresses[0][1]), engine="lightpanda", public_addresses_only=False)
+        assert received == [b"\x00\xff\x80A"]
+    finally:
+        await runner.cleanup()
+
+
+async def test_lightpanda_timeout_reaps_its_process(monkeypatch) -> None:
+    import mato_loop_backend.web.lightpanda as lightpanda
+
+    processes = []
+    spawn = asyncio.create_subprocess_exec
+
+    async def capture(*args, **kwargs):
+        process = await spawn(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(lightpanda.asyncio, "create_subprocess_exec", capture)
+
+    async def responder(_path, _headers):
+        return _response(b"<html><body><script>while(true){}</script></body></html>", headers={"Content-Type": "text/html"})
+
+    async with _server(responder) as port:
+        assert await _error_code(fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False, timeout=1)) == "webfetch.timeout"
+    assert len(processes) == 1 and processes[0].returncode is not None
+
+
+async def test_lightpanda_limits_rendered_output() -> None:
+    async def responder(path, _headers):
+        return _response(b"<html><body><main>Loading</main><script>document.querySelector('main').textContent='x'.repeat(2000)</script></body></html>", headers={"Content-Type": "text/html"})
+
+    async with _server(responder) as port:
+        assert await _error_code(fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False,
+            max_response_bytes=850)) == "webfetch.responseTooLarge"
+
+
+async def test_lightpanda_propagates_superseded_page_approval() -> None:
+    from mato_loop_backend.tools.contracts import ToolCallSuperseded
+
+    async def responder(_path, _headers):
+        return _response(b"<html><body><main>Stale content</main><script src='/script.js'></script></body></html>", headers={"Content-Type": "text/html"})
+
+    async def authorize(url):
+        raise ToolCallSuperseded
+
+    async with _server(responder) as port:
+        with pytest.raises(ToolCallSuperseded):
+            await fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False, authorize_url=authorize, timeout=5)
+
+
+@pytest.mark.parametrize(("location", "expected"), [
+    (None, "#/article%2F123"),
+    ("/final", "#/article%2F123"),
+    ("/final#/other", "#/other"),
+])
+async def test_lightpanda_preserves_browsing_fragment(location, expected) -> None:
+    async def responder(path, _headers):
+        if location and path == "/":
+            return _response(status=302, headers={"Location": location})
+        return _response(b"<html><body><main>Default route</main><script>document.querySelector('main').textContent=location.hash;</script></body></html>", headers={"Content-Type": "text/html"})
+
+    async with _server(responder) as port:
+        result = await fetch_web(_origin(port) + "/#/article%2F123", engine="lightpanda", format="text", public_addresses_only=False, timeout=5)
+    assert result.content == expected
+    assert result.final_url == _origin(port) + ("/final" if location else "/") + expected
 
 
 async def _error_code(awaitable: Awaitable[object]) -> str:
@@ -281,10 +563,7 @@ async def test_dns_is_pinned_and_request_headers_are_safe(monkeypatch) -> None:
 
     assert result.content == "pinned"
     assert seen_headers["host"] == f"pinned.test:{port}"
-    assert seen_headers["user-agent"] == (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
-    )
+    assert seen_headers["user-agent"] == "MatoLoop/1.0"
     assert seen_headers["accept-encoding"] == "gzip, deflate"
     assert "application/pdf" in seen_headers["accept"]
     assert "application/json" in seen_headers["accept"]

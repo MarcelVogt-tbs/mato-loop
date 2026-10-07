@@ -123,11 +123,12 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
 
 async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolResult:
     await web_access.ensure_webfetch_binding_is_current(context)
-    public_addresses_only = context.tool_settings.web_fetch.public_addresses_only
+    settings = context.tool_settings.web_fetch.model_copy(deep=True)
+    public_addresses_only = settings.public_addresses_only
 
     async def authorize_url(url: str) -> None:
         await web_access.authorize_webfetch_target(context, url)
-        if context.tool_settings.web_fetch.public_addresses_only != public_addresses_only:
+        if context.tool_settings.web_fetch != settings:
             raise WebFetchError("tool.unavailable")
 
     result = await fetch_web(
@@ -136,16 +137,17 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
         timeout=arguments.timeout,
         public_addresses_only=public_addresses_only,
         authorize_url=authorize_url,
-        max_response_bytes=context.tool_settings.web_fetch.max_response_mib * 1024 * 1024,
+        max_response_bytes=settings.max_response_mib * 1024 * 1024,
         pdf_vision_handler=context.pdf_vision_handler,
         pdf_pages=arguments.pdf_pages,
-        user_agent=context.tool_settings.web_fetch.user_agent,
+        user_agent=settings.user_agent,
+        engine=settings.engine,
     )
     if not result.content.strip() and not result.images:
         return ToolResult.error(
             "webfetch.emptyResponse", params={"statusCode": result.status_code}
         )
-    canonical_source_url = canonicalize_url(result.final_url)
+    canonical_source_url = canonicalize_url(result.final_url, preserve_fragment=True)
     source = {
         "sourceId": evidence_source_id(canonical_source_url),
         "url": canonical_source_url,

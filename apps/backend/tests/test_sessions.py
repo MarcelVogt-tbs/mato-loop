@@ -1767,7 +1767,7 @@ def test_message_payload_exposes_only_validated_research_snapshot() -> None:
         "policy": "available",
         "used": True,
         "linkedSources": [
-            {"title": "Quelle", "url": "https://example.test/source"}
+            {"title": "Quelle", "url": "https://example.test/source#part"}
         ],
     }
     assert "private-state" not in str(payload)

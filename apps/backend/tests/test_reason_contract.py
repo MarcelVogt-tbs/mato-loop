@@ -51,7 +51,7 @@ async def test_reason_repair_through_runtime_and_real_registry(monkeypatch, extr
     first, second = _tool_messages(db)
     assert json.loads(first.content)["error"] == {
         "code": "tool.invalidArguments",
-        "message": "The tool arguments are invalid. Inspect error.field and retry with arguments that match the tool schema.",
+        "message": "The tool arguments are invalid. Inspect error.field and error.params.reason and retry with arguments that match the tool schema.",
         "field": "_reason",
     }
     assert json.loads(second.content) == {"content": "note"}

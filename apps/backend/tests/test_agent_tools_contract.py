@@ -5527,8 +5527,9 @@ async def test_webfetch_rejects_changed_bound_settings(tmp_path, monkeypatch) ->
         ("application/json", '{"title":"A & B <value>","items":[1,2]}\n', "text"),
     ],
 )
+@pytest.mark.parametrize("suffix", ["?variant=", "#/article/"])
 async def test_webfetch_sources_preserve_distinct_query_values(
-    tmp_path, monkeypatch, content_type, content, output_format,
+    tmp_path, monkeypatch, content_type, content, output_format, suffix,
 ) -> None:
     async def fake_fetch(url, **_kwargs):
         return WebFetchResult(
@@ -5545,7 +5546,7 @@ async def test_webfetch_sources_preserve_distinct_query_values(
         call = ToolCall(
             id=value,
             name="webfetch",
-            arguments={"url": f"https://example.com/product?variant={value}"},
+            arguments={"url": f"https://example.com/product{suffix}{value}"},
         )
         results.append(
             await tool_registry.execute(
@@ -5562,8 +5563,18 @@ async def test_webfetch_sources_preserve_distinct_query_values(
     assert payloads[0]["sourceId"] != payloads[1]["sourceId"]
     assert payloads[0]["citationEligible"] is True
     assert payloads[1]["citationEligible"] is True
-    assert payloads[0]["url"] == "https://example.com/product?variant=first"
-    assert payloads[1]["url"] == "https://example.com/product?variant=second"
+    assert payloads[0]["url"] == f"https://example.com/product{suffix}first"
+    assert payloads[1]["url"] == f"https://example.com/product{suffix}second"
+    from mato_loop_backend.agent.research import _add_research_sources, _research_snapshot
+    from mato_loop_backend.sessions.serialization import _public_research_payload
+
+    sources, titles = {}, {}
+    for result in results:
+        _add_research_sources(sources, result.metadata, titles)
+    snapshot = _research_snapshot(policy="available", used=True,
+        content=" ".join(f"[Source]({item['url']})" for item in payloads), sources=sources, titles=titles)
+    message = Message(role="assistant", provider_data={"_matoloop": {"research": snapshot}})
+    assert [item["url"] for item in _public_research_payload(message)["linkedSources"]] == [item["url"] for item in payloads]
     for payload in payloads:
         assert payload["content"] == content
         assert payload["contentType"] == content_type

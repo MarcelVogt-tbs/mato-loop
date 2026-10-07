@@ -52,6 +52,15 @@ def test_legacy_duckduckgo_provider_is_migrated_to_no_key_search() -> None:
     assert settings.web_search.primary_provider == "no_key"
 
 
+@pytest.mark.parametrize("user_agent", [
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+    "Custom-Agent/2.0",
+])
+def test_webfetch_migrates_only_the_old_shipped_user_agent(user_agent) -> None:
+    settings = WebFetchSettings.model_validate({"userAgent": user_agent})
+    assert settings.user_agent == ("MatoLoop/1.0" if user_agent.startswith("Mozilla") else user_agent)
+
+
 @pytest.mark.parametrize(
     ("session_policy", "workspace_policy", "available"),
     [
@@ -496,10 +505,8 @@ async def test_get_tool_configuration_returns_defaults(monkeypatch) -> None:
         )
     } == {
         "webFetch": {
-            "userAgent": (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
-            ),
+            "engine": "lightpanda",
+            "userAgent": "MatoLoop/1.0",
             "maxResponseMiB": 64,
             "publicAddressesOnly": True,
         },
@@ -552,6 +559,7 @@ def test_tool_configuration_uses_frontend_webfetch_field_names() -> None:
     result = tool_configuration_payload(
         ToolSettings(
             web_fetch={
+                "engine": "http",
                 "userAgent": "MatoLoop/1.0",
                 "maxResponseMiB": 32,
                 "publicAddressesOnly": False,
@@ -560,6 +568,7 @@ def test_tool_configuration_uses_frontend_webfetch_field_names() -> None:
     )
 
     assert result["webFetch"] == {
+        "engine": "http",
         "userAgent": "MatoLoop/1.0",
         "maxResponseMiB": 32,
         "publicAddressesOnly": False,

@@ -477,7 +477,7 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
         safe.get("url"), str
     ):
         try:
-            safe["url"] = canonicalize_url(safe["url"])
+            safe["url"] = canonicalize_url(safe["url"], preserve_fragment=tool_name == "webfetch")
         except WebFetchError:
             safe["url"] = "[Invalid URL]"
     instructions = safe.get("instructions")

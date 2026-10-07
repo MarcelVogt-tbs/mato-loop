@@ -156,7 +156,7 @@ def _summary(tool_name: str, arguments: dict[str, Any]) -> str | None:
         url = arguments.get("url")
         if isinstance(url, str):
             try:
-                value = canonicalize_url(url)
+                value = canonicalize_url(url, preserve_fragment=tool_name == "webfetch")
             except (ValueError, WebFetchError):
                 pass
     elif tool_name in {"web_search", "session_search", "mail_search", "recipes_search"}:

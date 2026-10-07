@@ -9,11 +9,11 @@ import re
 import socket
 import subprocess
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from email.message import Message
 from pathlib import PurePosixPath
 from typing import Literal
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 import aiohttp
 from aiohttp.abc import AbstractResolver
@@ -184,6 +184,7 @@ class _Target:
     host: str
     port: int
     addresses: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...]
+    browsing_url: URL | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,11 +283,12 @@ def _parse_url(value: str, *, origin: bool = False) -> tuple[URL, str, int]:
     return normalized, host, port
 
 
-def canonicalize_url(value: str) -> str:
+def canonicalize_url(value: str, *, preserve_fragment: bool = False) -> str:
     url, _, _ = _parse_url(value)
     if url.path == "/":
         url = url.with_path("/", keep_query=True)
-    return str(url)
+    fragment = quote(value.partition("#")[2], safe="!$&'()*+,-./:;=?@_~%") if preserve_fragment else ""
+    return str(url) + ("#" + fragment if fragment else "")
 
 
 def normalize_source_title(value: object, *, max_length: int = 300) -> str | None:
@@ -367,7 +369,7 @@ async def _validate_target(
 
 
 async def _read_limited(
-    response: aiohttp.ClientResponse, max_response_bytes: int
+    response: aiohttp.ClientResponse, max_response_bytes: int,
 ) -> bytes:
     if response.content_length is not None and response.content_length > max_response_bytes:
         raise _error("responseTooLarge")
@@ -816,7 +818,7 @@ async def _build_result(
         _text_content_and_title, response, format, target.url
     )
     return WebFetchResult(
-        final_url=str(target.url),
+        final_url=str(target.browsing_url or target.url) if response.content_type in {"text/html", "application/xhtml+xml"} else str(target.url),
         content_type=response.content_type,
         content=content,
         status_code=response.status,
@@ -842,7 +844,10 @@ async def _follow_redirects(
     remaining = float(timeout)
     current_url = url
     for redirect_count in range(MAX_REDIRECTS + 1):
-        current_url = canonicalize_url(current_url)
+        canonical_url = canonicalize_url(current_url)
+        fragment = current_url.partition("#")[2] if "#" in current_url else None
+        browsing_url = URL(canonical_url + ("#" + fragment if fragment is not None else ""), encoded=True)
+        current_url = canonical_url
         started = loop.time()
         async with asyncio.timeout(max(remaining, 0.001)):
             target = await _validate_target(current_url, public_addresses_only)
@@ -875,12 +880,14 @@ async def _follow_redirects(
                 raise _error("tooManyRedirects")
             try:
                 current_url = str(target.url.join(URL(response.location)))
+                if "#" not in response.location and fragment is not None:
+                    current_url += "#" + fragment
             except (TypeError, ValueError) as exc:
                 raise _error("redirectInvalid") from exc
             continue
         if response.status == 202 or not 200 <= response.status < 300:
             raise _error("requestFailed", statusCode=response.status)
-        return target, response, remaining
+        return replace(target, browsing_url=browsing_url), response, remaining
     raise _error("tooManyRedirects")
 
 
@@ -1056,6 +1063,7 @@ async def fetch_web(
     pdf_vision_handler: PdfVisionHandler | None = None,
     pdf_pages: tuple[int, ...] | list[int] = (),
     user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
+    engine: Literal["http", "lightpanda"] = "http",
 ) -> WebFetchResult:
     if format not in {"html", "markdown", "text"}:
         raise _error("formatUnsupported")
@@ -1069,17 +1077,38 @@ async def fetch_web(
         raise ValueError("pdf_pages must contain at most eight positive integers")
     normalized_pdf_pages = tuple(sorted(set(pdf_pages)))
     _validate_fetch_limits(timeout, max_response_bytes)
+    if engine not in {"http", "lightpanda"}:
+        raise _error("engineUnsupported")
+    if engine == "lightpanda" and "mozilla" in user_agent.lower():
+        raise _error("userAgentUnsupported")
+    authorized = False
+
+    async def authorize_page(value: str) -> None:
+        nonlocal authorized
+        if authorize_url is not None and not authorized:
+            await authorize_url(value)
+            authorized = True
+
     try:
         target, response, remaining = await _follow_redirects(
             url,
             timeout,
             public_addresses_only,
-            authorize_url,
+            authorize_page if engine == "lightpanda" else authorize_url,
             max_response_bytes,
             user_agent,
             _DEFAULT_ACCEPT,
         )
         try:
+            if engine == "lightpanda" and response.content_type in {"text/html", "application/xhtml+xml"}:
+                from mato_loop_backend.web.lightpanda import render_html
+
+                target, response, remaining = await render_html(
+                    replace(target, browsing_url=URL(canonicalize_url(url, preserve_fragment=True), encoded=True)), timeout=remaining,
+                    public_addresses_only=public_addresses_only,
+                    max_response_bytes=max_response_bytes,
+                    user_agent=user_agent,
+                )
             async with asyncio.timeout(max(remaining, 0.001)):
                 result = await _build_result(
                     target,

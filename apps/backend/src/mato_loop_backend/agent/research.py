@@ -38,7 +38,7 @@ def _add_research_sources(
         if not isinstance(source_id, str) or not isinstance(url, str):
             continue
         try:
-            registry[source_id] = canonicalize_url(url)
+            registry[source_id] = canonicalize_url(url, preserve_fragment=True)
         except WebFetchError:
             continue
         title = normalize_source_title(source.get("title"))
@@ -50,7 +50,7 @@ def _linked_research_source_ids(content: str, sources: dict[str, str]) -> list[s
     source_ids_by_url: dict[str, str] = {}
     for source_id, url in sources.items():
         try:
-            source_ids_by_url[canonicalize_url(url)] = source_id
+            source_ids_by_url[canonicalize_url(url, preserve_fragment=True)] = source_id
         except WebFetchError:
             continue
     visible_lines: list[str] = []
@@ -133,10 +133,12 @@ def _linked_research_source_ids(content: str, sources: dict[str, str]) -> list[s
             and classified_destination.lower().startswith(("http://", "https://", "//"))
         ):
             try:
-                canonical_destination = canonicalize_url(classified_destination)
+                canonical_destination = canonicalize_url(classified_destination, preserve_fragment=True)
             except WebFetchError:
                 canonical_destination = ""
             source_id = source_ids_by_url.get(canonical_destination)
+            if source_id is None and canonical_destination:
+                source_id = source_ids_by_url.get(canonicalize_url(classified_destination))
             if source_id is not None and source_id not in cited_source_ids:
                 cited_source_ids.append(source_id)
         without_link_destinations.append("")
@@ -144,7 +146,9 @@ def _linked_research_source_ids(content: str, sources: dict[str, str]) -> list[s
     for match in _BARE_HTTP_URL_PATTERN.finditer("".join(without_link_destinations)):
         candidate = match.group(0).rstrip(".,;:!?)]}>")
         try:
-            source_id = source_ids_by_url.get(canonicalize_url(candidate))
+            source_id = source_ids_by_url.get(canonicalize_url(candidate, preserve_fragment=True))
+            if source_id is None:
+                source_id = source_ids_by_url.get(canonicalize_url(candidate))
         except WebFetchError:
             continue
         if source_id is not None and source_id not in cited_source_ids:

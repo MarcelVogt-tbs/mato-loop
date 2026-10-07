@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Annotated, Any, ClassVar, Self
+from typing import Annotated, Any, ClassVar, Literal, Self
 from unicodedata import category as unicode_category
 from uuid import UUID, uuid4
 
@@ -42,10 +42,11 @@ _MODEL_RUNTIME_KEYS = {
     "pseudonymization_enabled": "pseudonymizationEnabled",
 }
 
-DEFAULT_WEBFETCH_USER_AGENT = (
+_LEGACY_WEBFETCH_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 )
+DEFAULT_WEBFETCH_USER_AGENT = "MatoLoop/1.0"
 
 
 def _camel_case(value: str) -> str:
@@ -873,6 +874,8 @@ class IntegrationInstance(BaseModel):
 class WebFetchSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    engine: Literal["lightpanda", "http"] = "lightpanda"
+
     user_agent: str = Field(
         default=DEFAULT_WEBFETCH_USER_AGENT,
         min_length=1,
@@ -899,7 +902,8 @@ class WebFetchSettings(BaseModel):
             return value
         if any(not 32 <= ord(character) <= 126 for character in value):
             raise ValueError("user_agent must contain visible ASCII characters only")
-        return value.strip()
+        value = value.strip()
+        return DEFAULT_WEBFETCH_USER_AGENT if value == _LEGACY_WEBFETCH_USER_AGENT else value
 
 class WebSearchToolSettings(BaseModel):
     primary_provider: str = Field(
