@@ -46,7 +46,7 @@ _IMAGE_TYPES = {
     "image/png": ".png",
     "image/webp": ".webp",
 }
-_TEXT_TYPES = {"application/xhtml+xml", "text/html", "text/markdown", "text/plain"}
+_TEXT_TYPES = {"application/xhtml+xml", "text/html", "text/markdown", "text/x-markdown", "text/plain"}
 _STRUCTURED_TEXT_TYPES = {
     "application/atom+xml",
     "application/json",
@@ -98,6 +98,13 @@ _DEFAULT_ACCEPT = (
     "image/png, image/jpeg, image/webp, image/gif, "
     + ", ".join(sorted(_STRUCTURED_TEXT_TYPES))
 )
+_PAGE_ACCEPT = {
+    "markdown": "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1",
+    "text": "text/plain;q=1.0, text/markdown;q=0.9, text/html;q=0.8, */*;q=0.1",
+    "html": "text/html;q=1.0, application/xhtml+xml;q=0.9, text/plain;q=0.8, text/markdown;q=0.7, */*;q=0.1",
+}
+_JAVASCRIPT_HOSTS = frozenset({"reddit.com", "www.reddit.com"})
+
 DOWNLOAD_TYPES = {
     "application/gzip": ".gz",
     "application/json": ".json",
@@ -571,7 +578,7 @@ def _convert_text(
         return f"<pre>{html.escape(value)}</pre>"
     if preserve_text:
         return value
-    if content_type == "text/markdown":
+    if content_type in {"text/markdown", "text/x-markdown"}:
         soup = _sanitize_html(value)
         if format == "text":
             return _normalize_lines(soup.get_text())
@@ -1063,7 +1070,7 @@ async def fetch_web(
     pdf_vision_handler: PdfVisionHandler | None = None,
     pdf_pages: tuple[int, ...] | list[int] = (),
     user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
-    engine: Literal["http", "lightpanda"] = "http",
+    javascript: bool | None = None,
 ) -> WebFetchResult:
     if format not in {"html", "markdown", "text"}:
         raise _error("formatUnsupported")
@@ -1077,10 +1084,8 @@ async def fetch_web(
         raise ValueError("pdf_pages must contain at most eight positive integers")
     normalized_pdf_pages = tuple(sorted(set(pdf_pages)))
     _validate_fetch_limits(timeout, max_response_bytes)
-    if engine not in {"http", "lightpanda"}:
-        raise _error("engineUnsupported")
-    if engine == "lightpanda" and "mozilla" in user_agent.lower():
-        raise _error("userAgentUnsupported")
+    _, host, _ = _parse_url(url)
+    use_javascript = host in _JAVASCRIPT_HOSTS if javascript is None else javascript
     authorized = False
 
     async def authorize_page(value: str) -> None:
@@ -1094,15 +1099,17 @@ async def fetch_web(
             url,
             timeout,
             public_addresses_only,
-            authorize_page if engine == "lightpanda" else authorize_url,
+            authorize_page if use_javascript else authorize_url,
             max_response_bytes,
             user_agent,
-            _DEFAULT_ACCEPT,
+            _PAGE_ACCEPT[format],
         )
         try:
-            if engine == "lightpanda" and response.content_type in {"text/html", "application/xhtml+xml"}:
+            if use_javascript and response.content_type in {"text/html", "application/xhtml+xml"}:
                 from mato_loop_backend.web.lightpanda import render_html
 
+                if "mozilla" in user_agent.lower():
+                    raise _error("userAgentUnsupported")
                 target, response, remaining = await render_html(
                     replace(target, browsing_url=URL(canonicalize_url(url, preserve_fragment=True), encoded=True)), timeout=remaining,
                     public_addresses_only=public_addresses_only,

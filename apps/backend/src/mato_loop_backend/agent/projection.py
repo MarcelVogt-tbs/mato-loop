@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 
 MAX_ATTACHMENT_EXCERPT_CHARACTERS = 20_000
+MAX_WEBFETCH_CONTENT_CHARACTERS = 15_000
 
 
 _OMITTED_TOOL_OUTPUT = "[Historical tool output omitted from the active context.]"
@@ -169,6 +170,31 @@ def _sanitize_tool_result_reference_fields(content: str) -> str:
         if changed
         else content
     )
+
+
+def _model_webfetch_result(message_id: UUID, content: str) -> str:
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return content
+    if not isinstance(payload, dict) or not isinstance(payload.get("content"), str):
+        return content
+    text = payload["content"]
+    if len(text) <= MAX_WEBFETCH_CONTENT_CHARACTERS:
+        return content
+    head_budget = MAX_WEBFETCH_CONTENT_CHARACTERS * 3 // 4
+    tail_budget = MAX_WEBFETCH_CONTENT_CHARACTERS - head_budget
+    head, tail = text[:head_budget], text[-tail_budget:]
+    if (boundary := head.rfind("\n")) > head_budget // 2:
+        head = head[:boundary]
+    if 0 <= (boundary := tail.find("\n")) < tail_budget // 2:
+        tail = tail[boundary + 1:]
+    payload["content"] = head + (
+        "\n[Middle omitted by host. Use toolResultReference to read the complete stored result.]\n"
+    ) + tail
+    payload["toolOutputShortened"] = True
+    payload["toolResultReference"] = _tool_result_reference(message_id, content)
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _model_file_tool_result(content: str) -> str:
@@ -705,6 +731,8 @@ def _projection_messages(
         projected = message_dict(
             item,
             attachment_service=attachment_service,
+            # Keep Webfetch JSON parseable; images travel in the separate attachments field.
+            include_attachment_markers=tool_names.get(item.id) != "webfetch",
             include_attachment_text=(
                 include_attachment_text
                 and item.id == latest_user_id
@@ -777,6 +805,12 @@ def _projection_messages(
                 ):
                     projected["content"] = _model_browser_inspection(projected["content"])
                 current_tool_indices.append(len(messages))
+            if tool_name == "webfetch":
+                original_content = str(projected.get("content") or "")
+                projected["content"] = _model_webfetch_result(item.id, original_content)
+                if projected["content"] != original_content:
+                    projected[_HOST_TOOL_RESULT_REFERENCE] = True
+                    projected[_HOST_RETAINED_TOOL_RESULT] = _omitted_tool_result(item.id, original_content)
         messages.append(projected)
         runtime_data = (
             item.provider_data.get("_matoloop")
@@ -1043,6 +1077,11 @@ def _shorten_evidence_output(
         preserve_tool_result_reference
         and isinstance(payload, dict)
         and isinstance(payload.get("toolResultReference"), dict)
+        and not (
+            isinstance(payload.get("sourceId"), str)
+            and isinstance(payload.get("url"), str)
+            and isinstance(payload.get("content"), str)
+        )
     ):
         omitted = serialized(
             {

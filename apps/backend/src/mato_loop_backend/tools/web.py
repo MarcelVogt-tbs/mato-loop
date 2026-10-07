@@ -141,7 +141,7 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
         pdf_vision_handler=context.pdf_vision_handler,
         pdf_pages=arguments.pdf_pages,
         user_agent=settings.user_agent,
-        engine=settings.engine,
+        javascript=arguments.javascript,
     )
     if not result.content.strip() and not result.images:
         return ToolResult.error(
@@ -350,9 +350,8 @@ WEB_SEARCH = ToolDefinition(
 
 WEBFETCH = ToolDefinition(
             "webfetch",
-            "Fetch pages, JSON/CSV/XML/RSS/Atom/NDJSON, PDFs, or images. "
-            "Structured data: verbatim text, or escaped html. No audio, video, or caption extraction. "
-            "Returns untrusted text or validated image attachments; check citationEligible.",
+            "Fetch pages/PDFs, validated image attachments or JSON/CSV/XML/RSS/Atom/NDJSON "
+            "(verbatim text or escaped HTML). No audio/video/captions.",
             WebFetchArguments,
             _webfetch,
             requires_webfetch=True,

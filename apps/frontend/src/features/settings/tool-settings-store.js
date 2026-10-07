@@ -4,7 +4,6 @@ import { api } from 'src/boot/axios'
 const defaultMediaSettings = () => ({ timeoutSeconds: 300 })
 const defaultAnalysisSettings = () => ({ timeoutSeconds: 1800 })
 const defaultConfigurationWebFetch = () => ({
-  engine: 'lightpanda',
   userAgent: '',
   maxResponseMiB: 64,
   publicAddressesOnly: true

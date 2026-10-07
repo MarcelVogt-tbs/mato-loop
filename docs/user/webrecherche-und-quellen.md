@@ -24,7 +24,7 @@ Der Fallback wird nur bei vorübergehenden Fehlern des primären Providers verwe
 - **Nachfragen**
 - **Automatisch**
 
-The policy is stored separately for private and public models. Administrators configure availability and **Nur öffentliche Adressen zulassen**, enabled by default. With Lightpanda, approving a page also approves its scripts, data requests, and redirects within those network restrictions. HTTP compatibility mode requires separate authorization for redirects. Disabling the address restriction permits targets reachable from the backend. Hash routes remain part of returned source links.
+The policy is stored separately for private and public models. Administrators configure availability and **Nur öffentliche Adressen zulassen**, enabled by default. The optional `javascript` tool argument overrides host defaults: known Reddit hosts use JavaScript, other hosts use HTTP. With JavaScript enabled, approving a page also approves its scripts, data requests, and redirects within those network restrictions. Without JavaScript, HTTP requires separate authorization for redirects. Disabling the address restriction permits targets reachable from the backend. Hash routes remain part of returned source links. Large tool results stay fully stored; the model receives an excerpt and can read missing sections through the returned reference without fetching again. Browser control is requested when the task requires interaction with a specific page, rather than whenever an interchangeable source returns a consent page.
 
 ## Veröffentlichte Untertitel
 

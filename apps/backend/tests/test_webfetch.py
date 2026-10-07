@@ -80,6 +80,53 @@ def _origin(port: int, host: str = "127.0.0.1") -> str:
     return f"http://{host}:{port}"
 
 
+@pytest.mark.parametrize(("host", "javascript", "expected"), [
+    ("reddit.com", None, "Rendered"),
+    ("WWW.Reddit.COM.", None, "Rendered"),
+    ("www.reddit.com", False, "HTTP"),
+    ("reddit.com.example.test", None, "HTTP"),
+    ("example.test", None, "HTTP"),
+    ("example.test", True, "Rendered"),
+])
+async def test_javascript_host_defaults_and_explicit_overrides(monkeypatch, host, javascript, expected):
+    monkeypatch.setattr(web_fetch, "_resolve_addresses", AsyncMock(return_value=(ipaddress.ip_address("127.0.0.1"),)))
+
+    async def render(target, **_kwargs):
+        return target, web_fetch._Response(200, None, "text/html", "utf-8", None, b"Rendered"), 30
+
+    monkeypatch.setattr("mato_loop_backend.web.lightpanda.render_html", render)
+
+    async def responder(_path, _headers):
+        return _response(b"<main>HTTP</main>", headers={"Content-Type": "text/html"})
+
+    async with _server(responder) as port:
+        result = await fetch_web(_origin(port, host), javascript=javascript, public_addresses_only=False)
+    assert result.content == expected
+
+
+@pytest.mark.parametrize(("format", "preferred"), [
+    ("markdown", "text/markdown"), ("text", "text/plain"), ("html", "text/html"),
+])
+async def test_format_accept_header_selects_page_instead_of_interstitial(format, preferred):
+    async def responder(_path, headers):
+        body = b"Article" if headers["accept"].startswith(preferred + ";q=1.0") else b"Consent"
+        return _response(body, headers={"Content-Type": "text/html"})
+
+    async with _server(responder) as port:
+        result = await fetch_web(_origin(port), format=format, public_addresses_only=False)
+    assert result.content == "Article"
+
+
+async def test_javascript_html_rejects_incompatible_user_agent():
+    async def responder(_path, _headers):
+        return _response(b"<main>Page</main>", headers={"Content-Type": "text/html"})
+
+    async with _server(responder) as port:
+        assert await _error_code(fetch_web(
+            _origin(port), javascript=True, user_agent="Mozilla/5.0", public_addresses_only=False,
+        )) == "webfetch.userAgentUnsupported"
+
+
 @pytest.mark.parametrize(("navigation", "approval_wait"), [(False, 0), (True, 0), (False, 3)])
 async def test_lightpanda_executes_javascript_and_fetches_with_configured_user_agent(navigation, approval_wait) -> None:
     headers_seen = []
@@ -102,7 +149,7 @@ async def test_lightpanda_executes_javascript_and_fetches_with_configured_user_a
             await asyncio.sleep(approval_wait)
 
     async with _server(responder) as port:
-        pending = fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False,
+        pending = fetch_web(_origin(port), javascript=True, public_addresses_only=False,
             user_agent="MatoLoop-Test/1.0", authorize_url=authorize, timeout=2 if approval_wait else 5)
         result = await pending
     assert result.content == "Dynamic page content MatoLoop-Test/1.0"
@@ -123,7 +170,7 @@ async def test_lightpanda_loads_redirected_module() -> None:
         return _response(b"<html><body><main>Loading</main><script type='module' src='/bundle.js'></script></body></html>", headers={"Content-Type": "text/html"})
 
     async with _server(responder) as port:
-        result = await fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False, timeout=10)
+        result = await fetch_web(_origin(port), javascript=True, public_addresses_only=False, timeout=10)
     assert result.content == "Redirected module loaded"
 
 
@@ -143,7 +190,7 @@ async def test_lightpanda_page_approval_includes_subrequests(redirect) -> None:
     authorize = AsyncMock()
 
     async with _server(responder) as port:
-        await fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False, authorize_url=authorize)
+        await fetch_web(_origin(port), javascript=True, public_addresses_only=False, authorize_url=authorize)
     authorize.assert_awaited_once_with(_origin(port) + "/")
     assert "/secret" in paths
 
@@ -200,7 +247,7 @@ async def test_lightpanda_waits_for_data_beyond_five_seconds() -> None:
         return _response(b"<html><body><main>Loading</main><script>fetch('/data').then(r=>r.text()).then(t=>document.querySelector('main').textContent=t)</script></body></html>", headers={"Content-Type": "text/html"})
 
     async with _server(responder) as port:
-        result = await fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False, timeout=12)
+        result = await fetch_web(_origin(port), javascript=True, public_addresses_only=False, timeout=12)
     assert result.content == "Delayed content"
 
 
@@ -257,7 +304,7 @@ async def test_lightpanda_native_blocks_private_dependencies(monkeypatch, transp
         return _response(f"<html><body><main>Waiting</main><script>{script}</script></body></html>".encode(), headers={"Content-Type": "text/html"})
 
     async with _server(responder, host="0.0.0.0") as port:
-        result = await fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False, timeout=5)
+        result = await fetch_web(_origin(port), javascript=True, public_addresses_only=False, timeout=5)
         if transport != "redirect":
             assert result.content == "Blocked"
     assert "/private" not in paths
@@ -271,7 +318,7 @@ async def test_lightpanda_native_cookie_session() -> None:
                          headers={"Content-Type": "text/html", "Set-Cookie": "session=native; Path=/; HttpOnly; SameSite=Lax"})
 
     async with _server(responder) as port:
-        result = await fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False)
+        result = await fetch_web(_origin(port), javascript=True, public_addresses_only=False)
     assert result.content == "Cookie accepted"
 
 
@@ -294,7 +341,7 @@ async def test_lightpanda_native_binary_post() -> None:
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     try:
-        await fetch_web(_origin(runner.addresses[0][1]), engine="lightpanda", public_addresses_only=False)
+        await fetch_web(_origin(runner.addresses[0][1]), javascript=True, public_addresses_only=False)
         assert received == [b"\x00\xff\x80A"]
     finally:
         await runner.cleanup()
@@ -317,7 +364,7 @@ async def test_lightpanda_timeout_reaps_its_process(monkeypatch) -> None:
         return _response(b"<html><body><script>while(true){}</script></body></html>", headers={"Content-Type": "text/html"})
 
     async with _server(responder) as port:
-        assert await _error_code(fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False, timeout=1)) == "webfetch.timeout"
+        assert await _error_code(fetch_web(_origin(port), javascript=True, public_addresses_only=False, timeout=1)) == "webfetch.timeout"
     assert len(processes) == 1 and processes[0].returncode is not None
 
 
@@ -326,7 +373,7 @@ async def test_lightpanda_limits_rendered_output() -> None:
         return _response(b"<html><body><main>Loading</main><script>document.querySelector('main').textContent='x'.repeat(2000)</script></body></html>", headers={"Content-Type": "text/html"})
 
     async with _server(responder) as port:
-        assert await _error_code(fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False,
+        assert await _error_code(fetch_web(_origin(port), javascript=True, public_addresses_only=False,
             max_response_bytes=850)) == "webfetch.responseTooLarge"
 
 
@@ -341,7 +388,7 @@ async def test_lightpanda_propagates_superseded_page_approval() -> None:
 
     async with _server(responder) as port:
         with pytest.raises(ToolCallSuperseded):
-            await fetch_web(_origin(port), engine="lightpanda", public_addresses_only=False, authorize_url=authorize, timeout=5)
+            await fetch_web(_origin(port), javascript=True, public_addresses_only=False, authorize_url=authorize, timeout=5)
 
 
 @pytest.mark.parametrize(("location", "expected"), [
@@ -356,7 +403,7 @@ async def test_lightpanda_preserves_browsing_fragment(location, expected) -> Non
         return _response(b"<html><body><main>Default route</main><script>document.querySelector('main').textContent=location.hash;</script></body></html>", headers={"Content-Type": "text/html"})
 
     async with _server(responder) as port:
-        result = await fetch_web(_origin(port) + "/#/article%2F123", engine="lightpanda", format="text", public_addresses_only=False, timeout=5)
+        result = await fetch_web(_origin(port) + "/#/article%2F123", javascript=True, format="text", public_addresses_only=False, timeout=5)
     assert result.content == expected
     assert result.final_url == _origin(port) + ("/final" if location else "/") + expected
 
@@ -565,10 +612,7 @@ async def test_dns_is_pinned_and_request_headers_are_safe(monkeypatch) -> None:
     assert seen_headers["host"] == f"pinned.test:{port}"
     assert seen_headers["user-agent"] == "MatoLoop/1.0"
     assert seen_headers["accept-encoding"] == "gzip, deflate"
-    assert "application/pdf" in seen_headers["accept"]
-    assert "application/json" in seen_headers["accept"]
-    assert "text/csv" in seen_headers["accept"]
-    assert "application/rss+xml" in seen_headers["accept"]
+    assert seen_headers["accept"] == "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1"
     assert {"authorization", "cookie", "referer"}.isdisjoint(seen_headers)
 
 
@@ -792,6 +836,7 @@ async def test_structured_text_preserves_source_without_parsing(
     async with _server(responder) as port:
         result = await fetch_web(
             f"{_origin(port)}/data", public_addresses_only=False,
+            javascript=True,
             **({"format": format} if format is not None else {}),
         )
 
@@ -836,9 +881,10 @@ async def test_html_title_ignores_title_elements_outside_the_head() -> None:
     assert result.title is None
 
 
-async def test_active_markup_is_removed_or_escaped_from_markdown() -> None:
+@pytest.mark.parametrize("markdown_type", ["text/markdown", "text/x-markdown"])
+async def test_active_markup_is_removed_or_escaped_from_markdown(markdown_type) -> None:
     async def responder(target: str, headers: dict[str, str]) -> bytes:
-        content_type = "text/markdown" if target == "/markdown" else "text/plain"
+        content_type = markdown_type if target == "/markdown" else "text/plain"
         return _response(
             b"before<script>alert(1)</script>after",
             headers={"Content-Type": content_type},
@@ -868,7 +914,8 @@ async def test_supported_image_returns_bytes_and_safe_filename() -> None:
 
     async with _server(responder) as port:
         result = await fetch_web(
-            f"{_origin(port)}/fallback.png", public_addresses_only=False
+            f"{_origin(port)}/fallback.png", public_addresses_only=False,
+            javascript=True, user_agent="Mozilla/5.0",
         )
 
     assert result.content_type == "image/png"
@@ -895,6 +942,7 @@ async def test_text_pdf_is_extracted_without_vision(monkeypatch) -> None:
             f"{_origin(port)}/manual.pdf",
             public_addresses_only=False,
             pdf_vision_handler=vision,
+            javascript=True,
         )
 
     assert result.content_type == "application/pdf"

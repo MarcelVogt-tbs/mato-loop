@@ -1241,6 +1241,43 @@ def test_projection_distributes_current_tool_output_budget_fairly() -> None:
     assert second.content == "b" * 1_000
 
 
+@pytest.mark.parametrize("continuing", [False, True])
+@pytest.mark.parametrize("budget", [None, 20])
+def test_large_webfetch_pdf_keeps_its_image_and_original_reference(continuing, budget):
+    session = _session()
+    user = _message(session.id, "user", "Read this page")
+    call = _message(session.id, "assistant", "")
+    call.tool_calls = [{"id": "fetch", "name": "webfetch", "arguments": {"url": "https://example.test/manual.pdf", "pdf_pages": [1]}}]
+    content = json.dumps({
+        "sourceId": "src-page", "url": "https://example.test/manual.pdf",
+        "contentType": "application/pdf", "outputFormat": "text",
+        "content": "START\n" + "paragraph\n" * 4_000 + "END",
+    })
+    result = _message(session.id, "tool", content)
+    result.tool_call_id = "fetch"
+    image = _attach_image(result)
+    records = [user, call, result]
+    if continuing:
+        records.append(_message(session.id, "user", "Continue"))
+    projected = _projection_messages(
+        "System", None, records, TrustLevel.PRIVATE, current_turn_tool_output_tokens=budget,
+    )
+    projected_result = next(item for item in projected if item["role"] == "tool")
+    payload = json.loads(projected_result["content"])
+    assert [item["id"] for item in projected_result["attachments"]] == [str(image.id)]
+    assert payload["toolResultReference"] == {
+        "tool": "session_tool_result_read",
+        "arguments": {"message_id": str(result.id), "offset": 0},
+        "totalCharacters": len(content),
+    }
+    if budget is None:
+        assert payload["content"].startswith("START") and payload["content"].endswith("END")
+        assert len(payload["content"]) < 15_200
+    else:
+        assert payload["toolResultOmitted"] is True
+    assert result.content == content
+
+
 def test_current_tool_output_budget_keeps_small_results_and_ignores_order() -> None:
     session = _session()
     user = _message(session.id, "user", "Arbeite mit mehreren Quellen")
@@ -1633,7 +1670,7 @@ def test_session_tool_result_prompt_only_appears_when_the_tool_is_offered() -> N
     )
 
     assert "relevant toolResultReference" in offered
-    assert "never rerun the original tool" in offered
+    assert "do not rerun the original tool just to read omitted content" in offered
     assert "Copy the reference argument values unchanged" in offered
     assert "add _reason in the user's language when useful" in offered
     assert "Use nextOffset for further chunks" in offered
@@ -1990,6 +2027,7 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "never apply current rules to past periods" in prompt
     assert "invent numbers" in prompt
     assert "Current-turn research requires" in prompt
+    assert "Cite fetched sources only when citationEligible=true" in prompt
     assert "never use sourceId" in prompt
     assert "after each claim" in prompt
     assert "Use at most two links per claim" in prompt
@@ -2013,8 +2051,8 @@ def test_webfetch_browser_fallback_prompt_matches_available_control() -> None:
         offered_tool_names=frozenset({"webfetch"}),
     )
 
-    assert "use the attached browser instead" in attached
-    assert "handle downloads that require page interaction" in attached
+    assert "Use the attached browser when the task requires interaction" in attached
+    assert "downloads that require page interaction" in attached
     assert "Browser handoff contract:" in attached
     assert "release browser control and wait for success" in attached
     assert "wait for their reply; do not poll with browser tools" in attached
@@ -2023,6 +2061,8 @@ def test_webfetch_browser_fallback_prompt_matches_available_control() -> None:
     assert "attached browser" not in requestable
     assert "attached browser" not in unavailable
     assert "request browser control" not in unavailable
+    assert "prefer another suitable source" in requestable
+    assert "webfetch with javascript=true" in unavailable
 
 
 def test_agent_profile_uses_one_persona_before_task_instructions() -> None:

@@ -287,7 +287,7 @@ def test_transcript_routing_uses_the_production_tool_contract() -> None:
         }
         assert "spoken content only, not of visual events" in messages[0]["content"]
         assert "does not inspect video visuals" in by_name["fetch_transcript"]["description"]
-        assert "No audio, video, or caption extraction" in by_name["webfetch"]["description"]
+        assert "No audio/video/captions" in by_name["webfetch"]["description"]
         assert "does not accept video files" in by_name["transcribe_audio"]["description"]
         assert "does not accept URLs" in by_name["analyze_video"]["description"]
         parameters = by_name["fetch_transcript"]["parameters"]

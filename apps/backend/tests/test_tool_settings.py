@@ -505,7 +505,6 @@ async def test_get_tool_configuration_returns_defaults(monkeypatch) -> None:
         )
     } == {
         "webFetch": {
-            "engine": "lightpanda",
             "userAgent": "MatoLoop/1.0",
             "maxResponseMiB": 64,
             "publicAddressesOnly": True,
@@ -555,11 +554,12 @@ async def test_get_tool_configuration_returns_defaults(monkeypatch) -> None:
     }
 
 
-def test_tool_configuration_uses_frontend_webfetch_field_names() -> None:
+@pytest.mark.parametrize("engine", ["http", "lightpanda"])
+def test_tool_configuration_removes_legacy_engine_and_uses_frontend_field_names(engine) -> None:
     result = tool_configuration_payload(
         ToolSettings(
             web_fetch={
-                "engine": "http",
+                "engine": engine,
                 "userAgent": "MatoLoop/1.0",
                 "maxResponseMiB": 32,
                 "publicAddressesOnly": False,
@@ -568,7 +568,6 @@ def test_tool_configuration_uses_frontend_webfetch_field_names() -> None:
     )
 
     assert result["webFetch"] == {
-        "engine": "http",
         "userAgent": "MatoLoop/1.0",
         "maxResponseMiB": 32,
         "publicAddressesOnly": False,

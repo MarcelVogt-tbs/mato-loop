@@ -360,8 +360,11 @@ def general_system_prompt(
                 "Once a relevant page or document URL is known, fetch it instead of re-searching that candidate. "
                 "Fetch exact pages for prices, availability, compatibility, variants, and specifications; never merge "
                 "model codes, and qualify or omit absent claims.",
-                "Reuse session fetches; read omitted results with session_tool_result_read when offered. "
-                "Refetch for changed, missing, or stale evidence.",
+                "Reuse fetched evidence; follow toolResultReference for omitted sections when possible. "
+                "Refetch only for new or updated evidence.",
+                "For missing dynamic content, request webfetch with javascript=true. "
+                "HTTP errors and consent pages alone do not imply a JavaScript requirement. "
+                "For general research, prefer another suitable source over a blocked page.",
                 "Never invent image URLs. Fetch the exact URL, prefer its attachment as research input, and "
                 "do not repeat the remote URL. Request pdf_pages for PDF layouts.",
             ]
@@ -406,14 +409,13 @@ def general_system_prompt(
         name.startswith("browser_") for name in browser_tools
     ):
         research_instructions.append(
-            "If webfetch fails or returns an access challenge, interstitial, or unusable JavaScript shell, "
-            "use the attached browser instead of repeating the same fetch or giving up. The browser may "
-            "also handle downloads that require page interaction."
+            "Use the attached browser when the task requires interaction with a specific page or "
+            "browser-authenticated access. This includes downloads that require page interaction."
         )
     elif {"webfetch", "browser_request_control"} <= offered_tool_names:
         research_instructions.append(
-            "If webfetch fails or returns an access challenge, interstitial, or unusable JavaScript shell, "
-            "request browser control with a concrete reason instead of repeating the same fetch or giving up."
+            "If the task requires interaction with a specific page or browser-authenticated access, "
+            "request browser control with a concrete reason."
         )
     if "browser_release_control" in offered_tool_names:
         parts.append(
@@ -465,7 +467,7 @@ def general_system_prompt(
         parts.append(
             "Read relevant toolResultReference data with session_tool_result_read. Copy the reference "
             "argument values unchanged and add _reason in the user's language when useful. "
-            "Use nextOffset for further chunks; never rerun the original tool."
+            "Use nextOffset for further chunks; do not rerun the original tool just to read omitted content."
         )
     if offered_tool_names & {"transcribe_audio", "edit_image", "read_qr_code", "analyze_video", "analyze_audio"}:
         parts.append(

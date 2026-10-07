@@ -77,7 +77,6 @@
             </div>
 
             <div v-if="section === 'general' && tool.name === 'webfetch'" class="row q-col-gutter-md q-mt-sm">
-              <q-select dense v-model="form.webFetch.engine" class="col-12" outlined emit-value map-options label="Webfetch-Engine" :options="[{ label: 'Lightpanda – mit JavaScript (Standard)', value: 'lightpanda' }, { label: 'HTTP – ohne JavaScript (Kompatibilität)', value: 'http' }]" :behavior="$q.screen.lt.sm ? 'dialog' : 'menu'" />
               <q-toggle dense v-model="form.webFetch.publicAddressesOnly" class="col-12" color="primary" label="Nur öffentliche Adressen zulassen" />
               <q-input dense v-model.trim="form.webFetch.userAgent" class="col-12 col-md-8" outlined maxlength="512" label="User-Agent" :rules="[userAgentRule]" />
               <q-input dense v-model.number="form.webFetch.maxResponseMiB" class="col-12 col-md-4" outlined type="number" min="1" max="256" suffix="MiB" label="Maximale Antwortgröße" :rules="[responseLimitRule]" />
@@ -199,8 +198,7 @@ const timeoutRule = (value) => Number.isInteger(value) && value >= 10 && value <
 const responseLimitRule = (value) => Number.isInteger(value) && value >= 1 && value <= 256 || '1 bis 256 MiB eingeben.'
 const userAgentRule = (value) => typeof value === 'string' && value.length >= 1 && value.length <= 512
   && [...value].every((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) <= 126)
-  && (form.webFetch.engine !== 'lightpanda' || !/mozilla/i.test(value))
-  || (form.webFetch.engine === 'lightpanda' && /mozilla/i.test(value) ? 'Lightpanda erlaubt keinen User-Agent mit „Mozilla“.' : '1 bis 512 sichtbare ASCII-Zeichen eingeben.')
+  || '1 bis 512 sichtbare ASCII-Zeichen eingeben.'
 
 async function load() {
   if (route.query.profileId) section.value = 'management'

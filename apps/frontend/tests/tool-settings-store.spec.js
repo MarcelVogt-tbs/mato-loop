@@ -38,7 +38,7 @@ const configuration = {
     }]
   }],
   toolAvailability: { webfetch: true },
-  webFetch: { engine: 'http', userAgent: 'MatoLoop/1.0', maxResponseMiB: 32, publicAddressesOnly: false },
+  webFetch: { userAgent: 'MatoLoop/1.0', maxResponseMiB: 32, publicAddressesOnly: false },
   transcribeAudio: { timeoutSeconds: 180 }
 }
 

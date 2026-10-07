@@ -1,20 +1,51 @@
-# Webfetch engines
+# Webfetch and JavaScript
 
-Administrators select **Lightpanda – mit JavaScript (Standard)** or
-**HTTP – ohne JavaScript (Kompatibilität)** under **Administration > Tools > Einstellungen**.
-This instance-wide choice needs neither a computer nor a personal integration.
-The existing computer browser is independent.
+`webfetch` has one optional `javascript` argument. Omitted or `null` uses host defaults:
+the normalized requested hostname must exactly match `reddit.com` or `www.reddit.com`
+to enable JavaScript; other hosts use HTTP. Explicit `true` or `false` overrides
+this choice. The small host list lives in `web/fetch.py`, not in prompts or settings.
+Selection happens once, before authorization, with no automatic retries or engine fallback.
+
+There is no administrator engine selection. Previously stored `engine` fields are
+ignored on load and removed on the next settings save; other unknown Webfetch settings
+remain invalid. Availability, User-Agent, response size, and address restrictions stay
+under **Administration > Tools > Einstellungen**. Neither fetch mode requires a
+computer or personal integration. The existing computer browser is independent.
 
 An initial bounded HTTP request determines the content type. PDFs, images,
 structured data, plain text, and Markdown keep their existing processing.
-For HTML, Lightpanda loads the original URL itself, including scripts, cookies,
+HTTP requests prefer the requested Markdown, text, or HTML format using weighted
+Accept headers. The actual response content type determines processing. With
+JavaScript enabled for HTML, Lightpanda loads the original URL itself, including scripts, cookies,
 binary request bodies, redirects, and hash routes. This means HTML is requested
 again after the content-type check. The resulting DOM is sanitized and converted
-by the existing extraction code. There is no automatic engine fallback.
+by the existing extraction code. Native browser subrequests retain Lightpanda's
+own Accept headers rather than overriding scripts and API requests with a page-format preference.
+
+For missing dynamic content, the model can explicitly request JavaScript. An HTTP
+error or consent page alone does not establish that need. General research should
+prefer another suitable source; browser control is appropriate when the task requires
+interaction with a specific page or browser-authenticated access.
+
+## Model result size
+
+The complete result remains persisted. Before token estimation, the model projection
+limits large Webfetch content to 15,000 original characters: approximately 75% from
+the beginning and 25% from the end, cut at line boundaries when possible. An explicit
+omission marker and `toolResultReference` point to `session_tool_result_read` for the
+full stored result. Its offsets count characters in the complete serialized result,
+not just the page body. Source metadata and attachments remain available. This applies
+to current results and retained results from the preceding turn; older results still
+follow historical-reference rules. Further context-budget shortening preserves the
+original reference. Inner JSON or other structured text may be incomplete in the
+projection; the outer result envelope remains valid.
+
+Reading omitted content uses the stored result, not another fetch. A new `webfetch`
+still makes a fresh network request. There is no separate result cache or LLM summary.
 
 ## Authorization and networking
 
-With the Lightpanda engine, `network.fetch` authorizes the initial canonical URL
+With JavaScript enabled, `network.fetch` authorizes the initial canonical URL
 once. That page authorization includes its scripts, data requests, and redirects;
 there are no separate approvals for subresources. The initial transport still
 validates and pins addresses, including after approval. The browser uses its own
@@ -28,7 +59,7 @@ site-local ranges, while retaining the IANA public exceptions. A boundary test
 checks parity with the Python runtime; mapped IPv6 addresses use IPv4 rules.
 The final URL is also
 validated before returning content. Disabling the setting deliberately permits
-targets reachable from the backend. HTTP compatibility mode retains exact-URL
+targets reachable from the backend. Without JavaScript, HTTP retains exact-URL
 authorization and DNS pinning on every redirect.
 
 Fragments are preserved in browsing URLs, results, source identities, saved tool
@@ -60,7 +91,8 @@ are enabled; images and iframes use the engine's disabled defaults.
 
 Both engines use the configured User-Agent, default `MatoLoop/1.0`. The exact old
 shipped Chrome default is normalized when loading settings; custom values remain.
-Lightpanda rejects User-Agents containing `Mozilla`; HTTP accepts them. Web search
+Lightpanda rejects User-Agents containing `Mozilla`; this is reported only when an
+HTML JavaScript fetch needs it. HTTP and non-HTML fetches accept those values. Web search
 is separate and its clients manage their own headers.
 
 ## Compatibility

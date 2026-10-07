@@ -1309,7 +1309,6 @@ def test_webfetch_schema_describes_verified_image_attachments() -> None:
     webfetch = next(item for item in schemas if item["name"] == "webfetch")
 
     assert "validated image attachments" in webfetch["description"]
-    assert "citationEligible" in webfetch["description"]
 
 
 def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
@@ -5158,8 +5157,9 @@ def test_tool_schemas_remove_annotative_titles_recursively() -> None:
         (ToolExecutionPolicy.AUTO, False, 0),
     ],
 )
+@pytest.mark.parametrize("javascript", [None, False, True])
 async def test_webfetch_applies_the_effective_policy(
-    tmp_path, monkeypatch, policy, public_addresses_only, expected_asks
+    tmp_path, monkeypatch, policy, public_addresses_only, expected_asks, javascript,
 ) -> None:
     fetch_kwargs = {}
 
@@ -5179,7 +5179,7 @@ async def test_webfetch_applies_the_effective_policy(
     call = ToolCall(
         id="fetch",
         name="webfetch",
-        arguments={"url": "https://example.com/page?token=secret"},
+        arguments={"url": "https://example.com/page?token=secret", **({"javascript": javascript} if javascript is not None else {})},
     )
     context = _context(
         tmp_path,
@@ -5222,6 +5222,7 @@ async def test_webfetch_applies_the_effective_policy(
     assert fetch_kwargs["pdf_vision_handler"] is None
     assert fetch_kwargs["pdf_pages"] == []
     assert fetch_kwargs["user_agent"] == "ConfiguredBrowser/1.0"
+    assert fetch_kwargs["javascript"] is javascript
     assert fetch_kwargs["public_addresses_only"] is public_addresses_only
     if expected_asks:
         request = context.ask_handler.await_args.args[0]

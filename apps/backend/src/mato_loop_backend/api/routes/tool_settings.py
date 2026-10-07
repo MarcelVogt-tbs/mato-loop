@@ -105,7 +105,6 @@ def tool_configuration_payload(settings: ToolSettings) -> dict:
         "groups": groups,
         "toolAvailability": settings.tool_availability,
         "webFetch": {
-            "engine": settings.web_fetch.engine,
             "userAgent": settings.web_fetch.user_agent,
             "maxResponseMiB": settings.web_fetch.max_response_mib,
             "publicAddressesOnly": settings.web_fetch.public_addresses_only,
@@ -155,8 +154,6 @@ async def update_tool_configuration(
     if not user.is_admin:
         raise ApiError(403, "auth.adminRequired")
     settings = await SettingsStore.load(db, ToolSettings, for_update=True)
-    if payload.web_fetch.engine == "lightpanda" and "mozilla" in payload.web_fetch.user_agent.lower():
-        raise ApiError(422, "webfetch.userAgentUnsupported", field="webFetch.userAgent")
     known_tools = {
         tool["name"]
         for group in tool_registry.catalog(settings, IntegrationSettings())

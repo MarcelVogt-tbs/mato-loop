@@ -431,7 +431,7 @@ _MESSAGES = {
     "webfetch.contentTypeUnsupported": "The web server sent an unsupported content type.",
     "webfetch.dnsFailed": "The web server's host name could not be resolved.",
     "webfetch.emptyResponse": "The web server returned no usable content.",
-    "webfetch.engineUnavailable": "The selected web fetch engine is unavailable.",
+    "webfetch.engineUnavailable": "JavaScript web fetching is unavailable.",
     "webfetch.engineUnsupported": "The selected web fetch engine is unsupported.",
     "webfetch.renderFailed": "The web page could not be processed by the JavaScript engine.",
     "webfetch.userAgentUnsupported": "The Lightpanda user agent must not contain Mozilla.",

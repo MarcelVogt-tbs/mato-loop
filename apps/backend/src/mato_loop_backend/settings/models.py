@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Annotated, Any, ClassVar, Literal, Self
+from typing import Annotated, Any, ClassVar, Self
 from unicodedata import category as unicode_category
 from uuid import UUID, uuid4
 
@@ -874,8 +874,6 @@ class IntegrationInstance(BaseModel):
 class WebFetchSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    engine: Literal["lightpanda", "http"] = "lightpanda"
-
     user_agent: str = Field(
         default=DEFAULT_WEBFETCH_USER_AGENT,
         min_length=1,
@@ -894,6 +892,13 @@ class WebFetchSettings(BaseModel):
             "public_addresses_only", "publicAddressesOnly"
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def remove_legacy_engine(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: item for key, item in value.items() if key != "engine"}
+        return value
 
     @field_validator("user_agent", mode="before")
     @classmethod
