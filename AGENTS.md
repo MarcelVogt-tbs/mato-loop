@@ -135,6 +135,8 @@ Example:
 ### Running checks
 
 - Before validation, choose the smallest checks supported by `./scripts/dev.sh` that verify the changed behavior. Identify what a failure would cause you to change. If the script only supports a whole target suite, use it without adding test infrastructure just to narrow execution.
+- When changing system dependencies, update the development Dockerfile, production Dockerfile, and native CI installation together. Rebuild the affected development image with `./scripts/dev.sh compose build <service>` before validation; bind-mounted code does not update installed binaries.
+- Changes to shared prompts, tool schemas, settings defaults, or error contracts require the complete affected target test suite before handoff. Update affected expectations in the same change, and distinguish local validation from CI verification.
 - A failing baseline run is optional. Run it to resolve uncertainty about the cause or whether the regression test detects the bug, not merely to complete a red-green sequence.
 - Use known suite duration plus a timeout margin; allow a generous timeout for full suites of unknown duration. After interruption or truncated output, inspect captured results and execution state before deciding whether another run is necessary.
 - Repeat a check only after a change that can affect its result or to investigate a specific unresolved failure. Formatting-only changes require formatting/lint checks, not another functional test run.

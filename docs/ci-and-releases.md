@@ -46,6 +46,16 @@ Forgejo Runner does not own host Docker retention. Configure image, layer, Build
 
 The workflow uses Forgejo's Actions cache for locked UV and Yarn package downloads. Cache misses only make dependency installation slower; they never skip `uv sync --frozen` or `yarn install --immutable`. Docker image builds separately reuse normal builder layers and BuildKit package-cache mounts, whose retention remains a runner-administrator responsibility.
 
+## Test Environment Parity
+
+The backend, frontend, and agent test jobs run directly in the runner environment, not in the application images. System dependency changes must update both Dockerfiles and the corresponding CI installation. The backend job copies Lightpanda from the same digest-pinned official image used by its development and production Dockerfiles and runs `lightpanda version` before testing. Update all three image references together when upgrading it.
+
+Local backend checks and tests also verify that Lightpanda starts before installing Python dependencies. After a Dockerfile change, run `./scripts/dev.sh compose build backend` (or the affected service) before validation: `dev.sh check` and `dev.sh test` reuse existing images. Bind-mounted source changes do not install new system dependencies.
+
+For shared prompt, tool schema, settings default, and error contract changes, run the complete affected target test suite and update its expectations in the same change. Prefer focused behavior assertions over a digest of all prompt text and schemas; a digest also fails on unrelated, intentional wording changes and cannot explain which contract changed.
+
+Passing the default suites does not imply all integration tests ran. Backend PostgreSQL tests need their explicit flags or environment variables, RAG tests use `./scripts/dev.sh test rag`, and additional agent browser scenarios require their documented opt-in environment. Native Windows tests skip on Linux. The agent's packaged OpenSCAD test also skips when OpenSCAD/Xvfb are absent; the native CI job does not install them. Review skip reasons separately from failures and report which opt-in checks actually ran.
+
 ## Forgejo Configuration
 
 Configure these repository or organization Action variables:

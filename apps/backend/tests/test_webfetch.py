@@ -111,7 +111,7 @@ async def test_lightpanda_executes_javascript_and_fetches_with_configured_user_a
     assert result.final_url == _origin(port) + ("/final" if navigation else "/")
 
 
-@pytest.mark.xfail(strict=True, reason="Official Lightpanda 1.0.0 loses the base URL for relative imports in redirected ES modules")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="Official Lightpanda 1.0.0 loses the base URL for relative imports in redirected ES modules")
 async def test_lightpanda_loads_redirected_module() -> None:
     async def responder(path, _headers):
         if path == "/bundle.js":
