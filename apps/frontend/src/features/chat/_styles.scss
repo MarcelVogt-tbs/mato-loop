@@ -502,12 +502,17 @@
 }
 
 .chat-messages--small {
-  --chat-message-font-size: 0.875rem;
+  --chat-message-font-size: 13px;
   --chat-message-gap: 12px;
   --chat-message-padding: 8px 12px;
   --chat-message-line-height: 1.5;
   --chat-paragraph-gap: 0.6em;
   --chat-heading-gap: 0.9em;
+
+  .chat-message__content,
+  .chat-markdown {
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
 }
 
 .chat-message {
