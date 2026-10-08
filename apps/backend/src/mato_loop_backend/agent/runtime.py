@@ -232,12 +232,11 @@ class AgentRuntime:
                 select(ExecutionAgent).where(
                     ExecutionAgent.id == chat_session.preferred_execution_agent_id,
                     ExecutionAgent.user_id == chat_session.user_id,
-                    ExecutionAgent.revoked_at.is_(None),
                 )
             )
             snapshot = execution_agent_connections.snapshot(
                 chat_session.preferred_execution_agent_id
-            )
+            ) if execution_agent is not None and execution_agent.revoked_at is None else None
             if execution_agent is None:
                 raise AgentRunError("executionAgent.unavailable")
             if snapshot is not None and current_directory is not None:
@@ -421,7 +420,6 @@ class AgentRuntime:
                 select(ExecutionAgent).where(
                     ExecutionAgent.id == agent_id,
                     ExecutionAgent.user_id == chat_session.user_id,
-                    ExecutionAgent.revoked_at.is_(None),
                 )
             )
             if agent_id is not None
@@ -429,6 +427,8 @@ class AgentRuntime:
         )
         if agent_id is not None and execution_agent is None:
             raise AgentRunError("executionAgent.unavailable")
+        if execution_agent is not None and execution_agent.revoked_at is not None:
+            snapshot = None
         if snapshot is not None and current_directory is not None:
             try:
                 directory = await ExecutionClient(
@@ -479,6 +479,11 @@ class AgentRuntime:
             if input_message is None:
                 raise AgentRunError("session.retryUnavailable")
             metadata = (input_message.provider_data or {}).get("_matoloop", {})
+            if not before_execution:
+                input_message.provider_data = {
+                    **(input_message.provider_data or {}),
+                    "_matoloop": {**metadata, "executionStarted": True},
+                }
             if "maxToolCalls" in metadata and str(failed_run.id) not in metadata.get("maxToolCallsByRun", {}):
                 agent_run_support._snapshot_tool_call_limit(input_message, failed_run.id, metadata["maxToolCalls"])
             agent_run_support._snapshot_tool_call_limit(input_message, run.id, profile.max_tool_calls if profile is not None else 25)
@@ -796,12 +801,12 @@ class AgentRuntime:
             raise AgentRunError("agentProfile.selectedUnavailable") from exc
         if not profile.enabled:
             raise AgentRunError("agentProfile.selectedUnavailable")
+        agent = await db.get(ExecutionAgent, run.execution_agent_id) if run.execution_agent_id is not None else None
+        if run.execution_agent_id is not None and (agent is None or agent.user_id != session.user_id or agent.revoked_at is not None):
+            raise AgentRunError("executionAgent.unavailable")
         if (profile.base_profile_id or profile.id) in {PLAN_PROFILE_ID, BUILD_PROFILE_ID}:
             if run.execution_agent_id is None:
                 raise AgentRunError("session.computerRequired")
-            agent = await db.get(ExecutionAgent, run.execution_agent_id)
-            if agent is None or agent.user_id != session.user_id or agent.revoked_at is not None:
-                raise AgentRunError("executionAgent.unavailable")
             snapshot = execution_agent_connections.snapshot(agent.id)
             if snapshot is None:
                 raise AgentRunError("session.computerOffline")
@@ -902,8 +907,17 @@ class AgentRuntime:
                             **run_timing_payload(run),
                         },
                     )
+                    input_message = await db.get(Message, run.input_message_id) if run.input_message_id else None
+                    input_metadata = (input_message.provider_data or {}).get("_matoloop", {}) if isinstance(input_message, Message) else {}
+                    before_execution = input_metadata.get("executionStarted") is not True
                     await cls._prepare_run(db, run)
                     before_execution = False
+                    if isinstance(input_message, Message):
+                        input_message.provider_data = {
+                            **(input_message.provider_data or {}),
+                            "_matoloop": {**input_metadata, "executionStarted": True},
+                        }
+                        await db.commit()
                     await cls._transcribe_voice_messages(db, run)
                     await cls._execute_loop(db, run, visible_response)
                     await cls._finalize_run_files(db, run)

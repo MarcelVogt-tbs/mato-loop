@@ -1009,8 +1009,8 @@ def test_unknown_runtime_exception_has_safe_descriptor() -> None:
     assert secret not in str(error.payload())
 
 
-@pytest.mark.parametrize("preflight", [False, True])
-async def test_run_failure_persists_structured_message_before_terminal_event(monkeypatch, preflight) -> None:
+@pytest.mark.parametrize("preflight,previously_started", [(False, False), (True, False), (True, True)])
+async def test_run_failure_persists_structured_message_before_terminal_event(monkeypatch, preflight, previously_started) -> None:
     monkeypatch.setattr(AgentRuntime, "_finalize_run_files", AsyncMock())
     run = AgentRun(
         id=uuid4(),
@@ -1021,7 +1021,9 @@ async def test_run_failure_persists_structured_message_before_terminal_event(mon
     )
     db = AsyncMock(spec=AsyncSession)
     session = ChatSession(id=run.session_id, title_generation_status="running")
-    db.get.side_effect = lambda model, _id: session if model is ChatSession else run
+    input_message = Message(id=uuid4(), session_id=run.session_id, role="user", content="Work", provider_data={"_matoloop": {"executionStarted": previously_started}})
+    run.input_message_id = input_message.id
+    db.get.side_effect = lambda model, key, **_kw: session if model is ChatSession else input_message if key == input_message.id else run
     db.scalar.return_value = None
     db.add.side_effect = lambda message: setattr(message, "id", uuid4())
     events = []
@@ -1057,7 +1059,7 @@ async def test_run_failure_persists_structured_message_before_terminal_event(mon
     assert run.error == message.error_code
     assert message_payload(message)["origin"] == "host"
     assert events[1]["message"]["state"] == "error"
-    assert (message.provider_data["_matoloop"].get("beforeExecution") is True) is preflight
+    assert (message.provider_data["_matoloop"].get("beforeExecution") is True) is (preflight and not previously_started)
     assert [event["type"] for event in events] == [
         "run.started",
         "message.completed",

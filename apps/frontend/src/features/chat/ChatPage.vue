@@ -919,8 +919,8 @@ async function undoQueuedMessage(id) {
 
 async function retryMessage(message) {
   const accepted = await confirm(
-    'Die fehlerhafte Antwort wird entfernt und mit dem ursprünglichen Modell erneut erzeugt. '
-      + 'Bereits ausgeführte Tool-, Datei-, Berechtigungs- und Memory-Aktionen können erneut ausgeführt werden.',
+    'Die Anfrage wird erneut gestartet. Bereits ausgeführte Aktionen werden nicht rückgängig gemacht '
+      + 'und können erneut ausgeführt werden.',
     'Antwort erneut versuchen?',
     { okLabel: 'Erneut versuchen', okColor: 'primary' }
   )

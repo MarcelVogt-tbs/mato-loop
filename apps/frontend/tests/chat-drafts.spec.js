@@ -649,6 +649,28 @@ describe('chat drafts', () => {
     expect(chat.activeContext.sessionTemplateId).toBe('latest')
   })
 
+  it.each([false, true])('waits for project defaults before creation (empty=%s)', async (empty) => {
+    const chat = useChatStore()
+    let resolveDefaults
+    api.get.mockResolvedValue(sessionPage())
+    api.post.mockResolvedValue({ data: {} })
+      .mockImplementationOnce(() => new Promise(resolve => { resolveDefaults = resolve }))
+      .mockResolvedValueOnce({ data: {
+        session: { id: 'created', projectId: 'project-1' },
+        message: { id: 'message', role: 'user', content: 'Work' }, runId: 'run'
+      } })
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+    await chat.setSessionScope('project-1')
+    const loading = chat.fetchDefaults()
+    const creating = empty ? chat.createEmptySession(useControlCenterStore()) : chat.send('Work')
+    const earlyCreations = api.post.mock.calls.filter(([url]) => url === '/sessions').length
+    resolveDefaults({ data: { sessionTemplateId: 'coding', preferredExecutionAgentId: 'computer', currentDirectory: '/repo', memoryMode: 'disabled' } })
+    await Promise.all([loading, creating])
+    expect([earlyCreations, api.post.mock.calls.find(([url]) => url === '/sessions')?.[1]]).toEqual([
+      0, expect.objectContaining({ session_template_id: 'coding', preferred_execution_agent_id: 'computer', current_directory: '/repo', memory_mode: 'disabled' })
+    ])
+  })
+
   it('does not start a run while a persisted session setting is being saved', async () => {
     let resolvePatch
     api.patch.mockReturnValue(new Promise((resolve) => { resolvePatch = resolve }))

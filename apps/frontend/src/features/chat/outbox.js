@@ -3,7 +3,7 @@ import { api } from 'src/boot/axios'
 import { controlCenterRequestState, useControlCenterStore } from 'src/stores/control-center'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { buildAttachmentFormData, releaseAttachmentDrafts } from 'src/features/chat/attachments'
-import { newSessionQueueKey, queueKeyForEntry, sanitizedSessionOptions, sessionCreatePayload, sortSessions } from 'src/features/chat/state'
+import { newSessionQueueKey, queueKeyForEntry, sanitizedSessionOptions, sessionCreatePayload, sessionScopeKey, sortSessions } from 'src/features/chat/state'
 import { errorDescriptor } from 'src/utils/api-errors'
 import { compareChatOutboxEntries, deleteChatOutboxEntry, deleteChatOutboxEntries, saveChatOutboxEntry } from 'src/utils/chat-outbox'
 import { notifyError } from 'src/utils/notifications'
@@ -12,6 +12,11 @@ import { OUTBOX_RETRY_MS } from 'src/features/chat/model'
 
 export const outboxActions = {
     async send(content, { preserveDraft = false, interrupt = false } = {}) {
+      if (!this.current && this.draftPreviewRequests[sessionScopeKey(this.sessionsProjectId)]) {
+        const draft = this.drafts.newSession
+        await this.waitForDraftDefaults()
+        if (this.current || this.drafts.newSession !== draft) return null
+      }
       if (this.outboxSaving || this.historyActionPending || this.sessionSettingsPending) return null
       this.outboxSaving = true
       const interruptRun = interrupt && this.running && Boolean(this.current)

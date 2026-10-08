@@ -86,32 +86,44 @@ export const draftActions = {
     },
     async fetchDefaults(projectId = this.sessionsProjectId, templateId = null) {
       const scope = sessionScopeKey(projectId)
-      const version = (this.draftPreviewVersions[scope] || 0) + 1
-      this.draftPreviewVersions[scope] = version
       const targetDraft = this.drafts.newSessions[scope] || this.drafts.newSession
       const options = targetDraft.options
       const initial = !options.sessionTemplateId && !options.modelId && !options.sessionProfile && !options.agentProfileId && options.memoryMode === 'full' && !options.reasoningEffort
       const snapshot = JSON.stringify(options)
-      const { data } = await api.post('/sessions/defaults', {
-        project_id: projectId,
-        session_template_id: templateId || options.sessionTemplateId,
-        ...(!initial && !templateId ? {
-          agent_profile_id: options.agentProfileId, model_id: options.modelId,
-          reasoning_effort: options.reasoningEffort, memory_mode: options.memoryMode,
-          session_profile: options.sessionProfile
-        } : {})
-      })
-      if (version !== this.draftPreviewVersions[scope] || (this.drafts.newSessions[scope] || this.drafts.newSession) !== targetDraft || JSON.stringify(options) !== snapshot) return
-      if (initial && !templateId) {
-        const defaults = sanitizedSessionOptions({ ...defaultSessionOptions(), ...data })
-        if (sessionScopeKey(this.sessionsProjectId) === scope) this.sessionDefaults = defaults
-        Object.assign(options, defaults)
-      } else {
-        for (const field of ['sessionTemplateId', 'sessionProfile', 'agentProfileId', 'modelId', 'reasoningEffort', 'memoryMode', 'effectiveMemoryMode', 'memoryToolsAvailable', 'memoryUnavailableReason']) {
-          if (Object.hasOwn(data, field)) options[field] = data[field]
+      this.sessionSettingsPending += 1
+      const request = (async () => {
+        const { data } = await api.post('/sessions/defaults', {
+          project_id: projectId,
+          session_template_id: templateId || options.sessionTemplateId,
+          ...(!initial && !templateId ? {
+            agent_profile_id: options.agentProfileId, model_id: options.modelId,
+            reasoning_effort: options.reasoningEffort, memory_mode: options.memoryMode,
+            session_profile: options.sessionProfile
+          } : {})
+        })
+        if (this.draftPreviewRequests[scope] !== request || (this.drafts.newSessions[scope] || this.drafts.newSession) !== targetDraft || JSON.stringify(options) !== snapshot) return
+        if (initial && !templateId) {
+          const defaults = sanitizedSessionOptions({ ...defaultSessionOptions(), ...data })
+          if (sessionScopeKey(this.sessionsProjectId) === scope) this.sessionDefaults = defaults
+          Object.assign(options, defaults)
+        } else {
+          for (const field of ['sessionTemplateId', 'sessionProfile', 'agentProfileId', 'modelId', 'reasoningEffort', 'memoryMode', 'effectiveMemoryMode', 'memoryToolsAvailable', 'memoryUnavailableReason']) {
+            if (Object.hasOwn(data, field)) options[field] = data[field]
+          }
         }
+        this.persistDrafts()
+      })()
+      this.draftPreviewRequests[scope] = markRaw(request)
+      try {
+        await request
+      } finally {
+        if (this.draftPreviewRequests[scope] === request) delete this.draftPreviewRequests[scope]
+        this.sessionSettingsPending = Math.max(0, this.sessionSettingsPending - 1)
       }
-      this.persistDrafts()
+    },
+    async waitForDraftDefaults(projectId = this.sessionsProjectId) {
+      const scope = sessionScopeKey(projectId)
+      while (this.draftPreviewRequests[scope]) await this.draftPreviewRequests[scope]
     },
     async reconcileNewSession(validModelIds, searchAvailable) {
       const options = this.drafts.newSession.options

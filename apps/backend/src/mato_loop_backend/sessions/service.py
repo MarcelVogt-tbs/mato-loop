@@ -261,17 +261,19 @@ async def validate_execution_preferences(
         raise SessionServiceError(
             404, "executionAgent.notFound", field="preferredExecutionAgentId"
         )
-    if agent.revoked_at is not None:
+    if agent.revoked_at is not None and not defer_unavailable:
         raise SessionServiceError(
             409, "executionAgent.revoked", field="preferredExecutionAgentId"
         )
-    selected = current_directory or await execution_home(db, agent)
+    selected = current_directory or (agent.home_directory if agent.revoked_at is not None else await execution_home(db, agent))
     if selected is None:
         return None, None
     try:
         selected = _absolute_path(selected)
     except ValueError as exc:
         raise SessionServiceError(400, "session.invalidWorkingDirectory", field="currentDirectory") from exc
+    if agent.revoked_at is not None:
+        return selected, None
     snapshot = execution_agent_connections.snapshot(agent.id)
     if snapshot is None or "filesystem.resolve" not in snapshot:
         if defer_unavailable:
@@ -1010,8 +1012,8 @@ async def create_session(
     fields = payload.model_fields_set
     configured_model = payload.model_id if "model_id" in fields else template.model_id
     configured_reasoning = payload.reasoning_effort if "reasoning_effort" in fields else template.reasoning_effort
-    ai = await validate_session_profile(db, user.id, configuration, model_id=configured_model)
-    validate_chat_model(ai, ChatModelOverride(model_id=configured_model, reasoning_effort=configured_reasoning))
+    ai = await validate_session_profile(db, user.id, configuration, model_id=configured_model, defer_unavailable=True)
+    validate_chat_model(ai, ChatModelOverride(model_id=configured_model, reasoning_effort=configured_reasoning), defer_unavailable=True)
     await validate_agent_profile(db, user.id, agent_profile_id)
     agent_id = (
         payload.preferred_execution_agent_id

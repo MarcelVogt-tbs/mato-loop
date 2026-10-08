@@ -2353,7 +2353,14 @@ async def test_attachment_download_rejects_incomplete_hierarchy() -> None:
     assert exc_info.value.code == "attachment.notFound"
 
 
-async def test_session_accepts_unavailable_model_for_host_failure(monkeypatch) -> None:
+@pytest.mark.parametrize("selection", ["default", "session", "agent"])
+async def test_session_accepts_unavailable_model_for_host_failure(monkeypatch, selection) -> None:
+    from mato_loop_backend.settings.models import GENERAL_PROFILE_ID
+    from mato_loop_backend.settings.session_profiles import (
+        ChatModelOverride,
+        SessionProfileSnapshot,
+    )
+
     user = _user()
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(
@@ -2388,7 +2395,10 @@ async def test_session_accepts_unavailable_model_for_host_failure(monkeypatch) -
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = persisted_message
 
-    result = await create_session(SessionCreateRequest(content="Test"), user, db)
+    options = {"model_id": model.id} if selection == "session" else {
+        "session_profile": SessionProfileSnapshot(agent_models={GENERAL_PROFILE_ID: ChatModelOverride(model_id=model.id)})
+    } if selection == "agent" else {}
+    result = await create_session(SessionCreateRequest(content="Test", **options), user, db)
     assert result["runId"] == str(run.id)
     start.assert_awaited_once()
 

@@ -48,7 +48,7 @@ export const useChatStore = defineStore('chat', {
     olderMessagesPromise: null,
     loadError: null,
     sessionDefaults: defaultSessionOptions(),
-    draftPreviewVersions: {},
+    draftPreviewRequests: {},
     draftOwnerUserId: null,
     drafts: emptyDrafts(),
     attachmentDrafts: {

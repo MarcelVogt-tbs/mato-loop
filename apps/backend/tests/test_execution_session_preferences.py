@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -67,12 +68,15 @@ def _agent(user_id=None, **values):
     ("missing", "session.computerRequired"), ("offline", "session.computerOffline"),
     ("operations", "session.computerOperationsMissing"), ("directory", "session.directoryRequired"),
     ("unreachable", "session.directoryUnavailable"), ("foreign", "executionAgent.unavailable"),
+    ("revoked", "executionAgent.unavailable"),
 ])
 async def test_coding_preflight_requires_usable_owned_computer(monkeypatch, profile, problem, code):
     from mato_loop_backend.execution import ExecutionClientError
 
     session = ChatSession(id=uuid4(), user_id=uuid4(), agent_profile_id=profile.id)
     agent = _agent(session.user_id if problem != "foreign" else uuid4())
+    if problem == "revoked":
+        agent.revoked_at = datetime.now(UTC)
     run = AgentRun(session_id=session.id, agent_profile_id=profile.id,
                    execution_agent_id=None if problem == "missing" else agent.id,
                    current_directory_snapshot=None if problem == "directory" else "/home/user")
@@ -288,9 +292,12 @@ async def test_session_payload_reports_connected_operations(monkeypatch) -> None
 
 
 @pytest.mark.usefixtures("mock_db_settings")
-async def test_start_persists_rootless_executor_snapshot(monkeypatch) -> None:
+@pytest.mark.parametrize("revoked", [False, True])
+async def test_start_persists_rootless_executor_snapshot(monkeypatch, revoked) -> None:
     user_id = uuid4()
     agent = _agent(user_id)
+    if revoked:
+        agent.revoked_at = datetime.now(UTC)
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="agent-model")
     settings = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
@@ -320,7 +327,7 @@ async def test_start_persists_rootless_executor_snapshot(monkeypatch) -> None:
     run = await AgentRuntime.start(db, session, "Work")
     assert run.execution_agent_id == agent.id
     assert run.current_directory_snapshot == "/home/user/project"
-    assert run.execution_operations == ["filesystem.read", "filesystem.resolve"]
+    assert run.execution_operations == ([] if revoked else ["filesystem.read", "filesystem.resolve"])
 
 
 @pytest.mark.parametrize("before_execution", [False, True])
@@ -344,3 +351,4 @@ async def test_retry_uses_current_computer_only_for_preflight_failure(monkeypatc
     monkeypatch.setattr(execution_agent_connections, "snapshot", lambda _id: None)
     retried = await AgentRuntime.retry(db, session, failed, before_execution=before_execution)
     assert retried.execution_agent_id == (agent.id if before_execution else None)
+    assert (message.provider_data["_matoloop"].get("executionStarted") is True) is not before_execution

@@ -22,6 +22,10 @@ export const sessionsActions = {
       const scope = sessionScopeKey(projectId)
       const draft = this.drafts.newSession
       const request = (async () => {
+        if (this.draftPreviewRequests[scope]) {
+          await this.waitForDraftDefaults(projectId)
+          if (this.sessionLoadVersion !== version || this.sessionsProjectId !== projectId || this.drafts.newSession !== draft) return null
+        }
         const { data } = await api.post('/sessions', {
           content: null,
           ...sessionCreatePayload(
@@ -439,9 +443,7 @@ export const sessionsActions = {
         return
       }
       if (Object.hasOwn(patch, 'session_template_id')) {
-        this.sessionSettingsPending += 1
-        try { await this.fetchDefaults(this.sessionsProjectId, patch.session_template_id) }
-        finally { this.sessionSettingsPending = Math.max(0, this.sessionSettingsPending - 1) }
+        await this.fetchDefaults(this.sessionsProjectId, patch.session_template_id)
         return
       }
       const options = this.drafts.newSession.options
