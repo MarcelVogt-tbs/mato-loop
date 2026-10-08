@@ -26,6 +26,8 @@ binding is loaded only on Linux.
    `& "$env:LOCALAPPDATA\matoloop-agent\installer.ps1" pair`. Enter the
    displayed computer ID and pairing token and the WebSocket URL printed by
    the installer. Confirm the platform is `win32` and system info says Windows.
+   Keep the startup task running during pairing: it must wait for the credential
+   lock and connect after pairing completes, without requiring a manual restart.
 5. Select the Windows workspace. Browse and create a folder, create/edit/read a
    UTF-8 file, search it, upload/download it, and use an approved PowerShell
    `Get-Content` and `Set-Content` command. Confirm `C:/` breadcrumbs and

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import json
 import msvcrt
 import os
 import stat
+import time
 from ctypes import wintypes
 from pathlib import Path
 from typing import Self
@@ -59,12 +61,22 @@ class WindowsCredentialStore:
         if self.path.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
             raise CredentialError("Credential directory must not be a link")
         self.lock = (self.path / "credential.lock").open("a+b")
-        self.lock.seek(0)
-        if not self.lock.read(1):
-            self.lock.write(b"0")
-            self.lock.flush()
-        self.lock.seek(0)
-        msvcrt.locking(self.lock.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            self.lock.seek(0)
+            # Windows permits locking past EOF; reading the locked byte would fail.
+            while True:
+                try:
+                    msvcrt.locking(self.lock.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as exc:
+                    if exc.errno != errno.EACCES:
+                        raise
+                    # LK_LOCK gives up after ten attempts, even while pairing is active.
+                    time.sleep(0.1)
+        except BaseException:
+            self.lock.close()
+            self.lock = None
+            raise
         return self
 
     def __exit__(self, *_: object) -> None:
