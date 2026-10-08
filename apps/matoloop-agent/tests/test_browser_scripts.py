@@ -93,6 +93,11 @@ class BrowserScriptTests(unittest.IsolatedAsyncioTestCase):
                 "failureReason": "runtimeError",
                 "failureDetail": "resultTooLarge",
             },
+            {
+                "errorCode": "browser.outcomeUnknown",
+                "failureReason": "invalidResult",
+                "failureDetail": "typeError",
+            },
         ):
             with self.assertRaises(ValidationError):
                 BrowserScriptResult(**invalid)
@@ -135,6 +140,8 @@ async def run(page):
         for ending in (
             "return object()",
             "raise RuntimeError('not exposed')",
+            "raise TypeError('not exposed')",
+            "raise AttributeError('not exposed')",
             "raise TimeoutError('not a deadline')",
             "return float('nan')",
             "return 'x' * 32769",
@@ -166,6 +173,10 @@ async def run(page):
                         if "32769" in ending
                         else "resultTypeUnsupported"
                         if ending.startswith("return")
+                        else "typeError"
+                        if ending.startswith("raise TypeError")
+                        else "attributeError"
+                        if ending.startswith("raise AttributeError")
                         else None
                     ),
                     line=None if ending.startswith("return") else 4,

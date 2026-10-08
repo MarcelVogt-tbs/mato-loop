@@ -44,6 +44,8 @@ BrowserScriptFailureDetail = Literal[
     "resultTooLarge",
     "resultTooDeep",
     "resultTypeUnsupported",
+    "typeError",
+    "attributeError",
 ]
 
 
@@ -479,8 +481,14 @@ class BrowserScriptResult(StrictModel):
             raise ValueError("Script failure reason requires an error outcome")
         if self.line is not None and self.failure_reason is None:
             raise ValueError("Script line requires a failure reason")
-        if self.failure_detail is not None and self.failure_reason != "invalidResult":
-            raise ValueError("Script failure detail requires an invalid result")
+        if self.failure_detail is not None:
+            expected = (
+                "runtimeError"
+                if self.failure_detail in {"typeError", "attributeError"}
+                else "invalidResult"
+            )
+            if self.failure_reason != expected:
+                raise ValueError("Script failure detail does not match its reason")
         return self
 
     @field_validator("value", mode="before")

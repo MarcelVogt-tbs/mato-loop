@@ -21,6 +21,7 @@ from fastapi import WebSocket
 from pydantic import ValidationError
 
 from mato_loop_backend.db.session import AsyncSessionFactory
+from mato_loop_backend.diagnostics.service import schedule_diagnostic_event
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.execution.browser_contracts import (
     BrowserActionArguments,
@@ -194,9 +195,25 @@ class BrowserConnection:
     action_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
-    def detach(self) -> None:
+    def diagnostic(self, event: str, reason: str, *, error_code: str | None = None) -> None:
+        schedule_diagnostic_event(
+            self.owner_id, f"browser.{event}", component="browser",
+            session_id=self.session_id, correlation_id=self.browser_id,
+            payload={
+                "browserId": str(self.browser_id), "viewId": str(self.view_id),
+                "agentId": str(self.agent_id), "integrationId": str(self.integration_id),
+                "attachmentRevision": self.attachment_revision,
+                "reason": reason,
+                "errorCode": describe_error(error_code).code if error_code is not None else None,
+            },
+        )
+
+    def detach(self, reason: str = "manualTakeover", *, error_code: str | None = None) -> None:
+        was_attached = self.attached
         self.attached = False
         self.attachment_revision += 1
+        if was_attached:
+            self.diagnostic("detached", reason, error_code=error_code)
 
     async def send(self, payload: dict) -> None:
         async with self.send_lock:
@@ -234,7 +251,7 @@ class BrowserConnection:
         if self.closed or instance.execution_agent_id != self.agent_id:
             raise ExecutionClientError("browser.bindingChanged")
         if not self.can_attach and self.attached:
-            self.detach()
+            self.detach("accessRevoked", error_code="tool.unavailable")
 
     async def check_manual(self) -> None:
         await self.check_access()
@@ -323,7 +340,7 @@ class BrowserCoordinator:
             if previous is not None:
                 # Retire the immutable view binding, not the Chromium runtime it controlled.
                 previous.closed = True
-                previous.detach()
+                previous.detach("takeover")
                 for task in (previous.task, previous.idle_task):
                     if task is not None:
                         task.cancel()
@@ -411,15 +428,20 @@ class BrowserCoordinator:
             if control_request is not None:
                 await control_request.validate()
             connection.ready = True
+            connection.diagnostic("opened", "takeover" if previous is not None else "start")
             connection.task = asyncio.create_task(self.watch(connection))
             return connection
         except BaseException as exc:
+            code = (control_request.error if control_request is not None else None) or (
+                exc.code if isinstance(exc, ExecutionClientError) else "browser.unavailable"
+            )
             if isinstance(exc, Exception):
                 with suppress(Exception):
-                    await connection.send({"type": "error", "error": describe_error(
-                        exc.code if isinstance(exc, ExecutionClientError) else "browser.unavailable",
-                    ).payload()})
-            await self.close(connection)
+                    await connection.send({"type": "error", "error": describe_error(code).payload()})
+            await self.close(
+                connection, reason="controlTimeout" if code == "browser.controlTimeout" else "startupFailed",
+                error_code=code,
+            )
             raise
         finally:
             if previous is not None:
@@ -472,7 +494,12 @@ class BrowserCoordinator:
             code = exc.code if isinstance(exc, ExecutionClientError) else "browser.unavailable"
             with suppress(Exception):
                 await connection.send({"type": "error", "error": describe_error(code).payload()})
-            await self.close(connection)
+            await self.close(
+                connection,
+                reason=("agentDisconnected" if execution_agent_connections.generation(connection.agent_id)
+                        != connection.generation else "watchFailed"),
+                error_code=code,
+            )
 
     async def release(self, connection: BrowserConnection, websocket: WebSocket) -> None:
         if connection.closed or connection.websocket is not websocket:
@@ -486,19 +513,21 @@ class BrowserCoordinator:
                 await connection.view_socket.close()
             connection.view_socket = None
         if not connection.closed and not connection.attached:
-            connection.detach()
+            connection.detach("controlDisconnected")
             if connection.idle_task is not None:
                 connection.idle_task.cancel()
             async def expire():
                 await asyncio.sleep(IDLE_SECONDS)
-                await self.close(connection)
+                await self.close(connection, reason="idleTimeout")
             connection.idle_task = asyncio.create_task(expire())
 
-    async def close(self, connection: BrowserConnection) -> None:
+    async def close(self, connection: BrowserConnection, *, reason: str = "manualClose",
+                    error_code: str | None = None) -> None:
         if connection.closed:
             return
         connection.closed = True
-        connection.detach()
+        connection.detach(reason, error_code=error_code)
+        connection.diagnostic("closed", reason, error_code=error_code)
         for task in (connection.task, connection.idle_task):
             if task is not None and task is not asyncio.current_task():
                 task.cancel()
@@ -523,7 +552,8 @@ class BrowserCoordinator:
                 self.connections.pop(connection.agent_id)
 
     async def attachment(self, connection: BrowserConnection, attached: bool,
-                         *, control_request: ControlRequest | None = None) -> None:
+                         *, control_request: ControlRequest | None = None,
+                         reason: str | None = None) -> None:
         await connection.check_access()
         if attached:
             if not connection.can_attach:
@@ -556,15 +586,16 @@ class BrowserCoordinator:
                 if control_request is not None:
                     await control_request.validate()
                     control_request.binding_ready()
-                connection.detach()
+                connection.detach("attachmentReplaced")
                 connection.attached = True
+                connection.diagnostic("attached", "modelRequest" if control_request is not None else "manualAttach")
                 if control_request is not None:
                     from mato_loop_backend.execution.browser_control import browser_control_requests
 
                     browser_control_requests.finish(control_request)
                 await connection.state()
         else:
-            connection.detach()
+            connection.detach(reason or "manualTakeover")
             await connection.state()
             # Revoke queued actions immediately, but let a dispatched action settle.
             async with connection.action_lock:
@@ -599,7 +630,7 @@ class BrowserCoordinator:
                         connection.idle_task.cancel()
                     async def expire():
                         await asyncio.sleep(IDLE_SECONDS)
-                        await self.close(connection)
+                        await self.close(connection, reason="idleTimeout")
                     connection.idle_task = asyncio.create_task(expire())
 
     async def _snapshot(self, connection: BrowserConnection, tab_id: str, *, settle: bool = False) -> tuple[str, BrowserActionResult]:
@@ -1039,7 +1070,7 @@ class BrowserCoordinator:
         return connection
 
     async def shutdown(self) -> None:
-        await asyncio.gather(*(self.close(item) for item in list(self.connections.values())))
+        await asyncio.gather(*(self.close(item, reason="shutdown") for item in list(self.connections.values())))
 
 
 browser_coordinator = BrowserCoordinator()

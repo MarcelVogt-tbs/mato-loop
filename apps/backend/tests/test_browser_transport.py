@@ -275,6 +275,14 @@ def test_live_access_revocation_closes_or_detaches_viewer(env, monkeypatch, chan
             assert event["type"] == ("state" if change == "profile" else "error")
             assert env.coordinator.attached_for(env.session.id, env.agent.id) is None
 
+    assert [
+        (call.kwargs["payload"]["reason"], call.kwargs["payload"]["errorCode"])
+        for call in env.diagnostics.call_args_list if call.args[1] == "browser.detached"
+    ] == [(
+        "accessRevoked" if change == "profile" else "agentDisconnected" if change == "generation" else "watchFailed",
+        "tool.unavailable" if change == "profile" else event["error"]["code"],
+    )]
+
 
 def test_detach_during_busy_action_is_immediate_and_does_not_cancel_rpc(env):
     started, finish = asyncio.Event(), asyncio.Event()

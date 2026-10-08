@@ -223,12 +223,15 @@ def test_request_reports_disconnected_execution_agent(request_case, monkeypatch)
     assert not case.calls
 
 
-def test_request_timeout_closes_incomplete_binding(request_case, monkeypatch):
+@pytest.mark.parametrize("phase", ["startup", "attachment"])
+def test_request_timeout_closes_incomplete_binding(request_case, monkeypatch, phase):
     case = request_case
     monkeypatch.setattr(control, "CONTROL_TIMEOUT", 0.01)
 
-    async def reply(operation, _arguments):
-        if operation == "integration.browser.open":
+    async def reply(operation, arguments):
+        if (phase == "startup" and operation == "integration.browser.open") or (
+            phase == "attachment" and operation == "integration.browser.control" and arguments["manual"] is False
+        ):
             await asyncio.sleep(1)
 
     case.reply = reply
@@ -236,6 +239,10 @@ def test_request_timeout_closes_incomplete_binding(request_case, monkeypatch):
 
     assert result.metadata["errorCode"] == "browser.controlTimeout"
     assert not case.coordinator.connections
+    assert [
+        (call.kwargs["payload"]["reason"], call.kwargs["payload"]["errorCode"])
+        for call in case.diagnostics.call_args_list if call.args[1] == "browser.closed"
+    ] == [("controlTimeout", "browser.controlTimeout")]
 
 
 def test_fresh_start_revalidates_before_manual_control(request_case):

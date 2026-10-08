@@ -200,7 +200,7 @@ async def test_browser_release_is_auto_for_public_and_private(browser_policy_cas
     assert case.context.ask_handler.await_args.args[0].capability == "browser.release"
     case.approval.assert_not_awaited()
     case.coordinator.attachment.assert_awaited_once_with(
-        case.coordinator.attached_for.return_value, False,
+        case.coordinator.attached_for.return_value, False, reason="modelRelease",
     )
 
 

@@ -427,7 +427,7 @@ async def browser_view(websocket: WebSocket, integration_id: UUID) -> None:
                 browser_control_requests.cancel_socket(connection.websocket)
             connection.view_socket = None
             if not connection.attached:
-                connection.detach()
+                connection.detach("viewerDisconnected")
             if not connection.resetting_view:
                 with suppress(Exception):
                     await connection.state()

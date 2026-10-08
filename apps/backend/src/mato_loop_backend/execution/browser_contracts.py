@@ -25,7 +25,7 @@ BrowserScriptFailureReason = Literal[
     "scriptTimeout", "playwrightTimeout", "targetUnavailable", "runtimeError", "invalidResult",
 ]
 BrowserScriptFailureDetail = Literal[
-    "resultTooLarge", "resultTooDeep", "resultTypeUnsupported",
+    "resultTooLarge", "resultTooDeep", "resultTypeUnsupported", "typeError", "attributeError",
 ]
 BrowserAction = Literal[
     "tabs", "newtab", "closetab", "navigate", "inspect", "screenshot", "click",
@@ -395,8 +395,10 @@ class BrowserScriptResult(BrowserResult):
             raise ValueError("browser script failure reason requires an error outcome")
         if self.line is not None and self.failure_reason is None:
             raise ValueError("browser script line requires a failure reason")
-        if self.failure_detail is not None and self.failure_reason != "invalidResult":
-            raise ValueError("browser script failure detail requires an invalid result")
+        if self.failure_detail is not None:
+            expected = "runtimeError" if self.failure_detail in {"typeError", "attributeError"} else "invalidResult"
+            if self.failure_reason != expected:
+                raise ValueError("browser script failure detail does not match its reason")
         return self
 
 

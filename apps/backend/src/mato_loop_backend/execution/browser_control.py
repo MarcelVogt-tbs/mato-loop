@@ -242,9 +242,15 @@ class BrowserControlRequests:
                     await browser_coordinator.attachment(
                         connection, True, control_request=request,
                     )
-                except BaseException:
+                except BaseException as exc:
                     if request.connection is not None:
-                        await browser_coordinator.close(request.connection)
+                        code = request.error or (exc.code if isinstance(exc, ExecutionClientError) else None)
+                        await browser_coordinator.close(
+                            request.connection,
+                            reason=("controlTimeout" if code == "browser.controlTimeout" else
+                                    "controlCancelled" if isinstance(exc, asyncio.CancelledError) else "controlFailed"),
+                            error_code=code,
+                        )
                     raise
 
             binding = asyncio.create_task(bind())
@@ -252,17 +258,20 @@ class BrowserControlRequests:
                 async with asyncio.timeout(max(0, request.deadline - monotonic())):
                     await asyncio.shield(binding)
             except TimeoutError:
+                request.error = "browser.controlTimeout"
                 binding.cancel()
                 with CancelScope(shield=True):
                     await asyncio.gather(binding, return_exceptions=True)
                     if request.connection is not None:
-                        await browser_coordinator.close(request.connection)
+                        await browser_coordinator.close(
+                            request.connection, reason="controlTimeout", error_code="browser.controlTimeout",
+                        )
                 raise ExecutionClientError("browser.controlTimeout") from None
             except asyncio.CancelledError:
                 with CancelScope(shield=True):
                     await asyncio.gather(binding, return_exceptions=True)
                     if request.connection is not None:
-                        await browser_coordinator.close(request.connection)
+                        await browser_coordinator.close(request.connection, reason="controlCancelled")
                 raise
             return ToolResult.json({"ok": True})
         finally:

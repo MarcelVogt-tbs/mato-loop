@@ -13,6 +13,7 @@ The original comparison reference was Playwright MCP inside Playwright `v1.58.0`
 [form batching](https://github.com/microsoft/playwright/blob/v1.58.0/packages/playwright/src/mcp/browser/tools/form.ts),
 [completion waiting](https://github.com/microsoft/playwright/blob/v1.58.0/packages/playwright/src/mcp/browser/tools/utils.ts),
 and [response tracking](https://github.com/microsoft/playwright/blob/v1.58.0/packages/playwright/src/mcp/browser/tab.ts).
+The historical aggregate-tool description lives only in `browser_perf_eval.py`; it is not a live adapter tool. The internal action model and old-session projection remain supported independently.
 MatoLoop keeps Python Playwright, not the official MCP runtime or its fixed waits. Public
 `browser_*` tools now have small per-operation schemas. `browser_run_code` uses Python
 `async def run(page)` rather than JavaScript Playwright snippets; `browser_evaluate` runs

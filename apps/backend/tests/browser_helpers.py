@@ -5,7 +5,7 @@ import base64
 from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -58,6 +58,8 @@ def env(monkeypatch):
         "loading": False, "nativeChrome": False,
     }
     case.navigation["activeTabId"] = case.navigation["tabs"][0]["id"]
+    case.diagnostics = Mock()
+    monkeypatch.setattr(execution, "schedule_diagnostic_event", case.diagnostics)
 
     class Db:
         async def get(self, model, key):

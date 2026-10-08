@@ -46,7 +46,6 @@ from mato_loop_backend.integrations.browser.adapter import (
     BROWSER_DOWNLOADS,
     BROWSER_RELEASE_CONTROL,
     BROWSER_REQUEST_CONTROL,
-    BROWSER_TOOL,
     BROWSER_TOOL_ACTIONS,
     BROWSER_TOOLS,
     BROWSER_UPLOAD,
@@ -131,7 +130,7 @@ def test_config_empty_action_requirements_and_wire_host_fields():
     assert BrowserActionArguments(action="newtab").tab_id is None
     wire = BrowserExecuteArguments(browserId=str(uuid4()), allowNetwork=False, **args.model_dump())
     assert wire.model_dump()["allowNetwork"] is False
-    schema = BROWSER_TOOL.arguments_model.model_json_schema()
+    schema = BrowserActionArguments.model_json_schema()
     assert schema["additionalProperties"] is False
     assert not {"browserId", "ownerId", "allowNetwork", "settle", "profilePath", "command", "script"} & schema["properties"].keys()
     assert BROWSER_ADAPTER.personal_only
@@ -219,6 +218,8 @@ def test_public_script_source_limits_and_host_only_flags(model, source):
     {"errorCode": "browser.outcomeUnknown", "failureReason": "rawException"},
     {"errorCode": "browser.outcomeUnknown", "failureReason": "runtimeError",
      "failureDetail": "resultTooLarge"},
+    {"errorCode": "browser.outcomeUnknown", "failureReason": "invalidResult",
+     "failureDetail": "typeError"},
 ])
 def test_script_results_reject_unbounded_or_uncontrolled_data(script):
     with pytest.raises(ValidationError):
@@ -262,31 +263,16 @@ def test_browser_code_observation_is_explicit(model, source):
     assert model(tabId=str(uuid4()), **source).observe is False
 
 
-def test_browser_guidance_groups_known_actions_without_blind_mutations():
-    description = BROWSER_TOOL.description
-    for guidance in (
-        "Use fill_form for known independent native fields from one snapshot",
-        "Do not batch individual ref mutations with the same snapshot hash",
-        "batch.completed is the successful prefix; never replay those fields",
-        "outcomeUnknown means the next field may also have changed",
-        "accessibility snapshots with refs",
-        "include that result's snapshotSha256",
-        "Write actions return the resulting accessibility snapshot by default",
-        "wait for that result before choosing further mutations",
-        "Do not target newly discovered elements or tabs until their result is available",
-        "tabs and diagnostics are browser-level actions: use tabId=null",
-        "key=Escape and selector=null",
-        "Use inspect selector/depth for a focused native Playwright snapshot",
-        "read or grep that path",
-        "After observationFailed, inspect",
-        "inspect the same known tabId",
-        "do not use tabs or reattach",
-        'snapshotFormat="diff"',
-        "A full snapshot is provided when the base is missing",
-        "current data.snapshotSha256, not baseSnapshotSha256",
-        "inspect current state before retrying; do not repeat mutations blindly",
-    ):
-        assert guidance in description
+@pytest.mark.parametrize("name,guidance", [
+    ("browser_run_code", "page.locator('aria-ref=e12')"),
+    ("browser_run_code", "locator.first and locator.last are properties"),
+    ("browser_run_code", "verify relevant input values"),
+    ("browser_run_code", "inspect current state before retrying"),
+    ("browser_evaluate", "normalize missing values with value ?? null"),
+    ("browser_snapshot", "Prefer selector and depth"),
+])
+def test_active_browser_guidance_supports_reliable_compact_workflows(name, guidance):
+    assert guidance in next(tool.description for tool in BROWSER_ADAPTER.execution_tools if tool.name == name)
 
 
 @pytest.mark.parametrize("changes", [
@@ -458,7 +444,7 @@ async def test_browser_release_returns_control_to_human(browser_case):
 
     assert not result.is_error
     assert json.loads(result.content) == {"ok": True}
-    case.coordinator.attachment.assert_awaited_once_with(case.connection, False)
+    case.coordinator.attachment.assert_awaited_once_with(case.connection, False, reason="modelRelease")
 
 
 @pytest.mark.parametrize("observe", [True, False])
@@ -947,7 +933,7 @@ async def test_script_results_preserve_bounded_data_and_mark_partial_effect_erro
         script={
             "value": {"changed": True}, "output": "printed output", "outputTruncated": True,
             "errorCode": error_code,
-            **({"failureReason": "runtimeError", "line": 3} if error_code else {}),
+            **({"failureReason": "runtimeError", "failureDetail": "typeError", "line": 3} if error_code else {}),
         },
         **({"text": "- changed document", "data": {"snapshotSha256": "a" * 64}} if observe else {}),
     )
@@ -956,7 +942,7 @@ async def test_script_results_preserve_bounded_data_and_mark_partial_effect_erro
     assert result.metadata == {"privateIntegrationData": True, **({"errorCode": error_code} if error_code else {})}
     assert json.loads(result.content)["script"] == {
         "value": {"changed": True}, "output": "printed output", "outputTruncated": True,
-        **({"errorCode": error_code, "failureReason": "runtimeError", "line": 3} if error_code else {}),
+        **({"errorCode": error_code, "failureReason": "runtimeError", "failureDetail": "typeError", "line": 3} if error_code else {}),
     }
     requests = [call.args[0] for call in case.context.ask_handler.await_args_list]
     assert [request.capability for request in requests] == ["browser.read", "browser.write", "browser.code"]

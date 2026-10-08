@@ -1719,6 +1719,10 @@ class BrowserWorker:
                 reason = "targetUnavailable"
             else:
                 reason = "runtimeError"
+                if isinstance(exc, TypeError):
+                    detail = "typeError"
+                elif isinstance(exc, AttributeError):
+                    detail = "attributeError"
             line = None
             traceback = exc.__traceback__
             while traceback is not None:
