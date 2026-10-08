@@ -736,6 +736,7 @@ async def test_inspect_accepts_only_exact_snapshot_data(browser_case, data):
         BrowserInspectionData.model_validate(data)
     case.call.name = "browser_snapshot"
     case.call.arguments = {"tabId": str(uuid4())}
+    case.coordinator.execute.side_effect = None
     case.coordinator.execute.return_value = BrowserActionResult(text='{"elements":[]}', data=data)
     result = await case.effective.execute(case.call, case.context)
     assert result.metadata["errorCode"] == "executionAgent.protocolError"

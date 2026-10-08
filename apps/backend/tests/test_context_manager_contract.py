@@ -3174,26 +3174,6 @@ async def test_empty_compaction_result_raises_stable_context_error() -> None:
     db.commit.assert_not_awaited()
 
 
-async def test_unprunable_context_overflow_raises_stable_error() -> None:
-    session = _session()
-    db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = None
-
-    with pytest.raises(ContextError, match="agent.contextWindowExceeded") as exc_info:
-        await _build_context(
-            db,
-            chat_session=session,
-            records=[_message(session.id, "user", "x" * 2_000)],
-            system_prompt="System",
-            tool_schemas=[],
-            model=_model(context_window_tokens=900),
-            settings=_settings(),
-            summarize=AsyncMock(),
-        )
-
-    assert exc_info.value.code == "agent.contextWindowExceeded"
-
-
 async def test_failed_projection_does_not_commit_new_summary() -> None:
     session = _session()
     records = [

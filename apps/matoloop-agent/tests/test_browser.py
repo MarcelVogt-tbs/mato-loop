@@ -40,7 +40,9 @@ from matoloop_agent.browser_contracts import (
 from matoloop_agent.browser_worker import OPENBOX_CONFIG, BrowserWorker, launch_error_code, serve
 from matoloop_agent.config import AgentConfig
 from matoloop_agent.connection import MatoLoopAgent
-from matoloop_agent.filesystem import AgentError
+from matoloop_agent.filesystem import AgentError, Filesystem
+from matoloop_agent.process import ProcessRunner
+from matoloop_agent.terminal import TerminalManager
 
 
 class BrowserTests(unittest.IsolatedAsyncioTestCase):
@@ -59,8 +61,9 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         config._data_directory = self.root
-        self.agent = MatoLoopAgent(config, "not-for-browser")
-        self.manager = self.agent.browser
+        filesystem = Filesystem(config)
+        terminal = TerminalManager(config, ProcessRunner(config, filesystem))
+        self.manager = BrowserManager(config, terminal, filesystem)
 
     def test_openbox_config_disables_desktop_switching(self):
         root = ET.fromstring(OPENBOX_CONFIG)
@@ -303,7 +306,8 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(task.cancelled())
 
     def test_bounded_contract_and_operations(self):
-        self.assertLessEqual(len(self.agent.hello().operations), 64)
+        agent = MatoLoopAgent(self.manager.config, "not-for-browser")
+        self.assertLessEqual(len(agent.hello().operations), 64)
         for width, height in ((320, 240), (3840, 2160), (1001, 701)):
             args = BrowserResizeArguments(browserId=self.browser_id, width=width, height=height)
             self.assertEqual((args.width, args.height), (width, height))
@@ -457,17 +461,17 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         user = SimpleNamespace(pw_name="matoloop-browser", pw_uid=10001, pw_gid=10001)
         with patch("os.getuid", return_value=0), patch("pwd.getpwnam", return_value=user):
             with patch.dict(os.environ, {"MATOLOOP_AGENT_CONTAINER": "0"}):
-                native = BrowserManager(self.agent.config, self.agent.terminal)
+                native = BrowserManager(self.manager.config, self.manager.terminal)
                 self.assertEqual(native.installation, self.root.parent / "tools" / "browser")
                 self.assertEqual(native.environment()[0]["MATOLOOP_AGENT_CONTAINER"], "0")
-                native_agent = MatoLoopAgent(self.agent.config, "not-for-browser")
+                native_agent = MatoLoopAgent(self.manager.config, "not-for-browser")
                 self.assertIn("integration.browser.execute", native_agent.hello().operations)
                 self.assertNotIn("integration.browser.view", native_agent.hello().operations)
             with patch.dict(os.environ, {"MATOLOOP_AGENT_CONTAINER": "1"}):
-                container = BrowserManager(self.agent.config, self.agent.terminal)
+                container = BrowserManager(self.manager.config, self.manager.terminal)
                 self.assertEqual(container.installation, CONTAINER_INSTALLATION)
                 self.assertEqual(container.environment()[0]["MATOLOOP_AGENT_CONTAINER"], "1")
-                container_agent = MatoLoopAgent(self.agent.config, "not-for-browser")
+                container_agent = MatoLoopAgent(self.manager.config, "not-for-browser")
                 self.assertIn("integration.browser.view", container_agent.hello().operations)
             environment, options = self.manager.environment()
         self.assertNotIn("MATOLOOP_AGENT_PAIRING_TOKEN", environment)
@@ -835,7 +839,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("startup check failed", base64.b64decode(output["data"]).decode())
 
     async def test_setup_replay_survives_terminal_and_browser_disconnect(self):
-        entry = self.agent.terminal._spawn(
+        entry = self.manager.terminal._spawn(
             str(uuid4()),
             [str(Path("/bin/bash").resolve()), "-c", "printf first; sleep .15; printf second"],
             str(self.root),
@@ -845,7 +849,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         )
         self.manager.setup = entry
         self.manager.setup_task = asyncio.create_task(self.manager.setup_output(entry))
-        await self.agent.terminal.close_all()
+        await self.manager.terminal.close_all()
         await self.manager.close()
         await entry.wait_task
         await self.manager.setup_task

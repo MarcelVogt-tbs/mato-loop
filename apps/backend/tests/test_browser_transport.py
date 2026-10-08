@@ -581,9 +581,8 @@ def browser_tool(env, monkeypatch, wire):
             )
 
 
-@pytest.mark.parametrize("observe", [True, False])
+@pytest.mark.parametrize("observe,observation_failed", [(False, False), (True, False), (True, True)])
 @pytest.mark.parametrize("error_code", [None, "browser.snapshotChanged", "browser.outcomeUnknown"])
-@pytest.mark.parametrize("observation_failed", [False, True])
 def test_fill_form_permission_wire_and_partial_prefix(browser_tool, observe, error_code, observation_failed):
     case = browser_tool
     case.call.arguments["observe"] = observe

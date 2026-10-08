@@ -1436,6 +1436,7 @@ describe('chat drafts', () => {
     await vi.waitFor(() => expect(chat.current.messages.at(-1)).toMatchObject({
       kind: 'runtime_error', error: { code: 'provider.unavailable' }
     }))
+    expect(chat.running).toBe(false)
   })
 
   it.each([
@@ -2603,42 +2604,6 @@ describe('chat drafts', () => {
     expect(chat.stopping).toBe(false)
     expect(chat.runId).toBeNull()
     expect(chat.sessions[0].activeRunStatus).toBeNull()
-  })
-
-  it('reloads the persisted runtime error after a failed run', async () => {
-    global.EventSource = EventSourceMock
-    api.get.mockImplementation((url) => Promise.resolve({
-      data: url === '/sessions/session-1'
-        ? {
-            id: 'session-1',
-            activeRun: null,
-            messages: [{
-              id: 'error-1',
-              role: 'assistant',
-              kind: 'runtime_error',
-              error: {
-                code: 'agent.requiredWebSearchMissing',
-                message: 'The required web search was not performed.',
-                params: {}
-              }
-            }]
-          }
-        : { items: [], nextCursor: null }
-    }))
-    const chat = useChatStore()
-    chat.current = { id: 'session-1', messages: [] }
-    chat.selectedSessionId = 'session-1'
-    chat.watchRun('session-1', 'run-1', { status: 'running' })
-
-    EventSourceMock.instances[0].emit('run.failed', {
-      error: { code: 'agent.requiredWebSearchMissing' }
-    })
-
-    await vi.waitFor(() => expect(chat.current.messages[0]).toMatchObject({
-      kind: 'runtime_error',
-      error: { code: 'agent.requiredWebSearchMissing' }
-    }))
-    expect(chat.running).toBe(false)
   })
 
   it('promotes the last streamed state before a cancelled run finishes', () => {

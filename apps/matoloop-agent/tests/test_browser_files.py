@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+from matoloop_agent.browser import BrowserManager
 from matoloop_agent.browser_contracts import (
     BrowserFileArguments,
     BrowserPublishArguments,
@@ -13,8 +14,9 @@ from matoloop_agent.browser_contracts import (
 )
 from matoloop_agent.browser_worker import BrowserWorker
 from matoloop_agent.config import AgentConfig
-from matoloop_agent.connection import MatoLoopAgent
-from matoloop_agent.filesystem import AgentError
+from matoloop_agent.filesystem import AgentError, Filesystem
+from matoloop_agent.process import ProcessRunner
+from matoloop_agent.terminal import TerminalManager
 
 
 class Download:
@@ -50,8 +52,9 @@ class BrowserFileTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         config._data_directory = self.root
-        self.agent = MatoLoopAgent(config, "test")
-        self.manager = self.agent.browser
+        filesystem = Filesystem(config)
+        terminal = TerminalManager(config, ProcessRunner(config, filesystem))
+        self.manager = BrowserManager(config, terminal, filesystem)
         self.browser_id = str(uuid4())
         self.manager.browser_id = self.browser_id
 

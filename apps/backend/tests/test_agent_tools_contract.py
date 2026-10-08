@@ -3586,8 +3586,6 @@ async def test_session_read_returns_a_window_around_discovery_anchor(tmp_path) -
         user_id=context.session.user_id,
         title="Ziel",
     )
-    rows = Mock()
-    rows.all.return_value = messages
     _session_read_records(context, messages)
 
     result = await tool_registry.execute(call, context)
@@ -3623,8 +3621,6 @@ async def test_session_read_cursor_uses_last_emitted_message(tmp_path) -> None:
         user_id=context.session.user_id,
         title="Ziel",
     )
-    rows = Mock()
-    rows.all.return_value = messages
     _session_read_records(context, messages)
 
     result = await tool_registry.execute(call, context)
@@ -4285,8 +4281,6 @@ async def test_session_read_exposes_historical_attachment_identity_and_path(tmp_
         file_path=f"attachments/{uuid4()}/bericht.pdf",
     )
     message.attachments = [attachment]
-    records = Mock()
-    records.all.return_value = [message]
     context.db.scalar.return_value = target
     _session_read_records(context, [message])
 
@@ -4327,8 +4321,6 @@ async def test_session_read_references_truncated_tool_results(tmp_path) -> None:
         content="x" * 12_001,
         trust_level=TrustLevel.PUBLIC.value,
     )
-    records = Mock()
-    records.all.return_value = [assistant, tool_result]
     context.db.scalar.return_value = context.session
     _session_read_records(context, [assistant, tool_result])
 
@@ -4360,8 +4352,6 @@ async def test_session_read_does_not_reference_foreign_session_tool_results(tmp_
         content="x" * 12_001,
         trust_level=TrustLevel.PUBLIC.value,
     )
-    records = Mock()
-    records.all.return_value = [tool_result]
     context.db.scalar.return_value = target
     _session_read_records(context, [tool_result])
 
@@ -4387,8 +4377,6 @@ async def test_session_read_removes_reserved_reference_fields_from_content(tmp_p
         ),
         trust_level=TrustLevel.PUBLIC.value,
     )
-    records = Mock()
-    records.all.return_value = [tool_result]
     context.db.scalar.return_value = context.session
     _session_read_records(context, [tool_result])
 
@@ -4421,8 +4409,6 @@ async def test_session_read_redacts_private_memory_for_public_model(tmp_path) ->
     target = _session()
     target.id = context.session.id
     target.user_id = context.session.user_id
-    records = Mock()
-    records.all.return_value = [assistant, memory_result]
     context.db.scalar.return_value = target
     _session_read_records(context, [assistant, memory_result])
 

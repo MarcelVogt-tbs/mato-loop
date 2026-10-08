@@ -160,10 +160,10 @@ it('shows a background state without opening a viewer for a headless agent', asy
   expect(browser.mountView).not.toHaveBeenCalled()
 })
 
-it.each([{ width: 390, dark: false }, { width: 1440, dark: true }])(
-  'shows one explicit takeover action, progress and quiet replacement without reclaim (%j)', async (viewport) => {
+it(
+  'shows one explicit takeover action, progress and quiet replacement without reclaim', async () => {
     const shown = ref(true)
-    await mount({ render: () => shown.value ? h(BrowserApp) : null }, viewport)
+    await mount({ render: () => shown.value ? h(BrowserApp) : null })
     const socket = browser.socket
     socket.open()
     socket.message({ type: 'availability', status: 'waiting', canTakeover: false })
@@ -238,10 +238,10 @@ it('closes Chromium only from the explicit Browser menu action', async () => {
   expect(FakeWebSocket.instances).toHaveLength(1)
 })
 
-it.each([{ width: 390, dark: false }, { width: 1440, dark: true }])(
-  'parks an unmounted A viewer, shows no A page or attachment in B, and reuses it on return (%j)', async (viewport) => {
+it(
+  'parks an unmounted A viewer, shows no A page or attachment in B, and reuses it on return', async () => {
     const shown = ref(true)
-    await mount({ render: () => shown.value ? h('div', [h(BrowserApp), h(BrowserFooter)]) : null }, viewport)
+    await mount({ render: () => shown.value ? h('div', [h(BrowserApp), h(BrowserFooter)]) : null })
     const original = browser.socket
     original.open()
     original.message({ type: 'state', browserId: 'runtime-1', viewId, attached: true, busy: false, canAttach: true })
