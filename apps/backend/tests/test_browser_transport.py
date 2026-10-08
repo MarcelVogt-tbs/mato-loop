@@ -65,6 +65,8 @@ def wire(env, monkeypatch):
                 await manager.receive(env.agent.id, socket, response.model_dump_json())
 
             responders.append(asyncio.create_task(respond()))
+        # A real WebSocket send can yield, including when sending cancellation frames.
+        await asyncio.sleep(0.01 if message["type"] == "cancel" else 0)
 
     socket = SimpleNamespace(send_text=send_text)
     hello = HelloMessage(type="hello", protocol_version=1, agent_id=env.agent.id, agent_version="test",
@@ -2673,5 +2675,6 @@ def test_setup_start_remains_independent_of_takeover_and_browser_close(env, wire
         finally:
             env.client.portal.call(finish.set)
         assert setup.receive_json()["state"] == "installing"
-        env.client.portal.call(asyncio.sleep, 0)
+        env.client.portal.call(installer.result)
         assert not routes._setup_starts
+    assert env.agent.id not in routes._setup_viewers

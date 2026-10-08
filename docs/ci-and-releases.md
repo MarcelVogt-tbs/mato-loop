@@ -48,6 +48,8 @@ The workflow uses Forgejo's Actions cache for locked UV and Yarn package downloa
 
 Backend and agent test jobs report their slowest tests using the test runners' built-in duration reporting. Develop publication checks the current branch head before building and again before publishing; superseded revisions skip unnecessary image builds, and revisions superseded during a build skip publication.
 
+New runs supersede older runs of the same branch/ref, including the entire `develop` pipeline and any in-progress image publication. An interrupted develop publication can leave an incomplete image pair; only use immutable commit tags from successful runs. Release tags share a separate concurrency group and are serialized without automatic cancellation. Runs already queued with an older workflow retain that workflow's concurrency settings.
+
 ## Test Environment Parity
 
 The backend, frontend, and agent test jobs run directly in the runner environment, not in the application images. System dependency changes must update both Dockerfiles and the corresponding CI installation. The backend job copies Lightpanda from the same digest-pinned official image used by its development and production Dockerfiles and runs `lightpanda version` before testing. Update all three image references together when upgrading it.

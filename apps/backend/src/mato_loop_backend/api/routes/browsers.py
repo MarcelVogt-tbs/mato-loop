@@ -582,18 +582,19 @@ async def browser_setup(websocket: WebSocket, integration_id: UUID) -> None:
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
             task.result()
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, asyncio.CancelledError):
         pass
     except Exception as exc:
         await _error(websocket, exc)
     finally:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        if agent_id is not None and _setup_viewers.get(agent_id) is websocket:
-            _setup_viewers.pop(agent_id)
-        # Closing a viewer must never cancel a package-manager transaction.
-        await _close_socket(websocket)
+        with CancelScope(shield=True):
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if agent_id is not None and _setup_viewers.get(agent_id) is websocket:
+                _setup_viewers.pop(agent_id)
+            # Closing a viewer must never cancel a package-manager transaction.
+            await _close_socket(websocket)
 
 
 async def _file_request(connection, **arguments):
