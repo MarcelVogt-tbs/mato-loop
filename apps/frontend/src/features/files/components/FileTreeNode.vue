@@ -82,7 +82,6 @@ const workspace = useWorkspaceStore()
 const selected = computed(() => workspace.selectedPath === props.entry.path)
 const mutableEntry = computed(() => (
   props.mutable
-  && !workspace.toolContext
   && ['file', 'directory'].includes(props.entry.kind)
 ))
 const canRename = computed(() => mutableEntry.value && workspace.operationAvailable('filesystem.rename'))

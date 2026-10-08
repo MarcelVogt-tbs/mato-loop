@@ -46,7 +46,7 @@ export function replaceCachedEntry(store, entry) {
 }
 
 export function requireWritableContext(store) {
-  if (store.toolContext || store.viewedEntry?.revision != null) throw new Error('Historical workspace snapshots are read-only')
+  if (store.viewedEntry?.revision != null) throw new Error('Historical file revisions are read-only')
 }
 
 export function persistedFileView(store) {
@@ -58,10 +58,10 @@ export function persistedFileView(store) {
     viewedFilePath: store.viewedEntry?.path || null,
     ...(store.scope === 'session' ? { rootIdentity: store.rootIdentity } : {}),
     executionAgentId: filesystem
-      ? store.toolContext?.executionAgentId || store.workspaceContext?.executionAgentId || null
+      ? store.workspaceContext?.executionAgentId || null
       : null,
     currentDirectory: filesystem
-      ? store.toolContext?.currentDirectory || store.currentDirectory || null
+      ? store.currentDirectory || null
       : null
   }
 }

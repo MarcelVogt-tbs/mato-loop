@@ -89,7 +89,7 @@ function normalizedFileTarget(value) {
     name,
     executionAgentId: value.executionAgentId,
     currentDirectory: value.currentDirectory,
-    readOnly: value.readOnly === true
+    readOnly: false
   }
 }
 

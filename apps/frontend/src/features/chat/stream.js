@@ -51,7 +51,7 @@ export const streamActions = {
             && workspace.viewedEntry?.revision == null
             && workspace.scope === target.scope
             && (target.scope === 'session' ? workspace.rootIdentity === target.rootIdentity
-              : (workspace.toolContext?.executionAgentId || workspace.workspaceContext?.executionAgentId) === target.executionAgentId)
+              : workspace.workspaceContext?.executionAgentId === target.executionAgentId)
           workspace.noteFileTabMutations(controlCenter.fileTabsForTarget(target)
             .filter((tab) => tab.fileTarget.revision == null && (!sameOpenFile || tab.tabId !== workspace.activeFileTabId)).map((tab) => tab.tabId))
           if (sameOpenFile) workspace.noteFileMutation(target.path)
@@ -334,9 +334,9 @@ export const streamActions = {
             && (workspace.viewedEntry.path === sourcePath
               || workspace.viewedEntry.path.startsWith(`${sourcePath}/`))
             && (!['files', 'session'].includes(sourceRoot) || workspace.rootIdentity === sessionId)
-            && !workspace.toolContext
             && ((sourceRoot === 'files' && workspace.scope === 'session')
-              || (sourceRoot === 'computer' && workspace.scope === 'filesystem'))
+              || (sourceRoot === 'computer' && workspace.scope === 'filesystem'
+                && workspace.workspaceContext?.executionAgentId === session.preferredExecutionAgentId))
           if (sourceMatchesOpenFile) workspace.noteFileMutation(workspace.viewedEntry.path)
         }).catch(() => {})
         if (FILESYSTEM_MUTATION_TOOLS.has(payload.tool) && !payload.metadata?.errorCode) {

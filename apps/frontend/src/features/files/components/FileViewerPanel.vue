@@ -86,7 +86,7 @@
           <q-tooltip>Inhalt kopieren</q-tooltip>
         </q-btn>
         <q-btn
-          v-if="entry && !historical && workspace.scope === 'session' && !workspace.toolContext"
+          v-if="entry && !historical && workspace.scope === 'session'"
           class="file-icon-action"
           flat
           round
@@ -181,7 +181,7 @@
           <q-item-section>Als PDF speichern</q-item-section>
         </q-item>
         <q-item
-          v-if="entry && !historical && workspace.scope === 'session' && !workspace.toolContext"
+          v-if="entry && !historical && workspace.scope === 'session'"
           clickable v-close-popup
           :disable="workspace.editorDirty || saving"
           aria-label="Versionsverlauf öffnen"
@@ -440,7 +440,6 @@ const contentUrl = computed(() => props.entry?.path
 const editable = computed(() => (
   props.entry?.path
   && !historical.value
-  && !workspace.toolContext
   && ['text', 'markdown', 'openscad'].includes(preview.value.kind)
   && workspace.operationAvailable('filesystem.write')
 ))
@@ -448,7 +447,6 @@ const usingTextEditor = computed(() => workspace.editorActive && editable.value)
 const canActivateRevision = computed(() => Boolean(
   props.entry?.path
   && workspace.scope === 'session'
-  && !workspace.toolContext
   && workspace.operationAvailable('filesystem.write')
 ))
 const canDownload = computed(() => Boolean(directModel.value) || workspace.operationAvailable('filesystem.export'))
@@ -865,7 +863,6 @@ watch(
     () => workspace.sessionId,
     () => workspace.currentDirectory,
     () => workspace.rootIdentity,
-    () => workspace.toolContext,
     () => workspace.workspaceContext,
     () => workspace.fileChangeVersions[props.entry?.path]
   ],

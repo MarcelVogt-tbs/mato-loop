@@ -411,7 +411,6 @@ const matchingDraftDirty = computed(() => Boolean(
   && workspace.editorDirty
   && workspace.sessionId === props.approval.sessionId
   && workspace.scope === 'session'
-  && !workspace.toolContext
   && workspace.viewedEntry?.path === draftFile.value.path
 ))
 const draftRevision = computed(() => draftFile.value

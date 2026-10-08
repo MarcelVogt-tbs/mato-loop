@@ -183,7 +183,6 @@ describe('workspace store', () => {
     workspace.configure({ currentDirectory: '/draft-project' })
 
     expect(await workspace.load('.')).toBe(false)
-    workspace.returnToCurrentContext()
 
     expect(api.get).not.toHaveBeenCalled()
   })
@@ -371,7 +370,7 @@ describe('workspace store', () => {
     )
   })
 
-  it('opens a tool file through the existing read-only explorer context', async () => {
+  it('opens a tool file through the normal editable computer context', async () => {
     api.get
       .mockResolvedValueOnce({ data: { entries: [] } })
       .mockResolvedValueOnce({ data: { kind: 'text', content: 'Bericht' } })
@@ -388,7 +387,10 @@ describe('workspace store', () => {
       filename: 'result.txt',
       sizeBytes: 7
     })
-    workspace.activateFileTab({ tabId: 'file-1', kind: 'file', fileTarget: target })
+    workspace.activateFileTab({ tabId: 'file-1', kind: 'file', fileTarget: target }, {
+      ...liveContext(['filesystem.list', 'filesystem.read', 'filesystem.export', 'filesystem.write']),
+      executionAgentId: 'original-agent'
+    })
     await workspace.load(workspace.directoryPath)
     await workspace.preview('/original-project/reports/result.txt')
 
@@ -412,15 +414,15 @@ describe('workspace store', () => {
       }
     ])
     expect(workspace.fileUrl('download', '/original-project/reports/result.txt')).not.toContain('root_identity')
-    expect(workspace.archiveUrl(workspace.directoryPath)).toBe('')
-    await expect(workspace.createDirectory('.', 'blocked')).rejects.toThrow('Historical workspace snapshots are read-only')
-    workspace.returnToCurrentContext()
-    expect(workspace.rootIdentity).toBe('session-a')
+    expect(workspace.operationAvailable('filesystem.write')).toBe(true)
   })
 
-  it('restores a historical workspace file with its snapshot context', () => {
+  it.each(['agent-1', 'other-agent'])('restores a computer view only for the configured agent (%s)', (executionAgentId) => {
     const workspace = useWorkspaceStore()
-    workspace.configure({ sessionId: 'session-a' })
+    workspace.configure({
+      sessionId: 'session-a', scope: 'filesystem', currentDirectory: '/project',
+      workspaceContext: liveContext(['filesystem.list', 'filesystem.read', 'filesystem.write'])
+    })
 
     workspace.restoreView({
       scope: 'filesystem',
@@ -428,19 +430,14 @@ describe('workspace store', () => {
       selectedKind: 'file',
       viewedFilePath: '/project/reports/result.txt',
       rootIdentity: null,
-      executionAgentId: '550e8400-e29b-41d4-a716-446655440001',
+      executionAgentId,
       currentDirectory: '/project'
     })
 
-    expect(workspace.viewedEntry?.path).toBe('/project/reports/result.txt')
-    expect(workspace.rootIdentity).toBeNull()
-    expect(workspace.toolContext).toEqual({
-      executionAgentId: '550e8400-e29b-41d4-a716-446655440001',
-      currentDirectory: '/project'
-    })
+    expect(workspace.viewedEntry?.path).toBe(executionAgentId === 'agent-1' ? '/project/reports/result.txt' : undefined)
   })
 
-  it('persists the live filesystem context when no tool snapshot is active', () => {
+  it('persists the live filesystem context', () => {
     const workspace = useWorkspaceStore()
     workspace.configure({
       currentDirectory: '/project',
@@ -491,11 +488,10 @@ describe('workspace store', () => {
     expect(workspace.viewedEntry).toEqual({
       kind: 'file', name: 'plan.md', path: 'plan.md'
     })
-    expect(workspace.toolContext).toBeNull()
     expect(workspace.operationAvailable('filesystem.write')).toBe(true)
   })
 
-  it('keeps the historical workspace context for tool-file reads', async () => {
+  it('keeps the original computer identity for provided-file reads', async () => {
     api.get.mockResolvedValue({ data: { entries: [] } })
     const workspace = useWorkspaceStore()
     workspace.configure({
@@ -515,7 +511,9 @@ describe('workspace store', () => {
     const reference = '/api/workspace/files/provided/550e8400-e29b-41d4-a716-446655440000/550e8400-e29b-41d4-a716-446655440001/0'
     api.get.mockResolvedValueOnce({ data: action })
     const target = await workspace.resolveFileTarget({ operation: 'provide', targetUrl: `${reference}/target`, downloadUrl: `${reference}/download` })
-    workspace.activateFileTab({ tabId: 'file-1', kind: 'file', fileTarget: target })
+    workspace.activateFileTab({ tabId: 'file-1', kind: 'file', fileTarget: target }, {
+      ...liveContext(['filesystem.list', 'filesystem.read']), executionAgentId: action.executionAgentId
+    })
     await workspace.load(workspace.directoryPath)
 
     expect(api.get).toHaveBeenCalledWith('/workspace/entries', {
@@ -911,9 +909,6 @@ describe('workspace store', () => {
       sha256: 'a'.repeat(64),
       dirty: true
     })
-
-    workspace.toolContext = { executionAgentId: 'agent', currentDirectory: '/project' }
-    expect(workspace.activeFileSnapshot()).toBeNull()
   })
 
   it('does not snapshot a sibling session file for the current chat', () => {

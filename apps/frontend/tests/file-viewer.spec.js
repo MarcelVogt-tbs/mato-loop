@@ -8,6 +8,7 @@ import FileViewerPanel from '../src/features/files/components/FileViewerPanel.vu
 import ImageViewerPanel from '../src/features/files/components/ImageViewerPanel.vue'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { useWorkspaceStore } from '../src/stores/workspace'
+import { useExecutionAgentStore } from '../src/stores/execution-agents'
 
 const mocks = vi.hoisted(() => ({ confirm: vi.fn(), api: { get: vi.fn(), put: vi.fn() } }))
 
@@ -139,14 +140,16 @@ it('activates a historical revision only after confirmation', async () => {
   expect(activate).toHaveBeenCalledWith('note.txt', 1, state)
 })
 
-async function mountLiveViewer({ kind = 'text', path = 'note.txt', toolContext = null, toolbar, viaApp = false, fullscreen = false, fullscreenToggle = false, previewError = null } = {}) {
+async function mountLiveViewer({ kind = 'text', path = 'note.txt', fileAction = null, agentConnected = true, toolbar, viaApp = false, fullscreen = false, fullscreenToggle = false, previewError = null } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const workspace = useWorkspaceStore()
   useControlCenterStore().sessionId = 'session-id'
   workspace.configure({ sessionId: 'session-id', rootIdentity: 'root-id' })
-  workspace.toolContext = toolContext
-  if (toolContext) workspace.scope = 'filesystem'
+  if (fileAction) useExecutionAgentStore().items = [{
+    id: fileAction.executionAgentId, connected: agentConnected,
+    operations: ['filesystem.read', 'filesystem.write', 'filesystem.export']
+  }]
   workspace.openEntry({ kind: 'file', path, name: path.split('/').at(-1) })
   if (previewError) mocks.api.get.mockRejectedValue(previewError)
   else mocks.api.get.mockResolvedValue({ data: { kind, content: 'original', revision: 'a'.repeat(64) } })
@@ -156,7 +159,8 @@ async function mountLiveViewer({ kind = 'text', path = 'note.txt', toolContext =
   vi.spyOn(workspace, 'refreshStorageUsage').mockResolvedValue(null)
   const root = document.createElement('div')
   const toggleFullscreen = vi.fn()
-  const tab = { tabId: 'file-a', kind: 'file', fileTarget: workspace.fileTarget(workspace.viewedEntry) }
+  const tab = { tabId: 'file-a', kind: 'file', fileTarget: fileAction
+    ? workspace.fileTargetFromAction(fileAction) : workspace.fileTarget(workspace.viewedEntry) }
   app = createApp({ render: () => h(
     viaApp ? FileViewerApp : FileViewerPanel,
     viaApp ? { tab } : { entry: workspace.viewedEntry, fullscreen, fullscreenToggle, onToggleFullscreen: toggleFullscreen },
@@ -194,7 +198,7 @@ async function mountLiveViewer({ kind = 'text', path = 'note.txt', toolContext =
   app.directive('close-popup', {})
   app.directive('ripple', {})
   app.mount(root)
-  await vi.waitFor(() => expect(root.querySelector('textarea, pre, article, img, audio, [data-model-src], [aria-label="OpenSCAD-Ansicht wählen"], [role="alert"]')).not.toBeNull())
+  await vi.waitFor(() => expect(root.querySelector('textarea, pre, article, img, audio, [data-model-src], [aria-label="OpenSCAD-Ansicht wählen"], .app-state-message')).not.toBeNull())
   return { root, workspace, preview, saveFile, render, toggleFullscreen }
 }
 
@@ -235,11 +239,14 @@ it.each(['image', 'text'])('offers an exit for fullscreen %s without enabling th
   expect(toggleFullscreen).toHaveBeenCalledOnce()
 })
 
-it('explains that a historical workspace output can have been moved or deleted', async () => {
+it('explains that a computer output can have been moved or deleted', async () => {
   const error = { response: { status: 404, data: { error: { code: 'file.pathNotFound' } } } }
   const { root } = await mountLiveViewer({
-    path: '/project/_probe2.py',
-    toolContext: { executionAgentId: 'historical-agent', currentDirectory: '/project' },
+    viaApp: true,
+    fileAction: {
+      root: 'workspace', executionAgentId: 'original-agent', currentDirectory: '/project',
+      path: '/project/_probe2.py', filename: '_probe2.py'
+    },
     previewError: error
   })
 
@@ -455,18 +462,27 @@ it.each(['path', 'tab', 'context'])('ignores a late conflict comparison after a 
   expect(mocks.api.put).toHaveBeenCalledTimes(1)
 })
 
-it('keeps a tool-context text file read-only even when its agent supports reading', async () => {
-  const { root, workspace, saveFile } = await mountLiveViewer({
-    path: '/project/note.txt',
-    toolContext: { executionAgentId: 'historical-agent', currentDirectory: '/project' }
+it('opens a computer file action after its agent connects and saves to its original computer', async () => {
+  const { root, saveFile } = await mountLiveViewer({
+    viaApp: true,
+    agentConnected: false,
+    fileAction: {
+      root: 'workspace', executionAgentId: 'original-agent', currentDirectory: '/project',
+      path: '/project/note.txt', filename: 'note.txt'
+    }
   })
-  expect(root.querySelector('pre').textContent).toBe('original')
-  expect(root.querySelector('textarea')).toBeNull()
-  expect(workspace.editorActive).toBe(false)
+  useExecutionAgentStore().items[0].connected = true
+  await vi.waitFor(() => expect(root.querySelector('textarea')?.value).toBe('original'))
+  mocks.api.put.mockResolvedValue({ data: { revision: 'b'.repeat(64) } })
+  await type(root, 'edited')
   expect(saveFile).not.toHaveBeenCalled()
-  expect(root.querySelectorAll('[role="toolbar"]')).toHaveLength(1)
-  expect(root.querySelector('.file-viewer__toolbar')).not.toBeNull()
-  expect(root.querySelector('[aria-label="Versionsverlauf öffnen"]')).toBeNull()
+  button(root, 'Speichern').click()
+  await vi.waitFor(() => expect(mocks.api.put).toHaveBeenCalledWith('/workspace/files', {
+    path: '/project/note.txt', content: 'edited', expected_revision: 'a'.repeat(64)
+  }, {
+    params: { scope: 'filesystem', session_id: 'session-id', execution_agent_id: 'original-agent', current_directory: '/project' },
+    suppressErrorToast: true
+  }))
 })
 
 it('opens the writable OpenSCAD source in the editor and blocks returning to 3D while dirty or saving', async () => {

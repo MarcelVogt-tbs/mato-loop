@@ -16,7 +16,7 @@ const { chat, workspace } = vi.hoisted(() => ({
   },
   workspace: {
     scope: 'session', sessionId: 'session-a', directoryPath: 'reports', selectedPath: 'other.txt', selectedKind: 'file',
-    toolContext: null, filter: 'hidden', entries: { reports: [] }, loading: {}, loadErrors: {}, hasMore: {}, contextVersion: 0,
+    filter: 'hidden', entries: { reports: [] }, loading: {}, loadErrors: {}, hasMore: {}, contextVersion: 0,
     uploading: false, archiveUrl: vi.fn(), operationAvailable: vi.fn(), load: vi.fn(), configure: vi.fn(), openDirectory: vi.fn()
   }
 }))
@@ -52,7 +52,6 @@ beforeEach(() => {
   workspace.directoryPath = 'reports'
   workspace.selectedPath = 'other.txt'
   workspace.selectedKind = 'file'
-  workspace.toolContext = null
   workspace.filter = 'hidden'
   workspace.entries = { reports: [] }
   workspace.archiveUrl.mockReturnValue('/api/workspace/files/download?path=reports&archive=zip')
@@ -105,15 +104,6 @@ it.each([
 
 it('hides the archive action when its computer operations are unavailable', async () => {
   workspace.scope = 'filesystem'
-  workspace.archiveUrl.mockReturnValue('')
-  await mountPanel()
-
-  expect(root.querySelector('[aria-label="Weitere Dateiaktionen"]')).toBeNull()
-})
-
-it('hides the archive action in a historical tool context', async () => {
-  workspace.scope = 'filesystem'
-  workspace.toolContext = { executionAgentId: 'agent-1', currentDirectory: '/project' }
   workspace.archiveUrl.mockReturnValue('')
   await mountPanel()
 

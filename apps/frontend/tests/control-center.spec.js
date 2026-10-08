@@ -405,15 +405,19 @@ describe('control center store', () => {
     expect(store.activeAppId).toBe('files')
   })
 
-  it('reveals an existing file tab from a restored panel', async () => {
+  it('reveals a legacy read-only computer tab as an editable file from a restored panel', async () => {
     const store = useControlCenterStore()
     const tabId = 'file-550e8400-e29b-41d4-a716-446655440000'
-    const fileTarget = { scope: 'session', rootIdentity: 'session-1', path: 'notes.md', name: 'notes.md' }
+    const fileTarget = {
+      scope: 'filesystem', executionAgentId: 'agent-1', currentDirectory: '/project',
+      path: '/project/notes.md', name: 'notes.md', readOnly: true
+    }
     const state = { tabs: [{ tabId, kind: 'file', fileTarget }], activeAppId: tabId, open: true }
     store.syncSession({ id: 'session-1', controlCenter: state })
     api.patch.mockResolvedValue({ data: { controlCenter: state } })
 
-    await expect(store.openFile(fileTarget)).resolves.toBe(tabId)
+    await expect(store.openFile({ ...fileTarget, readOnly: false })).resolves.toBe(tabId)
+    expect(store.activeTab.fileTarget.readOnly).toBe(false)
     expect(store.restoredOpen).toBe(false)
     expect(api.patch).toHaveBeenCalledOnce()
   })

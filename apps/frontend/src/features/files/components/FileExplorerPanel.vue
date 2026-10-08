@@ -64,23 +64,11 @@
           <q-tooltip>Dateien aktualisieren</q-tooltip>
         </q-btn>
         <q-separator
-          v-if="workspace.toolContext || hasOverflowActions || canCreateFile || canCreateDirectory || canUpload"
+          v-if="hasOverflowActions || canCreateFile || canCreateDirectory || canUpload"
           vertical
           inset
           class="q-mx-xs"
         />
-        <q-btn
-          v-if="workspace.toolContext"
-          flat
-          round
-          dense
-          color="primary"
-          icon="undo"
-          aria-label="Zu aktuellen Dateien"
-          @click="workspace.returnToCurrentContext()"
-        >
-          <q-tooltip>Zu aktuellen Dateien</q-tooltip>
-        </q-btn>
         <q-btn
           v-if="canCreateFile || canCreateDirectory"
           class="file-explorer__primary-action"
@@ -143,7 +131,7 @@
                 <q-item-section>Ordner als ZIP herunterladen</q-item-section>
               </q-item>
               <q-item
-                v-if="!workspace.toolContext && workspace.scope === 'filesystem' && selectedIsDirectory && workspace.operationAvailable('filesystem.list')"
+                v-if="workspace.scope === 'filesystem' && selectedIsDirectory && workspace.operationAvailable('filesystem.list')"
                 clickable
                 v-ripple
                 v-close-popup
@@ -154,7 +142,7 @@
                 <q-item-section>Als aktuellen Ordner verwenden</q-item-section>
               </q-item>
               <q-item
-                v-if="!workspace.toolContext && workspace.scope === 'filesystem' && explorerAvailable"
+                v-if="workspace.scope === 'filesystem' && explorerAvailable"
                 clickable
                 v-ripple
                 v-close-popup
@@ -406,7 +394,7 @@ const targetDirectory = computed(() => {
   return parentPath(workspace.selectedPath)
 })
 const mutationDirectory = computed(() => targetDirectory.value)
-const writableLocation = computed(() => !projectOverview.value && !workspace.toolContext)
+const writableLocation = computed(() => !projectOverview.value)
 const canCreateFile = computed(() => writableLocation.value && workspace.operationAvailable('filesystem.import'))
 const canCreateDirectory = computed(() => writableLocation.value && workspace.operationAvailable('filesystem.mkdir'))
 const canUpload = computed(() => writableLocation.value && workspace.operationAvailable('filesystem.import'))
