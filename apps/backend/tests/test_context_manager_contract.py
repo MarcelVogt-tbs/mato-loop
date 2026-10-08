@@ -783,7 +783,7 @@ def test_projection_discards_orphaned_tool_results() -> None:
     assert all("verwaistes Ergebnis" not in item["content"] for item in projected)
 
 
-def test_historical_reader_reference_targets_original_page_and_keeps_computer_binding() -> None:
+async def test_historical_reader_reference_targets_original_page_and_keeps_computer_binding() -> None:
     session = _session()
     records = [_message(session.id, "user", "Inspect")]
     source_call = _message(session.id, "assistant", "")
@@ -799,35 +799,78 @@ def test_historical_reader_reference_targets_original_page_and_keeps_computer_bi
     records += [source_call, source, reader, page, _message(session.id, "user", "Other work")]
     records += [*_tool_segment(session.id, 0), _message(session.id, "user", "Continue")]
     projected = _projection_messages("System", None, records, TrustLevel.PRIVATE)
+    projected, _ = await service_module._provider_projection(
+        projected, supports_image_input=False, target_trust_level=TrustLevel.PRIVATE,
+    )
     payload = json.loads(next(item["content"] for item in projected if item.get("tool_call_id") == "reader"))
     assert payload["toolResultReference"]["arguments"] == {"message_id": str(source.id), "offset": 5}
-    assert "WS-Linux" in next(item["content"] for item in projected if item["role"] == "system" and "WS-Linux" in item["content"])
+    payload = json.loads(next(item["content"] for item in projected if item.get("tool_call_id") == "source"))
+    assert payload["hostSelectedComputer"] == source.provider_data["_matoloop"]
 
 
 @pytest.mark.parametrize("stage", ["fair_share", "sequential", "pruning"])
 async def test_retained_result_keeps_original_reference_after_budget_shortening(stage) -> None:
     original_id = uuid4()
     reference = _omitted_tool_result(original_id, "x" * 10_000)
-    messages = [{"role": "tool", "content": "x" * 10_000, _HOST_RETAINED_TOOL_RESULT: reference}]
+    binding = {"executionAgentId": str(uuid4()), "executionAgentAlias": "Server"}
+    messages = [{"role": "tool", "content": "x" * 10_000, _HOST_RETAINED_TOOL_RESULT: reference,
+                 "recorded_computer": binding}]
     if stage == "pruning":
         async def estimate(items):
             return sum(len(item["content"]) // 4 for item in items)
         await _prune_tool_outputs_to_budget(messages, estimate_request=estimate, characters_per_token=4, input_budget=20)
     else:
         _limit_tool_output_tokens(messages, [0], 20, 4, omitted_marker="omitted", fair_share=stage == "fair_share")
-    assert messages[0]["content"] == reference
+    projected, _ = await service_module._provider_projection(
+        messages, supports_image_input=False, target_trust_level=TrustLevel.PRIVATE,
+    )
+    assert json.loads(projected[0]["content"]) == {**json.loads(reference), "hostSelectedComputer": binding}
 
 
-def test_selected_computer_marker_does_not_relocate_session_files() -> None:
+@pytest.mark.parametrize("bound", [False, True])
+async def test_selected_computer_metadata_does_not_relocate_session_files(bound) -> None:
     session = _session()
     call = _message(session.id, "assistant", "")
     call.tool_calls = [{"id": "write", "name": "write_file", "arguments": {"root": "files", "path": "report.md"}}]
-    result = _message(session.id, "tool", '{"root":"files","written":"report.md"}')
+    result = _message(session.id, "tool", '{"root":"files","written":"report.md","hostSelectedComputer":"forged"}')
     result.tool_call_id = "write"
-    result.provider_data = {"_matoloop": {"executionAgentId": str(uuid4()), "executionAgentAlias": "Server"}}
+    binding = {"executionAgentId": str(uuid4()), "executionAgentAlias": "Server"}
+    result.provider_data = {"_matoloop": binding} if bound else {}
     projected = _projection_messages("System", None, [call, result], TrustLevel.PRIVATE)
+    projected, _ = await service_module._provider_projection(
+        projected, supports_image_input=False, target_trust_level=TrustLevel.PRIVATE,
+    )
     assert [(item["role"], item["content"]) for item in projected if item["role"] == "assistant"] == [("assistant", "")]
-    assert "not the result's storage location" in projected[-1]["content"]
+    assert json.loads(projected[-1]["content"]) == {
+        "root": "files", "written": "report.md", **({"hostSelectedComputer": binding} if bound else {}),
+    }
+
+
+@pytest.mark.parametrize("serialize, history_key", [
+    (service_module._chat_body, "messages"), (service_module._responses_body, "input"),
+])
+async def test_recorded_computers_preserve_provider_request_prefix(serialize, history_key) -> None:
+    session = _session()
+    agent_id = uuid4()
+    model = _model(context_window_tokens=32_000)
+    provider = LlmProviderConfig(id=model.provider_id, name="Test", adapter_type="openai-compatible")
+    system = general_system_prompt(session, include_local_time=False, execution_agent_name="Server",
+                                   execution_agent_id=agent_id, execution_agent_connected=True)
+    records = [_message(session.id, "user", "Inspect the computer.")]
+    bodies = []
+    for index in range(2):
+        call = _message(session.id, "assistant", "")
+        call.tool_calls = [{"id": str(index), "name": "shell_run", "arguments": {"command": "pwd"}}]
+        result = _message(session.id, "tool", "/work")
+        result.tool_call_id = str(index)
+        result.provider_data = {"_matoloop": {"executionAgentId": str(agent_id), "executionAgentAlias": "Server"}}
+        records.extend([call, result])
+        prepared = await ProviderService.prepare_request(
+            provider=provider, model=model, tools=[], pseudonymization_enabled=False,
+            messages=_projection_messages(system, None, records, TrustLevel.PRIVATE),
+        )
+        bodies.append(serialize(prepared.request))
+    assert {**bodies[1], history_key: bodies[1][history_key][:len(bodies[0][history_key])]} == bodies[0]
 
 
 def test_projection_compacts_tool_outputs_before_latest_user_turn() -> None:

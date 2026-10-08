@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import math
 from collections.abc import Awaitable, Callable
@@ -220,6 +221,22 @@ async def _provider_projection(
     for message in messages:
         projected = dict(message)
         projected.pop("attachments", None)
+        recorded_computer = projected.pop("recorded_computer", None)
+        if projected.get("role") == "tool":
+            content = projected.get("content") or ""
+            try:
+                payload = json.loads(content)
+            except (TypeError, ValueError):
+                payload = content
+            # Add host provenance after result shortening/browser projection, before estimation
+            # and privacy protection. Tool data cannot supply this reserved top-level field.
+            supplied_context = isinstance(payload, dict) and "hostSelectedComputer" in payload
+            if recorded_computer or supplied_context:
+                payload = payload if isinstance(payload, dict) else {"result": payload}
+                payload.pop("hostSelectedComputer", None)
+                if recorded_computer:
+                    payload["hostSelectedComputer"] = recorded_computer
+                projected["content"] = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         projected_messages.append(projected)
 
     selected = select_provider_images(
