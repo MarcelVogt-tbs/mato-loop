@@ -13,7 +13,7 @@ from zipfile import ZipFile
 
 import pytest
 from pydantic import ValidationError
-from test_agent_tools_contract import _context
+from tool_helpers import _context
 
 import mato_loop_backend.files.archives as files_archives
 from mato_loop_backend.api.errors import ApiError

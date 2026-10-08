@@ -11,9 +11,10 @@ from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from context_helpers import _build_context
 from PIL import Image
+from runtime_helpers import _runtime_setup
 from sqlalchemy.ext.asyncio import AsyncSession
-from test_context_manager_contract import _build_context
 
 import mato_loop_backend.agent.loop as mock_agent_loop
 import mato_loop_backend.agent.run_support as mock_agent_run_support
@@ -716,7 +717,6 @@ def test_hidden_artifact_references_are_omitted_without_redacting_technical_hist
 async def test_runtime_ephemeral_images_survive_requests_without_files(
     tmp_path, monkeypatch, terminal, vision,
 ):
-    from test_required_web_search_runtime import _runtime_setup
 
     reused_ids = terminal.startswith("reused-")
     db, run, requests, _, _ = await _runtime_setup(
@@ -906,7 +906,6 @@ def test_ephemeral_projection_keeps_user_references_and_newest_images(persisted_
 async def test_runtime_two_previews_are_internal_and_explicit_stl_is_retained(
     tmp_path, monkeypatch, export_stl
 ):
-    from test_required_web_search_runtime import _runtime_setup
 
     finalize = AgentRuntime._finalize_run_files
     agent_id = uuid4()
@@ -1412,7 +1411,6 @@ async def test_recovery_finalizes_live_files_and_pending_json_before_errors(
 
 
 async def test_runtime_publishes_attachment_rows_only_before_final_assistant(tmp_path, monkeypatch):
-    from test_required_web_search_runtime import _runtime_setup
 
     finalize = AgentRuntime._finalize_run_files
     db, run, requests, _, events = await _runtime_setup(

@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+from contextlib import closing
 from pathlib import Path
 from uuid import uuid4
 
@@ -32,7 +33,8 @@ with _browser_latency('snapshot', UUID(int=1)):
 
 
 def test_liveness() -> None:
-    with TestClient(app) as client:
+    # Exercise routes without background services; test_harness_restart_contract covers lifespan.
+    with closing(TestClient(app)) as client:
         response = client.get("/api/health/live")
 
     assert response.status_code == 200
@@ -40,7 +42,7 @@ def test_liveness() -> None:
 
 
 def test_agent_installer_is_publicly_available() -> None:
-    with TestClient(app) as client:
+    with closing(TestClient(app)) as client:
         response = client.get("/api/execution-agents/install.sh")
 
     assert response.status_code == 200
@@ -50,7 +52,7 @@ def test_agent_installer_is_publicly_available() -> None:
 
 
 def test_validation_errors_use_stable_codes() -> None:
-    with TestClient(app) as client:
+    with closing(TestClient(app)) as client:
         response = client.post(
             "/api/auth/setup",
             json={"username": "test", "password": "too-short"},
@@ -68,7 +70,7 @@ def test_validation_errors_use_stable_codes() -> None:
 
 
 def test_domain_errors_use_stable_codes() -> None:
-    with TestClient(app) as client:
+    with closing(TestClient(app)) as client:
         response = client.get("/api/sessions")
 
     assert response.status_code == 401
@@ -81,7 +83,7 @@ def test_domain_errors_use_stable_codes() -> None:
 
 
 def test_attachment_download_requires_authentication() -> None:
-    with TestClient(app) as client:
+    with closing(TestClient(app)) as client:
         response = client.get(
             f"/api/sessions/{uuid4()}/messages/{uuid4()}/attachments/{uuid4()}"
         )
@@ -96,7 +98,7 @@ def test_attachment_download_requires_authentication() -> None:
 
 
 def test_workspace_file_update_requires_authentication() -> None:
-    with TestClient(app) as client:
+    with closing(TestClient(app)) as client:
         response = client.put(
             "/api/workspace/files",
             json={
@@ -111,7 +113,7 @@ def test_workspace_file_update_requires_authentication() -> None:
 
 
 def test_workspace_usage_requires_authentication() -> None:
-    with TestClient(app) as client:
+    with closing(TestClient(app)) as client:
         response = client.get("/api/workspace/usage", params={"session_id": uuid4()})
 
     assert response.status_code == 401
@@ -119,7 +121,7 @@ def test_workspace_usage_requires_authentication() -> None:
 
 
 def test_notifications_require_authentication() -> None:
-    with TestClient(app) as client:
+    with closing(TestClient(app)) as client:
         response = client.get("/api/notifications")
 
     assert response.status_code == 401
@@ -127,7 +129,7 @@ def test_notifications_require_authentication() -> None:
 
 
 def test_web_push_config_requires_authentication() -> None:
-    with TestClient(app) as client:
+    with closing(TestClient(app)) as client:
         response = client.get("/api/notifications/push/config")
 
     assert response.status_code == 401

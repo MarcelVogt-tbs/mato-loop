@@ -287,6 +287,7 @@ async def test_session_payload_reports_connected_operations(monkeypatch) -> None
     }
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_start_persists_rootless_executor_snapshot(monkeypatch) -> None:
     user_id = uuid4()
     agent = _agent(user_id)

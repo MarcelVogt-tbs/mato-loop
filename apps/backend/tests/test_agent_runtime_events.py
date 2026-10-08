@@ -1,5 +1,6 @@
 import asyncio
 import json
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
@@ -642,6 +643,7 @@ async def test_child_authorization_uses_main_grants_child_roots_and_snapshot(mon
     ],
 )
 @pytest.mark.parametrize("tool_limit", [25, None])
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_start_persists_effective_run_policy_snapshot(
     monkeypatch,
     provider_trust: TrustLevel,
@@ -706,6 +708,7 @@ async def test_start_persists_effective_run_policy_snapshot(
     AgentRuntime._tasks.pop(run.id, None)
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_start_accepts_unavailable_model_for_persisted_host_failure(monkeypatch) -> None:
     missing_model_id = uuid4()
     settings = AiSettings(models=[], default_model_id=missing_model_id)
@@ -748,6 +751,7 @@ async def test_start_rejects_disabled_profile_before_persisting(monkeypatch) -> 
     db.commit.assert_not_awaited()
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_start_switches_profile_with_run_and_discards_session_grants(monkeypatch) -> None:
     from mato_loop_backend.settings.models import AgentProfile
 
@@ -789,6 +793,7 @@ async def test_start_switches_profile_with_run_and_discards_session_grants(monke
     AgentRuntime._tasks.pop(run.id, None)
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_start_schedules_title_generation_after_agent_run(monkeypatch) -> None:
     provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="model")
@@ -944,17 +949,6 @@ async def test_cancel_and_wait_user_title_tasks_only_cancels_owned_tasks() -> No
         await asyncio.gather(other, return_exceptions=True)
 
 
-class _SessionContext:
-    def __init__(self, db) -> None:
-        self.db = db
-
-    async def __aenter__(self):
-        return self.db
-
-    async def __aexit__(self, *_args) -> None:
-        return None
-
-
 async def test_title_generation_rechecks_user_before_each_provider_request(
     monkeypatch,
 ) -> None:
@@ -980,7 +974,7 @@ async def test_title_generation_rechecks_user_before_each_provider_request(
     complete = AsyncMock(return_value=ProviderResult())
     fail = AsyncMock()
     def _mock_value():
-        return _SessionContext(db)
+        return nullcontext(db)
     for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     _mock_value = AsyncMock(return_value=settings)
@@ -1042,7 +1036,7 @@ async def test_run_failure_persists_structured_message_before_terminal_event(mon
         events.append(event)
 
     def _mock_value():
-        return _SessionContext(db)
+        return nullcontext(db)
     for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_execute_loop", fail)
@@ -1145,7 +1139,7 @@ async def test_user_cancel_persists_visible_response_before_terminal_event(monke
         events.append(event)
 
     def _mock_value():
-        return _SessionContext(db)
+        return nullcontext(db)
     for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_execute_loop", execute_loop)
@@ -1191,7 +1185,7 @@ async def test_immediate_user_cancel_persists_empty_interruption_marker(monkeypa
 
     execute_loop = AsyncMock()
     def _mock_value():
-        return _SessionContext(db)
+        return nullcontext(db)
     for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_execute_loop", execute_loop)
@@ -1240,7 +1234,7 @@ async def test_shutdown_cancel_is_persisted_as_backend_restart(monkeypatch) -> N
         events.append(event)
 
     def _mock_value():
-        return _SessionContext(db)
+        return nullcontext(db)
     for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_execute_loop", execute_loop)
@@ -1274,7 +1268,7 @@ async def test_cancel_after_completed_response_does_not_add_interruption(monkeyp
         events.append(event)
 
     def _mock_value():
-        return _SessionContext(db)
+        return nullcontext(db)
     for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_execute_loop", AsyncMock())

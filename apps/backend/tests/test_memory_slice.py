@@ -216,6 +216,7 @@ async def test_provider_rejects_model_from_another_provider_before_database_acce
     db.get.assert_not_awaited()
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_provider_allows_chat_text_for_public_pseudonymized_request(
     monkeypatch,
 ) -> None:

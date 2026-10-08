@@ -137,6 +137,7 @@ def test_skill_edit_patch_is_partial_strict_and_requires_a_change() -> None:
             SkillEditPatch.model_validate(value)
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_skill_service_locks_mutations_preserves_id_and_does_not_commit(
     monkeypatch,
 ) -> None:
@@ -178,6 +179,7 @@ async def test_skill_service_locks_mutations_preserves_id_and_does_not_commit(
     save.assert_awaited_once()
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_skill_service_rejects_casefold_duplicate(monkeypatch) -> None:
     settings = SkillsSettings(
         skills=[SkillDefinition(name="STRASSE", description="Alt", instructions="Alt")]
@@ -193,6 +195,7 @@ async def test_skill_service_rejects_casefold_duplicate(monkeypatch) -> None:
     save.assert_not_awaited()
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_skill_delete_removes_the_personal_definition(
     monkeypatch,
 ) -> None:
@@ -272,6 +275,7 @@ async def test_effective_skills_merge_scopes_and_hide_disabled(monkeypatch) -> N
     assert skills[0].owner_id is None
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_personal_default_activation_creates_an_override(monkeypatch) -> None:
     user_id = uuid4()
     shipped = SkillDefinition(
@@ -299,6 +303,7 @@ async def test_personal_default_activation_creates_an_override(monkeypatch) -> N
     save.assert_awaited_once_with(db, personal, user_id=user_id)
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_personal_reset_materializes_the_shipped_default(monkeypatch) -> None:
     user_id = uuid4()
     shipped = SkillDefinition(

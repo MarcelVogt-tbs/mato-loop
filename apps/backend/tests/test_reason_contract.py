@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from test_required_web_search_runtime import _runtime_setup, _tool_messages
+from runtime_helpers import _runtime_setup, _tool_messages
 
 from mato_loop_backend.agent.projection import message_dict
 from mato_loop_backend.agent.run_contracts import AgentRunError

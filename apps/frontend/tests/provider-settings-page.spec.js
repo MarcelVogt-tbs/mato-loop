@@ -3,11 +3,8 @@ import { createApp, h, reactive } from 'vue'
 import { createPinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, expect, it, vi } from 'vitest'
-import {
-  Quasar, QAvatar, QBadge, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox,
-  QChip, ClosePopup, QDialog, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QItem, QItemLabel,
-  QItemSection, QLinearProgress, QList, QMenu, QSelect, QSeparator, QSpace, QTab, QTabs, QToggle, QTooltip
-} from 'quasar'
+import { Quasar } from 'quasar'
+import { quasarOptions } from './quasar-options'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn() } }))
@@ -23,9 +20,11 @@ afterEach(() => {
   app?.unmount()
   root?.remove()
   vi.clearAllMocks()
+  vi.restoreAllMocks()
 })
 
 it('keeps global and personal lists and creation scopes separate when switching pages', async () => {
+  vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   api.get.mockImplementation((url, config) => {
     if (url === '/providers/personal-policy') return Promise.resolve({ data: { personalProvidersEnabled: false } })
     if (url === '/providers/codex/status') return Promise.resolve({ data: { authenticated: false } })
@@ -49,11 +48,7 @@ it('keeps global and personal lists and creation scopes separate when switching 
   const pinia = createPinia()
   const props = reactive({ admin: true })
   app = createApp({ render: () => h(Page, props) })
-  app.use(pinia).use(router).use(Quasar, { directives: { ClosePopup }, components: {
-    QAvatar, QBadge, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox,
-    QChip, QDialog, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QItem, QItemLabel,
-    QItemSection, QLinearProgress, QList, QMenu, QSelect, QSeparator, QSpace, QTab, QTabs, QToggle, QTooltip
-  } })
+  app.use(pinia).use(router).use(Quasar, quasarOptions)
   useAuthStore(pinia).isAdmin = true
   app.mount(root)
   const providers = useProviderStore(pinia)

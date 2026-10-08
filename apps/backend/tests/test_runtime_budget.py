@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
-from test_required_web_search_runtime import (
+from runtime_helpers import (
     _assistant_messages,
     _runtime_setup,
     _search_call,
@@ -312,10 +312,10 @@ def test_transcript_signature_canonicalizes_youtube_url():
     assert _tool_call_signature(shared) == _tool_call_signature(canonical)
 
 
-@pytest.mark.parametrize(("old_limit", "new_limit"), [(None, 25), (25, None)])
+@pytest.mark.parametrize(("old_limit", "new_limit"), [(None, 2), (2, None)])
 @pytest.mark.parametrize("legacy", [False, True])
 async def test_retry_snapshots_current_budget_without_overwriting_failed_run(monkeypatch, old_limit, new_limit, legacy):
-    count = 25 if new_limit is not None else 26
+    count = new_limit if new_limit is not None else old_limit + 1
     db, failed, requests, _projections, _events = await _runtime_setup(
         monkeypatch,
         [ProviderResult(tool_calls=[_search_call(str(index), f"Question {index}")]) for index in range(count)]

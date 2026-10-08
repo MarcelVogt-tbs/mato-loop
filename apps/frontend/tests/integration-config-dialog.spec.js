@@ -2,11 +2,8 @@
 import { createApp, h, nextTick, ref } from 'vue'
 import { createPinia } from 'pinia'
 import { afterEach, expect, it, vi } from 'vitest'
-import {
-  Quasar, QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection,
-  QCheckbox, QDialog, QForm, QIcon, QInput, QItem, QItemSection,
-  QSelect, QSeparator, QSpace, QToggle
-} from 'quasar'
+import { Quasar } from 'quasar'
+import { quasarOptions } from './quasar-options'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn() } }))
@@ -41,11 +38,7 @@ it('keeps the ownership selected by the administration or settings page', async 
   root = document.createElement('div')
   document.body.append(root)
   app = createApp({ render: () => h(Dialog, { modelValue: open.value, ref: (value) => { page = value?.$?.setupState } }) })
-  app.use(pinia).use(Quasar, { components: {
-    QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox,
-    QDialog, QForm, QIcon, QInput, QItem, QItemSection, QSelect,
-    QSeparator, QSpace, QToggle
-  } })
+  app.use(pinia).use(Quasar, quasarOptions)
   app.mount(root)
   open.value = true
 

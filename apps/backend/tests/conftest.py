@@ -20,8 +20,9 @@ def pytest_addoption(parser):
     parser.addoption("--debug-db", action="store_true", help="Run debug MCP PostgreSQL integration tests")
 
 
-@pytest.fixture(autouse=True)
-def no_personal_settings_by_default(monkeypatch):
+@pytest.fixture
+def mock_db_settings(monkeypatch):
+    """Opt in to default settings when a test uses an incomplete database mock."""
     async def load_optional(session, settings_type, **kwargs):
         if isinstance(session, AsyncMock):
             record = session.scalar.return_value
@@ -33,11 +34,6 @@ def no_personal_settings_by_default(monkeypatch):
                 return None
         return await _load_optional(session, settings_type, **kwargs)
 
-    monkeypatch.setattr(SettingsStore, "load_optional", load_optional)
-
-
-@pytest.fixture(autouse=True)
-def default_runtime_settings_for_mock_db(monkeypatch):
     async def load(session, settings_type, **kwargs):
         if (
             settings_type is AgentRuntimeSettings
@@ -47,4 +43,5 @@ def default_runtime_settings_for_mock_db(monkeypatch):
             return AgentRuntimeSettings()
         return await _load(session, settings_type, **kwargs)
 
+    monkeypatch.setattr(SettingsStore, "load_optional", load_optional)
     monkeypatch.setattr(SettingsStore, "load", load)

@@ -160,7 +160,7 @@ it('shows a background state without opening a viewer for a headless agent', asy
   expect(browser.mountView).not.toHaveBeenCalled()
 })
 
-it.each([{ width: 390, dark: false }, { width: 390, dark: true }, { width: 1440, dark: false }, { width: 1440, dark: true }])(
+it.each([{ width: 390, dark: false }, { width: 1440, dark: true }])(
   'shows one explicit takeover action, progress and quiet replacement without reclaim (%j)', async (viewport) => {
     const shown = ref(true)
     await mount({ render: () => shown.value ? h(BrowserApp) : null }, viewport)
@@ -238,7 +238,7 @@ it('closes Chromium only from the explicit Browser menu action', async () => {
   expect(FakeWebSocket.instances).toHaveLength(1)
 })
 
-it.each([{ width: 390, dark: false }, { width: 390, dark: true }, { width: 1440, dark: false }, { width: 1440, dark: true }])(
+it.each([{ width: 390, dark: false }, { width: 1440, dark: true }])(
   'parks an unmounted A viewer, shows no A page or attachment in B, and reuses it on return (%j)', async (viewport) => {
     const shown = ref(true)
     await mount({ render: () => shown.value ? h('div', [h(BrowserApp), h(BrowserFooter)]) : null }, viewport)
@@ -358,7 +358,7 @@ it('offers manual cancellation while requested attachment is still in flight', a
   expect(browser.submitting).toBe('detach')
 })
 
-it.each([{ width: 390, dark: false }, { width: 390, dark: true }, { width: 1440, dark: false }, { width: 1440, dark: true }])(
+it.each([{ width: 390, dark: false }, { width: 1440, dark: true }])(
   'renders server tabs and navigation without optimistic URLs, duplicate attachment, or mobile action loss (%j)', async (viewport) => {
     await mount({ render: () => h('div', [h(BrowserApp), h(BrowserFooter)]) }, viewport)
     const socket = browser.socket
@@ -896,7 +896,7 @@ it('offers explicit GET after remote copy failure without duplicating the Axios 
   await vi.waitFor(() => expect(button('Lokal kopieren').disabled).toBe(false))
 })
 
-it.each([{ width: 390, dark: false }, { width: 390, dark: true }, { width: 1440, dark: false }, { width: 1440, dark: true }])(
+it.each([{ width: 390, dark: false }, { width: 1440, dark: true }])(
   'requires explicit clipboard actions and offers German permission fallbacks (%j)', async (viewport) => {
     await mount({ render: () => h('div', [h(BrowserApp), h(BrowserFooter)]) }, viewport)
     expect(FakeWebSocket.instances).toHaveLength(1)

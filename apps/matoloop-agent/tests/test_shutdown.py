@@ -54,6 +54,11 @@ def init(self, *args, **kwargs):
     original_init(self, *args, **kwargs)
     self.installation = Path(os.environ['PLAYWRIGHT_BROWSERS_PATH'])
 
+original_timer = threading.Timer
+def shutdown_timer(interval, *args, **kwargs):
+    assert interval == 25
+    return original_timer(2 if mode == 'stuck' else interval, *args, **kwargs)
+
 sys.argv = ['matoloop-agent', 'run', '--config', config]
 with patch('matoloop_agent.__main__.resolve_credential', credential):
     if mode == 'browser':
@@ -61,7 +66,8 @@ with patch('matoloop_agent.__main__.resolve_credential', credential):
             main()
     else:
         with patch.object(MatoLoopAgent, '_connect_once', disconnected), \\
-             patch.object(BrowserManager, 'close', close):
+             patch.object(BrowserManager, 'close', close), \\
+             patch('matoloop_agent.platform_linux.threading.Timer', shutdown_timer):
             main()
 """
 
@@ -193,9 +199,9 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
         process.send_signal(signal.SIGTERM)
         self.assertEqual(await process.stdout.readline(), b"CLOSING\n")
         self.assertEqual(await process.stdout.readline(), b"CLOSED\n")
-        await asyncio.wait_for(process.wait(), 27)
+        await asyncio.wait_for(process.wait(), 5)
         self.assertEqual(process.returncode, 1)
-        self.assertLess(asyncio.get_running_loop().time() - started, 27)
+        self.assertLess(asyncio.get_running_loop().time() - started, 5)
 
     async def test_outer_lifetime_closes_during_disconnected_retry_and_key_reload(self):
         for during_reload in (False, True):
@@ -281,9 +287,18 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
         worker.playwright = SimpleNamespace(stop=AsyncMock(side_effect=asyncio.Event().wait))
         process = Mock()
         worker.processes.append(process)
+        wait_for = asyncio.wait_for
+
+        async def short_wait_for(awaitable, timeout):
+            return await wait_for(awaitable, timeout / 100)
+
         started = asyncio.get_running_loop().time()
-        await worker.close()
-        self.assertLess(asyncio.get_running_loop().time() - started, 10)
+        with patch(
+            "matoloop_agent.browser_worker.asyncio.wait_for", side_effect=short_wait_for
+        ) as bounded_wait:
+            await worker.close()
+        self.assertLess(asyncio.get_running_loop().time() - started, 1)
+        self.assertLess(sum(call.args[1] for call in bounded_wait.call_args_list), 10)
         worker.context.close.assert_awaited_once()
         worker.playwright.stop.assert_awaited_once()
         process.kill.assert_called_once()

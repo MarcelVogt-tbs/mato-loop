@@ -47,6 +47,7 @@ def upload() -> UploadFile:
     )
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_direct_transcription_uses_timeout_and_returns_text(monkeypatch) -> None:
     settings = ToolSettings.model_validate(
         {"transcribeAudio": {"timeoutSeconds": 175}}
@@ -69,6 +70,7 @@ async def test_direct_transcription_uses_timeout_and_returns_text(monkeypatch) -
     assert transcribe.await_args.kwargs["timeout"] == 175
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_direct_transcription_returns_structured_timeout(monkeypatch) -> None:
     settings = ToolSettings.model_validate(
         {"transcribeAudio": {"timeoutSeconds": 480}}
@@ -102,6 +104,7 @@ async def test_direct_transcription_returns_structured_timeout(monkeypatch) -> N
     assert exc_info.value.params == {"timeoutSeconds": 480, "retryable": True}
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_direct_transcription_rejects_unavailable_tool(monkeypatch) -> None:
     monkeypatch.setattr(
         SettingsStore,

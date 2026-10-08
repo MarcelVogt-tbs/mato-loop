@@ -1,9 +1,9 @@
+from contextlib import nullcontext
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from test_agent_runtime_events import _SessionContext
-from test_required_web_search_runtime import _assistant_messages, _runtime_setup, _search_call
+from runtime_helpers import _assistant_messages, _runtime_setup, _search_call
 
 import mato_loop_backend.agent.runtime as mock_agent_runtime
 import mato_loop_backend.agent.summarization as mock_agent_summarization
@@ -48,7 +48,7 @@ async def test_canonical_error_retains_only_current_safe_generation_diagnostics(
     )
     db.scalar.return_value = None
     def _mock_value():
-        return _SessionContext(db)
+        return nullcontext(db)
     for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_ensure_user_active", AsyncMock())

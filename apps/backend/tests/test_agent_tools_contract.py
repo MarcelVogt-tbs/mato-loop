@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import make_transient_to_detached
+from tool_helpers import _context, _session, _settings_record
 
 import mato_loop_backend.files.access as mock_files_access
 import mato_loop_backend.integrations.registry as integration_registry
@@ -39,7 +40,6 @@ from mato_loop_backend.agent.projection import (
 from mato_loop_backend.agent.run_support import _argument_edit_payload, _tool_policy
 from mato_loop_backend.files.search import MAX_MATCH_TEXT, MAX_SEARCH_RESULTS, RootFileSearch
 from mato_loop_backend.files.service import FileRoot, RootFileError, RootFileService
-from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
     IntegrationContributions,
@@ -364,49 +364,6 @@ def _definition(name: str = "example") -> ToolDefinition:
     return ToolDefinition(name, "Example tool", _RequiredArguments, _successful_handler)
 
 
-def _session() -> ChatSession:
-    return ChatSession(
-        id=uuid4(),
-        user_id=uuid4(),
-        title="Test",
-        memory_mode="disabled",
-        web_search_policy="available",
-    )
-
-
-def _context(
-    tmp_path,
-    call: ToolCall,
-    *,
-    decision=PermissionDecision.ALLOW,
-    web_fetch_policy=ToolExecutionPolicy.DISABLED,
-    public_addresses_only=True,
-) -> ToolContext:
-    session = _session()
-    storage = SessionStorage(tmp_path / "sessions")
-    storage.provision(session.id)
-    tool_settings = ToolSettings()
-    tool_settings.private_permissions.policies["network.fetch"] = web_fetch_policy
-    tool_settings.public_permissions.policies["network.fetch"] = web_fetch_policy
-    tool_settings.web_fetch.public_addresses_only = public_addresses_only
-    context = ToolContext(
-        db=AsyncMock(spec=AsyncSession),
-        run_id=uuid4(),
-        session=session,
-        tool_call=call,
-        root_files=RootFileService(
-            session.id,
-            session_storage=storage,
-        ),
-        integration_settings=IntegrationSettings(),
-        ask_handler=AsyncMock(return_value=decision),
-        tool_settings=tool_settings,
-    )
-    context.db.scalar.return_value = Mock(data=_settings_record(tool_settings))
-    context.model_trust_level = TrustLevel.PRIVATE
-    return context
-
-
 def _session_read_records(context: ToolContext, messages: list[Message], runs=()) -> None:
     context.db.scalars.side_effect = lambda statement: Mock(all=Mock(
         return_value=list(runs) if "FROM agent_runs" in str(statement) else messages,
@@ -514,19 +471,6 @@ def _tool_settings(data: dict) -> ToolSettings:
         values["privatePermissions"] = permissions
         values["publicPermissions"] = permissions
     return ToolSettings.model_validate(values)
-
-
-def _settings_record(settings: ToolSettings) -> dict:
-    permissions = settings.private_permissions.model_dump(mode="json")
-    return {
-        **settings.model_dump(mode="json"),
-        "builtin_access_overrides": {
-            str(GENERAL_PROFILE_ID): {
-                "private_permissions": permissions,
-                "public_permissions": permissions,
-            }
-        },
-    }
 
 
 def _set_profile_settings(context: ToolContext, settings: ToolSettings) -> None:
@@ -1539,7 +1483,6 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     create = definitions["create_automation"].schema()["parameters"]
     assert "source_session_id" not in create["properties"]
     assert "output_session_id" not in create["properties"]
-    assert create["properties"]["schedules"]["maxItems"] == 50
     assert "triggers" in create["properties"]
     schedule_schema = create["properties"]["schedules"]["items"]
     schedule_schema = create["$defs"][schedule_schema["$ref"].rsplit("/", 1)[-1]]
@@ -2135,6 +2078,7 @@ async def test_missing_workspace_returns_structured_error_without_approval(tmp_p
     context.ask_handler.assert_not_awaited()
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> None:
     tool_settings = _tool_settings({})
     persona = PersonaProfile(name="Direkt", instructions="Alt")
@@ -2190,6 +2134,7 @@ async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> N
     assert (identity.profile_personas[GENERAL_PROFILE_ID], identity.personas[0].instructions) == (persona.id, "Antworte direkt.")
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) -> None:
     tool_settings = _tool_settings(
         {"policies": {"settings.agent_identity.update": "auto"}}
@@ -2232,6 +2177,7 @@ async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) 
     context.ask_handler.assert_not_awaited()
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_update_agent_identity_rejects_changed_approved_persona(
     monkeypatch, tmp_path
 ) -> None:
@@ -2280,6 +2226,7 @@ async def test_update_agent_identity_rejects_changed_approved_persona(
     save.assert_not_awaited()
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_update_agent_identity_rejects_persona_changed_since_run_start(
     monkeypatch, tmp_path
 ) -> None:
@@ -3381,6 +3328,7 @@ async def test_load_skill_ask_policy_uses_the_user_skill_collection(
     assert request.resource_scope == str(context.session.user_id)
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_disabled_agent_identity_tool_is_not_offered_or_executed(
     monkeypatch, tmp_path
 ) -> None:

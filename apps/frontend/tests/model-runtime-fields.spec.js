@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { createApp, h, nextTick, reactive } from 'vue'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Quasar, QBtn, QCardSection, QExpansionItem, QForm, QInput, QSelect, QToggle } from 'quasar'
+import { Quasar, QForm } from 'quasar'
+import { quasarOptions } from './quasar-options'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 
@@ -19,7 +20,7 @@ it('toggles Auto, validates manual ceilings independently and never edits them o
   app = createApp({ render: () => h(QForm, { ref: (value) => { qform = value } }, {
     default: () => h(ModelRuntimeFields, { modelValue: form })
   }) })
-  app.use(Quasar, { components: { QBtn, QCardSection, QExpansionItem, QInput, QSelect, QToggle } })
+  app.use(Quasar, quasarOptions)
   app.mount(root)
   root.querySelector('.q-expansion-item .q-item').click()
   await nextTick()
@@ -68,7 +69,7 @@ it('shows the transport omission hint only when explicitly enabled without chang
   root = document.createElement('div')
   document.body.append(root)
   app = createApp({ render: () => h(ModelRuntimeFields, { modelValue: form, ...presentation }) })
-  app.use(Quasar, { components: { QBtn, QCardSection, QExpansionItem, QInput, QSelect, QToggle } })
+  app.use(Quasar, quasarOptions)
   app.mount(root)
   root.querySelector('.q-expansion-item .q-item').click()
   await nextTick()

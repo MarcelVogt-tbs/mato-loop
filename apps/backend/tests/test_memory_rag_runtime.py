@@ -65,6 +65,8 @@ from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
 from mato_loop_backend.tools.contracts import ToolResult
 from mato_loop_backend.tools.registry import EffectiveToolSet
 
+pytestmark = pytest.mark.usefixtures("mock_db_settings")
+
 
 @pytest.mark.parametrize(
     ("manual", "discovered", "reserve"),

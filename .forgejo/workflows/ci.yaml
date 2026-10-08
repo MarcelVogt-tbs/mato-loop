@@ -53,7 +53,7 @@ jobs:
           uv run --no-sync ruff check src tests
       - name: Test backend
         working-directory: apps/backend
-        run: uv run --no-sync pytest
+        run: uv run --no-sync pytest --durations=20
 
   frontend:
     runs-on: ubuntu-latest
@@ -120,7 +120,7 @@ jobs:
           uv run --no-sync ruff format --check src tests ../../scripts/matoloop-agent-installer.py
       - name: Test MatoLoop Agent
         working-directory: apps/matoloop-agent
-        run: uv run --no-sync python -m unittest discover -s tests -v
+        run: uv run --no-sync python -m unittest discover -s tests -v --durations 20
 
   migrations:
     runs-on: ubuntu-latest
@@ -178,11 +178,12 @@ jobs:
         run: |
           bash -n scripts/release.sh
           bash -n scripts/ci/publish-docker-image.sh
-          python3 -m py_compile scripts/check-version.py scripts/ci/create-forgejo-release.py
+          python3 -m py_compile scripts/check-version.py scripts/ci/create-forgejo-release.py scripts/ci/check-develop-revision.py
       - name: Test CI helpers
         run: |
           bash scripts/release.sh --self-test
           bash scripts/ci/publish-docker-image.sh --self-test
+          python3 scripts/ci/check-develop-revision.py --self-test
           python3 scripts/ci/create-forgejo-release.py --self-test
           python3 scripts/ci/create-forgejo-release.py --check-notes HEAD
           python3 scripts/check-version.py --self-test
@@ -238,7 +239,16 @@ jobs:
       - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+      - name: Check develop revision before building
+        id: build_freshness
+        if: github.ref == 'refs/heads/develop'
+        env:
+          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+        run: python3 scripts/ci/check-develop-revision.py
       - name: Build both images before publication
+        if: github.ref != 'refs/heads/develop' || steps.build_freshness.outputs.current == 'true'
         env:
           KEEP_LOCAL_IMAGE: "1"
         run: |
@@ -252,40 +262,12 @@ jobs:
           bash scripts/ci/publish-docker-image.sh build matoloop-agent . apps/matoloop-agent/Dockerfile
       - name: Check current develop revision
         id: freshness
-        if: github.ref == 'refs/heads/develop'
+        if: github.ref == 'refs/heads/develop' && steps.build_freshness.outputs.current == 'true'
         env:
           FORGEJO_SERVER_URL: ${{ github.server_url }}
           FORGEJO_REPOSITORY: ${{ github.repository }}
           FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
-        run: |
-          remote_sha="$(python3 - <<'PY'
-          import json
-          import os
-          import urllib.parse
-          import urllib.request
-
-          class NoRedirect(urllib.request.HTTPRedirectHandler):
-              def redirect_request(self, request, fp, code, msg, headers, newurl):
-                  return None
-
-          server = os.environ["FORGEJO_SERVER_URL"].rstrip("/")
-          if urllib.parse.urlsplit(server).scheme != "https":
-              raise SystemExit("FORGEJO_SERVER_URL must use HTTPS")
-          repository = "/".join(urllib.parse.quote(part, safe="") for part in os.environ["FORGEJO_REPOSITORY"].split("/"))
-          request = urllib.request.Request(
-              f"{server}/api/v1/repos/{repository}/branches/develop",
-              headers={"Authorization": f"token {os.environ['FORGEJO_TOKEN']}"},
-          )
-          with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
-              print(json.load(response)["commit"]["id"])
-          PY
-          )"
-          if [[ "$remote_sha" == "$GITHUB_SHA" ]]; then
-            printf 'current=true\n' >> "$GITHUB_OUTPUT"
-          else
-            printf 'Skipping stale develop publication for %s; current commit is %s.\n' "$GITHUB_SHA" "$remote_sha"
-            printf 'current=false\n' >> "$GITHUB_OUTPUT"
-          fi
+        run: python3 scripts/ci/check-develop-revision.py
       - name: Publish both images
         if: github.ref != 'refs/heads/develop' || steps.freshness.outputs.current == 'true'
         run: |

@@ -55,6 +55,8 @@ from mato_loop_backend.settings.models import (
     TrustLevel,
 )
 
+pytestmark = pytest.mark.usefixtures("mock_db_settings")
+
 
 def _png_bytes() -> bytes:
     buffer = BytesIO()

@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -18,17 +19,6 @@ from mato_loop_backend.models import (
 )
 
 
-class _SessionContext:
-    def __init__(self, session: AsyncMock) -> None:
-        self.session = session
-
-    async def __aenter__(self) -> AsyncMock:
-        return self.session
-
-    async def __aexit__(self, *_args: object) -> None:
-        return None
-
-
 @pytest.mark.parametrize("restored", [False, True])
 async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypatch, restored) -> None:
     db = AsyncMock(spec=AsyncSession)
@@ -43,7 +33,7 @@ async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypat
     rows.all.return_value = []
     db.execute.return_value = rows
     engine = Mock(dispose=AsyncMock())
-    monkeypatch.setattr(app_module, "AsyncSessionFactory", lambda: _SessionContext(db))
+    monkeypatch.setattr(app_module, "AsyncSessionFactory", lambda: nullcontext(db))
     recover_runs = AsyncMock(side_effect=lambda _db: order.append("recover"))
     monkeypatch.setattr(AgentRuntime, "recover", recover_runs)
     monkeypatch.setattr(app_module.AutomationService, "recover", AsyncMock())

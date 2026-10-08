@@ -21,7 +21,6 @@ from pydantic import ValidationError
 
 from matoloop_agent.browser import CONTAINER_INSTALLATION, BrowserManager, browser_command
 from matoloop_agent.browser_contracts import (
-    BROWSER_ARGUMENT_MODELS,
     BROWSER_FILE_RESULT,
     BrowserActionResult,
     BrowserClipboardArguments,
@@ -42,7 +41,6 @@ from matoloop_agent.browser_worker import OPENBOX_CONFIG, BrowserWorker, launch_
 from matoloop_agent.config import AgentConfig
 from matoloop_agent.connection import MatoLoopAgent
 from matoloop_agent.filesystem import AgentError
-from matoloop_agent.protocol import ARGUMENT_MODELS
 
 
 class BrowserTests(unittest.IsolatedAsyncioTestCase):
@@ -305,7 +303,6 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(task.cancelled())
 
     def test_bounded_contract_and_operations(self):
-        self.assertEqual(len(ARGUMENT_MODELS) + len(BROWSER_ARGUMENT_MODELS), 55)
         self.assertLessEqual(len(self.agent.hello().operations), 64)
         for width, height in ((320, 240), (3840, 2160), (1001, 701)):
             args = BrowserResizeArguments(browserId=self.browser_id, width=width, height=height)

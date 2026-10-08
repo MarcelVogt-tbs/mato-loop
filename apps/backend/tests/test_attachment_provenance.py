@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
+from document_helpers import document_bytes
 from sqlalchemy.ext.asyncio import AsyncSession
-from test_attachment_processing import document_bytes
 
 from mato_loop_backend.files.service import RootFileError, RootFileService
 from mato_loop_backend.files.storage import SessionStorage

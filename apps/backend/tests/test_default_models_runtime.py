@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -69,17 +70,6 @@ def model_defaults(monkeypatch):
         return ModelDefaultsSettings(**ai.model_dump(include=set(ModelDefaults.model_fields)))
 
     monkeypatch.setattr(SettingsStore, "load_optional", load_optional)
-
-
-class _SessionContext:
-    def __init__(self, db):
-        self.db = db
-
-    async def __aenter__(self):
-        return self.db
-
-    async def __aexit__(self, *_args):
-        return None
 
 
 @pytest.fixture
@@ -547,7 +537,7 @@ async def test_title_generation_falls_back_to_session_model(monkeypatch, context
 
     monkeypatch.setattr(SettingsStore, "load", load)
     def _mock_value():
-        return _SessionContext(db)
+        return nullcontext(db)
     for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     transport = AsyncMock(return_value=ProviderResult(content="Standardmodelle konfigurieren"))
@@ -597,7 +587,7 @@ async def test_title_generation_waits_for_agent_run(monkeypatch) -> None:
     def session_factory():
         nonlocal factory_calls
         factory_calls += 1
-        return _SessionContext(db)
+        return nullcontext(db)
 
     _mock_value = session_factory
     for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
@@ -625,7 +615,7 @@ async def test_title_generation_skips_cancelled_agent_run(monkeypatch) -> None:
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
     def _mock_value():
-        return _SessionContext(db)
+        return nullcontext(db)
     for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     complete = AsyncMock()
@@ -651,7 +641,7 @@ async def test_title_generation_does_not_overwrite_manual_title(monkeypatch) -> 
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
     def _mock_value():
-        return _SessionContext(db)
+        return nullcontext(db)
     for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     complete = AsyncMock()
@@ -732,7 +722,7 @@ async def test_title_generation_repairs_empty_visible_output(
     )
     monkeypatch.setattr(SettingsStore, "load", load)
     def _mock_value():
-        return _SessionContext(db)
+        return nullcontext(db)
     for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(ProviderService, "complete", complete)
@@ -774,7 +764,7 @@ async def test_title_generation_persists_failed_status(monkeypatch) -> None:
 
     monkeypatch.setattr(SettingsStore, "load", load)
     def _mock_value():
-        return _SessionContext(db)
+        return nullcontext(db)
     for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(
@@ -901,7 +891,7 @@ async def test_title_generation_routes_current_images_in_one_request(
     complete = AsyncMock(return_value=ProviderResult(content="Quarterly report"))
     monkeypatch.setattr(SettingsStore, "load", load)
     def _mock_value():
-        return _SessionContext(db)
+        return nullcontext(db)
     for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles,):
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     def _mock_value():

@@ -193,6 +193,7 @@ async def test_retry_rejects_a_non_latest_error(monkeypatch) -> None:
     assert exc_info.value.code == "session.retryUnavailable"
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_runtime_retry_reuses_failed_run_model(monkeypatch) -> None:
     pass
     from mato_loop_backend.settings import AiSettings, SettingsStore
@@ -243,6 +244,7 @@ async def test_runtime_retry_reuses_failed_run_model(monkeypatch) -> None:
     schedule.assert_called_once_with(run)
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_runtime_retry_rejects_unowned_or_revoked_execution_agent(
     monkeypatch,
 ) -> None:

@@ -3,7 +3,8 @@ import { createApp, h, nextTick } from 'vue'
 import { createPinia } from 'pinia'
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Quasar, QBanner, QBtn, QBtnToggle, QCard, QCardSection, QCheckbox, QForm, QIcon, QInnerLoading, QInput, QSelect, QSeparator, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QToolbar, QToolbarTitle } from 'quasar'
+import { Quasar } from 'quasar'
+import { quasarOptions } from './quasar-options'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), put: vi.fn() } }))
@@ -45,7 +46,7 @@ async function mountEditor(path = '/agents/agent', extraAgents = [], personalAge
   let page
   app = createApp({ render: () => h(RouterView, null, { default: ({ Component }) => h(Component, { ref: (value) => { page = value?.$?.setupState } }) }) })
   const pinia = createPinia()
-  app.use(pinia).use(router).use(Quasar, { components: { QBanner, QBtn, QBtnToggle, QCard, QCardSection, QCheckbox, QForm, QIcon, QInnerLoading, QInput, QSelect, QSeparator, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QToolbar, QToolbarTitle } })
+  app.use(pinia).use(router).use(Quasar, quasarOptions)
   useAuthStore(pinia).isAdmin = isAdmin
   app.config.globalProperties.$q.notify = vi.fn()
   app.mount(root)

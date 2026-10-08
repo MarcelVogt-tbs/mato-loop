@@ -1045,6 +1045,7 @@ async def test_skill_policy_revocation_while_waiting_stops_loading(
     assert decision == PermissionDecision.DENY
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_runtime_uses_bound_integration_resource_policy(
     tmp_path, monkeypatch
 ) -> None:
@@ -1194,6 +1195,7 @@ async def test_runtime_discovery_uses_integration_baseline_not_resource_policy(
     assert request_approval.await_count == approval_count
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_runtime_ignores_override_after_resource_contract_removal(
     tmp_path, monkeypatch
 ) -> None:

@@ -2,7 +2,8 @@
 import { computed, createApp, defineComponent, h, nextTick, ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
-import { Quasar, QAvatar, QBanner, QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QDialog, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QRadio, QScrollArea, QSelect, QSeparator, QSpace, QSpinner, QToggle, QTooltip } from 'quasar'
+import { Quasar } from 'quasar'
+import { quasarOptions } from './quasar-options'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
@@ -26,8 +27,14 @@ import { buildChatTranscript } from '../src/utils/chat-transcript'
 import { agentRunPresentation, mergeAgentActivity } from '../src/utils/agent-activity'
 import { api } from 'src/boot/axios'
 
-const components = { QAvatar, QBanner, QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QDialog, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QRadio, QScrollArea, QSelect, QSeparator, QSpace, QSpinner, QToggle, QTooltip }
+const { components } = quasarOptions
 let app, root, store
+function mountApp() {
+  if (!app.config.globalProperties.$router) {
+    app.use(createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { render: () => null } }] }))
+  }
+  return app.mount(root)
+}
 afterEach(() => {
   app?.unmount()
   root?.remove()
@@ -49,7 +56,7 @@ describe('subagent inspector navigation and presentation', () => {
       actions: ['create', 'edit', 'edit', 'delete'].map((operation) => ({ ...action, operation }))
     }) })
     app.use(createPinia()).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
     expect({
       rows: root.querySelectorAll('.q-list .q-item').length,
       caption: root.querySelector('.q-list .q-item__section--side:last-child')?.textContent.trim(),
@@ -87,7 +94,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(createPinia()).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     expect(root.querySelector('.work-history__timeline')).toBeNull()
     expect(root.querySelectorAll('.work-history__outputs')).toHaveLength(2)
@@ -116,7 +123,7 @@ describe('subagent inspector navigation and presentation', () => {
       history: { entries: [{ key: 'old', type: 'tool', result: {}, tool: { id: 'old', name: 'web_search', arguments: { query: 'Älterer Aufruf' } } }, ...(type === 'context-summary' ? [] : [entry.value])] }
     }) })
     app.use(createPinia()).use(router).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
     const row = root.querySelector('.activity-row')
     expect(row.getAttribute('aria-expanded')).toBe('false')
     expect(row.getAttribute('tabindex')).toBe('0')
@@ -167,7 +174,7 @@ describe('subagent inspector navigation and presentation', () => {
       })) }
     }) })
     app.use(createPinia()).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     root.querySelector('.work-history__toggle').click()
     await nextTick()
@@ -196,7 +203,7 @@ describe('subagent inspector navigation and presentation', () => {
     document.body.append(root)
     app = createApp({ render: () => h(SubagentRows, { children: states.map(([status]) => ({ id: status, title: `Auftrag ${status}`, parentSessionId: 'parent', run: { status } })) }) })
     app.use(router).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
     const rows = [...root.querySelectorAll('a')]
     for (const [index, [status, icon, label]] of states.entries()) {
       expect(rows[index].textContent).toContain(`Auftrag ${status}`)
@@ -251,7 +258,7 @@ describe('subagent inspector navigation and presentation', () => {
     app.use(router)
     app.use(Quasar, { config: { dark }, components })
     app.config.globalProperties.$q.dark.set(dark)
-    app.mount(root)
+    mountApp()
     const parentScroll = document.getElementById('parent-scroll')
     parentScroll.scrollTop = 123
     const row = [...root.querySelectorAll('a')].find((link) => link.textContent.includes('Freigabe erforderlich'))
@@ -325,7 +332,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(router).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     const historyHeader = root.querySelector('.work-history__toggle')
     expect(root.textContent).not.toContain('Bisheriger Kommentar')
@@ -358,7 +365,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     const error = root.querySelector('.work-history__message-count--error')
     const warning = root.querySelector('.work-history__message-count--warning')
@@ -380,7 +387,7 @@ describe('subagent inspector navigation and presentation', () => {
       }, { header: () => h('div', 'codemato · Allgemein') })
     })
     app.use(pinia).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     expect(root.querySelector('.work-history__agent-header').textContent).toContain('codemato · Allgemein')
     expect(root.querySelector('.work-history__toggle')).not.toBeNull()
@@ -400,7 +407,7 @@ describe('subagent inspector navigation and presentation', () => {
       onHistoryExpanded: (value) => { historyExpanded.value = value }
     }) })
     app.use(createPinia()).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     expect(root.querySelector('.work-history--preview')).not.toBeNull()
     expect(root.querySelector('.activity-shimmer').textContent).toBe('Verarbeite Anfrage')
@@ -429,7 +436,7 @@ describe('subagent inspector navigation and presentation', () => {
       presentation: agentRunPresentation({ running: true, activity: activity.value })
     }) })
     app.use(createPinia()).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     expect(root.querySelector('.work-history--preview')).not.toBeNull()
     expect(root.textContent).toContain('Verarbeite Anfrage')
@@ -480,7 +487,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     if (!running) {
       expect(root.querySelector('.tool-call__header')).toBeNull()
@@ -520,7 +527,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     expect(root.querySelector('.work-history__header')).toBeNull()
     expect(root.querySelector('.work-history__tool-icons')).toBeNull()
@@ -584,7 +591,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     expect(root.querySelector('[role="timer"]').textContent).toBe('4 s')
     root.querySelector('.work-history__toggle').click()
@@ -617,7 +624,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     const latest = root.querySelector('.tool-call__header')
     expect(root.textContent).not.toContain('Älterer Schritt')
@@ -659,7 +666,7 @@ describe('subagent inspector navigation and presentation', () => {
       history: history.value, running: true, activity: activity.value
     }) })
     app.use(createPinia()).use(router).use(Quasar, { components, config: { dark } })
-    app.mount(root)
+    mountApp()
 
     expect(root.querySelectorAll('.work-history__tool-group')).toHaveLength(1)
     expect(root.querySelector('.work-history__tool-group-header').textContent).toContain('· 2')
@@ -714,7 +721,7 @@ describe('subagent inspector navigation and presentation', () => {
       history: history.value, running: running.value, activity: activity.value
     }) })
     app.use(pinia).use(router).use(Quasar, { components, config: { dark } })
-    app.mount(root)
+    mountApp()
 
     const intro = 'Ich verifiziere das kurz über eine Online-Suche:'
     expect(root.textContent).toContain(intro)
@@ -797,7 +804,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     expect(root.querySelector('.tool-call--detail')).toBeNull()
     root.querySelector('.work-history__toggle').click()
@@ -832,7 +839,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     expect(root.textContent).not.toContain('Technische Argumente')
     expect(root.querySelector('.tool-call .q-expansion-item')).toBeNull()
@@ -881,7 +888,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     expect(root.textContent).toContain('Nachdenken')
     expect(root.querySelector('.activity-shimmer')).not.toBeNull()
@@ -910,7 +917,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
     await nextTick()
 
     const reasoningHeader = root.querySelector('.work-history__reasoning .q-item')
@@ -932,7 +939,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     expect(root.textContent).not.toContain('Zwischenstand')
     expect(root.querySelector('.activity-shimmer').textContent).toBe('Verarbeite Anfrage')
@@ -955,7 +962,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     expect(root.querySelector('.work-history__activity-title').textContent).toBe('Nachdenken')
     expect(root.querySelector('.work-history__activity-title').classList).toContain('activity-shimmer')
@@ -976,7 +983,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     expect(root.textContent).toContain('Nachdenken')
     expect(root.querySelector('.work-history__reasoning')).toBeNull()
@@ -994,7 +1001,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     expect(root.textContent).toContain('erforderlich')
     expect(root.querySelector('.activity-shimmer')).toBeNull()
@@ -1021,7 +1028,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     expect(root.textContent).not.toContain('Kontext wird gesammelt')
     expect(root.querySelector('.tool-call__title').textContent).toContain('Datei lesen')
@@ -1049,7 +1056,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     expect(root.textContent).not.toContain('Verarbeite Tool-Ergebnisse')
     expect(root.textContent).not.toContain('Öffentliche Überlegung')
@@ -1104,7 +1111,7 @@ describe('subagent inspector navigation and presentation', () => {
       })
     })
     app.use(pinia).use(router).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
 
     root.querySelector('.work-history__toggle').click()
     await nextTick()
@@ -1167,7 +1174,7 @@ describe('subagent inspector navigation and presentation', () => {
     document.body.append(root)
     app = createApp({ render: () => h(RouterView) })
     app.use(pinia).use(router).use(Quasar, { components })
-    app.mount(root)
+    mountApp()
     expect(root.querySelector('[role="status"]').textContent).toBe('Subagenten beauftragen')
     expect(root.querySelectorAll('.approval-card')).toHaveLength(2)
     expect(root.querySelectorAll('.question-dock')).toHaveLength(1)

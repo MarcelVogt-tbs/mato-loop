@@ -519,6 +519,7 @@ def test_preview_contact_sheet_rejects_unexpected_dimensions() -> None:
         )
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_render_tool_returns_preview_and_geometry_metadata(
     monkeypatch,
 ) -> None:
@@ -599,6 +600,7 @@ async def test_render_tool_returns_preview_and_geometry_metadata(
         assert ImageChops.difference(label, Image.new("RGB", label.size, "white")).getbbox()
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_render_tool_returns_generated_attachments(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -642,6 +644,7 @@ async def test_render_tool_returns_generated_attachments(
     assert all(attachment.presentation == "internal" for attachment in result.attachments)
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_render_tool_exposes_only_controlled_syntax_diagnostics(
     monkeypatch,
 ) -> None:
@@ -680,6 +683,7 @@ async def test_render_tool_exposes_only_controlled_syntax_diagnostics(
     }
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_render_tool_rejects_oversized_artifact_before_export(
     monkeypatch,
 ) -> None:
@@ -704,6 +708,7 @@ async def test_render_tool_rejects_oversized_artifact_before_export(
     exported.assert_not_awaited()
 
 
+@pytest.mark.usefixtures("mock_db_settings")
 async def test_openscad_crud_payload_and_ownership_shape(monkeypatch) -> None:
     settings = UserIntegrationSettings()
     instance_settings = IntegrationSettings()

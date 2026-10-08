@@ -11,10 +11,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from docx import Document
-from openpyxl import Workbook
-from pptx import Presentation
-from pypdf import PdfWriter
+from document_helpers import document_bytes, pdf_bytes
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.media.attachments as media_attachments
@@ -36,42 +33,6 @@ def wav_bytes(*, frames: int = 80, sample_rate: int = 8_000) -> bytes:
         audio.setsampwidth(2)
         audio.setframerate(sample_rate)
         audio.writeframes(b"\x00\x00" * frames)
-    return buffer.getvalue()
-
-
-def document_bytes(document_format: str) -> bytes:
-    buffer = BytesIO()
-    if document_format == "pdf":
-        writer = PdfWriter()
-        writer.add_blank_page(width=100, height=100)
-        writer.write(buffer)
-    elif document_format == "docx":
-        document = Document()
-        document.add_paragraph("Sicherer DOCX-Inhalt")
-        document.save(buffer)
-    elif document_format == "xlsx":
-        workbook = Workbook()
-        workbook.active.append(["Name", "Wert"])
-        workbook.active.append(["MatoLoop", 42])
-        workbook.save(buffer)
-    elif document_format == "pptx":
-        presentation = Presentation()
-        slide = presentation.slides.add_slide(presentation.slide_layouts[5])
-        slide.shapes.title.text = "Sicherer PPTX-Inhalt"
-        presentation.save(buffer)
-    else:
-        raise AssertionError("Unknown test format")
-    return buffer.getvalue()
-
-
-def pdf_bytes(*, pages: int = 1, password: str | None = None) -> bytes:
-    buffer = BytesIO()
-    writer = PdfWriter()
-    for _ in range(pages):
-        writer.add_blank_page(width=100, height=100)
-    if password is not None:
-        writer.encrypt(password)
-    writer.write(buffer)
     return buffer.getvalue()
 
 

@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
@@ -82,17 +83,6 @@ def test_payload_exposes_computer_metadata_and_policies() -> None:
     assert payload["externalFilesystemPolicy"] == "ask"
     assert payload["homeShellEnabled"] is True
     assert payload["externalShellEnabled"] is True
-
-
-class _SessionContext:
-    def __init__(self, db) -> None:
-        self.db = db
-
-    async def __aenter__(self):
-        return self.db
-
-    async def __aexit__(self, *_args) -> None:
-        return None
 
 
 def test_execution_agent_model_has_policy_constraints() -> None:
@@ -535,7 +525,7 @@ async def test_ws_snapshot_rejects_stale_authenticated_hash(monkeypatch) -> None
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = None
     monkeypatch.setattr(
-        execution_agents_route, "AsyncSessionFactory", lambda: _SessionContext(db)
+        execution_agents_route, "AsyncSessionFactory", lambda: nullcontext(db)
     )
     hello = HelloMessage.model_validate(
         {

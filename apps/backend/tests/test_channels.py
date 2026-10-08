@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -177,16 +178,9 @@ async def test_telegram_callback_resolves_through_shared_approval_service(
     db.get.side_effect = [inbox, endpoint, inbox, endpoint]
     db.scalar.side_effect = [user, endpoint]
 
-    class SessionContext:
-        async def __aenter__(self):
-            return db
-
-        async def __aexit__(self, *_args):
-            return None
-
     resolve = AsyncMock(return_value={"status": "denied", "decision": "deny"})
     answer = AsyncMock()
-    monkeypatch.setattr(telegram, "AsyncSessionFactory", SessionContext)
+    monkeypatch.setattr(telegram, "AsyncSessionFactory", lambda: nullcontext(db))
     monkeypatch.setattr(
         telegram, "channel_provider_allowed", AsyncMock(return_value=True)
     )
@@ -266,13 +260,6 @@ async def test_telegram_callback_resolves_question_interaction(monkeypatch) -> N
     db.get.side_effect = [inbox, endpoint, inbox, endpoint]
     db.scalar.side_effect = [user, endpoint]
 
-    class SessionContext:
-        async def __aenter__(self):
-            return db
-
-        async def __aexit__(self, *_args):
-            return None
-
     result = QuestionInteractionResult(
         status="pending", envelope=envelope, changed=True, finalized=False
     )
@@ -283,7 +270,7 @@ async def test_telegram_callback_resolves_question_interaction(monkeypatch) -> N
     process = AsyncMock(side_effect=process_interaction)
     update = AsyncMock(return_value=None)
     track = AsyncMock()
-    monkeypatch.setattr(telegram, "AsyncSessionFactory", SessionContext)
+    monkeypatch.setattr(telegram, "AsyncSessionFactory", lambda: nullcontext(db))
     monkeypatch.setattr(
         telegram, "channel_provider_allowed", AsyncMock(return_value=True)
     )
@@ -419,13 +406,6 @@ async def test_telegram_direct_reply_answers_question_text(monkeypatch) -> None:
     db.get.side_effect = [inbox, endpoint, inbox, endpoint]
     db.scalar.side_effect = [user, endpoint, source]
 
-    class SessionContext:
-        async def __aenter__(self):
-            return db
-
-        async def __aexit__(self, *_args):
-            return None
-
     result = QuestionInteractionResult(
         status="pending", envelope=envelope, changed=True, finalized=False
     )
@@ -436,7 +416,7 @@ async def test_telegram_direct_reply_answers_question_text(monkeypatch) -> None:
     process = AsyncMock(side_effect=process_interaction)
     update = AsyncMock(return_value=None)
     track = AsyncMock()
-    monkeypatch.setattr(telegram, "AsyncSessionFactory", SessionContext)
+    monkeypatch.setattr(telegram, "AsyncSessionFactory", lambda: nullcontext(db))
     monkeypatch.setattr(
         telegram, "channel_provider_allowed", AsyncMock(return_value=True)
     )
@@ -571,14 +551,7 @@ async def test_telegram_unbound_text_during_question_gets_direct_guidance(
     db.get.side_effect = [inbox, endpoint]
     db.scalar.side_effect = [user, endpoint, uuid4()]
 
-    class SessionContext:
-        async def __aenter__(self):
-            return db
-
-        async def __aexit__(self, *_args):
-            return None
-
-    monkeypatch.setattr(telegram, "AsyncSessionFactory", SessionContext)
+    monkeypatch.setattr(telegram, "AsyncSessionFactory", lambda: nullcontext(db))
     monkeypatch.setattr(
         telegram, "channel_provider_allowed", AsyncMock(return_value=True)
     )
@@ -798,18 +771,11 @@ async def test_telegram_forwards_voice_attachment_and_unchanged_text(monkeypatch
     db.get.side_effect = [inbox, endpoint, None, session]
     db.scalar.side_effect = [user, endpoint, None, user, endpoint, inbox]
 
-    class SessionContext:
-        async def __aenter__(self):
-            return db
-
-        async def __aexit__(self, *_args):
-            return None
-
     start = AsyncMock(return_value=run)
     attachments = [AttachmentInput(
         b"original", "audio/ogg", "voice.ogg", "audio", {"voiceMessage": True}
     )]
-    monkeypatch.setattr(telegram, "AsyncSessionFactory", SessionContext)
+    monkeypatch.setattr(telegram, "AsyncSessionFactory", lambda: nullcontext(db))
     monkeypatch.setattr(
         telegram, "channel_provider_allowed", AsyncMock(return_value=True)
     )
@@ -857,14 +823,7 @@ async def test_telegram_progress_target_copies_state_before_rollback(monkeypatch
 
     db.rollback.side_effect = rollback
 
-    class SessionContext:
-        async def __aenter__(self):
-            return db
-
-        async def __aexit__(self, *_args):
-            return None
-
-    monkeypatch.setattr(telegram, "AsyncSessionFactory", SessionContext)
+    monkeypatch.setattr(telegram, "AsyncSessionFactory", lambda: nullcontext(db))
     monkeypatch.setattr(
         telegram, "channel_provider_allowed", AsyncMock(return_value=True)
     )
@@ -1390,14 +1349,7 @@ async def test_telegram_claims_outbox_with_optional_linked_run(
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [item, run_id] if with_inbox else [item]
 
-    class SessionContext:
-        async def __aenter__(self):
-            return db
-
-        async def __aexit__(self, *_args):
-            return None
-
-    monkeypatch.setattr(telegram, "AsyncSessionFactory", SessionContext)
+    monkeypatch.setattr(telegram, "AsyncSessionFactory", lambda: nullcontext(db))
 
     assert await telegram.claim_outbox() == (outbox_id, run_id)
     assert item.status == "processing"
@@ -1503,13 +1455,6 @@ async def test_telegram_delivery_renders_markdown(monkeypatch) -> None:
     db.scalar.side_effect = [user, endpoint, item, item]
     sent_messages = []
 
-    class SessionContext:
-        async def __aenter__(self):
-            return db
-
-        async def __aexit__(self, *_args):
-            return None
-
     class FakeBot:
         async def __aenter__(self):
             return self
@@ -1522,7 +1467,7 @@ async def test_telegram_delivery_renders_markdown(monkeypatch) -> None:
             sent_messages.append(kwargs)
             return SimpleNamespace(message_id=1)
 
-    monkeypatch.setattr(telegram, "AsyncSessionFactory", SessionContext)
+    monkeypatch.setattr(telegram, "AsyncSessionFactory", lambda: nullcontext(db))
     monkeypatch.setattr(
         telegram, "channel_provider_allowed", AsyncMock(return_value=True)
     )
@@ -1605,13 +1550,6 @@ async def test_telegram_delivery_renders_approval_as_native_buttons(monkeypatch)
     db.scalar.side_effect = [user, endpoint, item, item]
     sent_messages = []
 
-    class SessionContext:
-        async def __aenter__(self):
-            return db
-
-        async def __aexit__(self, *_args):
-            return None
-
     class FakeBot:
         async def __aenter__(self):
             return self
@@ -1624,7 +1562,7 @@ async def test_telegram_delivery_renders_approval_as_native_buttons(monkeypatch)
             sent_messages.append(kwargs)
             return SimpleNamespace(message_id=42)
 
-    monkeypatch.setattr(telegram, "AsyncSessionFactory", SessionContext)
+    monkeypatch.setattr(telegram, "AsyncSessionFactory", lambda: nullcontext(db))
     monkeypatch.setattr(
         telegram, "channel_provider_allowed", AsyncMock(return_value=True)
     )
@@ -1706,13 +1644,6 @@ async def test_telegram_delivery_renders_question_as_native_buttons(monkeypatch)
     db.scalar.side_effect = [user, endpoint, item, item]
     sent_messages = []
 
-    class SessionContext:
-        async def __aenter__(self):
-            return db
-
-        async def __aexit__(self, *_args):
-            return None
-
     class FakeBot:
         async def __aenter__(self):
             return self
@@ -1724,7 +1655,7 @@ async def test_telegram_delivery_renders_question_as_native_buttons(monkeypatch)
             sent_messages.append(kwargs)
             return SimpleNamespace(message_id=42)
 
-    monkeypatch.setattr(telegram, "AsyncSessionFactory", SessionContext)
+    monkeypatch.setattr(telegram, "AsyncSessionFactory", lambda: nullcontext(db))
     monkeypatch.setattr(
         telegram, "channel_provider_allowed", AsyncMock(return_value=True)
     )

@@ -120,7 +120,7 @@ beforeEach(async () => {
     emits: ['click'],
     setup: (_, { emit, slots }) => () => h('button', { onClick: () => emit('click') }, slots.default?.())
   }))
-  for (const name of ['QList', 'QItemSection']) {
+  for (const name of ['QList', 'QItemSection', 'QItemLabel']) {
     app.component(name, { render() { return h('div', this.$slots.default?.()) } })
   }
   app.component('QMenu', defineComponent({

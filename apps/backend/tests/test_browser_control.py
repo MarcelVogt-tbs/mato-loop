@@ -7,7 +7,8 @@ from uuid import uuid4
 from weakref import WeakValueDictionary
 
 import pytest
-from test_browser_transport import ORIGIN, env, open_view, other_session  # noqa: F401
+from browser_helpers import ORIGIN, open_view, other_session
+from browser_helpers import env as env
 
 import mato_loop_backend.agent.runtime as runtime_module
 import mato_loop_backend.tools.access as tools_module

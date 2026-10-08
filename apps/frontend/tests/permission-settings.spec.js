@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { createApp, h, nextTick } from 'vue'
 import { createPinia } from 'pinia'
-import { createMemoryHistory, createRouter } from 'vue-router'
+import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Quasar, QAvatar, QBanner, QBtn, QCard, QCardSection, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QSelect, QSeparator, QTab, QTabs, QToggle, QToolbar, QToolbarTitle } from 'quasar'
+import { Quasar } from 'quasar'
+import { quasarOptions } from './quasar-options'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), put: vi.fn() } }))
@@ -30,8 +31,10 @@ async function mount(Page, props, path, name, pinia = createPinia()) {
   root = document.createElement('div')
   document.body.append(root)
   let page
-  app = createApp({ render: () => h(Page, { ...props, ref: (value) => { page = value?.$?.setupState } }) })
-  app.use(pinia).use(router).use(Quasar, { components: { QAvatar, QBanner, QBtn, QCard, QCardSection, QExpansionItem, QForm, QIcon, QInnerLoading, QInput, QSelect, QSeparator, QTab, QTabs, QToggle, QToolbar, QToolbarTitle } })
+  app = createApp({ render: () => h(RouterView, null, {
+    default: ({ Component }) => h(Component, { ...props, ref: (value) => { page = value?.$?.setupState } })
+  }) })
+  app.use(pinia).use(router).use(Quasar, quasarOptions)
   app.config.globalProperties.$q.notify = vi.fn()
   app.mount(root)
   return { page: () => page, pinia }

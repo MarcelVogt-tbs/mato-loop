@@ -2,10 +2,8 @@
 import { createApp, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import {
-  Quasar, QIcon, QItem, QItemSection, QLayout, QList, QPage, QPageContainer,
-  QRouteTab, QSeparator, QTabs
-} from 'quasar'
+import { Quasar, QLayout, QPageContainer } from 'quasar'
+import { quasarOptions } from './quasar-options'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('#q-app/wrappers', () => ({ defineRouter: (factory) => factory }))
@@ -51,9 +49,7 @@ it('allows admins personal provider settings regardless of the personal gate', a
   root = document.createElement('div')
   document.body.append(root)
   app = createApp({ render: () => h(QLayout, () => h(QPageContainer, () => h(Page))) })
-  app.use(pinia).use(router).use(Quasar, { components: {
-    QIcon, QItem, QItemSection, QList, QPage, QRouteTab, QSeparator, QTabs
-  } })
+  app.use(pinia).use(router).use(Quasar, quasarOptions)
   app.mount(root)
   const providerLink = () => root.querySelector('a[href="/settings/providers"]')
   expect(providerLink()).not.toBeNull()
