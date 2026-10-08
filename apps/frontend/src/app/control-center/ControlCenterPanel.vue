@@ -224,7 +224,6 @@ import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, nextTick, ref } from 'vue'
 import AppClosableTab from 'src/shared/ui/AppClosableTab.vue'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
-import { useAutomationStore } from 'stores/automations'
 import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
@@ -254,7 +253,6 @@ defineOptions({ name: 'ControlCenterPanel' })
 const emit = defineEmits(['close'])
 const { confirm } = useConfirm()
 const controlCenter = useControlCenterStore()
-const automations = useAutomationStore()
 const notifications = useInAppNotificationStore()
 const mail = useMailStore()
 const browser = useBrowserStore()
@@ -323,20 +321,6 @@ async function closePanel() {
 }
 
 async function removeIntegration(appId) {
-  const sessionId = controlCenter.sessionId
-  const item = content(appId)
-  if (!item) return
-  const terminalHint = appId === 'terminal'
-    ? ' Die laufende Shell und ihr sichtbarer Verlauf gehen verloren.'
-    : appId === 'automation' && automations.dirty
-      ? ' Ungespeicherte Änderungen am Auftrag werden verworfen.'
-    : ''
-  const accepted = await confirm(
-    `„${item.label}“ wird aus dieser Session entfernt.${terminalHint} Gespeicherte Daten werden nicht gelöscht. Die App kann später erneut hinzugefügt werden.`,
-    'App aus Session entfernen?',
-    { okLabel: 'Entfernen', okColor: 'negative' }
-  )
-  if (!accepted || controlCenter.sessionId !== sessionId) return
   try {
     await controlCenter.removeIntegration(appId)
     // Terminal cleanup follows persisted tabs on the backend, never optimistic browser state.

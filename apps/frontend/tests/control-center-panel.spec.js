@@ -98,18 +98,13 @@ describe('control center panel', () => {
     expect(root.querySelector('[data-footer="browser"]')).not.toBeNull()
   })
 
-  it('does not remove a different session tab after a delayed confirmation', async () => {
-    controlCenter.syncSession({ id: 'session-1', controlCenter: { tabs: [{ appId: 'terminal' }] } })
-    let accept
-    confirm.mockImplementationOnce(() => new Promise((resolve) => { accept = resolve }))
-    const remove = vi.spyOn(controlCenter, 'removeIntegration')
+  it('closes an app without confirmation', async () => {
+    await draftApp('terminal')
+    confirm.mockResolvedValueOnce(false)
     await mountPanel()
     root.querySelector('#control-center-tab-terminal').parentElement.querySelector('.app-closable-tab__close').click()
     await nextTick()
-    controlCenter.syncSession({ id: 'session-2', controlCenter: { tabs: [{ appId: 'terminal' }] } })
-    accept(true)
-    await nextTick()
-    expect(remove).not.toHaveBeenCalled()
+    expect(root.querySelector('#control-center-tab-terminal')).toBeNull()
   })
 
   it.each(['success', 'failure'])('never closes the current session shell after an older tab save settles (%s)', async (outcome) => {
@@ -120,7 +115,6 @@ describe('control center panel', () => {
     old.open()
     old.snapshot()
     controlCenter.syncSession({ id: 'session-1', controlCenter: { tabs: [{ appId: 'terminal' }] } })
-    confirm.mockResolvedValueOnce(true)
     let finish, fail
     vi.spyOn(controlCenter, 'removeIntegration').mockImplementationOnce(() => new Promise((resolve, reject) => {
       finish = resolve
