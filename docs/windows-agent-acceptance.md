@@ -5,7 +5,9 @@ Test the `develop` source and backend together. Clone `develop` on the Windows
 machine and run `scripts\install-matoloop-agent.ps1` from that checkout, or pass
 `-Branch develop` to the downloaded installer. A clone of `main` does not contain
 the changes until a release. Run the installer as Administrator under the intended
-task account. Git and Internet access are needed to bootstrap `uv`.
+task account. Internet access and access to the repository are needed for a fresh
+standalone installation. If Git is missing, the installer downloads checksum-verified
+MinGit for x64 or ARM64 Windows into its private `tools\git` directory.
 
 The installer checks the new Agent executable before activating it. Shared
 filesystem helpers must remain importable on Windows; the Linux `renameat2`
@@ -15,6 +17,10 @@ binding is loaded only on Linux.
    C:\path\to\checkout\scripts\install-matoloop-agent.ps1 -Source
    C:\path\to\checkout -InstanceUrl https://your-matoloop-host`.
    Enter the installing account's password only in the Task Scheduler prompt.
+   Also test the downloaded installer with `-Branch develop` on a machine without
+   Git in `PATH`. Confirm `tools\git\cmd\git.exe` runs and the checkout is cloned.
+   The private Git must remain available for local and portal updates without
+   changing the system `PATH`. Installing an existing checkout needs no Git download.
 2. Run `& "$env:LOCALAPPDATA\matoloop-agent\installer.ps1" status`. Verify
    `Get-ScheduledTask -TaskName 'MatoLoop Agent'` is running and the home is
    `%USERPROFILE%\mato-loop-agent\workspace` (or the chosen external directory).
@@ -38,10 +44,12 @@ binding is loaded only on Linux.
    Verify the maintenance result becomes completed, the Agent reconnects, and the
    pairing and workspace stay intact. `MatoLoop Agent Maintenance` must run independently
    of the boot-time Agent task and return to Ready when the update finishes.
+   On the installation without system Git, also run the local `update` command
+   and confirm both update paths reuse private Git without downloading it again.
    A failing update (for example a local checkout edit) must report failure, not success.
 7. Run `uninstall`; confirm the workspace and pairing data remain. Repeat an
    installation and run `uninstall -Purge`; confirm the managed directory is
-   removed while the workspace remains.
+   removed while the workspace remains. Both uninstall modes remove private Git.
 
 Do not treat the native Windows behavior as verified until these steps pass on
 the target Windows installation. Linux Docker tests exercise protocol and

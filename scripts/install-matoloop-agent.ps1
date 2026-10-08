@@ -61,6 +61,45 @@ function Stop-Agent {
     }
 }
 
+function Resolve-Git {
+    $installed = Get-Command git.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($installed) { return $installed.Source }
+    $destination = Join-Path $root 'tools\git'
+    $executable = Join-Path $destination 'cmd\git.exe'
+    foreach ($path in @((Join-Path $root 'tools'), $destination, (Join-Path $destination 'cmd'), $executable)) {
+        if ((Test-Path -LiteralPath $path) -and
+            ((Get-Item -LiteralPath $path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            Fail 'The private Git path contains a reparse point.'
+        }
+    }
+    if (Test-Path -LiteralPath $executable -PathType Leaf) { return $executable }
+    if (Test-Path -LiteralPath $destination) { Fail 'The private Git directory is incomplete.' }
+    $architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+    switch ($architecture) {
+        'AMD64' { $variant = '64-bit'; $sha256 = 'da35e72aa21c005a5a0d298cfbae110bc1609a815730ea0dde84b01a1b3cd3be' }
+        'ARM64' { $variant = 'arm64'; $sha256 = '38b33dc6024026e3315cf88ab2cfea65205bbd7bb3a8e824bd21c8ad4fe609a7' }
+        default { Fail 'Private Git requires x64 or ARM64 Windows.' }
+    }
+    $temporary = Join-Path $root ('tools\git-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $temporary -Force | Out-Null
+    try {
+        $archive = Join-Path $temporary 'git.zip'
+        Write-Host 'Downloading private MinGit 2.56.0.2.'
+        Invoke-WebRequest -UseBasicParsing -Uri (
+            "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/MinGit-2.56.0.2-${variant}.zip"
+        ) -OutFile $archive
+        if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $sha256) {
+            Fail 'The private Git download checksum did not match.'
+        }
+        $unpacked = Join-Path $temporary 'unpacked'
+        Expand-Archive -LiteralPath $archive -DestinationPath $unpacked
+        & (Join-Path $unpacked 'cmd\git.exe') --version | Out-Null
+        if ($LASTEXITCODE) { Fail 'The private Git executable failed its startup check.' }
+        Move-Item -LiteralPath $unpacked -Destination $destination
+    } finally { Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue }
+    return $executable
+}
+
 # One on-demand Task Scheduler worker survives stopping the boot-time Agent task.
 if ($Command -eq 'maintenance-run') {
     $requestFile = Join-Path $data 'maintenance-request.json'
@@ -160,26 +199,33 @@ $checkout = if ($Source) { (Resolve-Path -LiteralPath $Source).Path } elseif ($e
     $candidate = Join-Path (Split-Path -Parent $PSScriptRoot) 'apps\matoloop-agent\pyproject.toml'
     if (Test-Path -LiteralPath $candidate) { Split-Path -Parent $PSScriptRoot } else { $null }
 }
-if (-not $checkout -and -not (Get-Command git -ErrorAction SilentlyContinue)) { Fail 'Git is required.' }
 if (-not $checkout) { $checkout = Join-Path $root 'source' }
+New-Item -ItemType Directory -Path $root, $data, (Join-Path $root 'tools\bin'),
+    (Join-Path $root 'venvs') -Force | Out-Null
+if (-not (Test-Path -LiteralPath $marker)) {
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    & icacls $root /inheritance:r /grant:r "*${sid}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' | Out-Null
+    if ($LASTEXITCODE) { Fail 'Could not restrict the installation directory ACL.' }
+    New-Item -ItemType File -Path $marker -Force | Out-Null
+}
 if ($Command -eq 'update') {
     $env:GIT_TERMINAL_PROMPT = '0'
     $env:GCM_INTERACTIVE = 'Never'
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Fail 'Git is required to update.' }
-    if ((& git -C $checkout status --porcelain)) { Fail 'Source checkout has local changes; use install instead.' }
+    $git = Resolve-Git
+    if ((& $git -C $checkout status --porcelain)) { Fail 'Source checkout has local changes; use install instead.' }
     if ($LASTEXITCODE) { Fail 'Could not inspect the source checkout.' }
-    & git -C $checkout symbolic-ref --quiet HEAD | Out-Null
+    & $git -C $checkout symbolic-ref --quiet HEAD | Out-Null
     if ($LASTEXITCODE) { Fail 'The source checkout must be on a branch.' }
-    & git -C $checkout rev-parse --abbrev-ref --symbolic-full-name '@{u}' | Out-Null
+    & $git -C $checkout rev-parse --abbrev-ref --symbolic-full-name '@{u}' | Out-Null
     if ($LASTEXITCODE) { Fail 'The selected branch has no upstream.' }
-    & git -C $checkout pull --ff-only
+    & $git -C $checkout pull --ff-only
     if ($LASTEXITCODE) { Fail 'Git could not fast-forward the selected branch.' }
 } elseif (-not (Test-Path -LiteralPath (Join-Path $checkout 'apps\matoloop-agent\pyproject.toml'))) {
-    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    $git = Resolve-Git
     $sourceUrl = if ($env:MATOLOOP_AGENT_SOURCE_URL) { $env:MATOLOOP_AGENT_SOURCE_URL } else {
         'https://git.devmato.net/devmato/MatoLoop.git'
     }
-    & git clone --branch $Branch --single-branch $sourceUrl $checkout
+    & $git clone --branch $Branch --single-branch $sourceUrl $checkout
     if ($LASTEXITCODE) { Fail 'Could not clone the selected source branch.' }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $checkout 'apps\matoloop-agent\pyproject.toml'))) {
@@ -202,14 +248,6 @@ if ($instance.Scheme -notin @('https', 'http') -or -not $instance.Host -or $inst
 $websocket = $InstanceUrl.TrimEnd('/') -replace '^https:', 'wss:' -replace '^http:', 'ws:'
 $websocket += '/api/execution-agents/connect'
 
-New-Item -ItemType Directory -Path $root, $data, (Join-Path $root 'tools\bin'),
-    (Join-Path $root 'venvs') -Force | Out-Null
-if (-not (Test-Path -LiteralPath $marker)) {
-    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    & icacls $root /inheritance:r /grant:r "*${sid}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' | Out-Null
-    if ($LASTEXITCODE) { Fail 'Could not restrict the installation directory ACL.' }
-    New-Item -ItemType File -Path $marker -Force | Out-Null
-}
 if (-not (Test-Path -LiteralPath $uv)) {
     $bootstrap = Join-Path $env:TEMP 'matoloop-uv-install.ps1'
     Invoke-WebRequest -UseBasicParsing -Uri 'https://astral.sh/uv/0.10.9/install.ps1' -OutFile $bootstrap

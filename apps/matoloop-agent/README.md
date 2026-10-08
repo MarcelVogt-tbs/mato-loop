@@ -93,9 +93,12 @@ Copy the Windows installation command from **Einstellungen > Computer**. The scr
 installs its own `uv` and Python under `%LOCALAPPDATA%\matoloop-agent` and creates
 `%USERPROFILE%\mato-loop-agent\workspace` as the default Agent home. A startup
 Scheduled Task runs under the installing account, using a password supplied only
-to Windows Task Scheduler at installation. The source checkout requires Git and
-access to the private MatoLoop repository; an existing checkout can be provided
-with `-Source`. Windows PowerShell is the shell for `shell_run`.
+to Windows Task Scheduler at installation. For cloning and updates, the installer
+uses Git from `PATH`, reuses its private Git, or downloads pinned MinGit 2.56.0.2
+for x64 or ARM64 Windows into `tools\git` after checking the archive's SHA-256.
+Access to the private MatoLoop repository is still required; an existing checkout
+can be provided with `-Source` and installed without Git. No system Git installation
+or global `PATH` change is made. Windows PowerShell is the shell for `shell_run`.
 
 After setup, create a computer in the UI and pair from a normal interactive
 PowerShell window with `& "$env:LOCALAPPDATA\matoloop-agent\installer.ps1" pair`.
@@ -105,8 +108,9 @@ in the Computer settings uses that task and the same installer update function;
 both tasks run under the installing account without elevation. Task Scheduler
 stores the account password, while the Agent's own pairing state uses DPAPI.
 Updates require a clean tracked Git branch and fast-forward only. Deinstallation
-never removes the workspace. Browser, OpenSCAD, and interactive/shared terminals
-are not advertised by the Windows adapter.
+removes the private tools, including MinGit, and never removes the workspace.
+Browser, OpenSCAD, and interactive/shared terminals are not advertised by the
+Windows adapter.
 
 Run tests:
 

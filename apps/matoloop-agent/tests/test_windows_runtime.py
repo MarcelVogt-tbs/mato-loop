@@ -228,6 +228,41 @@ class WindowsRuntimeTests(unittest.TestCase):
         )
         self.assertIn("Home: workspace", result.stdout)
 
+    def test_installer_finds_private_git_without_git_on_path(self) -> None:
+        root = Path(self.temporary.name) / "agent root"
+        executable = root / "tools/git/cmd/git.exe"
+        executable.parent.mkdir(parents=True)
+        executable.touch()
+        installer = Path(__file__).parents[3] / "scripts/install-matoloop-agent.ps1"
+        result = subprocess.run(
+            [
+                self.process.shell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$ErrorActionPreference='Stop'; $tokens=$null; $errors=$null; "
+                "$ast=[System.Management.Automation.Language.Parser]::ParseFile("
+                "$env:TEST_INSTALLER, [ref]$tokens, [ref]$errors); "
+                "if ($errors) { throw 'Invalid installer syntax' }; "
+                "$definition=$ast.Find({ param($node) "
+                "$node -is [System.Management.Automation.Language.FunctionDefinitionAst] "
+                "-and $node.Name -eq 'Resolve-Git' }, $true); "
+                ". ([ScriptBlock]::Create($definition.Extent.Text)); "
+                "$root=$env:TEST_ROOT; function Fail($message) { throw $message }; Resolve-Git",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env={
+                **os.environ,
+                "PATH": "",
+                "TEST_ROOT": str(root),
+                "TEST_INSTALLER": str(installer),
+            },
+        )
+        self.assertEqual(result.stdout.strip(), str(executable))
+
     def test_maintenance_handoff_uses_only_a_fixed_task_and_bounded_job(self) -> None:
         from matoloop_agent.platform_windows import WindowsPlatform
 
