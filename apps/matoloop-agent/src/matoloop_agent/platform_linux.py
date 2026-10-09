@@ -12,7 +12,6 @@ import tempfile
 import threading
 from collections.abc import Coroutine, Mapping
 from contextlib import suppress
-from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -92,6 +91,13 @@ class LinuxPlatform:
         )
         openscad = OpenScadRunner(config, filesystem, cache, transfer)
         operations = set(ARGUMENT_MODELS) | set(BROWSER_ARGUMENT_MODELS)
+        managed_container = os.environ.get("MATOLOOP_AGENT_INSTALL_ROOT")
+        if not (
+            os.environ.get("MATOLOOP_AGENT_CONTAINER") == "1"
+            and managed_container
+            and (Path(managed_container) / "launcher.pid").is_file()
+        ):
+            operations.discard("maintenance.update")
         root = config.data_dir.parent
         if (
             os.environ.get("MATOLOOP_AGENT_CONTAINER") == "1"
@@ -140,8 +146,30 @@ class LinuxPlatform:
         )
 
     async def start_maintenance(
-        self, config: AgentConfig, action: str, job_id: str, password: str | None
+        self,
+        config: AgentConfig,
+        action: str,
+        job_id: str,
+        password: str | None,
+        revision: str | None = None,
     ) -> dict:
+        if os.environ.get("MATOLOOP_AGENT_CONTAINER") == "1":
+            root = os.environ.get("MATOLOOP_AGENT_INSTALL_ROOT")
+            if action != "update" or not root:
+                raise AgentError("maintenance.unavailable", "Container maintenance is unavailable")
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                str(Path(root) / "installer.py"),
+                "container-request",
+                job_id,
+                "--revision",
+                revision,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            if await process.wait() != 0:
+                raise AgentError("maintenance.failed", "Container update could not be queued")
+            return {"started": True}
         root = config.data_dir.parent
         if (
             not (root / ".managed-by-matoloop-agent").is_file()
@@ -214,6 +242,7 @@ class LinuxPlatform:
                     job_id,
                     socket_path,
                     str(root),
+                    *(["--revision", revision] if revision else []),
                 )
                 if result != 0:
                     raise AgentError("maintenance.failed", "Maintenance could not be started")
@@ -228,18 +257,10 @@ class LinuxPlatform:
     def system_info(
         self, current_directory: str | None, filesystem: FilesystemAdapter
     ) -> dict[str, Any]:
-        try:
-            agent_version = version("matoloop-agent")
-        except Exception:
-            agent_version = "0.1.0"
-        try:
-            revision = Path("/app/BUILD_REVISION").read_text(encoding="ascii").strip()
-        except OSError:
-            revision = ""
-        if len(revision) == 40 and all(character in "0123456789abcdef" for character in revision):
-            agent_version = f"{agent_version}+{revision}"
+        from matoloop_version import get_version
+
         result: dict[str, Any] = {
-            "agentVersion": agent_version,
+            "agentVersion": get_version(),
             "platform": self.platform_id[:80],
             "operatingSystem": None,
             "kernel": None,

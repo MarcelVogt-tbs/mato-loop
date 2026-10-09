@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
@@ -22,7 +23,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend import __version__
 from mato_loop_backend.api.errors import ApiError
+from mato_loop_backend.build_info import build_revision
 from mato_loop_backend.config import PROJECT_ROOT
 from mato_loop_backend.db.session import AsyncSessionFactory, get_db_session
 from mato_loop_backend.execution import (
@@ -73,6 +76,27 @@ class ApiModel(BaseModel):
         serialize_by_alias=True,
         extra="forbid",
     )
+
+
+class InstallationTarget(ApiModel):
+    revision: str = Field(pattern=r"^[0-9a-f]{40}$")
+    version: str
+
+
+def installation_target() -> InstallationTarget:
+    revision = build_revision()
+    if revision is None or not re.fullmatch(
+        rf"[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}-{revision[:8]}", __version__
+    ):
+        raise ApiError(409, "maintenance.targetUnavailable", headers={"Cache-Control": "no-store"})
+    return InstallationTarget(revision=revision, version=__version__)
+
+
+@router.get("/installation-target")
+async def get_installation_target(response: Response) -> InstallationTarget:
+    # Public build metadata lets an unpaired installer select the exact source.
+    response.headers["Cache-Control"] = "no-store"
+    return installation_target()
 
 
 class ExecutionAgentAliasRequest(ApiModel):
@@ -423,8 +447,14 @@ async def start_execution_agent_maintenance(
         raise ApiError(409, "maintenance.busy")
     if not execution_agent_connections.is_connected(agent_id):
         raise ApiError(503, "executionAgent.unavailable")
-    if "maintenance.start" not in agent.operations:
+    operation = (
+        "maintenance.update"
+        if payload.action == "update" and "maintenance.update" in agent.operations
+        else "maintenance.start"
+    )
+    if operation not in agent.operations:
         raise ApiError(409, "maintenance.unavailable")
+    revision = installation_target().revision if payload.action == "update" else None
     previous = agent.maintenance
     job_id = str(uuid4())
     agent.maintenance = {
@@ -438,10 +468,11 @@ async def start_execution_agent_maintenance(
     try:
         result = await execution_agent_connections.request(
             agent_id,
-            "maintenance.start",
+            operation,
             {
                 "action": payload.action,
                 "jobId": job_id,
+                **({"revision": revision} if revision else {}),
                 **({"sudoPassword": payload.sudo_password} if payload.sudo_password else {}),
             },
             timeout=35,

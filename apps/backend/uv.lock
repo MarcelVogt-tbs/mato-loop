@@ -1026,6 +1026,7 @@ dependencies = [
     { name = "jsonschema" },
     { name = "markdown-it-py" },
     { name = "markdownify" },
+    { name = "matoloop-version" },
     { name = "mcp" },
     { name = "openpyxl" },
     { name = "pgvector" },
@@ -1073,6 +1074,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.25.0,<5.0.0" },
     { name = "markdown-it-py", specifier = ">=4.0,<5.0" },
     { name = "markdownify", specifier = ">=1.2.0" },
+    { name = "matoloop-version", editable = "../../libs/python/version" },
     { name = "mcp", specifier = ">=1.14.0,<2.0.0" },
     { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "pgvector", specifier = ">=0.5.0,<0.6.0" },
@@ -1100,6 +1102,11 @@ dev = [
     { name = "ruff", specifier = ">=0.12.0" },
 ]
 docs = [{ name = "mkdocs-material", specifier = "==9.7.7" }]
+
+[[package]]
+name = "matoloop-version"
+version = "0.1.0"
+source = { editable = "../../libs/python/version" }
 
 [[package]]
 name = "mcp"

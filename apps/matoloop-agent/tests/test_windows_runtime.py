@@ -282,6 +282,7 @@ class WindowsRuntimeTests(unittest.TestCase):
                     "update",
                     "2ea504cc-e3c6-4e0d-aa05-080328100fe8",
                     None,
+                    "a" * 40,
                 )
             )
         self.assertEqual(
@@ -289,6 +290,7 @@ class WindowsRuntimeTests(unittest.TestCase):
             {
                 "action": "update",
                 "jobId": "2ea504cc-e3c6-4e0d-aa05-080328100fe8",
+                "revision": "a" * 40,
             },
         )
         self.assertIn(

@@ -49,7 +49,7 @@ run_matoloop_agent() {
 }
 
 check_backend() {
-    run_backend "/usr/local/bin/lightpanda version && uv sync --frozen --group docs && uv run --no-sync mkdocs build --strict --config-file /workspace/mkdocs.yml --site-dir /tmp/mato-loop-docs && uv run python -m compileall src/mato_loop_backend && uv run ruff check src tests"
+    run_backend "/usr/local/bin/lightpanda version && uv sync --frozen --group docs && uv run --no-sync mkdocs build --strict --config-file /workspace/mkdocs.yml --site-dir /tmp/mato-loop-docs && uv run python -m compileall src/mato_loop_backend && uv run ruff check src tests /workspace/libs/python/version/src"
 }
 
 check_frontend() {

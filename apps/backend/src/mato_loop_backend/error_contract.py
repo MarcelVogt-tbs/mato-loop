@@ -117,6 +117,7 @@ _MESSAGES = {
     "maintenance.unavailable": "Native maintenance is unavailable on this computer.",
     "maintenance.jobUnavailable": "The maintenance job is no longer available.",
     "maintenance.failed": "Computer maintenance failed.",
+    "maintenance.targetUnavailable": "This backend has no reproducible Agent installation target.",
     "executionAgent.alreadyPaired": "The MatoLoop Agent is already paired.",
     "executionAgent.homeDirectoryInvalid": "The home directory is invalid or unavailable.",
     "executionAgent.operationUnavailable": "The MatoLoop Agent does not support this operation.",

@@ -6,6 +6,7 @@ readme = "README.md"
 license = "AGPL-3.0-only"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "matoloop-version",
     "aiohttp>=3.12.0",
     "alembic>=1.16.0",
     "asyncpg>=0.30.0",
@@ -44,6 +45,9 @@ dependencies = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+matoloop-version = { path = "../../libs/python/version", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mato_loop_backend"]

@@ -547,9 +547,38 @@ async def test_ws_snapshot_rejects_stale_authenticated_hash(monkeypatch) -> None
     assert "execution_agents.token_hash" in str(statement)
 
 
-async def test_maintenance_password_is_forwarded_once_and_never_persisted(monkeypatch) -> None:
+@pytest.fixture
+def backend_build(monkeypatch):
+    revision = "a" * 40
+    monkeypatch.setattr(execution_agents_route, "build_revision", lambda: revision)
+    monkeypatch.setattr(execution_agents_route, "__version__", "2026-10-08-aaaaaaaa")
+    return revision
+
+
+async def test_public_installation_target_matches_the_running_build(backend_build) -> None:
+    response = Response()
+    target = await execution_agents_route.get_installation_target(response)
+    assert (target.model_dump(), response.headers["Cache-Control"]) == (
+        {"revision": backend_build, "version": "2026-10-08-aaaaaaaa"}, "no-store"
+    )
+
+
+@pytest.mark.parametrize("revision, version", [
+    (None, "2026-10-08-aaaaaaaa"),
+    ("a" * 40, "2026-10-08-aaaaaaaa-dirty"),
+    ("a" * 40, "2026-10-08-bbbbbbbb"),
+])
+def test_installation_target_rejects_unreproducible_builds(monkeypatch, revision, version) -> None:
+    monkeypatch.setattr(execution_agents_route, "build_revision", lambda: revision)
+    monkeypatch.setattr(execution_agents_route, "__version__", version)
+    with pytest.raises(ApiError, match="maintenance.targetUnavailable"):
+        execution_agents_route.installation_target()
+
+
+@pytest.mark.parametrize("operation", ["maintenance.start", "maintenance.update"])
+async def test_maintenance_password_is_forwarded_once_and_never_persisted(monkeypatch, operation, backend_build) -> None:
     user = _user()
-    agent = _agent(user_id=user.id, operations=["maintenance.start"])
+    agent = _agent(user_id=user.id, operations=[operation])
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = agent
     db.get.return_value = agent
@@ -562,9 +591,23 @@ async def test_maintenance_password_is_forwarded_once_and_never_persisted(monkey
     )
 
     assert result["maintenance"]["status"] == "running"
+    assert request.await_args.args[1] == operation
     assert "private" not in str(agent.maintenance)
     assert request.await_args.args[2]["sudoPassword"] == "private"
+    assert request.await_args.args[2]["revision"] == backend_build
     assert db.commit.await_count == 1
+
+
+async def test_container_maintenance_rejects_uninstall(monkeypatch) -> None:
+    user = _user()
+    agent = _agent(user_id=user.id, operations=["maintenance.update"])
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = agent
+    monkeypatch.setattr(execution_agents_route.execution_agent_connections, "is_connected", lambda _: True)
+    with pytest.raises(ApiError, match="maintenance.unavailable"):
+        await start_execution_agent_maintenance(
+            agent.id, MaintenanceRequest(action="uninstall"), user, db, Response()
+        )
 
 
 async def test_maintenance_auth_prompt_and_callback_owner_check(monkeypatch) -> None:
@@ -602,7 +645,7 @@ async def test_maintenance_auth_prompt_and_callback_owner_check(monkeypatch) -> 
     assert agent.maintenance["status"] == "succeeded"
 
 
-async def test_disconnected_maintenance_is_unknown_not_success(monkeypatch) -> None:
+async def test_disconnected_maintenance_is_unknown_not_success(monkeypatch, backend_build) -> None:
     user = _user()
     agent = _agent(user_id=user.id, operations=["maintenance.start"])
     db = AsyncMock(spec=AsyncSession)

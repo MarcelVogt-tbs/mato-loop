@@ -215,6 +215,7 @@ const messages = {
   'maintenance.unavailable': () => 'Die Wartung ist auf diesem Computer nicht verfügbar.',
   'maintenance.jobUnavailable': () => 'Der Wartungsauftrag ist nicht mehr verfügbar.',
   'maintenance.failed': () => 'Die Wartung des Computers ist fehlgeschlagen.',
+  'maintenance.targetUnavailable': () => 'Für diesen Backend-Stand ist keine reproduzierbare Agent-Version verfügbar. Verwende einen veröffentlichten Build oder einen lokalen Entwicklungs-Checkout.',
   'executionAgent.operationUnavailable': () => 'Der Computer unterstützt diese Aktion nicht.',
   'executionAgent.outcomeUnknown': () => 'Die Verbindung wurde nach dem Senden der Aktion unterbrochen. Der Ausgang ist unbekannt. Prüfe zuerst den tatsächlichen Zustand und wiederhole die Aktion nicht blind.',
   'executionAgent.protocolError': () => 'Der Computer hat eine ungültige Protokollnachricht gesendet.',

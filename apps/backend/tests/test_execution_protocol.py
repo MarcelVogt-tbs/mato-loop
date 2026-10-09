@@ -201,6 +201,7 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "integration.browser.publish",
         "integration.browser.upload",
         "maintenance.start",
+        "maintenance.update",
         "shell.inspect",
         "shell.classify",
         "terminal.open",

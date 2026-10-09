@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import fcntl
 import json
 import os
 import pwd
+import re
 import secrets
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -16,6 +19,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+from uuid import UUID
 
 SOURCE_URL = "https://git.devmato.net/devmato/MatoLoop.git"
 SYSTEM_SERVICE_PATH = Path("/etc/systemd/system/matoloop-agent.service")
@@ -199,6 +203,57 @@ def paired_instance(credential: Path) -> str | None:
     fail(f"invalid Agent credentials: {credential}")
 
 
+def validate_revision(value: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+        fail("the installation target must be a full Git commit SHA")
+    return value
+
+
+def target_revision(instance: str) -> str:
+    backend_url(instance)
+    try:
+        with build_opener(_NoRedirect).open(
+            instance.rstrip("/") + "/api/execution-agents/installation-target", timeout=30
+        ) as response:
+            target = json.loads(response.read(4097))
+    except (OSError, ValueError):
+        fail("the backend installation target is unavailable; use a published backend build")
+    if not isinstance(target, dict):
+        fail("the backend returned an invalid installation target")
+    revision = validate_revision(target.get("revision"))
+    if not isinstance(target.get("version"), str) or not re.fullmatch(
+        rf"[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}-{revision[:8]}", target["version"]
+    ):
+        fail("the backend installation target is not a clean source version")
+    return revision
+
+
+def fetch_source(repository: str, revision: str, destination: Path) -> None:
+    validate_revision(revision)
+    environment = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    run("git", "init", "--quiet", destination)
+    run("git", "-C", destination, "remote", "add", "--", "origin", repository)
+    run(
+        "git",
+        "-C",
+        destination,
+        "fetch",
+        "--depth=1",
+        "--no-tags",
+        "origin",
+        revision,
+        env=environment,
+    )
+    actual = run(
+        "git", "-C", destination, "rev-parse", "FETCH_HEAD^{commit}", capture_output=True, text=True
+    ).stdout.strip()
+    if actual != revision:
+        fail("the fetched source does not match the backend commit")
+    run("git", "-C", destination, "checkout", "--detach", revision)
+    if not (destination / "libs/python/version/src/matoloop_version/__init__.py").is_file():
+        fail("the target commit does not support versioned Agent installations")
+
+
 def check_linux() -> None:
     if not sys.platform.startswith("linux"):
         fail(f"native installation is not supported on {sys.platform} yet")
@@ -247,7 +302,9 @@ def install_system_dependencies(layout: dict[str, Path]) -> None:
     write_file(layout["packages"], ("\n".join(sorted(tracked)) + "\n").encode(), 0o600)
 
 
-def sync_environment(layout: dict[str, Path], source: Path, destination: Path) -> None:
+def sync_environment(
+    layout: dict[str, Path], source: Path, destination: Path, *, browser: bool = False
+) -> None:
     project = source / "apps/matoloop-agent"
     if not (project / "pyproject.toml").is_file():
         fail(f"not a MatoLoop checkout: {source}")
@@ -256,6 +313,7 @@ def sync_environment(layout: dict[str, Path], source: Path, destination: Path) -
         "UV_CACHE_DIR": os.fspath(layout["root"] / "cache/uv"),
         "UV_PYTHON_INSTALL_DIR": os.fspath(layout["root"] / "tools/python"),
         "VIRTUAL_ENV": os.fspath(destination),
+        "UV_PROJECT_ENVIRONMENT": os.fspath(destination),
     }
     run(
         layout["uv"],
@@ -265,7 +323,12 @@ def sync_environment(layout: dict[str, Path], source: Path, destination: Path) -
         "--frozen",
         "--no-dev",
         "--no-editable",
+        "--refresh-package",
+        "matoloop-agent",
+        "--refresh-package",
+        "matoloop-version",
         "--active",
+        *(["--group", "browser"] if browser else []),
         env=environment,
     )
     executable = destination / (
@@ -432,6 +495,15 @@ def install(arguments: argparse.Namespace) -> None:
 
     atexit.register(cleanup_staging)
     copy_source(source, staged_source, keep_git=managed)
+    version_script = staged_source / "libs/python/version/src/matoloop_version/__init__.py"
+    run(
+        sys.executable,
+        version_script,
+        "--source",
+        source,
+        "--output",
+        version_script.with_name("build-version.txt"),
+    )
     active_source = staged_source
     layout["venvs"].mkdir(exist_ok=True)
     new_venv = layout["venvs"] / secrets.token_hex(8)
@@ -565,47 +637,46 @@ def install(arguments: argparse.Namespace) -> None:
     print(f"MatoLoop Agent installed. Status: {layout['wrapper']} status")
 
 
-def update(*, in_process: bool = False) -> None:
+def update(*, in_process: bool = False, revision: str | None = None) -> None:
     layout = paths()
     state = read_state(layout)
     if not state:
         fail("MatoLoop Agent is not installed")
-    git = shutil.which("git")
-    if git is None:
-        fail("git is required to update this source installation")
-    source = Path(state["source"])
-    if run(git, "-C", source, "status", "--porcelain", capture_output=True, text=True).stdout:
-        fail("the source checkout has local changes; use install to deploy them without pulling")
-    run(git, "-C", source, "symbolic-ref", "--quiet", "HEAD")
-    run(git, "-C", source, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
-    run(git, "-C", source, "pull", "--ff-only")
-    command = [
-        sys.executable,
-        source / "scripts/matoloop-agent-installer.py",
-        "install",
-        "--source",
-        source,
-        "--home",
-        state["homeDirectory"],
-        "--instance-url",
-        state["instanceUrl"],
-    ]
-    if state.get("sourceType") == "managed":
-        command.append("--managed")
-    if in_process:
-        install(
-            argparse.Namespace(
-                source=os.fspath(source),
-                managed=state.get("sourceType") == "managed",
-                home=state["homeDirectory"],
-                instance_url=state["instanceUrl"],
+    instance = (
+        paired_instance(layout["data"] / "agent-state/credential.json") or state["instanceUrl"]
+    )
+    revision = target_revision(instance) if revision is None else validate_revision(revision)
+    # Stage managed sources even for local installs; never change the user's checkout.
+    with tempfile.TemporaryDirectory(prefix=".update-", dir=layout["root"]) as temporary:
+        source = Path(temporary) / "source"
+        fetch_source(state.get("sourceUrl", SOURCE_URL), revision, source)
+        if in_process:
+            install(
+                argparse.Namespace(
+                    source=os.fspath(source),
+                    managed=True,
+                    home=state["homeDirectory"],
+                    instance_url=instance,
+                )
             )
-        )
-    else:
-        run(*command)
+        else:
+            run(
+                sys.executable,
+                source / "scripts/matoloop-agent-installer.py",
+                "install",
+                "--source",
+                source,
+                "--managed",
+                "--home",
+                state["homeDirectory"],
+                "--instance-url",
+                instance,
+            )
 
 
-def maintenance_run(action: str, job_id: str, socket_path: str, root: str) -> None:
+def maintenance_run(
+    action: str, job_id: str, socket_path: str, root: str, revision: str | None = None
+) -> None:
     global _maintenance_password
     os.environ["MATOLOOP_AGENT_INSTALL_ROOT"] = root
     layout = paths()
@@ -624,6 +695,21 @@ def maintenance_run(action: str, job_id: str, socket_path: str, root: str) -> No
     password.clear()
     os.environ["MATOLOOP_AGENT_MAINTENANCE"] = "1"
     credential = json.loads((layout["data"] / "agent-state/credential.json").read_text())
+    result = "succeeded"
+    try:
+        if action == "update":
+            os.environ["GIT_TERMINAL_PROMPT"] = "0"
+            update(in_process=True, revision=validate_revision(revision))
+        else:
+            uninstall(purge=False, yes=True)
+    except BaseException:
+        result = "failed"
+        raise
+    finally:
+        report_maintenance(credential, job_id, result)
+
+
+def report_maintenance(credential: dict, job_id: str, result: str) -> None:
     address = urlsplit(credential["backendUrl"])
     endpoint = urlunsplit(
         (
@@ -634,37 +720,275 @@ def maintenance_run(action: str, job_id: str, socket_path: str, root: str) -> No
             "",
         )
     )
-    result = "succeeded"
     reporter = build_opener(_NoRedirect)
+    payload = json.dumps({"status": result}).encode()
+    for attempt in range(3):
+        try:
+            with reporter.open(
+                Request(
+                    endpoint,
+                    data=payload,
+                    headers={
+                        "Authorization": f"Bearer {credential['accessKey']}",
+                        "Content-Type": "application/json",
+                    },
+                ),
+                timeout=10,
+            ) as response:
+                response.read()
+            break
+        except OSError:
+            if attempt < 2:
+                time.sleep(2)
+
+
+def container_root() -> Path:
+    root = Path(os.environ["MATOLOOP_AGENT_INSTALL_ROOT"])
+    if os.geteuid() != 0 or os.environ.get("MATOLOOP_AGENT_CONTAINER") != "1":
+        fail("Container lifecycle requires the managed root container")
+    return root
+
+
+def container_init(repository: str) -> None:
+    root = container_root()
+    if (root / "install.json").exists():
+        fail("Container installation is already initialized")
+    write_json(
+        root / "install.json",
+        {
+            "sourceUrl": repository,
+            "release": "releases/image",
+        },
+    )
+    write_file(root / "installer.py", Path(__file__).read_bytes(), 0o755)
+
+
+def container_request(job_id: str | None, revision: str | None) -> None:
+    root = container_root()
+    if job_id:
+        UUID(job_id)
+        validate_revision(revision)
+    else:
+        data = Path(os.environ.get("MATOLOOP_AGENT_CONFIG", "/data/config.json")).resolve().parent
+        instance = paired_instance(data / "agent-state/credential.json")
+        if instance is None:
+            fail("pair the Agent before requesting an update")
+        revision = target_revision(instance)
+    os.kill(int((root / "launcher.pid").read_text()), 0)
+    # Publish a complete request exclusively, including during update preparation.
+    with tempfile.NamedTemporaryFile(mode="w", dir=root, encoding="utf-8") as stream:
+        json.dump({"jobId": job_id, "revision": revision}, stream)
+        stream.flush()
+        os.link(stream.name, root / "update-request.json")
+
+
+def prepare_container_release(root: Path, state: dict, revision: str) -> Path:
+    validate_revision(revision)
+    release = Path(tempfile.mkdtemp(prefix="update-", dir=root / "releases"))
+    release.chmod(0o755)  # The unprivileged browser worker executes this environment.
     try:
-        if action == "update":
-            os.environ["GIT_TERMINAL_PROMPT"] = "0"
-            update(in_process=True)
-        else:
-            uninstall(purge=False, yes=True)
-    except BaseException:
-        result = "failed"
-        raise
-    finally:
-        payload = json.dumps({"status": result}).encode()
-        for attempt in range(3):
-            try:
-                with reporter.open(
-                    Request(
-                        endpoint,
-                        data=payload,
-                        headers={
-                            "Authorization": f"Bearer {credential['accessKey']}",
-                            "Content-Type": "application/json",
-                        },
+        source = release / "source"
+        fetch_source(state["sourceUrl"], revision, source)
+        version = source / "libs/python/version/src/matoloop_version/__init__.py"
+        run(
+            sys.executable,
+            version,
+            "--source",
+            source,
+            "--output",
+            version.with_name("build-version.txt"),
+        )
+        sync_environment(
+            {"root": root, "uv": Path(shutil.which("uv") or "uv")},
+            source,
+            release / "venv",
+            browser=True,
+        )
+        python = release / "venv/bin/python"
+        run(
+            "sh",
+            source / "apps/matoloop-agent/src/matoloop_agent/container-browser-setup.sh",
+            python,
+        )
+        run(release / "venv/bin/matoloop-agent", "--help", stdout=subprocess.DEVNULL)
+        with tempfile.TemporaryDirectory(prefix="matoloop-browser-check-") as temporary:
+            probe = Path(temporary)
+            probe.chmod(0o755)
+            run(
+                python,
+                "-m",
+                "matoloop_agent",
+                "browser-install",
+                env={
+                    **os.environ,
+                    "MATOLOOP_BROWSER_DATA_DIR": str(
+                        Path(os.environ.get("MATOLOOP_AGENT_CONFIG", "/data/config.json"))
+                        .resolve()
+                        .parent
                     ),
-                    timeout=10,
-                ) as response:
-                    response.read()
-                break
-            except OSError:
-                if attempt < 2:
-                    time.sleep(2)
+                    "MATOLOOP_BROWSER_ROOT": str(probe),
+                    "MATOLOOP_BROWSER_INSTALLATION": "/usr/local/lib/matoloop-agent/tools/browser",
+                },
+            )
+        return release
+    except BaseException:
+        shutil.rmtree(release)
+        raise
+
+
+_container_process: subprocess.Popen | None = None
+
+
+def container_start(root: Path, state: dict) -> None:
+    global _container_process
+    executable = root / state["release"] / "venv/bin/matoloop-agent"
+    _container_process = subprocess.Popen(
+        [executable, "run"],
+        start_new_session=True,
+        env={
+            **os.environ,
+            "PATH": f"{executable.parent}:{os.environ['PATH']}",
+            "UV_PROJECT_ENVIRONMENT": str(executable.parent.parent),
+        },
+    )
+
+
+def container_stop() -> None:
+    global _container_process
+    process = _container_process
+    if process is None:
+        return
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+    # Reap remaining shell/browser workers in the Agent process group.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    _container_process = None
+
+
+def activate_container_release(root: Path, state: dict, release: Path) -> dict:
+    candidate = {
+        **state,
+        "release": str(release.relative_to(root)),
+        "previousRelease": state["release"],
+    }
+    # The journal allows a container restart to recover an interrupted activation.
+    write_json(root / "install.json", candidate)
+    try:
+        container_stop()
+        container_start(root, candidate)
+        for _ in range(3):
+            time.sleep(1)
+            if _container_process.poll() is not None:
+                raise RuntimeError("The updated Agent failed its startup check")
+        write_file(
+            root / "installer.py",
+            (release / "source/scripts/matoloop-agent-installer.py").read_bytes(),
+            0o755,
+        )
+        candidate.pop("previousRelease")
+        write_json(root / "install.json", candidate)
+    except BaseException:
+        container_stop()
+        write_json(root / "install.json", state)
+        write_file(
+            root / "installer.py",
+            (root / state["release"] / "source/scripts/matoloop-agent-installer.py").read_bytes(),
+            0o755,
+        )
+        container_start(root, state)
+        shutil.rmtree(release)
+        raise
+    shutil.rmtree(root / state["release"], ignore_errors=True)
+    return candidate
+
+
+def container_run() -> None:
+    root = container_root()
+    # One launcher owns the process and update queue for this container.
+    with (root / "launcher.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        state = json.loads((root / "install.json").read_text())
+        request = root / "update-request.json"
+        interrupted = "previousRelease" in state
+        if interrupted:
+            state["release"] = state.pop("previousRelease")
+            write_json(root / "install.json", state)
+            write_file(
+                root / "installer.py",
+                (
+                    root / state["release"] / "source/scripts/matoloop-agent-installer.py"
+                ).read_bytes(),
+                0o755,
+            )
+        interrupted = interrupted and request.exists()
+
+        def shutdown(_signal, _frame):
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGTERM, shutdown)
+        signal.signal(signal.SIGINT, shutdown)
+        (root / "launcher.pid").write_text(str(os.getpid()))
+        try:
+            container_start(root, state)
+            while _container_process.poll() is None:
+                if request.exists():
+                    try:
+                        job = json.loads(request.read_text())
+                        job_id = str(UUID(job["jobId"])) if job["jobId"] else None
+                        revision = validate_revision(job["revision"])
+                    except (ValueError, KeyError, TypeError, SystemExit):
+                        request.unlink()
+                        print("Discarded an invalid container update request.", flush=True)
+                        continue
+                    data = (
+                        Path(os.environ.get("MATOLOOP_AGENT_CONFIG", "/data/config.json"))
+                        .resolve()
+                        .parent
+                    )
+                    credential = (
+                        json.loads((data / "agent-state/credential.json").read_text())
+                        if job_id
+                        else None
+                    )
+                    result = "failed"
+                    try:
+                        if not interrupted:
+                            release = prepare_container_release(root, state, revision)
+                            state = activate_container_release(root, state, release)
+                            result = "succeeded"
+                    except (
+                        OSError,
+                        ValueError,
+                        RuntimeError,
+                        subprocess.SubprocessError,
+                        SystemExit,
+                    ):
+                        print(
+                            "Container Agent update failed; previous installation retained.",
+                            flush=True,
+                        )
+                    finally:
+                        request.unlink(missing_ok=True)
+                        interrupted = False
+                        if job_id:
+                            report_maintenance(credential, job_id, result)
+                        else:
+                            print(f"Container Agent update {result}.", flush=True)
+                time.sleep(0.5)
+            raise SystemExit(_container_process.returncode)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            container_stop()
+            (root / "launcher.pid").unlink(missing_ok=True)
 
 
 def status() -> None:
@@ -777,6 +1101,12 @@ def main() -> None:
     install_parser.add_argument("--instance-url")
     subparsers.add_parser("update")
     subparsers.add_parser("status")
+    image_parser = subparsers.add_parser("container-init")
+    image_parser.add_argument("repository")
+    subparsers.add_parser("container-run")
+    request_parser = subparsers.add_parser("container-request")
+    request_parser.add_argument("job_id", nargs="?")
+    request_parser.add_argument("--revision")
     uninstall_parser = subparsers.add_parser("uninstall")
     uninstall_parser.add_argument("--purge", action="store_true")
     uninstall_parser.add_argument("--yes", action="store_true")
@@ -785,9 +1115,16 @@ def main() -> None:
     maintenance_parser.add_argument("job_id")
     maintenance_parser.add_argument("socket_path")
     maintenance_parser.add_argument("root")
+    maintenance_parser.add_argument("--revision")
     arguments = parser.parse_args()
     try:
-        if arguments.command == "install":
+        if arguments.command == "container-init":
+            container_init(arguments.repository)
+        elif arguments.command == "container-run":
+            container_run()
+        elif arguments.command == "container-request":
+            container_request(arguments.job_id, arguments.revision)
+        elif arguments.command == "install":
             install(arguments)
         elif arguments.command == "update":
             update()
@@ -797,7 +1134,11 @@ def main() -> None:
             uninstall(arguments.purge, arguments.yes)
         else:
             maintenance_run(
-                arguments.action, arguments.job_id, arguments.socket_path, arguments.root
+                arguments.action,
+                arguments.job_id,
+                arguments.socket_path,
+                arguments.root,
+                arguments.revision,
             )
     except (OSError, subprocess.CalledProcessError):
         fail("the installation command failed")

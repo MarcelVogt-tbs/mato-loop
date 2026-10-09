@@ -1,5 +1,8 @@
-.git
 .env*
+# Keep tracked defaults so the read-only Git version stage does not see deletions.
+!.env.dev
+!.env.dev.override.example
+!.env.example
 .idea
 .vscode
 **/.pytest_cache

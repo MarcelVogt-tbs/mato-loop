@@ -4,7 +4,7 @@ param(
     [string] $InstanceUrl,
     [Alias('Home')]
     [string] $HomeDirectory,
-    [string] $Branch = 'main',
+    [string] $Revision,
     [string] $Source,
     [switch] $Purge,
     [switch] $Yes
@@ -100,26 +100,34 @@ function Resolve-Git {
     return $executable
 }
 
+function Read-AgentCredential {
+    $path = Join-Path $data 'agent-state\credential.dat'
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    Add-Type -AssemblyName System.Security
+    $plain = [Security.Cryptography.ProtectedData]::Unprotect(
+        [IO.File]::ReadAllBytes($path), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+    return ([Text.Encoding]::UTF8.GetString($plain) | ConvertFrom-Json)
+}
+
 # One on-demand Task Scheduler worker survives stopping the boot-time Agent task.
 if ($Command -eq 'maintenance-run') {
     $requestFile = Join-Path $data 'maintenance-request.json'
     $request = Get-Content -LiteralPath $requestFile -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ((($request.PSObject.Properties.Name | Sort-Object) -join ',') -ne 'action,jobId' -or
+    if ((($request.PSObject.Properties.Name | Sort-Object) -join ',') -ne 'action,jobId,revision' -or
         $request.action -notin @('update', 'uninstall') -or
         ([Guid]::Parse($request.jobId)).ToString() -cne $request.jobId) { Fail 'Invalid maintenance request.' }
+    if (($request.action -eq 'update' -and $request.revision -cnotmatch '\A[0-9a-f]{40}\z') -or
+        ($request.action -eq 'uninstall' -and $null -ne $request.revision)) { Fail 'Invalid maintenance revision.' }
     Remove-Item -LiteralPath $requestFile -Force
-    Add-Type -AssemblyName System.Security
-    $encrypted = [IO.File]::ReadAllBytes((Join-Path $data 'agent-state\credential.dat'))
-    $plain = [Security.Cryptography.ProtectedData]::Unprotect(
-        $encrypted, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
-    $connection = [Text.Encoding]::UTF8.GetString($plain) | ConvertFrom-Json
+    $connection = Read-AgentCredential
     $completionUrl = ($connection.backendUrl -replace '^wss:', 'https:' -replace '^ws:', 'http:')
     $completionUrl = $completionUrl -replace '/connect$', "/$($connection.agentId)/maintenance/$($request.jobId)/complete"
     $result = 'failed'
     $env:GIT_TERMINAL_PROMPT = '0'
     $env:GCM_INTERACTIVE = 'Never'
     try {
-        & $PSCommandPath $request.action -Yes
+        if ($request.action -eq 'update') { & $PSCommandPath update -Revision $request.revision -Yes }
+        else { & $PSCommandPath uninstall -Yes }
         if ($LASTEXITCODE -ne 0) { Fail 'Maintenance failed.' }
         $result = 'succeeded'
     } catch { Write-Host 'MatoLoop Agent maintenance failed.' }
@@ -175,7 +183,7 @@ if ($Command -eq 'uninstall') {
     if ($Purge) {
         Remove-Item -LiteralPath $root -Recurse -Force
     } else {
-        foreach ($name in @('venvs', 'source', 'tools', 'cache', 'install.json', 'installer.ps1')) {
+        foreach ($name in @('venvs', 'source', 'sources', 'tools', 'cache', 'install.json', 'installer.ps1')) {
             Remove-Item -LiteralPath (Join-Path $root $name) -Recurse -Force -ErrorAction SilentlyContinue
         }
         foreach ($child in Get-ChildItem -LiteralPath $data -ErrorAction SilentlyContinue) {
@@ -193,13 +201,37 @@ if (-not $existing -and -not (Test-Path -LiteralPath $marker) -and ((Test-Path -
     (Get-ChildItem -LiteralPath $root -Force | Select-Object -First 1))) { Fail 'The installation directory is not empty.' }
 if (-not $existing -and (Task)) { Fail 'An unmanaged MatoLoop Agent task already exists.' }
 
-$checkout = if ($Source) { (Resolve-Path -LiteralPath $Source).Path } elseif ($existing) {
-    $existing.source
-} else {
+$connection = Read-AgentCredential
+$pairedInstance = if ($connection) {
+    ($connection.backendUrl -replace '^wss:', 'https:' -replace '^ws:', 'http:') -replace '/api/execution-agents/connect$', ''
+} else { $null }
+if ($InstanceUrl -and $pairedInstance -and $InstanceUrl.TrimEnd('/') -ne $pairedInstance) {
+    Fail 'The instance URL cannot change while pairing credentials are preserved.'
+}
+if (-not $InstanceUrl) { $InstanceUrl = if ($pairedInstance) { $pairedInstance } elseif ($existing) {
+    $existing.instanceUrl
+} else { Read-Host 'MatoLoop instance URL (https://host)' } }
+try { $instance = [Uri] $InstanceUrl } catch { Fail 'Invalid instance URL.' }
+if ($instance.Scheme -notin @('https', 'http') -or -not $instance.Host -or $instance.UserInfo -or
+    $instance.Query -or $instance.Fragment) { Fail 'Invalid instance URL.' }
+$websocket = $InstanceUrl.TrimEnd('/') -replace '^https:', 'wss:' -replace '^http:', 'ws:'
+$websocket += '/api/execution-agents/connect'
+
+$checkout = if ($Command -eq 'update') { $null } elseif ($Source) {
+    (Resolve-Path -LiteralPath $Source).Path
+} elseif ($PSCommandPath -and (Split-Path -Leaf $PSCommandPath) -ne 'installer.ps1') {
     $candidate = Join-Path (Split-Path -Parent $PSScriptRoot) 'apps\matoloop-agent\pyproject.toml'
     if (Test-Path -LiteralPath $candidate) { Split-Path -Parent $PSScriptRoot } else { $null }
-}
-if (-not $checkout) { $checkout = Join-Path $root 'source' }
+} else { $null }
+$managedSource = -not $checkout
+$sourceUrl = if ($existing -and $existing.sourceUrl) { $existing.sourceUrl } elseif ($env:MATOLOOP_AGENT_SOURCE_URL) {
+    $env:MATOLOOP_AGENT_SOURCE_URL
+} elseif ($existing -and (Test-Path -LiteralPath (Join-Path $existing.source '.git'))) {
+    $git = Resolve-Git
+    $origin = & $git -C $existing.source remote get-url origin
+    if ($LASTEXITCODE) { Fail 'Could not read the installed source repository.' }
+    $origin
+} else { 'https://git.devmato.net/devmato/MatoLoop.git' }
 New-Item -ItemType Directory -Path $root, $data, (Join-Path $root 'tools\bin'),
     (Join-Path $root 'venvs') -Force | Out-Null
 if (-not (Test-Path -LiteralPath $marker)) {
@@ -208,25 +240,42 @@ if (-not (Test-Path -LiteralPath $marker)) {
     if ($LASTEXITCODE) { Fail 'Could not restrict the installation directory ACL.' }
     New-Item -ItemType File -Path $marker -Force | Out-Null
 }
-if ($Command -eq 'update') {
+if ($managedSource) {
+    if (-not $Revision) {
+        try {
+            $target = Invoke-RestMethod -Uri ($InstanceUrl.TrimEnd('/') + '/api/execution-agents/installation-target') `
+                -TimeoutSec 30 -MaximumRedirection 0
+        } catch { Fail 'The backend installation target is unavailable; use a published backend build.' }
+        if ($target.revision -isnot [string] -or $target.revision -cnotmatch '\A[0-9a-f]{40}\z' -or
+            $target.version -isnot [string] -or $target.version -cnotmatch (
+                '\A[0-9]{4}-[0-9]{2}-[0-9]{2}-' + $target.revision.Substring(0, 8) + '\z')) {
+            Fail 'The backend returned an invalid installation target.'
+        }
+        $Revision = $target.revision
+    }
+    if ($Revision -cnotmatch '\A[0-9a-f]{40}\z') { Fail 'The installation target must be a full Git commit SHA.' }
+    $checkout = Join-Path $root ('sources\' + [Guid]::NewGuid().ToString('N'))
     $env:GIT_TERMINAL_PROMPT = '0'
     $env:GCM_INTERACTIVE = 'Never'
     $git = Resolve-Git
-    if ((& $git -C $checkout status --porcelain)) { Fail 'Source checkout has local changes; use install instead.' }
-    if ($LASTEXITCODE) { Fail 'Could not inspect the source checkout.' }
-    & $git -C $checkout symbolic-ref --quiet HEAD | Out-Null
-    if ($LASTEXITCODE) { Fail 'The source checkout must be on a branch.' }
-    & $git -C $checkout rev-parse --abbrev-ref --symbolic-full-name '@{u}' | Out-Null
-    if ($LASTEXITCODE) { Fail 'The selected branch has no upstream.' }
-    & $git -C $checkout pull --ff-only
-    if ($LASTEXITCODE) { Fail 'Git could not fast-forward the selected branch.' }
-} elseif (-not (Test-Path -LiteralPath (Join-Path $checkout 'apps\matoloop-agent\pyproject.toml'))) {
-    $git = Resolve-Git
-    $sourceUrl = if ($env:MATOLOOP_AGENT_SOURCE_URL) { $env:MATOLOOP_AGENT_SOURCE_URL } else {
-        'https://git.devmato.net/devmato/MatoLoop.git'
+    try {
+        & $git init --quiet $checkout
+        if ($LASTEXITCODE) { Fail 'Could not initialize the source checkout.' }
+        & $git -C $checkout remote add -- origin $sourceUrl
+        if ($LASTEXITCODE) { Fail 'Could not configure the source repository.' }
+        & $git -C $checkout fetch --depth=1 --no-tags origin $Revision
+        if ($LASTEXITCODE) { Fail 'Could not fetch the backend commit.' }
+        $actual = & $git -C $checkout rev-parse 'FETCH_HEAD^{commit}'
+        if ($LASTEXITCODE -or $actual -cne $Revision) { Fail 'Source does not match the backend commit.' }
+        & $git -C $checkout checkout --detach $Revision
+        if ($LASTEXITCODE) { Fail 'Could not check out the backend commit.' }
+        if (-not (Test-Path -LiteralPath (Join-Path $checkout 'libs\python\version\src\matoloop_version\__init__.py'))) {
+            Fail 'The target commit does not support versioned Agent installations.'
+        }
+    } catch {
+        Remove-Item -LiteralPath $checkout -Recurse -Force -ErrorAction SilentlyContinue
+        throw
     }
-    & $git clone --branch $Branch --single-branch $sourceUrl $checkout
-    if ($LASTEXITCODE) { Fail 'Could not clone the selected source branch.' }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $checkout 'apps\matoloop-agent\pyproject.toml'))) {
     Fail 'Source is not a MatoLoop checkout.'
@@ -239,14 +288,6 @@ if ($HomeDirectory.Equals($root, [StringComparison]::OrdinalIgnoreCase) -or
     $HomeDirectory.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase) -or
     $root.StartsWith($HomeDirectory + '\', [StringComparison]::OrdinalIgnoreCase)) { Fail 'Workspace must be outside the installation.' }
 New-Item -ItemType Directory -Path $HomeDirectory -Force | Out-Null
-if (-not $InstanceUrl) { $InstanceUrl = if ($existing) { $existing.instanceUrl } else {
-    Read-Host 'MatoLoop instance URL (https://host)'
-} }
-try { $instance = [Uri] $InstanceUrl } catch { Fail 'Invalid instance URL.' }
-if ($instance.Scheme -notin @('https', 'http') -or -not $instance.Host -or $instance.UserInfo -or
-    $instance.Query -or $instance.Fragment) { Fail 'Invalid instance URL.' }
-$websocket = $InstanceUrl.TrimEnd('/') -replace '^https:', 'wss:' -replace '^http:', 'ws:'
-$websocket += '/api/execution-agents/connect'
 
 if (-not (Test-Path -LiteralPath $uv)) {
     $bootstrap = Join-Path $env:TEMP 'matoloop-uv-install.ps1'
@@ -264,7 +305,14 @@ $installer = Join-Path $root 'installer.ps1'
 $previousInstaller = if (Test-Path -LiteralPath $installer) { [IO.File]::ReadAllBytes($installer) } else { $null }
 $env:VIRTUAL_ENV = $newVenv
 try {
-    & $uv sync --directory (Join-Path $checkout 'apps\matoloop-agent') --frozen --no-dev --no-editable --active
+    $python = & $uv python find 3.13
+    if ($LASTEXITCODE) { Fail 'Could not find private Python.' }
+    $git = Resolve-Git
+    $env:PATH = (Split-Path -Parent $git) + [IO.Path]::PathSeparator + $env:PATH
+    $versionScript = Join-Path $checkout 'libs\python\version\src\matoloop_version\__init__.py'
+    & $python $versionScript --source $checkout --output (Join-Path (Split-Path $versionScript) 'build-version.txt')
+    if ($LASTEXITCODE) { Fail 'Could not determine the Agent version.' }
+    & $uv sync --directory (Join-Path $checkout 'apps\matoloop-agent') --frozen --no-dev --no-editable --active --refresh-package matoloop-agent --refresh-package matoloop-version
     if ($LASTEXITCODE) { Fail 'Could not prepare the new Agent environment.' }
     $executable = Join-Path $newVenv 'Scripts\matoloop-agent.exe'
     & $executable --help | Out-Null
@@ -287,7 +335,7 @@ try {
     Stop-Agent
     try {
         [IO.File]::WriteAllText($configFile, ($config | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
-        $newState = [pscustomobject] @{activeVenv=$newVenv; source=$checkout;
+        $newState = [pscustomobject] @{activeVenv=$newVenv; source=$checkout; sourceUrl=$sourceUrl;
             homeDirectory=$HomeDirectory; instanceUrl=$InstanceUrl.TrimEnd('/'); maintenanceReady=$false}
         Save-State $newState
         if (-not (Task) -or -not (Get-ScheduledTask -TaskName $maintenanceTask -ErrorAction SilentlyContinue)) {
@@ -344,6 +392,10 @@ try {
         ([IO.Path]::GetFullPath($existing.activeVenv)).StartsWith((Join-Path $root 'venvs') + '\', [StringComparison]::OrdinalIgnoreCase)) {
         Remove-Item -LiteralPath $existing.activeVenv -Recurse -Force -ErrorAction SilentlyContinue
     }
+    if ($existing -and $existing.source -ne $checkout -and
+        ([IO.Path]::GetFullPath($existing.source)).StartsWith((Join-Path $root 'sources') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        Remove-Item -LiteralPath $existing.source -Recurse -Force -ErrorAction SilentlyContinue
+    }
     Write-Host "MatoLoop Agent installed. Workspace: $HomeDirectory"
     if (-not (Test-Path -LiteralPath (Join-Path $data 'agent-state\credential.dat'))) {
         Write-Host 'Create a computer under Einstellungen > Computer, then pair it with:'
@@ -352,6 +404,7 @@ try {
     }
 } catch {
     Remove-Item -LiteralPath $newVenv -Recurse -Force -ErrorAction SilentlyContinue
+    if ($managedSource) { Remove-Item -LiteralPath $checkout -Recurse -Force -ErrorAction SilentlyContinue }
     if ($previousInstaller) { [IO.File]::WriteAllBytes($installer, $previousInstaller) } else {
         Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
     }

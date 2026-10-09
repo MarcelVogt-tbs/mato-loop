@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { apiErrorMessage, decodeBlobApiError, errorDescriptor } from '../src/utils/api-errors'
 
 describe('API error messages', () => {
+  it('explains why a dirty backend cannot supply an Agent installation target', () => {
+    expect(apiErrorMessage({ error: { code: 'maintenance.targetUnavailable' } })).toBe(
+      'Für diesen Backend-Stand ist keine reproduzierbare Agent-Version verfügbar. Verwende einen veröffentlichten Build oder einen lokalen Entwicklungs-Checkout.'
+    )
+  })
   it('explains how to retry a session without a computer', () => {
     expect(apiErrorMessage({ error: { code: 'session.computerRequired' } })).toBe(
       'Plan und Build benötigen einen Computer. Wähle einen verbundenen Computer und ein Arbeitsverzeichnis in den Session-Einstellungen. Starte diese Anfrage danach erneut.'

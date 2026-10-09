@@ -75,11 +75,12 @@ matoloop-agent uninstall
 matoloop-agent uninstall --purge
 ```
 
-`update` requires a clean checkout on a branch with an upstream, runs `git pull --ff-only`, then
-prepares source and dependencies before replacing the running version. This is identical for an
-existing checkout and an installer-created checkout: the selected branch alone determines whether
-the Agent follows stable `main`, bleeding-edge `develop`, or another tracked branch. Use `install`
-instead to deploy uncommitted local changes without pulling.
+Standalone setup and `update` retrieve the running backend's full commit SHA from
+`/api/execution-agents/installation-target`. Source and dependencies are prepared in a new
+managed checkout and the fetched SHA is verified before replacing the running version.
+Updates can move forward or backward; they do not change a user's original checkout.
+There is no branch prompt. Use `install` from a checkout to deploy local development changes.
+Dirty or unknown backend builds cannot supply a reproducible managed installation target.
 `uninstall` preserves credentials, while `uninstall --purge` removes all managed Agent files. Both
 offer to remove only the system packages recorded as newly installed by MatoLoop. Agent
 home directories and workspaces are always preserved. The first platform implementation targets
@@ -97,7 +98,7 @@ to Windows Task Scheduler at installation. For cloning and updates, the installe
 uses Git from `PATH`, reuses its private Git, or downloads pinned MinGit 2.56.0.2
 for x64 or ARM64 Windows into `tools\git` after checking the archive's SHA-256.
 Access to the private MatoLoop repository is still required; an existing checkout
-can be provided with `-Source` and installed without Git. No system Git installation
+can be provided with `-Source`; Git is still used to stamp its source version. No system Git installation
 or global `PATH` change is made. Windows PowerShell is the shell for `shell_run`.
 
 After setup, create a computer in the UI and pair from a normal interactive
@@ -107,7 +108,7 @@ The setup also registers an on-demand maintenance task. **Agent aktualisieren**
 in the Computer settings uses that task and the same installer update function;
 both tasks run under the installing account without elevation. Task Scheduler
 stores the account password, while the Agent's own pairing state uses DPAPI.
-Updates require a clean tracked Git branch and fast-forward only. Deinstallation
+Setup and updates follow the running backend's exact commit, including backward transitions. Deinstallation
 removes the private tools, including MinGit, and never removes the workspace.
 Browser, OpenSCAD, and interactive/shared terminals are not advertised by the
 Windows adapter.

@@ -13,9 +13,10 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 
-SEMVER_TAG = re.compile(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
+RELEASE_TAG = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{8}")
 RELEASE_NOTE_CATEGORIES = ("Added", "Changed", "Fixed", "Security")
 RELEASE_LIST_MARKER = "<!-- release-list -->"
 
@@ -42,6 +43,8 @@ def previous_tag(tag: str, revision: str) -> str | None:
             "--tags",
             "--match",
             "v[0-9]*",
+            "--match",
+            "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-????????",
             "--exclude",
             tag,
             "--abbrev=0",
@@ -100,23 +103,15 @@ def release_notes(tag: str, revision: str) -> str:
     return render_release_notes(collect_release_notes(revision_range))
 
 
-def update_changelog(index_path: Path, tag: str, body: str) -> Path:
+def update_changelog(index_path: Path, body: str) -> None:
     index = index_path.read_text(encoding="utf-8")
     if index.count(RELEASE_LIST_MARKER) != 1:
         raise ValueError(f"Expected one release list marker in {index_path}")
-    link = f"- [{tag}](changelog/{tag}.md)"
-    if link in index:
-        raise ValueError(f"Changelog already contains {tag}")
-
-    release_path = index_path.parent / "changelog" / f"{tag}.md"
-    if release_path.exists():
-        raise ValueError(f"Release notes already exist: {release_path}")
-
-    updated_index = index.replace(RELEASE_LIST_MARKER, f"{RELEASE_LIST_MARKER}\n{link}")
-    release_path.parent.mkdir(exist_ok=True)
-    release_path.write_text(f"# {tag}\n\n{body}\n", encoding="utf-8")
-    index_path.write_text(updated_index, encoding="utf-8")
-    return release_path
+    # A committed page cannot contain the hash of its own release commit.
+    date = datetime.now(UTC).date()
+    section = f"## {date}\n\n{body.replace('## ', '### ')}"
+    updated_index = index.replace(RELEASE_LIST_MARKER, f"{RELEASE_LIST_MARKER}\n\n{section}\n")
+    index_path.write_text(updated_index.rstrip() + "\n", encoding="utf-8")
 
 
 def release_payload(tag: str, commit: str, body: str) -> dict[str, object]:
@@ -176,23 +171,18 @@ def self_test() -> None:
         "No notable changes."
     )
     index = f"# Changelog\n\n## Versionen\n\n{RELEASE_LIST_MARKER}\n"
-    link = "- [v1.2.3](changelog/v1.2.3.md)"
     with tempfile.TemporaryDirectory() as directory:
         index_path = Path(directory) / "changelog.md"
         index_path.write_text(index, encoding="utf-8")
-        release_path = update_changelog(index_path, "v1.2.3", body)
-        assert link in index_path.read_text(encoding="utf-8")
-        update_changelog(index_path, "v1.2.4", body)
-        assert index_path.read_text(encoding="utf-8").index("v1.2.4") < (
-            index_path.read_text(encoding="utf-8").index("v1.2.3")
-        )
-        assert release_path.read_text(encoding="utf-8") == f"# v1.2.3\n\n{body}\n"
+        update_changelog(index_path, body)
+        assert body.replace("## ", "### ") in index_path.read_text(encoding="utf-8")
+        assert not index_path.read_text(encoding="utf-8").endswith("\n\n")
 
-    payload = release_payload("v1.2.3", "a" * 40, body)
-    assert payload["tag_name"] == "v1.2.3"
+    payload = release_payload("2026-10-08-12345678", "a" * 40, body)
+    assert payload["tag_name"] == "2026-10-08-12345678"
     assert payload["target_commitish"] == "a" * 40
     assert payload["draft"] is False and payload["prerelease"] is False
-    assert SEMVER_TAG.fullmatch("v1.2.3") and not SEMVER_TAG.fullmatch("v1.2")
+    assert RELEASE_TAG.fullmatch("2026-10-08-12345678") and not RELEASE_TAG.fullmatch("v1.2.3")
     validate_existing(payload, payload)
     print("Forgejo release payload self-test passed.")
 
@@ -220,8 +210,8 @@ def main() -> int:
         return 0
     if not args.tag or not args.commit:
         parser.error("tag and commit are required")
-    if not SEMVER_TAG.fullmatch(args.tag):
-        parser.error("tag must be stable SemVer vX.Y.Z")
+    if not RELEASE_TAG.fullmatch(args.tag):
+        parser.error("tag must use YYYY-MM-DD-<8-character SHA>")
     if not re.fullmatch(r"[0-9a-fA-F]{40,64}", args.commit):
         parser.error("commit must be a full Git object ID")
 
@@ -230,8 +220,8 @@ def main() -> int:
         print(body)
         return 0
     if args.write_changelog:
-        release_path = update_changelog(args.write_changelog, args.tag, body)
-        print(f"Created release notes in {release_path}.")
+        update_changelog(args.write_changelog, body)
+        print(f"Created release notes in {args.write_changelog}.")
         return 0
 
     payload = release_payload(args.tag, args.commit, body)

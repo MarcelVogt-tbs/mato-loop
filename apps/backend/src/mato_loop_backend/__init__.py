@@ -1,3 +1,5 @@
 """MatoLoop backend package."""
 
-__version__ = "0.1.0"
+from matoloop_version import get_version
+
+__version__ = get_version()

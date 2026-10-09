@@ -12,12 +12,7 @@ check_tool() {
 }
 
 if [ "${MATOLOOP_AGENT_CONTAINER:-0}" = 1 ]; then
-    printf '%s\n' 'Browser components are included in the container.'
-    printf '%s\n' 'Checking browser desktop tools.'
-    for tool in Xvfb xrandr xprop openbox x11vnc xclip; do
-        check_tool "$tool"
-    done
-    command -v Xvfb xrandr xprop openbox x11vnc xclip >/dev/null
+    sh "$(dirname "$0")/container-browser-setup.sh" "$MATOLOOP_BROWSER_EXECUTABLE"
 elif [ "$(uname -s)" != Linux ]; then
     printf '%s\n' 'Browser setup is not supported on this system yet.'
     exit 1

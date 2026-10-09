@@ -11,7 +11,7 @@ ${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/mato-loop
 ${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/matoloop-agent
 ```
 
-Both images currently target `linux/amd64` only. Successful `develop` pushes publish both the mutable `develop` tag and an immutable `sha-<12>` tag derived from the Git commit ID. Native MatoLoop Agent installations use a selected branch from a Git checkout; CI does not publish native archives.
+Both images currently target `linux/amd64` only. Every source version uses `YYYY-MM-DD-<SHA8>`, derived from the commit date in UTC and its first eight SHA characters. The same commit has the same version on `develop` and `main`; local changes append `-dirty`. Native MatoLoop Agent installations fetch the running backend's exact commit; CI does not publish native archives.
 
 The tag policy deliberately limits mutable artifact storage:
 
@@ -19,9 +19,9 @@ The tag policy deliberately limits mutable artifact storage:
 | --- | --- | --- | --- |
 | Pull request | Full checks and tests | Both images | Never |
 | Feature branch push | Checks and tests only | No | Never |
-| `develop` push | Full checks and tests | Both images | Mutable `develop` and immutable `sha-<12>` |
+| `develop` push | Full checks and tests | Both images | Mutable `develop` and immutable date/SHA tag |
 | `main` push | Full checks and tests | No | Never; release tags only |
-| Release `vX.Y.Z` | Full checks and tests | Both images | `vX.Y.Z`, `X.Y.Z`, `latest` |
+| Date/SHA release tag | Full checks and tests | Both images | Immutable date/SHA tag and `latest` |
 
 Feature branches therefore consume runner cache only, each accepted `develop` revision retains an immutable image tag plus the moving `develop` tag, and releases retain fixed version tags. Forgejo registry retention and unreferenced-blob cleanup remain instance-administrator responsibilities.
 
@@ -48,7 +48,7 @@ The workflow uses Forgejo's Actions cache for locked UV and Yarn package downloa
 
 Backend and agent test jobs report their slowest tests using the test runners' built-in duration reporting. Develop publication checks the current branch head before building and again before publishing; superseded revisions skip unnecessary image builds, and revisions superseded during a build skip publication.
 
-New runs supersede older runs of the same branch/ref, including the entire `develop` pipeline and any in-progress image publication. An interrupted develop publication can leave an incomplete image pair; only use immutable commit tags from successful runs. Release tags share a separate concurrency group and are serialized without automatic cancellation. Runs already queued with an older workflow retain that workflow's concurrency settings.
+Develop and release publication workflows share one serialized concurrency group without automatic cancellation: a release and develop push can reference the same immutable version. Superseded develop revisions still skip building or publishing through the branch-head checks. Other refs supersede older runs of that ref. Interrupted publication can leave an incomplete image pair; only use tags from successful runs. Retries reuse validated existing fixed images. Runs already queued with an older workflow retain its concurrency settings.
 
 ## Test Environment Parity
 
@@ -87,9 +87,9 @@ Configure these Action secrets only for trusted `develop` and release jobs:
 
 The release job uses the configured `FORGEJO_TOKEN`; it is not a registry credential. Pull request jobs receive none of these configured secrets. The runner registration token belongs in the runner's external configuration, not in repository variables or secrets.
 
-Use a dedicated least-privilege publisher account. Allow it to update protected `develop`, `main`, and `v*` refs for releases. The registry token needs no MatoLoop application, database, deployment-host, provider, or MatoLoop Agent credentials.
+Use a dedicated least-privilege publisher account. Allow it to update protected `develop`, `main`, and date/SHA release tags. The registry token needs no MatoLoop application, database, deployment-host, provider, or MatoLoop Agent credentials.
 
-Protect `develop`, `main`, and `v*` tags so only trusted maintainers can modify them. Require the CI workflow for branch changes and protect reviews of `.forgejo/`, `scripts/ci/`, `scripts/release.sh`, Dockerfiles, `VERSION`, and package lockfiles. The Forgejo server URL must use HTTPS.
+Protect `develop`, `main`, and date/SHA tags so only trusted maintainers can modify them. Require the CI workflow for branch changes and protect reviews of `.forgejo/`, `scripts/ci/`, `scripts/release.sh`, Dockerfiles, `libs/python/version`, and package lockfiles. The Forgejo server URL must use HTTPS.
 
 ## Release Process
 
@@ -106,14 +106,7 @@ Release-Note: Security: Reject credentials in mail server URLs.
 
 The supported categories are `Added`, `Changed`, `Fixed`, and `Security`. Keep multiple trailers together in the final commit-message paragraph so Git recognizes all of them. The trailer is optional; commits without one and merge commits are omitted. CI rejects malformed trailers.
 
-Releases default to a patch version increase. Add `Release-Bump: minor` or `Release-Bump: major` to a non-merge commit when the release needs a larger increase. The highest bump since the previous release wins. For example:
-
-```text
-Add mail integration
-
-Release-Note: Added: Add IMAP and SMTP integration.
-Release-Bump: minor
-```
+There are no major/minor/patch increments or `Release-Bump` trailers. Python/npm manifest versions are fixed packaging placeholders, not product versions. The shared `libs/python/version` helper calculates the product version and writes `build-version.txt` before packaging. Backend, Linux Agent, and Windows Agent report this version; installed packages do not need Git. Development checkouts read Git directly; missing metadata reports `unknown`.
 
 Start a release manually from the `develop` branch in Forgejo under **Actions > Release**, or from a clean, current local `develop` checkout:
 
@@ -121,19 +114,22 @@ Start a release manually from the `develop` branch in Forgejo under **Actions > 
 ./scripts/release.sh
 ```
 
-The script keeps the current version for the first release and otherwise applies the highest `Release-Bump` since `main`, defaulting to patch. It generates `docs/user/changelog/vX.Y.Z.md`, adds it to the changelog index, synchronizes package versions and locks, runs all checks and tests, commits on `develop`, fast-forwards `main`, creates `vX.Y.Z`, returns to `develop`, and atomically pushes both branches and the tag. Pass an explicit numeric version without a leading `v` only for an exceptional release. CI accepts only annotated release tags whose commit is on `main`. Do not create release tags manually or publish from arbitrary commits.
-
-Normal commits do not change version declarations. The first release may use the already synchronized repository version while no local or remote `v*` tag exists; every later release must increase the version.
+The script adds dated notes to `docs/user/changelog.md`, runs all checks and tests, and commits on `develop`. It derives the version from that final commit, fast-forwards `main`, creates the annotated date/SHA tag, returns to `develop`, and atomically pushes both branches and the tag. A committed changelog cannot contain its own commit hash, so it uses date headings while the Forgejo Release carries the exact version. Package manifests and lockfiles are not rewritten. `--dry-run` previews the notes and validates the branch state. CI accepts only tags matching their clean source version and pointing to commits on `main`. Do not create release tags manually. Previous `v*` tags remain valid release-note baselines during migration.
 
 After checks and both `linux/amd64` builds succeed, the release job publishes these tags on both images:
 
 ```text
-vX.Y.Z
-X.Y.Z
+2026-10-08-a1b2c3d4
 latest
 ```
 
-It then creates the matching Forgejo Release from the same categorized notes stored in the versioned changelog page. Workflow retries preserve existing fixed tags, publication workflows are serialized, and `latest` never moves to an older version. Forgejo concurrency is best-effort, so the required task queue and branch/tag protections remain part of the integrity boundary. Registry pushes across two repositories are not transactional: if publication stops partway through, no Forgejo Release is created; repair any incomplete fixed-tag pair within one image before retrying. Artifact publication is not deployment automation; operators choose when to pull a version.
+It then creates the matching Forgejo Release from the same categorized notes stored in the changelog. Workflow retries preserve existing fixed tags, publication workflows are serialized, and `latest` never moves to an older source revision. Git ancestry determines release order, including multiple releases on the same day; hashes are not compared alphabetically. Forgejo concurrency is best-effort, so the required task queue and branch/tag protections remain part of the integrity boundary. Registry pushes across two repositories are not transactional: if publication stops partway through, no Forgejo Release is created; retry to publish the missing image. Artifact publication is not deployment automation; operators choose when to pull a version.
+
+CI passes the calculated version through `MATOLOOP_VERSION` and the full commit through `BUILD_REVISION`. Local Docker builds calculate them from a read-only Git mount in a version build stage, without copying Git into the runtime image. Linked worktrees need host-calculated `MATOLOOP_VERSION` and `BUILD_REVISION` arguments because their Git metadata is outside the build context. Recompute them after source changes. Without a valid full revision the backend cannot provide a managed Agent installation target. The shared helper can be run directly:
+
+```bash
+python3 libs/python/version/src/matoloop_version/__init__.py
+```
 
 ## Compose and Rollback
 
@@ -151,8 +147,8 @@ Use `docker compose -f docker-compose.no-agent.yaml up -d --remove-orphans` for 
 For a reproducible `develop` deployment, set the same immutable commit tag on both images and pull before recreating containers:
 
 ```env
-MATO_LOOP_IMAGE=${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/mato-loop:sha-0123456789ab
-MATOLOOP_AGENT_IMAGE=${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/matoloop-agent:sha-0123456789ab
+MATO_LOOP_IMAGE=${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/mato-loop:2026-10-08-a1b2c3d4
+MATOLOOP_AGENT_IMAGE=${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/matoloop-agent:2026-10-08-a1b2c3d4
 ```
 
 ```bash
@@ -160,8 +156,8 @@ docker compose pull
 docker compose up -d
 ```
 
-Use the same commit tag for MatoLoop and the MatoLoop Agent. Stable releases may use the matching fixed `vX.Y.Z` or `X.Y.Z` tags instead. `develop` and `latest` are not reproducible deployment references.
+Use the same date/SHA tag for MatoLoop and the MatoLoop Agent. `develop` and `latest` are not reproducible deployment references. Managed Docker Agents can also synchronize to the running backend's commit through the WebUI. Such updates survive container restarts, while recreating the container restores the selected image; credentials and workspaces stay in their mounts. See [computer-maintenance.md](computer-maintenance.md).
 
 Use the mutable `develop` tag only for short-lived test environments and run `docker compose pull` before every recreation. Never use `develop` as a rollback target.
 
-Rollback by setting both image variables to the previous fixed `sha-<12>` or release tag, pulling, and recreating the containers. Because startup applies Alembic migrations, an image rollback may also require restoring the database and `/data` from the matching pre-upgrade backup. Never use `develop` or `latest` as a rollback target.
+Rollback by setting both image variables to the previous fixed date/SHA tag, pulling, and recreating the containers. Because startup applies Alembic migrations, an image rollback may also require restoring the database and `/data` from the matching pre-upgrade backup. Never use `develop` or `latest` as a rollback target.

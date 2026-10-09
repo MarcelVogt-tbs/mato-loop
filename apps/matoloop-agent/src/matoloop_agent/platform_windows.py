@@ -9,7 +9,6 @@ import platform
 import shutil
 import socket
 from collections.abc import Coroutine, Mapping
-from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -72,7 +71,12 @@ class WindowsPlatform:
             return False
 
     async def start_maintenance(
-        self, config: AgentConfig, action: str, job_id: str, password: str | None
+        self,
+        config: AgentConfig,
+        action: str,
+        job_id: str,
+        password: str | None,
+        revision: str | None = None,
     ) -> dict:
         if not self._maintenance_available(config):
             raise AgentError("maintenance.unavailable", "Native maintenance is unavailable")
@@ -85,7 +89,7 @@ class WindowsPlatform:
         request = config.data_dir / "maintenance-request.json"
         try:
             with request.open("x", encoding="utf-8") as file:
-                json.dump({"action": action, "jobId": job_id}, file)
+                json.dump({"action": action, "jobId": job_id, "revision": revision}, file)
         except OSError as exc:
             raise AgentError(
                 "maintenance.failed", "Maintenance request could not be prepared"
@@ -168,12 +172,10 @@ class WindowsPlatform:
         )
 
     def system_info(self, current_directory: str | None, filesystem: FilesystemAdapter) -> dict:
-        try:
-            agent_version = version("matoloop-agent")
-        except Exception:
-            agent_version = "0.1.0"
+        from matoloop_version import get_version
+
         result = {
-            "agentVersion": agent_version,
+            "agentVersion": get_version(),
             "platform": self.platform_id,
             "operatingSystem": "Windows",
             "distribution": platform.platform()[:255],

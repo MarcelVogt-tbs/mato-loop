@@ -21,7 +21,10 @@ MANAGER="$INSTALL_ROOT/installer.py"
 WRAPPER=${XDG_BIN_HOME:-$HOME/.local/bin}/matoloop-agent
 SERVICE=/etc/systemd/system/matoloop-agent.service
 LEGACY_SERVICE=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/matoloop-agent.service
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." 2>/dev/null && pwd || true)
+ROOT=
+if [ -f "$RESOLVED_SCRIPT" ]; then
+    ROOT=$(CDPATH= cd -- "$(dirname -- "$RESOLVED_SCRIPT")/.." && pwd)
+fi
 INPUT=
 if [ -t 0 ]; then
     INPUT=/dev/stdin
@@ -98,7 +101,7 @@ chmod 600 "$INSTALL_ROOT/.managed-by-matoloop-agent"
 
 MISSING_PACKAGES=
 command -v curl >/dev/null 2>&1 || MISSING_PACKAGES=curl
-if [ ! -f "$ROOT/apps/matoloop-agent/pyproject.toml" ] && ! command -v git >/dev/null 2>&1; then
+if ! command -v git >/dev/null 2>&1; then
     MISSING_PACKAGES="${MISSING_PACKAGES:+$MISSING_PACKAGES }git"
 fi
 if [ -n "$MISSING_PACKAGES" ]; then
@@ -140,33 +143,58 @@ export UV_MANAGED_PYTHON=1
 "$UV" python install 3.13
 BOOTSTRAP_PYTHON=$("$UV" python find 3.13)
 
-if [ -f "$ROOT/apps/matoloop-agent/pyproject.toml" ]; then
+if [ -n "$ROOT" ] && [ -f "$ROOT/apps/matoloop-agent/pyproject.toml" ]; then
     if [ -n "$INPUT" ]; then
         exec "$BOOTSTRAP_PYTHON" "$ROOT/scripts/matoloop-agent-installer.py" install --source "$ROOT" "$@" < "$INPUT"
     fi
     exec "$BOOTSTRAP_PYTHON" "$ROOT/scripts/matoloop-agent-installer.py" install --source "$ROOT" "$@"
 fi
 
-BRANCH=${MATOLOOP_AGENT_BRANCH:-}
-if [ -z "$BRANCH" ]; then
-    BRANCH=main
-    if [ -n "$INPUT" ]; then
-        printf 'Git branch [%s]: ' "$BRANCH"
-        read -r answer < "$INPUT"
-        BRANCH=${answer:-$BRANCH}
-    fi
+INSTANCE_URL=
+HOME_DIRECTORY=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --instance-url) [ "$#" -ge 2 ] || fail "--instance-url requires a URL."; INSTANCE_URL=$2; shift 2 ;;
+        --home) [ "$#" -ge 2 ] || fail "--home requires a path."; HOME_DIRECTORY=$2; shift 2 ;;
+        *) fail "Unknown installation option: $1" ;;
+    esac
+done
+if [ -z "$INSTANCE_URL" ] && [ -n "$INPUT" ]; then
+    printf '%s' 'MatoLoop instance URL (https://host): '
+    read -r INSTANCE_URL < "$INPUT"
 fi
+INSTANCE_URL=${INSTANCE_URL%/}
+case "$INSTANCE_URL" in
+    http://*|https://*) ;;
+    *) fail "A MatoLoop instance URL is required." ;;
+esac
+REVISION=$(curl --fail --silent --show-error --max-time 30 --proto '=https,http' \
+    -- "$INSTANCE_URL/api/execution-agents/installation-target" | "$BOOTSTRAP_PYTHON" -c '
+import json, re, sys
+try:
+    target = json.loads(sys.stdin.read(4097))
+    revision = target["revision"]
+    version = target["version"]
+    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise ValueError("Invalid revision")
+    if not isinstance(version, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}-" + revision[:8], version):
+        raise ValueError("Invalid version")
+except (ValueError, KeyError, TypeError):
+    raise SystemExit("The backend has no reproducible Agent installation target.")
+print(revision)
+')
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/matoloop-agent-source.XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT HUP INT TERM
+git init --quiet "$STAGE/source"
+git -C "$STAGE/source" remote add -- origin "${MATOLOOP_AGENT_SOURCE_URL:-https://git.devmato.net/devmato/MatoLoop.git}"
+git -C "$STAGE/source" fetch --depth=1 --no-tags origin "$REVISION"
+[ "$(git -C "$STAGE/source" rev-parse 'FETCH_HEAD^{commit}')" = "$REVISION" ] || fail "Source does not match the backend commit."
+git -C "$STAGE/source" checkout --detach "$REVISION"
+[ -f "$STAGE/source/libs/python/version/src/matoloop_version/__init__.py" ] || fail "The target commit does not support versioned Agent installations."
+set -- --source "$STAGE/source" --managed --instance-url "$INSTANCE_URL"
+[ -z "$HOME_DIRECTORY" ] || set -- "$@" --home "$HOME_DIRECTORY"
 if [ -n "$INPUT" ]; then
-    git clone --branch "$BRANCH" --single-branch "${MATOLOOP_AGENT_SOURCE_URL:-https://git.devmato.net/devmato/MatoLoop.git}" "$STAGE/source" < "$INPUT"
+    "$BOOTSTRAP_PYTHON" "$STAGE/source/scripts/matoloop-agent-installer.py" install "$@" < "$INPUT"
 else
-    git clone --branch "$BRANCH" --single-branch "${MATOLOOP_AGENT_SOURCE_URL:-https://git.devmato.net/devmato/MatoLoop.git}" "$STAGE/source"
-fi
-if [ -n "$INPUT" ]; then
-    "$BOOTSTRAP_PYTHON" "$STAGE/source/scripts/matoloop-agent-installer.py" install \
-        --source "$STAGE/source" --managed "$@" < "$INPUT"
-else
-    "$BOOTSTRAP_PYTHON" "$STAGE/source/scripts/matoloop-agent-installer.py" install \
-        --source "$STAGE/source" --managed "$@"
+    "$BOOTSTRAP_PYTHON" "$STAGE/source/scripts/matoloop-agent-installer.py" install "$@"
 fi

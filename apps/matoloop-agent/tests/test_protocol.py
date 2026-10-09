@@ -16,12 +16,39 @@ class ProtocolTests(unittest.TestCase):
             type="request",
             id=REQUEST_ID,
             operation="maintenance.start",
-            arguments={"action": "update", "jobId": REQUEST_ID, "sudoPassword": "secret"},
+            arguments={
+                "action": "update",
+                "jobId": REQUEST_ID,
+                "sudoPassword": "secret",
+                "revision": "a" * 40,
+            },
         )
         self.assertEqual(validate_arguments(request).sudo_password, "secret")
         request.arguments["sudoPassword"] = "secret\nnext"
         with self.assertRaises(ValidationError):
             validate_arguments(request)
+
+    def test_update_only_capability_rejects_uninstall(self) -> None:
+        request = Request(
+            type="request",
+            id=REQUEST_ID,
+            operation="maintenance.update",
+            arguments={"action": "uninstall", "jobId": REQUEST_ID},
+        )
+        with self.assertRaises(ValidationError):
+            validate_arguments(request)
+
+    def test_updates_require_a_full_commit_instead_of_a_branch(self) -> None:
+        for revision in (None, "main", "-bad-option", "a" * 8, "a" * 40 + "\n"):
+            with self.subTest(revision=revision), self.assertRaises(ValidationError):
+                validate_arguments(
+                    Request(
+                        type="request",
+                        id=REQUEST_ID,
+                        operation="maintenance.update",
+                        arguments={"action": "update", "jobId": REQUEST_ID, "revision": revision},
+                    )
+                )
 
     def test_shell_environment_is_strict_bounded_and_protects_clean_values(self) -> None:
         request = Request(

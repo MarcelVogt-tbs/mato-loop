@@ -93,7 +93,7 @@
           <q-item-section side top class="execution-agent-item__actions">
             <div class="row items-center no-wrap q-gutter-xs">
               <q-btn
-                v-if="agent.operations?.includes('maintenance.start')"
+                v-if="agent.operations?.some(operation => ['maintenance.start', 'maintenance.update'].includes(operation))"
                 flat round dense icon="more_vert"
                 :aria-label="`Agent-Wartung für ${agent.alias}`"
                 :disable="!agent.connected || agent.maintenance?.status === 'running' || maintenanceBusy"
@@ -104,7 +104,7 @@
                       <q-item-section avatar><q-icon name="update" /></q-item-section>
                       <q-item-section>Agent aktualisieren</q-item-section>
                     </q-item>
-                    <q-item clickable v-close-popup @click="maintain(agent, 'uninstall')">
+                    <q-item v-if="agent.operations?.includes('maintenance.start')" clickable v-close-popup @click="maintain(agent, 'uninstall')">
                       <q-item-section avatar><q-icon name="delete_sweep" /></q-item-section>
                       <q-item-section>Agent deinstallieren</q-item-section>
                     </q-item>
@@ -238,6 +238,8 @@ import { useExecutionAgentStore } from 'stores/execution-agents'
 defineOptions({ name: 'ExecutionAgentSettingsPage' })
 
 const operationLabels = {
+  'maintenance.start': 'Agent-Wartung',
+  'maintenance.update': 'Agent aktualisieren',
   'cache.clear': 'Cache leeren',
   'cache.ensure': 'Datei im Cache bereitstellen',
   'cache.store': 'Datei im Cache speichern',

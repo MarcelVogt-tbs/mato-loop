@@ -1,7 +1,7 @@
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ffmpeg poppler-utils ripgrep \
+    && apt-get install -y --no-install-recommends curl ffmpeg git poppler-utils ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
 # Official Lightpanda 1.0.0 binary; no browser service or compiler is required.

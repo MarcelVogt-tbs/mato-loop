@@ -6,6 +6,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -191,6 +192,61 @@ class InstallerTests(unittest.TestCase):
             )
             self.assertEqual(result.stdout.strip(), "None")
 
+    def test_container_activation_and_failed_start_restore_the_running_release(self) -> None:
+        for failure in (None, "start", "launcher"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                for name in ("old", "new"):
+                    release = root / "releases" / name
+                    executable = release / "venv/bin/matoloop-agent"
+                    executable.parent.mkdir(parents=True)
+                    command = (
+                        "raise SystemExit(1)"
+                        if failure == "start" and name == "new"
+                        else "import time; time.sleep(60)"
+                    )
+                    executable.write_text(f"#!/bin/sh\nexec '{sys.executable}' -c '{command}'\n")
+                    executable.chmod(0o755)
+                    source = release / "source/scripts"
+                    source.mkdir(parents=True)
+                    (source / "matoloop-agent-installer.py").write_text(f"# {name}\n")
+                launcher = root / "installer.py"
+                launcher.write_text("# old\n")
+                replace = os.replace
+                interrupted = False
+
+                def interrupted_replace(
+                    source, destination, *, failure=failure, launcher=launcher, replace=replace
+                ):
+                    nonlocal interrupted
+                    if failure == "launcher" and destination == launcher and not interrupted:
+                        interrupted = True
+                        self.assertEqual(launcher.read_text(), "# old\n")
+                        raise OSError("Launcher replacement interrupted")
+                    return replace(source, destination)
+
+                state = {"release": "releases/old", "sourceUrl": "unused"}
+                installer.write_json(root / "install.json", state)
+                installer.container_start(root, state)
+                try:
+                    with patch.object(installer.os, "replace", side_effect=interrupted_replace):
+                        if failure:
+                            with self.assertRaises(RuntimeError if failure == "start" else OSError):
+                                installer.activate_container_release(
+                                    root, state, root / "releases/new"
+                                )
+                        else:
+                            installer.activate_container_release(root, state, root / "releases/new")
+                    self.assertEqual(
+                        (
+                            json.loads((root / "install.json").read_text())["release"],
+                            installer._container_process.poll(),
+                        ),
+                        ("releases/old" if failure else "releases/new", None),
+                    )
+                finally:
+                    installer.container_stop()
+
     def test_checkout_install_keeps_every_managed_file_under_selected_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -270,7 +326,21 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(layout["venv"].resolve(), previous)
             self.assertTrue((previous / "working").exists())
 
-    def test_update_pulls_the_checkout_tracking_branch(self) -> None:
+    def test_target_revision_requires_clean_backend_metadata(self) -> None:
+        for version in ("2026-10-08-aaaaaaaa", "2026-10-08-aaaaaaaa-dirty"):
+            with self.subTest(version=version), patch.object(installer, "build_opener") as opener:
+                opener.return_value.open.return_value = io.BytesIO(
+                    json.dumps({"revision": "a" * 40, "version": version}).encode()
+                )
+                if version.endswith("-dirty"):
+                    with self.assertRaises(SystemExit):
+                        installer.target_revision("https://mato.test")
+                else:
+                    self.assertEqual(installer.target_revision("https://mato.test"), "a" * 40)
+
+    def test_update_pins_backend_commit_in_both_directions_without_changing_user_checkout(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             remote = base / "remote.git"
@@ -290,13 +360,18 @@ class InstallerTests(unittest.TestCase):
             git("-C", author, "config", "user.name", "MatoLoop Test")
             git("-C", author, "config", "user.email", "test@example.invalid")
             (author / "version").write_text("one")
-            git("-C", author, "add", "version")
+            helper = author / "libs/python/version/src/matoloop_version/__init__.py"
+            helper.parent.mkdir(parents=True)
+            helper.touch()
+            git("-C", author, "add", ".")
             git("-C", author, "commit", "-m", "Initial")
+            first = git("-C", author, "rev-parse", "HEAD").stdout.strip()
             git("-C", author, "remote", "add", "origin", remote)
             git("-C", author, "push", "-u", "origin", "main")
             git("clone", "--branch", "main", remote, source)
             (author / "version").write_text("two")
             git("-C", author, "commit", "-am", "Update")
+            second = git("-C", author, "rev-parse", "HEAD").stdout.strip()
             git("-C", author, "push")
 
             root = base / "agent"
@@ -307,30 +382,27 @@ class InstallerTests(unittest.TestCase):
                     {
                         "source": str(source),
                         "sourceType": "checkout",
+                        "sourceUrl": str(remote),
                         "homeDirectory": str(base / "home"),
                         "instanceUrl": "https://mato.test",
                     },
                 )
-                original_run = installer.run
+                installed = []
 
-                def record_git(*command, **kwargs):
-                    if command[0] == installer.sys.executable:
-                        return subprocess.CompletedProcess(command, 0)
-                    return original_run(*command, **kwargs)
+                def record_install(arguments):
+                    installed.append(
+                        git("-C", arguments.source, "rev-parse", "HEAD").stdout.strip()
+                    )
 
-                with patch.object(installer, "run", side_effect=record_git) as commands:
-                    installer.update()
-            self.assertEqual((source / "version").read_text(), "two")
-            reinstall = commands.call_args_list[-1].args
+                with (
+                    patch.object(installer, "target_revision", side_effect=[second, first]),
+                    patch.object(installer, "install", side_effect=record_install),
+                ):
+                    installer.update(in_process=True)
+                    installer.update(in_process=True)
             self.assertEqual(
-                reinstall[:3],
-                (
-                    installer.sys.executable,
-                    source / "scripts/matoloop-agent-installer.py",
-                    "install",
-                ),
+                (installed, (source / "version").read_text()), ([second, first], "one")
             )
-            self.assertNotIn("--managed", reinstall)
 
     def test_uninstall_preserves_data_without_purge(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -586,6 +658,7 @@ class InstallerTests(unittest.TestCase):
                     return Child()
 
                 with (
+                    patch.dict(os.environ, {"MATOLOOP_AGENT_CONTAINER": "0"}),
                     patch(
                         "matoloop_agent.platform_linux.shutil.which",
                         side_effect=lambda name: f"/usr/bin/{name}",
@@ -596,13 +669,14 @@ class InstallerTests(unittest.TestCase):
                     ),
                 ):
                     result = await LinuxPlatform().start_maintenance(
-                        config, "update", "ce137f81-2b83-4e07-950d-c35306533e16", "secret"
+                        config, "update", "ce137f81-2b83-4e07-950d-c35306533e16", "secret", "a" * 40
                     )
                 await asyncio.gather(*handoffs)
                 self.assertEqual(result, {"started": True})
                 self.assertEqual(connections, [b"secret"])
                 self.assertIn("--collect", calls[1])
                 self.assertIn(str(root), calls[1])
+                self.assertIn("a" * 40, calls[1])
                 self.assertNotIn("secret", str(calls[0][:-1]) + str(calls[1][:-1]))
 
         asyncio.run(check())

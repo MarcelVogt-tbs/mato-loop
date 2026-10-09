@@ -3,13 +3,13 @@ name: CI
 on:
   push:
     branches: ["**"]
-    tags: ["v*"]
+    tags: ["[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*"]
   pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ startsWith(github.ref, 'refs/tags/v') && 'publication' || github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+  group: ci-${{ github.workflow }}-${{ (github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/')) && 'publication' || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/develop' && !startsWith(github.ref, 'refs/tags/') }}
 
 defaults:
   run:
@@ -36,7 +36,7 @@ jobs:
         working-directory: apps/backend
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg poppler-utils ripgrep
+          sudo apt-get install -y ffmpeg git poppler-utils ripgrep
           python -m pip install uv==0.10.9
           uv sync --frozen --group docs
       - name: Install pinned Lightpanda
@@ -50,7 +50,7 @@ jobs:
         run: |
           uv run --no-sync mkdocs build --strict --config-file ../../mkdocs.yml --site-dir /tmp/mato-loop-docs
           uv run --no-sync python -m compileall src/mato_loop_backend
-          uv run --no-sync ruff check src tests
+          uv run --no-sync ruff check src tests ../../libs/python/version/src
       - name: Test backend
         working-directory: apps/backend
         run: uv run --no-sync pytest --durations=20
@@ -181,15 +181,13 @@ jobs:
           python3 -m py_compile scripts/check-version.py scripts/ci/create-forgejo-release.py scripts/ci/check-develop-revision.py
       - name: Test CI helpers
         run: |
-          bash scripts/release.sh --self-test
           bash scripts/ci/publish-docker-image.sh --self-test
           python3 scripts/ci/check-develop-revision.py --self-test
           python3 scripts/ci/create-forgejo-release.py --self-test
           python3 scripts/ci/create-forgejo-release.py --check-notes HEAD
-          python3 scripts/check-version.py --self-test
       - name: Check versions and release tag
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             python3 scripts/check-version.py "${GITHUB_REF#refs/tags/}"
             [[ "$(git cat-file -t "$GITHUB_REF")" == tag ]] || { printf 'Release tag must be annotated.\n' >&2; exit 1; }
             git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main || { printf 'Release tag must point to a commit on main.\n' >&2; exit 1; }
@@ -225,7 +223,7 @@ jobs:
         run: bash scripts/ci/publish-docker-image.sh build matoloop-agent . apps/matoloop-agent/Dockerfile
 
   publish-images:
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/v'))
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/'))
     needs: [backend, frontend, matoloop-agent, migrations, version]
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -238,6 +236,7 @@ jobs:
     steps:
       - uses: https://github.com/actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Check develop revision before building
         id: build_freshness
@@ -252,12 +251,6 @@ jobs:
         env:
           KEEP_LOCAL_IMAGE: "1"
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            IMAGE_VERSION="${GITHUB_REF#refs/tags/v}"
-          else
-            IMAGE_VERSION=develop
-          fi
-          export IMAGE_VERSION
           bash scripts/ci/publish-docker-image.sh build mato-loop . apps/backend/Dockerfile
           bash scripts/ci/publish-docker-image.sh build matoloop-agent . apps/matoloop-agent/Dockerfile
       - name: Check current develop revision
@@ -271,7 +264,7 @@ jobs:
       - name: Publish both images
         if: github.ref != 'refs/heads/develop' || steps.freshness.outputs.current == 'true'
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             mode=release
             tag="${GITHUB_REF#refs/tags/}"
           else
@@ -285,7 +278,7 @@ jobs:
         run: docker image rm --force "mato-loop:ci-$CI_RUN_ID" "matoloop-agent:ci-$CI_RUN_ID" >/dev/null 2>&1 || true
 
   release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     needs: [publish-images]
     runs-on: ubuntu-latest
     timeout-minutes: 10

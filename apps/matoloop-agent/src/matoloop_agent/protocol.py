@@ -507,15 +507,27 @@ class OpenScadRenderArguments(StrictModel):
 class MaintenanceStartArguments(StrictModel):
     action: Literal["update", "uninstall"]
     job_id: str = Field(alias="jobId", pattern=UUID_PATTERN)
+    revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
     sudo_password: str | None = Field(
         default=None, alias="sudoPassword", min_length=1, max_length=4096
     )
 
     _password_is_single_line = field_validator("sudo_password")(_single_line_password)
 
+    @model_validator(mode="after")
+    def revision_matches_action(self):
+        if (self.action == "update") != (self.revision is not None):
+            raise ValueError("A target revision is required only for updates")
+        return self
+
+
+class MaintenanceUpdateArguments(MaintenanceStartArguments):
+    action: Literal["update"]
+
 
 ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "maintenance.start": MaintenanceStartArguments,
+    "maintenance.update": MaintenanceUpdateArguments,
     "system.info": SystemInfoArguments,
     "filesystem.resolve": ResolveDirectoryArguments,
     "filesystem.stat": StatArguments,

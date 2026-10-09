@@ -164,7 +164,11 @@ class MatoLoopAgent:
             return await asyncio.to_thread(self.system_info, arguments.current_directory)
         if isinstance(arguments, MaintenanceStartArguments):
             return await self.platform.start_maintenance(
-                self.config, arguments.action, arguments.job_id, arguments.sudo_password
+                self.config,
+                arguments.action,
+                arguments.job_id,
+                arguments.sudo_password,
+                arguments.revision,
             )
         if isinstance(arguments, ResolveDirectoryArguments):
             return await asyncio.to_thread(self.filesystem.resolve_directory, arguments.path)
