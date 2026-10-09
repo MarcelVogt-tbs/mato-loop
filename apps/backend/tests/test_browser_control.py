@@ -226,12 +226,23 @@ def test_request_reports_disconnected_execution_agent(request_case, monkeypatch)
 @pytest.mark.parametrize("phase", ["startup", "attachment"])
 def test_request_timeout_closes_incomplete_binding(request_case, monkeypatch, phase):
     case = request_case
-    monkeypatch.setattr(control, "CONTROL_TIMEOUT", 0.01)
+    timeouts = {}
+    timeout = asyncio.timeout
+
+    def track_timeout(delay):
+        scope = timeout(delay)
+        timeouts[asyncio.current_task()] = scope
+        return scope
+
+    monkeypatch.setattr(control.asyncio, "timeout", track_timeout)
 
     async def reply(operation, arguments):
         if (phase == "startup" and operation == "integration.browser.open") or (
             phase == "attachment" and operation == "integration.browser.control" and arguments["manual"] is False
         ):
+            # Expire the request only after the selected RPC starts.
+            request = next(iter(control.browser_control_requests.requests.values()))
+            timeouts[request.task].reschedule(asyncio.get_running_loop().time())
             await asyncio.sleep(1)
 
     case.reply = reply
