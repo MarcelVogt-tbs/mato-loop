@@ -32,6 +32,13 @@ if [[ "${1:-}" == --self-test ]]; then
     [[ "$(remote_state example.invalid/image:missing)" == missing ]]
     docker() { printf 'registry timeout' >&2; return 1; }
     ! (remote_state example.invalid/image:missing) >/dev/null 2>&1
+    test_config="$(mktemp -d)"
+    trap 'rm -rf "$test_config"' EXIT
+    printf '{"auths":{"docker.io":{"auth":"synthetic"}}}\n' > "$test_config/config.json"
+    docker() { [[ "$1" != build ]] || cmp -s "$EXPECTED_CONFIG" "$DOCKER_CONFIG/config.json"; }
+    export -f docker
+    EXPECTED_CONFIG="$test_config/config.json" DOCKER_CONFIG="$test_config" \
+        bash "$0" build mato-loop . apps/backend/Dockerfile
     printf 'Docker image tag self-test passed.\n'
     exit
 fi
@@ -42,6 +49,7 @@ MODE="$1" IMAGE="$2" CONTEXT="$3" DOCKERFILE="$4" RELEASE_TAG="${5:-}"
 [[ "$IMAGE" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]] || die "Invalid image name."
 [[ -d "$CONTEXT" && -f "$DOCKERFILE" ]] || die "Missing build context or Dockerfile."
 command -v docker >/dev/null
+SOURCE_DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}"
 DOCKER_CONFIG="$(mktemp -d "${TMPDIR:-/tmp}/mato-loop-docker.XXXXXX")"
 export DOCKER_CONFIG
 LOCAL_REFS=()
@@ -52,6 +60,9 @@ cleanup() {
     rm -rf "$DOCKER_CONFIG"
 }
 trap cleanup EXIT
+if [[ -f "$SOURCE_DOCKER_CONFIG/config.json" ]]; then
+    cp "$SOURCE_DOCKER_CONFIG/config.json" "$DOCKER_CONFIG/config.json"
+fi
 
 REVISION="$(git rev-parse HEAD)"
 [[ -z "${GITHUB_SHA:-}" || "$GITHUB_SHA" == "$REVISION" ]] || die "Checkout does not match CI revision."
