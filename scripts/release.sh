@@ -35,14 +35,14 @@ git merge-base --is-ancestor main develop || die "main must be an ancestor of de
 [[ "$(git rev-parse main)" != "$(git rev-parse develop)" ]] || die "No commits to release."
 SOURCE="$(git rev-parse HEAD)"
 SOURCE_VERSION="$(python3 scripts/check-version.py)"
-python3 scripts/ci/create-forgejo-release.py "$SOURCE_VERSION" "$SOURCE" --print-notes
+python3 scripts/ci/create-release.py "$SOURCE_VERSION" "$SOURCE" --print-notes
 if [[ "$DRY_RUN" == true ]]; then
     printf '%s\n' "Dry run passed. A release would commit dated notes, run checks and tests," \
         "fast-forward main, tag the final commit with its date/SHA version, and push atomically."
     exit
 fi
 
-python3 scripts/ci/create-forgejo-release.py "$SOURCE_VERSION" "$SOURCE" \
+python3 scripts/ci/create-release.py "$SOURCE_VERSION" "$SOURCE" \
     --write-changelog docs/user/changelog.md
 ./scripts/dev.sh check
 ./scripts/dev.sh test

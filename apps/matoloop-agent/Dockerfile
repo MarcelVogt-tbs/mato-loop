@@ -25,7 +25,7 @@ COPY apps/matoloop-agent/src ./src
 COPY scripts/matoloop-agent-installer.py ../../scripts/matoloop-agent-installer.py
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --group browser --no-editable \
     && sh src/matoloop_agent/container-browser-setup.sh "$UV_PROJECT_ENVIRONMENT/bin/python"
-ARG AGENT_SOURCE_URL=https://git.devmato.net/devmato/MatoLoop.git
+ARG AGENT_SOURCE_URL=https://github.com/devmato/mato-loop.git
 RUN python ../../scripts/matoloop-agent-installer.py container-init "$AGENT_SOURCE_URL"
 COPY apps/matoloop-agent/config.json /usr/share/matoloop-agent/config.json
 COPY --chmod=755 apps/matoloop-agent/docker/entrypoint /usr/local/bin/matoloop-agent-entrypoint

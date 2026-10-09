@@ -231,7 +231,7 @@ $sourceUrl = if ($existing -and $existing.sourceUrl) { $existing.sourceUrl } els
     $origin = & $git -C $existing.source remote get-url origin
     if ($LASTEXITCODE) { Fail 'Could not read the installed source repository.' }
     $origin
-} else { 'https://git.devmato.net/devmato/MatoLoop.git' }
+} else { 'https://github.com/devmato/mato-loop.git' }
 New-Item -ItemType Directory -Path $root, $data, (Join-Path $root 'tools\bin'),
     (Join-Path $root 'venvs') -Force | Out-Null
 if (-not (Test-Path -LiteralPath $marker)) {

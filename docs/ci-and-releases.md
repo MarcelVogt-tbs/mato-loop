@@ -1,14 +1,14 @@
-# Forgejo CI and Releases
+# CI and Releases
 
-Forgejo Actions verifies MatoLoop and publishes release artifacts. It does not deploy MatoLoop, update a server, touch deployment storage, or perform Docker garbage collection on runners.
+GitHub is the primary host at [devmato/mato-loop](https://github.com/devmato/mato-loop). GitHub Actions verifies MatoLoop and publishes GHCR images and GitHub releases. Forgejo remains a Git pull mirror with Actions disabled. Both `.github/workflows` and `.forgejo/workflows` stay in the repository; Forgejo workflows remain usable if it is the primary host. CI does not deploy MatoLoop, update a server, touch deployment storage, or perform Docker garbage collection on runners.
 
 ## Published Artifacts
 
 The registry contains two OCI images:
 
 ```text
-${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/mato-loop
-${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/matoloop-agent
+ghcr.io/devmato/mato-loop/mato-loop
+ghcr.io/devmato/mato-loop/matoloop-agent
 ```
 
 Both images currently target `linux/amd64` only. Every source version uses `YYYY-MM-DD-<SHA8>`, derived from the commit date in UTC and its first eight SHA characters. The same commit has the same version on `develop` and `main`; local changes append `-dirty`. Native MatoLoop Agent installations fetch the running backend's exact commit; CI does not publish native archives.
@@ -22,14 +22,17 @@ The tag policy deliberately limits mutable artifact storage:
 | `develop` push | Full checks and tests | Both images | Mutable `develop` and immutable date/SHA tag |
 | `main` push | Full checks and tests | No | Never; release tags only |
 | Date/SHA release tag | Full checks and tests | Both images | Immutable date/SHA tag and `latest` |
+| Manual GitHub Release | Full checks, tests, and migration round trip | Both images | Immutable date/SHA tag and `latest` |
 
-Feature branches therefore consume runner cache only, each accepted `develop` revision retains an immutable image tag plus the moving `develop` tag, and releases retain fixed version tags. Forgejo registry retention and unreferenced-blob cleanup remain instance-administrator responsibilities.
+Feature branches therefore consume runner cache only, each accepted `develop` revision retains an immutable image tag plus the moving `develop` tag, and releases retain fixed version tags. Registry retention remains an operator responsibility. The retained Forgejo workflow publishes to its configured `${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}` instead.
 
 Pull requests run the complete test and production-image build path, but registry login, publication, and release creation are disabled. Repository secrets must not be passed to pull request jobs. This applies to same-repository and fork pull requests.
 
 ## Runner Requirements
 
-Jobs require a self-hosted Forgejo Runner registered with the `ubuntu-latest` label and running on `linux/amd64`. The runner needs:
+GitHub workflows use GitHub-hosted `ubuntu-latest` runners. Native test jobs keep the same pinned toolchains, system packages, and Lightpanda binary as the Forgejo jobs. The migration job publishes its PostgreSQL service port and connects through `localhost`; Forgejo job containers use the `db` hostname.
+
+The retained Forgejo jobs require a self-hosted Forgejo Runner registered with the `ubuntu-latest` label and running on `linux/amd64`. The runner needs:
 
 - a Docker daemon available to job containers, commonly through `/var/run/docker.sock` or an isolated Docker service
 - Bash, Python 3.11 or newer, Git, and permission to install the checked toolchains and system packages
@@ -44,7 +47,7 @@ Docker socket access is effectively root access to the runner host. Pull request
 
 Forgejo Runner does not own host Docker retention. Configure image, layer, BuildKit cache, container, and volume garbage collection outside the workflows and monitor disk use. Never solve runner pressure by mounting or pruning deployment Docker storage.
 
-The workflow uses Forgejo's Actions cache for locked UV and Yarn package downloads. Yarn's global cache override is disabled so `YARN_CACHE_FOLDER` selects the persisted cache in CI and development containers. Cache misses only make dependency installation slower; they never skip `uv sync --frozen` or `yarn install --immutable`. Docker image builds separately reuse normal builder layers and BuildKit package-cache mounts, whose retention remains a runner-administrator responsibility.
+Each workflow uses its host's Actions cache for locked UV and Yarn package downloads. Yarn's global cache override is disabled so `YARN_CACHE_FOLDER` selects the persisted cache in CI and development containers. Cache misses only make dependency installation slower; they never skip `uv sync --frozen` or `yarn install --immutable`. Docker image builds separately reuse normal builder layers and BuildKit package-cache mounts, whose retention remains a runner-administrator responsibility.
 
 Backend and agent test jobs report their slowest tests using the test runners' built-in duration reporting. Develop publication checks the current branch head before building and again before publishing; superseded revisions skip unnecessary image builds, and revisions superseded during a build skip publication.
 
@@ -68,7 +71,27 @@ Backend tests with incomplete database mocks explicitly request `mock_db_setting
 
 Keep compatibility cases only for a concrete supported boundary: persisted user data, supported upgrades, or active interfaces. Retire obsolete fixtures with their removed feature. A guard that rejects an obsolete pending approval is still a safety boundary, not an alternate execution path to preserve for its own sake.
 
-## Forgejo Configuration
+## GitHub Configuration
+
+Set `develop` as the default branch. Checks use `contents: read`; image publication gets `packages: write`, and release preparation/publication gets `contents: write`. All GitHub jobs use the automatic `GITHUB_TOKEN`, with no personal token, registry secrets, or publication toggle. After the first publication, make both GHCR packages public to allow anonymous pulls.
+
+The manually dispatched **Release** workflow verifies the migration round trip, then runs `./scripts/release.sh` to check, test, commit, tag, and push. Pushes using `GITHUB_TOKEN` do not trigger push workflows, so a dependent publication job checks out the newly generated commit and builds/publishes both images before creating the GitHub release. Both GitHub workflows use the same `ci-publication` concurrency group. Local releases still trigger CI through the maintainer's normal Git credentials. No repository secret is required for the Release button.
+
+Protect `develop`, `main`, and date/SHA tags. Branch and tag rules must permit the GitHub Actions token to push the checked release commit, fast-forward `main`, and create the release tag; `contents: write` does not bypass protection rules or required checks. Include `.github/workflows`, `.forgejo/workflows`, CI helpers, Dockerfiles, and lockfiles in workflow reviews.
+
+Shared helpers `scripts/ci/create-release.py` and `scripts/ci/check-develop-revision.py` receive `CI_API_URL`, `CI_REPOSITORY`, and `CI_TOKEN` from the workflow. GitHub passes its API URL; Forgejo passes its server URL with `/api/v1`. Release notes, changelog generation, image tags, and source-version checks are shared.
+
+## GitHub Cutover and Forgejo Mirror
+
+1. Create an empty public `devmato/mato-loop` repository without an initial README or license commit. Configure GitHub permissions before uploading; matching pushes start CI and publication immediately.
+2. Commit the migration changes. Transfer the existing Forgejo server branches and tags to GitHub from a fresh bare clone, rather than pushing every local working branch. Include the migration commit on `develop`.
+3. Set GitHub's default branch to `develop`, verify the first CI/publication run and anonymous pulls of both public GHCR images, then switch this checkout's `origin` to `git@github.com:devmato/mato-loop.git`. Keep the old remote as `forgejo` if useful.
+4. Rename the existing Forgejo repository to preserve its issues, PRs, and Actions history. Create a new migration under the previous `devmato/MatoLoop` name from `https://github.com/devmato/mato-loop.git`, selecting **This repository will be a mirror**. Forgejo cannot convert an existing repository into a pull mirror. Disable Actions on the mirror, synchronize it, and compare branch/tag object IDs with GitHub.
+5. Update deployment image addresses deliberately. Keep existing Forgejo images available for rollback. Existing managed Agents preserve their stored source URL and can continue fetching from the Forgejo mirror; new installations default to GitHub.
+
+The mirror copies Git commits, branches, and tags; it does not continuously synchronize issues, PRs, release entries, or images. Start releases only on the primary host or locally against it.
+
+## Retained Forgejo Configuration
 
 Configure these repository or organization Action variables:
 
@@ -108,13 +131,13 @@ The supported categories are `Added`, `Changed`, `Fixed`, and `Security`. Keep m
 
 There are no major/minor/patch increments or `Release-Bump` trailers. Python/npm manifest versions are fixed packaging placeholders, not product versions. The shared `libs/python/version` helper calculates the product version and writes `build-version.txt` before packaging. Backend, Linux Agent, and Windows Agent report this version; installed packages do not need Git. Development checkouts read Git directly; missing metadata reports `unknown`.
 
-Start a release manually from the `develop` branch in Forgejo under **Actions > Release**, or from a clean, current local `develop` checkout:
+Start a release manually from the `develop` branch in GitHub under **Actions > Release**, or from a clean, current local `develop` checkout. The retained Forgejo workflow has the same manual entry point when Forgejo is the primary host:
 
 ```bash
 ./scripts/release.sh
 ```
 
-The script adds dated notes to `docs/user/changelog.md`, runs all checks and tests, and commits on `develop`. It derives the version from that final commit, fast-forwards `main`, creates the annotated date/SHA tag, returns to `develop`, and atomically pushes both branches and the tag. A committed changelog cannot contain its own commit hash, so it uses date headings while the Forgejo Release carries the exact version. Package manifests and lockfiles are not rewritten. `--dry-run` previews the notes and validates the branch state. CI accepts only tags matching their clean source version and pointing to commits on `main`. Do not create release tags manually. Previous `v*` tags remain valid release-note baselines during migration.
+The script adds dated notes to `docs/user/changelog.md`, runs all checks and tests, and commits on `develop`. It derives the version from that final commit, fast-forwards `main`, creates the annotated date/SHA tag, returns to `develop`, and atomically pushes both branches and the tag. A committed changelog cannot contain its own commit hash, so it uses date headings while the hosted release carries the exact version. Package manifests and lockfiles are not rewritten. `--dry-run` previews the notes and validates the branch state. CI accepts only tags matching their clean source version and pointing to commits on `main`. Do not create release tags manually. Previous `v*` tags remain valid release-note baselines during migration.
 
 After checks and both `linux/amd64` builds succeed, the release job publishes these tags on both images:
 
@@ -123,7 +146,7 @@ After checks and both `linux/amd64` builds succeed, the release job publishes th
 latest
 ```
 
-It then creates the matching Forgejo Release from the same categorized notes stored in the changelog. Workflow retries preserve existing fixed tags, publication workflows are serialized, and `latest` never moves to an older source revision. Git ancestry determines release order, including multiple releases on the same day; hashes are not compared alphabetically. Forgejo concurrency is best-effort, so the required task queue and branch/tag protections remain part of the integrity boundary. Registry pushes across two repositories are not transactional: if publication stops partway through, no Forgejo Release is created; retry to publish the missing image. Artifact publication is not deployment automation; operators choose when to pull a version.
+It then creates the matching hosted release from the same categorized notes stored in the changelog. Workflow retries preserve existing fixed tags, publication workflows are serialized, and `latest` never moves to an older source revision. Git ancestry determines release order, including multiple releases on the same day; hashes are not compared alphabetically. Forgejo concurrency is best-effort, so the required task queue and branch/tag protections remain part of the integrity boundary when running there. Registry pushes across two repositories are not transactional: if publication stops partway through, no hosted release is created; retry to publish the missing image. For a failed manual GitHub publication, use **Re-run failed jobs** so the successful preparation job's commit/tag outputs are reused instead of creating another release. Artifact publication is not deployment automation; operators choose when to pull a version.
 
 CI passes the calculated version through `MATOLOOP_VERSION` and the full commit through `BUILD_REVISION`. Local Docker builds calculate them from a read-only Git mount in a version build stage, without copying Git into the runtime image. Linked worktrees need host-calculated `MATOLOOP_VERSION` and `BUILD_REVISION` arguments because their Git metadata is outside the build context. Recompute them after source changes. Without a valid full revision the backend cannot provide a managed Agent installation target. The shared helper can be run directly:
 
@@ -147,8 +170,8 @@ Use `docker compose -f docker-compose.no-agent.yaml up -d --remove-orphans` for 
 For a reproducible `develop` deployment, set the same immutable commit tag on both images and pull before recreating containers:
 
 ```env
-MATO_LOOP_IMAGE=${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/mato-loop:2026-10-08-a1b2c3d4
-MATOLOOP_AGENT_IMAGE=${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}/matoloop-agent:2026-10-08-a1b2c3d4
+MATO_LOOP_IMAGE=ghcr.io/devmato/mato-loop/mato-loop:2026-10-08-a1b2c3d4
+MATOLOOP_AGENT_IMAGE=ghcr.io/devmato/mato-loop/matoloop-agent:2026-10-08-a1b2c3d4
 ```
 
 ```bash

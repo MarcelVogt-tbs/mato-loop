@@ -178,13 +178,13 @@ jobs:
         run: |
           bash -n scripts/release.sh
           bash -n scripts/ci/publish-docker-image.sh
-          python3 -m py_compile scripts/check-version.py scripts/ci/create-forgejo-release.py scripts/ci/check-develop-revision.py
+          python3 -m py_compile scripts/check-version.py scripts/ci/create-release.py scripts/ci/check-develop-revision.py
       - name: Test CI helpers
         run: |
           bash scripts/ci/publish-docker-image.sh --self-test
           python3 scripts/ci/check-develop-revision.py --self-test
-          python3 scripts/ci/create-forgejo-release.py --self-test
-          python3 scripts/ci/create-forgejo-release.py --check-notes HEAD
+          python3 scripts/ci/create-release.py --self-test
+          python3 scripts/ci/create-release.py --check-notes HEAD
       - name: Check versions and release tag
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
@@ -242,9 +242,9 @@ jobs:
         id: build_freshness
         if: github.ref == 'refs/heads/develop'
         env:
-          FORGEJO_SERVER_URL: ${{ github.server_url }}
-          FORGEJO_REPOSITORY: ${{ github.repository }}
-          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+          CI_API_URL: ${{ github.server_url }}/api/v1
+          CI_REPOSITORY: ${{ github.repository }}
+          CI_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
         run: python3 scripts/ci/check-develop-revision.py
       - name: Build both images before publication
         if: github.ref != 'refs/heads/develop' || steps.build_freshness.outputs.current == 'true'
@@ -257,9 +257,9 @@ jobs:
         id: freshness
         if: github.ref == 'refs/heads/develop' && steps.build_freshness.outputs.current == 'true'
         env:
-          FORGEJO_SERVER_URL: ${{ github.server_url }}
-          FORGEJO_REPOSITORY: ${{ github.repository }}
-          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+          CI_API_URL: ${{ github.server_url }}/api/v1
+          CI_REPOSITORY: ${{ github.repository }}
+          CI_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
         run: python3 scripts/ci/check-develop-revision.py
       - name: Publish both images
         if: github.ref != 'refs/heads/develop' || steps.freshness.outputs.current == 'true'
@@ -289,7 +289,7 @@ jobs:
           persist-credentials: false
       - name: Create Forgejo release
         env:
-          FORGEJO_SERVER_URL: ${{ github.server_url }}
-          FORGEJO_REPOSITORY: ${{ github.repository }}
-          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
-        run: python3 scripts/ci/create-forgejo-release.py "${GITHUB_REF#refs/tags/}" "$GITHUB_SHA"
+          CI_API_URL: ${{ github.server_url }}/api/v1
+          CI_REPOSITORY: ${{ github.repository }}
+          CI_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+        run: python3 scripts/ci/create-release.py "${GITHUB_REF#refs/tags/}" "$GITHUB_SHA"

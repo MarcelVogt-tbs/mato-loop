@@ -186,7 +186,7 @@ print(revision)
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/matoloop-agent-source.XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT HUP INT TERM
 git init --quiet "$STAGE/source"
-git -C "$STAGE/source" remote add -- origin "${MATOLOOP_AGENT_SOURCE_URL:-https://git.devmato.net/devmato/MatoLoop.git}"
+git -C "$STAGE/source" remote add -- origin "${MATOLOOP_AGENT_SOURCE_URL:-https://github.com/devmato/mato-loop.git}"
 git -C "$STAGE/source" fetch --depth=1 --no-tags origin "$REVISION"
 [ "$(git -C "$STAGE/source" rev-parse 'FETCH_HEAD^{commit}')" = "$REVISION" ] || fail "Source does not match the backend commit."
 git -C "$STAGE/source" checkout --detach "$REVISION"

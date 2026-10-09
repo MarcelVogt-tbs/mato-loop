@@ -21,7 +21,7 @@ from urllib.parse import urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import UUID
 
-SOURCE_URL = "https://git.devmato.net/devmato/MatoLoop.git"
+SOURCE_URL = "https://github.com/devmato/mato-loop.git"
 SYSTEM_SERVICE_PATH = Path("/etc/systemd/system/matoloop-agent.service")
 SYSTEM_PACKAGES = (
     "bash",

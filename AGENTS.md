@@ -17,13 +17,14 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - `apps/matoloop-agent`: standalone MatoLoop Agent for filesystem, process, transfer, and local-integration operations.
 - `docs`: architecture and operations decisions.
 - `docker-compose.dev.yaml`: local development environment with separate frontend, backend, and `matoloop-agent` services.
-- `.env.example`: production Compose configuration template for published Forgejo images.
+- `.env.example`: production Compose configuration template for published GHCR images.
 - `docker-compose.yaml`: prepared production stack with a MatoLoop Agent.
 - `docker-compose.no-agent.yaml`: prepared production stack without a MatoLoop Agent.
 - `scripts/dev.sh`: unified entry point for development, checks, tests, and migrations.
 - `scripts/eval.sh`: entry point for opt-in evaluations through the development stack.
 - `docker-compose.eval.yaml`: evaluation-only overlay for the development Compose configuration.
-- `docs/ci-and-releases.md`: Forgejo runner, branch, image, and release contract.
+- `.github/workflows`: GitHub Actions checks and publication; `.forgejo/workflows` retains Forgejo support.
+- `docs/ci-and-releases.md`: CI runner, branch, image, release, and Forgejo mirror contract.
 
 ## Language and Style
 
@@ -170,8 +171,8 @@ For UI changes, verify the affected interaction. Check desktop and mobile when l
 - Pull requests run complete checks and image builds without registry or release secrets and never publish artifacts.
 - Feature branch pushes run tests only. Both `develop` and `main` use `YYYY-MM-DD-<SHA8>` versions derived from the UTC commit date and Git SHA, with `-dirty` for local changes. The shared helper lives in `libs/python/version`. Stamp the version before packaging; Python/npm package versions are fixed packaging placeholders.
 - Add one `Release-Note: <category>: <text>` Git trailer at the end of a non-merge commit for each noteworthy change. Supported categories are `Added`, `Changed`, `Fixed`, and `Security`; use concise English text. Multiple trailers must be contiguous in the final commit-message paragraph. Commits without a trailer are omitted from release notes. There are no version bumps.
-- Start a release manually in Forgejo Actions from `develop` or from a clean, current local `develop` branch with `./scripts/release.sh`. It commits dated notes, checks the result, fast-forwards release-only `main`, tags the final commit, and pushes atomically. Do not create release tags manually.
+- Start a release manually in GitHub Actions from `develop` or from a clean, current local `develop` branch with `./scripts/release.sh`. GitHub's manual workflow uses `GITHUB_TOKEN` and publishes the new release commit directly in the same workflow; its pushes do not trigger CI. The retained Forgejo workflow supports the same process when Forgejo is the primary host; disable Actions on the pull mirror. It commits dated notes, checks the result, fast-forwards release-only `main`, tags the final commit, and pushes atomically. Do not create release tags manually.
 - Both publication channels use the same immutable date/SHA image tags; moving aliases are `develop` and `latest`. Publication workflows are serialized so the same commit is not published twice concurrently. Published artifacts currently target `linux/amd64` only.
 - Agent setup and updates follow the running backend's full commit SHA, exposed by `/api/execution-agents/installation-target`. Freeze this target once per operation; do not select branches or require version equality to connect. Dirty or unknown backend builds cannot supply a managed installation target; local checkouts remain an explicit development path. Native and Docker updates stage and verify the exact commit without modifying user checkouts.
 - Managed Docker Agents support WebUI updates through their container launcher. Updates survive container restarts, but recreating a container restores its image version. Keep credentials and workspaces in their existing mounts. Reuse the shared container browser setup for builds and updates.
-- CI publishes images and Forgejo releases only. It does not deploy, mutate deployment storage, or clean runner Docker storage.
+- CI publishes images and releases only. GitHub is the primary host and Forgejo is a Git pull mirror. Shared CI helpers use neutral names and receive `CI_API_URL`, `CI_REPOSITORY`, and `CI_TOKEN` from the platform workflow. CI does not deploy, mutate deployment storage, or clean runner Docker storage.

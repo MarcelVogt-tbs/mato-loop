@@ -14,18 +14,19 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def main() -> None:
-    server = os.environ["FORGEJO_SERVER_URL"].rstrip("/")
+    server = os.environ["CI_API_URL"].rstrip("/")
     if urllib.parse.urlsplit(server).scheme != "https":
-        raise SystemExit("FORGEJO_SERVER_URL must use HTTPS")
+        raise SystemExit("CI_API_URL must use HTTPS")
     repository = "/".join(
-        urllib.parse.quote(part, safe="") for part in os.environ["FORGEJO_REPOSITORY"].split("/")
+        urllib.parse.quote(part, safe="") for part in os.environ["CI_REPOSITORY"].split("/")
     )
     request = urllib.request.Request(
-        f"{server}/api/v1/repos/{repository}/branches/develop",
-        headers={"Authorization": f"token {os.environ['FORGEJO_TOKEN']}"},
+        f"{server}/repos/{repository}/branches/develop",
+        headers={"Authorization": f"token {os.environ['CI_TOKEN']}"},
     )
     with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
-        remote_sha = json.load(response)["commit"]["id"]
+        commit = json.load(response)["commit"]
+        remote_sha = commit.get("sha") or commit["id"]
     current = remote_sha == os.environ["GITHUB_SHA"]
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
         print(f"current={str(current).lower()}", file=output)
@@ -44,21 +45,22 @@ def self_test() -> None:
     with TemporaryDirectory() as directory:
         output = Path(directory) / "output"
         with patch.dict(os.environ, {
-            "FORGEJO_SERVER_URL": "https://forgejo.example.test",
-            "FORGEJO_REPOSITORY": "owner/repo",
-            "FORGEJO_TOKEN": "synthetic",
+            "CI_API_URL": "https://forge.example.test/api",
+            "CI_REPOSITORY": "owner/repo",
+            "CI_TOKEN": "synthetic",
             "GITHUB_SHA": "a" * 40,
             "GITHUB_OUTPUT": str(output),
         }):
-            for revision in ("a" * 40, "b" * 40):
-                with patch("urllib.request.OpenerDirector.open", return_value=StringIO(
-                    json.dumps({"commit": {"id": revision}}),
-                )):
-                    main()
+            for key in ("id", "sha"):
+                for revision in ("a" * 40, "b" * 40):
+                    with patch("urllib.request.OpenerDirector.open", return_value=StringIO(
+                        json.dumps({"commit": {key: revision}}),
+                    )):
+                        main()
             with patch("urllib.request.OpenerDirector.open", side_effect=URLError("unavailable")):
                 with TestCase().assertRaises(URLError):
                     main()
-        assert output.read_text(encoding="utf-8") == "current=true\ncurrent=false\n"
+        assert output.read_text(encoding="utf-8") == "current=true\ncurrent=false\n" * 2
     print("Develop revision check self-test passed.")
 
 

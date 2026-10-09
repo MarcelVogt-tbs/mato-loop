@@ -14,7 +14,7 @@ Planen und prüfen Sie mindestens:
 - getestete Wiederherstellung
 - Aktualisierungs- und Monitoring-Prozess
 
-Kopieren Sie vor dem ersten Start `.env.example` nach `.env`. Ersetzen Sie das Datenbankpasswort und beide Image-Platzhalter. Verwenden Sie für MatoLoop und den MatoLoop Agent denselben von Forgejo CI veröffentlichten Tag im Format `sha-<12 Zeichen der Commit-ID>`.
+Copy `.env.example` to `.env` before the first start. Replace the database password and both image placeholders. Use the same GitHub Actions image tag for MatoLoop and MatoLoop Agent, in the format `YYYY-MM-DD-<SHA8>`.
 
 ```bash
 cp .env.example .env
@@ -128,11 +128,11 @@ Git remains available through shell commands on a selected, connected agent with
 
 ### Veröffentlichtes Image verwenden
 
-Die normale Compose-Datei verwendet veröffentlichte Images. Setzen Sie beide Image-Adressen auf denselben unveränderlichen Forgejo-CI-Tag:
+The standard Compose file uses published GHCR images. Set both image addresses to the same immutable GitHub Actions tag:
 
 ```env
-MATO_LOOP_IMAGE=git.devmato.net/devmato/matoloop/mato-loop:2026-10-08-a1b2c3d4
-MATOLOOP_AGENT_IMAGE=git.devmato.net/devmato/matoloop/matoloop-agent:2026-10-08-a1b2c3d4
+MATO_LOOP_IMAGE=ghcr.io/devmato/mato-loop/mato-loop:2026-10-08-a1b2c3d4
+MATOLOOP_AGENT_IMAGE=ghcr.io/devmato/mato-loop/matoloop-agent:2026-10-08-a1b2c3d4
 ```
 
 Melden Sie Docker bei einer privaten Registry an. Laden Sie die Images anschließend ausdrücklich und erstellen Sie die Container neu:

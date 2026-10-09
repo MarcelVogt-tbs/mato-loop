@@ -2,6 +2,8 @@
 
 MatoLoop is a self-hosted, provider-neutral AI chat and agent harness with persistent sessions, internal tools, human-in-the-loop approvals, optional memory, and enforceable web search.
 
+The primary repository is [devmato/mato-loop on GitHub](https://github.com/devmato/mato-loop). Forgejo remains a Git pull mirror; both platforms' workflows stay in the repository.
+
 ## Current State
 
 The current implementation includes:
@@ -129,7 +131,7 @@ The following command deletes containers and all development named volumes, incl
 
 When copying the production configuration, include `apps/matoloop-agent/docker/browser-seccomp.json` at that same relative path beside `docker-compose.yaml` and `.env`. Compose requires this companion security profile; the host must also permit Chromium's unprivileged user-namespace sandbox. See [Browser architecture and operations](docs/browser.md) before enabling the integration.
 
-Copy `.env.example` to `.env`, replace the database password and both image placeholders, and use the same immutable Forgejo CI tag in `MATO_LOOP_IMAGE` and `MATOLOOP_AGENT_IMAGE`. Development publications use `sha-` followed by the first 12 characters of the Git commit ID. Then authenticate to the registry when required and start the stack:
+Copy `.env.example` to `.env`, replace the database password and both image placeholders, and use the same immutable GitHub Actions tag in `MATO_LOOP_IMAGE` and `MATOLOOP_AGENT_IMAGE`. Images are published to GHCR with `YYYY-MM-DD-<SHA8>` tags derived from the UTC commit date and Git commit ID. Then authenticate to the registry when required and start the stack:
 
 ```bash
 docker compose pull
@@ -144,7 +146,7 @@ Existing installations must complete the [removed Git integration cleanup](docs/
 
 The production template stores backend and PostgreSQL data below `/opt/mato-loop` and MatoLoop Agent data below `/opt/matoloop-agent`. It publishes port `10020` on `0.0.0.0`; restrict access with the host firewall and configure TLS through a suitable reverse proxy. Before production use, verify secure cookies, credentials, backups, and restoration for the target environment.
 
-Forgejo CI and the manual release process are documented in [CI and releases](docs/ci-and-releases.md). CI publishes images and Forgejo releases; it does not deploy MatoLoop.
+GitHub Actions, the retained Forgejo workflows, the mirror cutover, and the manual release process are documented in [CI and releases](docs/ci-and-releases.md). CI publishes images and releases; it does not deploy MatoLoop.
 
 ## Accounts and Ownership
 

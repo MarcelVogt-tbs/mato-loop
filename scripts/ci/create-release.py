@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create an idempotent Forgejo release from local Git history."""
+"""Create an idempotent release from local Git history."""
 
 from __future__ import annotations
 
@@ -136,7 +136,7 @@ def request(
     with OPENER.open(api_request, timeout=30) as response:
         body = json.loads(response.read())
     if not isinstance(body, dict):
-        raise ValueError("Forgejo returned an invalid release response")
+        raise ValueError("The release API returned an invalid response")
     return body
 
 
@@ -152,10 +152,10 @@ def existing_release(url: str, token: str) -> dict[str, object] | None:
 def validate_existing(existing: dict[str, object], expected: dict[str, object]) -> None:
     keys = ("tag_name", "name", "body", "draft", "prerelease")
     if any(existing.get(key) != expected[key] for key in keys):
-        raise ValueError("Existing Forgejo release does not match the requested stable release")
+        raise ValueError("Existing release does not match the requested stable release")
     target = existing.get("target_commitish")
     if target is not None and target != expected["target_commitish"]:
-        raise ValueError("Existing Forgejo release points to a different commit")
+        raise ValueError("Existing release points to a different commit")
 
 
 def self_test() -> None:
@@ -184,7 +184,7 @@ def self_test() -> None:
     assert payload["draft"] is False and payload["prerelease"] is False
     assert RELEASE_TAG.fullmatch("2026-10-08-12345678") and not RELEASE_TAG.fullmatch("v1.2.3")
     validate_existing(payload, payload)
-    print("Forgejo release payload self-test passed.")
+    print("Release payload self-test passed.")
 
 
 def main() -> int:
@@ -229,25 +229,25 @@ def main() -> int:
         print(json.dumps(payload, indent=2))
         return 0
 
-    server = os.environ.get("FORGEJO_SERVER_URL", "").rstrip("/")
-    repository = os.environ.get("FORGEJO_REPOSITORY", "")
-    token = os.environ.get("FORGEJO_TOKEN", "")
+    server = os.environ.get("CI_API_URL", "").rstrip("/")
+    repository = os.environ.get("CI_REPOSITORY", "")
+    token = os.environ.get("CI_TOKEN", "")
     parsed_server = urllib.parse.urlsplit(server)
     if parsed_server.scheme != "https" or not parsed_server.netloc:
-        raise ValueError("FORGEJO_SERVER_URL must be an HTTPS URL")
+        raise ValueError("CI_API_URL must be an HTTPS URL")
     if len(repository.split("/")) != 2:
-        raise ValueError("FORGEJO_REPOSITORY must be owner/name")
+        raise ValueError("CI_REPOSITORY must be owner/name")
     if not token:
-        raise ValueError("FORGEJO_TOKEN is required")
+        raise ValueError("CI_TOKEN is required")
 
     owner, name = (urllib.parse.quote(part, safe="") for part in repository.split("/"))
     tag_path = urllib.parse.quote(args.tag, safe="")
-    releases_url = f"{server}/api/v1/repos/{owner}/{name}/releases"
+    releases_url = f"{server}/repos/{owner}/{name}/releases"
     release_url = f"{releases_url}/tags/{tag_path}"
     existing = existing_release(release_url, token)
     if existing is not None:
         validate_existing(existing, payload)
-        print(f"Forgejo release {args.tag} already exists.")
+        print(f"Release {args.tag} already exists.")
         return 0
 
     try:
@@ -259,7 +259,7 @@ def main() -> int:
         if existing is None:
             raise
         validate_existing(existing, payload)
-    print(f"Created Forgejo release {args.tag}.")
+    print(f"Created release {args.tag}.")
     return 0
 
 

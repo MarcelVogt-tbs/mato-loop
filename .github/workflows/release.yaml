@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-publication
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    outputs:
+      revision: ${{ steps.source.outputs.revision }}
+      tag: ${{ steps.source.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Verify migration round trip
+        run: |
+          ./scripts/dev.sh db upgrade head
+          ./scripts/dev.sh db check
+          ./scripts/dev.sh db downgrade base
+          ./scripts/dev.sh db upgrade head
+          ./scripts/dev.sh db check
+      - name: Release develop
+        id: source
+        run: |
+          git config user.name "MatoLoop Release Bot"
+          git config user.email "release-bot@matoloop.invalid"
+          git branch --force main refs/remotes/origin/main
+          ./scripts/release.sh
+          printf 'revision=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$(python3 scripts/check-version.py)" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: [release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      packages: write
+    env:
+      CI_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      RELEASE_REVISION: ${{ needs.release.outputs.revision }}
+      RELEASE_TAG: ${{ needs.release.outputs.tag }}
+      CONTAINER_REGISTRY: ghcr.io
+      CONTAINER_IMAGE_NAMESPACE: ${{ github.repository }}
+      CONTAINER_USERNAME: ${{ github.actor }}
+      CONTAINER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      CI_API_URL: ${{ github.api_url }}
+      CI_REPOSITORY: ${{ github.repository }}
+      CI_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.release.outputs.revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build and publish release
+        run: |
+          export GITHUB_SHA="$RELEASE_REVISION"
+          python3 scripts/check-version.py "$RELEASE_TAG"
+          KEEP_LOCAL_IMAGE=1 bash scripts/ci/publish-docker-image.sh build mato-loop . apps/backend/Dockerfile
+          KEEP_LOCAL_IMAGE=1 bash scripts/ci/publish-docker-image.sh build matoloop-agent . apps/matoloop-agent/Dockerfile
+          bash scripts/ci/publish-docker-image.sh release mato-loop . apps/backend/Dockerfile "$RELEASE_TAG"
+          bash scripts/ci/publish-docker-image.sh release matoloop-agent . apps/matoloop-agent/Dockerfile "$RELEASE_TAG"
+          python3 scripts/ci/create-release.py "$RELEASE_TAG" "$GITHUB_SHA"
+      - name: Remove local publication images
+        if: always()
+        run: docker image rm --force "mato-loop:ci-$CI_RUN_ID" "matoloop-agent:ci-$CI_RUN_ID" >/dev/null 2>&1 || true
