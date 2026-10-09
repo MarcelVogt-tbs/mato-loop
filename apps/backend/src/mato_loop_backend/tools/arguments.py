@@ -256,8 +256,11 @@ def validate_protected_question_answers(
     validated = {}
     for question in questions.questions:
         answer = answers.get(question.id)
-        if not isinstance(answer, list) or len(answer) != 1:
-            raise ValueError("protected question requires one answer per item")
+        if not isinstance(answer, list) or len(answer) > 1:
+            raise ValueError("protected question allows at most one answer per item")
+        if not answer:
+            validated[question.id] = []
+            continue
         value = answer[0]
         if (
             not isinstance(value, str)

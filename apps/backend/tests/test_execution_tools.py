@@ -1082,6 +1082,38 @@ async def test_administrator_input_grants_run_or_revocable_session_access(tmp_pa
         session_secrets.clear_session(context.session.id)
 
 
+async def test_secret_input_reports_skipped_administrator_password_without_grant(tmp_path):
+    client = FakeExecutionClient({}, {"administrator.run"})
+    call = ToolCall("secret", "secret_input", {"inputs": [
+        {"name": "SSH_USERNAME", "label": "Username", "question": "Enter username", "masked": False},
+        {"name": "SSH_PASSWORD", "label": "Password", "question": "Enter password", "administrator": True},
+    ]})
+    context = _context(tmp_path, call, client)
+    context.session.preferred_execution_agent_id = client.agent_id
+    context.db.scalar.return_value = ExecutionAgent(id=client.agent_id, alias="AI-PC")
+    context.question_handler = AsyncMock(return_value=ProtectedQuestionResolution(
+        {"SSH_USERNAME": ["user"], "SSH_PASSWORD": []},
+    ))
+
+    result = json.loads((await _tools(client.operations).execute(call, context)).content)
+
+    assert result["unanswered"] == ["SSH_PASSWORD"]
+    assert set(result["environment"]) == {"SSH_USERNAME"}
+    assert context.administrator_access == set()
+
+
+async def test_variable_write_reports_skipped_value(tmp_path, monkeypatch):
+    client = FakeExecutionClient({}, set())
+    call = ToolCall("save", "variable_write", {"name": "API_TOKEN", "secret": True})
+    context = _context(tmp_path, call, client)
+    context.question_handler = AsyncMock(return_value={"value": []})
+    monkeypatch.setattr(mock_tools_interaction.tools_access, "profile_tool_settings", AsyncMock(return_value=ToolSettings()))
+
+    result = await tool_registry.execute(call, context)
+
+    assert json.loads(result.content) == {"saved": False, "name": "API_TOKEN", "unanswered": ["value"]}
+
+
 async def test_missing_administrator_password_returns_to_input_before_approval(tmp_path):
     client = FakeExecutionClient(
         {"authenticate": AdministratorAuthenticationResult(passwordless=False)},

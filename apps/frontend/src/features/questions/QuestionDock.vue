@@ -60,6 +60,9 @@
       </div>
 
       <template v-if="!draft.minimized">
+        <div class="text-caption app-muted q-mt-xs">
+          Du kannst Fragen leer lassen und jederzeit mit „Fertig“ abschließen.
+        </div>
         <div v-if="current.type === 'multiple_choice'" class="text-caption app-muted q-mt-xs">
           Du kannst mehrere Antworten auswählen.
         </div>
@@ -70,7 +73,7 @@
         <q-banner v-if="oneTime" rounded class="app-surface-tonal q-mt-sm">
           <template #avatar><q-icon name="lock_clock" color="primary" /></template>
           <template v-if="current.administrator">
-            Mit dem Senden erlaubst du Administratorzugriffe auf „{{ current.administrator.alias }}“
+            Wenn du dieses Passwort sendest, erlaubst du Administratorzugriffe auf „{{ current.administrator.alias }}“
             für den laufenden Durchlauf.
           </template>
           <template v-else>
@@ -81,8 +84,8 @@
 
         <q-banner v-else-if="saveProposal" rounded class="app-surface-tonal q-mt-sm">
           <template #avatar><q-icon :name="current.type === 'password' ? 'lock' : 'save'" color="primary" /></template>
-          Diese Antwort wird dauerhaft als {{ current.type === 'password' ? 'Secret' : 'Variable' }} „{{ saveProposal.name }}“ gespeichert, bis du sie löschst.
-          Erst „Antworten senden“ erlaubt genau diesen Speichervorgang.
+          Eine ausgefüllte Antwort wird dauerhaft als {{ current.type === 'password' ? 'Secret' : 'Variable' }} „{{ saveProposal.name }}“ gespeichert, bis du sie löschst.
+          Erst „Fertig“ erlaubt genau diesen Speichervorgang. Ein leeres Feld wird nicht gespeichert.
         </q-banner>
 
         <div
@@ -216,13 +219,22 @@
         @click="back"
       />
       <q-btn
+        v-if="!last"
+        outline
+        no-caps
+        color="primary"
+        label="Weiter"
+        :disable="busy"
+        @click="next"
+      />
+      <q-btn
         unelevated
         no-caps
         color="primary"
-        :label="last ? 'Antworten senden' : 'Weiter'"
+        label="Fertig"
         :loading="answering"
         :disable="busy"
-        @click="next"
+        @click="finish"
       />
     </q-card-actions>
   </q-card>
@@ -261,7 +273,7 @@ const saveProposal = computed(() => {
 })
 const last = computed(() => draft.index === props.request.questions.length - 1)
 const rememberedQuestionIds = computed(() => props.request.questions
-  .filter((item) => item.one_time === true && draft.rememberForSession[item.id] === true)
+  .filter((item) => item.one_time === true && draft.rememberForSession[item.id] === true && draft.answers[item.id]?.length)
   .map((item) => item.id))
 const rejecting = ref(false)
 const ownSubmission = computed(() => questions.submittingId === props.request.id)
@@ -297,11 +309,15 @@ function clearProtectedAnswers() {
   }
 }
 
-async function next() {
+function next() {
   if (!last.value) {
     jump(draft.index + 1)
     return
   }
+  void finish()
+}
+
+async function finish() {
   try {
     await questions.answer(props.request.id, draft.answers, rememberedQuestionIds.value)
   } catch {

@@ -47,14 +47,14 @@ it('masks password questions, submits exact values, and clears failed drafts', a
   await nextTick()
 
   expect(root.textContent).toContain('Secret „GITHUB_TOKEN“')
-  expect(root.textContent).toContain('Erst „Antworten senden“ erlaubt genau diesen Speichervorgang.')
+  expect(root.textContent).toContain('Erst „Fertig“ erlaubt genau diesen Speichervorgang.')
   expect(root.textContent).not.toContain('Für diese Session merken')
   const input = root.querySelector('input[type="password"]')
   expect(input.autocomplete).toBe('new-password')
   input.value = '  exact secret  '
   input.dispatchEvent(new Event('input', { bubbles: true }))
   await nextTick()
-  ;[...root.querySelectorAll('button')].find((button) => button.textContent.includes('Antworten senden')).click()
+  ;[...root.querySelectorAll('button')].find((button) => button.textContent === 'Fertig').click()
 
   await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith('/questions/question-1/answers', {
     answers: { token: ['  exact secret  '] }
@@ -68,7 +68,7 @@ it('masks password questions, submits exact values, and clears failed drafts', a
   await vi.waitFor(() => expect(input.value).toBe(''))
 })
 
-it.each([false, true])('submits protected credentials with optional administrator consent (admin=%s)', async (administrator) => {
+it.each([[false, false], [true, false], [true, true]])('submits protected credentials with optional administrator consent (admin=%s, early=%s)', async (administrator, early) => {
   api.post.mockRejectedValue(new Error('network'))
   const request = {
     id: 'question-1',
@@ -121,17 +121,23 @@ it.each([false, true])('submits protected credentials with optional administrato
     root.querySelector('[role="checkbox"]').click()
   }
   expect(password.autocomplete).toBe('new-password')
-  password.value = '  exact secret  '
-  password.dispatchEvent(new Event('input', { bubbles: true }))
-  ;[...root.querySelectorAll('button')].find((button) => button.textContent.includes('Antworten senden')).click()
+  if (early) {
+    ;[...root.querySelectorAll('button')].find((button) => button.textContent === 'Zurück').click()
+    await nextTick()
+  } else {
+    password.value = '  exact secret  '
+    password.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+  ;[...root.querySelectorAll('button')].find((button) => button.textContent === 'Fertig').click()
 
   await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith('/questions/question-1/answers', {
     answers: {
       SSH_USERNAME: ['  viktor  '],
-      SSH_PASSWORD: ['  exact secret  ']
+      SSH_PASSWORD: early ? [] : ['  exact secret  ']
     },
-    remember_for_session: administrator ? ['SSH_USERNAME', 'SSH_PASSWORD'] : ['SSH_USERNAME']
+    remember_for_session: administrator && !early ? ['SSH_USERNAME', 'SSH_PASSWORD'] : ['SSH_USERNAME']
   }))
+  if (early) return
   await vi.waitFor(() => expect(password.value).toBe(''))
   ;[...root.querySelectorAll('button')].find((button) => button.textContent.includes('Zurück')).click()
   await nextTick()

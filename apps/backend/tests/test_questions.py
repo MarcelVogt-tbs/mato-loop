@@ -242,9 +242,11 @@ async def test_answer_is_persisted_before_agent_resumes(monkeypatch) -> None:
     assert result == {"status": "answered"}
 
 
+@pytest.mark.parametrize(("filled", "action"), [(True, "create"), (False, "update")])
 async def test_protected_answer_is_saved_but_never_persisted_or_resumed(
-    monkeypatch,
+    monkeypatch, filled, action,
 ) -> None:
+    variable_id = uuid4() if action == "update" else None
     questions = ProtectedQuestionArguments.model_validate(
         {
             "questions": [
@@ -257,7 +259,8 @@ async def test_protected_answer_is_saved_but_never_persisted_or_resumed(
                         "name": "API_TOKEN",
                         "description": "Token for deployments",
                         "secret": True,
-                        "action": "create",
+                        "action": action,
+                        "variable_id": variable_id,
                         "trust_level": "public",
                     },
                 }
@@ -276,8 +279,10 @@ async def test_protected_answer_is_saved_but_never_persisted_or_resumed(
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
     save = AsyncMock()
+    update = AsyncMock()
     resolve = Mock(return_value=True)
     monkeypatch.setattr(question_decisions_module, "create_personal_variable", save)
+    monkeypatch.setattr(question_decisions_module, "update_personal_variable", update)
     monkeypatch.setattr(
         question_decisions_module,
         "load_agent_profile_tools",
@@ -290,9 +295,14 @@ async def test_protected_answer_is_saved_but_never_persisted_or_resumed(
     monkeypatch.setattr(run_events, "publish", AsyncMock())
 
     result = await answer_question_decision(
-        db, request, {"value": ["  exact secret  "]}
+        db, request, {"value": ["  exact secret  "] if filled else []}
     )
 
+    if not filled:
+        save.assert_not_awaited()
+        update.assert_not_awaited()
+        resolve.assert_called_once_with(request.id, {"value": []})
+        return
     save.assert_awaited_once_with(
         db,
         session.user_id,
@@ -307,7 +317,8 @@ async def test_protected_answer_is_saved_but_never_persisted_or_resumed(
     assert result == {"status": "answered"}
 
 
-async def test_one_time_secret_is_delivered_but_never_persisted(monkeypatch) -> None:
+@pytest.mark.parametrize("password", [["  exact secret  "], []])
+async def test_one_time_secret_is_delivered_but_never_persisted(monkeypatch, password) -> None:
     questions = ProtectedQuestionArguments.model_validate(
         {
             "questions": [
@@ -324,6 +335,7 @@ async def test_one_time_secret_is_delivered_but_never_persisted(monkeypatch) -> 
                     "question": "Enter password",
                     "type": "password",
                     "one_time": True,
+                    "administrator": {"agent_id": str(uuid4()), "alias": "AI-PC"},
                 }
             ]
         }
@@ -344,30 +356,38 @@ async def test_one_time_secret_is_delivered_but_never_persisted(monkeypatch) -> 
     monkeypatch.setattr(AgentRuntime, "resolve_question", resolve)
     monkeypatch.setattr(run_events, "publish", AsyncMock())
 
+    if not password:
+        with pytest.raises(QuestionDecisionError, match="question.invalidAnswer"):
+            await answer_question_decision(
+                db, request, {"SSH_USERNAME": ["user"], "SSH_PASSWORD": []},
+                remember_for_session=["SSH_PASSWORD"],
+            )
+
     result = await answer_question_decision(
         db,
         request,
         {
             "SSH_USERNAME": ["  exact user  "],
-            "SSH_PASSWORD": ["  exact secret  "],
+            "SSH_PASSWORD": password,
         },
         remember_for_session=["SSH_USERNAME"],
     )
 
     assert request.answers == {
         "SSH_USERNAME": ["received"],
-        "SSH_PASSWORD": ["received"],
+        "SSH_PASSWORD": ["received"] if password else [],
     }
     assert "exact user" not in json.dumps(request.answers)
     assert "exact secret" not in json.dumps(request.answers)
     db.get.assert_not_awaited()
+    db.add.assert_not_called()
     db.commit.assert_awaited_once()
     resolve.assert_called_once_with(
         request.id,
         ProtectedQuestionResolution(
             {
                 "SSH_USERNAME": ["  exact user  "],
-                "SSH_PASSWORD": ["  exact secret  "],
+                "SSH_PASSWORD": password,
             },
             frozenset({"SSH_USERNAME"}),
         ),

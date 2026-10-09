@@ -13,6 +13,23 @@ frontend loads pending requests independently of SSE and replaces the normal com
 sequential question dock. Backend restarts expire pending requests and fail their active runs
 through the normal recovery path.
 
+The question dock offers Next for navigation and Done on every step to submit the current draft,
+including answers to previously visited questions. Empty answers are allowed, even when all
+questions are unanswered. Ordinary questions retain their configured default-answer behavior.
+The `answered` status means the request is closed, not that every field has a value. Rejection
+discards the draft instead of submitting it.
+
+Protected questions from `secret_input` and `variable_write` also allow empty answer lists.
+Only filled fields receive secret references or can be remembered for the session. A skipped
+administrator password grants no access. Temporary protected answers persist only a received
+marker for filled fields and an empty list for skipped fields; their values are never persisted.
+`secret_input` returns the available references in `environment` and the skipped input names in
+`unanswered`, with instructions to explain blocked work instead of assuming values or repeating
+skipped questions unless requested. An empty durable-storage answer creates or updates nothing;
+`variable_write` reports `saved: false`. Protected values remain hidden from the model, so users
+must send a change of direction as a normal chat message rather than entering it in a credential
+field.
+
 Question delivery is channel-neutral. A run started from a paired messaging endpoint persists a
 versioned question envelope in that endpoint's outbox. Providers may render the envelope with
 native controls and direct-reply text input, but all interactions use the same backend state

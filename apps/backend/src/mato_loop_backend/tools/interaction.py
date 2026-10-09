@@ -38,7 +38,10 @@ from mato_loop_backend.tools.contracts import ToolDefinition as ToolDefinition
 from mato_loop_backend.tools.contracts import ToolResult as ToolResult
 
 SECRET_INPUT_USAGE = (
-    "Continue the requested work now in this run; do not finish with an acknowledgement. "
+    "Continue the requested work in this run where the available inputs are sufficient; "
+    "do not finish with an acknowledgement. "
+    "Inputs listed in unanswered were skipped by the user; do not assume their values or "
+    "repeat those questions unless requested. Explain work blocked by missing inputs. "
     "Copy references exactly. run-secret references are reusable until this run ends; "
     "a final answer ends the run. session-secret references last until removed or the backend restarts."
 )
@@ -107,6 +110,7 @@ async def _secret_input(
     if not missing:
         return ToolResult.json({
             "environment": {item.name: known[item.name] for item in arguments.inputs},
+            "unanswered": [],
             "instruction": SECRET_INPUT_USAGE,
         })
     administrator = None
@@ -142,7 +146,8 @@ async def _secret_input(
     if answers == "rejected":
         return ToolResult.error("question.rejected")
     assert isinstance(answers, ProtectedQuestionResolution)
-    if administrator is not None:
+    provided = [item for item in missing if answers.answers[item.name]]
+    if administrator is not None and any(item.administrator for item in provided):
         await context.db.refresh(context.session)
         if context.session.preferred_execution_agent_id != administrator.agent_id:
             return ToolResult.error("permission.denied")
@@ -151,7 +156,7 @@ async def _secret_input(
             context.administrator_access.add(administrator.agent_id)
     remembered = {
         item.name: answers.answers[item.name][0]
-        for item in missing
+        for item in provided
         if item.name in answers.remember_for_session
     }
     session_environment = session_secrets.put(
@@ -159,12 +164,12 @@ async def _secret_input(
         remembered,
         {
             item.name: item.description or f"Administrator password for {administrator.alias}"
-            for item in missing
+            for item in provided
             if (item.description or item.administrator) and item.name in answers.remember_for_session
         },
     )
     environment = {item.name: known[item.name] for item in arguments.inputs if item.name in known}
-    for item in missing:
+    for item in provided:
         if item.name in session_environment:
             environment[item.name] = session_environment[item.name]
         else:
@@ -172,7 +177,11 @@ async def _secret_input(
             context.one_time_secrets[secret_id] = answers.answers[item.name][0]
             environment[item.name] = f"run-secret:{secret_id}"
             context.run_secret_refs[item.name] = environment[item.name]
-    return ToolResult.json({"environment": environment, "instruction": SECRET_INPUT_USAGE})
+    return ToolResult.json({
+        "environment": environment,
+        "unanswered": [item.name for item in missing if not answers.answers[item.name]],
+        "instruction": SECRET_INPUT_USAGE,
+    })
 
 
 async def _variable_write(
@@ -216,6 +225,8 @@ async def _variable_write(
         return ToolResult.error("question.expired")
     if answers == "rejected":
         return ToolResult.error("question.rejected")
+    if not answers["value"]:
+        return ToolResult.json({"saved": False, "name": arguments.name, "unanswered": ["value"]})
     saved = await get_personal_variable_by_name(
         context.db, context.session.user_id, arguments.name
     )

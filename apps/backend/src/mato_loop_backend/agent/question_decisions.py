@@ -83,7 +83,7 @@ async def answer_question(
     if remembered and (
         not isinstance(questions, ProtectedQuestionArguments)
         or not questions.questions[0].one_time
-        or not remembered <= {question.id for question in questions.questions}
+        or not remembered <= {key for key, value in validated_answers.items() if value}
     ):
         raise QuestionDecisionError(
             422, "question.invalidAnswer", field="remember_for_session"
@@ -133,9 +133,10 @@ async def answer_question(
                 validated_answers, remembered
             )
             persisted_answers = {
-                question.id: ["received"] for question in questions.questions
+                question.id: ["received"] if validated_answers[question.id] else []
+                for question in questions.questions
             }
-        else:
+        elif validated_answers[questions.questions[0].id]:
             durable_protected = True
             question = questions.questions[0]
             assert question.save_proposal is not None
