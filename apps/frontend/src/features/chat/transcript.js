@@ -1,5 +1,5 @@
 import { runWarningEntries } from 'src/utils/agent-activity'
-import { toolOpenFileActions } from 'src/utils/attachments'
+import { toolFileActions, toolOpenFileActions } from 'src/utils/attachments'
 import { apiErrorMessage } from 'src/utils/api-errors'
 
 export function retryAvailableForMessage(message, messages = [], running = false) {
@@ -30,9 +30,10 @@ export function withLiveTranscriptMessage(messages, liveMessage) {
     if (currentIndex >= 0 && !displayed[currentIndex].agentProfileId && liveMessage.agentProfileId) {
       displayed[currentIndex] = { ...displayed[currentIndex], agentProfileId: liveMessage.agentProfileId }
     }
-    if (currentIndex >= 0 && displayed[currentIndex].currentTurn && displayed[currentIndex].fileChanges?.length) {
-      liveMessage = { ...liveMessage, fileChanges: displayed[currentIndex].fileChanges }
-      displayed[currentIndex] = { ...displayed[currentIndex], fileChanges: [] }
+    if (currentIndex >= 0 && displayed[currentIndex].currentTurn) {
+      const { fileChanges, providedFiles } = displayed[currentIndex]
+      liveMessage = { ...liveMessage, fileChanges, providedFiles }
+      displayed[currentIndex] = { ...displayed[currentIndex], fileChanges: [], providedFiles: [], continuesAssistantTurn: true }
     }
     return [...displayed, liveMessage]
   }
@@ -326,14 +327,17 @@ export function buildChatTranscript(
       || message.workHistory
     ))
     if (visibleMessages.length) {
-      visibleMessages.at(-1).fileChanges = response.fileActions.filter((action) => action.operation !== 'provide')
+      const finalMessage = visibleMessages.at(-1)
+      finalMessage.fileChanges = response.fileActions.filter((action) => action.operation !== 'provide')
+      finalMessage.providedFiles = workEntries.flatMap((entry) => entry.type === 'tool'
+        ? toolFileActions(entry.result).filter((action) => action.operation === 'provide')
+        : [])
       visibleMessages[0].showAgentLabel = true
       visibleMessages.forEach((message, index) => {
         message.currentTurn = currentTurn
         message.continuesAssistantTurn = index < visibleMessages.length - 1
       })
       if (!currentTurn) {
-        const finalMessage = visibleMessages.at(-1)
         finalMessage.createdAt = finalCreatedAt
         finalMessage.modelName = hasContent ? finalModelName : null
         finalMessage.trustLevel = effectiveTrust

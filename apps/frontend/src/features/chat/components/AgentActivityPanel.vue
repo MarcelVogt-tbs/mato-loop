@@ -3,6 +3,7 @@
     v-if="$slots.header || entries.length || running || unmatchedSubagents.length"
     class="work-history"
     :class="{
+      'q-pb-sm': historyExpanded,
       'work-history--preview': showPreview,
       'work-history--with-agent-header': $slots.header
     }"
@@ -11,11 +12,12 @@
       <slot name="header" />
     </div>
     <div v-if="$slots.header" class="work-history__header-actions row items-center no-wrap">
-      <TurnDuration :history="running ? activity : history" :running="running" />
+      <TurnDuration v-if="historyExpanded" :history="running ? activity : history" :running="running" />
       <q-btn
         flat round dense
         size="sm"
-        class="work-history__toggle q-ml-sm"
+        class="work-history__toggle"
+        :class="{ 'q-ml-sm': historyExpanded }"
         icon="history"
         :color="historyExpanded ? 'primary' : undefined"
         :aria-expanded="historyExpanded"
@@ -26,13 +28,14 @@
       </q-btn>
     </div>
     <div v-if="!$slots.header" class="work-history__meta-section row items-center no-wrap" :class="showPreview ? 'self-start' : 'self-center'">
-      <div class="work-history__meta row items-center no-wrap q-gutter-xs">
+      <div v-if="historyExpanded" class="work-history__meta row items-center no-wrap q-gutter-xs">
         <TurnDuration :history="running ? activity : history" :running="running" />
       </div>
       <q-btn
         flat round dense
         size="sm"
-        class="work-history__toggle q-ml-sm"
+        class="work-history__toggle"
+        :class="{ 'q-ml-sm': historyExpanded }"
         icon="history"
         :color="historyExpanded ? 'primary' : undefined"
         :aria-expanded="historyExpanded"
@@ -107,6 +110,7 @@ const props = defineProps({
   subagents: { type: Array, default: () => [] },
   trustedImageOrigins: { type: Array, default: () => [] },
   readOnly: Boolean,
+  hideProvidedFiles: Boolean,
   running: Boolean,
   expanded: { type: Boolean, default: null }
 })
@@ -169,7 +173,7 @@ const enrichedEntries = computed(() => preparedEntries.value.map((entry) => {
         ...(entry.result?.attachments || []),
         ...(providedFile ? [providedFile] : [])
       ]),
-      fileActions: toolFileActions(entry.result).filter((action) => action.operation === 'provide')
+      fileActions: props.hideProvidedFiles ? [] : toolFileActions(entry.result).filter((action) => action.operation === 'provide')
     }
   }
 }))

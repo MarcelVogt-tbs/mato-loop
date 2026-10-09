@@ -87,10 +87,13 @@ describe('chat transcript', () => {
     }])
   })
 
-  it.each([false, true])('keeps file changes at the end of the answer (streaming: %s)', (streaming) => {
+  it.each([
+    [false, 'write', 'fileChanges'], [true, 'write', 'fileChanges'],
+    [false, 'provide', 'providedFiles'], [true, 'provide', 'providedFiles']
+  ])('keeps file outputs at the end of the answer (streaming: %s, operation: %s)', (streaming, operation, field) => {
     const rootIdentity = '550e8400-e29b-41d4-a716-446655440000'
     const action = {
-      operation: 'write', root: 'session', rootIdentity, path: 'result.txt', filename: 'result.txt', sizeBytes: 7,
+      operation, root: 'session', rootIdentity, path: 'result.txt', filename: 'result.txt', sizeBytes: 7,
       downloadUrl: `/api/workspace/files/download?scope=session&root_identity=${rootIdentity}&session_id=${rootIdentity}&path=result.txt`
     }
     const transcript = buildChatTranscript([
@@ -103,8 +106,8 @@ describe('chat transcript', () => {
       id: 'live', role: 'assistant', content: 'Fertig', currentTurn: true
     }) : transcript.messages
 
-    expect(messages.filter((message) => message.fileChanges?.length).map((message) => [
-      message.id, message.fileChanges.map((change) => change.path)
+    expect(messages.filter((message) => message[field]?.length).map((message) => [
+      message.id, message[field].map((change) => change.path)
     ])).toEqual([[streaming ? 'live' : 'final', ['result.txt']]])
   })
 

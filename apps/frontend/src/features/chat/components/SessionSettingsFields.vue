@@ -52,7 +52,7 @@ import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import { useProviderStore } from 'stores/providers'
 import { apiErrorMessage } from 'src/utils/api-errors'
-import { modelReasoningEffortOptions } from 'src/utils/model-runtime'
+import { modelReasoningEffortOptions, reasoningEffortLabel } from 'src/utils/model-runtime'
 import { sessionModel } from '../session-model'
 import { useSessionTemplateStore } from 'src/features/settings/session-templates-store'
 
@@ -158,6 +158,10 @@ const executionAgentMessage = computed(() => {
 const effectiveSelection = computed(() => sessionModel(props.session, providers.modelDefaults, displayedAgentProfileId.value))
 const effectiveModelId = computed(() => effectiveSelection.value.modelId)
 const modelSelectionOptions = computed(() => providers.selectionOptions(effectiveModelId.value, true))
+const selectedModelLabel = computed(() => {
+  const option = modelSelectionOptions.value.find((item) => item.value === effectiveModelId.value)
+  return option?.primaryLabel || option?.label || 'Modell wählen'
+})
 const selectedModelConfig = computed(() => providers.models.find((model) => model.id === effectiveModelId.value))
 const selectedModelTrustIcon = computed(() => selectedModelConfig.value?.effectiveTrustLevel === 'private' ? 'lock' : 'public')
 const reasoningEffortOptions = computed(() => modelReasoningEffortOptions(selectedModelConfig.value))
@@ -290,33 +294,53 @@ const MessageSizeField = defineComponent(() => () => h(AppSelect, selectProps({
 const AgentField = defineComponent(() => () => h(AppSelect, selectProps({
   modelValue: displayedAgentProfileId.value,
   options: agentProfileOptions.value,
-  label: props.compact ? 'Agent' : 'Agent-Profil',
-  class: props.compact ? 'composer-agent-mode' : undefined,
+  label: props.compact ? undefined : 'Agent-Profil',
+  'aria-label': 'Agent-Profil auswählen',
+  dropdownIcon: props.compact ? 'expand_more' : undefined,
+  hideBottomSpace: props.compact,
+  displayValue: props.compact ? agentProfileOptions.value.find((option) => option.value === displayedAgentProfileId.value)?.label || 'Agent wählen' : undefined,
+  class: props.compact ? 'composer-select composer-agent-mode col-auto rounded-borders q-px-sm' : undefined,
   hint: props.compact ? undefined : 'Agent-Profil für diese Session.',
   persistentHint: !props.compact,
   disable: (props.disabled && !props.agentSelectable) || agentProfiles.loading,
   onPopupHide: () => emit('agent-popup-hide'),
   'onUpdate:modelValue': (value) => update({ agent_profile_id: value })
 }), {
-  prepend: () => h(QIcon, { name: selectedAgentIcon.value, size: props.compact ? '18px' : undefined })
+  prepend: !props.compact || selectedAgentIcon.value === 'warning_amber'
+    ? () => h(QIcon, { name: selectedAgentIcon.value, size: props.compact ? '16px' : undefined })
+    : undefined
 }))
 const ModelField = defineComponent(() => () => h(AppSelect, selectProps({
   modelValue: effectiveModelId.value,
-  options: modelSelectionOptions.value,
-  label: props.compact ? 'LLM' : 'Modell',
-  class: props.compact ? 'composer-model' : undefined,
+  options: props.compact ? [{ label: 'Standardmodell verwenden', value: null }, ...modelSelectionOptions.value] : modelSelectionOptions.value,
+  label: props.compact ? undefined : 'Modell',
+  'aria-label': 'Modell auswählen',
+  dropdownIcon: props.compact ? 'expand_more' : undefined,
+  hideBottomSpace: props.compact,
+  displayValue: props.compact ? selectedModelLabel.value : undefined,
+  class: props.compact ? 'composer-select composer-model col-auto rounded-borders q-px-sm' : undefined,
   hint: props.compact ? undefined : modelSupportsTools.value ? 'Modell für diesen Agenten in dieser Session.' : 'Das ausgewählte Modell unterstützt keine Tools.',
   persistentHint: !props.compact,
-  clearable: true,
+  clearable: !props.compact,
   'onUpdate:modelValue': selectModel
 }), {
-  prepend: () => h(QIcon, { name: selectedModelTrustIcon.value, size: props.compact ? '18px' : undefined })
+  prepend: () => h(QIcon, {
+    name: selectedModelTrustIcon.value,
+    size: props.compact ? '16px' : undefined,
+    role: 'img',
+    'aria-hidden': 'false',
+    'aria-label': `Datenfreigabe: ${selectedModelTrustIcon.value === 'lock' ? 'Privat' : 'Öffentlich'}`
+  })
 }))
 const ReasoningField = defineComponent(() => () => h(AppSelect, selectProps({
   modelValue: effectiveSelection.value.reasoningEffort,
   options: reasoningEffortOptions.value,
-  label: 'Denken',
-  class: props.compact ? 'composer-reasoning' : undefined,
+  label: props.compact ? undefined : 'Denken',
+  'aria-label': 'Reasoning-Aufwand auswählen',
+  dropdownIcon: props.compact ? 'expand_more' : undefined,
+  hideBottomSpace: props.compact,
+  displayValue: props.compact ? effectiveSelection.value.reasoningEffort ? reasoningEffortLabel(effectiveSelection.value.reasoningEffort) : 'Standard' : undefined,
+  class: props.compact ? 'composer-select composer-reasoning col-auto rounded-borders q-px-sm' : undefined,
   hint: props.compact ? undefined : reasoningEffortOptions.value.length
     ? 'Reasoning-Aufwand für diesen Agenten in dieser Session.'
     : 'Das ausgewählte Modell bietet keine Reasoning-Stufen an.',

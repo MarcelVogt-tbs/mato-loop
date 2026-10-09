@@ -158,51 +158,7 @@
         :attachments="entry.output.attachments"
         @open-file="emit('open-file', $event)"
       />
-      <div v-if="entry.output.fileActions.length" class="work-history__file-outputs">
-        <div
-          v-for="action in entry.output.fileActions"
-          :key="`${action.rootIdentity || action.executionAgentId}:${action.path}`"
-          class="work-history__file-output row no-wrap items-center text-caption"
-        >
-          <q-icon :name="['directory', 'collection'].includes(action.kind) ? 'folder_zip' : attachmentIcon(action)" class="app-muted" size="18px" />
-          <span class="col ellipsis" :title="action.path">{{ action.kind === 'directory' ? `${action.filename}.zip` : action.filename }}</span>
-          <q-btn
-            v-if="!readOnly && action.fileRevision && action.fileId"
-            flat round dense size="sm" icon="history"
-            class="work-history__file-action col-auto app-muted"
-            :aria-label="`${action.filename}: bereitgestellte Revision ansehen`"
-            @click="emit('open-file', { ...action, revision: action.fileRevision })"
-          >
-            <q-tooltip>Bereitgestellte Revision ansehen</q-tooltip>
-          </q-btn>
-          <q-btn
-            v-if="!readOnly && action.kind === 'file'"
-            flat
-            round
-            dense
-            size="sm"
-            icon="visibility"
-            class="work-history__file-action col-auto app-muted"
-            :aria-label="`${action.filename} ansehen`"
-            @click="emit('open-file', action)"
-          >
-            <q-tooltip>Datei ansehen</q-tooltip>
-          </q-btn>
-          <q-btn
-            flat
-            round
-            dense
-            size="sm"
-            icon="download"
-            class="work-history__file-action col-auto app-muted"
-            :href="action.downloadUrl"
-            :download="action.kind === 'directory' ? `${action.filename}.zip` : action.filename"
-            :aria-label="`${action.filename} herunterladen`"
-          >
-            <q-tooltip>Datei herunterladen</q-tooltip>
-          </q-btn>
-        </div>
-      </div>
+      <ProvidedFiles :actions="entry.output.fileActions" :read-only="readOnly" @open-file="emit('open-file', $event)" />
     </div>
   </div>
 </template>
@@ -212,8 +168,8 @@ import { computed, nextTick, useId } from 'vue'
 import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
 import MessageAttachments from 'src/features/chat/components/MessageAttachments.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
+import ProvidedFiles from 'src/features/chat/components/ProvidedFiles.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'
-import { attachmentIcon } from 'src/utils/attachments'
 import { parseToolResult, shellCommand, toolIdentity, toolPresentation, toolStatus } from 'src/utils/tool-display'
 
 defineOptions({ name: 'AgentActivityEntry' })

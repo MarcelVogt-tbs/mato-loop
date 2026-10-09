@@ -239,6 +239,11 @@
   opacity: 0;
 }
 
+.chat-composer {
+  --composer-control-size: 28px;
+  --composer-action-font-size: 10px;
+}
+
 .chat-composer__card {
   padding: 8px 10px 8px 14px;
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
@@ -359,7 +364,20 @@
 
 .chat-composer__footer {
   min-width: 0;
-  gap: 2px;
+  gap: 4px;
+}
+
+.chat-composer__fields {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.chat-composer .composer-action {
+  font-size: var(--composer-action-font-size);
+  width: var(--composer-control-size);
+  height: var(--composer-control-size);
+  min-width: var(--composer-control-size);
+  min-height: var(--composer-control-size);
 }
 
 .chat-composer__actions {
@@ -479,19 +497,46 @@
   color: var(--q-primary);
 }
 
-.composer-agent-mode {
-  width: 160px;
-  min-width: 145px;
+.chat-composer .composer-select {
+  min-width: 0;
+  max-width: min(20rem, 100%);
+  font-size: 13px;
 }
 
-.composer-model {
-  width: min(230px, 28vw);
-  min-width: 150px;
+.chat-composer .composer-select:hover,
+.chat-composer .composer-select:focus-within {
+  background: var(--app-hover);
 }
 
-.composer-reasoning {
-  width: 165px;
-  min-width: 135px;
+// Quasar 2.18 only provides a 40px dense field; scope custom sizing to composer selects.
+.chat-composer .composer-select .q-field__control,
+.chat-composer .composer-select .q-field__native,
+.chat-composer .composer-select .q-field__marginal {
+  height: var(--composer-control-size);
+  min-height: var(--composer-control-size);
+}
+
+.chat-composer .composer-select .q-field__native {
+  padding-top: 0;
+  padding-bottom: 0;
+  color: var(--app-muted);
+}
+
+.chat-composer .composer-select .q-field__marginal {
+  color: var(--app-muted);
+  font-size: 16px;
+}
+
+@media (any-pointer: coarse) {
+  .chat-composer {
+    --composer-control-size: 44px;
+    --composer-action-font-size: 14px;
+  }
+
+  .chat-composer .composer-select {
+    min-width: 44px;
+    font-size: 16px;
+  }
 }
 
 .chat-transcript {
@@ -1122,6 +1167,11 @@
   grid-column: 1;
   grid-row: 1;
   margin-top: 0;
+}
+
+.chat-page__scroll-content .work-history__timeline {
+  grid-column: 1;
+  grid-row: 1;
 }
 
 .work-history__children {

@@ -351,6 +351,7 @@ describe('subagent inspector navigation and presentation', () => {
     app = createApp({
       render: () => h(AgentActivityPanel, {
         running: true,
+        expanded: true,
         activity: { phase: 'streaming', activeDurationMs: 296_000 },
         history: {
           activeDurationMs: 296_000,
@@ -377,7 +378,7 @@ describe('subagent inspector navigation and presentation', () => {
     expect(duration.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('keeps the answer header and duration when no activity entries exist', () => {
+  it('keeps the answer header and reveals duration on expansion when no activity entries exist', async () => {
     const pinia = createPinia()
     root = document.createElement('div')
     document.body.append(root)
@@ -391,10 +392,13 @@ describe('subagent inspector navigation and presentation', () => {
 
     expect(root.querySelector('.work-history__agent-header').textContent).toContain('codemato · Allgemein')
     expect(root.querySelector('.work-history__toggle')).not.toBeNull()
+    expect(root.querySelector('[role="timer"]')).toBeNull()
+    root.querySelector('.work-history__toggle').click()
+    await nextTick()
     expect(root.querySelector('[role="timer"]').textContent).toBe('4 s')
   })
 
-  it('shows initial activity beside live duration with a persistent history toggle', async () => {
+  it('shows initial activity and reveals live duration through the persistent history toggle', async () => {
     const panelKey = ref('live')
     const historyExpanded = ref(false)
     root = document.createElement('div')
@@ -411,12 +415,13 @@ describe('subagent inspector navigation and presentation', () => {
 
     expect(root.querySelector('.work-history--preview')).not.toBeNull()
     expect(root.querySelector('.activity-shimmer').textContent).toBe('Verarbeite Anfrage')
-    expect(root.querySelector('.work-history__meta-section [role="timer"]').textContent).toBe('38 s')
+    expect(root.querySelector('.work-history__meta-section [role="timer"]')).toBeNull()
     expect(root.querySelector('.work-history__header')).toBeNull()
     expect(root.querySelector('.work-history__toggle').getAttribute('aria-expanded')).toBe('false')
     root.querySelector('.work-history__toggle').click()
     await nextTick()
     expect(historyExpanded.value).toBe(true)
+    expect(root.querySelector('.work-history__meta-section [role="timer"]').textContent).toBe('38 s')
     panelKey.value = 'canonical'
     await nextTick()
     expect(root.querySelector('.work-history__toggle').getAttribute('aria-expanded')).toBe('true')
@@ -593,7 +598,7 @@ describe('subagent inspector navigation and presentation', () => {
     app.use(pinia).use(Quasar, { components })
     mountApp()
 
-    expect(root.querySelector('[role="timer"]').textContent).toBe('4 s')
+    expect(root.querySelector('[role="timer"]')).toBeNull()
     root.querySelector('.work-history__toggle').click()
     await nextTick()
 

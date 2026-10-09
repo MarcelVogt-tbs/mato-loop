@@ -124,9 +124,8 @@
               :data-live-message-id="message.liveMessageId || undefined"
               tabindex="-1"
             >
-            <div v-if="message.role === 'user' || (message.showAgentLabel && !message.workHistory)" class="chat-message__label row items-center wrap q-gutter-x-sm">
-              <span>{{ message.role === 'user' ? userMessageLabel(message) : identity.displayName }}</span>
-            </div>
+            <span v-if="message.role === 'user'" class="app-sr-only">Benutzernachricht</span>
+            <span v-else-if="message.showAgentLabel && !message.workHistory" class="app-sr-only">Assistentenantwort</span>
             <template
               v-if="message.content
                 || message.workHistory
@@ -134,6 +133,7 @@
             >
               <AgentActivityPanel
                 v-if="message.workHistory"
+                hide-provided-files
                 :history="message.workHistory"
                 :subagents="childrenByMessage.get(message.id) || []"
                 :activity="message.currentTurn ? chat.activity : null"
@@ -158,11 +158,7 @@
                 @trust-image-origin="trustImageOrigin"
               >
                 <template v-if="message.showAgentLabel" #header>
-                  <div class="chat-message__label row items-center wrap q-gutter-x-sm">
-                    <span>{{ identity.displayName }}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{{ agentProfileName(message) }}</span>
-                  </div>
+                  <span class="app-sr-only">Assistentenantwort</span>
                 </template>
               </AgentActivityPanel>
               <MessageContent
@@ -193,6 +189,11 @@
               :attachments="message.attachments"
             />
             <FileChanges :actions="message.fileChanges" @open-file="openToolFile" />
+            <ProvidedFiles
+              :actions="message.providedFiles"
+              class="q-my-sm"
+              @open-file="openToolFile"
+            />
             <div
               v-if="message.generationStatus === 'interrupted' && !message.redirected"
               class="app-muted text-caption row items-center q-gutter-x-xs q-mt-sm"
@@ -204,6 +205,8 @@
             <div
               v-if="message.deliveryStatus || message.queueRecoveryId || message.createdAt
                 || showMessageModel(message)
+                || agentProfileName(message)
+                || userMessageSource(message)
                 || isMessageTrustLevel(message.trustLevel)"
               class="chat-message__meta items-center wrap"
             >
@@ -237,9 +240,13 @@
               </span>
               <span
                 v-if="isMessageTrustLevel(message.trustLevel)
-                  && (showMessageModel(message) || message.createdAt)"
+                  && (showMessageModel(message) || agentProfileName(message) || userMessageSource(message) || message.createdAt)"
                 aria-hidden="true"
               >·</span>
+              <template v-if="agentProfileName(message)">
+                <span class="chat-message__meta-agent">{{ agentProfileName(message) }}</span>
+                <span v-if="showMessageModel(message) || userMessageSource(message) || message.createdAt" aria-hidden="true">·</span>
+              </template>
               <span
                 v-if="showMessageModel(message)"
                 class="chat-message__meta-model"
@@ -248,9 +255,13 @@
                 {{ message.origin === 'host' ? 'Host' : message.modelName }}
               </span>
               <span
-                v-if="message.createdAt && showMessageModel(message)"
+                v-if="showMessageModel(message) && (userMessageSource(message) || message.createdAt)"
                 aria-hidden="true"
               >·</span>
+              <template v-if="userMessageSource(message)">
+                <span class="chat-message__meta-source">{{ userMessageSource(message) }}</span>
+                <span v-if="message.createdAt" aria-hidden="true">·</span>
+              </template>
               <time
                 v-if="message.createdAt"
                 :datetime="message.createdAt"
@@ -526,6 +537,7 @@ import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
 import AgentActivityPanel from 'src/features/chat/components/AgentActivityPanel.vue'
+import ProvidedFiles from 'src/features/chat/components/ProvidedFiles.vue'
 import FileChanges from 'src/features/chat/components/FileChanges.vue'
 import HomeContent from 'src/features/home/HomeContent.vue'
 import ComputerChoiceStrip from 'src/features/chat/components/ComputerChoiceStrip.vue'
@@ -540,7 +552,6 @@ import QuestionDock from 'src/features/questions/QuestionDock.vue'
 import SubagentInspector from 'src/features/subagents/SubagentInspector.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'
 import { useSubagentStore } from 'stores/subagents'
-import { useAgentIdentityStore } from 'stores/agent-identity'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
@@ -586,7 +597,6 @@ const $q = useQuasar()
 const { confirm } = useConfirm()
 const chat = useChatStore()
 const subagents = useSubagentStore()
-const identity = useAgentIdentityStore()
 const agentProfiles = useAgentProfileStore()
 const approvals = useApprovalStore()
 const questions = useQuestionStore()
@@ -633,13 +643,19 @@ const liveWorkHistory = computed(() => ({
   activeDurationMs: chat.activity.activeDurationMs,
   activeDurationUpdatedAt: chat.activity.activeDurationUpdatedAt
 }))
-const userMessageLabel = (message) => (
-  message.sourceType === 'automationRun' ? `Automation${message.automationName ? ` · ${message.automationName}` : ''}`
+const userMessageSource = (message) => (
+  message.role !== 'user' ? ''
+    : message.sourceType === 'automationRun' ? `Automation${message.automationName ? ` · ${message.automationName}` : ''}`
     : message.source?.type === 'endpoint' && message.source.provider === 'telegram'
-    ? 'Du · Telegram'
-    : 'Du'
+    ? 'Telegram'
+    : ''
 )
-const agentProfileName = (message) => agentProfiles.byId(message.agentProfileId)?.name || 'Allgemein'
+const agentProfileName = (message) => (
+  message.role === 'assistant' && !message.continuesAssistantTurn && message.origin !== 'host'
+    && !(chat.running && message.currentTurn)
+    ? agentProfiles.byId(message.agentProfileId)?.name || 'Allgemein'
+    : ''
+)
 function setWorkHistoryExpanded(messageId, expanded) {
   const next = new Set(expandedWorkHistoryIds.value)
   if (expanded) next.add(messageId)
@@ -1042,7 +1058,7 @@ async function reconcileRouteProject() {
 async function revealRouteMessage() {
   const messageId = routeMessageId.value
   if (!messageId || chat.current?.id !== routeSessionId.value) return
-  let index = transcript.value.messages.findIndex((message) => message.id === messageId)
+  let index = displayMessages.value.findIndex((message) => message.id === messageId)
   if (index < 0 && chat.current.nextMessageCursor) {
     try {
       await chat.loadThroughMessage(messageId)
@@ -1050,7 +1066,7 @@ async function revealRouteMessage() {
       return
     }
     await nextTick()
-    index = transcript.value.messages.findIndex((message) => message.id === messageId)
+    index = displayMessages.value.findIndex((message) => message.id === messageId)
   }
   if (index < 0) return
   followingBottom.value = false
@@ -1060,6 +1076,12 @@ async function revealRouteMessage() {
   virtualScroll.value?.scrollTo(index, 'center-force')
   await new Promise((resolve) => window.requestAnimationFrame(resolve))
   const target = findMessageElement(messageId)
+  // Align the rendered message after virtual scrolling; expanded history changes item heights.
+  if (target && scrollTarget) {
+    restoreChatReadingAnchor(scrollTarget, target, {
+      offsetTop: Math.max(0, (scrollTarget.clientHeight - target.getBoundingClientRect().height) / 2)
+    })
+  }
   target?.focus({ preventScroll: true })
   rememberReadingAnchor()
   clearTimeout(searchHighlightTimer)

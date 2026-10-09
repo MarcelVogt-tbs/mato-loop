@@ -42,9 +42,10 @@
             </div>
           </div>
         </q-banner>
-        <div class="chat-composer__footer row items-center q-gutter-xs">
+        <div class="chat-composer__footer row items-center">
           <SessionSettingsFields
             ref="settingsFields"
+            class="chat-composer__fields"
             :session="session"
             :disabled="interactionDisabled"
             :agent-profile-id="chat.activeAgentProfileId"
@@ -84,6 +85,7 @@
               round
               dense
               icon="attach_file"
+              class="composer-action"
               type="button"
               aria-label="Dateien anhängen"
               :disable="inputDisabled || starting || recording || finalizing"
@@ -104,6 +106,7 @@
               round
               dense
               :icon="recording ? 'stop' : 'mic'"
+              class="composer-action"
               :color="recording ? 'negative' : undefined"
               type="button"
               :aria-label="recording ? 'Sprachnachricht beenden' : 'Sprachnachricht aufnehmen'"
@@ -119,8 +122,10 @@
             </q-btn>
             <q-btn
               v-if="running"
+              flat
               round
-              unelevated
+              dense
+              class="composer-action"
               :color="canSendDuringRun ? sendMode === 'queue' ? 'secondary' : 'primary' : 'negative'"
               :icon="canSendDuringRun ? sendMode === 'queue' ? 'schedule_send' : 'arrow_upward' : 'stop'"
               :aria-label="canSendDuringRun
@@ -137,6 +142,7 @@
               round
               dense
               icon="arrow_drop_down"
+              class="composer-action"
               aria-label="Versandart auswählen"
               type="button"
               :disable="stopping"
@@ -156,8 +162,10 @@
             </q-btn>
             <q-btn
               v-if="!running"
+              flat
               round
-              unelevated
+              dense
+              class="composer-action"
               :color="queueMode ? 'secondary' : 'primary'"
               :icon="queueMode ? 'schedule_send' : 'arrow_upward'"
               :aria-label="voiceActivity ? voiceSendLabel : queueMode ? 'Nachricht vormerken' : 'Nachricht senden'"
