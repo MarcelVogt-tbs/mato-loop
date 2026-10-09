@@ -135,6 +135,7 @@
             <q-input dense
               v-if="form.integration_type === 'openscad'"
               v-model="form.binaryPath"
+              class="app-field--wide"
               outlined
               label="Binary-Pfad"
               hint="Absoluter Pfad zur OpenSCAD-Binärdatei."

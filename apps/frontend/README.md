@@ -54,6 +54,10 @@ Simple destructive actions use `useConfirm` from `src/composables/confirm.js` or
 
 Quasar dialogs are used when additional input or multiple domain decisions are required. Human-in-the-loop approvals use persistent approval state and must not be denied automatically when the dialog closes.
 
+Menus and dialog surfaces share `app-popup-surface` in `src/shared/styles/_menus.scss`. Existing dialog cards inherit the same surface through the direct Quasar dialog-card selector, including mobile select dialogs. Maximized dialogs retain square, borderless edges.
+
+Single-line inputs and selects share responsive sizing in `src/shared/styles/_fields.scss`: 32px (36px with a label) and 13px text on desktop mouse devices, 44px and 16px on narrow or touch devices. Textareas and composer controls keep their existing sizing. Desktop form fields are capped at 28rem; URL inputs and `app-field--wide` use 42rem, always bounded by available width. `--app-field-max-width` allows a local width override. Hints and errors wrap in normal flow. The centralized Quasar-internal selectors must be reviewed when upgrading Quasar.
+
 ## UI Rules
 
 - Prefer Quasar components and utilities over new custom CSS.

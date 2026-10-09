@@ -689,6 +689,7 @@ async function setWorkdir() {
 
 function openAbsolutePath() {
   $q.dialog({
+    color: 'primary',
     title: 'Absoluten Pfad öffnen',
     prompt: {
       dense: true,
@@ -697,7 +698,7 @@ function openAbsolutePath() {
       label: 'Absoluter Pfad',
       isValid: (value) => absoluteComputerPath(String(value || '').trim())
     },
-    cancel: { label: 'Abbrechen', flat: true, noCaps: true },
+    cancel: { label: 'Abbrechen', color: undefined, class: 'app-muted', flat: true, noCaps: true },
     ok: { label: 'Öffnen', unelevated: true, noCaps: true, color: 'primary' }
   }).onOk((path) => workspace.openDirectory(path.trim()))
 }
