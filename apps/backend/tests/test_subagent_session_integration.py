@@ -99,6 +99,12 @@ async def tree(request, tmp_path, monkeypatch):
     await engine.dispose()
 
 
+async def test_preloaded_text_message_can_pass_voice_transcription(tree):
+    _, run, message = tree.records[0]
+    await AgentRuntime._transcribe_voice_messages(tree.db, run)
+    assert message.attachments == []
+
+
 async def test_database_spawn_constraints_and_message_relationships(tree):
     db, user = tree.db, tree.user
     parent, parent_run, _ = tree.records[0]

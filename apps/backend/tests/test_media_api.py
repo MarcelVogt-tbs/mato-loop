@@ -222,9 +222,6 @@ async def test_common_voice_transcription_preserves_persisted_audio_and_is_idemp
     original_path = await service.verified_path(voice, session.id)
     run = AgentRun(id=uuid4(), session_id=session.id, input_message_id=message.id)
 
-    async def get(model, _id, **_kwargs):
-        return message if model is Message else session
-
     async def transcribe(_db, **kwargs):
         assert db.commit.await_count >= 2
         assert kwargs["audio"] == await service.read_audio(voice, session.id)
@@ -252,8 +249,11 @@ async def test_common_voice_transcription_preserves_persisted_audio_and_is_idemp
             )
         return TranscriptionResult("  Gesprochener Text  " if outcome == "success" else "  ")
 
-    db.get.side_effect = get
+    db.get.return_value = session
     db.scalar.return_value = outcome != "owner_disabled_before"
+    db.scalar.side_effect = lambda statement: (
+        message if statement.column_descriptions[0]["entity"] is Message else db.scalar.return_value
+    )
     def _mock_value():
         return service
     for _mock_target in (mock_agent_runtime, mock_agent_loop, mock_agent_titles,):

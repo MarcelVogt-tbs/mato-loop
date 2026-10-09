@@ -495,7 +495,7 @@ Required fields and channels:
 
 English fallback text comes only from the central backend catalog. Pydantic details, exception text, and external provider responses never reach clients. Unknown syntactically valid codes remain intact with the safe `The action failed.` message.
 
-The frontend localizes codes centrally in `apps/frontend/src/utils/api-errors.js` and always prefers the German translation over `error.message`. An Axios interceptor displays API failures as negative Quasar toasts. Persistent agent failures appear as MatoLoop chat responses and do not create a duplicate domain toast. Unknown codes use a safe frontend fallback based on HTTP status. Other channels may use `error.message` directly or localize `error.code` and `error.params` themselves.
+The frontend localizes codes centrally in `apps/frontend/src/utils/api-errors.js` and always prefers the German translation over `error.message`. An Axios interceptor displays API failures as negative Quasar toasts. Persistent agent failures use ordinary chat message content with Host attribution in the existing metadata row, without a separate error banner or duplicate domain toast. The backend-approved retry action is a red refresh button in that row. Unknown codes use a safe frontend fallback based on HTTP status. Other channels may use `error.message` directly or localize `error.code` and `error.params` themselves.
 
 ## Notifications
 

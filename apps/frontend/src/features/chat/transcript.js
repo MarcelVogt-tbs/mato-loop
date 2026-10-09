@@ -1,5 +1,6 @@
 import { runWarningEntries } from 'src/utils/agent-activity'
 import { toolOpenFileActions } from 'src/utils/attachments'
+import { apiErrorMessage } from 'src/utils/api-errors'
 
 export function retryAvailableForMessage(message, messages = [], running = false) {
   return message?.kind === 'runtime_error'
@@ -141,6 +142,7 @@ export function buildChatTranscript(
     .filter(({ message }) => message.role !== 'tool')
     .map(({ message, index }) => ({
       ...message,
+      content: message.error ? apiErrorMessage(message.error) : message.content,
       _sourceIndex: index,
       toolCalls: (message.toolCalls || []).map((tool, toolIndex) => {
         const currentRound = running && index > lastUserIndex

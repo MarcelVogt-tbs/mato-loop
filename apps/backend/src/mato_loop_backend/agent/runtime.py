@@ -719,8 +719,10 @@ class AgentRuntime:
         message_id = message_id or run.input_message_id
         if message_id is None:
             return
-        message = await db.get(
-            Message, message_id, options=(selectinload(Message.attachments),)
+        message = await db.scalar(
+            select(Message)
+            .where(Message.id == message_id)
+            .options(selectinload(Message.attachments))
         )
         if message is None or message.role != "user" or message.session_id != run.session_id:
             return

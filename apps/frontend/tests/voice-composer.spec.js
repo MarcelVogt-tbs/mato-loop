@@ -31,7 +31,9 @@ vi.mock('src/shared/ui/AppLogo.vue', () => ({ default: { render: () => null } })
 vi.mock('src/features/home/HomeContent.vue', () => ({ default: { render: () => h('section', { class: 'home-stub' }, 'Übersicht') } }))
 vi.mock('src/features/chat/components/ComputerChoiceStrip.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/app/control-center/ControlCenterPanel.vue', () => ({ default: { render: () => null } }))
-vi.mock('src/features/chat/components/MessageContent.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/chat/components/MessageContent.vue', () => ({ default: {
+  props: ['content'], render() { return h('div', this.content) }
+} }))
 vi.mock('src/features/chat/components/MessageAttachments.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/questions/QuestionDock.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/subagents/SubagentInspector.vue', () => ({ default: { render: () => null } }))
@@ -197,6 +199,26 @@ describe('voice attachment composer', () => {
       ['Erste Nachricht', 'Wird gesendet …'],
       ['Erste Nachricht', 'Nicht gesendet']
     ])
+  })
+
+  it('renders host failures as message content with a red metadata retry action', async () => {
+    mocks.api.get.mockResolvedValue({ data: {} })
+    await router.push('/')
+    showPage.value = true
+    await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
+    const failure = { id: 'failure', role: 'assistant', origin: 'host', kind: 'runtime_error',
+      state: 'error', content: 'The agent run failed.', error: { code: 'agent.failed' }, retryAvailable: true }
+    chat.current = { id: 'session-1', messages: [failure] }
+    const retry = vi.spyOn(chat, 'retryFailedMessage').mockResolvedValue(null)
+    await nextTick()
+    await click('Anfrage erneut starten')
+    const message = root.querySelector('[data-message-id="failure"]')
+    expect([
+      message.querySelector('.chat-message__content')?.textContent,
+      message.querySelector('.chat-message__content')?.getAttribute('role'),
+      message.querySelector('.chat-message__meta [aria-label="Anfrage erneut starten"]')?.getAttribute('color'),
+      retry.mock.calls[0]?.[0]?.id
+    ]).toEqual(['Die Agent-Anfrage ist fehlgeschlagen.', 'alert', 'negative', 'failure'])
   })
 
   it('keeps sent-message undo and queue recovery visible after local cleanup fails', async () => {

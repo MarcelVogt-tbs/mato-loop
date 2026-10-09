@@ -127,16 +127,8 @@
             <div v-if="message.role === 'user' || (message.showAgentLabel && !message.workHistory)" class="chat-message__label row items-center wrap q-gutter-x-sm">
               <span>{{ message.role === 'user' ? userMessageLabel(message) : identity.displayName }}</span>
             </div>
-            <template v-if="message.state === 'error' && message.error">
-              <q-banner rounded class="chat-runtime-error app-surface-tonal" role="alert">
-                <template #avatar>
-                  <q-icon name="error_outline" color="negative" />
-                </template>
-                {{ apiErrorMessage(message.error) }}
-              </q-banner>
-            </template>
             <template
-              v-else-if="message.content
+              v-if="message.content
                 || message.workHistory
                 || message.generationStatus === 'interrupted'"
             >
@@ -184,6 +176,7 @@
                 v-if="message.content && message.role === 'assistant'"
                 class="chat-message__content"
                 :content="message.content"
+                :role="message.error ? 'alert' : undefined"
                 :file-actions="message.fileActions"
                 :research-sources="message.research?.linkedSources || []"
                 :streaming="message.streaming"
@@ -296,6 +289,7 @@
                 dense
                 size="sm"
                 icon="refresh"
+                color="negative"
                 class="chat-message__meta-action chat-message__meta-action--retry"
                 :loading="messageActionId === message.id"
                 :disable="messageActionId !== null && messageActionId !== message.id"

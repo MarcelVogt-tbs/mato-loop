@@ -605,11 +605,6 @@
   line-height: var(--chat-message-line-height, 1.6);
 }
 
-.chat-runtime-error {
-  border-left: 3px solid var(--q-negative);
-  color: var(--app-text);
-}
-
 .chat-markdown {
   font-size: var(--chat-message-font-size, inherit);
   min-width: 0;
