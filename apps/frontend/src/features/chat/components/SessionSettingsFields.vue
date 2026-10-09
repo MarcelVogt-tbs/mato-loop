@@ -7,10 +7,10 @@
     </q-banner>
 
     <section v-if="grouped && hasSessionFields" aria-labelledby="session-settings-title">
-      <div id="session-settings-title" class="text-subtitle1 text-weight-bold q-mb-md">
+      <div id="session-settings-title" class="text-subtitle1 text-weight-bold q-mb-sm">
         Session-Einstellungen
       </div>
-      <div class="column q-gutter-md">
+      <div class="column q-gutter-sm">
         <TemplateField v-if="has('template')" />
         <MessageSizeField v-if="has('messageSize')" />
         <AgentField v-if="has('agent')" />
@@ -21,10 +21,10 @@
     </section>
 
     <section v-if="grouped && hasLlmFields" aria-labelledby="session-llm-settings-title">
-      <div id="session-llm-settings-title" class="text-subtitle1 text-weight-bold q-mb-md">
+      <div id="session-llm-settings-title" class="text-subtitle1 text-weight-bold q-mb-sm">
         LLM-Einstellungen
       </div>
-      <div class="column q-gutter-md">
+      <div class="column q-gutter-sm">
         <ModelField v-if="has('model')" />
         <ReasoningField v-if="has('reasoning')" />
       </div>

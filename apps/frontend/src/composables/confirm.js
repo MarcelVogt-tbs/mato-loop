@@ -10,8 +10,8 @@ export function useConfirm() {
       Dialog.create({
         title,
         message,
-        ok: { label: okLabel, color: okColor, flat: false },
-        cancel: { label: cancelLabel, flat: true }
+        ok: { label: okLabel, color: okColor, unelevated: true, noCaps: true },
+        cancel: { label: cancelLabel, color: undefined, class: 'app-muted', flat: true, noCaps: true }
       })
         .onOk(() => resolve(true))
         .onCancel(() => resolve(false))

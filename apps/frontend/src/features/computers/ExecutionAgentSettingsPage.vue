@@ -383,11 +383,12 @@ async function maintain(agent, action) {
         if (password) notifyError(error)
         password = await new Promise((resolve) => {
           $q.dialog({
+            color: 'primary',
             title: 'sudo-Passwort benötigt',
             message: `Gib das sudo-Passwort auf „${agent.alias}“ für diese Wartung ein. Es wird nur für diesen Auftrag verwendet.`,
             prompt: { model: '', type: 'password', label: 'sudo-Passwort', outlined: true, dense: true, maxlength: 4096, autocomplete: 'new-password', isValid: Boolean },
-            cancel: { label: 'Abbrechen', flat: true },
-            ok: { label: 'Wartung starten', color: 'primary' },
+            cancel: { label: 'Abbrechen', color: undefined, class: 'app-muted', flat: true, noCaps: true },
+            ok: { label: 'Wartung starten', color: 'primary', unelevated: true, noCaps: true },
             maximized: $q.screen.lt.sm
           }).onOk(resolve).onDismiss(() => resolve(null))
         })
