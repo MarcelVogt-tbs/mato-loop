@@ -152,7 +152,7 @@
       v-if="showOutput && (entry.output?.attachments.length || entry.output?.fileActions.length)"
       class="work-history__outputs"
     >
-      <div class="tool-call__section-label">Ausgaben</div>
+      <div v-if="entry.tool.name !== 'provide_file'" class="tool-call__section-label">Ausgaben</div>
       <MessageAttachments
         v-if="entry.output.attachments.length"
         :attachments="entry.output.attachments"
@@ -162,13 +162,14 @@
         <div
           v-for="action in entry.output.fileActions"
           :key="`${action.rootIdentity || action.executionAgentId}:${action.path}`"
-          class="work-history__file-output app-surface"
+          class="work-history__file-output row no-wrap items-center text-caption"
         >
-          <q-icon :name="['directory', 'collection'].includes(action.kind) ? 'folder_zip' : attachmentIcon(action)" color="primary" size="24px" />
-          <span class="col ellipsis text-weight-medium" :title="action.path">{{ action.kind === 'directory' ? `${action.filename}.zip` : action.filename }}</span>
+          <q-icon :name="['directory', 'collection'].includes(action.kind) ? 'folder_zip' : attachmentIcon(action)" class="app-muted" size="18px" />
+          <span class="col ellipsis" :title="action.path">{{ action.kind === 'directory' ? `${action.filename}.zip` : action.filename }}</span>
           <q-btn
             v-if="!readOnly && action.fileRevision && action.fileId"
-            flat round dense icon="history"
+            flat round dense size="sm" icon="history"
+            class="work-history__file-action col-auto app-muted"
             :aria-label="`${action.filename}: bereitgestellte Revision ansehen`"
             @click="emit('open-file', { ...action, revision: action.fileRevision })"
           >
@@ -179,7 +180,9 @@
             flat
             round
             dense
+            size="sm"
             icon="visibility"
+            class="work-history__file-action col-auto app-muted"
             :aria-label="`${action.filename} ansehen`"
             @click="emit('open-file', action)"
           >
@@ -189,7 +192,9 @@
             flat
             round
             dense
+            size="sm"
             icon="download"
+            class="work-history__file-action col-auto app-muted"
             :href="action.downloadUrl"
             :download="action.kind === 'directory' ? `${action.filename}.zip` : action.filename"
             :aria-label="`${action.filename} herunterladen`"
