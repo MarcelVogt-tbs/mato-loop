@@ -217,6 +217,12 @@ app.include_router(api_router, prefix="/api")
 app.mount("/api/debug", debug_mcp_mount)
 register_error_handlers(app)
 
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+async def appearance_manifest() -> RedirectResponse:
+    return RedirectResponse("/api/appearance/manifest.webmanifest", headers={"Cache-Control": "no-store"})
+
+
 if runtime_config.static_dir and runtime_config.static_dir.exists():
     docs_dir = runtime_config.static_dir / "docs"
     if docs_dir.is_dir():

@@ -16,6 +16,7 @@ import { useSearchStore } from 'stores/search'
 import { useTerminalStore } from 'stores/terminal'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useHomeStore } from 'src/features/home/store'
+import { applyBranding, useAppearanceStore } from 'src/features/settings/appearance-store'
 import { terminalControlCenterState } from 'src/app/control-center/manifest'
 import { isPwaUpdateReload } from 'src/utils/pwa-update'
 import { searchShortcutAction } from 'src/utils/search-shortcut'
@@ -37,6 +38,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   const controlCenter = useControlCenterStore()
   const executionAgents = useExecutionAgentStore()
   const notifications = useInAppNotificationStore()
+  const appearance = useAppearanceStore()
   const integrations = useIntegrationStore()
   const projects = useProjectStore()
   const questions = useQuestionStore()
@@ -59,9 +61,6 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   let sessionActivityTimer = null
   let backgroundNotificationTimer = null
   let sessionActivityRefreshPending = false
-  const originalTitle = document.title
-  const favicon = document.querySelector('link[rel="icon"][type="image/svg+xml"]')
-  const originalFavicon = favicon?.getAttribute('href')
   const presenceClientId = randomUuid(window.crypto)
   const focused = ref(appIsFocused())
   const visibleSessionId = computed(() => (
@@ -171,10 +170,8 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     event.returnValue = ''
   }
 
-  watch(() => notifications.unreadCount, (count) => {
-    document.title = count > 0 ? `(${count > 99 ? '99+' : count}) ${originalTitle}` : originalTitle
-    favicon?.setAttribute('href', count > 0 ? '/icons/matoloop-unread.svg' : originalFavicon)
-  }, { immediate: true })
+  watch(() => [notifications.unreadCount, appearance.appName, appearance.description, appearance.logoUrl, appearance.customLogo],
+    () => applyBranding(appearance, notifications.unreadCount), { immediate: true })
 
   watch(visibleSessionId, refreshAppPresence)
   watch(() => [visibleSessionId.value, chat.current?.hasUnreadMessages, chat.current?.messages?.length], ([id, unread], previous = []) => {
@@ -264,8 +261,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   })
 
   onBeforeUnmount(() => {
-    document.title = originalTitle
-    favicon?.setAttribute('href', originalFavicon)
+    applyBranding(appearance)
     window.visualViewport?.removeEventListener('resize', updateVisualViewport)
     window.visualViewport?.removeEventListener('scroll', updateVisualViewport)
     window.removeEventListener('resize', updateVisualViewport)

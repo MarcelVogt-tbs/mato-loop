@@ -63,6 +63,8 @@ def _request_limit(scope: Scope) -> int | None:
         return None
     path = scope.get("path")
     method = scope.get("method")
+    if path == "/api/appearance/logo" and method == "PUT":
+        return 2 * 1024 * 1024
     if path == "/api/workspace/files" and method == "PUT":
         return WORKSPACE_FILE_EDIT_REQUEST_LIMIT
     parts = str(path).split("/")

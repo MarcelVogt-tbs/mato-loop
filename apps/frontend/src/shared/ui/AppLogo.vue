@@ -1,7 +1,7 @@
 <template>
   <img
     class="app-logo"
-    src="/icons/matoloop.svg"
+    :src="appearance.logoUrl"
     alt=""
     aria-hidden="true"
     :width="size"
@@ -10,6 +10,9 @@
 </template>
 
 <script setup>
+import { useAppearanceStore } from 'src/features/settings/appearance-store'
+
+const appearance = useAppearanceStore()
 defineProps({
   size: {
     type: Number,

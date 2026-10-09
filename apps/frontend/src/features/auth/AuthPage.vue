@@ -5,7 +5,8 @@
         <q-card flat class="app-surface auth-card">
           <q-card-section class="text-center q-pb-none">
             <AppLogo :size="64" />
-            <h1 class="text-h5 text-weight-bold q-mb-xs">MatoLoop</h1>
+            <h1 class="text-h5 text-weight-bold q-mb-xs">{{ appearance.appName }}</h1>
+            <p v-if="appearance.description" class="app-muted q-mt-none">{{ appearance.description }}</p>
             <p class="app-muted q-mt-none">
               {{ auth.setupRequired ? 'Richte deinen lokalen Benutzer ein.' : 'Melde dich in deinem Workspace an.' }}
             </p>
@@ -29,7 +30,7 @@
                 unelevated
                 no-caps
                 :loading="loading"
-                :label="auth.setupRequired ? 'MatoLoop einrichten' : 'Anmelden'"
+                :label="auth.setupRequired ? `${appearance.appName} einrichten` : 'Anmelden'"
               />
             </q-card-actions>
           </q-form>
@@ -43,11 +44,13 @@
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppLogo from 'src/shared/ui/AppLogo.vue'
+import { useAppearanceStore } from 'src/features/settings/appearance-store'
 import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'AuthPage' })
 
 const auth = useAuthStore()
+const appearance = useAppearanceStore()
 const route = useRoute()
 const router = useRouter()
 const username = ref('')

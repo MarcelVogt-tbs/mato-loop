@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { createApp, h, nextTick, reactive } from 'vue'
+import { createPinia } from 'pinia'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import MainLayout from '../src/app/MainLayout.vue'
 import { useChatStore } from 'stores/chat'
@@ -142,6 +143,7 @@ beforeEach(async () => {
   vi.useFakeTimers()
   root = document.createElement('div')
   app = createApp(MainLayout)
+  app.use(createPinia())
   app.config.globalProperties.$q = quasar
   const container = { render() { return h('div', this.$slots.default?.()) } }
   for (const name of ['QLayout', 'QDrawer', 'QToolbar', 'QSpace', 'QSeparator', 'QScrollArea', 'QItem', 'QItemSection', 'QItemLabel', 'QIcon', 'QList', 'QAvatar', 'QBadge', 'QCard', 'QCardSection', 'QCardActions', 'QBanner', 'QPageContainer', 'RouterLink']) {

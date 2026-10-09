@@ -1,7 +1,7 @@
 <template>
   <div v-if="!auth.statusLoaded" class="startup-view column items-center justify-center">
     <AppLogo :size="56" />
-    <div class="text-h6 text-weight-bold q-mt-md">MatoLoop</div>
+    <div class="text-h6 text-weight-bold q-mt-md">{{ appearance.appName }}</div>
     <q-spinner-dots color="primary" size="32px" class="q-mt-sm" />
     <q-btn
       v-if="startupSlow"
@@ -33,6 +33,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import AppLogo from 'src/shared/ui/AppLogo.vue'
+import { useAppearanceStore } from 'src/features/settings/appearance-store'
 import { useAuthStore } from 'stores/auth'
 import { notifyError } from 'src/utils/notifications'
 import {
@@ -45,6 +46,7 @@ import {
 defineOptions({ name: 'App' })
 
 const auth = useAuthStore()
+const appearance = useAppearanceStore()
 const startupSlow = ref(false)
 const updateAvailable = ref(false)
 const restarting = ref(false)

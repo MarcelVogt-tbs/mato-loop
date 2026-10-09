@@ -72,6 +72,10 @@ export const adminRoutes = [
     meta: { settingsLabel: 'Allgemein', settingsIcon: 'settings' }
   },
   {
+    path: 'appearance', name: 'admin-appearance', component: () => import('./AppearanceSettingsPage.vue'),
+    meta: { settingsLabel: 'Darstellung', settingsIcon: 'palette' }
+  },
+  {
     path: 'notifications', name: 'admin-notifications', component: () => import('src/features/notifications/NotificationSettingsPage.vue'),
     meta: { settingsLabel: 'Benachrichtigungen', settingsIcon: 'notifications_active' }
   },

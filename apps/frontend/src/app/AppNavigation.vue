@@ -12,14 +12,12 @@
       <q-toolbar class="drawer-toolbar q-px-sm">
         <router-link
           to="/"
-          class="app-brand row no-wrap items-center q-gutter-sm"
+          class="app-brand col row no-wrap items-center q-gutter-sm"
           @click="closeDrawerOnMobile"
         >
           <AppLogo />
-          <div class="app-brand__name">MatoLoop</div>
+          <div class="app-brand__name ellipsis">{{ appearance.appName }}</div>
         </router-link>
-
-        <q-space />
 
         <SidebarIconButton icon="search" aria-label="Suche öffnen" @click="search.openDialog" />
         <SidebarIconButton icon="menu" aria-label="Navigation schließen" @click="closeNavigation" />
@@ -266,6 +264,8 @@
 </template>
 
 <script setup>
+import { useAppearanceStore } from 'src/features/settings/appearance-store'
+
 import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
@@ -302,6 +302,7 @@ const $q = useQuasar()
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const appearance = useAppearanceStore()
 const chat = useChatStore()
 const controlCenter = useControlCenterStore()
 const workspace = useWorkspaceStore()
