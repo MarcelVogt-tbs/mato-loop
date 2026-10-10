@@ -5,8 +5,7 @@ import {
   isModelEffective,
   modelOption,
   modelSupportsCapability,
-  normalizeModelCapabilities,
-  selectedModelState
+  normalizeModelCapabilities
 } from '../src/utils/provider-models'
 
 const provider = { id: 'provider-1', name: 'Lokal', enabled: true, adapterType: 'openai-compatible' }
@@ -26,31 +25,12 @@ describe('effective model state', () => {
     expect(isModelEffective(model, { ...provider, enabled: false })).toBe(false)
   })
 
-  it('keeps unavailable session models readable without exposing a UUID', () => {
-    expect(selectedModelState(model.id, [{ ...model, enabled: false }], [provider])).toEqual({
-      available: false,
-      label: 'Qwen Test · Lokal',
-      message: 'Das Modell dieser Session ist deaktiviert.'
-    })
-    expect(selectedModelState('removed-id', [], [])).toEqual({
-      available: false,
-      label: 'Nicht mehr vorhandenes Modell',
-      message: 'Das Modell dieser Session ist nicht mehr vorhanden.'
-    })
-  })
-
   it('requires a saved Azure Speech credential for an effective transcription model', () => {
     const azure = { ...provider, adapterType: 'azure-speech', hasCredential: true }
     const transcription = { ...model, capabilities: ['audio_transcription'] }
     expect(isModelEffective(transcription, azure)).toBe(true)
     expect(isModelEffective(transcription, { ...azure, hasCredential: false })).toBe(false)
     expect(isModelEffective(transcription, { ...azure, effectiveEnabled: false })).toBe(false)
-    expect(selectedModelState(model.id, [transcription], [azure], {}, 'audio_transcription').available).toBe(true)
-    expect(selectedModelState(model.id, [transcription], [{ ...azure, hasCredential: false }], {}, 'audio_transcription')).toMatchObject({
-      available: false,
-      message: 'Der Provider dieses Modells ist deaktiviert oder nicht verbunden.'
-    })
-    expect(selectedModelState(model.id, [transcription], [azure]).available).toBe(false)
   })
 
   it('uses effective trust instead of the nullable model override', () => {
@@ -79,18 +59,6 @@ describe('effective model state', () => {
     const imageModel = { ...model, capabilities: ['image_generation'], supportsImageInput: false }
     expect(modelSupportsCapability(imageModel, 'chat')).toBe(false)
     expect(modelSupportsCapability(imageModel, 'image_generation')).toBe(true)
-  })
-
-  it('marks a media-only session model unavailable for chat', () => {
-    expect(selectedModelState(
-      model.id,
-      [{ ...model, capabilities: ['audio_transcription'] }],
-      [provider]
-    )).toEqual({
-      available: false,
-      label: 'Qwen Test · Lokal',
-      message: 'Das Modell dieser Session unterstützt keinen Chat.'
-    })
   })
 
   it('distinguishes idle, running, successful and failed discovery', () => {

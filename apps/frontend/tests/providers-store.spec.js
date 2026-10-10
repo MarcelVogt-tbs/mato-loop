@@ -76,10 +76,6 @@ describe('provider store', () => {
     expect(store.selectionOptions(null).map((option) => option.value)).toEqual(['legacy'])
     expect(store.capabilityOptions('image_generation').map((option) => option.value)).toEqual(['image'])
     expect(store.capabilityOptions('speech_generation')).toEqual([])
-    expect(store.selectedModelState('image')).toMatchObject({
-      available: false,
-      message: 'Das Modell dieser Session unterstützt keinen Chat.'
-    })
   })
 
   it('uses canonical input modalities for vision models with legacy fallback', () => {
@@ -379,10 +375,6 @@ describe('provider store', () => {
       { label: 'Öffentlich · Lokal', primaryLabel: 'Öffentlich', caption: 'Lokal', value: 'public', trustLevel: 'public', trustIcon: 'public', disable: false },
       { label: 'Privat · Lokal', primaryLabel: 'Privat', caption: 'Lokal', value: 'private', trustLevel: 'private', trustIcon: 'lock', disable: false }
     ])
-    expect(store.selectedModelState('public')).toMatchObject({
-      available: true,
-      message: ''
-    })
   })
 
   it('keeps an unavailable default visible without offering it as a new selection', () => {

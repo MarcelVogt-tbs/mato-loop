@@ -2795,13 +2795,14 @@ async def test_session_model_switch_ignores_stale_model_references(monkeypatch) 
 
     user = _user()
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
-    fallback = ModelConfig(provider_id=provider.id, model_id="default")
+    plain_chat = ModelConfig(provider_id=provider.id, model_id="plain-chat", supports_tools=False)
+    fallback = ModelConfig(provider_id=provider.id, model_id="Qwen3.8-27B")
     replacement = ModelConfig(provider_id=provider.id, model_id="replacement")
-    ai = AiSettings(providers=[provider], models=[fallback, replacement], default_model_id=fallback.id)
+    ai = AiSettings(providers=[provider], models=[plain_chat, fallback, replacement], default_model_id=fallback.id)
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_: ai if kind is AiProviderSettings else kind()))
-    profile = SessionProfileSnapshot(agent_models={PLAN_PROFILE_ID: ChatModelOverride(model_id=uuid4()), BUILD_PROFILE_ID: ChatModelOverride(model_id=uuid4())})
-    session = ChatSession(id=uuid4(), user_id=user.id, title="Test", agent_profile_id=PLAN_PROFILE_ID, model_config_id=uuid4(), memory_mode="disabled", session_profile=profile.model_dump(mode="json"))
-    before = apply_session_ai(ai, session).default_model_id
+    profile = SessionProfileSnapshot(agent_models={PLAN_PROFILE_ID: ChatModelOverride(model_id=uuid4(), reasoning_effort="high"), BUILD_PROFILE_ID: ChatModelOverride(model_id=uuid4())})
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Test", agent_profile_id=PLAN_PROFILE_ID, model_config_id=plain_chat.id, memory_mode="disabled", session_profile=profile.model_dump(mode="json"))
+    before = apply_session_ai(ai, session)
     profile.agent_models[PLAN_PROFILE_ID] = ChatModelOverride(model_id=replacement.id)
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
@@ -2809,7 +2810,7 @@ async def test_session_model_switch_ignores_stale_model_references(monkeypatch) 
 
     await update_session(session.id, SessionUpdateRequest(session_profile=profile), user, db)
 
-    assert (before, apply_session_ai(ai, session).default_model_id) == (fallback.id, replacement.id)
+    assert (before.default_model_id, before.reasoning_effort, apply_session_ai(ai, session).default_model_id) == (fallback.id, None, replacement.id)
 
 
 async def test_manual_title_change_skips_automatic_generation(monkeypatch) -> None:

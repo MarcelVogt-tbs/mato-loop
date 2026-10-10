@@ -5,8 +5,7 @@ import {
   isModelEffective,
   isModelPresent,
   modelOption,
-  modelSupportsCapability,
-  selectedModelState
+  modelSupportsCapability
 } from 'src/utils/provider-models'
 
 function assignProviderPayload(store, payload) {
@@ -147,14 +146,7 @@ export const useProviderStore = defineStore('providers', {
         return [modelOption(selectedModel, provider, true), ...options]
       }
       return options
-    },
-    selectedModelState: (state) => (modelId, capability = 'chat') => selectedModelState(
-      modelId,
-      state.availableModels || state.models,
-      state.availableProviders || state.providers,
-      state.codex,
-      capability
-    )
+    }
   },
   actions: {
     async fetchPersonalPolicy() {

@@ -156,7 +156,7 @@ const executionAgentMessage = computed(() => {
   if (!liveWorkspaceContext.value.connected) return 'Der ausgewählte Computer ist nicht verfügbar.'
   return ''
 })
-const effectiveSelection = computed(() => sessionModel(props.session, providers.modelDefaults, providers.modelOptions, displayedAgentProfileId.value))
+const effectiveSelection = computed(() => sessionModel(props.session, providers, displayedAgentProfileId.value))
 const effectiveModelId = computed(() => effectiveSelection.value.modelId)
 const modelSelectionOptions = computed(() => providers.selectionOptions(effectiveModelId.value, true))
 const selectedModelLabel = computed(() => {
@@ -253,7 +253,8 @@ function update(patch) {
 
 function selectModel(modelId) {
   const model = providers.models.find((item) => item.id === modelId)
-  const effort = effectiveSelection.value.reasoningEffort
+  const effort = props.session?.sessionProfile?.agentModels?.[displayedAgentProfileId.value]?.reasoningEffort
+    || props.session?.reasoningEffort || providers.modelDefaults?.reasoningEffort
   const agentModels = { ...props.session?.sessionProfile?.agentModels }
   agentModels[displayedAgentProfileId.value] = { ...agentModels[displayedAgentProfileId.value], modelId, ...(effort && !model?.reasoningEfforts?.includes(effort) ? { reasoningEffort: null } : {}) }
   update({ session_profile: { ...props.session?.sessionProfile, agentModels } })

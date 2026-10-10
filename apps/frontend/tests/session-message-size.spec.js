@@ -31,23 +31,27 @@ it('changes message size while retaining configuration and shows an unselected c
   expect(update).toHaveBeenCalledWith({ session_profile: { ...sessionProfile, messageSize: 'small' } })
 })
 
-it('lets the compact model menu return to the inherited model', async () => {
+it.each(['override', 'removed'])('lets the compact model menu return to the inherited model from %s', async (modelId) => {
   const update = vi.fn()
   root = document.createElement('div')
   document.body.append(root)
   app = createApp({ render: () => h(SessionSettingsFields, {
-    session: { agentProfileId: 'agent', sessionProfile: { agentModels: { agent: { modelId: 'override' } } } },
+    session: { agentProfileId: 'agent', sessionProfile: { agentModels: { agent: { modelId, reasoningEffort: 'high' } } } },
     fields: ['model'], compact: true, onUpdate: update
   }) })
   app.use(createPinia()).use(Quasar, { components: { QSelect, QIcon, QItem, QItemLabel, QItemSection } })
   const providers = useProviderStore()
   providers.providers = [{ id: 'provider', name: 'Local', enabled: true }]
-  providers.models = [{ id: 'override', providerId: 'provider', modelId: 'chat', enabled: true }]
+  providers.modelDefaults = { defaultModelId: 'default' }
+  providers.models = [
+    { id: 'override', providerId: 'provider', modelId: 'chat', enabled: true, reasoningEfforts: ['high'] },
+    { id: 'default', providerId: 'provider', modelId: 'fallback', enabled: true, reasoningEfforts: ['low'] }
+  ]
   app.mount(root)
   root.querySelector('.composer-model .q-field__native').click()
   const option = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')]
     .find((item) => item.textContent.includes('Standardmodell verwenden')))
   option.click()
   await nextTick()
-  expect(update).toHaveBeenCalledWith({ session_profile: { agentModels: { agent: { modelId: null } } } })
+  expect(update).toHaveBeenCalledWith({ session_profile: { agentModels: { agent: { modelId: null, reasoningEffort: null } } } })
 })

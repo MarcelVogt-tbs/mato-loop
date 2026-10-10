@@ -251,7 +251,7 @@ const audioScope = computed(() => ({
 }))
 const currentDictation = computed(() => chat.getAudioDictation(audioScope.value.sessionId, audioScope.value.projectId))
 const recordingDuration = computed(() => formatAttachmentDuration(recordingDurationMs.value) || '0:00')
-const effectiveModelId = computed(() => sessionModel(props.session, providers.modelDefaults, providers.modelOptions, chat.activeAgentProfileId).modelId)
+const effectiveModelId = computed(() => sessionModel(props.session, providers, chat.activeAgentProfileId).modelId)
 const selectedModelConfig = computed(() => providers.models.find((model) => (
   model.id === effectiveModelId.value
 )))

@@ -61,47 +61,6 @@ export function modelOption(model, provider, disable = false) {
   }
 }
 
-export function selectedModelState(
-  modelId,
-  models,
-  providers,
-  codex = {},
-  capability = 'chat'
-) {
-  if (!modelId) {
-    return {
-      available: false,
-      label: 'Kein Modell ausgewählt',
-      message: 'Es ist kein verfügbares Standardmodell eingerichtet.'
-    }
-  }
-
-  const model = models.find((item) => item.id === modelId)
-  if (!model) {
-    return {
-      available: false,
-      label: 'Nicht mehr vorhandenes Modell',
-      message: 'Das Modell dieser Session ist nicht mehr vorhanden.'
-    }
-  }
-
-  const provider = providers.find((item) => item.id === model.providerId)
-  if (isModelEffective(model, provider, codex) && modelSupportsCapability(model, capability)) {
-    return { available: true, label: modelOption(model, provider).label, message: '' }
-  }
-
-  let reason = 'Das Modell dieser Session ist derzeit nicht verfügbar.'
-  if (!isModelPresent(model)) reason = 'Das Modell dieser Session wurde beim Provider nicht mehr gefunden.'
-  else if (!model.enabled) reason = 'Das Modell dieser Session ist deaktiviert.'
-  else if (!isProviderEffective(provider, codex)) reason = 'Der Provider dieses Modells ist deaktiviert oder nicht verbunden.'
-  else if (!modelSupportsCapability(model, capability)) {
-    reason = capability === 'chat'
-      ? 'Das Modell dieser Session unterstützt keinen Chat.'
-      : 'Das Modell unterstützt die benötigte Fähigkeit nicht.'
-  }
-  return { available: false, label: modelOption(model, provider).label, message: reason }
-}
-
 export function discoveryState(provider, syncing = false, failed = false) {
   if (syncing) return 'syncing'
   if (failed) return 'failed'

@@ -1,11 +1,22 @@
-import { expect, it } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { expect, it, vi } from 'vitest'
 import { sessionModel } from '../src/features/chat/session-model'
+import { useProviderStore } from '../src/stores/providers'
+
+vi.mock('src/boot/axios', () => ({ api: {} }))
 
 it('resolves each agent override above session and effective defaults', () => {
-  const defaults = { defaultModelId: 'global', reasoningEffort: 'low' }
+  setActivePinia(createPinia())
+  const providers = useProviderStore()
+  providers.modelDefaults = { defaultModelId: 'global', reasoningEffort: 'low' }
+  providers.providers = [{ id: 'provider', enabled: true }]
+  providers.models = ['plan-model', 'session', 'global'].map((id) => ({ id, providerId: 'provider', enabled: true, supportsTools: true, reasoningEfforts: ['low'] }))
   const session = { modelId: 'session', sessionProfile: { agentModels: { plan: { modelId: 'plan-model', reasoningEffort: 'high' } } } }
-  const options = ['plan-model', 'session', 'global'].map((value) => ({ value }))
-  expect([sessionModel(session, defaults, options, 'plan'), sessionModel(session, defaults, options, 'build'), sessionModel({}, defaults, options), sessionModel(session, defaults, options.slice(2), 'plan')]).toEqual([
-    { modelId: 'plan-model', reasoningEffort: 'high' }, { modelId: 'session', reasoningEffort: 'low' }, { modelId: 'global', reasoningEffort: 'low' }, { modelId: 'global', reasoningEffort: 'high' }
+  const selections = [sessionModel(session, providers, 'plan'), sessionModel(session, providers, 'build'), sessionModel({}, providers)]
+  providers.models[0].availability = 'missing'
+  providers.models[1].supportsTools = false
+  selections.push(sessionModel(session, providers, 'plan'))
+  expect(selections).toEqual([
+    { modelId: 'plan-model', reasoningEffort: 'high' }, { modelId: 'session', reasoningEffort: 'low' }, { modelId: 'global', reasoningEffort: 'low' }, { modelId: 'global', reasoningEffort: null }
   ])
 })
