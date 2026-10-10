@@ -543,26 +543,18 @@ class MealieClient:
             raise _error("malformedResponse")
         return {"id": _uuid(payload.get("id")), "name": _string(payload.get("name"))}
 
-    async def _prepare_recipe_changes(self, changes: dict[str, Any]) -> dict[str, Any]:
-        if "recipeIngredient" not in changes:
-            return changes
-        references: dict[tuple[str, str], dict[str, str]] = {}
-        ingredients = []
-        for ingredient in changes["recipeIngredient"]:
-            prepared = {**ingredient, "referenceId": str(uuid4())}
-            for kind in ("food", "unit"):
-                if reference := ingredient.get(kind):
-                    key = (kind, reference["name"].strip().casefold())
-                    if key not in references:
-                        references[key] = await self._ingredient_reference(kind, reference["name"])
-                    prepared[kind] = references[key]
-            ingredients.append(prepared)
-        return {**changes, "recipeIngredient": ingredients}
-
     async def update_recipe(self, slug_or_id: str, changes: dict[str, Any]) -> MealieRecipe:
         before = self._mutation_count
         try:
-            changes = await self._prepare_recipe_changes(changes)
+            references: dict[tuple[str, str], dict[str, str]] = {}
+            for ingredient in changes.get("recipeIngredient", []):
+                ingredient["referenceId"] = str(uuid4())
+                for kind in ("food", "unit"):
+                    if reference := ingredient.get(kind):
+                        key = (kind, reference["name"].strip().casefold())
+                        if key not in references:
+                            references[key] = await self._ingredient_reference(kind, reference["name"])
+                        ingredient[kind] = references[key]
             payload = await self._request(
                 "PATCH", f"/recipes/{quote(slug_or_id, safe='')}", payload=changes,
             )

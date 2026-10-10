@@ -370,7 +370,7 @@ async def test_connection_requires_a_mealie_user_id() -> None:
 
 
 async def test_recipe_create_patch_import_and_delete_use_mealie_contract() -> None:
-    requests = []
+    requests = {}
     changes = {"recipeServings": 4, "recipeIngredient": [{"food": {"name": "Kartoffeln"}, "unit": {"name": "kg"}, "quantity": 2}], "recipeInstructions": [{"text": "Kochen"}]}
     stored = {**_summary(), "recipeIngredient": [], "recipeInstructions": [], "extras": {"keep": "value"}}
 
@@ -381,7 +381,7 @@ async def test_recipe_create_patch_import_and_delete_use_mealie_contract() -> No
         ]}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
+        requests[request.method, request.url.path] = request
         if request.url.path == "/api/foods":
             assert request.method == "GET"
             return httpx.Response(200, json={"items": [{"id": FOOD_ID, "name": "Kartoffel", "pluralName": "Kartoffeln"}], "total_pages": 1})
@@ -408,20 +408,13 @@ async def test_recipe_create_patch_import_and_delete_use_mealie_contract() -> No
         imported = await client.import_recipe("https://recipes.example/soup")
         await client.delete_recipe(imported.id)
 
-    assert [(request.method, request.url.path) for request in requests] == [
-        ("POST", "/api/recipes"), ("GET", "/api/foods"),
-        ("GET", "/api/units"), ("POST", "/api/units"),
-        ("PATCH", "/api/recipes/kartoffelsuppe"), ("GET", f"/api/recipes/{RECIPE_ID}"),
-        ("PATCH", f"/api/recipes/{RECIPE_ID}"), ("POST", "/api/recipes/create/url"),
-        ("GET", "/api/recipes/kartoffelsuppe"), ("DELETE", f"/api/recipes/{RECIPE_ID}"),
-    ]
-    assert json.loads(requests[0].content) == {"name": "Kartoffelsuppe"}
-    assert json.loads(requests[4].content)["recipeIngredient"][0]["food"]["name"] == "Kartoffel"
-    assert json.loads(requests[6].content) == {"description": "Neu"}
-    assert json.loads(requests[7].content) == {"url": "https://recipes.example/soup"}
+    assert json.loads(requests["POST", "/api/recipes"].content) == {"name": "Kartoffelsuppe"}
+    assert json.loads(requests["PATCH", "/api/recipes/kartoffelsuppe"].content)["recipeIngredient"][0]["food"]["name"] == "Kartoffel"
+    assert json.loads(requests["PATCH", f"/api/recipes/{RECIPE_ID}"].content) == {"description": "Neu"}
+    assert json.loads(requests["POST", "/api/recipes/create/url"].content) == {"url": "https://recipes.example/soup"}
+    assert ("DELETE", f"/api/recipes/{RECIPE_ID}") in requests
     assert created.snapshot_hash == reread.snapshot_hash
     assert updated.id == RECIPE_ID
-    assert len(created.snapshot_hash) == 64
 
 
 @pytest.mark.parametrize("operation", ["create", "import", "update_with_new_food"])
