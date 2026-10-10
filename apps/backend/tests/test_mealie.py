@@ -22,14 +22,22 @@ from mato_loop_backend.integrations.mealie.adapter import (
     MealPlanDeleteArguments,
     MealPlanGetArguments,
     MealPlanUpdateArguments,
+    RecipeCreateArguments,
+    RecipeDeleteArguments,
     RecipeGetArguments,
+    RecipeImportArguments,
     RecipesSearchArguments,
+    RecipeUpdateArguments,
     meal_plan_add,
     meal_plan_delete,
     meal_plan_get,
     meal_plan_update,
     mealie_list_accounts,
+    recipe_create,
+    recipe_delete,
     recipe_get,
+    recipe_import_url,
+    recipe_update,
     recipes_search,
 )
 from mato_loop_backend.integrations.mealie.client import (
@@ -38,6 +46,7 @@ from mato_loop_backend.integrations.mealie.client import (
     MealieRecipe,
     MealieRecipeIngredient,
     MealieRecipeInstruction,
+    MealieRecipePage,
     MealieRecipeSummary,
 )
 from mato_loop_backend.integrations.mealie.service import MealieIntegrationService
@@ -123,6 +132,7 @@ def _recipe(**changes) -> MealieRecipe:
         )
     }
     values |= {
+        "snapshot_hash": "a" * 64,
         "ingredients": (
             MealieRecipeIngredient(
                 quantity=2.5,
@@ -179,6 +189,10 @@ def test_adapter_is_a_standalone_shared_tool_definition() -> None:
         "mealie_list_accounts",
         "recipes_search",
         "recipe_get",
+        "recipe_create",
+        "recipe_update",
+        "recipe_delete",
+        "recipe_import_url",
         "meal_plan_get",
         "meal_plan_add",
         "meal_plan_update",
@@ -196,6 +210,8 @@ def test_adapter_is_a_standalone_shared_tool_definition() -> None:
     assert set(actions) == {
         "mealie.accounts.read",
         "recipes.read",
+        "recipes.write",
+        "recipes.delete",
         "meal_plan.read",
         "meal_plan.write",
         "meal_plan.delete",
@@ -210,6 +226,10 @@ def test_adapter_is_a_standalone_shared_tool_definition() -> None:
     assert actions["meal_plan.delete"].mutates is True
     assert actions["meal_plan.delete"].private_default_policy == ToolExecutionPolicy.ASK
     assert actions["meal_plan.delete"].public_default_policy == ToolExecutionPolicy.ASK
+    for capability in ("recipes.write", "recipes.delete"):
+        assert actions[capability].mutates is True
+        assert actions[capability].private_default_policy == ToolExecutionPolicy.ASK
+        assert actions[capability].public_default_policy == ToolExecutionPolicy.ASK
 
 
 @pytest.mark.parametrize(
@@ -288,6 +308,15 @@ def test_argument_models_are_strict_and_enforce_ranges_and_sparse_updates() -> N
     assert RecipeGetArguments(
         integration_id=account.id, recipe_token=recipe_token
     ).recipe_token == recipe_token
+    for arguments in ({"name": "  "}, {"name": "Suppe", "servings": float("nan")}, {"name": "Suppe", "ingredients": [{}]}):
+        with pytest.raises(ValidationError):
+            RecipeCreateArguments(integration_id=account.id, **arguments)
+    for changes in ({}, {"description": None}):
+        with pytest.raises(ValidationError):
+            RecipeUpdateArguments(integration_id=account.id, recipe_token=recipe_token, **changes)
+    for url in ("file:///tmp/recipe", "https://user:secret@recipes.example/soup"):
+        with pytest.raises(ValidationError):
+            RecipeImportArguments(integration_id=account.id, url=url)
 
 
 async def test_account_listing_uses_only_the_bound_active_snapshot() -> None:
@@ -405,13 +434,13 @@ async def test_recipe_search_and_detail_return_bounded_opaque_results(monkeypatc
     account = _account()
     revision = _revision(account)
     client = AsyncMock()
-    client.search_recipes.return_value = (_summary(description="x" * 6_000),)
+    client.search_recipes.return_value = MealieRecipePage((_summary(description="x" * 6_000),), 2, 40, 2)
     client.get_recipe.return_value = _recipe()
     _mock_client(monkeypatch, client, revision)
     context = _context(account, revision)
 
     search = await recipes_search(
-        RecipesSearchArguments(integration_id=account.id, query="Suppe"), context
+        RecipesSearchArguments(integration_id=account.id, query="Suppe", page=2, tags=["Vegetarisch"]), context
     )
     summary = json.loads(search.content)["recipes"][0]
     detail = await recipe_get(
@@ -422,7 +451,9 @@ async def test_recipe_search_and_detail_return_bounded_opaque_results(monkeypatc
     )
     recipe = json.loads(detail.content)["recipe"]
 
-    client.search_recipes.assert_awaited_once_with("Suppe", 20)
+    client.search_recipes.assert_awaited_once_with("Suppe", 20, page=2, tags=("Vegetarisch",), categories=(), ingredients=())
+    assert json.loads(search.content)["nextPage"] is None
+    assert json.loads(search.content)["total"] == 40
     client.get_recipe.assert_awaited_once_with(RECIPE_ID)
     assert len(summary["description"]) == 5_000
     assert summary["categories"] == ["Suppe"]
@@ -646,3 +677,76 @@ def test_permissions_name_the_account_and_offer_scoped_writes() -> None:
     assert account_list.capability == "mealie.accounts.read"
     assert account_list.resource_type == "network_service"
     assert account_list.resource_scope == "mealie_accounts"
+
+    for name, arguments, capability in (
+        ("recipe_create", RecipeCreateArguments(integration_id=account.id, name="Suppe"), "recipes.write"),
+        ("recipe_import_url", RecipeImportArguments(integration_id=account.id, url="https://recipes.example/soup"), "recipes.write"),
+        ("recipe_delete", RecipeDeleteArguments(integration_id=account.id, recipe_token=integrations_mealie_adapter._recipe_token(_recipe(), account.id, revision)), "recipes.delete"),
+    ):
+        permission = tools[name].authorization_factory(arguments, context)[0]
+        assert permission.capability == capability
+        assert permission.effective_session_grants[0].access == "write"
+        assert json.loads(permission.effective_session_grants[0].resource_scope)["resourceKey"] == "recipes"
+        assert permission.available_decisions == ("allow_once", "allow_session", "deny")
+
+
+async def test_recipe_writes_chain_tokens_and_patch_only_supplied_fields(monkeypatch) -> None:
+    account = _account()
+    revision = _revision(account)
+    context = _context(account, revision)
+    client = AsyncMock()
+    client.create_recipe.return_value = _recipe()
+    client.import_recipe.return_value = _recipe()
+    client.get_recipe.return_value = _recipe()
+    client.update_recipe.return_value = _recipe(description="Neu")
+    _mock_client(monkeypatch, client, revision)
+
+    created = await recipe_create(RecipeCreateArguments(
+        integration_id=account.id, name="Suppe", servings=4,
+        ingredients=[{"quantity": 2, "unit": "kg", "food": "Kartoffeln"}],
+        instructions=[{"text": "Kochen"}],
+    ), context)
+    token = json.loads(created.content)["recipe"]["recipeToken"]
+    updated = await recipe_update(RecipeUpdateArguments(integration_id=account.id, recipe_token=token, description="Neu"), context)
+    imported = await recipe_import_url(RecipeImportArguments(integration_id=account.id, url="https://recipes.example/soup"), context)
+    deleted = await recipe_delete(RecipeDeleteArguments(integration_id=account.id, recipe_token=json.loads(updated.content)["recipe"]["recipeToken"]), context)
+
+    client.create_recipe.assert_awaited_once_with("Suppe", {
+        "recipeServings": 4,
+        "recipeIngredient": [{"quantity": 2, "unit": {"name": "kg"}, "food": {"name": "Kartoffeln"}, "note": "", "title": None, "originalText": None}],
+        "recipeInstructions": [{"text": "Kochen", "title": "", "summary": ""}],
+    })
+    client.update_recipe.assert_awaited_once_with(RECIPE_ID, {"description": "Neu"})
+    client.import_recipe.assert_awaited_once_with("https://recipes.example/soup")
+    assert json.loads(imported.content)["recipe"]["name"] == "Kartoffelsuppe"
+    assert json.loads(deleted.content)["deleted"] is True
+    client.delete_recipe.assert_awaited_once_with(RECIPE_ID)
+    assert RECIPE_ID not in created.content
+
+
+@pytest.mark.parametrize("operation", ["update", "delete"])
+@pytest.mark.parametrize("reference", ["summary", "changed", "other_account"])
+async def test_recipe_mutations_require_current_owner_bound_detail(monkeypatch, operation, reference) -> None:
+    account = _account()
+    revision = _revision(account)
+    recipe = _summary() if reference == "summary" else _recipe()
+    token = integrations_mealie_adapter._recipe_token(recipe, uuid4() if reference == "other_account" else account.id, revision)
+    client = AsyncMock()
+    client.get_recipe.return_value = _recipe(snapshot_hash="b" * 64)
+    _mock_client(monkeypatch, client, revision)
+    if operation == "update":
+        result = await recipe_update(RecipeUpdateArguments(integration_id=account.id, recipe_token=token, name="Neu"), _context(account, revision))
+    else:
+        result = await recipe_delete(RecipeDeleteArguments(integration_id=account.id, recipe_token=token), _context(account, revision))
+    assert result.metadata["errorCode"] == ("integration.remoteChanged" if reference == "changed" else "integration.staleReference")
+    client.update_recipe.assert_not_awaited()
+    client.delete_recipe.assert_not_awaited()
+
+
+async def test_recipe_write_projection_failure_reports_unknown_outcome(monkeypatch) -> None:
+    account = _account()
+    client = AsyncMock()
+    client.create_recipe.return_value = _recipe(description="x" * 5_001)
+    _mock_client(monkeypatch, client, _revision(account))
+    result = await recipe_create(RecipeCreateArguments(integration_id=account.id, name="Suppe"), _context(account, _revision(account)))
+    assert result.metadata == {"errorCode": "integration.outcomeUnknown"}
