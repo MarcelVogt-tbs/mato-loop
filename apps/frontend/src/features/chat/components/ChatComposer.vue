@@ -55,9 +55,6 @@
             @update="$emit('update', $event)"
             @agent-popup-hide="input?.focus()"
           />
-          <q-chip v-if="pendingCount" dense square color="warning" text-color="dark" icon="pending_actions">
-            {{ pendingCount }} offen
-          </q-chip>
           <q-space />
           <input
             ref="attachmentInput"
