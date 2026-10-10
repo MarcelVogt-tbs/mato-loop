@@ -17,9 +17,9 @@ MatoLoop is a provider-neutral AI chat and agent harness. It owns sessions, mess
 
 MatoLoop is developed with significant AI assistance. Large parts of the codebase have not been reviewed by a human.
 
-Use this software at your own risk. There is no warranty or guarantee that it will work correctly or avoid data loss, security issues, misconfiguration, downtime, or other problems caused directly or indirectly by using the application.
+Use this software at your own risk. AI-generated responses may be incorrect, and agent actions can affect files, systems, and connected services. There is no warranty or guarantee of correctness, reliability, or security.
 
-Review agent permissions and test workflows, backups, and restores carefully before relying on this software for important data or systems.
+Verify important results and configure tool permissions carefully. Grant agents only the access you intend them to have.
 
 ## Features
 
