@@ -2,9 +2,9 @@
 
 ## Nachrichtenanhänge
 
-Sie können Dateien über die Dateiauswahl oder die Zwischenablage an einen Nachrichtenentwurf anhängen. Anzahl, Einzelgröße und Gesamtgröße werden global von Administratoren unter **Einstellungen > Instanzlimits** festgelegt. Browserlokale Anhangsentwürfe bleiben über alle Sessions zusammen auf 256 MiB begrenzt.
+Sie können Dateien über Dateiauswahl oder Zwischenablage anhängen. Anzahl, Einzelgröße und Gesamtgröße legen Administratoren unter **Administration > Instanzlimits** fest. Browserlokale Anhangsentwürfe bleiben über alle Sessions zusammen auf 256 MiB begrenzt.
 
-MatoLoop zeigt unterstützte Bilder, Audio, Text und Dokumente passend an. Benutzer-Uploads bleiben private Nachrichtenanhänge. Office-Dokumente, PDFs, Audio und weitere Formate können serverseitig in lesbare Ableitungen umgewandelt werden; diese liegen unter dem jeweiligen Anhang. Die Originaldatei bleibt als Download verfügbar.
+Uploads und ausdrücklich gespeicherte Dokumentableitungen sind verwaltete Dateien der besitzenden Session; Nachrichten behalten ihre exakten Versionsverweise. Es gibt keinen separaten Anhangsbaum. Office-/PDF-Textbegleiter können dauerhaft entstehen, Audio-WAV-Konvertierung erfolgt dagegen bei Bedarf nur vorübergehend. Das Original bleibt zum Download verfügbar.
 
 ## Bildverarbeitung
 
@@ -20,9 +20,9 @@ Der Agent kann QR-Codes lokal und ohne Bildgenerator als scannbare PNG-Datei erz
 
 ## Sprachnachrichten
 
-Mit der Mikrofontaste nehmen Sie im Browser eine Sprachnachricht auf. Dafür benötigt der Browser die Mikrofonberechtigung; die Aufnahme endet automatisch nach fünf Minuten. Mit **Als Sprachnachricht anhängen** fügen Sie die Aufnahme dem Entwurf hinzu. Dort können Sie sie vor dem Senden anhören oder entfernen. Innerhalb der normalen Anhangsgrenzen sind mehrere Aufnahmen möglich.
+Die Mikrofontaste startet die Aufnahme mit Browserberechtigung. Stoppen hängt sie automatisch an den Entwurf; sie endet spätestens nach fünf Minuten. Dort können Sie sie anhören oder entfernen. Scheitert das Anhängen an den Grenzen, bieten **Anhängen**, **Herunterladen** und **Verwerfen** eine Wiederaufnahme bzw. Sicherung. Innerhalb der Grenzen sind mehrere Aufnahmen möglich.
 
-Beim Senden speichert MatoLoop das Originalaudio als normalen Nachrichtenanhang. Anschließend verwendet die gemeinsame Laufzeit das Transkriptionsmodell des gewählten Agentenprofils und ergänzt den erkannten Text in der Nachricht. Dies ist eine direkte Benutzeranfrage, daher erzeugt das Profilrecht **Nachfragen** keine zusätzliche Freigabekarte. Für die automatische Transkription müssen Audiotranskription technisch aktiviert und im Profil ein verfügbares Transkriptionsmodell gewählt sein; Aufnahme und Versand funktionieren auch ohne Transkription. Eine fehlgeschlagene oder nicht verfügbare Transkription lässt das Originalaudio unverändert.
+Beim Senden wird das Original gespeichert und bei verfügbarer Transkription der erkannte Text ergänzt. Das Transkriptionsmodell wählen Sie unter **Standardmodelle > Transkription**, nicht am Agentenprofil. Diese ausdrückliche Benutzeraktion erzeugt keine weitere Tool-Freigabe; technisch deaktivierte Transkription bleibt deaktiviert. Aufnahme und Versand funktionieren auch ohne Transkription, und Fehler lassen das Original erhalten. Azure Speech ist eine mögliche reine Transkriptionsquelle; dabei wird das Originalaudio an Azure übertragen.
 
 Gesendete Aufnahmen besitzen einen Audioplayer und einen Download der Originaldatei. Nur das Originalaudio wird dauerhaft gespeichert. Für Transkription und Wiedergabe erzeugt MatoLoop bei Bedarf vorübergehend eine WAV-Datei aus dem geprüften Original, ohne der Session eine doppelte Datei hinzuzufügen. Ältere WAV-Begleitdateien bleiben wegen bestehender Dateiverweise gespeichert, werden für Wiedergabe und Transkription aber nicht mehr benötigt. Das Modell kann später erneut auf den Anhang zugreifen, auch für eine weitere Transkription. Wenn Sie eine Nachricht wieder in den Entwurf übernehmen, bleibt das Audio erhalten; ein bereits enthaltenes erfolgreiches Transkript wird beim erneuten Senden nicht nochmals angehängt.
 

@@ -2,43 +2,60 @@
 
 ## Neue und vorhandene Sessions
 
-Eine neue Session entsteht serverseitig erst mit der ersten Nachricht. Nicht gesendeter Text wird im Browser getrennt je Session und Projekt gespeichert. Vorhandene Sessions können geöffnet, angepinnt, umbenannt, zwischen Projekten verschoben und gelöscht werden.
+Die Startseite und eine leere neue Unterhaltung sind zunächst Browserentwürfe. Eine erste Nachricht oder das Öffnen einer sessiongebundenen Control-Center-App legt die Session samt internem Speicher an. Die feste Session-Einstellungsansicht und globale Benachrichtigungen allein erzeugen keine Session.
 
-Projekte gruppieren zusammengehörige Sessions in der Seitenleiste. Ein Projektordner kann unabhängig von anderen Projekten aufgeklappt werden. Das Session-Symbol am Projekt startet eine neue Session in diesem Projekt; Sessions ohne Projekt stehen darunter im Bereich **Sessions**.
+Sessions können angepinnt, umbenannt, zwischen Projekten verschoben, archiviert und gelöscht werden. Projekte gruppieren Sessions, teilen aber nicht deren Dateiablage. Ein Projekt kann Sessionvorlage, Computer und Arbeitsordner als Vorgaben für neue Sessions speichern; spätere Projektänderungen schreiben bestehende Sessions nicht um. Beim Projektwechsel wird ein Entwurf nur in einen leeren Zielentwurf übernommen, nie über vorhandene Inhalte oder eine Warteschlange geschrieben.
 
 ## Session-Einstellungen
 
-Für jede Session können Sie festlegen:
-
 | Einstellung | Bedeutung |
 | --- | --- |
-| Agent | Arbeitsweise, Modelle, Reasoning, Integrationen und Tool-Rechte |
-| Modell | Verwendetes aktives Chatmodell |
+| Sessionvorlage | Verfügbare Agenten, Startagent, Memory, Nachrichtengröße und optionale Modell-/Reasoning-Vorgaben |
+| Agent | Arbeitsweise, Tool-Rechte und Integrationsauswahl |
+| Modell und Reasoning | Effektive Modellwahl und unterstützte Reasoning-Stufe |
 | Memory | Voll, nur lesen oder deaktiviert |
 | Websuche | Erzwingen, verfügbar oder deaktiviert |
-| Computer | Optional verbundener Computer für lokale Funktionen |
+| Computer und Arbeitsordner | Optionaler lokaler Ausführungsort |
 
-Das ausgewählte Agentenprofil gilt für die Session. Eine ausdrückliche Session-Modellwahl hat Vorrang vor dem Agentmodell des Profils; ohne beides kann kein Lauf starten. Entsprechend hat eine ausdrückliche Reasoning-Stufe der Session Vorrang vor der Profilstufe. Beim Start eines Laufs wählt das Vertrauenslevel des Modells den privaten oder öffentlichen Berechtigungszweig des Profils. **Allgemein**, **Plan**, **Build** und **Sysadmin** sind unabhängige Instanz-Basisprofile; eigene Profile übernehmen jedes nicht angepasste Feld von ihrer gewählten Basis. Ein Profilwechsel ist während eines aktiven Laufs gesperrt. **Allgemein** gilt für neue Sessions. Vom Modell ausgelöste Dateiaktionen werden zusätzlich durch die beiden Dateirichtlinien des gewählten Computers beschränkt. Zwei feste Schalter aktivieren oder blockieren Shell-Aktionen im Home-Verzeichnis und außerhalb davon; beide sind standardmäßig aktiviert. Einen pauschalen Lesen-/Schreiben-Modus gibt es nicht. Shell-Befehle werden als Lesen oder Schreiben klassifiziert. Profilgebundene Präfixregeln und Session-Freigaben können Rückfragen reduzieren; Session-Freigaben bleiben an Agentenprofil, Vertrauenslevel, Klasse, Computer und absoluten Arbeitsordner gebunden und überstimmen keine technische, Vertrauens-, Pfad-, Computer- oder Delegationsgrenze.
+Unter **Control Center > Session** ändern Sie die Sessionwerte. Die Vorlagen **Allgemein** und **Coding** bieten Allgemein/Sysadmin bzw. Plan/Build. Eine Vorlagenauswahl ersetzt Agentenauswahl, Memory, Nachrichtengröße und Modell-/Reasoning-Vorgaben; Projekt, Computer, Arbeitsordner und Websuche bleiben unabhängig. Spätere Änderungen einer gespeicherten Vorlage wirken nicht rückwirkend.
 
-Eine neue Session besitzt nur internen Session-Speicher und noch keinen Workspace. Die Computerauswahl und der absolute aktuelle Ordner unter **Control Center > Dateien** sind veränderbare Session-Vorgaben. Beim Start eines Laufs speichert MatoLoop die Auswahl für diesen Lauf. Änderungen in den Sessioneinstellungen gelten erst für den nächsten Lauf; ein einzeln freigegebener Computerwechsel durch das Modell gilt ab dem nächsten Modellschritt desselben Laufs. Ist kein Computer gewählt oder der gewählte Computer offline, bleiben Chat und Backend-Tools verfügbar; Computer-, Prozess- und passende lokale Integrationstools fehlen. MatoLoop wechselt nicht automatisch zu einem anderen Computer und wiederholt keine fehlgeschlagene lokale Operation automatisch.
+Modell und Reasoning gehören nicht zum Agentenprofil. Ein agentenspezifischer Sessionwert hat Vorrang vor dem sessionweiten Wert, dann persönlichen und globalen **Standardmodellen**; beim Reasoning folgt zuletzt der Modellstandard. Nicht verfügbare Modellreferenzen werden bei der Auflösung übersprungen. Ohne ausdrückliches Agentmodell kann das erste verfügbare toolfähige Chatmodell dienen. Hilfsmodelle verwenden Standardmodelle und ihre jeweiligen Fallbacks.
+
+Plan und Build brauchen einen verbundenen Computer und zugänglichen Arbeitsordner. Allgemeiner Chat und Backend-Tools funktionieren ohne Computer. Fehlende Laufvoraussetzungen erscheinen als gespeicherte Host-Antwort, die Sie nach einer Korrektur erneut versuchen können.
 
 ## Laufende Antworten
 
-Antworten werden während der Erzeugung angezeigt. MatoLoop stellt Arbeitsphasen, Laufzeit, Tool-Aufrufe und deren Status dar. Ein aktiver Lauf kann gestoppt werden. Bei einer kurzzeitigen Verbindungsunterbrechung versucht die Oberfläche, den Ereignisstrom wieder aufzunehmen.
+MatoLoop zeigt Antworttext, aktuelle Aktivität, Tool-Ergebnisse, Laufzeit und gegebenenfalls Reasoning-Zusammenfassungen. Diese Zusammenfassungen sind keine vollständigen internen Gedankengänge. Bei Verbindungsunterbrechung lädt die Oberfläche den gespeicherten Zustand nach; ein Browserdisconnect stoppt den Agenten nicht. Der Stoppknopf beendet den Lauf, ohne abgeschlossene Wirkungen rückgängig zu machen.
 
-Reasoning-Zusammenfassungen werden nur angezeigt, wenn das Modell sie liefert und die Modellkonfiguration sie erlaubt. Sie sind nicht mit vollständigen internen Gedankengängen gleichzusetzen.
+### Während eines Laufs senden
 
-Bei unterstützten Modellen kann der Reasoning-Aufwand direkt neben der Modellauswahl geändert oder wieder auf die Profilstufe zurückgesetzt werden. Ist auch im Profil keine Stufe gewählt, gilt der Modellstandard. Qwen3.8-27B verwendet standardmäßig **Mittel**. Codex übernimmt verfügbare Stufen und Modellstandard aus dem aktuellen Katalog.
+**Jetzt senden** ergänzt den aktuellen Lauf um Ihre neue Nachricht. Eine laufende Modellanfrage wird neu aufgebaut; aktive Tool-Arbeit darf zuerst enden. Eine überholte Freigabe wird geschlossen und der Agent plant mit Ihrer neuen Anweisung weiter. Das erlaubt keine zuvor gesperrte Aktion.
+
+**Nach dem Lauf senden** reiht die Nachricht für einen anschließenden Lauf ein. Der ownergebundene Browser-Postausgang bewahrt eingereihte Nachrichten und Anhänge in Reihenfolge. Fehlgeschlagene Sendungen bleiben für einen erneuten Versuch oder die Übernahme in den Entwurf erhalten. Abmelden oder ein Kontowechsel entfernt den bisherigen Postausgang dieses Browsers.
+
+Der laufende Auftrag behält sein Startprofil und seinen Modell-/Vertrauenskontext. Neue Profilauswahlen gelten für spätere Läufe. Für Details zu wirksamen Rechten siehe [Freigaben](freigaben-und-datenfreigabe.md).
+
+### Aufgaben und Subagenten
+
+**Agent-Coding** im Control Center bündelt Einstiege zu Ablage, Computer-Dateien, Terminal, Browser und OpenCode, soweit verfügbar. Die App öffnet bestehende Werkzeuge; sie gewährt keine zusätzlichen Rechte und erzeugt keine automatische Workspace-Isolation.
+
+Geeignete Profile können eine Aufgabenliste oberhalb des Eingabefelds anzeigen. Sie lässt sich zuklappen; der Status dokumentiert gemeldeten Fortschritt und ist kein unabhängiger Erfolgsnachweis.
+
+Delegierte Aufgaben erscheinen mit anklickbarem Titel und Status in der Aktivität. Der Subagenteninspektor zeigt deren eigenen Verlauf schreibgeschützt. Fragen und Freigaben beantworten Sie in der Hauptsession. Kinder teilen den Computer-Arbeitsbereich; unterschiedliche Sessions bieten dort keine Dateisolation. Ein Stopp des Elternlaufs stoppt auch offene delegierte Arbeit.
+
+## Rückfragen
+
+Eine strukturierte Rückfrage ersetzt vorübergehend das Eingabefeld. **Weiter** navigiert; **Fertig** sendet den bisherigen Antwortstand auch vor der letzten Frage. Fragen dürfen unbeantwortet bleiben. **Ablehnen** verwirft den Entwurf. Geschützte Felder behandeln ausgelassene Werte ausdrücklich als fehlend; siehe [Variablen und Secrets](variablen-und-secrets.md).
 
 ## Nachrichtenaktionen
 
-- **Erneut versuchen** startet nach einer fehlgeschlagenen letzten Antwort einen neuen Versuch.
-- **Rückgängig** entfernt eine Benutzernachricht und den nachfolgenden Verlauf und lädt Text sowie Anhänge wieder als Entwurf.
-- **Kopieren** übernimmt geeignete Nachrichteninhalte in die Zwischenablage.
+- **Erneut versuchen** startet für die letzte fehlgeschlagene Host-Antwort einen neuen Versuch. Vor-Ausführungsfehler werden mit aktuellen Sessionvorgaben erneut geprüft; bereits gestartete Läufe behalten ihren Retry-Kontext.
+- **Rückgängig** entfernt eine Benutzernachricht und den folgenden Verlauf, nachdem Text und Anhänge wieder in den Entwurf übernommen wurden.
+- **Kopieren** übernimmt Nachrichteninhalte in die Zwischenablage.
 
 !!! warning "Externe Wirkungen bleiben bestehen"
-    Rückgängig und erneutes Versuchen machen bereits ausgeführte Dateiänderungen, Webzugriffe, Freigaben oder Memory-Änderungen nicht rückgängig.
+    Rückgängig, Retry und Stopp machen bereits ausgeführte Datei-, Integrations-, Freigabe- oder Memory-Änderungen nicht rückgängig.
 
 ## Darstellung
 
-Assistant-Antworten unterstützen Markdown, Tabellen, Aufgabenlisten, Codeblöcke mit Syntaxhervorhebung, mathematische Ausdrücke und Mermaid-Diagramme. Codeblöcke lassen sich über ihre Aktionen herunterladen oder kopieren. Mermaid-Diagramme erscheinen ohne eigenen Rahmen direkt zwischen dem übrigen Markdown; fertige Diagramme lassen sich als SVG herunterladen, als Quelltext kopieren oder unabhängig von ihrer Breite im gemeinsamen Bildviewer vergrößern. Während ein Diagramm entsteht, erscheint ein Erstellhinweis. Die Mermaid-Quelle bleibt Bestandteil der Chatnachricht und erzeugt keine zusätzliche Session-Datei. Externe Links öffnen sicher in einem neuen Tab. Externe Bilder werden erst nach Ihrer Zustimmung für den jeweiligen Ursprung geladen.
+Antworten unterstützen Markdown, Tabellen, Code, Mathematik und Mermaid. Codeblöcke lassen sich kopieren oder herunterladen; fertige Mermaid-Diagramme als SVG herunterladen, als Quelle kopieren oder vergrößern. Die Quelle bleibt in der Nachricht, ohne zusätzliche Datei. Externe Bilder benötigen eine Zustimmung je Ursprung und Session. **Kleine Nachrichten** aus der Sessionvorlage bzw. Sessionansicht verdichtet die Darstellung, ohne den Inhalt zu kürzen.

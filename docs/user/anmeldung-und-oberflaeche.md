@@ -2,46 +2,56 @@
 
 ## Anmeldung
 
-MatoLoop verwendet derzeit ausschließlich eine lokale, Cookie-basierte Anmeldung. Geschützte Seiten leiten automatisch zur Anmeldeseite weiter. Über **Abmelden** im Benutzermenü beenden Sie die Sitzung. Eine Anmeldung über einen externen OAuth- oder SSO-Anbieter ist noch nicht implementiert.
+MatoLoop verwendet eine lokale Cookie-Anmeldung. Geschützte Seiten leiten zur Anmeldung weiter; **Abmelden** beendet sie. Externe SSO-Anmeldung ist nicht implementiert. Das erste Konto ist Administrator. Unter **Konto** ändern Sie Ihr Passwort; dadurch werden bestehende Anmeldungen dieses Kontos beendet.
 
-Das erste bei der Ersteinrichtung angelegte lokale Konto erhält Administratorrechte. Über **Konto** im Benutzermenü ändern Sie Ihr eigenes Passwort; danach werden alle bestehenden Anmeldungen dieses Kontos beendet.
+Unter **Administration > Benutzer** können Administratoren Konten anlegen, Passwörter zurücksetzen, Konten aktivieren/deaktivieren und Rollen vergeben. Ein Konto muss vor dem Löschen deaktiviert sein. Das eigene Konto und der letzte aktive Administrator sind geschützt.
 
-Under **Administration > Benutzer**, administrators can create local accounts, reset passwords, enable or disable accounts, and grant or revoke administrator rights. An account must be disabled before permanent deletion. You cannot disable or delete your own account, and at least one active administrator must remain.
-
-Administratorrechte erlauben die Benutzerverwaltung und Änderungen an globalen Einstellungen. Sie erlauben keinen Zugriff auf Sessions, Nachrichten, Dateien, Erinnerungen, Zugangsdaten, Arbeitsbereiche oder Computer anderer Benutzer. **Persönlich** und **Global** gekennzeichnete Einträge erscheinen in einer Liste; Administratoren können beim Anlegen geeigneter Einträge **Global** wählen. Persönliche Einträge anderer Benutzer werden dabei nicht angezeigt.
-
-Beim Löschen entfernt MatoLoop die zugehörigen Datenbankdaten und Session-Bäume. Dateien, Caches und Konfigurationen auf Computern, einschließlich des mitgelieferten Compose-Computers, sowie Daten in externen Diensten werden nicht gelöscht und müssen dort bei Bedarf separat entfernt werden. Gemeinsam konfigurierte Instanzressourcen bleiben erhalten.
+Administratorrechte erlauben gemeinsame Konfiguration und Kontoverwaltung, keinen Zugriff auf persönliche Inhalte anderer Benutzer. **Administration** und **Einstellungen** haben getrennte gemeinsame bzw. persönliche Listen. Beim Löschen eines Kontos entfernt MatoLoop dessen Datenbankdaten und Backend-Sessionbäume; Computerdateien und externe Daten bleiben beim jeweiligen Dienst.
 
 ## Navigation
 
-Die linke Seitenleiste enthält:
+Die Seitenleiste enthält Home, Suche, Projekte und Unterhaltungen, Automationen, **Variablen & Secrets**, **Archiv** und das Benutzermenü. Statussymbole zeigen aktive Arbeit, offene Anfragen und ungelesene Antworten. Projekt-Sessions werden beim Aufklappen geladen; **Mehr anzeigen** lädt weitere Einträge. Listenfehler können direkt erneut versucht werden.
 
-- Benachrichtigungsglocke als direkter Zugang zu **Benachrichtigungen** im Control Center
-- aufklappbare Projekte mit ihren Sessions und einer Schaltfläche für eine neue Projekt-Session
-- Bereich **Sessions** für Unterhaltungen ohne Projekt
-- Statushinweise für aktive Läufe und offene Freigaben
-- Benutzermenü mit Einstellungen, Dokumentation, Farbschema und Abmeldung
+Home zeigt zuletzt aktive Unterhaltungen, offene Anfragen, kommende Automationen und Computerstatus. Manche Übersichtselemente sind auf kleinen Bildschirmen ausgeblendet; der Chat bleibt nutzbar. Eine ausdrückliche neue Unterhaltung öffnet einen leeren Entwurf.
 
-Projektordner laden ihre Sessions erst beim Aufklappen. **Mehr anzeigen** lädt innerhalb des jeweiligen Projekts oder im Bereich **Sessions** weitere Einträge. Ladefehler können direkt an der betroffenen Liste erneut versucht werden.
+### Suche
+
+Die Suche findet eigene Projekte, Sessions und Nachrichten ab zwei Zeichen. **Strg+F** bzw. **Cmd+F** öffnet die Anwendungssuche; ist sie bereits offen, bleibt die Browsersuche verfügbar. Ohne Embedding-Dienst funktioniert die lexikalische Suche weiter. Suchergebnisse öffnen den passenden Gesprächskontext.
+
+### Archiv
+
+Über das Menü einer Session oder eines Projekts archivieren Sie Unterhaltungen. **Archiv** ermöglicht Lesen und Wiederherstellen. Ein archiviertes Projekt archiviert seine Sessions wirksam mit; einzeln archivierte Sessions bleiben nach der Projektwiederherstellung archiviert. Neue Aufträge benötigen die Wiederherstellung, bestehende Arbeit darf noch enden. Mehr zu Zeitplänen unter [Automationen](automationen.md).
 
 ## Control Center
 
-Die schwebende Schaltfläche **Control Center** öffnet eine gemeinsame Arbeitsfläche für globale Bereiche und die Integrationen der aktuellen Session. **Benachrichtigungen** is the single fixed global view for pending actions and informational notices. **Dateien** ist die eingebaute Session-Integration; weitere mit MatoLoop ausgelieferte Integrationen können eigene Ansichten ergänzen. Integrationstabs lassen sich per Drag-and-drop sortieren. Auf Touch-Geräten und mit der Tastatur stehen dafür zusätzlich **Nach links verschieben** und **Nach rechts verschieben** im Menü des Inhalts-Headers bereit. Reihenfolge, aktive Integration, geöffneter Zustand und die zuletzt verwendete Datei- oder Pfadansicht werden serverseitig für die Session gespeichert. When reopening a session, the saved open state is restored only in the side-by-side layout (from 1024 px). The fullscreen Control Center stays closed until explicitly opened. Tabs and the last file or path view are restored; unsaved edits are not. Neue Sessions beginnen mit **Dateien**.
+Die schwebende Schaltfläche öffnet das Control Center. **Session** ist der feste Einstellungsbereich. Neue Sessions haben außerdem die App **Ablage**; **Computer-Dateien**, **Automationen**, **Terminal**, **Browser** und andere verfügbare Apps fügen Sie über den Launcher hinzu. Sessiongebundene Apps können einen Entwurf als leere Session speichern.
 
-Der Schließen-Button im Inhalts-Header klappt das gesamte Control Center zu, ohne eine Integration zu entfernen. **Integration aus Session entfernen** ist davon getrennt im Drei-Punkte-Menü untergebracht und erfordert eine Bestätigung. Gespeicherte Daten werden dabei nicht gelöscht; die Integration kann später erneut hinzugefügt werden.
+Apps lassen sich umordnen und schließen. Das Schließen eines App-Tabs löscht seine Daten oder Konfiguration nicht; eine Automation läuft beispielsweise weiter. Das Zuklappen des Panels erhält Tabs und Dateientwürfe. Nur beim Schließen einer Datei mit ungespeicherten Änderungen ist eine Entscheidung erforderlich. Der feste Sessionbereich kann nicht entfernt werden.
 
-The bell opens **Benachrichtigungen** directly; this global view is not saved as a session integration. Pending approvals and agent questions from all sessions appear at the top under **Aktion erforderlich** and can both be answered there. Informational notices appear below under **Hinweise** and can be marked read individually or together without resolving pending actions. The badge counts pending approvals, questions, and unread notices. The same approvals and questions remain available in their chat, including shared-terminal shell requests. Their commands are reviewed read-only here and edited only in the real terminal line. Granted permissions remain under **Session > Session-Freigaben**, not in the global center.
+Reihenfolge, Dateiziele und Ansichten werden je Session gespeichert, Editorentwürfe bleiben im Browser-Arbeitsspeicher. Ab 1024 Pixeln stellt MatoLoop die gespeicherte Panel-Sichtbarkeit im geteilten Layout wieder her. Der mobile Vollbilddialog startet geschlossen und muss ausdrücklich geöffnet werden.
 
-Normale Chat-Antworten erscheinen nicht zusätzlich als Benachrichtigung. Ergebnisse und Fehler von Automationsläufen erscheinen dagegen dauerhaft in dieser Zentrale.
+### Benachrichtigungen
+
+Der globale Bereich **Benachrichtigungen** zeigt eine chronologische Liste. Sein Zähler zählt ausschließlich ungelesene Hinweise. Die schwebende Control-Center-Schaltfläche öffnet bei vorhandenem Zähler direkt diese Liste; sonst die zuletzt verwendete App.
+
+Hinweise auf Freigaben und Rückfragen öffnen die Quell-Session; Dreaming-Vorschläge öffnen **Memory > Dreaming > Offene Vorschläge**. Normale Antworten und Laufzeitfehler erzeugen ebenfalls Hinweise, sofern ihre Session nicht sichtbar und fokussiert ist. Antwort- und Sessionanfrage-Hinweise verschwinden nach dem Lesen; andere Hinweise können einen gelesenen Verlauf behalten. Lesen oder Löschen entscheidet niemals die zugrunde liegende Anfrage.
+
+Session-Freigaben verwalten Sie unter **Session > Session-Freigaben**. Push aktivieren Sie pro Gerät im Benachrichtigungsbereich, nachdem die Instanz dafür eingerichtet wurde; siehe [Betrieb](betrieb-und-datensicherung.md#app-und-push-benachrichtigungen).
 
 ## Desktop und Mobilgeräte
 
-Auf größeren Bildschirmen können Chat und Control Center nebeneinander angezeigt und in der Breite angepasst werden. Auf schmalen Bildschirmen öffnet sich das Control Center als Vollbilddialog. Ist die Navigation geschlossen, erscheint eine schwebende Menüschaltfläche.
+Auf größeren Bildschirmen teilen sich Chat und Control Center einen verstellbaren Bereich. Auf schmalen Geräten öffnet ein Vollbilddialog. Bei geschlossener Seitenleiste erscheint eine schwebende Navigationstaste.
 
 ## Heller und dunkler Modus
 
-Das Benutzermenü schaltet zwischen hellem und dunklem Modus um. Die Dokumentation besitzt einen eigenen Schalter und berücksichtigt beim ersten Aufruf die Systemeinstellung.
+Das Benutzermenü schaltet den Farbmodus um. Die Dokumentation hat einen eigenen Schalter und berücksichtigt zunächst die Systemeinstellung.
+
+### Darstellung der Instanz
+
+Unter **Administration > Darstellung** ändern Administratoren Name und Beschreibung der Anwendung sowie Logo und Theme. **Anpassung** erlaubt einen Namen bis 80 Zeichen, Beschreibung bis 500 Zeichen und ein PNG-, JPEG- oder WebP-Logo bis 1 MiB; das Logo wird als quadratisches 512-Pixel-PNG normalisiert. Speichern und Zurücksetzen wirken auf die Instanz, einschließlich der Anmeldung.
+
+Unter **Themes** wählen Sie ein aktiviertes Standardtheme. Der aktuelle Standard kann erst deaktiviert werden, wenn ein anderer gewählt wird. Derzeit ist nur MatoLoop mitgeliefert; eigene Theme-Auswahl je Benutzer oder Uploads gibt es nicht. Theme, Hell/Dunkel-Modus und Name/Persona des Assistenten sind getrennte Einstellungen. Andere geöffnete Browser laden die neue Darstellung beim nächsten Seitenaufruf.
 
 ## Ungespeicherte Änderungen
 
-MatoLoop warnt, wenn Sie eine bearbeitete Datei verlassen würden. Die Dokumentation öffnet sich deshalb in einem neuen Tab und unterbricht Ihre aktuelle Arbeit nicht.
+Ungespeicherte Dateiänderungen lösen vor Verlassen oder Verwerfen eine Rückfrage aus. Panelzuklappen und Tabwechsel erhalten sie. Ein Neuladen kann browserlokale Editorzustände verlieren; speichern Sie wichtige Änderungen. Die Dokumentation öffnet in einem eigenen Tab.

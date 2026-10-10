@@ -20,9 +20,9 @@ Für jede Angabe können Sie zwischen privaten und öffentlichen Modellen umscha
 
 ## Sitzungsübergreifender Abruf
 
-Bei jeder geeigneten Anfrage sucht MatoLoop begrenzte relevante Ausschnitte aus früheren Sessions. Projekt-Sessions verwenden ausschließlich andere Sessions desselben Projekts; normale Sessions verwenden vorherige normale Sessions. Dafür müssen Inhalte nicht zuerst als dauerhafte Erinnerung gespeichert oder durch Dreaming verarbeitet werden.
+Geeignete Anfragen können begrenzte Ausschnitte aus anderen eigenen Sessions über alle Projekte und eigenständigen Sessions abrufen. Automatische Quellen benötigen vollen Memory-Modus; die aktuelle Session und Subagenten sind ausgeschlossen. Explizite Sessiontools und die eigene Oberfläche-Suche können auch Sessions anderer Memory-Modi lesen. Ein Dreaming-Durchlauf ist für den Sessionabruf nicht erforderlich.
 
-In Projekten erhält der Agent zusätzlich einen kompakten Index der bis zu zehn neuesten geeigneten Sessions mit vollständigem Memory-Modus. Der Index enthält nur gekürzte Titel und Verweise auf die jeweils neueste geeignete Nachricht, aber keinen Nachrichteninhalt. Damit kann der Agent aktuelle Details gezielt aus der richtigen Session nachladen. Relevante Session-Auszüge haben danach Vorrang im automatischen Kontext; standardmäßig können bis zu drei unterschiedliche frühere Projekt-Sessions berücksichtigt werden. Ein Auszug enthält den stärksten thematischen Treffer. Vollständige frühere Gespräche werden nie automatisch übertragen.
+Der zusätzliche Projektindex enthält bis zu zehn neueste geeignete Sessions desselben Projekts, nur mit Titeln und Verweisen auf aktuelle Nachrichten. Relevante Ausschnitte danach können standardmäßig bis zu drei unterschiedliche eigene Sessions berücksichtigen, auch aus anderen Projekten. Sie liefern den stärksten thematischen Anker, nie automatisch das vollständige Gespräch.
 
 Beim ersten Beitrag oder bei einer ausdrücklichen Frage nach den letzten Sessions können zusätzlich kleine aktuelle Ausschnitte erscheinen. Ein ausdrücklicher Verzicht auf Memory oder vorherige Sessions und reine Textumformungen unterdrücken den automatischen Abruf.
 
@@ -42,7 +42,7 @@ Beim Ändern von **privat** auf **öffentlich** warnt MatoLoop, weil diese Einst
 
 ## Dreaming
 
-Dreaming is optional and processes completed chat work with full memory mode. Sessions with automations follow the same session settings. It extracts durable user-specific knowledge such as owned devices, stable technical environments and skills, relationships, recurring preferences, long-term projects or goals, and lasting constraints. Temporary devices, current task progress, and implementation details remain in session history. Information maintained under **Über mich** is not copied into memory. Extraction sees only the current source segment, not existing memories or other sessions.
+Dreaming verarbeitet optional geeignete abgeschlossene Chatnachrichten mit vollem Memory. Sessions mit Automationen folgen denselben Einstellungen; Subagenten und Fehlerausgaben sind keine Quellen. Extrahiert werden dauerhafte benutzerspezifische Angaben, etwa eigene Geräte, stabile Umgebungen, Beziehungen, Vorlieben oder langfristige Ziele. Aktueller Aufgabenfortschritt, vorübergehende Geräte und Implementierungsdetails bleiben im Verlauf. **Über mich** wird nicht kopiert. Die Extraktion sieht nur ihren Quellenabschnitt, keine vorhandenen Memories oder anderen Sessions.
 
 Anschließend sucht der Host für jeden Kandidaten getrennt nach möglichen vorhandenen Erinnerungen. Exakte Duplikate werden ohne weitere Modellentscheidung als unverändert behandelt, und normale Kandidaten ohne Treffer werden neu angelegt. Bei Unsicherheit bleiben ähnliche Angaben getrennt: Ein genauer bezeichnetes Gerät oder eine weitere Präferenz ersetzt keine allgemeinere Erinnerung, solange die Aussage nicht eindeutig denselben Gegenstand oder eine Korrektur bezeichnet. Nur bei möglichen inhaltlichen Überschneidungen entscheidet ein getrennter Abgleich zwischen:
 
@@ -68,7 +68,7 @@ Für das Ändern und Entfernen stehen jeweils diese Richtlinien zur Verfügung:
 
 Der Standard ist **Automatisch** für Änderungen und **Nachfragen** für Entfernungen. Eine Zusammenführung benötigt beide Rechte: Ist eine Richtlinie deaktiviert, wird sie übersprungen. Steht mindestens eine auf Nachfragen, entsteht eine Freigabe. Nur zweimal Automatisch führt sofort zusammen.
 
-Pending Dreaming decisions can be answered under **Control Center > Benachrichtigungen > Aktion erforderlich**, above informational notices. Diese Memory-Freigaben bleiben auch nach einem Backend-Neustart offen. Beim Genehmigen prüft MatoLoop die betroffenen Erinnerungen, Belege und Richtlinien erneut. Wurde eine Erinnerung inzwischen geändert, läuft die Freigabe ab, ohne einen Teil der vorgeschlagenen Änderung anzuwenden. Zusammenführungen bewahren Belege, private Einstufung und vorhandene Markierungen gemeinsam in einer Transaktion.
+Offene Entscheidungen finden Sie unter **Einstellungen > Memory > Dreaming > Offene Vorschläge**; Benachrichtigungen verlinken dorthin. Sie überleben einen Backend-Neustart. Vor Genehmigung werden Ziele, Belege und Richtlinien erneut geprüft; veraltete Anfragen verfallen ohne Teiländerung. Bei Änderungen/Zusammenführungen können Sie den vorgeschlagenen Inhalt und die Zielgruppe/Markierung bewusst bearbeiten. Die geprüften Zielrevisionen müssen trotzdem unverändert sein.
 
 Dreaming kann manuell für alle oder für eine einzelne Session gestartet werden. Die Oberfläche zeigt Laufstatus und die Anzahl neu angelegter, aktualisierter und entfernter Erinnerungen. Später genehmigte Änderungen werden dem ursprünglichen Lauf zugerechnet.
 

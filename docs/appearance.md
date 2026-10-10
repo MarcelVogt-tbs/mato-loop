@@ -26,7 +26,9 @@ matoloop/
 {"id": "matoloop", "name": "MatoLoop"}
 ```
 
-IDs use lowercase ASCII letters, digits and hyphens and begin with a letter.
+IDs use lowercase ASCII letters, digits and hyphens, begin with a letter, and contain
+at most 64 characters. Display names contain 1 to 80 characters. Branding accepts an
+application name of 1 to 80 characters and description of at most 500 characters.
 The backend discovers these folders from the frontend public directory in
 development and the built static directory in production. Quasar copies them
 unchanged into the frontend build. No second registry or component imports are

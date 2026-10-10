@@ -23,8 +23,11 @@ The tag policy deliberately limits mutable artifact storage:
 | `main` push | Full checks and tests | No | Never; release tags only |
 | Date/SHA release tag | Full checks and tests | Both images | Immutable date/SHA tag and `latest` |
 | Manual GitHub Release | Full checks, tests, and migration round trip | Both images | Immutable date/SHA tag and `latest` |
+| Manual GitHub CI | Full checks, tests, migrations, and version validation | Both images | Never |
 
 Feature branches therefore consume runner cache only, each accepted `develop` revision retains an immutable image tag plus the moving `develop` tag, and releases retain fixed version tags. Registry retention remains an operator responsibility. The retained Forgejo workflow publishes to its configured `${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}` instead.
+
+The verification path also includes migration and source-version jobs; "checks and tests" does not mean only unit tests. Manual CI dispatch builds without publication. Use tags only from successful publication runs.
 
 Pull requests run the complete test and production-image build path, but registry login, publication, and release creation are disabled. Repository secrets must not be passed to pull request jobs. This applies to same-repository and fork pull requests.
 
@@ -83,7 +86,9 @@ Protect `develop`, `main`, and date/SHA tags. Branch and tag rules must permit t
 
 Shared helpers `scripts/ci/create-release.py` and `scripts/ci/check-develop-revision.py` receive `CI_API_URL`, `CI_REPOSITORY`, and `CI_TOKEN` from the workflow. GitHub passes its API URL; Forgejo passes its server URL with `/api/v1`. Release notes, changelog generation, image tags, and source-version checks are shared.
 
-## GitHub Cutover and Forgejo Mirror
+## Historical GitHub Cutover and Current Forgejo Mirror
+
+The cutover checklist below records the migration procedure, not installation steps for a new MatoLoop deployment. GitHub is now the primary source. The current mirror copies Git refs only and should keep Actions disabled.
 
 1. Create an empty public `devmato/mato-loop` repository without an initial README or license commit. Configure GitHub permissions before uploading; matching pushes start CI and publication immediately.
 2. Commit the migration changes. Transfer the existing Forgejo server branches and tags to GitHub from a fresh bare clone, rather than pushing every local working branch. Include the migration commit on `develop`.
@@ -139,6 +144,8 @@ Start a release manually from the `develop` branch in GitHub under **Actions > R
 ./scripts/release.sh
 ```
 
+Local releases require Git, Python 3, Docker/Compose, and both local `develop` and `main` exactly matching their remote branches. The local script runs checks/tests; the GitHub manual workflow additionally verifies the migration round trip before invoking it. Inspect `--dry-run` before preparing a local release.
+
 The script adds dated notes to `docs/user/changelog.md`, runs all checks and tests, and commits on `develop`. It derives the version from that final commit, fast-forwards `main`, creates the annotated date/SHA tag, returns to `develop`, and atomically pushes both branches and the tag. A committed changelog cannot contain its own commit hash, so it uses date headings while the hosted release carries the exact version. Package manifests and lockfiles are not rewritten. `--dry-run` previews the notes and validates the branch state. CI accepts only tags matching their clean source version and pointing to commits on `main`. Do not create release tags manually. Previous `v*` tags remain valid release-note baselines during migration.
 
 After checks and both `linux/amd64` builds succeed, the release job publishes these tags on both images:
@@ -156,13 +163,18 @@ CI passes the calculated version through `MATOLOOP_VERSION` and the full commit 
 python3 libs/python/version/src/matoloop_version/__init__.py
 ```
 
+### Local release failure recovery
+
+The local release script does not automatically undo preparation after failure. Before retrying, inspect `git status`, local/remote `develop` and `main`, release tags, and any triggered publication run. A failure may occur after a changelog edit, release commit, local fast-forward/tag, or remote push. Determine the last completed stage before making another release; blindly rerunning preparation can create duplicate or conflicting release state. For failed manual GitHub publication, reuse **Re-run failed jobs** as described above.
+
 ## Compose and Rollback
 
 `docker-compose.yaml` uses the published MatoLoop and MatoLoop Agent images configured in the production `.env`. Start from the tracked template:
 
 ```bash
 cp .env.example .env
-# Set the database password and the same published image tag for both images.
+# Set the password, public origin, host paths/binding, and matching published image tags.
+# Configure HTTPS before production login with Secure cookies.
 docker compose pull
 docker compose up -d
 ```
@@ -186,3 +198,5 @@ Use the same date/SHA tag for MatoLoop and the MatoLoop Agent. `develop` and `la
 Use the mutable `develop` tag only for short-lived test environments and run `docker compose pull` before every recreation. Never use `develop` as a rollback target.
 
 Rollback by setting both image variables to the previous fixed date/SHA tag, pulling, and recreating the containers. Because startup applies Alembic migrations, an image rollback may also require restoring the database and `/data` from the matching pre-upgrade backup. Never use `develop` or `latest` as a rollback target.
+
+Use the German [operations and recovery runbook](user/betrieb-und-datensicherung.md) for initial configuration, reverse-proxy requirements, monitoring, and a coordinated database/files/key backup. Documentation builds and worktree isolation are described in [development.md](development.md).

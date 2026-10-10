@@ -47,15 +47,17 @@ nav:
       - Anhänge, Diktat und Medien: anhaenge-und-medien.md
       - Webrecherche und Quellen: webrecherche-und-quellen.md
       - Freigaben und Datenfreigabe: freigaben-und-datenfreigabe.md
+      - Variablen und Secrets: variablen-und-secrets.md
       - Automationen: automationen.md
       - Kanäle: kanaele.md
   - Personalisierung:
       - Personalisierung: persona.md
       - Skills: skills.md
       - Memory und Dreaming: memory-und-dreaming.md
-  - Administration:
+  - Konfiguration:
       - Provider und Modelle: provider-und-modelle.md
       - Tools und Integrationen: tools-und-integrationen.md
+  - Administration und Betrieb:
       - Betrieb und Datensicherung: betrieb-und-datensicherung.md
       - Debug-Zugang: debug-zugang.md
   - Hilfe:

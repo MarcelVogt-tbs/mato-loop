@@ -2,44 +2,41 @@
 
 ## 1. Benutzer einrichten
 
-On first launch, MatoLoop opens initial setup. Choose a username and a password with at least ten characters. This first local account becomes an administrator and is signed in automatically after saving. Administrators create additional accounts under **Administration > Benutzer**.
+Beim ersten Aufruf öffnet MatoLoop die Ersteinrichtung. Wählen Sie einen Benutzernamen und ein Passwort mit mindestens zehn Zeichen. Das erste lokale Konto erhält Administratorrechte und wird nach dem Speichern angemeldet. Weitere Konten legen Administratoren unter **Administration > Benutzer** an.
+
+Für die Serverinstallation beginnen Sie mit [Betrieb und Datensicherung](betrieb-und-datensicherung.md).
 
 ## 2. Provider verbinden
 
-Open **Administration > Provider** to configure a global provider. If personal providers are allowed, use **Einstellungen > Provider** for your own connection:
+Öffnen Sie **Administration > Provider > Verwaltung**, um einen gemeinsamen Provider anzulegen. Für erlaubte persönliche Verbindungen verwenden Sie **Einstellungen > Provider**:
 
 - **ChatGPT Codex** verbindet ein geeignetes ChatGPT-Konto über einen Gerätecode.
-- **OpenAI-kompatibel** verbindet einen kompatiblen Server über Basis-URL und optionalen API-Schlüssel.
-- **Lemonade** verbindet einen lokalen Lemonade-Server und erkennt dessen Chat- und Medienmodelle.
+- **OpenAI-kompatibel** verbindet einen Server über Basis-URL, optionale Zugangsdaten und Chat Completions oder Responses.
+- **Lemonade** verbindet einen Lemonade-Server und erkennt installierte Chat- und Medienmodelle.
+- **Azure Speech** stellt Transkription bereit, kein Chatmodell.
 
-Beim Anlegen synchronisiert MatoLoop die verfügbaren Modelle. Eine erneute Synchronisierung kann später manuell gestartet werden.
+Beim Anlegen werden verfügbare Modelle synchronisiert. Später können Sie die Synchronisierung erneut starten.
 
-## 3. Modell aktivieren
+## 3. Modell und Sessionvorlage wählen
 
-Öffnen Sie beim Provider das gewünschte Modell und aktivieren Sie es, falls es nicht bereits als natives Providermodell aktiv ist. Danach können Sie die Verbindung mit einem aktiven Chatmodell testen. Öffnen Sie anschließend **Einstellungen > Agenten**, wählen Sie mindestens für **Allgemein** ein Agentmodell und konfigurieren Sie **Plan**, **Build** und **Sysadmin** bei Bedarf unabhängig davon.
+Aktivieren Sie beim Provider ein verfügbares Chatmodell mit Tool-Unterstützung und testen Sie die Verbindung. Legen Sie unter **Administration > Standardmodelle > Verwaltung** das Agentmodell fest; ohne ausdrückliche Vorgabe kann MatoLoop das erste verfügbare toolfähige Chatmodell verwenden. Erlaubte persönliche Vorgaben stehen unter **Einstellungen > Standardmodelle**.
+
+Agentenprofile enthalten keine Modellfelder. **Sessionvorlagen** legen verfügbare Agenten, Startagent, Memory, Nachrichtengröße und optionale Chatmodell-/Reasoning-Vorgaben fest. **Allgemein** bietet Allgemein und Sysadmin; **Coding** bietet Plan und Build und startet mit Plan. Hilfsmodelle, etwa für Transkription, wählen Sie unter **Standardmodelle**.
 
 ## 4. Computer optional verbinden
 
-Für reinen Chat ist kein Computer erforderlich. Für lokale Arbeitsbereiche, Prozesse oder lokale Integrationen öffnen Sie **Einstellungen > Computer** und fügen einen Computer hinzu. Der normale Compose-Stack startet den MatoLoop Agent ungekoppelt. Führen Sie anschließend `matoloop-agent pair` aus und geben Sie Backend-Adresse, Computer-ID sowie das nur einmal angezeigte Kopplungstoken ein. Für automatisierte Starts müssen alle drei `MATOLOOP_AGENT_*`-Verbindungswerte vorliegen. Ausführliche Hinweise stehen unter [Betrieb und Datensicherung](betrieb-und-datensicherung.md#optionalen-computer-einrichten).
+Für normalen Chat und die **Ablage** ist kein Computer nötig. Plan und Build benötigen dagegen einen verbundenen Computer mit zugänglichem Arbeitsordner. Fügen Sie ihn unter **Einstellungen > Computer** hinzu und folgen Sie den Installations- und Kopplungshinweisen.
+
+Der mitgelieferte Compose-Agent wartet zunächst ungekoppelt. Mit `matoloop-agent pair` geben Sie Backend-Adresse, Computer-ID und das einmalig sichtbare Token ein. Die vollständigen Befehle für Docker, Linux und Windows finden Sie unter [Computer einrichten](betrieb-und-datensicherung.md#optionalen-computer-einrichten).
 
 ## 5. Erste Session starten
 
-Kehren Sie zum Chat zurück, geben Sie eine Nachricht ein und senden Sie sie ab. Eine neue Session wird erst mit dieser ersten Nachricht dauerhaft angelegt.
+Auf Home oder in einer neuen Unterhaltung wählen Sie Sessionvorlage, Projekt, Memory und Websuche. Geben Sie eine Nachricht ein und senden Sie sie. Das legt Session, Speicher und Nachricht an. Eine sessiongebundene Control-Center-App kann auch vorher eine leere Session anlegen; das bloße Öffnen der Startseite tut dies nicht.
 
-Vor dem Senden können Sie unter anderem auswählen:
+In einer gespeicherten Session ändern Sie Vorgaben unter **Control Center > Session**. Den absoluten Arbeitsordner wählen Sie über **Computer-Dateien**. Modell und Reasoning können Sie auch am Nachrichteneingabefeld ändern. Mehr dazu unter [Chat und Sessions](chat-und-sessions.md).
 
-- Modell
-- Agentenprofil
-- Memory-Modus
-- Websuchmodus
-- Computer
+## 6. Freigaben und Rückfragen beantworten
 
-Den aktuellen absoluten Ordner wählen Sie bei Bedarf unter **Control Center > Dateien**. Ohne gewählten und verbundenen Computer bleibt der Chat nutzbar; Computer-Dateien und lokale Integrationen fehlen.
+Eine erforderliche Freigabe erscheint beim Tool-Aufruf. Prüfen Sie Aktion und Ressourcenumfang vor **Für diesen Lauf erlauben**, **Für Session erlauben** oder **Ablehnen**. Lauf-Freigaben enden mit dem ausführenden Lauf; Session-Freigaben können spätere passende Aktionen abdecken und sind widerrufbar.
 
-## 6. Freigaben prüfen
-
-When an action requires consent, its approval appears next to the tool call. Review the resource, risk level and details before choosing **Für diesen Lauf erlauben**, **Für Session erlauben** or **Ablehnen**. Run consent covers matching actions until that run ends; session consent also covers later runs in the same chat session.
-
-Under **Control Center > Benachrichtigungen**, normal pending approvals and agent questions from all sessions appear above informational notices and can both be answered directly, including shared-terminal shell approvals. Marking notices read does not resolve these actions. For a pending terminal command, you can alternatively edit its real shell line and press Enter to allow the rechecked draft once.
-
-Als Nächstes: [Chat und Sessions](chat-und-sessions.md)
+**Benachrichtigungen** verweist auf die betroffene Session; dort entscheiden Sie mit dem Gesprächskontext. Das Lesen eines Hinweises entscheidet keine Anfrage. Strukturierte Rückfragen beantworten Sie am Eingabefeld; mit **Fertig** können Sie auch unbeantwortete Fragen abschließen. Geheimnisse gehören in [geschützte Eingaben](variablen-und-secrets.md), nicht in normale Chatnachrichten.

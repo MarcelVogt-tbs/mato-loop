@@ -8,7 +8,7 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Sessions, messages, agent runs, approvals, and permission grants are persistent core data.
 - ChatGPT Codex and OpenAI-compatible APIs are LLM transports only.
 - MatoLoop controls tool execution, file access, memory, web search, and human-in-the-loop approvals.
-- New sessions start without a working directory. Sending the first message or opening a session-bound Control Center app creates the owner-bound internal session tree under `/data/sessions`; it is not a workspace. Every workspace is an ordinary absolute path on a selected owner-bound MatoLoop Agent.
+- New sessions have no working directory unless an explicit selection or project default supplies one. Sending the first message or opening a session-bound Control Center app creates owner-bound internal storage under `/data/sessions/<session-id>` or `/data/projects/<project-id>/sessions/<session-id>`; it is not a workspace. Every workspace is an ordinary absolute path on a selected owner-bound MatoLoop Agent.
 
 ## Repository
 
@@ -29,6 +29,7 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 ## Language and Style
 
 - Write repository documentation, `AGENTS.md`, READMEs, code comments, docstrings, logs, internal exception messages, technical identifiers, and static host-controlled LLM text in English.
+- Exception: write the user and administrator handbook under `docs/user/` in German, matching the application UI. Keep its MkDocs navigation and UI labels German. Technical documentation and READMEs remain English.
 - Static host-controlled LLM text includes system and repair prompts, prompt fragments, tool and schema descriptions, and model-facing host markers.
 - Write visible UI text in German. Backend-generated labels and messages that are rendered directly by the German UI are UI text.
 - Dynamic user, persona, memory, source, and tool data may use any language.
@@ -70,9 +71,9 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Provider adapters transport messages, tool schemas, text deltas, and tool calls; they never execute tools.
 - All providers use the same MatoLoop agent and permission loop.
 - Model arguments must not bypass runtime policies or path boundaries.
-- Constrain backend file access to the current owner-bound session tree under `/data/sessions`; dispatch the internal `root=workspace` only through the selected owner-bound `ExecutionAgent` and the session's normalized absolute current directory.
+- Constrain backend file access to the current owner-bound standalone or project-session tree; dispatch the internal `root=workspace` only through the selected owner-bound `ExecutionAgent` and the session's normalized absolute current directory.
 - Symlinks must not bypass path boundaries.
-- Disallowed actions create persistent approval requests with `allow_once`, `allow_session`, or `deny`.
+- Actions requiring approval create persistent requests with `allow_once`, `allow_session`, or `deny`. Hard policy denials do not become overridable approval requests.
 - Never expose unfiltered external provider responses or exception text as API errors or toasts.
 - `shell.read` means no recognized mutation, not guaranteed side-effect-free execution. Unknown effects and incomplete analysis are an accepted workflow tradeoff, not an unresolved sandbox requirement. Follow the decision in `docs/architecture.md`; review enforcement regressions, and revisit the tradeoff only with new evidence or a changed threat model.
 
@@ -95,7 +96,7 @@ Example:
 {
   "error": {
     "code": "validation.tooShort",
-    "message": "The value is too short.",
+    "message": "The request contains invalid data.",
     "field": "password",
     "params": {
       "minLength": 10
