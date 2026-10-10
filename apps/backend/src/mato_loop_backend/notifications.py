@@ -167,7 +167,8 @@ class NotificationService:
                 title=f"{'Antwort fehlgeschlagen' if message.error_code else 'Neue Antwort'}: {session.title}"[:240],
                 body=(
                     "Der Agent-Auftrag konnte nicht abgeschlossen werden. Details stehen in der Session."
-                    if message.error_code else " ".join(canonical_assistant_content(message.content).split())[:500]
+                    # ponytail: snapshots retain at most 4,000 source characters; read source messages if more is needed.
+                    if message.error_code else canonical_assistant_content(message.content).strip()[:4_000]
                     or "Die Antwort ist in der Session verfügbar."
                 ),
                 deduplication_key=f"message:{message.id}",

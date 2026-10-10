@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.config import RuntimeConfig, get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.models import UserAccount, WebPushSubscription
+from mato_loop_backend.notification_content import notification_body_preview
 from mato_loop_backend.security import CredentialCipher
 from mato_loop_backend.sessions.presence import user_is_present
 from mato_loop_backend.settings.models import WebPushSettings
@@ -215,11 +216,10 @@ def web_push_payload(
     target: WebPushSessionTarget | WebPushAutomationRunTarget | WebPushMemoryApprovalTarget | None,
     notification_id: UUID | None = None,
 ) -> WebPushPayload:
-    preview = " ".join(body.split())[:500] if body else None
     return WebPushPayload(
         notification=WebPushNotificationPayload(
             title=title[:240],
-            body=preview or None,
+            body=notification_body_preview(body),
             tag=tag,
             target=target,
             notificationId=notification_id,

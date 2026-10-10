@@ -39,6 +39,7 @@ from mato_loop_backend.notifications import (
     NotificationError,
     NotificationService,
 )
+from mato_loop_backend.web_push import web_push_payload
 
 
 def _user() -> UserAccount:
@@ -229,6 +230,28 @@ def test_notification_cursor_is_owner_bound() -> None:
 
     assert exc_info.value.code == "validation.invalid"
     assert exc_info.value.field == "cursor"
+
+
+async def test_notification_previews_remove_markdown_before_truncating(monkeypatch) -> None:
+    source = (
+        "# **Bericht**\n\n[Dokument](https://example.test/" + "x" * 600 + ")\n\n"
+        "- `status_code`\n- ~~erledigt~~\n\n" + "weiter " * 90
+    )
+    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test", session_type="chat")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = session
+    create = AsyncMock()
+    monkeypatch.setattr(NotificationService, "create", create)
+    monkeypatch.setattr("mato_loop_backend.notifications.session_is_present", lambda *_: False)
+    await NotificationService.create_for_message(db, Message(
+        id=uuid4(), session_id=session.id, role="assistant", content=source, created_at=datetime.now(UTC),
+    ))
+    item = Notification(id=uuid4(), **create.await_args.args[1].model_dump(), created_at=datetime.now(UTC))
+    previews = [
+        _notification_payload(item).body,
+        web_push_payload(title=item.title, body=item.body, tag="notice", target=None).notification.body,
+    ]
+    assert previews == ["Bericht Dokument status_code erledigt" + " weiter" * 66 + "…"] * 2
 
 
 async def test_notification_list_returns_cursor_target_and_global_unread_count(monkeypatch) -> None:
