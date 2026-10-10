@@ -43,6 +43,22 @@
   margin-bottom: 16px;
 }
 
+.settings-list-name {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 599px) {
+  .settings-list-item {
+    flex-wrap: wrap;
+  }
+
+  .settings-list-actions {
+    width: 100%;
+    align-items: flex-end;
+    padding-top: 8px;
+  }
+}
+
 .integration-list-card,
 .execution-agent-list-card,
 .user-list-card,
@@ -84,13 +100,6 @@
 
 .provider-card__identity {
   min-width: 0;
-}
-
-.provider-card__header-actions,
-.provider-model-actions {
-  align-items: center;
-  flex-direction: row;
-  gap: 4px;
 }
 
 .provider-models-section {

@@ -3,7 +3,8 @@ import { createApp, h } from 'vue'
 import { createPinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Quasar, QAvatar, QBadge, QBanner, QBtn, QCheckbox, QCard, QCardSection, QIcon, QInnerLoading, QItem, QItemLabel, QItemSection, QList, QSelect, QTab, QTabs, QToggle, QTooltip } from 'quasar'
+import { Quasar } from 'quasar'
+import { quasarOptions } from './quasar-options'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { delete: vi.fn(), get: vi.fn(), patch: vi.fn() } }))
@@ -44,12 +45,7 @@ it('shows disabled personal profiles without error or empty states', async () =>
   document.body.append(root)
   const pinia = createPinia()
   app = createApp({ render: () => h(Page) })
-  app.use(pinia).use(router).use(Quasar, {
-    components: {
-      QAvatar, QBadge, QBanner, QBtn, QCheckbox, QCard, QCardSection, QIcon,
-      QInnerLoading, QItem, QItemLabel, QItemSection, QList, QSelect, QTab, QTabs, QToggle, QTooltip
-    }
-  })
+  app.use(pinia).use(router).use(Quasar, quasarOptions)
   useAuthStore(pinia).isAdmin = false
   app.mount(root)
 
@@ -101,10 +97,7 @@ it.each([
   document.body.append(root)
   const pinia = createPinia()
   app = createApp({ render: () => h(Page, { admin }) })
-  app.use(pinia).use(router).use(Quasar, { components: {
-    QAvatar, QBadge, QBanner, QBtn, QCheckbox, QCard, QCardSection, QIcon,
-    QInnerLoading, QItem, QItemLabel, QItemSection, QList, QSelect, QTab, QTabs, QToggle, QTooltip
-  } })
+  app.use(pinia).use(router).use(Quasar, quasarOptions)
   useAuthStore(pinia).isAdmin = admin
   app.config.globalProperties.$q.dark.set(dark)
   app.mount(root)

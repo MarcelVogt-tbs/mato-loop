@@ -53,12 +53,12 @@
         />
       </q-card-section>
       <q-list v-else separator>
-        <q-item v-for="agent in visibleAgents" :key="agent.id" class="q-py-md">
+        <q-item v-for="agent in visibleAgents" :key="agent.id" class="settings-list-item q-py-md">
           <q-item-section avatar top>
             <q-avatar rounded color="primary" text-color="white" icon="smart_toy" />
           </q-item-section>
           <q-item-section>
-            <q-item-label class="text-subtitle1 text-weight-medium">
+            <q-item-label class="settings-list-name text-subtitle1 text-weight-medium">
               {{ agent.name }} <q-badge outline color="grey-7" :label="agent.scope === 'instance' ? 'Global' : 'Persönlich'" />
               <q-badge v-if="agent.enabled === false" outline color="grey-7" label="Deaktiviert" />
               <q-badge v-if="agent.effective === false" outline color="warning" label="Nicht verfügbar" />
@@ -70,8 +70,8 @@
               Persona: {{ agent.resolvedPersonaName || 'Standard' }}
             </q-item-label>
           </q-item-section>
-          <q-item-section side top>
-            <div class="row no-wrap q-gutter-xs">
+          <q-item-section side top class="settings-list-actions">
+            <div class="row items-center no-wrap q-gutter-sm">
               <q-toggle
                 dense
                 :model-value="agent.enabled !== false"
@@ -79,26 +79,27 @@
                 :disable="agent.id === agents.defaultAgentProfileId || switchingId === agent.id || agents.saving || personalBlocked"
                 @update:model-value="setAgentEnabled(agent, $event)"
               />
-              <q-btn
-                flat
-                round
-                dense
-                :icon="agent.scope === 'instance' && !auth.isAdmin ? 'visibility' : 'edit'"
-                :aria-label="`${agent.name} ${agent.scope === 'instance' && !auth.isAdmin ? 'ansehen' : 'bearbeiten'}`"
-                :disable="agent.scope === 'personal' && personalBlocked"
-                :to="{ name: admin ? 'admin-agent-edit' : 'settings-agent-edit', params: { agentId: agent.id } }"
-              ><q-tooltip>{{ agent.scope === 'instance' && !auth.isAdmin ? 'Ansehen' : 'Bearbeiten' }}</q-tooltip></q-btn>
-              <q-btn
-                flat
-                round
-                dense
-                color="negative"
-                icon="delete_outline"
-                :aria-label="`${agent.name} löschen`"
-                v-if="agent.scope === 'personal' || auth.isAdmin"
-                :disable="personalBlocked || agent.protected || agent.id === agents.defaultAgentProfileId"
-                @click="removeAgent(agent)"
-              ><q-tooltip>Löschen</q-tooltip></q-btn>
+              <div class="row items-center no-wrap q-gutter-xs">
+                <q-btn
+                  flat
+                  round
+                  dense
+                  :icon="agent.scope === 'instance' && !auth.isAdmin ? 'visibility' : 'edit'"
+                  :aria-label="`${agent.name} ${agent.scope === 'instance' && !auth.isAdmin ? 'ansehen' : 'bearbeiten'}`"
+                  :disable="agent.scope === 'personal' && personalBlocked"
+                  :to="{ name: admin ? 'admin-agent-edit' : 'settings-agent-edit', params: { agentId: agent.id } }"
+                ><q-tooltip>{{ agent.scope === 'instance' && !auth.isAdmin ? 'Ansehen' : 'Bearbeiten' }}</q-tooltip></q-btn>
+                <q-btn flat round dense icon="more_vert" :aria-label="`Weitere Aktionen für ${agent.name}`" :disable="!(agent.scope === 'personal' || auth.isAdmin) || personalBlocked || agent.protected || agent.id === agents.defaultAgentProfileId">
+                  <AppMenu>
+                    <q-list>
+                      <q-item v-if="agent.scope === 'personal' || auth.isAdmin" clickable v-close-popup class="text-negative" :disable="personalBlocked || agent.protected || agent.id === agents.defaultAgentProfileId" @click="removeAgent(agent)">
+                        <q-item-section avatar><q-icon name="delete_outline" /></q-item-section>
+                        <q-item-section>Löschen</q-item-section>
+                      </q-item>
+                    </q-list>
+                  </AppMenu>
+                </q-btn>
+              </div>
             </div>
           </q-item-section>
         </q-item>
@@ -110,6 +111,7 @@
 
 <script setup>
 import AppSelect from 'src/shared/ui/AppSelect.vue'
+import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'

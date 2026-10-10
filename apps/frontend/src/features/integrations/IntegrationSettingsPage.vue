@@ -191,7 +191,7 @@
           </q-item-section>
         </q-item>
 
-        <q-item v-for="integration in configuredIntegrations" :key="integration.id" class="q-py-md">
+        <q-item v-for="integration in configuredIntegrations" :key="integration.id" class="settings-list-item q-py-md">
           <q-item-section avatar top>
             <q-avatar
               color="primary"
@@ -201,7 +201,7 @@
           </q-item-section>
           <q-item-section>
             <div class="row items-center q-gutter-sm">
-              <q-item-label class="text-weight-medium">{{ integration.name }}</q-item-label>
+              <q-item-label class="settings-list-name text-weight-medium">{{ integration.name }}</q-item-label>
               <q-badge outline color="grey-7" :label="integration.scope === 'instance' ? 'Global' : 'Persönlich'" />
               <q-chip dense :color="integrationAvailable(integration) && integration.enabled ? 'positive' : 'grey-7'" text-color="white">
                 {{ integrationAvailable(integration) ? (integration.enabled ? 'Aktiv' : 'Deaktiviert') : 'Nicht verfügbar' }}
@@ -221,17 +221,13 @@
             <template v-else-if="integration.integrationType === 'browser'">
               <q-item-label caption>Computer: {{ executionAgentName(integration) }}</q-item-label>
               <q-item-label caption role="status">{{ browserStatusLabel(integrations.browserStatuses[integration.id]) }}</q-item-label>
-              <div class="row q-gutter-xs q-mt-xs">
-                <q-btn flat dense no-caps icon="terminal" label="Einrichtung / Status" :disable="!canEditIntegration(integration)" @click="setupId = integration.id" />
-                <q-btn flat dense no-caps color="negative" icon="restart_alt" label="Profil zurücksetzen" :disable="!canEditIntegration(integration) || resettingId !== null" @click="resetBrowser(integration)" />
-              </div>
             </template>
             <q-item-label v-else caption lines="1">
               {{ integration.config?.baseUrl || (integration.scope === 'instance' ? 'Globale Verbindung' : '') }}{{ integration.config?.username ? ` · ${integration.config.username}` : '' }}
             </q-item-label>
           </q-item-section>
-          <q-item-section side top>
-            <div class="row items-center no-wrap q-gutter-xs">
+          <q-item-section side top class="settings-list-actions">
+            <div class="row items-center no-wrap q-gutter-sm">
               <q-toggle
                 dense
                 :model-value="integration.enabled"
@@ -239,51 +235,36 @@
                 :disable="!canEditIntegration(integration) || togglingId !== null"
                 @update:model-value="toggleIntegration(integration, $event)"
               />
-              <q-btn
-                flat
-                dense
-                no-caps
-                :round="$q.screen.lt.md"
-                icon="folder_open"
-                :label="$q.screen.gt.sm ? 'Berechtigungen' : undefined"
-                aria-label="Integrationsrechte verwalten"
-                :disable="!canEditIntegration(integration)"
-                :to="{ name: admin ? 'admin-integration-resources' : 'settings-integration-resources', params: { integrationId: integration.id } }"
-              />
-              <q-btn
-                flat
-                dense
-                no-caps
-                :round="$q.screen.lt.md"
-                icon="network_check"
-                :label="$q.screen.gt.sm ? 'Testen' : undefined"
-                aria-label="Verbindung testen"
-                :loading="testingId === integration.id"
-                :disable="!canEditIntegration(integration)"
-                @click="testIntegration(integration)"
-              />
-              <q-btn
-                flat
-                dense
-                no-caps
-                :round="$q.screen.lt.md"
-                icon="edit"
-                :label="$q.screen.gt.sm ? 'Bearbeiten' : undefined"
-                aria-label="Integration bearbeiten"
-                :disable="!canEditIntegration(integration)"
-                @click="openEditDialog(integration)"
-              />
-              <q-btn
-                flat
-                round
-                dense
-                color="negative"
-                icon="delete"
-                :aria-label="`${integration.name} löschen`"
-                :loading="removingId === integration.id"
-                :disable="removingId !== null || (integration.scope === 'instance' && !auth.isAdmin)"
-                @click="removeIntegration(integration)"
-              />
+              <div class="row items-center no-wrap q-gutter-xs">
+                <q-btn flat round dense icon="edit" :aria-label="`${integration.name} bearbeiten`" :disable="!canEditIntegration(integration)" @click="openEditDialog(integration)" />
+                <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${integration.name}`" :loading="testingId === integration.id || removingId === integration.id">
+                  <AppMenu>
+                    <q-list>
+                      <q-item clickable v-close-popup :disable="!canEditIntegration(integration)" :to="{ name: admin ? 'admin-integration-resources' : 'settings-integration-resources', params: { integrationId: integration.id } }">
+                        <q-item-section avatar><q-icon name="folder_open" /></q-item-section>
+                        <q-item-section>Berechtigungen</q-item-section>
+                      </q-item>
+                      <q-item v-if="integration.integrationType === 'browser'" clickable v-close-popup :disable="!canEditIntegration(integration)" @click="setupId = integration.id">
+                        <q-item-section avatar><q-icon name="terminal" /></q-item-section>
+                        <q-item-section>Einrichtung / Status</q-item-section>
+                      </q-item>
+                      <q-item clickable v-close-popup :disable="!canEditIntegration(integration) || testingId === integration.id" @click="testIntegration(integration)">
+                        <q-item-section avatar><q-icon name="network_check" /></q-item-section>
+                        <q-item-section>Verbindung testen</q-item-section>
+                      </q-item>
+                      <q-separator />
+                      <q-item v-if="integration.integrationType === 'browser'" clickable v-close-popup class="text-negative" :disable="!canEditIntegration(integration) || resettingId !== null" @click="resetBrowser(integration)">
+                        <q-item-section avatar><q-icon name="restart_alt" /></q-item-section>
+                        <q-item-section>Profil zurücksetzen</q-item-section>
+                      </q-item>
+                      <q-item clickable v-close-popup class="text-negative" :disable="removingId !== null || (integration.scope === 'instance' && !auth.isAdmin)" @click="removeIntegration(integration)">
+                        <q-item-section avatar><q-icon name="delete" /></q-item-section>
+                        <q-item-section>Löschen</q-item-section>
+                      </q-item>
+                    </q-list>
+                  </AppMenu>
+                </q-btn>
+              </div>
             </div>
           </q-item-section>
         </q-item>
@@ -299,6 +280,7 @@
 <script setup>
 import { agentDisplayName } from 'src/features/computers/display'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
+import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'

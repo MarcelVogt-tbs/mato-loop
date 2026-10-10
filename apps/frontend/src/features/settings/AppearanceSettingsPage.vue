@@ -49,13 +49,13 @@
               <p class="text-caption app-muted q-mb-none">Aktuell angezeigt: {{ appliedThemeName }}</p>
             </q-card-section>
             <q-list separator>
-              <q-item v-for="theme in appearance.themes" :key="theme.id">
-                <q-item-section>
-                  <q-item-label>{{ theme.name }}</q-item-label>
+              <q-item v-for="theme in appearance.themes" :key="theme.id" class="settings-list-item q-py-md">
+                <q-item-section class="col-12 col-sm">
+                  <q-item-label class="settings-list-name">{{ theme.name }}</q-item-label>
                   <q-item-label caption>{{ theme.id === defaultThemeId ? 'Standard-Theme' : disabledThemeIds.includes(theme.id) ? 'Deaktiviert' : 'Aktiviert' }}</q-item-label>
                 </q-item-section>
-                <q-item-section side>
-                  <q-toggle :model-value="!disabledThemeIds.includes(theme.id)" :disable="busy || theme.id === defaultThemeId" :aria-label="`${theme.name} aktivieren`" @update:model-value="setEnabled(theme.id, $event)" />
+                <q-item-section side top class="settings-list-actions">
+                  <q-toggle dense color="primary" :model-value="!disabledThemeIds.includes(theme.id)" :disable="busy || theme.id === defaultThemeId" :aria-label="`${theme.name} ${disabledThemeIds.includes(theme.id) ? 'aktivieren' : 'deaktivieren'}`" @update:model-value="setEnabled(theme.id, $event)" />
                 </q-item-section>
               </q-item>
             </q-list>

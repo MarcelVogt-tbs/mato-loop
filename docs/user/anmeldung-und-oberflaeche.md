@@ -22,6 +22,10 @@ Die Suche findet eigene Projekte, Sessions und Nachrichten ab zwei Zeichen. **St
 
 Über das Menü einer Session oder eines Projekts archivieren Sie Unterhaltungen. **Archiv** ermöglicht Lesen und Wiederherstellen. Ein archiviertes Projekt archiviert seine Sessions wirksam mit; einzeln archivierte Sessions bleiben nach der Projektwiederherstellung archiviert. Neue Aufträge benötigen die Wiederherstellung, bestehende Arbeit darf noch enden. Mehr zu Zeitplänen unter [Automationen](automationen.md).
 
+## Verwaltungslisten
+
+In den Listen für Skills, Agenten, Provider, Modelle, Integrationen und MCP-Server steht der Ein-/Ausschalter rechts, getrennt von den Aktionen. Eine Hauptaktion ist direkt erreichbar; weitere Aktionen wie Testen, Aktualisieren oder Löschen finden Sie im Drei-Punkte-Menü. Auf schmalen Bildschirmen steht diese Bediengruppe unter dem Text. Beschriftete Schalter behalten ihre Bedeutung: **Erlaubt** steuert eine Anbieterfreigabe, **Verfügbar** die Tool-Verfügbarkeit und **Admin** die Benutzerrolle. Benutzerkonten aktivieren oder deaktivieren Sie im zugehörigen Drei-Punkte-Menü.
+
 ## Control Center
 
 Die schwebende Schaltfläche öffnet das Control Center. **Session** ist der feste Einstellungsbereich. Neue Sessions haben außerdem die App **Ablage**; **Computer-Dateien**, **Automationen**, **Terminal**, **Browser** und andere verfügbare Apps fügen Sie über den Launcher hinzu. Sessiongebundene Apps können einen Entwurf als leere Session speichern.

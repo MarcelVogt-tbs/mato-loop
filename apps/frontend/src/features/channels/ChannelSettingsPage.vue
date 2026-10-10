@@ -42,14 +42,14 @@
     <q-card v-if="admin && section === 'management'" flat class="app-surface">
       <q-card-section v-if="channels.loaded && !channels.enabled" class="text-caption app-muted">Kommunikationskanäle sind global deaktiviert. Die Anbieterfreigaben bleiben gespeichert.</q-card-section>
       <q-list separator>
-        <q-item v-for="provider in channels.providers" :key="provider.provider" class="q-py-md">
-          <q-item-section avatar>
+        <q-item v-for="provider in channels.providers" :key="provider.provider" class="settings-list-item q-py-md">
+          <q-item-section avatar top>
             <q-avatar color="primary" text-color="white" :icon="providerIcon(provider.provider)" />
           </q-item-section>
           <q-item-section>
-            <q-item-label class="text-weight-medium">{{ provider.label }}</q-item-label>
+            <q-item-label class="settings-list-name text-weight-medium">{{ provider.label }}</q-item-label>
           </q-item-section>
-          <q-item-section side>
+          <q-item-section side top class="settings-list-actions">
             <q-toggle dense
               :model-value="provider.allowed"
               color="primary"

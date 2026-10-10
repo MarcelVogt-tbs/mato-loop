@@ -37,17 +37,17 @@
         <AppStateMessage icon="school" title="Noch keine Skills" :description="admin ? 'Erstelle einen Skill für alle Benutzer.' : 'Erstelle einen persönlichen Skill.'" />
       </q-card-section>
       <q-list v-else separator>
-        <q-item v-for="skill in skills.scopedItems" :key="skill.id" class="skill-list-item q-py-md">
+        <q-item v-for="skill in skills.scopedItems" :key="skill.id" class="settings-list-item q-py-md">
           <q-item-section avatar top><q-avatar rounded color="primary" text-color="white" icon="school" /></q-item-section>
           <q-item-section>
-            <q-item-label class="skill-name text-subtitle1 text-weight-medium">
+            <q-item-label class="settings-list-name text-subtitle1 text-weight-medium">
               {{ skillDisplayName(skill) }}
               <q-badge v-if="skill.isDefault" outline color="primary" label="Standard" class="q-ml-xs" />
               <q-badge outline color="grey-7" :label="skill.scope === 'instance' ? 'Global' : 'Persönlich'" class="q-ml-xs" />
             </q-item-label>
             <q-item-label caption class="text-body2 q-mt-xs">{{ skillDisplayDescription(skill) }}</q-item-label>
           </q-item-section>
-          <q-item-section side top class="col-12 col-sm-auto">
+          <q-item-section side top class="settings-list-actions">
             <div class="row items-center justify-end no-wrap full-width q-gutter-sm">
               <q-toggle dense :model-value="skill.enabled" :aria-label="`${skillDisplayName(skill)} ${skill.enabled ? 'deaktivieren' : 'aktivieren'}`" :disable="writeBlocked || (skill.scope === 'instance' && !auth.isAdmin)" @update:model-value="setEnabled(skill, $event)" />
               <div class="row items-center no-wrap q-gutter-xs">
@@ -180,15 +180,3 @@ async function resetSkill(skill) {
 onMounted(load)
 watch(() => [admin, showEditor.value], load)
 </script>
-
-<style scoped>
-.skill-name {
-  overflow-wrap: anywhere;
-}
-
-@media (max-width: 599px) {
-  .skill-list-item {
-    flex-wrap: wrap;
-  }
-}
-</style>

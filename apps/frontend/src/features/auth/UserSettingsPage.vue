@@ -19,13 +19,13 @@
 
     <q-card flat class="app-surface user-list-card">
       <q-list separator>
-        <q-item v-for="user in users.items" :key="user.id" class="user-list-item q-py-md">
+        <q-item v-for="user in users.items" :key="user.id" class="settings-list-item q-py-md">
           <q-item-section avatar top>
             <q-avatar :color="user.isActive ? 'primary' : 'grey-7'" text-color="white" icon="person" />
           </q-item-section>
           <q-item-section>
             <div class="row items-center q-gutter-sm">
-              <q-item-label class="text-weight-medium">{{ user.username }}</q-item-label>
+              <q-item-label class="settings-list-name text-weight-medium">{{ user.username }}</q-item-label>
               <q-chip v-if="user.id === auth.userId" dense outline color="primary">Du</q-chip>
               <q-chip v-if="user.isAdmin" dense color="primary" text-color="white">Administrator</q-chip>
               <q-chip dense :color="user.isActive ? 'positive' : 'grey-7'" text-color="white">
@@ -36,52 +36,47 @@
               {{ user.hasLocalPassword ? 'Lokales Passwort eingerichtet' : 'Kein lokales Passwort' }}
             </q-item-label>
           </q-item-section>
-          <q-item-section side top class="user-list-item__actions">
+          <q-item-section side top class="settings-list-actions">
             <div class="row items-center no-wrap q-gutter-sm">
               <q-toggle dense
                 :model-value="user.isAdmin"
                 color="primary"
                 label="Admin"
+                :aria-label="`${user.username}: Administratorrechte`"
                 :disable="Boolean(pendingUserId)"
                 @update:model-value="setAdmin(user, $event)"
               />
-              <q-btn
-                flat
-                round
-                dense
-                :color="user.isActive ? 'negative' : 'positive'"
-                :icon="user.isActive ? 'person_off' : 'person_add'"
-                :loading="pendingUserId === user.id && pendingAction === 'active'"
-                :disable="Boolean(pendingUserId)"
-                :aria-label="user.isActive ? `${user.username} deaktivieren` : `${user.username} aktivieren`"
-                @click="setActive(user)"
-              >
-                <q-tooltip>{{ user.isActive ? 'Deaktivieren' : 'Aktivieren' }}</q-tooltip>
-              </q-btn>
-              <q-btn
-                flat
-                round
-                dense
-                icon="password"
-                :disable="Boolean(pendingUserId)"
-                :aria-label="`Passwort für ${user.username} zurücksetzen`"
-                @click="openPassword(user)"
-              >
-                <q-tooltip>Passwort zurücksetzen</q-tooltip>
-              </q-btn>
-              <q-btn
-                flat
-                round
-                dense
-                color="negative"
-                icon="delete_outline"
-                :loading="pendingUserId === user.id && pendingAction === 'delete'"
-                :disable="Boolean(pendingUserId) || user.isActive"
-                :aria-label="`${user.username} löschen`"
-                @click="removeUser(user)"
-              >
-                <q-tooltip>{{ user.isActive ? 'Vor dem Löschen deaktivieren' : 'Benutzer löschen' }}</q-tooltip>
-              </q-btn>
+              <div class="row items-center no-wrap q-gutter-xs">
+                <q-btn
+                  flat
+                  round
+                  dense
+                  icon="password"
+                  :disable="Boolean(pendingUserId)"
+                  :aria-label="`Passwort für ${user.username} zurücksetzen`"
+                  @click="openPassword(user)"
+                >
+                  <q-tooltip>Passwort zurücksetzen</q-tooltip>
+                </q-btn>
+                <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${user.username}`" :disable="Boolean(pendingUserId)" :loading="pendingUserId === user.id && pendingAction !== 'admin'">
+                  <AppMenu>
+                    <q-list>
+                      <q-item clickable v-close-popup :disable="Boolean(pendingUserId)" @click="setActive(user)">
+                        <q-item-section avatar><q-icon :name="user.isActive ? 'person_off' : 'person_add'" /></q-item-section>
+                        <q-item-section>{{ user.isActive ? 'Deaktivieren' : 'Aktivieren' }}</q-item-section>
+                      </q-item>
+                      <q-separator />
+                      <q-item clickable v-close-popup class="text-negative" :disable="Boolean(pendingUserId) || user.isActive" @click="removeUser(user)">
+                        <q-item-section avatar><q-icon name="delete_outline" /></q-item-section>
+                        <q-item-section>
+                          <q-item-label>Löschen</q-item-label>
+                          <q-item-label v-if="user.isActive" caption>Vor dem Löschen deaktivieren</q-item-label>
+                        </q-item-section>
+                      </q-item>
+                    </q-list>
+                  </AppMenu>
+                </q-btn>
+              </div>
             </div>
           </q-item-section>
         </q-item>
@@ -167,6 +162,7 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
+import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { useAuthStore } from 'stores/auth'
 import { useUsersStore } from 'stores/users'

@@ -69,11 +69,13 @@
               <div class="col-12 col-sm row items-center no-wrap q-gutter-md">
                 <q-avatar color="primary" text-color="white" :icon="tool.icon" />
                 <div>
-                  <div class="text-subtitle2 text-weight-bold">{{ tool.label }}</div>
+                  <div class="settings-list-name text-subtitle2 text-weight-bold">{{ tool.label }}</div>
                   <div class="text-caption app-muted">{{ descriptions[tool.name] || tool.name }}</div>
                 </div>
               </div>
-              <q-toggle dense v-if="showManagement" v-model="tool.available" class="col-12 col-sm-auto" color="primary" label="Verfügbar" />
+              <div v-if="showManagement" class="col-12 col-sm-auto row justify-end">
+                <q-toggle dense v-model="tool.available" color="primary" label="Verfügbar" :aria-label="`${tool.label}: verfügbar`" />
+              </div>
             </div>
 
             <div v-if="section === 'general' && tool.name === 'webfetch'" class="row q-col-gutter-md q-mt-sm">

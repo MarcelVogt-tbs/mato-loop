@@ -46,11 +46,11 @@
             <q-item-label caption>Füge einen streamfähigen HTTP-Endpunkt hinzu.</q-item-label>
           </q-item-section>
         </q-item>
-         <q-item v-for="server in visibleServers" :key="server.id" class="q-py-md">
+         <q-item v-for="server in visibleServers" :key="server.id" class="settings-list-item q-py-md">
           <q-item-section avatar top><q-avatar color="primary" text-color="white" icon="hub" /></q-item-section>
           <q-item-section>
             <div class="row items-center q-gutter-sm">
-              <q-item-label class="text-weight-medium">{{ server.name }}</q-item-label>
+              <q-item-label class="settings-list-name text-weight-medium">{{ server.name }}</q-item-label>
               <q-badge outline color="grey-7" :label="server.scope === 'instance' ? 'Global' : 'Persönlich'" />
               <q-chip dense :color="server.enabled ? 'positive' : 'grey-7'" text-color="white">{{ server.enabled ? 'Aktiv' : 'Deaktiviert' }}</q-chip>
               <q-chip v-if="server.available === false" dense outline color="warning">Nicht verfügbar</q-chip>
@@ -60,12 +60,12 @@
             <q-item-label caption lines="1">{{ server.endpoint }}</q-item-label>
             <q-item-label caption>{{ server.tools?.length || server.toolCount || 0 }} erkannte Tools</q-item-label>
           </q-item-section>
-          <q-item-section side top>
-            <div class="row items-center no-wrap q-gutter-xs">
+          <q-item-section side top class="settings-list-actions">
+            <div class="row items-center no-wrap q-gutter-sm">
               <q-toggle dense :model-value="server.enabled" :aria-label="`${server.name} ${server.enabled ? 'deaktivieren' : 'aktivieren'}`" :disable="!canEdit(server) || togglingId !== null" @update:model-value="toggleServer(server, $event)" />
-               <q-btn flat dense :round="$q.screen.lt.md" no-caps icon="construction" :label="$q.screen.gt.sm ? 'Tools / Rechte' : undefined" aria-label="Tools und Berechtigungen anzeigen" :disable="!canEdit(server)" :to="{ name: admin ? 'admin-mcp-tools' : 'settings-mcp-tools', params: { serverId: server.id } }" />
-              <template v-if="$q.screen.lt.md">
-                <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${server.name}`" :loading="refreshingId === server.id">
+              <div class="row items-center no-wrap q-gutter-xs">
+                <q-btn flat round dense icon="construction" :aria-label="`${server.name}: Tools und Berechtigungen anzeigen`" :disable="!canEdit(server)" :to="{ name: admin ? 'admin-mcp-tools' : 'settings-mcp-tools', params: { serverId: server.id } }" />
+                <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${server.name}`" :loading="refreshingId === server.id || removingId === server.id">
                   <AppMenu auto-close>
                     <q-list>
                       <q-item clickable :disable="refreshingId !== null || !canEdit(server)" @click="refreshServer(server)">
@@ -83,12 +83,7 @@
                     </q-list>
                   </AppMenu>
                 </q-btn>
-              </template>
-              <template v-else>
-                <q-btn v-if="canEdit(server)" flat dense no-caps icon="refresh" label="Tools aktualisieren" aria-label="Tools aktualisieren" :loading="refreshingId === server.id" @click="refreshServer(server)" />
-                <q-btn v-if="canEdit(server)" flat dense no-caps icon="edit" label="Bearbeiten" :aria-label="`${server.name} bearbeiten`" @click="openEdit(server)" />
-                <q-btn v-if="canEdit(server)" flat round dense color="negative" icon="delete" :aria-label="`${server.name} löschen`" :loading="removingId === server.id" :disable="removingId !== null" @click="removeServer(server)" />
-              </template>
+              </div>
             </div>
           </q-item-section>
         </q-item>

@@ -60,14 +60,14 @@
         flat
         class="app-surface provider-card"
       >
-        <q-expansion-item v-model="expandedProviders[provider.id]" expand-separator>
+        <q-expansion-item v-model="expandedProviders[provider.id]" expand-separator switch-toggle-side header-class="settings-list-item items-start" :toggle-aria-label="`Modelle für ${provider.name} anzeigen`">
           <template #header>
             <q-item-section avatar>
               <q-avatar color="primary" text-color="white" :icon="providerIcon(provider)" />
             </q-item-section>
             <q-item-section class="provider-card__identity">
               <div class="row items-center q-gutter-sm">
-                <q-item-label class="text-weight-bold">{{ provider.name }}</q-item-label>
+                <q-item-label class="settings-list-name text-weight-bold">{{ provider.name }}</q-item-label>
                 <q-chip dense :color="providerStatus(provider).color" text-color="white">
                   {{ providerStatus(provider).label }}
                 </q-chip>
@@ -76,37 +76,34 @@
               <q-item-label caption class="ellipsis">{{ providerDescription(provider) }}</q-item-label>
               <q-item-label caption>{{ activeModelCount(provider) }} aktiv · {{ providerModels(provider).length }} Modelle</q-item-label>
             </q-item-section>
-            <q-item-section side class="provider-card__header-actions">
-              <q-toggle dense
-                :model-value="provider.enabled"
-                color="primary"
-                label="Provider aktiv"
-                :aria-label="`${provider.name}: Provider aktiv`"
-                :disable="!canEdit(provider) || providerToggleLoading[provider.id]"
-                @click.stop
-                @update:model-value="toggleProvider(provider, $event)"
-              />
-              <div @click.stop>
-                <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${provider.name}`">
-                  <AppMenu>
-                    <q-list dense style="min-width: 190px">
-                      <q-item v-close-popup clickable :disable="!canEdit(provider)" @click="openEditDialog(provider)">
-                        <q-item-section avatar><q-icon name="edit" /></q-item-section>
-                        <q-item-section>Bearbeiten</q-item-section>
-                      </q-item>
-                      <q-item v-close-popup clickable :disable="!canEdit(provider) || !canTest(provider)" @click="testProvider(provider.id)">
-                        <q-item-section avatar><q-icon name="network_check" /></q-item-section>
-                        <q-item-section>Verbindung testen</q-item-section>
-                        <q-inner-loading :showing="testingProviderId === provider.id" />
-                      </q-item>
-                      <q-separator />
-                      <q-item v-close-popup clickable :disable="!canEdit(provider)" class="text-negative" @click="removeProvider(provider)">
-                        <q-item-section avatar><q-icon name="delete" /></q-item-section>
-                        <q-item-section>Löschen</q-item-section>
-                      </q-item>
-                    </q-list>
-                  </AppMenu>
-                </q-btn>
+            <q-item-section side top class="settings-list-actions">
+              <div class="row items-center no-wrap q-gutter-sm" @click.stop>
+                <q-toggle dense
+                  :model-value="provider.enabled"
+                  color="primary"
+                  :aria-label="`${provider.name}: Provider aktiv`"
+                  :disable="!canEdit(provider) || providerToggleLoading[provider.id]"
+                  @update:model-value="toggleProvider(provider, $event)"
+                />
+                <div class="row items-center no-wrap q-gutter-xs">
+                  <q-btn flat round dense icon="edit" :aria-label="`${provider.name} bearbeiten`" :disable="!canEdit(provider)" @click="openEditDialog(provider)" />
+                  <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${provider.name}`">
+                    <AppMenu>
+                      <q-list dense style="min-width: 190px">
+                        <q-item v-close-popup clickable :disable="!canEdit(provider) || !canTest(provider)" @click="testProvider(provider.id)">
+                          <q-item-section avatar><q-icon name="network_check" /></q-item-section>
+                          <q-item-section>Verbindung testen</q-item-section>
+                          <q-inner-loading :showing="testingProviderId === provider.id" />
+                        </q-item>
+                        <q-separator />
+                        <q-item v-close-popup clickable :disable="!canEdit(provider)" class="text-negative" @click="removeProvider(provider)">
+                          <q-item-section avatar><q-icon name="delete" /></q-item-section>
+                          <q-item-section>Löschen</q-item-section>
+                        </q-item>
+                      </q-list>
+                    </AppMenu>
+                  </q-btn>
+                </div>
               </div>
             </q-item-section>
           </template>
@@ -194,12 +191,12 @@
             </AppStateMessage>
 
             <q-list v-else separator class="provider-model-list q-mt-md">
-              <q-item v-for="model in filteredModels(provider)" :key="model.id" class="provider-model-item">
+              <q-item v-for="model in filteredModels(provider)" :key="model.id" class="provider-model-item settings-list-item">
                 <q-item-section avatar>
                   <q-avatar rounded color="primary" text-color="white" :icon="modelIcon(model)" size="38px" />
                 </q-item-section>
                 <q-item-section>
-                  <q-item-label class="text-weight-medium">{{ model.name || model.modelId }}</q-item-label>
+                  <q-item-label class="settings-list-name text-weight-medium">{{ model.name || model.modelId }}</q-item-label>
                   <q-item-label caption class="model-technical-id">{{ model.modelId }}</q-item-label>
                   <div class="row items-center q-gutter-xs q-mt-xs">
                     <q-chip dense outline>{{ model.origin === 'manual' ? 'Manuell' : 'Entdeckt' }}</q-chip>
@@ -215,40 +212,40 @@
                     <q-chip v-if="!isModelPresent(model)" dense color="warning" text-color="dark">Nicht verfügbar</q-chip>
                   </div>
                 </q-item-section>
-                <q-item-section side class="provider-model-actions">
-                  <q-toggle dense
-                    :model-value="model.enabled"
-                    color="primary"
-                    label="Aktiv"
-                    :aria-label="`${model.name || model.modelId}: Modell aktiv`"
-                    :disable="!canEdit(provider) || !provider.enabled || !isModelPresent(model) || modelToggleLoading[model.id]"
-                    @update:model-value="toggleModel(model, provider, $event)"
-                  />
-                  <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${model.name || model.modelId}`">
-                    <AppMenu>
-                      <q-list dense style="min-width: 210px">
-                        <q-item
-                          v-if="modelSupportsCapability(model, 'chat')"
-                          v-close-popup
-                          clickable
-                          :disable="!canEdit(provider) || !canTestModel(model, provider)"
-                          @click="testModel(model, provider)"
-                        >
-                          <q-item-section avatar><q-icon name="network_check" /></q-item-section>
-                          <q-item-section>Testen</q-item-section>
-                        </q-item>
-                        <q-item v-close-popup clickable :disable="!canEdit(provider)" @click="openModelDialog(provider, model)">
-                          <q-item-section avatar><q-icon name="tune" /></q-item-section>
-                          <q-item-section>{{ modelSupportsCapability(model, 'chat') ? 'Laufzeit bearbeiten' : 'Modell bearbeiten' }}</q-item-section>
-                        </q-item>
-                        <q-separator />
-                        <q-item v-close-popup clickable :disable="!canEdit(provider)" class="text-negative" @click="removeModel(model, provider)">
-                          <q-item-section avatar><q-icon name="delete" /></q-item-section>
-                          <q-item-section>Löschen</q-item-section>
-                        </q-item>
-                      </q-list>
-                    </AppMenu>
-                  </q-btn>
+                <q-item-section side top class="settings-list-actions">
+                  <div class="row items-center no-wrap q-gutter-sm">
+                    <q-toggle dense
+                      :model-value="model.enabled"
+                      color="primary"
+                      :aria-label="`${model.name || model.modelId}: Modell aktiv`"
+                      :disable="!canEdit(provider) || !provider.enabled || !isModelPresent(model) || modelToggleLoading[model.id]"
+                      @update:model-value="toggleModel(model, provider, $event)"
+                    />
+                    <div class="row items-center no-wrap q-gutter-xs">
+                      <q-btn flat round dense icon="tune" :aria-label="`${model.name || model.modelId}: ${modelSupportsCapability(model, 'chat') ? 'Laufzeit bearbeiten' : 'Modell bearbeiten'}`" :disable="!canEdit(provider)" @click="openModelDialog(provider, model)" />
+                      <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${model.name || model.modelId}`">
+                        <AppMenu>
+                          <q-list dense style="min-width: 210px">
+                            <q-item
+                              v-if="modelSupportsCapability(model, 'chat')"
+                              v-close-popup
+                              clickable
+                              :disable="!canEdit(provider) || !canTestModel(model, provider)"
+                              @click="testModel(model, provider)"
+                            >
+                              <q-item-section avatar><q-icon name="network_check" /></q-item-section>
+                              <q-item-section>Testen</q-item-section>
+                            </q-item>
+                            <q-separator v-if="modelSupportsCapability(model, 'chat')" />
+                            <q-item v-close-popup clickable :disable="!canEdit(provider)" class="text-negative" @click="removeModel(model, provider)">
+                              <q-item-section avatar><q-icon name="delete" /></q-item-section>
+                              <q-item-section>Löschen</q-item-section>
+                            </q-item>
+                          </q-list>
+                        </AppMenu>
+                      </q-btn>
+                    </div>
+                  </div>
                 </q-item-section>
               </q-item>
               <q-item v-if="!filteredModels(provider).length">
