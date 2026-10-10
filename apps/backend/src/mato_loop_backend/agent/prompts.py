@@ -76,11 +76,13 @@ def memory_context_prompt(
     offered_tool_names: frozenset[str] = frozenset(),
 ) -> str | None:
     parts = []
-    if "session_read" in offered_tool_names and injected_episode_count:
+    if "session_read" in offered_tool_names and (injected_episode_count or memory_text):
         parts.append(
-            "Prior-session references contain bounded conversation excerpts, not complete "
-            "conversations. Use a supplied excerpt directly when it is sufficient; call session_read "
-            "only for omitted details or attachments. Do not search again for a supplied candidate."
+            "Use supplied session excerpts directly when they are sufficient. "
+            "Before asking the user to repeat information or claiming that prior context is unavailable, "
+            "read missing details from matching supplied references with session_read. "
+            "For the latest state, prefer the reference in projectSessionIndex over an older topical anchor. "
+            "Do not search again for a supplied candidate."
         )
     if memory_read_enabled and memory_scope is not None:
         parts.append(

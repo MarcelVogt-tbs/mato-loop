@@ -54,6 +54,8 @@ Visible pins are serialized in full and remain outside the automatic snippet bud
 
 An automatic memory hit contains a short canonical-content preview and stable ID and revision. A relevant-session hit contains the strongest bounded topical anchor and exact `session_read` arguments; a recent hit contains a small tail. The project-session index points separately to the latest eligible message in each listed session so the model can read current details instead of treating an older semantic anchor as the final state. These references are discovery context, not complete evidence. `memory_retrieve` loads full durable-memory details, while `session_read` loads required transcript detail or attachments under its exact permission boundary.
 
+When `session_read` is available, the late memory context instructs the model to use sufficient excerpts directly and read missing details from matching supplied session references before asking the user to repeat information or claiming that prior context is unavailable. For the latest state, it prefers the project-session index over an older topical anchor. This guidance also applies when only the project-session index is supplied, without adding automatic retrieval or changing the stable system prompt.
+
 Explicit durable-memory overview intent uses bounded chronological prefetch and continuation state while still injecting every visible pin in full. `memory_retrieve`, `session_browse`, `session_search`, and `session_read` remain available for deliberate retrieval beyond automatic quotas. Assistant provider metadata records injected durable-memory and prior-session counts without duplicating their content.
 
 ## Durable Memory

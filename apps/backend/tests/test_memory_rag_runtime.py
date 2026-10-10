@@ -707,6 +707,11 @@ async def test_project_session_uses_configured_relevant_session_limit(monkeypatc
     assert f'"session_id": "{historical_session_id}"' in prompt
     assert f'"around_message_id": "{latest_message_id}"' in prompt
     assert '"hasMore": true' in prompt
+    assert (
+        "Before asking the user to repeat information or claiming that prior context is unavailable, "
+        "read missing details from matching supplied references with session_read. "
+        "For the latest state, prefer the reference in projectSessionIndex over an older topical anchor."
+    ) in prompt
 
 
 async def test_ordinary_first_turn_includes_two_latest_session_tails(monkeypatch) -> None:
