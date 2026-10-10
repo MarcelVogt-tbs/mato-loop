@@ -70,6 +70,12 @@ class BrowserManager:
         self.last_status = BrowserStatus(state="missing")
         self.publish_receipts: dict[str, tuple[str, str, dict]] = {}
 
+    @property
+    def maintenance_busy(self) -> bool:
+        return self.browser_id is not None or (
+            self.setup is not None and self.setup.exit_code is None
+        )
+
     def environment(self) -> tuple[dict[str, str], dict]:
         import pwd
 

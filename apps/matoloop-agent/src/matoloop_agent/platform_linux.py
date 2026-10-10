@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import os
 import pwd
 import shlex
@@ -144,6 +145,23 @@ class LinuxPlatform:
             transfer=transfer,
             operations=tuple(sorted(operations)),
         )
+
+    def maintenance_running(self, config: AgentConfig) -> bool:
+        if os.environ.get("MATOLOOP_AGENT_CONTAINER") == "1":
+            root = os.environ.get("MATOLOOP_AGENT_INSTALL_ROOT")
+            return bool(root and (Path(root) / "update-request.json").exists())
+        root = config.data_dir.parent
+        if not (root / ".managed-by-matoloop-agent").is_file():
+            return False
+        try:
+            descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                return False
+            finally:
+                os.close(descriptor)
+        except OSError:
+            return True
 
     async def start_maintenance(
         self,

@@ -383,8 +383,14 @@ async def list_execution_agents(
         ).all()
     )
     preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id)
+    try:
+        target = installation_target().model_dump()
+    except ApiError:
+        target = None
     return {
         "items": [_agent_payload(agent) for agent in agents],
+        "backendVersion": __version__,
+        "installationTarget": target,
         "defaultExecutionAgentId": (
             str(preferences.default_execution_agent_id)
             if preferences.default_execution_agent_id
@@ -480,7 +486,8 @@ async def start_execution_agent_maintenance(
         if not result.ok:
             code = result.error.code if result.error else "maintenance.failed"
             if code not in {
-                "process.sudoAuthRequired", "process.sudoAuthFailed", "maintenance.unavailable"
+                "process.sudoAuthRequired", "process.sudoAuthFailed", "maintenance.unavailable",
+                "maintenance.busy",
             }:
                 code = "maintenance.failed"
             raise ApiError(409 if code != "maintenance.failed" else 502, code)
@@ -493,7 +500,7 @@ async def start_execution_agent_maintenance(
             ExecutionAgent, agent_id, with_for_update=True, populate_existing=True
         )
         if current and current.maintenance and current.maintenance["jobId"] == job_id:
-            if code in {"process.sudoAuthRequired", "process.sudoAuthFailed"}:
+            if code in {"process.sudoAuthRequired", "process.sudoAuthFailed", "maintenance.busy"}:
                 current.maintenance = previous
             elif current.maintenance["status"] == "running":
                 current.maintenance = {

@@ -365,6 +365,7 @@ _REMOTE_ERROR_CODES = {
     "terminal.busy": "terminal.commandActive",
     "terminal.stale": "approval.targetChanged",
     "operation.unsupported": "executionAgent.operationUnavailable",
+    "maintenance.busy": "maintenance.busy",
 }
 
 _MANAGER_ERROR_CODES = frozenset(

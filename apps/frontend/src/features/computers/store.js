@@ -23,6 +23,8 @@ export function absoluteWebsocketUrl(value, location = globalThis.location) {
 export const useExecutionAgentStore = defineStore('execution-agents', {
   state: () => ({
     items: [],
+    backendVersion: null,
+    installationTarget: null,
     defaultExecutionAgentId: null,
     pairingPolicy: null,
     loading: false,
@@ -54,6 +56,8 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
       try {
         const { data } = await fetchPromise
         this.items = data.items
+        this.backendVersion = data.backendVersion || null
+        this.installationTarget = data.installationTarget || null
         this.defaultExecutionAgentId = data.defaultExecutionAgentId || null
         this.loaded = true
       } catch (error) {

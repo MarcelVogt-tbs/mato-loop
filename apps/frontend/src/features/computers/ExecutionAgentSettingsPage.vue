@@ -65,6 +65,9 @@
             <q-item-label caption>
               {{ agent.computerName || 'Noch keine Verbindung' }}<template v-if="agent.platform"> · {{ agent.platform }}</template><template v-if="agent.agentVersion"> · Agent {{ agent.agentVersion }}</template>
             </q-item-label>
+            <q-item-label caption>
+              {{ agentVersionLabel(agent.agentVersion, agents.backendVersion) }}<template v-if="agent.agentVersion && !agent.connected"> · Zuletzt gemeldeter Stand</template>
+            </q-item-label>
             <q-item-label v-if="agent.pairingState === 'pending' && agent.pairingTokenExpiresAt" caption>
               Kopplungstoken gültig bis: {{ formatExpiry(agent.pairingTokenExpiresAt) }}
             </q-item-label>
@@ -80,81 +83,78 @@
               <div class="text-body2">{{ agent.homeDirectory || 'Noch nicht gemeldet' }}</div>
             </div>
 
-            <div class="q-mt-sm">
-              <div class="text-caption app-muted">Funktionen</div>
-              <div v-if="agent.operations?.length" class="row q-gutter-xs q-mt-xs">
-                <q-chip v-for="operation in agent.operations" :key="operation" dense>
-                  {{ operationLabel(operation) }}
-                </q-chip>
-              </div>
-              <div v-else class="text-caption">Keine Funktionen gemeldet.</div>
-            </div>
           </q-item-section>
           <q-item-section side top class="execution-agent-item__actions">
-            <div class="row items-center no-wrap q-gutter-xs">
-              <q-btn
-                v-if="agent.operations?.some(operation => ['maintenance.start', 'maintenance.update'].includes(operation))"
-                flat round dense icon="more_vert"
-                :aria-label="`Agent-Wartung für ${agent.alias}`"
-                :disable="!agent.connected || agent.maintenance?.status === 'running' || maintenanceBusy"
-              >
-                <AppMenu anchor="bottom right" self="top right">
-                  <q-list>
-                    <q-item clickable v-close-popup @click="maintain(agent, 'update')">
-                      <q-item-section avatar><q-icon name="update" /></q-item-section>
-                      <q-item-section>Agent aktualisieren</q-item-section>
-                    </q-item>
-                    <q-item v-if="agent.operations?.includes('maintenance.start')" clickable v-close-popup @click="maintain(agent, 'uninstall')">
-                      <q-item-section avatar><q-icon name="delete_sweep" /></q-item-section>
-                      <q-item-section>Agent deinstallieren</q-item-section>
-                    </q-item>
-                  </q-list>
-                </AppMenu>
-              </q-btn>
-              <q-btn flat round dense icon="edit" :aria-label="`${agent.alias} bearbeiten`" @click="openEdit(agent)">
-                <q-tooltip>Bearbeiten</q-tooltip>
-              </q-btn>
-              <q-btn
-                v-if="agent.pairingState === 'unpaired' || agent.pairingState === 'pending'"
-                flat
-                round
-                dense
-                color="primary"
-                icon="key"
-                :aria-label="`Neuen Kopplungstoken für ${agent.alias} erstellen`"
-                @click="openPairingToken(agent)"
-              >
-                <q-tooltip>Neuen Kopplungstoken erstellen</q-tooltip>
-              </q-btn>
-              <q-btn
-                v-if="agent.pairingState === 'paired'"
-                flat
-                round
-                dense
-                color="negative"
-                icon="link_off"
-                :aria-label="`${agent.alias} entkoppeln`"
-                @click="unpair(agent)"
-              >
-                <q-tooltip>Computer entkoppeln</q-tooltip>
-              </q-btn>
-              <q-btn
-                flat
-                round
-                dense
-                color="negative"
-                icon="delete_outline"
-                :aria-label="`${agent.alias} entfernen`"
-                @click="revoke(agent)"
-              >
-                <q-tooltip>Computer entfernen</q-tooltip>
-              </q-btn>
-            </div>
+            <q-btn flat no-caps icon="settings" label="Verwalten" :aria-label="`${agent.alias} verwalten`" @click="managedAgentId = agent.id" />
           </q-item-section>
         </q-item>
       </q-list>
       <q-inner-loading :showing="agents.loading" />
     </q-card>
+
+    <q-dialog :model-value="Boolean(managedAgent)" :maximized="$q.screen.lt.sm" :persistent="actionBusy || maintenanceBusy" @update:model-value="!$event && (managedAgentId = null)">
+      <q-card v-if="managedAgent" class="execution-agent-dialog app-surface column no-wrap">
+        <q-card-section class="row items-center no-wrap q-gutter-md">
+          <div class="col">
+            <div class="text-h6">{{ managedAgent.alias }}</div>
+            <div class="text-body2 app-muted">{{ statusLabel(managedAgent) }}</div>
+          </div>
+          <q-btn flat round dense icon="close" aria-label="Dialog schließen" :disable="actionBusy || maintenanceBusy" @click="managedAgentId = null" />
+        </q-card-section>
+        <q-separator />
+        <q-card-section class="col scroll q-gutter-y-md">
+          <div>
+            <div class="text-subtitle2">{{ agentVersionLabel(managedAgent.agentVersion, agents.backendVersion) }}</div>
+            <div v-if="!managedAgent.connected" class="text-caption app-muted">Zuletzt gemeldeter Agent-Stand</div>
+          </div>
+          <div>
+            <div class="text-caption app-muted">Agent-Version · Commit-Datum (UTC) und Commit</div>
+            <div>{{ managedAgent.agentVersion || 'Unbekannt' }}</div>
+          </div>
+          <div>
+            <div class="text-caption app-muted">MatoLoop-Version · Referenz für Updates</div>
+            <div>{{ agents.backendVersion || 'Unbekannt' }}</div>
+          </div>
+          <div class="text-body2 app-muted">
+            Verglichen wird mit dieser MatoLoop-Instanz. Das Commit-Datum zeigt das Alter, nicht die neueste verfügbare Veröffentlichung. Ein Update übernimmt den MatoLoop-Stand und kann auch auf einen älteren Stand wechseln.
+          </div>
+          <div v-if="!agents.installationTarget" class="text-body2 app-muted">
+            Für diesen MatoLoop-Stand ist kein reproduzierbares Web-Update verfügbar.
+          </div>
+          <div v-if="managedAgent.maintenance" class="text-body2" role="status">{{ maintenanceLabel(managedAgent.maintenance) }}</div>
+          <q-list>
+            <q-item clickable :disable="actionBusy || maintenanceBusy" @click="openEdit(managedAgent)">
+              <q-item-section avatar><q-icon name="edit" /></q-item-section>
+              <q-item-section>Computer bearbeiten</q-item-section>
+            </q-item>
+            <q-item v-if="managedAgent.operations?.some(operation => ['maintenance.start', 'maintenance.update'].includes(operation))" clickable :disable="maintenanceDisabled || !agents.installationTarget" @click="maintain(managedAgent, 'update')">
+              <q-item-section avatar><q-icon name="update" /></q-item-section>
+              <q-item-section>Agent aktualisieren</q-item-section>
+            </q-item>
+            <q-item v-if="managedAgent.pairingState !== 'paired'" clickable :disable="actionBusy || maintenanceBusy" @click="openPairingToken(managedAgent)">
+              <q-item-section avatar><q-icon name="key" /></q-item-section>
+              <q-item-section>Neuen Kopplungstoken erstellen</q-item-section>
+            </q-item>
+            <q-item v-else clickable :disable="actionBusy || maintenanceBusy" @click="unpair(managedAgent)">
+              <q-item-section avatar><q-icon name="link_off" color="negative" /></q-item-section>
+              <q-item-section>Computer entkoppeln</q-item-section>
+            </q-item>
+            <q-item v-if="managedAgent.operations?.includes('maintenance.start')" clickable :disable="maintenanceDisabled" @click="maintain(managedAgent, 'uninstall')">
+              <q-item-section avatar><q-icon name="delete_sweep" color="negative" /></q-item-section>
+              <q-item-section>Agent deinstallieren</q-item-section>
+            </q-item>
+            <q-item clickable :disable="actionBusy || maintenanceBusy" @click="revoke(managedAgent)">
+              <q-item-section avatar><q-icon name="delete_outline" color="negative" /></q-item-section>
+              <q-item-section>Computer entfernen</q-item-section>
+            </q-item>
+          </q-list>
+        </q-card-section>
+        <q-separator />
+        <q-card-actions align="right" class="q-pa-md">
+          <q-btn flat no-caps label="Schließen" :disable="actionBusy || maintenanceBusy" @click="managedAgentId = null" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
 
     <ExecutionAgentConfigDialog
       v-model="configDialogOpen"
@@ -224,11 +224,11 @@
 </template>
 
 <script setup>
-import AppMenu from 'src/shared/ui/AppMenu.vue'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { copyToClipboard, useQuasar } from 'quasar'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import ExecutionAgentConfigDialog from 'src/features/computers/ExecutionAgentConfigDialog.vue'
+import { agentVersionLabel } from 'src/features/computers/version'
 import { useConfirm } from 'src/composables/confirm'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
 import { errorDescriptor } from 'src/utils/api-errors'
@@ -237,30 +237,6 @@ import { useExecutionAgentStore } from 'stores/execution-agents'
 
 defineOptions({ name: 'ExecutionAgentSettingsPage' })
 
-const operationLabels = {
-  'maintenance.start': 'Agent-Wartung',
-  'maintenance.update': 'Agent aktualisieren',
-  'cache.clear': 'Cache leeren',
-  'cache.ensure': 'Datei im Cache bereitstellen',
-  'cache.store': 'Datei im Cache speichern',
-  'filesystem.resolve': 'Verzeichnis auflösen',
-  'filesystem.copy': 'Pfade kopieren',
-  'filesystem.delete': 'Pfade löschen',
-  'filesystem.export': 'Dateien exportieren',
-  'filesystem.import': 'Dateien importieren',
-  'filesystem.list': 'Ordner auflisten',
-  'filesystem.glob': 'Dateien suchen',
-  'filesystem.grep': 'Dateiinhalte durchsuchen',
-  'filesystem.mkdir': 'Ordner erstellen',
-  'filesystem.move': 'Pfade verschieben',
-  'filesystem.read': 'Dateien lesen',
-  'filesystem.rename': 'Pfade umbenennen',
-  'filesystem.stat': 'Dateiinformationen lesen',
-  'filesystem.write': 'Dateien bearbeiten',
-  'shell.run': 'Shell-Befehle ausführen',
-  'shell.inspect': 'Shell-Konfiguration prüfen',
-  'system.info': 'Systeminformationen lesen'
-}
 const pairingDurationChoices = [
   { label: '30 Minuten', value: 1800 },
   { label: '1 Stunde', value: 3600 },
@@ -283,9 +259,16 @@ const pairingResult = ref(null)
 const pairingDurationSeconds = ref(null)
 const saving = ref(false)
 const maintenanceBusy = ref(false)
+const actionBusy = ref(false)
+const managedAgentId = ref(null)
+const managedAgent = computed(() => agents.byId(managedAgentId.value))
+const maintenanceDisabled = computed(() => (
+  actionBusy.value || maintenanceBusy.value || !managedAgent.value?.connected
+  || (['running', 'unknown'].includes(managedAgent.value?.maintenance?.status)
+    && Date.now() - Date.parse(managedAgent.value.maintenance.startedAt) <= 65 * 60_000)
+))
 const installerCommand = `curl -fsSL ${window.location.origin}/api/execution-agents/install.sh | sh -s -- --instance-url ${window.location.origin}`
 const windowsInstallerCommand = `$installer = Join-Path $env:TEMP 'install-matoloop-agent.ps1'; Invoke-WebRequest -UseBasicParsing -Uri '${window.location.origin}/api/execution-agents/install.ps1' -OutFile $installer; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -InstanceUrl '${window.location.origin}'`
-const operationLabel = (operation) => operationLabels[operation] || operation
 const pairingDurationOptions = computed(() => pairingDurationChoices.filter((option) => (
   option.value <= (agents.pairingPolicy?.maximumDurationSeconds || 0)
 )))
@@ -334,8 +317,13 @@ async function unpair(agent) {
     { okLabel: 'Entkoppeln', okColor: 'negative' }
   )
   if (!accepted) return
-  await agents.unpair(agent.id)
-  $q.notify({ type: 'positive', message: 'Computer entkoppelt' })
+  actionBusy.value = true
+  try {
+    await agents.unpair(agent.id)
+    $q.notify({ type: 'positive', message: 'Computer entkoppelt' })
+  } finally {
+    actionBusy.value = false
+  }
 }
 
 async function revoke(agent) {
@@ -345,8 +333,14 @@ async function revoke(agent) {
     { okLabel: 'Entfernen', okColor: 'negative' }
   )
   if (!accepted) return
-  await agents.revoke(agent.id)
-  $q.notify({ type: 'positive', message: 'Computer entfernt' })
+  actionBusy.value = true
+  try {
+    await agents.revoke(agent.id)
+    managedAgentId.value = null
+    $q.notify({ type: 'positive', message: 'Computer entfernt' })
+  } finally {
+    actionBusy.value = false
+  }
 }
 
 function maintenanceLabel(job) {

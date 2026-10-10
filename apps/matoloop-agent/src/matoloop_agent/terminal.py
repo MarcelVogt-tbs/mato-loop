@@ -67,6 +67,12 @@ class TerminalManager:
     def available(self) -> bool:
         return PTY_AVAILABLE and self.shell is not None
 
+    @property
+    def maintenance_busy(self) -> bool:
+        return any(
+            entry.exit_code is None for entry in (*self._terminals.values(), *self._runs.values())
+        )
+
     def _personal_environment(self) -> dict[str, str]:
         username = pwd.getpwuid(os.getuid()).pw_name
         return {

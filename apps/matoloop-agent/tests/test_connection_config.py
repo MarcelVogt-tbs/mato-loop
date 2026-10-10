@@ -314,10 +314,60 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             )
             task = asyncio.create_task(agent.dispatch(request))
             await asyncio.to_thread(started.wait, 1)
+            agent.operations.append("maintenance.start")
+            with self.assertRaises(AgentError) as busy:
+                await agent.dispatch(
+                    Request(
+                        type="request",
+                        id=AGENT_ID,
+                        operation="maintenance.start",
+                        arguments={"action": "uninstall", "jobId": AGENT_ID},
+                    )
+                )
+            self.assertEqual(busy.exception.code, "maintenance.busy")
             task.cancel()
             release.set()
             with self.assertRaisesRegex(AgentError, "changed"):
                 await task
+
+    async def test_maintenance_blocks_admission_during_launch_and_external_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            agent = MatoLoopAgent(configuration(Path(temporary)), "secret")
+            agent.operations.append("maintenance.start")
+            entered, release = asyncio.Event(), asyncio.Event()
+
+            async def launch(*_args):
+                entered.set()
+                await release.wait()
+                return {"started": True}
+
+            read = Request(type="request", id=REQUEST_ID, operation="system.info", arguments={})
+            update = Request(
+                type="request",
+                id=AGENT_ID,
+                operation="maintenance.start",
+                arguments={"action": "uninstall", "jobId": AGENT_ID},
+            )
+            with (
+                patch.object(agent.platform, "start_maintenance", side_effect=launch),
+                patch.object(agent.platform, "maintenance_running", return_value=False) as running,
+            ):
+                task = asyncio.create_task(agent.dispatch(update))
+                await entered.wait()
+                task.cancel()
+                try:
+                    with self.assertRaises(AgentError) as busy:
+                        await agent.dispatch(read)
+                    self.assertEqual(busy.exception.code, "maintenance.busy")
+                finally:
+                    running.return_value = True
+                    release.set()
+                    await task
+                with self.assertRaises(AgentError) as busy:
+                    await agent.dispatch(read)
+                self.assertEqual(busy.exception.code, "maintenance.busy")
+                running.return_value = False
+                self.assertIn("agentVersion", await agent.dispatch(read))
 
     async def test_dispatches_absolute_filesystem_operations(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
