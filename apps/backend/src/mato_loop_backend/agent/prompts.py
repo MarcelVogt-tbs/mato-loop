@@ -242,7 +242,8 @@ def general_system_prompt(
         parts.extend(
             [
                 "Call only supplied schemas when facts or actions require them.",
-                "Emit chosen tool calls now; never only announce future use.",
+                "Emit chosen tool calls now; never only announce future use. Include any progress update "
+                "and the corresponding tool calls in the same response.",
                 "No false success or unchanged retries; permission.denied is unexplained. "
                 "Use error.field to fix that argument, not unrelated code. Repeated failures require new evidence or a corrected cause.",
                 "permission.userDenied refuses only that action; do not retry or bypass it. Continue "
@@ -250,6 +251,15 @@ def general_system_prompt(
                 "and await a new user request.",
             ]
         )
+        if not delegated:
+            parts.append(
+                "Progress updates: Before multi-step investigation or substantial tool work, give one short "
+                "sentence in the user's language stating what you will check or do and why. During the work, "
+                "give further updates only for meaningful findings, changes of approach, or blockers. "
+                "Group related tool calls under one update; do not narrate each call or repeat the plan. "
+                "Skip updates for simple quick lookups. Report observable work, not private reasoning or "
+                "unverified success. Continue working after an update without waiting for a user reply."
+            )
     if inactive_capability_groups:
         dynamic_parts.append(
             "Inactive installed capabilities are informational only and have no callable schema. "

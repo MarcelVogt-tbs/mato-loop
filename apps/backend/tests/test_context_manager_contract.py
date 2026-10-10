@@ -2037,6 +2037,7 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "reformulate failed, empty, or irrelevant searches" in prompt
     assert "Emit chosen tool calls now" in prompt
     assert "never only announce future use" in prompt
+    assert "Before multi-step investigation or substantial tool work, give one short sentence" in prompt
     assert "Never invent dates" in prompt
     assert "preserve supplied dates" in prompt
     assert "derive freshness from prior knowledge" in prompt
