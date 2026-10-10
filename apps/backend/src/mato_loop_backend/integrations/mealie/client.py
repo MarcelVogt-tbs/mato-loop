@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, fields
 from datetime import date as Date
 from typing import Any, Literal
 from urllib.parse import quote
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 
@@ -14,12 +15,13 @@ MAX_RECIPE_RESULTS = 50
 MAX_MEAL_PLAN_RESULTS = 100
 MAX_RECIPE_PARTS = 200
 MAX_RECIPE_NAMES = 100
+MAX_INGREDIENT_LOOKUP_PAGES = 100
 
 MealieEntryType = Literal[
     "breakfast", "lunch", "dinner", "side", "snack", "drink", "dessert"
 ]
 _ENTRY_TYPES = {"breakfast", "lunch", "dinner", "side", "snack", "drink", "dessert"}
-_MUTATION_METHODS = {"POST", "PUT", "DELETE"}
+_MUTATION_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 class MealieError(RuntimeError):
@@ -69,6 +71,15 @@ class MealieRecipeInstruction:
 class MealieRecipe(MealieRecipeSummary):
     ingredients: tuple[MealieRecipeIngredient, ...]
     instructions: tuple[MealieRecipeInstruction, ...]
+    snapshot_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class MealieRecipePage:
+    recipes: tuple[MealieRecipeSummary, ...]
+    page: int
+    total: int
+    total_pages: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +139,16 @@ def _request_uuid(value: str | None, *, optional: bool = False) -> str | None:
         return str(UUID(value))
     except ValueError as exc:
         raise _error("invalidRequest") from exc
+
+
+def _filter_literal(name: str) -> str:
+    # Mealie's filter parser has no quoted-string escape syntax.
+    if (
+        not isinstance(name, str) or not name.strip() or len(name) > 500
+        or any(character in '\"[]\\$' or ord(character) < 32 for character in name)
+    ):
+        raise _error("invalidRequest")
+    return json.dumps(name.strip(), ensure_ascii=False)
 
 
 def _string(value: Any, *, optional: bool = False) -> str | None:
@@ -230,6 +251,9 @@ def _recipe(payload: Any) -> MealieRecipe:
         **{field.name: getattr(summary, field.name) for field in fields(summary)},
         ingredients=tuple(_ingredient(item) for item in ingredients),
         instructions=tuple(_instruction(item) for item in instructions),
+        snapshot_hash=hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
     )
 
 
@@ -302,6 +326,7 @@ class MealieClient:
         self._client = client or httpx.AsyncClient(timeout=30, trust_env=False)
         self._owns_client = client is None
         self._max_response_bytes = max_response_bytes
+        self._mutation_count = 0
 
     async def __aenter__(self) -> MealieClient:
         return self
@@ -368,6 +393,8 @@ class MealieClient:
                     code = "outcomeUnknown"
                 code = code or "unexpectedStatus"
                 raise _error(code, status_code=status)
+            if mutation:
+                self._mutation_count += 1
             if discard_response:
                 return None
             length = response.headers.get("content-length")
@@ -385,6 +412,8 @@ class MealieClient:
                     raise response_error("responseTooLarge")
                 chunks.append(chunk)
             body = b"".join(chunks)
+        except httpx.HTTPError as exc:
+            raise response_error("unavailable") from exc
         finally:
             await response.aclose()
         if not body:
@@ -410,24 +439,148 @@ class MealieClient:
         _uuid(payload.get("id"))
 
     async def search_recipes(
-        self, query: str | None = None, limit: int = 20
-    ) -> tuple[MealieRecipeSummary, ...]:
+        self, query: str | None = None, limit: int = 20, *, page: int = 1,
+        tags: tuple[str, ...] = (), categories: tuple[str, ...] = (),
+        ingredients: tuple[str, ...] = (),
+    ) -> MealieRecipePage:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_RECIPE_RESULTS:
             raise _error("invalidRequest")
-        params: dict[str, Any] = {"page": 1, "perPage": limit}
+        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+            raise _error("invalidRequest")
+        params: dict[str, Any] = {"page": page, "perPage": limit, "orderBy": "id"}
         if query is not None:
             if not isinstance(query, str):
                 raise _error("invalidRequest")
             if cleaned := query.strip():
                 params["search"] = cleaned
+        filters = []
+        for attribute, names in (
+            ("tags.name", tags), ("recipeCategory.name", categories),
+            ("recipeIngredient.food.name", ingredients),
+        ):
+            for name in names:
+                filters.append(f"{attribute} = {_filter_literal(name)}")
+        if filters:
+            params["queryFilter"] = " AND ".join(filters)
         payload = await self._request("GET", "/recipes", params=params)
-        return tuple(_recipe_summary(item) for item in self._items(payload, limit))
+        recipes = tuple(_recipe_summary(item) for item in self._items(payload, limit))
+        for field in ("page", "total", "total_pages"):
+            value = payload.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise _error("malformedResponse")
+        if payload["page"] != page:
+            raise _error("malformedResponse")
+        return MealieRecipePage(recipes, page, payload["total"], payload["total_pages"])
 
     async def get_recipe(self, slug_or_id: str) -> MealieRecipe:
         if not isinstance(slug_or_id, str) or not slug_or_id:
             raise _error("invalidRequest")
         segment = quote(slug_or_id, safe="")
         return _recipe(await self._request("GET", f"/recipes/{segment}"))
+
+    async def _created_recipe(
+        self, slug: Any, changes: dict[str, Any] | None = None,
+    ) -> MealieRecipe:
+        try:
+            if not isinstance(slug, str) or not slug.strip() or len(slug) > 1_000:
+                raise _error("malformedResponse")
+            if changes:
+                return await self.update_recipe(slug, changes)
+            recipe = await self.get_recipe(slug)
+            if recipe.id is None:
+                raise _error("malformedResponse")
+            return recipe
+        except MealieError as exc:
+            # Creation already succeeded; a failed follow-up may leave a partial recipe.
+            raise _error("outcomeUnknown") from exc
+
+    async def create_recipe(self, name: str, changes: dict[str, Any]) -> MealieRecipe:
+        slug = await self._request("POST", "/recipes", payload={"name": name}, expected={201})
+        return await self._created_recipe(slug, changes)
+
+    async def import_recipe(self, url: str) -> MealieRecipe:
+        slug = await self._request(
+            "POST", "/recipes/create/url", payload={"url": url}, expected={201},
+        )
+        return await self._created_recipe(slug)
+
+    async def _ingredient_reference(
+        self, kind: Literal["food", "unit"], name: str,
+    ) -> dict[str, str]:
+        name = name.strip()
+        if not name:
+            raise _error("invalidRequest")
+        path = {"food": "/foods", "unit": "/units"}[kind]
+        fields = ("name", "pluralName", "aliases.name")
+        if kind == "unit":
+            fields += ("abbreviation", "pluralAbbreviation")
+        params: dict[str, Any] = {"perPage": 100, "orderBy": "id"}
+        try:
+            literal = _filter_literal(name)
+        except MealieError:
+            # Names unsupported by the filter grammar still have to resolve exactly.
+            pass
+        else:
+            params["queryFilter"] = " OR ".join(f"{field} = {literal}" for field in fields)
+        for page in range(1, MAX_INGREDIENT_LOOKUP_PAGES + 1):
+            payload = await self._request("GET", path, params={**params, "page": page})
+            for item in self._items(payload, 100):
+                if not isinstance(item, dict):
+                    raise _error("malformedResponse")
+                names = [_string(item.get(field), optional=True) for field in fields if field != "aliases.name"]
+                names.extend(_names(item.get("aliases")))
+                if any(value is not None and value.casefold() == name.casefold() for value in names):
+                    return {"id": _uuid(item.get("id")), "name": _string(item.get("name"))}
+            total_pages = payload.get("total_pages")
+            if isinstance(total_pages, bool) or not isinstance(total_pages, int) or total_pages < 0:
+                raise _error("malformedResponse")
+            if page >= total_pages:
+                break
+        else:
+            raise _error("responseTooLarge")
+        payload = await self._request("POST", path, payload={"name": name}, expected={201})
+        if not isinstance(payload, dict):
+            raise _error("malformedResponse")
+        return {"id": _uuid(payload.get("id")), "name": _string(payload.get("name"))}
+
+    async def _prepare_recipe_changes(self, changes: dict[str, Any]) -> dict[str, Any]:
+        if "recipeIngredient" not in changes:
+            return changes
+        references: dict[tuple[str, str], dict[str, str]] = {}
+        ingredients = []
+        for ingredient in changes["recipeIngredient"]:
+            prepared = {**ingredient, "referenceId": str(uuid4())}
+            for kind in ("food", "unit"):
+                if reference := ingredient.get(kind):
+                    key = (kind, reference["name"].strip().casefold())
+                    if key not in references:
+                        references[key] = await self._ingredient_reference(kind, reference["name"])
+                    prepared[kind] = references[key]
+            ingredients.append(prepared)
+        return {**changes, "recipeIngredient": ingredients}
+
+    async def update_recipe(self, slug_or_id: str, changes: dict[str, Any]) -> MealieRecipe:
+        before = self._mutation_count
+        try:
+            changes = await self._prepare_recipe_changes(changes)
+            payload = await self._request(
+                "PATCH", f"/recipes/{quote(slug_or_id, safe='')}", payload=changes,
+            )
+            recipe = _recipe(payload)
+            if recipe.id is None:
+                raise _error("malformedResponse")
+            return recipe
+        except MealieError as exc:
+            if self._mutation_count != before:
+                # Food/unit creation may have succeeded before a later step failed.
+                raise _error("outcomeUnknown") from exc
+            raise
+
+    async def delete_recipe(self, recipe_id: str) -> None:
+        recipe_id = _request_uuid(recipe_id)
+        await self._request(
+            "DELETE", f"/recipes/{recipe_id}", expected={200, 204}, discard_response=True,
+        )
 
     async def get_meal_plans(
         self, start_date: Date, end_date: Date, limit: int = 100

@@ -1,6 +1,7 @@
 import json
 from dataclasses import replace
 from datetime import date
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -12,6 +13,8 @@ GROUP_ID = "22345678-1234-5678-9234-567812345678"
 USER_ID = "32345678-1234-5678-9234-567812345678"
 HOUSEHOLD_ID = "42345678-1234-5678-9234-567812345678"
 STEP_ID = "52345678-1234-5678-9234-567812345678"
+FOOD_ID = "62345678-1234-5678-9234-567812345678"
+UNIT_ID = "72345678-1234-5678-9234-567812345678"
 
 
 def _summary() -> dict:
@@ -60,18 +63,22 @@ async def test_search_uses_bearer_auth_deployment_path_and_current_pagination() 
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(200, json={"items": [_summary()]})
+        return httpx.Response(200, json={"items": [_summary()], "page": 2, "total": 25, "total_pages": 3, "next": "https://other.example/secret"})
 
     async with _client(handler, "http://mealie.example.test/kitchen/") as client:
-        recipes = await client.search_recipes("  Suppe  ", limit=12)
+        result = await client.search_recipes("  Suppe  ", limit=12, page=2, tags=("Vegetarisch",), categories=("Suppe",), ingredients=("Kartoffeln",))
 
     request = requests[0]
     assert request.headers["Authorization"] == "Bearer api-token"
     assert request.url.path == "/kitchen/api/recipes"
-    assert dict(request.url.params) == {"page": "1", "perPage": "12", "search": "Suppe"}
-    assert recipes[0].id == RECIPE_ID
-    assert recipes[0].categories == ("Suppe",)
-    assert recipes[0].tags == ("Vegetarisch",)
+    assert dict(request.url.params) == {
+        "page": "2", "perPage": "12", "search": "Suppe", "orderBy": "id",
+        "queryFilter": 'tags.name = "Vegetarisch" AND recipeCategory.name = "Suppe" AND recipeIngredient.food.name = "Kartoffeln"',
+    }
+    assert (result.page, result.total, result.total_pages) == (2, 25, 3)
+    assert result.recipes[0].id == RECIPE_ID
+    assert result.recipes[0].categories == ("Suppe",)
+    assert result.recipes[0].tags == ("Vegetarisch",)
 
 
 @pytest.mark.parametrize(
@@ -219,6 +226,10 @@ async def test_limits_dates_and_entry_types_are_validated() -> None:
             await client.get_meal_plans(date(2026, 8, 2), date(2026, 8, 1))
         with pytest.raises(MealieError) as entry_type:
             await client.create_meal_plan(date(2026, 8, 1), "brunch", "x", "", None)  # type: ignore[arg-type]
+        with pytest.raises(MealieError):
+            await client.search_recipes(page=0)
+        with pytest.raises(MealieError):
+            await client.search_recipes(tags=('x" OR name = "secret',))
 
     assert {error.value.code for error in (recipe_limit, meal_limit, dates, entry_type)} == {
         "mealie.invalidRequest"
@@ -314,6 +325,8 @@ async def test_transport_and_mutation_server_failures_report_unknown_outcome() -
             await client.create_meal_plan(
                 date(2026, 8, 20), "dinner", "Abendessen", "", RECIPE_ID
             )
+        with pytest.raises(MealieError) as patch_error:
+            await client.update_recipe(RECIPE_ID, {"name": "Neu"})
 
     def server_error(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, text="possibly completed")
@@ -324,6 +337,7 @@ async def test_transport_and_mutation_server_failures_report_unknown_outcome() -
 
     assert read_error.value.code == "mealie.unavailable"
     assert mutation_error.value.code == "mealie.outcomeUnknown"
+    assert patch_error.value.code == "mealie.outcomeUnknown"
     assert status_error.value.code == "mealie.outcomeUnknown"
 
 
@@ -353,3 +367,86 @@ async def test_connection_requires_a_mealie_user_id() -> None:
             await client.test_connection()
 
     assert error.value.code == "mealie.malformedResponse"
+
+
+async def test_recipe_create_patch_import_and_delete_use_mealie_contract() -> None:
+    requests = []
+    changes = {"recipeServings": 4, "recipeIngredient": [{"food": {"name": "Kartoffeln"}, "unit": {"name": "kg"}, "quantity": 2}], "recipeInstructions": [{"text": "Kochen"}]}
+    stored = {**_summary(), "recipeIngredient": [], "recipeInstructions": [], "extras": {"keep": "value"}}
+
+    def recipe_response():
+        return {**stored, "recipeIngredient": [
+            {**ingredient, "referenceId": ingredient.get("referenceId") or str(uuid4())}
+            for ingredient in stored["recipeIngredient"]
+        ]}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/api/foods":
+            assert request.method == "GET"
+            return httpx.Response(200, json={"items": [{"id": FOOD_ID, "name": "Kartoffel", "pluralName": "Kartoffeln"}], "total_pages": 1})
+        if request.url.path == "/api/units":
+            if request.method == "GET":
+                return httpx.Response(200, json={"items": [], "total_pages": 0})
+            assert json.loads(request.content) == {"name": "kg"}
+            return httpx.Response(201, json={"id": UNIT_ID, "name": "kg"})
+        if request.method == "POST":
+            return httpx.Response(201, json="kartoffelsuppe")
+        if request.method == "PATCH":
+            patch = json.loads(request.content)
+            for ingredient in patch.get("recipeIngredient", []):
+                assert ingredient["food"]["id"] == FOOD_ID
+                assert ingredient["unit"]["id"] == UNIT_ID
+                UUID(ingredient["referenceId"])
+            stored.update(patch)
+        return httpx.Response(200, json=recipe_response())
+
+    async with _client(handler) as client:
+        created = await client.create_recipe("Kartoffelsuppe", changes)
+        reread = await client.get_recipe(created.id)
+        updated = await client.update_recipe(created.id, {"description": "Neu"})
+        imported = await client.import_recipe("https://recipes.example/soup")
+        await client.delete_recipe(imported.id)
+
+    assert [(request.method, request.url.path) for request in requests] == [
+        ("POST", "/api/recipes"), ("GET", "/api/foods"),
+        ("GET", "/api/units"), ("POST", "/api/units"),
+        ("PATCH", "/api/recipes/kartoffelsuppe"), ("GET", f"/api/recipes/{RECIPE_ID}"),
+        ("PATCH", f"/api/recipes/{RECIPE_ID}"), ("POST", "/api/recipes/create/url"),
+        ("GET", "/api/recipes/kartoffelsuppe"), ("DELETE", f"/api/recipes/{RECIPE_ID}"),
+    ]
+    assert json.loads(requests[0].content) == {"name": "Kartoffelsuppe"}
+    assert json.loads(requests[4].content)["recipeIngredient"][0]["food"]["name"] == "Kartoffel"
+    assert json.loads(requests[6].content) == {"description": "Neu"}
+    assert json.loads(requests[7].content) == {"url": "https://recipes.example/soup"}
+    assert created.snapshot_hash == reread.snapshot_hash
+    assert updated.id == RECIPE_ID
+    assert len(created.snapshot_hash) == 64
+
+
+@pytest.mark.parametrize("operation", ["create", "import", "update_with_new_food"])
+async def test_recipe_creation_followup_failure_is_not_reported_as_safe_to_retry(operation) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/foods":
+            if request.method == "GET":
+                return httpx.Response(200, json={"items": [], "total_pages": 0})
+            return httpx.Response(201, json={"id": FOOD_ID, "name": "Kartoffeln"})
+        return httpx.Response(201, json="kartoffelsuppe") if request.method == "POST" else httpx.Response(403)
+
+    async with _client(handler) as client:
+        with pytest.raises(MealieError) as error:
+            if operation == "create":
+                await client.create_recipe("Kartoffelsuppe", {"description": "Neu"})
+            elif operation == "update_with_new_food":
+                await client.update_recipe(RECIPE_ID, {"recipeIngredient": [{"food": {"name": "Kartoffeln"}}]})
+            else:
+                await client.import_recipe("https://recipes.example/soup")
+    assert error.value.code == "mealie.outcomeUnknown"
+
+
+async def test_recipe_snapshot_includes_unprojected_data() -> None:
+    payloads = iter([{**_summary(), "extras": {"value": 1}}, {**_summary(), "extras": {"value": 2}}])
+    async with _client(lambda _request: httpx.Response(200, json=next(payloads))) as client:
+        first = await client.get_recipe(RECIPE_ID)
+        second = await client.get_recipe(RECIPE_ID)
+    assert first.snapshot_hash != second.snapshot_hash

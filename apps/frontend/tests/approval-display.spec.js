@@ -270,6 +270,8 @@ describe('approval display', () => {
     for (const [capability, label, icon] of [
       ['mealie.accounts.read', 'Mealie-Konten auflisten', 'restaurant'],
       ['recipes.read', 'Rezepte lesen', 'menu_book'],
+      ['recipes.write', 'Rezepte ändern', 'edit_note'],
+      ['recipes.delete', 'Rezepte löschen', 'delete'],
       ['meal_plan.read', 'Essensplan lesen', 'calendar_month'],
       ['meal_plan.write', 'Essensplan ändern', 'edit_calendar'],
       ['meal_plan.delete', 'Essensplan-Eintrag löschen', 'event_busy']

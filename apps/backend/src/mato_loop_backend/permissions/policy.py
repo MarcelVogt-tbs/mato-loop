@@ -74,6 +74,7 @@ _WRITE_CAPABILITIES = frozenset({
     "knowledge.delete", "knowledge.write", "mail.delete", "mail.drafts",
     "mail.send", "meal_plan.delete", "meal_plan.write", "memory.write",
     "mcp.call", "sonobin.call",
+    "recipes.write", "recipes.delete",
     "media.edit.image", "media.generate.audio", "media.generate.image",
     "media.generate.speech",
     "session.files.write", "settings.agent_identity.update",

@@ -69,6 +69,10 @@ describe('tool display', () => {
 
   it('labels Mealie and batch shopping-list tools', () => {
     expect(toolIdentity('recipes_search')).toEqual({ label: 'Rezepte suchen', icon: 'search' })
+    expect(toolIdentity('recipe_create')).toEqual({ label: 'Rezept erstellen', icon: 'post_add' })
+    expect(toolIdentity('recipe_update')).toEqual({ label: 'Rezept ändern', icon: 'edit_note' })
+    expect(toolIdentity('recipe_delete')).toEqual({ label: 'Rezept löschen', icon: 'delete' })
+    expect(toolIdentity('recipe_import_url')).toEqual({ label: 'Rezept aus URL importieren', icon: 'download' })
     expect(toolIdentity('meal_plan_get')).toEqual({ label: 'Essensplan lesen', icon: 'calendar_month' })
     expect(toolSummary({
       name: 'meal_plan_get',

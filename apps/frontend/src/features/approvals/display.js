@@ -318,6 +318,8 @@ export function permissionGrantDisplay(grant, sessions = []) {
     'knowledge.delete': { label: 'Wissenseintrag löschen', icon: 'delete_sweep' },
     'mealie.accounts.read': { label: 'Mealie-Konten auflisten', icon: 'restaurant' },
     'recipes.read': { label: 'Rezepte lesen', icon: 'menu_book' },
+    'recipes.write': { label: 'Rezepte ändern', icon: 'edit_note' },
+    'recipes.delete': { label: 'Rezepte löschen', icon: 'delete' },
     'meal_plan.read': { label: 'Essensplan lesen', icon: 'calendar_month' },
     'meal_plan.write': { label: 'Essensplan ändern', icon: 'edit_calendar' },
     'meal_plan.delete': { label: 'Essensplan-Eintrag löschen', icon: 'event_busy' },

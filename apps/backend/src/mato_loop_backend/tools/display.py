@@ -51,6 +51,8 @@ TOOL_ACTIVITY_LABELS = {
     "mail_send_message": "E-Mail senden", "mail_delete_message": "E-Mail löschen",
     "mealie_list_accounts": "Mealie-Konten auflisten", "recipes_search": "Rezepte suchen",
     "recipe_get": "Rezept lesen", "meal_plan_get": "Essensplan lesen",
+    "recipe_create": "Rezept erstellen", "recipe_update": "Rezept ändern",
+    "recipe_delete": "Rezept löschen", "recipe_import_url": "Rezept aus URL importieren",
     "meal_plan_add": "Essensplan-Eintrag erstellen", "meal_plan_update": "Essensplan-Eintrag ändern",
     "meal_plan_delete": "Essensplan-Eintrag löschen", "session_read": "Session lesen",
     "knowledge_list_accounts": "Wissensdatenbanken auflisten", "knowledge_list_books": "Bücher auflisten",

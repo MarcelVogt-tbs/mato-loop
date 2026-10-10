@@ -6,10 +6,18 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import date as Date
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
@@ -39,6 +47,12 @@ _ACCOUNTS_READ = ToolAction(
 )
 _RECIPES_READ = ToolAction(
     "recipes.read", "Rezepte lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK
+)
+_RECIPES_WRITE = ToolAction(
+    "recipes.write", "Rezepte ändern", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, mutates=True
+)
+_RECIPES_DELETE = ToolAction(
+    "recipes.delete", "Rezepte löschen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, mutates=True
 )
 _MEAL_PLAN_READ = ToolAction(
     "meal_plan.read", "Essensplan lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK
@@ -81,6 +95,7 @@ class _RecipeToken(BaseModel):
     recipe_id: UUID
     slug: str = Field(max_length=1_000)
     name: str = Field(max_length=500)
+    snapshot_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 class _MealPlanToken(BaseModel):
@@ -110,7 +125,7 @@ def _validate_encrypted_token(value: str, model: type[BaseModel], label: str) ->
 
 
 class _Arguments(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class MealieListAccountsArguments(_Arguments):
@@ -124,6 +139,10 @@ class MealieIntegrationArguments(_Arguments):
 class RecipesSearchArguments(MealieIntegrationArguments):
     query: str | None = Field(default=None, max_length=400)
     limit: int = Field(default=20, ge=1, le=50)
+    page: int = Field(default=1, ge=1)
+    tags: list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]] = Field(default_factory=list, max_length=20, description="Exact tag names; all must match.")
+    categories: list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]] = Field(default_factory=list, max_length=20, description="Exact category names; all must match.")
+    ingredients: list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]] = Field(default_factory=list, max_length=20, description="Exact structured food names; all must match. Use query for unparsed ingredient text.")
 
 
 class RecipeGetArguments(MealieIntegrationArguments):
@@ -133,6 +152,75 @@ class RecipeGetArguments(MealieIntegrationArguments):
     @classmethod
     def validate_recipe_token(cls, value: str) -> str:
         return _validate_encrypted_token(value, _RecipeToken, "recipe")
+
+
+class RecipeIngredientInput(_Arguments):
+    quantity: float | None = Field(default=None, ge=0)
+    unit: str | None = Field(default=None, max_length=500)
+    food: str | None = Field(default=None, max_length=500)
+    note: str = Field(default="", max_length=5_000)
+    title: str | None = Field(default=None, max_length=500)
+    original_text: str | None = Field(default=None, max_length=5_000)
+
+    @model_validator(mode="after")
+    def require_content(self) -> RecipeIngredientInput:
+        if not any((value or "").strip() for value in (self.food, self.note, self.title, self.original_text)):
+            raise ValueError("ingredient content is required")
+        return self
+
+
+class RecipeInstructionInput(_Arguments):
+    text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=10_000)]
+    title: str = Field(default="", max_length=500)
+    summary: str = Field(default="", max_length=5_000)
+
+
+class RecipeFields(_Arguments):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)] | None = None
+    description: str | None = Field(default=None, max_length=5_000)
+    servings: float | None = Field(default=None, ge=0)
+    yield_quantity: float | None = Field(default=None, ge=0)
+    yield_text: str | None = Field(default=None, max_length=500)
+    total_time: str | None = Field(default=None, max_length=500)
+    prep_time: str | None = Field(default=None, max_length=500)
+    cook_time: str | None = Field(default=None, max_length=500)
+    perform_time: str | None = Field(default=None, max_length=500)
+    ingredients: list[RecipeIngredientInput] | None = Field(default=None, max_length=200, description="Complete replacement ingredient list; omit to preserve it.")
+    instructions: list[RecipeInstructionInput] | None = Field(default=None, max_length=200, description="Complete replacement instruction list; omit to preserve it.")
+
+    @model_validator(mode="after")
+    def reject_null_fields(self) -> RecipeFields:
+        for field in self.model_fields_set & RecipeFields.model_fields.keys():
+            if getattr(self, field) is None:
+                raise ValueError(f"{field} cannot be null; omit it to preserve the current value")
+        return self
+
+
+class RecipeCreateArguments(RecipeFields, MealieIntegrationArguments):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+
+
+class RecipeUpdateArguments(RecipeFields, RecipeGetArguments):
+    @model_validator(mode="after")
+    def require_patch(self) -> RecipeUpdateArguments:
+        if not self.model_fields_set & RecipeFields.model_fields.keys():
+            raise ValueError("at least one recipe field is required")
+        return self
+
+
+class RecipeDeleteArguments(RecipeGetArguments):
+    pass
+
+
+class RecipeImportArguments(MealieIntegrationArguments):
+    url: HttpUrl = Field(max_length=2_000)
+
+    @field_validator("url")
+    @classmethod
+    def validate_source_url(cls, value: HttpUrl) -> HttpUrl:
+        if value.username is not None or value.password is not None or value.fragment is not None:
+            raise ValueError("recipe URL must not contain credentials or a fragment")
+        return value
 
 
 class MealPlanGetArguments(MealieIntegrationArguments):
@@ -331,6 +419,7 @@ def _recipe_token(
             recipe_id=UUID(recipe.id),
             slug=_bounded(recipe.slug, 1_000) or "",
             name=_bounded(recipe.name, 500) or "",
+            snapshot_hash=recipe.snapshot_hash if isinstance(recipe, MealieRecipe) else None,
         )
     )
 
@@ -510,10 +599,10 @@ def _invalid(field: str) -> Any:
     return ToolResult.error("integration.staleReference", field=field)
 
 
-def _remote_changed() -> Any:
+def _remote_changed(field: str = "meal_plan_token") -> Any:
     from mato_loop_backend.tools.contracts import ToolResult
 
-    return ToolResult.error("integration.remoteChanged", field="meal_plan_token")
+    return ToolResult.error("integration.remoteChanged", field=field)
 
 
 async def mealie_list_accounts(
@@ -541,13 +630,21 @@ async def recipes_search(arguments: RecipesSearchArguments, context: Any) -> Any
             client,
             revision,
         ):
-            recipes = await client.search_recipes(arguments.query, arguments.limit)
+            result = await client.search_recipes(
+                arguments.query, arguments.limit, page=arguments.page,
+                tags=tuple(arguments.tags), categories=tuple(arguments.categories),
+                ingredients=tuple(arguments.ingredients),
+            )
         return _result(
             {
                 "recipes": [
                     _recipe_summary(recipe, arguments.integration_id, revision)
-                    for recipe in recipes[: arguments.limit]
-                ]
+                    for recipe in result.recipes[: arguments.limit]
+                ],
+                "page": result.page,
+                "total": result.total,
+                "totalPages": result.total_pages,
+                "nextPage": result.page + 1 if result.page < result.total_pages else None,
             }
         )
     except ValueError:
@@ -575,6 +672,102 @@ async def recipe_get(arguments: RecipeGetArguments, context: Any) -> Any:
         return _result(
             {"recipe": _recipe_payload(recipe, arguments.integration_id, revision)}
         )
+    except ValueError:
+        return _invalid("recipe_token")
+    except MealieError as exc:
+        return _error(exc)
+
+
+def _recipe_changes(arguments: RecipeFields) -> dict[str, Any]:
+    fields = {
+        "name": "name", "description": "description", "servings": "recipeServings",
+        "yield_quantity": "recipeYieldQuantity", "yield_text": "recipeYield",
+        "total_time": "totalTime", "prep_time": "prepTime", "cook_time": "cookTime",
+        "perform_time": "performTime",
+    }
+    changes = {
+        remote: getattr(arguments, local)
+        for local, remote in fields.items() if local in arguments.model_fields_set
+    }
+    if "ingredients" in arguments.model_fields_set:
+        changes["recipeIngredient"] = [
+            {
+                "quantity": ingredient.quantity,
+                "unit": {"name": ingredient.unit} if ingredient.unit else None,
+                "food": {"name": ingredient.food} if ingredient.food else None,
+                "note": ingredient.note, "title": ingredient.title,
+                "originalText": ingredient.original_text,
+            }
+            for ingredient in arguments.ingredients or []
+        ]
+    if "instructions" in arguments.model_fields_set:
+        changes["recipeInstructions"] = [step.model_dump() for step in arguments.instructions or []]
+    return changes
+
+
+def _recipe_write_result(recipe: MealieRecipe, integration_id: UUID, revision: str) -> Any:
+    try:
+        return _result({"recipe": _recipe_payload(recipe, integration_id, revision)})
+    except (MealieError, ValueError):
+        return _error(MealieError("mealie.outcomeUnknown"))
+
+
+async def recipe_create(arguments: RecipeCreateArguments, context: Any) -> Any:
+    try:
+        changes = _recipe_changes(arguments)
+        changes.pop("name")
+        async with _selected_client(arguments.integration_id, context) as (client, revision):
+            recipe = await client.create_recipe(arguments.name, changes)
+        return _recipe_write_result(recipe, arguments.integration_id, revision)
+    except ValueError:
+        return _invalid("integration_id")
+    except MealieError as exc:
+        return _error(exc)
+
+
+async def recipe_import_url(arguments: RecipeImportArguments, context: Any) -> Any:
+    try:
+        async with _selected_client(arguments.integration_id, context) as (client, revision):
+            recipe = await client.import_recipe(str(arguments.url))
+        return _recipe_write_result(recipe, arguments.integration_id, revision)
+    except ValueError:
+        return _invalid("integration_id")
+    except MealieError as exc:
+        return _error(exc)
+
+
+async def recipe_update(arguments: RecipeUpdateArguments, context: Any) -> Any:
+    try:
+        _instance, revision = _binding(context, arguments.integration_id)
+        token = _decode_token(_RecipeToken, arguments.recipe_token, arguments.integration_id, revision)
+        if token.snapshot_hash is None:
+            return _invalid("recipe_token")
+        async with _selected_client(arguments.integration_id, context) as (client, _revision):
+            current = await client.get_recipe(str(token.recipe_id))
+            if current.id != str(token.recipe_id) or current.snapshot_hash != token.snapshot_hash:
+                return _remote_changed("recipe_token")
+            recipe = await client.update_recipe(str(token.recipe_id), _recipe_changes(arguments))
+        if recipe.id != str(token.recipe_id):
+            return _error(MealieError("mealie.outcomeUnknown"))
+        return _recipe_write_result(recipe, arguments.integration_id, revision)
+    except ValueError:
+        return _invalid("recipe_token")
+    except MealieError as exc:
+        return _error(exc)
+
+
+async def recipe_delete(arguments: RecipeDeleteArguments, context: Any) -> Any:
+    try:
+        _instance, revision = _binding(context, arguments.integration_id)
+        token = _decode_token(_RecipeToken, arguments.recipe_token, arguments.integration_id, revision)
+        if token.snapshot_hash is None:
+            return _invalid("recipe_token")
+        async with _selected_client(arguments.integration_id, context) as (client, _revision):
+            current = await client.get_recipe(str(token.recipe_id))
+            if current.id != str(token.recipe_id) or current.snapshot_hash != token.snapshot_hash:
+                return _remote_changed("recipe_token")
+            await client.delete_recipe(str(token.recipe_id))
+        return _result({"deleted": True})
     except ValueError:
         return _invalid("recipe_token")
     except MealieError as exc:
@@ -819,6 +1012,12 @@ def _search_permission(
         display_items=(
             PermissionDisplayItem("Suche", query),
             PermissionDisplayItem("Anzahl", f"Bis zu {arguments.limit}"),
+            PermissionDisplayItem("Seite", str(arguments.page)),
+            *(
+                PermissionDisplayItem(label, tuple(values), format="list")
+                for label, values in (("Tags", arguments.tags), ("Kategorien", arguments.categories), ("Zutaten", arguments.ingredients))
+                if values
+            ),
         ),
         resource_key="recipes",
     )
@@ -851,6 +1050,56 @@ def _recipe_get_permission(
         summary=f'Der Agent möchte das Rezept "{name}" lesen.',
         display_items=(PermissionDisplayItem("Rezept", name),),
         resource_key="recipes",
+    )
+
+
+def _recipe_mutation_permission(
+    arguments: RecipeCreateArguments | RecipeImportArguments | RecipeUpdateArguments | RecipeDeleteArguments,
+    context: Any,
+) -> tuple[Any, ...]:
+    from mato_loop_backend.permissions.policy import PermissionDisplayItem
+
+    name = "Ausgewähltes Rezept"
+    if isinstance(arguments, RecipeCreateArguments):
+        operation, verb, name = "recipe-create", "erstellen", arguments.name
+    elif isinstance(arguments, RecipeImportArguments):
+        operation, verb = "recipe-import-url", "importieren"
+    else:
+        _instance, revision = _binding(context, arguments.integration_id)
+        token = _decode_token(_RecipeToken, arguments.recipe_token, arguments.integration_id, revision)
+        name = token.name
+        operation, verb = ("recipe-delete", "löschen") if isinstance(arguments, RecipeDeleteArguments) else ("recipe-update", "ändern")
+    items = [PermissionDisplayItem("Rezept", _display_text(name))]
+    if isinstance(arguments, RecipeImportArguments):
+        items.append(PermissionDisplayItem("Quell-URL", str(arguments.url)))
+    if isinstance(arguments, RecipeFields):
+        for field, label in (
+            ("name", "Name"), ("description", "Beschreibung"), ("servings", "Portionen"),
+            ("yield_quantity", "Ertragsmenge"), ("yield_text", "Ertrag"),
+            ("total_time", "Gesamtzeit"), ("prep_time", "Vorbereitung"),
+            ("cook_time", "Kochzeit"), ("perform_time", "Zubereitungszeit"),
+        ):
+            if field in arguments.model_fields_set:
+                items.append(PermissionDisplayItem(label, _display_text(str(getattr(arguments, field)))))
+        if "ingredients" in arguments.model_fields_set:
+            if any(part.food or part.unit for part in arguments.ingredients or []):
+                items.append(PermissionDisplayItem("Lebensmittel und Einheiten", "Vorhandene verwenden, fehlende in Mealie anlegen."))
+            items.append(PermissionDisplayItem(
+                "Zutaten (ersetzen)", tuple(
+                    _display_text(" ".join(str(value) for value in (part.quantity, part.unit, part.food, part.note, part.title, part.original_text) if value is not None))
+                    for part in arguments.ingredients or []
+                ) or ("Liste leeren",), format="list",
+            ))
+        if "instructions" in arguments.model_fields_set:
+            items.append(PermissionDisplayItem(
+                "Zubereitung (ersetzen)", tuple(_display_text(step.text) for step in arguments.instructions or []) or ("Liste leeren",), format="list",
+            ))
+    return _permission(
+        "recipes.delete" if isinstance(arguments, RecipeDeleteArguments) else "recipes.write",
+        _operation_key(operation, arguments), arguments, context,
+        title=f"Rezept {verb}?",
+        summary=f'Der Agent möchte ein Rezept {verb}.',
+        display_items=tuple(items), resource_key="recipes",
     )
 
 
@@ -991,7 +1240,7 @@ MEALIE_SHARED_TOOLS = (
     ),
     ToolContribution(
         name="recipes_search",
-        description="Search recipes in one Mealie account and return recipe tokens for recipe_get.",
+        description="Search recipes in one Mealie account. Filter by exact tag, category, and structured food names. Follow nextPage with the same query, filters, and limit to read more results. Return recipe tokens for recipe_get.",
         arguments_model=RecipesSearchArguments,
         handler=recipes_search,
         label="Rezepte suchen",
@@ -1003,7 +1252,7 @@ MEALIE_SHARED_TOOLS = (
     ),
     ToolContribution(
         name="recipe_get",
-        description="Read ingredients and instructions for a recipe returned by recipes_search.",
+        description="Read a recipe using a recipeToken from a recipe tool. Return ingredients, instructions, and a fresh recipeToken required for update or delete.",
         arguments_model=RecipeGetArguments,
         handler=recipe_get,
         label="Rezept lesen",
@@ -1011,6 +1260,54 @@ MEALIE_SHARED_TOOLS = (
         actions=(_RECIPES_READ,),
         instance_argument="integration_id",
         authorization_factory=_recipe_get_permission,
+        releases_private_data=True,
+    ),
+    ToolContribution(
+        name="recipe_create",
+        description="Create a Mealie recipe with a name and optional ingredients, instructions, servings, yield, description, and times. Reuse matching foods and units; create missing ones. Return the saved recipe and recipeToken. Do not retry an unknown outcome; search for the recipe first.",
+        arguments_model=RecipeCreateArguments,
+        handler=recipe_create,
+        label="Rezept erstellen",
+        icon="post_add",
+        actions=(_RECIPES_WRITE,),
+        instance_argument="integration_id",
+        authorization_factory=_recipe_mutation_permission,
+        releases_private_data=True,
+    ),
+    ToolContribution(
+        name="recipe_import_url",
+        description="Import and save a recipe from an HTTP or HTTPS URL using Mealie's scraper. Mealie fetches the source URL. Return the saved recipe and recipeToken. Do not retry an unknown outcome; search for the recipe first.",
+        arguments_model=RecipeImportArguments,
+        handler=recipe_import_url,
+        label="Rezept aus URL importieren",
+        icon="download",
+        actions=(_RECIPES_WRITE,),
+        instance_argument="integration_id",
+        authorization_factory=_recipe_mutation_permission,
+        releases_private_data=True,
+    ),
+    ToolContribution(
+        name="recipe_update",
+        description="Update a recipe using the latest recipeToken from recipe_get or a recipe write. Omitted fields remain unchanged; supplied ingredient and instruction lists replace those lists completely. Reuse matching foods and units; create missing ones. A changed recipe requires a fresh read. Do not retry an unknown outcome without reading the recipe.",
+        arguments_model=RecipeUpdateArguments,
+        handler=recipe_update,
+        label="Rezept ändern",
+        icon="edit_note",
+        actions=(_RECIPES_WRITE,),
+        instance_argument="integration_id",
+        authorization_factory=_recipe_mutation_permission,
+        releases_private_data=True,
+    ),
+    ToolContribution(
+        name="recipe_delete",
+        description="Delete a recipe using the latest recipeToken from recipe_get or a recipe write. A changed recipe requires a fresh read. Do not retry an unknown outcome without checking whether the recipe still exists.",
+        arguments_model=RecipeDeleteArguments,
+        handler=recipe_delete,
+        label="Rezept löschen",
+        icon="delete",
+        actions=(_RECIPES_DELETE,),
+        instance_argument="integration_id",
+        authorization_factory=_recipe_mutation_permission,
         releases_private_data=True,
     ),
     ToolContribution(
@@ -1074,6 +1371,8 @@ MEALIE_ADAPTER = IntegrationAdapterDefinition(
     resource_actions=(
         _ACCOUNTS_READ,
         _RECIPES_READ,
+        _RECIPES_WRITE,
+        _RECIPES_DELETE,
         _MEAL_PLAN_READ,
         _MEAL_PLAN_WRITE,
         _MEAL_PLAN_DELETE,
