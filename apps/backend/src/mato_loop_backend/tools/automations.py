@@ -566,7 +566,10 @@ CREATE_AUTOMATION = ToolDefinition(
                  "The triggered agent checks those conditions and may take no action. Use "
                  "skill names in the task and load them through load_skill as in any conversation. Use "
                  "request_session_permissions for known required or recommended access before enabling work; "
-                 "never execute a mutation just to obtain permission. Archived sessions and projects do not run automations.",
+                 "never execute a mutation just to obtain permission. Wait for the result. Correct invalid target names "
+                 "or arguments. If preparation is unavailable, keep the automation disabled until question confirms "
+                 "the user accepts possible approval waits during execution. Do not enable work that depends on "
+                 "denied access. Archived sessions and projects do not run automations.",
              ),
         )
 

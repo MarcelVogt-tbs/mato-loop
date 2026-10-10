@@ -515,7 +515,8 @@ async def execute_tool_batch(
                 for attachment in tool_result.attachments:
                     attachment.ephemeral = True
             if tool_context.user_denied:
-                tool_result = ToolResult.error("permission.userDenied")
+                if tool_result.metadata.get("errorCode") != "permission.userDenied":
+                    tool_result = ToolResult.error("permission.userDenied")
                 state.user_denied_batch = True
             content = tool_result.content
             metadata = tool_result.metadata

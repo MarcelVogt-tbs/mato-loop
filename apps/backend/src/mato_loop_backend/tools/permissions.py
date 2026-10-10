@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 from typing import Any
 
@@ -104,16 +105,25 @@ async def request_session_permissions(arguments: RequestSessionPermissionsArgume
     )
     if settings._delegation_ceiling is not None:
         tools = tools.only(*settings._delegation_ceiling["toolNames"])
-    for target in arguments.requests:
+    for index, target in enumerate(arguments.requests):
+        target_field = f"requests.{index}"
         bound = tools.tools.get(target.tool)
         if bound is None:
-            return ToolResult.error("tool.unavailable")
+            return ToolResult.error(
+                "tool.invalidArguments", field=f"{target_field}.tool", params={"reason": "invalid_choice"},
+            )
         call = ToolCall(context.tool_call.id, target.tool, target.arguments)
         prepared = replace(context, tool_call=call, tool_settings=settings, bound_options={})
         result = await execute_definition(tool_registry, call, prepared, bound, permissions_only=True)
         context.user_denied = context.user_denied or prepared.user_denied
         if result.is_error:
-            return result
+            error = json.loads(result.content)["error"]
+            field = error.get("field")
+            return ToolResult.error(
+                "permission.userDenied" if context.user_denied else error["code"],
+                field=f"{target_field}.arguments.{field}" if field else target_field,
+                params=error.get("params"),
+            )
     return ToolResult.json({"permissionsReady": True, "executed": False})
 
 
