@@ -85,7 +85,7 @@ async def _permission_payload(
     if grant.resource_type == "execution_administrator":
         computer = await db.get(ExecutionAgent, UUID(grant.resource_scope))
         if computer is not None and computer.user_id == user.id:
-            resource_display = computer.alias
+            resource_display = computer.display_name
     return {
         "id": str(grant.id),
         "runId": str(grant.run_id) if grant.run_id is not None else None,

@@ -95,6 +95,7 @@ import { useProjectStore } from 'stores/projects'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useSessionTemplateStore } from 'src/features/settings/session-templates-store'
 import ExecutionAgentDirectoryPickerDialog from 'src/features/computers/ExecutionAgentDirectoryPickerDialog.vue'
+import { agentDisplayName } from 'src/features/computers/display'
 
 const props = defineProps({ project: { type: Object, default: null } })
 const emit = defineEmits(['created'])
@@ -125,7 +126,7 @@ const executionAgentOptions = computed(() => {
   const options = [
     { label: 'Keine Projektvorgabe', value: null, connected: null, caption: 'Allgemeine Session-Vorgabe verwenden' },
     ...executionAgents.items.map(agent => ({
-      label: agent.alias, value: agent.id, connected: agent.connected,
+      label: agentDisplayName(agent), value: agent.id, connected: agent.connected,
       disable: !agent.connected && agent.id !== executionAgentId.value,
       caption: agent.connected ? agent.computerName || agent.platform : 'Offline'
     }))

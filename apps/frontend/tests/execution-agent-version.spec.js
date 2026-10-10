@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest'
 import { agentVersionLabel } from '../src/features/computers/version'
+import { agentDisplayName } from '../src/features/computers/display'
 
 it.each([
   ['2026-10-08-aaaaaaaa', '2026-10-08-aaaaaaaa', 'Gleicher Stand wie MatoLoop'],
@@ -12,4 +13,14 @@ it.each([
   ['2026-10-08-aaaaaaaa', null, 'Stand unbekannt']
 ])('compares agent %s with backend %s', (agent, backend, label) => {
   expect(agentVersionLabel(agent, backend)).toBe(label)
+})
+
+it.each([
+  [{ id: '12345678-id', alias: '', computerName: 'host' }, 'host'],
+  [{ id: '12345678-id', alias: '', computerName: null }, 'Computer 12345678'],
+  [{ id: '12345678-id', alias: 'Custom', computerName: 'host' }, 'Custom'],
+  [{ id: '12345678-id', alias: '', displayName: 'Backend name' }, 'Backend name'],
+  [{ connected: true }, 'Computer']
+])('resolves the computer display name for %j', (agent, name) => {
+  expect(agentDisplayName(agent)).toBe(name)
 })

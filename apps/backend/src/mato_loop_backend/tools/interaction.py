@@ -125,7 +125,7 @@ async def _secret_input(
         ))
         if agent is None:
             return ToolResult.error("permission.denied")
-        administrator = AdministratorQuestionTarget(agent_id=agent.id, alias=agent.alias)
+        administrator = AdministratorQuestionTarget(agent_id=agent.id, alias=agent.display_name)
     answers = await context.ask_user(
         ProtectedQuestionArguments(
             questions=[

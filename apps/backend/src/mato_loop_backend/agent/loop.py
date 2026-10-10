@@ -413,7 +413,7 @@ async def execute_loop_body(
             active_skill=skill_state.active,
             execution_agent_id=run.execution_agent_id,
             execution_agent_name=(
-                selected_execution_agent.alias if selected_execution_agent else None
+                selected_execution_agent.display_name if selected_execution_agent else None
             ),
             execution_agent_platform=(
                 selected_execution_agent.platform if selected_execution_agent else None
@@ -732,7 +732,7 @@ async def execute_loop_body(
                 tool_calls_used=tool_calls_used,
                 execution_binding={
                     "executionAgentId": str(execution_client.agent_id) if execution_client else None,
-                    "executionAgentAlias": selected_execution_agent.alias if selected_execution_agent else None,
+                    "executionAgentAlias": selected_execution_agent.display_name if selected_execution_agent else None,
                 },
                 rejected_batch_code=rejected_batch_code,
                 truncated_batch=truncated_batch,

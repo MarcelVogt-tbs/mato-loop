@@ -2,7 +2,7 @@
   <div class="row items-center q-gutter-xs q-px-sm q-py-xs">
     <div v-if="agent" class="col-12 col-sm row items-center no-wrap text-caption app-muted">
       <q-icon name="computer" size="18px" class="q-mr-xs" />
-      <span class="col ellipsis">{{ agent.alias || agent.computerName }}</span>
+      <span class="col ellipsis">{{ agentDisplayName(agent) }}</span>
       <q-spinner-dots v-if="['connecting', 'acquiring', 'syncing'].includes(terminal.status)" class="q-ml-xs" color="primary" size="20px" />
       <span v-if="terminal.controlsEnabled && terminal.activeToolCallId" class="col-auto q-ml-sm text-primary" role="status" aria-live="polite">
         Agent aktiv
@@ -24,6 +24,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { agentDisplayName } from 'src/features/computers/display'
 import { useChatStore } from 'stores/chat'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useTerminalStore } from 'stores/terminal'

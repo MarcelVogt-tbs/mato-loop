@@ -2,16 +2,16 @@
   <q-dialog
     :model-value="modelValue"
     :maximized="$q.screen.lt.sm"
-    :persistent="saving"
+    :persistent="blocked"
     @hide="close"
   >
-    <q-card class="execution-agent-dialog app-surface column">
+    <q-card class="execution-agent-dialog app-surface column no-wrap">
       <q-card-section class="row items-start no-wrap q-gutter-md">
         <q-avatar color="primary" text-color="white" icon="computer" />
         <div class="col">
-          <div class="text-h6">{{ isEditing ? 'Computer bearbeiten' : 'Computer hinzufügen' }}</div>
+          <div class="text-h6">{{ isEditing ? 'Computer verwalten' : 'Computer hinzufügen' }}</div>
           <div class="text-body2 app-muted">
-            {{ isEditing ? 'Alias und Zugriffsrichtlinien konfigurieren.' : 'Computer anlegen und anschließend koppeln.' }}
+            {{ isEditing ? agentDisplayName(agent) : 'Computer anlegen und anschließend koppeln.' }}
           </div>
         </div>
         <q-btn
@@ -20,78 +20,126 @@
           dense
           icon="close"
           aria-label="Dialog schließen"
-          :disable="saving"
+          :disable="blocked"
           @click="close"
         />
       </q-card-section>
 
       <q-separator />
 
+      <template v-if="isEditing">
+        <q-tabs v-model="tab" dense no-caps align="left" active-color="primary" indicator-color="primary">
+          <q-tab name="settings" label="Einstellungen" :disable="blocked" />
+          <q-tab name="actions" label="Aktionen" :disable="blocked" />
+        </q-tabs>
+        <q-separator />
+      </template>
+
       <q-form ref="formRef" class="col column no-wrap" @submit.prevent="save">
-        <q-card-section class="col scroll q-gutter-md">
-          <q-input dense
-            v-model="alias"
-            autofocus
-            outlined
-            label="Alias"
-            maxlength="120"
-            lazy-rules
-            :rules="[requiredRule]"
-          />
+        <q-tab-panels v-model="tab" keep-alive class="col bg-transparent">
+          <q-tab-panel name="settings" class="q-pa-none">
+            <q-card-section class="q-gutter-md">
+              <template v-if="!isEditing">
+                <div class="text-subtitle2">Agent installieren</div>
+                <div class="row items-center" role="group" aria-label="Betriebssystem auswählen">
+                  <q-chip
+                    v-for="platform in installationPlatforms"
+                    :key="platform.value"
+                    clickable
+                    :selected="installationPlatform === platform.value"
+                    :icon="platform.icon"
+                    :icon-selected="platform.icon"
+                    :label="platform.label"
+                    :color="installationPlatform === platform.value ? 'primary' : undefined"
+                    :text-color="installationPlatform === platform.value ? 'white' : undefined"
+                    role="button"
+                    :aria-pressed="installationPlatform === platform.value"
+                    @click="installationPlatform = platform.value"
+                    @keydown.space.prevent
+                    @keyup.space.prevent="installationPlatform = platform.value"
+                  />
+                </div>
+                <div class="text-body2 app-muted">
+                  {{ installationPlatform === 'windows'
+                    ? 'PowerShell als Administrator unter dem späteren Task-Benutzer öffnen. Für den Start beim Hochfahren wird dessen Passwort einmalig abgefragt.'
+                    : 'Auf dem Zielcomputer als normaler Benutzer ausführen.' }}
+                </div>
+                <q-input :model-value="installationCommand" readonly outlined dense type="textarea" autogrow label="Installationsbefehl">
+                  <template #append>
+                    <q-btn flat round dense icon="content_copy" aria-label="Installationsbefehl kopieren" @click="emit('copy-command', installationCommand)" />
+                  </template>
+                </q-input>
+                <q-separator />
+              </template>
+              <q-input dense
+                v-model="alias"
+                :autofocus="isEditing"
+                outlined
+                label="Alias (optional)"
+                hint="Leer lassen, um den Computernamen zu verwenden."
+                maxlength="160"
+              />
 
-          <AppSelect dense
-            v-for="field in policyFields"
-            :key="field.key"
-            v-model="settings[field.key]"
-            outlined
-            emit-value
-            map-options
-            :options="policyOptions"
-            :label="field.label"
-          />
+              <AppSelect dense
+                v-for="field in policyFields"
+                :key="field.key"
+                v-model="settings[field.key]"
+                outlined
+                emit-value
+                map-options
+                :options="policyOptions"
+                :label="field.label"
+              />
 
-          <q-toggle dense
-            v-for="field in shellFields"
-            :key="field.key"
-            v-model="settings[field.key]"
-            color="primary"
-            :label="field.label"
-          />
+              <q-toggle dense
+                v-for="field in shellFields"
+                :key="field.key"
+                v-model="settings[field.key]"
+                color="primary"
+                :label="field.label"
+              />
 
-          <template v-if="isEditing">
-            <q-checkbox dense
-              v-model="useAsDefault"
-              color="primary"
-              label="Als Standardcomputer verwenden"
-            />
-            <div class="text-body2 app-muted">
-              Optional. Wird für neue Sessions vorausgewählt und ersetzt den bisherigen Standardcomputer.
-            </div>
-          </template>
-
-          <AppSelect dense
-            v-else
-            v-model="pairingDurationSeconds"
-            outlined
-            emit-value
-            map-options
-            :options="pairingDurationOptions"
-            label="Gültigkeitsdauer des Kopplungstokens"
-          />
-        </q-card-section>
+              <template v-if="isEditing">
+                <q-checkbox dense
+                  v-model="useAsDefault"
+                  color="primary"
+                  label="Als Standardcomputer verwenden"
+                />
+                <div class="text-body2 app-muted">
+                  Optional. Wird für neue Sessions vorausgewählt und ersetzt den bisherigen Standardcomputer.
+                </div>
+              </template>
+              <AppSelect dense
+                v-else
+                v-model="pairingDurationSeconds"
+                outlined
+                emit-value
+                map-options
+                :options="pairingDurationOptions"
+                label="Gültigkeitsdauer des Kopplungstokens"
+              />
+            </q-card-section>
+          </q-tab-panel>
+          <q-tab-panel v-if="isEditing" name="actions" class="q-pa-none">
+            <q-card-section class="q-gutter-y-md">
+              <slot name="actions" />
+            </q-card-section>
+          </q-tab-panel>
+        </q-tab-panels>
 
         <q-separator />
         <q-card-actions class="q-pa-md">
-          <q-btn flat no-caps label="Abbrechen" :disable="saving" @click="close" />
+          <q-btn flat no-caps :label="tab === 'settings' ? 'Abbrechen' : 'Schließen'" :disable="blocked" @click="close" />
           <q-space />
           <q-btn
+            v-if="tab === 'settings'"
             unelevated
             no-caps
             color="primary"
             :label="isEditing ? 'Änderungen speichern' : 'Computer hinzufügen'"
             type="submit"
             :loading="saving"
-            :disable="!isEditing && pairingDurationSeconds === null"
+            :disable="busy || (!isEditing && pairingDurationSeconds === null)"
           />
         </q-card-actions>
       </q-form>
@@ -100,7 +148,9 @@
 </template>
 
 <script setup>
+import { fabLinux, fabWindows } from '@quasar/extras/fontawesome-v6'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
+import { agentDisplayName } from 'src/features/computers/display'
 import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useExecutionAgentStore } from 'stores/execution-agents'
@@ -109,14 +159,25 @@ defineOptions({ name: 'ExecutionAgentConfigDialog' })
 
 const props = defineProps({
   modelValue: { type: Boolean, required: true },
-  agent: { type: Object, default: null }
+  agent: { type: Object, default: null },
+  busy: Boolean
 })
-const emit = defineEmits(['update:modelValue', 'created'])
+const emit = defineEmits(['update:modelValue', 'created', 'copy-command'])
 
 const $q = useQuasar()
 const agents = useExecutionAgentStore()
 const formRef = ref(null)
 const saving = ref(false)
+const blocked = computed(() => saving.value || props.busy)
+const tab = ref('settings')
+const installationPlatform = ref('linux')
+const installationPlatforms = [
+  { label: 'Linux', value: 'linux', icon: fabLinux },
+  { label: 'Windows', value: 'windows', icon: fabWindows }
+]
+const installationCommand = computed(() => installationPlatform.value === 'windows'
+  ? `$installer = Join-Path $env:TEMP 'install-matoloop-agent.ps1'; Invoke-WebRequest -UseBasicParsing -Uri '${window.location.origin}/api/execution-agents/install.ps1' -OutFile $installer; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -InstanceUrl '${window.location.origin}'`
+  : `curl -fsSL ${window.location.origin}/api/execution-agents/install.sh | sh -s -- --instance-url ${window.location.origin}`)
 const alias = ref('')
 const settings = reactive({
   homeFilesystemPolicy: 'auto',
@@ -151,11 +212,9 @@ const pairingDurationOptions = computed(() => [
 ].filter((option) => option.value <= (agents.pairingPolicy?.maximumDurationSeconds || 0)))
 let initialization = 0
 
-const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Alias erforderlich.'
-
 async function save() {
   if (
-    saving.value
+    blocked.value || tab.value !== 'settings'
     || (!isEditing.value && pairingDurationSeconds.value === null)
     || !await formRef.value?.validate()
   ) return
@@ -184,13 +243,16 @@ async function save() {
 }
 
 function close() {
-  if (saving.value) return
+  if (blocked.value) return
   emit('update:modelValue', false)
 }
 
 watch(() => props.modelValue, async (open) => {
   const currentInitialization = ++initialization
   if (!open) return
+  tab.value = 'settings'
+  installationPlatform.value = 'linux'
+  pairingDurationSeconds.value = null
   alias.value = props.agent?.alias || ''
   for (const { key } of [...policyFields, ...shellFields]) {
     settings[key] = props.agent?.[key] ?? (key.endsWith('Enabled') ? true : key === 'homeFilesystemPolicy' ? 'auto' : 'ask')

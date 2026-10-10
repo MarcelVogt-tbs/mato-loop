@@ -8,11 +8,11 @@
         :class="session.preferredExecutionAgentId === computer.id ? 'app-surface-tonal text-primary' : 'computer-choice app-muted'"
         :disable="disabled"
         :aria-pressed="session.preferredExecutionAgentId === computer.id"
-        :aria-label="`${computer.alias}: ${computer.connected ? 'Online' : 'Offline'}. ${session.preferredExecutionAgentId === computer.id ? 'Computer abwählen' : 'Computer auswählen'}`"
+        :aria-label="`${agentDisplayName(computer)}: ${computer.connected ? 'Online' : 'Offline'}. ${session.preferredExecutionAgentId === computer.id ? 'Computer abwählen' : 'Computer auswählen'}`"
         @click="selectComputer(computer)"
       >
         <q-icon :name="computer.connected ? 'computer' : 'desktop_access_disabled'" :color="computer.connected ? 'positive' : undefined" size="16px" class="q-mr-xs" />
-        <span class="text-caption">{{ computer.alias }}</span>
+        <span class="text-caption">{{ agentDisplayName(computer) }}</span>
       </q-btn>
     </div>
     <div v-if="agents.loadFailed" class="text-caption text-warning q-mt-xs" role="status">Computerstatus konnte nicht aktualisiert werden.</div>
@@ -21,6 +21,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { agentDisplayName } from 'src/features/computers/display'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 
 const props = defineProps({ session: { type: Object, required: true }, disabled: Boolean })

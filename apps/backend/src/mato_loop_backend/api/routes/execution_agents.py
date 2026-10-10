@@ -100,15 +100,12 @@ async def get_installation_target(response: Response) -> InstallationTarget:
 
 
 class ExecutionAgentAliasRequest(ApiModel):
-    alias: str = Field(min_length=1, max_length=160)
+    alias: str = Field(default="", max_length=160)
 
     @field_validator("alias")
     @classmethod
-    def normalize_alias(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("alias cannot be blank")
-        return value
+    def normalize_alias(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
 
 
 ExecutionPolicy = Literal["auto", "ask", "deny"]
@@ -144,7 +141,7 @@ class DefaultExecutionAgentRequest(ApiModel):
 
 
 class ExecutionAgentUpdateRequest(ApiModel):
-    alias: str | None = Field(default=None, min_length=1, max_length=160)
+    alias: str | None = Field(default=None, max_length=160)
     home_filesystem_policy: ExecutionPolicy | None = None
     external_filesystem_policy: ExecutionPolicy | None = None
     home_shell_enabled: bool | None = None
@@ -201,6 +198,7 @@ def _agent_payload(agent: ExecutionAgent) -> dict:
     payload = {
         "id": str(agent.id),
         "alias": agent.alias,
+        "displayName": agent.display_name,
         "computerName": agent.computer_name,
         "agentVersion": agent.agent_version,
         "platform": agent.platform,

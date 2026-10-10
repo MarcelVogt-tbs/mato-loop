@@ -47,6 +47,7 @@
 import { computed, defineComponent, h } from 'vue'
 import { QBanner, QIcon, useQuasar } from 'quasar'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
+import { agentDisplayName } from 'src/features/computers/display'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
@@ -121,7 +122,7 @@ const executionAgentOptions = computed(() => {
   const options = [
     { label: 'Kein Computer', value: null, connected: null, icon: 'computer', caption: 'Nur Backend-Funktionen verwenden' },
     ...executionAgents.items.map((agent) => ({
-      label: agent.alias,
+      label: agentDisplayName(agent),
       value: agent.id,
       connected: agent.connected,
       icon: agent.connected === false ? 'cloud_off' : 'computer',

@@ -221,6 +221,7 @@
 
 <script setup>
 import AppMenu from 'src/shared/ui/AppMenu.vue'
+import { agentDisplayName } from 'src/features/computers/display'
 import { computed, nextTick, ref } from 'vue'
 import AppClosableTab from 'src/shared/ui/AppClosableTab.vue'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
@@ -296,7 +297,7 @@ function tabLabel(tab) {
     + (tab.fileTarget.revision != null ? ` · Version ${tab.fileTarget.revision}` : '')
   if (['terminal', 'computer-files', 'browser'].includes(tab.appId)) {
     const agent = executionAgents.byId(chat.activeContext?.preferredExecutionAgentId)
-    return agent?.alias ? `${content(tab.appId).label} · ${agent.alias}` : content(tab.appId).label
+    return agent ? `${content(tab.appId).label} · ${agentDisplayName(agent)}` : content(tab.appId).label
   }
   return content(tab.appId).label
 }

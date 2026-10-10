@@ -297,6 +297,7 @@
 </template>
 
 <script setup>
+import { agentDisplayName } from 'src/features/computers/display'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
@@ -493,7 +494,7 @@ function executionLocationIcon(executionLocation) {
 
 function executionAgentName(integration) {
   const agentId = integration.executionAgentId || integration.config?.executionAgentId || null
-  return executionAgents.byId(agentId)?.alias
+  return agentDisplayName(executionAgents.byId(agentId))
     || integration.executionAgentName
     || integration.config?.executionAgentName
     || 'Nicht verfügbarer Computer'

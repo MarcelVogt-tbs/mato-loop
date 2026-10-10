@@ -280,6 +280,7 @@ import { useQuasar } from 'quasar'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import BrowserSetupDialog from 'src/features/browser/BrowserSetupDialog.vue'
+import { agentDisplayName } from 'src/features/computers/display'
 
 defineOptions({ name: 'IntegrationConfigDialog' })
 
@@ -342,7 +343,7 @@ const securityOptions = [
   { label: 'STARTTLS', value: 'starttls' }
 ]
 const executionAgentOptions = computed(() => {
-  const options = executionAgents.items.map((agent) => ({ label: agent.alias, value: agent.id }))
+  const options = executionAgents.items.map((agent) => ({ label: agentDisplayName(agent), value: agent.id }))
   if (form.executionAgentId && !executionAgents.byId(form.executionAgentId)) {
     options.unshift({ label: 'Nicht verfügbarer Computer', value: form.executionAgentId })
   }

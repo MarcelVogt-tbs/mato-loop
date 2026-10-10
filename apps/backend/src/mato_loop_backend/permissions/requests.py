@@ -48,9 +48,9 @@ async def request_approval(
         agent = await db.get(ExecutionAgent, UUID(permission.approval_details["administratorAgentId"]))
         if isinstance(agent, ExecutionAgent) and agent.user_id == chat_session.user_id:
             permission = replace(
-                permission, title=f"Administratorzugriff auf „{agent.alias}“ erlauben?",
-                display_items=tuple(replace(item, value=agent.alias) if item.label == "Computer" else item for item in permission.display_items),
-                session_grants=tuple(replace(grant, resource_display=agent.alias) for grant in permission.session_grants),
+                permission, title=f"Administratorzugriff auf „{agent.display_name}“ erlauben?",
+                display_items=tuple(replace(item, value=agent.display_name) if item.label == "Computer" else item for item in permission.display_items),
+                session_grants=tuple(replace(grant, resource_display=agent.display_name) for grant in permission.session_grants),
             )
     grant_payload = session_grants_payload(permission)
     available_decisions = [

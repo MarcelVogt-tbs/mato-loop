@@ -3,10 +3,20 @@
 ## Computer management and version comparison
 
 The Computer overview shows connectivity, the reported Agent version, and its
-comparison with the running backend. **Verwalten** opens one dialog for version
-details, editing, pairing, updates, uninstallation, and revocation. Adding and
-editing continue to use the same configuration dialog. Open management dialogs
-resolve the computer by ID from the existing polled store.
+comparison with the running backend. **Verwalten** opens the shared configuration
+dialog on **Einstellungen**; **Aktionen** contains version details, pairing,
+updates, uninstallation, and revocation. Settings drafts survive tab changes, and
+reopening starts on the settings tab. Adding uses the same settings form and
+starts with separate Linux/Windows icon chips and the selected installation command and
+instructions, followed by the optional alias and access settings. Installation
+commands are not part of the overview.
+Open management dialogs resolve the computer by ID from the existing polled store.
+
+An omitted or blank alias is stored as an empty string in the existing column.
+`displayName` resolves the custom alias, the last reported computer name, or
+`Computer <ID8>` before the first connection. Editing always uses the raw `alias`;
+clearing it restores the automatic name. The same name resolution supplies UI
+selections, permission labels, protected administrator questions, and model context.
 
 The existing computer-list response includes `backendVersion` and the nullable
 `installationTarget`. A missing target disables WebUI updates without preventing

@@ -224,6 +224,7 @@ def create_debug_mcp() -> tuple[FastMCP, Any]:
                 {
                     "id": str(agent.id),
                     "alias": agent.alias,
+                    "displayName": agent.display_name,
                     "computerName": agent.computer_name,
                     "version": agent.agent_version,
                     "platform": agent.platform,
@@ -815,6 +816,7 @@ def create_debug_mcp() -> tuple[FastMCP, Any]:
         return {
             "id": str(agent.id),
             "alias": agent.alias,
+            "displayName": agent.display_name,
             "computerName": agent.computer_name,
             "version": agent.agent_version,
             "platform": agent.platform,

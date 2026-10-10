@@ -71,13 +71,17 @@ def _agent(**values) -> ExecutionAgent:
     return ExecutionAgent(**(defaults | values))
 
 
-def test_payload_exposes_computer_metadata_and_policies() -> None:
-    agent = _agent(home_directory="/home/user", computer_name="host", agent_version="1")
+@pytest.mark.parametrize("alias, computer_name", [("Desktop", "host"), ("", "host"), ("", None)])
+def test_payload_exposes_computer_metadata_and_policies(alias, computer_name) -> None:
+    agent = _agent(alias=alias, home_directory="/home/user", computer_name=computer_name, agent_version="1")
 
     payload = _agent_payload(agent)
 
     assert payload["homeDirectory"] == "/home/user"
-    assert payload["computerName"] == "host"
+    assert payload["computerName"] == computer_name
+    assert (payload["alias"], payload["displayName"]) == (
+        alias, alias or computer_name or f"Computer {str(agent.id)[:8]}",
+    )
     assert payload["agentVersion"] == "1"
     assert payload["homeFilesystemPolicy"] == "auto"
     assert payload["externalFilesystemPolicy"] == "ask"
@@ -107,7 +111,8 @@ def test_execution_agent_model_has_policy_constraints() -> None:
     ) == "JSONB"
 
 
-async def test_create_returns_hash_only_pending_pairing_envelope() -> None:
+@pytest.mark.parametrize("values, expected_alias", [({"alias": " Desktop "}, "Desktop"), ({}, ""), ({"alias": "  "}, "")])
+async def test_create_returns_hash_only_pending_pairing_envelope(values, expected_alias) -> None:
     user = _user()
     db = AsyncMock(spec=AsyncSession)
     response_headers = Response()
@@ -123,11 +128,12 @@ async def test_create_returns_hash_only_pending_pairing_envelope() -> None:
     db.flush.side_effect = assign_server_values
 
     result = await create_execution_agent(
-        ExecutionAgentRequest(alias=" Desktop "), user, db, response_headers
+        ExecutionAgentRequest(**values), user, db, response_headers
     )
     stored = db.add.call_args.args[0]
 
-    assert result["agent"]["alias"] == "Desktop"
+    assert result["agent"]["alias"] == expected_alias
+    assert result["agent"]["displayName"] == (expected_alias or f"Computer {str(stored.id)[:8]}")
     assert result["agent"]["pairingState"] == "pending"
     assert result["pairingToken"]
     assert "token" not in result
@@ -142,16 +148,17 @@ async def test_create_returns_hash_only_pending_pairing_envelope() -> None:
     db.commit.assert_awaited_once()
 
 
-async def test_update_changes_alias_policies_and_shell_switches() -> None:
+@pytest.mark.parametrize("alias", ["Laptop", "  "])
+async def test_update_changes_alias_policies_and_shell_switches(alias) -> None:
     user = _user()
-    agent = _agent(user_id=user.id, token_hash="a" * 64, token_is_legacy=False)
+    agent = _agent(user_id=user.id, token_hash="a" * 64, token_is_legacy=False, computer_name="host")
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = agent
 
     result = await update_execution_agent(
         agent.id,
         ExecutionAgentUpdateRequest(
-            alias="Laptop",
+            alias=alias,
             externalFilesystemPolicy="deny",
             externalShellEnabled=False,
         ),
@@ -159,7 +166,7 @@ async def test_update_changes_alias_policies_and_shell_switches() -> None:
         db,
     )
 
-    assert result["alias"] == "Laptop"
+    assert (result["alias"], result["displayName"]) == (alias.strip(), alias.strip() or "host")
     assert result["externalFilesystemPolicy"] == "deny"
     assert result["externalShellEnabled"] is False
     db.commit.assert_awaited_once()
@@ -174,6 +181,9 @@ async def test_pairing_policy_and_duration_validation() -> None:
     assert ExecutionAgentRequest(alias="Agent").home_shell_enabled is True
     assert ExecutionAgentRequest(alias="Agent").external_shell_enabled is True
     assert PairingTokenRequest(pairingTokenDurationSeconds=86400)
+    assert ExecutionAgentUpdateRequest(alias=None).alias is None
+    with pytest.raises(ValidationError):
+        ExecutionAgentRequest(alias="x" * 161)
     with pytest.raises(ValidationError):
         ExecutionAgentRequest(alias="Agent", pairingTokenDurationSeconds=1799)
     with pytest.raises(ValidationError):

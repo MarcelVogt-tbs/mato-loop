@@ -396,14 +396,15 @@ def _session_read_records(context: ToolContext, messages: list[Message], runs=()
     ))
 
 
-async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("alias", ["Server", ""])
+async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkeypatch, tmp_path, alias) -> None:
     assert tool_registry.action_default("execution_agent.list", TrustLevel.PRIVATE) == ToolExecutionPolicy.AUTO
     assert tool_registry.action_default("execution_agent.list", TrustLevel.PUBLIC) == ToolExecutionPolicy.ASK
     assert all(
         tool_registry.action_default("execution_agent.select", trust) == ToolExecutionPolicy.ASK
         for trust in (TrustLevel.PRIVATE, TrustLevel.PUBLIC)
     )
-    first = ExecutionAgent(id=uuid4(), user_id=uuid4(), alias="Server", platform="linux")
+    first = ExecutionAgent(id=uuid4(), user_id=uuid4(), alias=alias, computer_name="host", platform="linux")
     listing = ToolCall("list", "list_execution_agents", {})
     context = _context(tmp_path, listing)
     first.user_id = context.session.user_id
@@ -413,7 +414,7 @@ async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkey
     result = await tool_registry.execute(listing, context)
 
     assert json.loads(result.content)["items"] == [{
-        "id": str(first.id), "alias": "Server", "platform": "linux",
+        "id": str(first.id), "alias": alias or "host", "platform": "linux",
         "connected": True, "selected": False,
     }]
     assert context.ask_handler.await_args.args[0].resource_scope == str(context.session.user_id)

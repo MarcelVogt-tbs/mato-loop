@@ -79,3 +79,7 @@ class ExecutionAgent(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+    @property
+    def display_name(self) -> str:
+        return (self.alias or "").strip() or (self.computer_name or "").strip() or f"Computer {str(self.id)[:8]}"

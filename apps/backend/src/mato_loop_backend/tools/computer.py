@@ -78,7 +78,7 @@ async def _list_execution_agents(
         ExecutionAgent.revoked_at.is_(None),
     ).order_by(ExecutionAgent.created_at, ExecutionAgent.id))).all()
     return ToolResult.json({"items": [
-        {"id": str(agent.id), "alias": agent.alias, "platform": agent.platform,
+        {"id": str(agent.id), "alias": agent.display_name, "platform": agent.platform,
          "connected": execution_agent_connections.is_connected(agent.id),
          "selected": agent.id == context.session.preferred_execution_agent_id}
         for agent in agents
@@ -98,8 +98,8 @@ async def _select_execution_agent(
     if agent is None:
         return ToolResult.error("executionAgent.notFound")
     if agent.id == context.session.preferred_execution_agent_id:
-        return ToolResult.json({"id": str(agent.id), "alias": agent.alias, "selected": True})
-    if not await tools_access.allow(context, execution_agent_select_permission(agent.id, agent.alias)):
+        return ToolResult.json({"id": str(agent.id), "alias": agent.display_name, "selected": True})
+    if not await tools_access.allow(context, execution_agent_select_permission(agent.id, agent.display_name)):
         return ToolResult.error("permission.denied")
     from mato_loop_backend.sessions.service import (
         SessionServiceError,
@@ -136,7 +136,7 @@ async def _select_execution_agent(
     run.execution_operations = sorted(snapshot)
     await context.db.flush()
     return ToolResult.json({
-        "id": str(agent.id), "alias": agent.alias, "currentDirectory": directory,
+        "id": str(agent.id), "alias": agent.display_name, "currentDirectory": directory,
         "selected": True,
         "instruction": "The selected computer changed. Files on the previous computer were not transferred. Use their recorded computer binding.",
     }, metadata={"executionAgentChanged": True})
