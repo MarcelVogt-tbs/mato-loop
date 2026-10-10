@@ -33,7 +33,7 @@ describe('provider store', () => {
       { id: 'm3', providerId: 'p1', name: 'Alt', modelId: 'old', enabled: true, availability: 'missing' }
     ]
 
-    expect(store.modelOptions).toEqual([{
+    expect([store.modelOptions, store.selectionOptions('m3'), store.selectionOptions('deleted')]).toEqual(Array(3).fill([{
       label: 'Alpha · Aktiv',
       primaryLabel: 'Alpha',
       caption: 'Aktiv',
@@ -41,7 +41,7 @@ describe('provider store', () => {
       trustLevel: 'public',
       trustIcon: 'public',
       disable: false
-    }])
+    }]))
   })
 
   it('offers only effective tool-capable chat models for skill creation', () => {

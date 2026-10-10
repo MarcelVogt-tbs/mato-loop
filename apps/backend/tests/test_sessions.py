@@ -2785,6 +2785,33 @@ async def test_session_profile_changes_preserve_grants_only_for_message_size(mon
     assert db.execute.await_count == int(revokes)
 
 
+async def test_session_model_switch_ignores_stale_model_references(monkeypatch) -> None:
+    from mato_loop_backend.settings.effective import apply_session_ai
+    from mato_loop_backend.settings.models import BUILD_PROFILE_ID, PLAN_PROFILE_ID
+    from mato_loop_backend.settings.session_profiles import (
+        ChatModelOverride,
+        SessionProfileSnapshot,
+    )
+
+    user = _user()
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    fallback = ModelConfig(provider_id=provider.id, model_id="default")
+    replacement = ModelConfig(provider_id=provider.id, model_id="replacement")
+    ai = AiSettings(providers=[provider], models=[fallback, replacement], default_model_id=fallback.id)
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_: ai if kind is AiProviderSettings else kind()))
+    profile = SessionProfileSnapshot(agent_models={PLAN_PROFILE_ID: ChatModelOverride(model_id=uuid4()), BUILD_PROFILE_ID: ChatModelOverride(model_id=uuid4())})
+    session = ChatSession(id=uuid4(), user_id=user.id, title="Test", agent_profile_id=PLAN_PROFILE_ID, model_config_id=uuid4(), memory_mode="disabled", session_profile=profile.model_dump(mode="json"))
+    before = apply_session_ai(ai, session).default_model_id
+    profile.agent_models[PLAN_PROFILE_ID] = ChatModelOverride(model_id=replacement.id)
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = session
+    db.scalar.return_value = None
+
+    await update_session(session.id, SessionUpdateRequest(session_profile=profile), user, db)
+
+    assert (before, apply_session_ai(ai, session).default_model_id) == (fallback.id, replacement.id)
+
+
 async def test_manual_title_change_skips_automatic_generation(monkeypatch) -> None:
     user = _user()
     session = ChatSession(

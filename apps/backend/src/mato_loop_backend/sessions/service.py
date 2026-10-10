@@ -1467,7 +1467,11 @@ async def update_session(
     if "session_profile" in fields and payload.session_profile is not None:
         from mato_loop_backend.sessions.templates import validate_session_profile
 
-        await validate_session_profile(db, user.id, payload.session_profile, model_id=payload.model_id if "model_id" in fields else item.model_config_id)
+        await validate_session_profile(
+            db, user.id, payload.session_profile,
+            model_id=payload.model_id if "model_id" in fields else item.model_config_id,
+            previous=SessionProfileSnapshot.model_validate(item.session_profile or {}),
+        )
         item.session_profile = payload.session_profile.model_dump(mode="json")
     if fields & {"session_profile", "agent_profile_id"}:
         from mato_loop_backend.settings.effective import session_agent_allowed
@@ -1479,7 +1483,7 @@ async def update_session(
         requested_model_id = (
             payload.model_id if "model_id" in fields else item.model_config_id
         )
-        if requested_model_id is not None and not model_available(ai, requested_model_id):
+        if "model_id" in fields and requested_model_id is not None and not model_available(ai, requested_model_id):
             raise SessionServiceError(400, "session.modelUnavailable")
         if "model_id" in fields:
             item.model_config_id = payload.model_id

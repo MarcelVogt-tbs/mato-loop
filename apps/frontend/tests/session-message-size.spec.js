@@ -8,6 +8,7 @@ vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: {} }))
 
 import SessionSettingsFields from '../src/features/chat/components/SessionSettingsFields.vue'
+import { useProviderStore } from '../src/stores/providers'
 
 let app, root
 afterEach(() => { app?.unmount(); root?.remove() })
@@ -39,6 +40,9 @@ it('lets the compact model menu return to the inherited model', async () => {
     fields: ['model'], compact: true, onUpdate: update
   }) })
   app.use(createPinia()).use(Quasar, { components: { QSelect, QIcon, QItem, QItemLabel, QItemSection } })
+  const providers = useProviderStore()
+  providers.providers = [{ id: 'provider', name: 'Local', enabled: true }]
+  providers.models = [{ id: 'override', providerId: 'provider', modelId: 'chat', enabled: true }]
   app.mount(root)
   root.querySelector('.composer-model .q-field__native').click()
   const option = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')]

@@ -3,6 +3,7 @@ import { api } from 'src/boot/axios'
 import { useAuthStore } from 'stores/auth'
 import {
   isModelEffective,
+  isModelPresent,
   modelOption,
   modelSupportsCapability,
   selectedModelState
@@ -138,21 +139,14 @@ export const useProviderStore = defineStore('providers', {
     selectionOptions: (state) => (modelId, requiresTools = false, capability = 'chat') => {
       const options = effectiveModelOptions(state, capability, requiresTools)
       if (!modelId || options.some((option) => option.value === modelId)) return options
-      const selected = selectedModelState(
-        modelId,
-        state.availableModels || state.models,
-        state.availableProviders || state.providers,
-        state.codex,
-        capability
-      )
       const models = state.availableModels || state.models
       const providers = state.availableProviders || state.providers
       const selectedModel = models.find((model) => model.id === modelId)
-      if (selectedModel) {
+      if (isModelPresent(selectedModel)) {
         const provider = providers.find((item) => item.id === selectedModel.providerId)
         return [modelOption(selectedModel, provider, true), ...options]
       }
-      return [{ label: selected.label, value: modelId, disable: true, trustLevel: 'public', trustIcon: 'public' }, ...options]
+      return options
     },
     selectedModelState: (state) => (modelId, capability = 'chat') => selectedModelState(
       modelId,
