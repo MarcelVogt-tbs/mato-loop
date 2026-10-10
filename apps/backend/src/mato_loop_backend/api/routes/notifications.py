@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import ChatSession, Notification, UserAccount
+from mato_loop_backend.notification_content import notification_body_preview
 from mato_loop_backend.notifications import NotificationError, NotificationService
 from mato_loop_backend.security import require_admin, require_user
 from mato_loop_backend.sessions.presence import mark_user_present
@@ -111,7 +112,7 @@ def _notification_payload(item: Notification) -> NotificationResponse:
         id=item.id,
         kind=item.kind,
         title=item.title,
-        body=item.body,
+        body=notification_body_preview(item.body, limit=500 if item.kind == "session.response" else 4_000),
         target=(
             MemoryApprovalNotificationTargetResponse(type="memoryApproval", approvalId=item.approval_id)
             if item.kind == "memory.approval" and item.approval_id is not None
