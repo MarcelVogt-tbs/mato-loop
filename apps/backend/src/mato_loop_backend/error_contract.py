@@ -113,7 +113,7 @@ _MESSAGES = {
     "session.directoryRequired": "Select a working directory on the computer, then retry this request.",
     "session.directoryUnavailable": "The working directory is unavailable. Check the path and computer connection, then retry this request.",
     "executionAgent.notFound": "The MatoLoop Agent was not found.",
-    "maintenance.busy": "Computer maintenance is already running.",
+    "maintenance.busy": "Computer operations or maintenance are still running.",
     "maintenance.unavailable": "Native maintenance is unavailable on this computer.",
     "maintenance.jobUnavailable": "The maintenance job is no longer available.",
     "maintenance.failed": "Computer maintenance failed.",

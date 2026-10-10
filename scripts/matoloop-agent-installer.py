@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -28,6 +29,7 @@ SYSTEM_PACKAGES = (
     "ripgrep",
 )
 _maintenance_password: str | None = None
+_installation_lock_fd: int | None = None
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -98,6 +100,33 @@ def run(*command: str | Path, **kwargs) -> subprocess.CompletedProcess:
     elif command[0] == "sudo" and os.environ.get("MATOLOOP_AGENT_MAINTENANCE") == "1":
         command = ("sudo", "-n", *command[1:])
     return subprocess.run([os.fspath(item) for item in command], **kwargs)
+
+
+@contextmanager
+def installation_lock():
+    global _installation_lock_fd
+    layout = paths()
+    check_safe_root(layout)
+    layout["root"].mkdir(parents=True, exist_ok=True, mode=0o700)
+    inherited = os.environ.get("MATOLOOP_AGENT_INSTALL_LOCK_FD")
+    descriptor = (
+        int(inherited)
+        if inherited is not None
+        else os.open(layout["root"], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    )
+    try:
+        actual, expected = os.fstat(descriptor), layout["root"].stat()
+        if (actual.st_dev, actual.st_ino) != (expected.st_dev, expected.st_ino):
+            fail("the inherited installation lock does not match the managed root")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            fail("another installation or maintenance command is running")
+        _installation_lock_fd = descriptor
+        yield
+    finally:
+        _installation_lock_fd = None
+        os.close(descriptor)
 
 
 def read_state(layout: dict[str, Path]) -> dict:
@@ -671,6 +700,17 @@ def update(*, in_process: bool = False, revision: str | None = None) -> None:
                 state["homeDirectory"],
                 "--instance-url",
                 instance,
+                **(
+                    {
+                        "env": {
+                            **os.environ,
+                            "MATOLOOP_AGENT_INSTALL_LOCK_FD": str(_installation_lock_fd),
+                        },
+                        "pass_fds": (_installation_lock_fd,),
+                    }
+                    if _installation_lock_fd is not None
+                    else {}
+                ),
             )
 
 
@@ -1118,29 +1158,33 @@ def main() -> None:
     maintenance_parser.add_argument("--revision")
     arguments = parser.parse_args()
     try:
-        if arguments.command == "container-init":
-            container_init(arguments.repository)
-        elif arguments.command == "container-run":
-            container_run()
-        elif arguments.command == "container-request":
-            container_request(arguments.job_id, arguments.revision)
-        elif arguments.command == "install":
-            install(arguments)
-        elif arguments.command == "update":
-            update()
-        elif arguments.command == "status":
-            status()
-        elif arguments.command == "uninstall":
-            uninstall(arguments.purge, arguments.yes)
-        else:
-            maintenance_run(
-                arguments.action,
-                arguments.job_id,
-                arguments.socket_path,
-                arguments.root,
-                arguments.revision,
-            )
-    except (OSError, subprocess.CalledProcessError):
+        if arguments.command == "maintenance-run":
+            os.environ["MATOLOOP_AGENT_INSTALL_ROOT"] = arguments.root
+        mutating = arguments.command in {"install", "update", "uninstall", "maintenance-run"}
+        with installation_lock() if mutating else nullcontext():
+            if arguments.command == "container-init":
+                container_init(arguments.repository)
+            elif arguments.command == "container-run":
+                container_run()
+            elif arguments.command == "container-request":
+                container_request(arguments.job_id, arguments.revision)
+            elif arguments.command == "install":
+                install(arguments)
+            elif arguments.command == "update":
+                update()
+            elif arguments.command == "status":
+                status()
+            elif arguments.command == "uninstall":
+                uninstall(arguments.purge, arguments.yes)
+            else:
+                maintenance_run(
+                    arguments.action,
+                    arguments.job_id,
+                    arguments.socket_path,
+                    arguments.root,
+                    arguments.revision,
+                )
+    except (OSError, ValueError, subprocess.CalledProcessError):
         fail("the installation command failed")
 
 

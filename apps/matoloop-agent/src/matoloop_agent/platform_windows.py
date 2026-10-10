@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import hashlib
 import json
 import os
 import platform
@@ -69,6 +71,33 @@ class WindowsPlatform:
             )
         except (OSError, ValueError, AttributeError):
             return False
+
+    def maintenance_running(self, config: AgentConfig) -> bool:
+        if not self._maintenance_available(config):
+            return False
+        if (config.data_dir / "maintenance-request.json").exists():
+            return True
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenMutexW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel.OpenMutexW.restype = wintypes.HANDLE
+        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.ReleaseMutex.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        root = str(config.data_dir.parent).lower().rstrip("\\/")
+        name = "Global\\MatoLoopAgentInstaller-" + hashlib.sha256(root.encode()).hexdigest()
+        handle = kernel.OpenMutexW(0x00100001, False, name)
+        if not handle:
+            return ctypes.get_last_error() != 2
+        try:
+            result = kernel.WaitForSingleObject(handle, 0)
+            if result in {0, 0x80}:
+                kernel.ReleaseMutex(handle)
+                return False
+            return True
+        finally:
+            kernel.CloseHandle(handle)
 
     async def start_maintenance(
         self,

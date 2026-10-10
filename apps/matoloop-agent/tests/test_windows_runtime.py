@@ -61,6 +61,42 @@ class WindowsRuntimeTests(unittest.TestCase):
         with self.assertRaises(AgentError):
             self.filesystem.read(link.as_posix(), 1, 10, 2000)
 
+    def test_installer_mutex_blocks_agent_admission_and_script_parses(self) -> None:
+        import hashlib
+
+        from matoloop_agent.platform_windows import WindowsPlatform
+
+        root = self.config.data_dir.parent
+        name = (
+            "Global\\MatoLoopAgentInstaller-"
+            + hashlib.sha256(str(root).lower().rstrip("\\/").encode()).hexdigest()
+        )
+        installer = Path(__file__).parents[3] / "scripts/install-matoloop-agent.ps1"
+        installer_path = str(installer).replace("'", "''")
+        script = (
+            "$tokens=$null; $errors=$null; "
+            f"[Management.Automation.Language.Parser]::ParseFile('{installer_path}', "
+            "[ref]$tokens, [ref]$errors) | Out-Null; "
+            "if ($errors.Count) {throw ($errors | Out-String)}; "
+            f"$mutex=[Threading.Mutex]::new($false, '{name}'); "
+            "$mutex.WaitOne() | Out-Null; [Console]::WriteLine('locked'); "
+            "[Console]::In.ReadLine() | Out-Null; $mutex.ReleaseMutex(); $mutex.Dispose()"
+        )
+        process = subprocess.Popen(
+            [self.process.shell, "-NoProfile", "-Command", script],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            self.assertEqual(process.stdout.readline().strip(), "locked")
+            with patch.object(WindowsPlatform, "_maintenance_available", return_value=True):
+                self.assertTrue(WindowsPlatform().maintenance_running(self.config))
+        finally:
+            process.communicate("release\n", timeout=10)
+        self.assertEqual(process.returncode, 0)
+
     def test_powershell_inspection_and_revision(self) -> None:
         read = self.process.inspect_shell("Get-Content ./note.txt", self.wire)
         self.assertEqual(read["classification"], "read")

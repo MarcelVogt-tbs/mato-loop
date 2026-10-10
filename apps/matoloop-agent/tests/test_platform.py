@@ -19,6 +19,9 @@ REQUEST_ID = "bbc46aa8-698d-4554-92c2-1cd5c6cc33a6"
 class FakePlatform:
     platform_id = "win32" if sys.platform == "win32" else "test"
 
+    def maintenance_running(self, config):
+        return False
+
     def computer_name(self):
         return "test-computer"
 

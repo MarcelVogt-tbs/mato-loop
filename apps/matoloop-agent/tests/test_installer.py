@@ -24,6 +24,50 @@ SPEC.loader.exec_module(installer)
 
 
 class InstallerTests(unittest.TestCase):
+    def test_native_lock_excludes_other_commands_and_survives_installer_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / ".managed-by-matoloop-agent").touch()
+            config_path = root / "data/config.json"
+            installer.write_json(config_path, {"homeDirectory": str(root)})
+            config = AgentConfig.load(config_path)
+            script = (
+                f"import runpy; module = runpy.run_path({str(INSTALLER_PATH)!r}); "
+                "lock = module['installation_lock'](); lock.__enter__(); "
+                "print('acquired'); lock.__exit__(None, None, None)"
+            )
+            environment = {
+                **os.environ,
+                "MATOLOOP_AGENT_INSTALL_ROOT": str(root),
+                "MATOLOOP_AGENT_CONTAINER": "0",
+            }
+            with patch.dict(os.environ, environment), installer.installation_lock():
+                self.assertTrue(LinuxPlatform().maintenance_running(config))
+                denied = subprocess.run(
+                    [sys.executable, "-c", script],
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                )
+                inherited = subprocess.run(
+                    [sys.executable, "-c", script],
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **environment,
+                        "MATOLOOP_AGENT_INSTALL_LOCK_FD": str(installer._installation_lock_fd),
+                    },
+                    pass_fds=(installer._installation_lock_fd,),
+                )
+            self.assertEqual(
+                (
+                    "another installation" in denied.stderr,
+                    inherited.stdout.strip(),
+                    LinuxPlatform().maintenance_running(config),
+                ),
+                (True, "acquired", False),
+            )
+
     def test_browser_packages_are_not_core_dependencies(self) -> None:
         project = INSTALLER_PATH.parents[1] / "apps/matoloop-agent/pyproject.toml"
         dependencies = project.read_text().split("[project.scripts]", 1)[0]

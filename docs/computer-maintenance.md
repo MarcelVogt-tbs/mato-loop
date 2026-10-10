@@ -1,5 +1,42 @@
 # Computer maintenance
 
+## Computer management and version comparison
+
+The Computer overview shows connectivity, the reported Agent version, and its
+comparison with the running backend. **Verwalten** opens one dialog for version
+details, editing, pairing, updates, uninstallation, and revocation. Adding and
+editing continue to use the same configuration dialog. Open management dialogs
+resolve the computer by ID from the existing polled store.
+
+The existing computer-list response includes `backendVersion` and the nullable
+`installationTarget`. A missing target disables WebUI updates without preventing
+version comparison or other actions. Only matching clean date/SHA versions are
+shown as the same source version. Dirty Agent builds are marked locally changed; unknown
+or legacy versions cannot be compared. Different UTC dates indicate older or
+newer commits, not Git ancestry or the latest published release. Different commits
+on the same day remain different source versions. Offline versions are last reported data.
+No additional version inventory, schema migration, or remote update probe is used.
+
+## Maintenance admission
+
+The Agent admits maintenance only when no requests, live terminals, browser
+sessions, or browser setup are active. Admission is reserved before launching the
+independent worker; cancellation waits for the actual launch outcome. Requests
+are rejected with `maintenance.busy` while the launcher or installer is active,
+including after Agent restart or reconnect. A definite busy rejection restores
+the previous backend maintenance record instead of creating a failed update.
+
+Native Linux mutations take a non-blocking exclusive lock on the managed root
+directory. The CLI update passes the open lock descriptor to its fetched installer,
+while a WebUI worker holds it before acknowledging the private socket handoff.
+The Agent probes the same lock; process exit releases it without stale lock files.
+Native Windows mutations use a reentrant, cross-session named mutex derived from
+the installation path. This serializes CLI and Task Scheduler operations; the
+Agent probes that mutex and the queued maintenance request. Managed containers
+retain their existing launcher lock, exclusive request file, and activation journal.
+
+## Native maintenance workers
+
 Installed native Linux Agents advertise `maintenance.start`; older installations
 need one local installation of a compatible Agent. Requests carry an
 action, job ID, and the full backend commit SHA for updates. The existing installer state and `paths()` select every managed

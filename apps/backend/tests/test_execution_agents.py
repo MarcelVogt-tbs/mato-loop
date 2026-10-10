@@ -563,6 +563,24 @@ async def test_public_installation_target_matches_the_running_build(backend_buil
     )
 
 
+@pytest.mark.parametrize("version, available", [
+    ("2026-10-08-aaaaaaaa", True),
+    ("2026-10-08-aaaaaaaa-dirty", False),
+    ("unknown", False),
+])
+async def test_computer_list_includes_backend_reference_without_requiring_a_target(
+    monkeypatch, backend_build, version, available,
+) -> None:
+    monkeypatch.setattr(execution_agents_route, "__version__", version)
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=UserPreferences()))
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = Mock(all=Mock(return_value=[]))
+    result = await execution_agents_route.list_execution_agents(_user(), db)
+    assert (result["backendVersion"], result["installationTarget"]) == (
+        version, {"revision": backend_build, "version": version} if available else None,
+    )
+
+
 @pytest.mark.parametrize("revision, version", [
     (None, "2026-10-08-aaaaaaaa"),
     ("a" * 40, "2026-10-08-aaaaaaaa-dirty"),
@@ -610,20 +628,21 @@ async def test_container_maintenance_rejects_uninstall(monkeypatch) -> None:
         )
 
 
-async def test_maintenance_auth_prompt_and_callback_owner_check(monkeypatch) -> None:
+@pytest.mark.parametrize("rejection", ["process.sudoAuthRequired", "maintenance.busy"])
+async def test_maintenance_auth_prompt_and_callback_owner_check(monkeypatch, rejection) -> None:
     user = _user()
     agent = _agent(user_id=user.id, operations=["maintenance.start"], token_hash=hash_token("agent-key"))
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = agent
     db.get.return_value = agent
     monkeypatch.setattr(execution_agents_route.execution_agent_connections, "is_connected", lambda _: True)
-    monkeypatch.setattr(execution_agents_route.execution_agent_connections, "request", AsyncMock(return_value=Mock(ok=False, error=Mock(code="process.sudoAuthRequired"))))
+    monkeypatch.setattr(execution_agents_route.execution_agent_connections, "request", AsyncMock(return_value=Mock(ok=False, error=Mock(code=rejection))))
 
     with pytest.raises(ApiError) as error:
         await start_execution_agent_maintenance(
             agent.id, MaintenanceRequest(action="uninstall"), user, db, Response()
         )
-    assert error.value.code == "process.sudoAuthRequired"
+    assert error.value.code == rejection
     assert agent.maintenance is None
 
     agent.maintenance = {"jobId": str(uuid4()), "action": "uninstall", "status": "running", "startedAt": datetime.now(UTC).isoformat()}

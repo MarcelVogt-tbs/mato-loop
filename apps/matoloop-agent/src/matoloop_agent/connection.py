@@ -114,6 +114,8 @@ class MatoLoopAgent:
         self.openscad = self.runtime.openscad
         self._access_key = access_key
         self.operations = list(self.runtime.operations)
+        self._active_requests = 0
+        self._maintenance_starting = False
 
     def hello(self) -> Hello:
         home = self.filesystem.resolve_directory(self.config.home_directory.as_posix())
@@ -139,15 +141,52 @@ class MatoLoopAgent:
     async def dispatch(
         self, request: Request, stream=None, *, backend_id: str | None = None
     ) -> dict[str, Any]:
+        if request.operation not in self.operations:
+            raise AgentError("operation.unsupported", "Operation is not supported")
+        maintenance = request.operation in {"maintenance.start", "maintenance.update"}
+        if (
+            self._maintenance_starting
+            or self.platform.maintenance_running(self.config)
+            or (
+                maintenance
+                and (
+                    self._active_requests
+                    or getattr(self.terminal, "maintenance_busy", False)
+                    or getattr(self.browser, "maintenance_busy", False)
+                )
+            )
+        ):
+            raise AgentError(
+                "maintenance.busy", "Agent operations or maintenance are still running"
+            )
+        self._active_requests += 1
+        if maintenance:
+            self._maintenance_starting = True
+        try:
+            if not maintenance:
+                return await self._dispatch(request, stream, backend_id=backend_id)
+            worker = asyncio.create_task(self._dispatch(request, stream, backend_id=backend_id))
+            # Resolve launch admission even if the backend cancels its request.
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    pass
+            return worker.result()
+        finally:
+            self._active_requests -= 1
+            if maintenance:
+                self._maintenance_starting = False
+
+    async def _dispatch(
+        self, request: Request, stream=None, *, backend_id: str | None = None
+    ) -> dict[str, Any]:
         try:
             arguments = validate_arguments(request)
         except (ValidationError, ValueError) as exc:
             if request.operation.startswith("integration.browser."):
                 raise AgentError("browser.invalidTarget", "Invalid browser arguments") from exc
             raise AgentError("request.invalid", "Invalid operation arguments") from exc
-
-        if request.operation not in self.operations:
-            raise AgentError("operation.unsupported", "Operation is not supported")
 
         if isinstance(arguments, AdministratorArguments):
             from .administrator import run_administrator
@@ -481,6 +520,7 @@ class MatoLoopAgent:
                     code = exc.code
                     if (
                         request.operation in BROWSER_ARGUMENT_MODELS
+                        and code != "maintenance.busy"
                         and not code.startswith("browser.")
                         and not (
                             request.operation == "integration.browser.publish"

@@ -37,13 +37,18 @@ describe('execution agent store', () => {
   afterEach(() => vi.useRealTimers())
 
   it('loads agents and derives the selected workspace context', async () => {
-    api.get.mockResolvedValue({ data: { items: [agent], defaultExecutionAgentId: 'agent-1' } })
+    const installationTarget = { revision: 'a'.repeat(40), version: '2026-10-08-aaaaaaaa' }
+    api.get.mockResolvedValue({ data: {
+      items: [agent], defaultExecutionAgentId: 'agent-1',
+      backendVersion: installationTarget.version, installationTarget
+    } })
     const store = useExecutionAgentStore()
 
     await store.fetchAll()
 
     expect(api.get).toHaveBeenCalledWith('/execution-agents')
     expect(store.defaultExecutionAgentId).toBe('agent-1')
+    expect([store.backendVersion, store.installationTarget]).toEqual([installationTarget.version, installationTarget])
     expect(store.workspaceContextFor({ preferredExecutionAgentId: 'agent-1' })).toEqual({
       executionAgentId: 'agent-1',
       connected: true,

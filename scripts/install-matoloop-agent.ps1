@@ -109,6 +109,21 @@ function Read-AgentCredential {
     return ([Text.Encoding]::UTF8.GetString($plain) | ConvertFrom-Json)
 }
 
+$installerMutex = $null
+if ($Command -in @('install', 'update', 'uninstall', 'maintenance-run')) {
+    $normalizedRoot = ([IO.Path]::GetFullPath($root)).ToLowerInvariant().TrimEnd('\', '/')
+    $hash = [Security.Cryptography.SHA256]::Create()
+    try { $suffix = [BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($normalizedRoot))).Replace('-', '').ToLowerInvariant() }
+    finally { $hash.Dispose() }
+    $installerMutex = [Threading.Mutex]::new($false, ('Global\MatoLoopAgentInstaller-' + $suffix))
+    try { $acquired = $installerMutex.WaitOne(0) }
+    catch [Threading.AbandonedMutexException] { $acquired = $true }
+    if (-not $acquired) {
+        $installerMutex.Dispose()
+        Fail 'Another installation or maintenance command is running.'
+    }
+}
+try {
 # One on-demand Task Scheduler worker survives stopping the boot-time Agent task.
 if ($Command -eq 'maintenance-run') {
     $requestFile = Join-Path $data 'maintenance-request.json'
@@ -144,7 +159,6 @@ if ($Command -eq 'maintenance-run') {
     if (-not $reported) { Write-Host 'Maintenance result could not be delivered.' }
     exit $(if ($result -eq 'succeeded') { 0 } else { 1 })
 }
-
 if ($Command -eq 'run') {
     $state = State
     $env:MATOLOOP_AGENT_CONFIG = Join-Path $data 'config.json'
@@ -409,4 +423,10 @@ try {
         Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
     }
     throw
+}
+} finally {
+    if ($installerMutex) {
+        $installerMutex.ReleaseMutex()
+        $installerMutex.Dispose()
+    }
 }
