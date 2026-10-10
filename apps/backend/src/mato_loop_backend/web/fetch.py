@@ -1073,6 +1073,7 @@ async def fetch_web(
     pdf_pages: tuple[int, ...] | list[int] = (),
     user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
     javascript: bool | None = None,
+    javascript_enabled: bool = True,
     javascript_hosts: list[str] | tuple[str, ...] = DEFAULT_WEBFETCH_JAVASCRIPT_HOSTS,
 ) -> WebFetchResult:
     if format not in {"html", "markdown", "text"}:
@@ -1088,7 +1089,9 @@ async def fetch_web(
     normalized_pdf_pages = tuple(sorted(set(pdf_pages)))
     _validate_fetch_limits(timeout, max_response_bytes)
     _, host, _ = _parse_url(url)
-    use_javascript = host in javascript_hosts if javascript is None else javascript
+    if javascript is True and not javascript_enabled:
+        raise _error("javascriptDisabled")
+    use_javascript = javascript_enabled and host in javascript_hosts if javascript is None else javascript
     authorized = False
 
     async def authorize_page(value: str) -> None:

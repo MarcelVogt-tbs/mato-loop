@@ -2,14 +2,24 @@
 
 `webfetch` has one optional `javascript` argument. Omitted or `null` uses the global
 `web_fetch.javascript_hosts` setting (`javascriptHosts` in the administration API).
-Administrators edit **JavaScript standardmäßig für diese Hosts** under
-**Administration > Tools > Einstellungen**, one exact DNS hostname per line, without
+Administrators open **JavaScript-Konfiguration** next to **Nur öffentliche Adressen zulassen**
+under **Administration > Tools > Einstellungen**. The dialog's **JavaScript aktivieren**
+switch controls `web_fetch.javascript_enabled` (`javascriptEnabled` in the API),
+defaulting to true for existing settings. When disabled, omitted/null defaults use HTTP
+and an explicit `javascript=true` fails with `webfetch.javascriptDisabled` before
+network access or approval; there is no silent fallback. The host list remains saved
+but is hidden in the dialog. When enabled, **Websites mit automatischem JavaScript**
+edits the list below; it is a default-selection list, not an access allowlist.
+**Übernehmen** updates
+the settings form; **Speichern** on the page persists it. Closing or cancelling the
+dialog discards its draft. Use one exact DNS hostname per line, without
 URLs, IP addresses, ports or wildcards. The default list is `reddit.com` and `www.reddit.com`;
 existing settings receive that default. Entries are trimmed, normalized to lowercase
 IDNA ASCII without trailing dots, and deduplicated. At most 100 entries are accepted.
 An empty list defaults all hosts to HTTP. Only the normalized requested hostname is
-matched, not subdomains or redirect destinations. Explicit `true` or `false` overrides
-this choice. The list is neither model-facing nor learned automatically.
+matched, not subdomains or redirect destinations. While JavaScript is enabled,
+explicit `true` or `false` overrides this choice. The list is neither model-facing
+nor learned automatically.
 Selection happens once, before authorization, with no automatic retries or engine fallback.
 
 There is no administrator engine selection. Previously stored `engine` fields are

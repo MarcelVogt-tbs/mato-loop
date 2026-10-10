@@ -80,18 +80,19 @@ def _origin(port: int, host: str = "127.0.0.1") -> str:
     return f"http://{host}:{port}"
 
 
-@pytest.mark.parametrize(("host", "hosts", "javascript", "expected"), [
-    ("reddit.com", ["reddit.com", "www.reddit.com"], None, "Rendered"),
-    ("WWW.Reddit.COM.", ["reddit.com", "www.reddit.com"], None, "Rendered"),
-    ("www.reddit.com", ["www.reddit.com"], False, "HTTP"),
-    ("reddit.com.example.test", ["reddit.com"], None, "HTTP"),
-    ("example.test", ["reddit.com"], None, "HTTP"),
-    ("example.test", [], True, "Rendered"),
-    ("example.test", ["example.test"], None, "Rendered"),
-    ("sub.example.test", ["example.test"], None, "HTTP"),
-    ("reddit.com", [], None, "HTTP"),
+@pytest.mark.parametrize(("host", "hosts", "javascript", "enabled", "expected"), [
+    ("reddit.com", ["reddit.com", "www.reddit.com"], None, True, "Rendered"),
+    ("WWW.Reddit.COM.", ["reddit.com", "www.reddit.com"], None, True, "Rendered"),
+    ("www.reddit.com", ["www.reddit.com"], False, True, "HTTP"),
+    ("reddit.com.example.test", ["reddit.com"], None, True, "HTTP"),
+    ("example.test", ["reddit.com"], None, True, "HTTP"),
+    ("example.test", [], True, True, "Rendered"),
+    ("example.test", ["example.test"], None, True, "Rendered"),
+    ("sub.example.test", ["example.test"], None, True, "HTTP"),
+    ("reddit.com", [], None, True, "HTTP"),
+    ("reddit.com", ["reddit.com"], None, False, "HTTP"),
 ])
-async def test_javascript_host_defaults_and_explicit_overrides(monkeypatch, host, hosts, javascript, expected):
+async def test_javascript_host_defaults_and_explicit_overrides(monkeypatch, host, hosts, javascript, enabled, expected):
     monkeypatch.setattr(web_fetch, "_resolve_addresses", AsyncMock(return_value=(ipaddress.ip_address("127.0.0.1"),)))
 
     async def render(target, **_kwargs):
@@ -103,8 +104,17 @@ async def test_javascript_host_defaults_and_explicit_overrides(monkeypatch, host
         return _response(b"<main>HTTP</main>", headers={"Content-Type": "text/html"})
 
     async with _server(responder) as port:
-        result = await fetch_web(_origin(port, host), javascript_hosts=hosts, javascript=javascript, public_addresses_only=False)
+        result = await fetch_web(_origin(port, host), javascript_hosts=hosts, javascript=javascript,
+                                 javascript_enabled=enabled, public_addresses_only=False)
     assert result.content == expected
+
+
+async def test_disabled_javascript_cannot_be_requested_explicitly(monkeypatch):
+    fetch = AsyncMock(side_effect=AssertionError("Disabled JavaScript must fail before fetching"))
+    monkeypatch.setattr(web_fetch, "_follow_redirects", fetch)
+    assert await _error_code(fetch_web(
+        "https://example.com", javascript=True, javascript_enabled=False,
+    )) == "webfetch.javascriptDisabled"
 
 
 @pytest.mark.parametrize(("format", "preferred"), [

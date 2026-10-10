@@ -38,7 +38,7 @@ const configuration = {
     }]
   }],
   toolAvailability: { webfetch: true },
-  webFetch: { javascriptHosts: ['example.com'], userAgent: 'MatoLoop/1.0', maxResponseMiB: 32, publicAddressesOnly: false },
+  webFetch: { javascriptEnabled: false, javascriptHosts: ['example.com'], userAgent: 'MatoLoop/1.0', maxResponseMiB: 32, publicAddressesOnly: false },
   transcribeAudio: { timeoutSeconds: 180 }
 }
 
@@ -75,6 +75,7 @@ describe('tool settings store', () => {
     })
 
     expect(store.configurationWebFetch.publicAddressesOnly).toBe(true)
+    expect(store.configurationWebFetch.javascriptEnabled).toBe(true)
     expect(store.configurationWebFetch.javascriptHosts).toEqual(['reddit.com', 'www.reddit.com'])
   })
 

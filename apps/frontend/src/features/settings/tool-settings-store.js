@@ -4,6 +4,7 @@ import { api } from 'src/boot/axios'
 const defaultMediaSettings = () => ({ timeoutSeconds: 300 })
 const defaultAnalysisSettings = () => ({ timeoutSeconds: 1800 })
 const defaultConfigurationWebFetch = () => ({
+  javascriptEnabled: true,
   javascriptHosts: ['reddit.com', 'www.reddit.com'],
   userAgent: '',
   maxResponseMiB: 64,

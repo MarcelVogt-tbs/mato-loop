@@ -142,6 +142,7 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
         pdf_pages=arguments.pdf_pages,
         user_agent=settings.user_agent,
         javascript=arguments.javascript,
+        javascript_enabled=settings.javascript_enabled,
         javascript_hosts=settings.javascript_hosts,
     )
     if not result.content.strip() and not result.images:

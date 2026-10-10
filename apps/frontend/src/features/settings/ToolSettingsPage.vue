@@ -79,8 +79,16 @@
             </div>
 
             <div v-if="section === 'general' && tool.name === 'webfetch'" class="row q-col-gutter-md q-mt-sm">
-              <q-toggle dense v-model="form.webFetch.publicAddressesOnly" class="col-12" color="primary" label="Nur öffentliche Adressen zulassen" />
-              <q-input dense v-model="form.javascriptHostsText" class="col-12" outlined type="textarea" autogrow label="JavaScript standardmäßig für diese Hosts" hint="Ein Host pro Zeile, ohne URL, Port oder Platzhalter. Leer: standardmäßig ohne JavaScript. Explizite Toolargumente haben Vorrang." />
+              <div class="col-12">
+                <div class="row items-center q-col-gutter-sm">
+                  <div class="col-12 col-sm-6">
+                    <q-toggle dense v-model="form.webFetch.publicAddressesOnly" color="primary" label="Nur öffentliche Adressen zulassen" />
+                  </div>
+                  <div class="col-12 col-sm-6 row justify-end">
+                    <q-btn flat no-caps dense icon="edit" label="JavaScript-Konfiguration" :disable="loading || saving" @click="editJavascript" />
+                  </div>
+                </div>
+              </div>
               <q-input dense v-model.trim="form.webFetch.userAgent" class="col-12 col-md-8" outlined maxlength="512" label="User-Agent" :rules="[userAgentRule]" />
               <q-input dense v-model.number="form.webFetch.maxResponseMiB" class="col-12 col-md-4" outlined type="number" min="1" max="256" suffix="MiB" label="Maximale Antwortgröße" :rules="[responseLimitRule]" />
             </div>
@@ -98,6 +106,24 @@
       </q-card>
       <q-inner-loading :showing="loading" />
     </q-form>
+    <q-dialog v-model="javascriptDialogOpen" :maximized="$q.screen.lt.sm" aria-labelledby="javascript-title">
+      <q-card class="app-surface column no-wrap full-width">
+        <q-card-section class="row items-center">
+          <div id="javascript-title" class="text-h6 col">JavaScript für ausgewählte Websites</div>
+          <q-btn v-close-popup flat round dense icon="close" aria-label="Dialog schließen" />
+        </q-card-section>
+        <q-card-section class="col scroll">
+          <q-toggle v-model="javascriptDraft.enabled" color="primary" label="JavaScript aktivieren" />
+          <q-input v-if="javascriptDraft.enabled" v-model="javascriptDraft.hosts" class="q-mt-md" outlined type="textarea" autogrow label="Websites mit automatischem JavaScript" hint="Ein DNS-Hostname pro Zeile, ohne URL, IP-Adresse, Port oder Platzhalter. Leer: standardmäßig ohne JavaScript. Explizite Toolargumente haben Vorrang." />
+          <div v-else class="text-body2 app-muted q-mt-md">JavaScript ist für Webabrufe vollständig gesperrt, auch bei ausdrücklicher Anforderung durch das Modell. Die gespeicherte Hostliste bleibt erhalten.</div>
+          <div class="text-caption app-muted q-mt-md">Mit „Übernehmen“ wird das Formular aktualisiert. Anschließend die Einstellungen auf der Seite speichern.</div>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn v-close-popup flat no-caps label="Abbrechen" />
+          <q-btn unelevated no-caps color="primary" label="Übernehmen" @click="applyJavascript" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </section>
 </template>
 
@@ -138,6 +164,8 @@ const formRef = ref(null)
 const saving = ref(false)
 const loadFailed = ref(false)
 const saved = ref('')
+const javascriptDialogOpen = ref(false)
+const javascriptDraft = ref({ enabled: true, hosts: '' })
 const mediaByName = {
   generate_image: 'generateImage', edit_image: 'editImage', generate_speech: 'generateSpeech',
   generate_audio: 'generateAudio', transcribe_audio: 'transcribeAudio', analyze_video: 'analyzeVideo',
@@ -202,6 +230,17 @@ const responseLimitRule = (value) => Number.isInteger(value) && value >= 1 && va
 const userAgentRule = (value) => typeof value === 'string' && value.length >= 1 && value.length <= 512
   && [...value].every((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) <= 126)
   || '1 bis 512 sichtbare ASCII-Zeichen eingeben.'
+
+function editJavascript() {
+  javascriptDraft.value = { enabled: form.webFetch.javascriptEnabled, hosts: form.javascriptHostsText }
+  javascriptDialogOpen.value = true
+}
+
+function applyJavascript() {
+  form.webFetch.javascriptEnabled = javascriptDraft.value.enabled
+  form.javascriptHostsText = javascriptDraft.value.hosts
+  javascriptDialogOpen.value = false
+}
 
 async function load() {
   if (route.query.profileId) section.value = 'management'

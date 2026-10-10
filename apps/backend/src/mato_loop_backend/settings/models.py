@@ -876,6 +876,10 @@ class IntegrationInstance(BaseModel):
 class WebFetchSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    javascript_enabled: StrictBool = Field(
+        default=True,
+        validation_alias=AliasChoices("javascript_enabled", "javascriptEnabled"),
+    )
     javascript_hosts: list[str] = Field(
         default_factory=lambda: list(DEFAULT_WEBFETCH_JAVASCRIPT_HOSTS),
         max_length=100,

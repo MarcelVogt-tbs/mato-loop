@@ -71,6 +71,51 @@ it('resets a built-in preset through the administrative tool endpoint', async ()
   await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith(`/tools/profiles/${builtinId}/permissions`, { ...rights(), shellPrefixes: null }, { params: { scope: 'instance' } }))
 })
 
+it('edits JavaScript hosts in a cancellable dialog before saving the settings', async () => {
+  vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+  api.get.mockImplementation(async (url) => ({ data: url === '/agent-profiles' ? { agents: [] } : {
+    ...rights(), groupsByTrust: { private: [], public: [] }, shellPrefixes: { read: [], write: [] },
+    groups: [{ id: 'web', label: 'Web', tools: [{ name: 'webfetch', label: 'Webseite abrufen', icon: 'language' }] }],
+    webFetch: { javascriptEnabled: true, javascriptHosts: ['reddit.com', 'www.reddit.com'], userAgent: 'MatoLoop/1.0', maxResponseMiB: 64 },
+  } }))
+  const { page } = await mount(ToolPage, { admin: true }, '/tools', 'settings-tools')
+  await vi.waitFor(() => expect(page().saved).toBeTruthy())
+  const button = (label) => [...document.querySelectorAll('button')].find((item) => item.textContent.includes(label))
+  const input = (value) => {
+    const textarea = document.querySelector('.q-dialog textarea')
+    textarea.value = value
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+  expect(root.querySelector('textarea')).toBeNull()
+  button('JavaScript-Konfiguration').click()
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog textarea')?.value).toBe('reddit.com\nwww.reddit.com'))
+  input('discard.example')
+  document.querySelector('.q-dialog [role="switch"]').click()
+  await nextTick()
+  expect(document.querySelector('.q-dialog textarea')).toBeNull()
+  button('Abbrechen').click()
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog')).toBeNull())
+  expect(page().form.javascriptHostsText).toBe('reddit.com\nwww.reddit.com')
+  button('JavaScript-Konfiguration').click()
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog textarea')?.value).toBe('reddit.com\nwww.reddit.com'))
+  document.querySelector('.q-dialog [role="switch"]').click()
+  await nextTick()
+  button('Übernehmen').click()
+  await vi.waitFor(() => expect(page().javascriptDialogOpen).toBe(false))
+  expect(page().payload().webFetch).toEqual(expect.objectContaining({ javascriptEnabled: false, javascriptHosts: ['reddit.com', 'www.reddit.com'] }))
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog')).toBeNull())
+  button('JavaScript-Konfiguration').click()
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog [role="switch"]')).not.toBeNull())
+  expect(document.querySelector('.q-dialog textarea')).toBeNull()
+  document.querySelector('.q-dialog [role="switch"]').click()
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog textarea')?.value).toBe('reddit.com\nwww.reddit.com'))
+  input('')
+  button('Übernehmen').click()
+  await vi.waitFor(() => expect(page().javascriptDialogOpen).toBe(false))
+  expect(page().payload().webFetch.javascriptHosts).toEqual([])
+  expect(api.put).not.toHaveBeenCalled()
+})
+
 it('saves a personal integration override for a global profile without a tool ceiling', async () => {
   const pinia = createPinia()
   const integrations = useIntegrationStore(pinia)

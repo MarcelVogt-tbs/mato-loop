@@ -505,6 +505,7 @@ async def test_get_tool_configuration_returns_defaults(monkeypatch) -> None:
         )
     } == {
         "webFetch": {
+            "javascriptEnabled": True,
             "javascriptHosts": ["reddit.com", "www.reddit.com"],
             "userAgent": "MatoLoop/1.0",
             "maxResponseMiB": 64,
@@ -561,6 +562,7 @@ def test_tool_configuration_removes_legacy_engine_and_uses_frontend_field_names(
         ToolSettings(
             web_fetch={
                 "engine": engine,
+                "javascriptEnabled": False,
                 "javascriptHosts": [" Example.COM. ", "example.com", "bücher.de"],
                 "userAgent": "MatoLoop/1.0",
                 "maxResponseMiB": 32,
@@ -570,6 +572,7 @@ def test_tool_configuration_removes_legacy_engine_and_uses_frontend_field_names(
     )
 
     assert result["webFetch"] == {
+        "javascriptEnabled": False,
         "javascriptHosts": ["example.com", "xn--bcher-kva.de"],
         "userAgent": "MatoLoop/1.0",
         "maxResponseMiB": 32,

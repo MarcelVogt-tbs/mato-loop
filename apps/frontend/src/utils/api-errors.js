@@ -585,6 +585,7 @@ const messages = {
   'webfetch.dnsFailed': () => 'Die Webadresse konnte nicht aufgelöst werden.',
   'webfetch.emptyResponse': () => 'Die Webadresse hat keinen verwertbaren Inhalt geliefert.',
   'webfetch.engineUnavailable': () => 'Webabrufe mit JavaScript sind derzeit nicht verfügbar.',
+  'webfetch.javascriptDisabled': () => 'Webabrufe mit JavaScript wurden in der Administration deaktiviert.',
   'webfetch.engineUnsupported': () => 'Die gewählte Webfetch-Engine wird nicht unterstützt.',
   'webfetch.renderFailed': () => 'Die Webseite konnte mit der JavaScript-Engine nicht verarbeitet werden.',
   'webfetch.userAgentUnsupported': () => 'Für Webabrufe mit JavaScript darf der User-Agent „Mozilla“ nicht enthalten. Passe ihn an oder rufe die Seite ohne JavaScript ab.',
