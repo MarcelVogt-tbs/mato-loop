@@ -44,7 +44,7 @@ def _tool(label: str, policy: ToolExecutionPolicy) -> SonoBinTool:
 
 SONOBIN = SonoBinMetadata(
     label="SonoBin",
-    description="Verwaltet Aufnahmen, Audio-Assets, Metadaten und Bibliothekstitel.",
+    description="Sucht Musik und verwaltet Playlists, Favoriten, Importe und die Bibliothek.",
     setup_instructions=(
         "Verwende die SonoBin-Basis-URL. Der MCP-Endpunkt wird automatisch ergänzt.",
         "Verwende einen in SonoBin erstellten MCP-Token oder den konfigurierten statischen Bearer-Token.",
@@ -57,8 +57,27 @@ SONOBIN = SonoBinMetadata(
             "Aufnahmen ohne Bibliothekstitel auflisten", ToolExecutionPolicy.AUTO
         ),
         "get_recording": _tool("Aufnahme anzeigen", ToolExecutionPolicy.AUTO),
+        "get_metadata_candidate": _tool(
+            "Metadaten-Kandidaten anzeigen", ToolExecutionPolicy.AUTO
+        ),
         "list_tracks": _tool("Bibliothekstitel auflisten", ToolExecutionPolicy.AUTO),
         "get_track": _tool("Bibliothekstitel anzeigen", ToolExecutionPolicy.AUTO),
+        "get_mcp_context": _tool("Konto und Rechte anzeigen", ToolExecutionPolicy.AUTO),
+        "list_providers": _tool("Musik-Provider auflisten", ToolExecutionPolicy.AUTO),
+        "search_music": _tool("Musik durchsuchen", ToolExecutionPolicy.AUTO),
+        "list_playlists": _tool("Playlists auflisten", ToolExecutionPolicy.AUTO),
+        "get_playlist": _tool("Playlist anzeigen", ToolExecutionPolicy.AUTO),
+        "list_playlist_tracks": _tool("Playlist-Einträge auflisten", ToolExecutionPolicy.AUTO),
+        "create_playlist": _tool("Playlist erstellen", ToolExecutionPolicy.ASK),
+        "update_playlist": _tool("Playlist bearbeiten", ToolExecutionPolicy.ASK),
+        "delete_playlist": _tool("Playlist löschen", ToolExecutionPolicy.ASK),
+        "add_playlist_tracks": _tool("Playlist-Titel hinzufügen", ToolExecutionPolicy.ASK),
+        "remove_playlist_tracks": _tool("Playlist-Einträge entfernen", ToolExecutionPolicy.ASK),
+        "reorder_playlist_tracks": _tool("Playlist-Einträge umsortieren", ToolExecutionPolicy.ASK),
+        "list_likes": _tool("Favoriten auflisten", ToolExecutionPolicy.AUTO),
+        "set_track_like": _tool("Titel-Favorit setzen oder entfernen", ToolExecutionPolicy.ASK),
+        "import_remote_track": _tool("Remote-Titel importieren", ToolExecutionPolicy.ASK),
+        "get_acquisition_status": _tool("Titel-Importstatus anzeigen", ToolExecutionPolicy.AUTO),
         "get_asset": _tool("Audio-Asset anzeigen", ToolExecutionPolicy.AUTO),
         "create_manual_candidate": _tool(
             "Manuellen Metadaten-Kandidaten erstellen", ToolExecutionPolicy.ASK
@@ -97,6 +116,7 @@ SONOBIN = SonoBinMetadata(
         "merge_recordings": _tool("Aufnahmen zusammenführen", ToolExecutionPolicy.ASK),
         "delete_asset": _tool("Audio-Asset löschen", ToolExecutionPolicy.ASK),
         "delete_recording": _tool("Aufnahme löschen", ToolExecutionPolicy.ASK),
+        "list_jobs": _tool("Hintergrundaufträge auflisten", ToolExecutionPolicy.AUTO),
         "get_job": _tool("Hintergrundauftrag anzeigen", ToolExecutionPolicy.AUTO),
         "cancel_job": _tool("Hintergrundauftrag abbrechen", ToolExecutionPolicy.ASK),
         "get_diagnostics_overview": _tool(
@@ -108,6 +128,14 @@ SONOBIN = SonoBinMetadata(
         "get_diagnostic_entry": _tool(
             "Diagnoseeintrag anzeigen", ToolExecutionPolicy.AUTO
         ),
+        "get_runtime_diagnostics": _tool("Laufzeitdiagnose anzeigen", ToolExecutionPolicy.AUTO),
+        "get_integration_diagnostics": _tool("Integrationsdiagnose anzeigen", ToolExecutionPolicy.AUTO),
+        "get_player_diagnostics": _tool("Player-Diagnose anzeigen", ToolExecutionPolicy.AUTO),
+        "get_playback_diagnostic_events": _tool(
+            "Wiedergabe-Diagnoseereignisse anzeigen", ToolExecutionPolicy.AUTO
+        ),
+        "list_generator_runs": _tool("Generator-Ausführungen auflisten", ToolExecutionPolicy.AUTO),
+        "get_generator_run": _tool("Generator-Ausführung anzeigen", ToolExecutionPolicy.AUTO),
     },
 )
 
