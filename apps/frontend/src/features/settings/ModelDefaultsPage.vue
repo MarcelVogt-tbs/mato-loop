@@ -40,7 +40,7 @@ const blocked = computed(() => !ready.value || failed.value || store.loading || 
 const dirty = computed(() => JSON.stringify(form.value) !== saved.value)
 const fields = [
   { key: 'compactionModelId', label: 'Komprimierung' }, { key: 'titleGenerationModelId', label: 'Titel' },
-  { key: 'skillCreationModelId', label: 'Skill-Erstellung', tools: true }, { key: 'dreamingModelId', label: 'Memory / Dreaming', tools: true },
+  { key: 'dreamingModelId', label: 'Memory / Dreaming', tools: true },
   { key: 'visionModelId', label: 'Bildanalyse', options: 'visionModelOptions' }, { key: 'videoModelId', label: 'Videoanalyse', options: 'videoModelOptions' },
   { key: 'audioAnalysisModelId', label: 'Audioanalyse', options: 'audioAnalysisModelOptions' },
   { key: 'imageGenerationModelId', label: 'Bilderzeugung', capability: 'image_generation' }, { key: 'speechGenerationModelId', label: 'Spracherzeugung', capability: 'speech_generation' },

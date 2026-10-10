@@ -1836,18 +1836,11 @@ def test_skill_catalog_contains_selection_metadata_without_instructions() -> Non
     assert "never load the target" in edit_prompt
 
 
-def test_skill_build_prompt_collects_only_relevant_missing_details() -> None:
-    with_question = general_system_prompt(
-        _session(), offered_tool_names=frozenset({"question", "build_skill"})
+def test_skill_authoring_prompt_uses_normal_tools() -> None:
+    prompt = general_system_prompt(
+        _session(), offered_tool_names=frozenset({"save_skill"})
     )
-    without_question = general_system_prompt(
-        _session(), offered_tool_names=frozenset({"build_skill"})
-    )
-
-    assert "call question once for missing" in with_question
-    assert "purpose, inputs, outputs, workflow, tools, constraints" in with_question
-    assert "skip when complete" in with_question
-    assert "use question once for gaps" not in without_question
+    assert "author skills with normal tools" in prompt
 
 
 def test_secret_input_prompt_routes_all_credentials_before_probing() -> None:

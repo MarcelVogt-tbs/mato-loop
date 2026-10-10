@@ -42,7 +42,6 @@ const fieldLabels = {
   instructions: 'Die Anweisungen',
   outputSessionId: 'Die Ausgabe-Session',
   schedules: 'Die Zeitpläne',
-  skillCreationModelId: 'Das Modell für die Skill-Erstellung',
   trustLevel: 'Die Vertrauensstufe',
   validUntil: 'Das Gültigkeitsende',
   dreamingIntervalMinutes: 'Das Dreaming-Intervall',

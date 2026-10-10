@@ -25,7 +25,11 @@ export const settingsRoutes = [
   },
   {
     path: 'skills', name: 'settings-skills', component: () => import('src/features/skills/SkillSettingsPage.vue'),
-    meta: { settingsLabel: 'Skills', settingsIcon: 'school' }
+    meta: { settingsLabel: 'Skills', settingsIcon: 'school' },
+    children: [
+      { path: 'new', name: 'settings-skill-create', component: () => import('src/features/skills/SkillEditorPage.vue') },
+      { path: ':skillId', name: 'settings-skill-edit', component: () => import('src/features/skills/SkillEditorPage.vue') }
+    ]
   },
   {
     path: 'agents', name: 'settings-agents',
@@ -104,7 +108,11 @@ export const adminRoutes = [
   },
   {
     path: 'skills', name: 'admin-skills', component: () => import('src/features/skills/SkillSettingsPage.vue'),
-    props: { admin: true }, meta: { settingsLabel: 'Skills', settingsIcon: 'school' }
+    props: { admin: true }, meta: { settingsLabel: 'Skills', settingsIcon: 'school' },
+    children: [
+      { path: 'new', name: 'admin-skill-create', component: () => import('src/features/skills/SkillEditorPage.vue') },
+      { path: ':skillId', name: 'admin-skill-edit', component: () => import('src/features/skills/SkillEditorPage.vue') }
+    ]
   },
   {
     path: 'personas', name: 'admin-personas', component: () => import('src/features/personalization/AgentIdentitySettingsPage.vue'),

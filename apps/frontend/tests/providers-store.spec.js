@@ -58,7 +58,6 @@ describe('provider store', () => {
       { id: 'image', providerId: 'active', name: 'Bild', enabled: true, supportsTools: true, capabilities: ['image_generation'] }
     ]
 
-    expect(store.skillCreationModelOptions.map((option) => option.value)).toEqual(['tools'])
   })
 
   it('keeps media models out of chat selectors and filters options by capability', () => {
@@ -347,7 +346,6 @@ describe('provider store', () => {
       trustLevel: 'public', trustIcon: 'public', disable: false
     }])
     expect(store.modelOptions).toEqual([])
-    expect(store.skillCreationModelOptions).toEqual([])
     expect(store.visionModelOptions).toEqual([])
     expect(store.videoModelOptions).toEqual([])
     for (const capability of ['image_generation', 'speech_generation', 'audio_generation']) {

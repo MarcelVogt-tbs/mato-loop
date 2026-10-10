@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,84 +19,15 @@ from mato_loop_backend.settings import (
 from mato_loop_backend.settings.effective import personal_skills_allowed
 from mato_loop_backend.settings.models import SkillReference
 from mato_loop_backend.skill_packages import (
-    MAX_FILE_BYTES,
-    MAX_PACKAGE_FILES,
-    MAX_SKILL_BYTES,
     SkillError,
     SkillFile,
     SkillPackage,
     parse_skill_md,
     skill_md,
-    skill_path,
 )
 from mato_loop_backend.skill_storage import SkillStorage
 
 SkillScope = Literal["instance", "personal"]
-
-
-class SkillTextFile(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    path: str
-    content: str | None = Field(default=None, max_length=MAX_FILE_BYTES, description="UTF-8 text; null removes the supporting file.")
-    executable: bool = False
-
-    @field_validator("path")
-    @classmethod
-    def valid_path(cls, value: str) -> str:
-        if value.casefold() == "skill.md":
-            raise ValueError("Use the skill fields to edit SKILL.md")
-        return skill_path(value)
-
-
-class SkillDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-    description: str = Field(min_length=1, max_length=1024)
-    instructions: str = Field(max_length=MAX_SKILL_BYTES)
-    files: list[SkillTextFile] = Field(default_factory=list, max_length=MAX_PACKAGE_FILES - 1)
-    frontmatter: dict[str, JsonValue] = Field(default_factory=dict, description="Additional SKILL.md fields, such as license, compatibility, or metadata. Null removes a field; omitted fields are preserved.")
-
-    @field_validator("description", "instructions")
-    @classmethod
-    def text(cls, value: str) -> str:
-        return value.strip()
-
-    def package(self, base: SkillPackage | None = None) -> SkillPackage:
-        files = dict(base.files) if base else {}
-        metadata = {**(base.metadata if base else {}), **self.frontmatter}
-        metadata = {key: value for key, value in metadata.items() if value is not None}
-        files["SKILL.md"] = SkillFile(skill_md(self.name, self.description, self.instructions, metadata))
-        for change in self.files:
-            if change.content is None:
-                files.pop(change.path, None)
-            else:
-                files[change.path] = SkillFile(change.content.encode(), change.executable)
-        return SkillPackage(files)
-
-
-class SkillEditPatch(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    name: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-    description: str | None = Field(default=None, min_length=1, max_length=1024)
-    instructions: str | None = Field(default=None, max_length=MAX_SKILL_BYTES)
-    files: list[SkillTextFile] | None = Field(default=None, max_length=MAX_PACKAGE_FILES - 1)
-    frontmatter: dict[str, JsonValue] | None = Field(default=None, description="Only changed additional SKILL.md fields; null values remove fields.")
-
-    @field_validator("name", "description", "instructions", "files", "frontmatter", mode="before")
-    @classmethod
-    def not_null(cls, value: Any) -> Any:
-        if value is None:
-            raise ValueError("An edited field must not be null")
-        return value.strip() if isinstance(value, str) else value
-
-    @model_validator(mode="after")
-    def require_change(self) -> SkillEditPatch:
-        if not self.model_fields_set:
-            raise ValueError("At least one skill field is required")
-        return self
 
 
 @dataclass(slots=True)
@@ -112,7 +42,7 @@ class RunSkillState:
 
 def default_package(skill_id: UUID) -> SkillPackage:
     skill = DEFAULT_SKILLS[skill_id]
-    return SkillDraft(name=skill.name, description=skill.description, instructions=skill.instructions).package()
+    return SkillPackage({"SKILL.md": SkillFile(skill_md(skill.name, skill.description, skill.instructions))})
 
 
 def definition(reference: SkillReference, owner_id: UUID | None, package: SkillPackage) -> SkillDefinition:

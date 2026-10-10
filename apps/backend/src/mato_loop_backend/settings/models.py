@@ -1214,7 +1214,6 @@ class ModelDefaults(BaseModel):
     compaction_model_id: UUID | None = None
     title_generation_model_id: UUID | None = None
     title_vision_fallback_enabled: StrictBool | None = None
-    skill_creation_model_id: UUID | None = None
     dreaming_model_id: UUID | None = None
     vision_model_id: UUID | None = None
     video_model_id: UUID | None = None

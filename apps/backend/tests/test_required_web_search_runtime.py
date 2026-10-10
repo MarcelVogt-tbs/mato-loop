@@ -1,6 +1,5 @@
 import asyncio
 import json
-import logging
 import wave
 from datetime import UTC, datetime
 from io import BytesIO
@@ -24,7 +23,6 @@ from runtime_helpers import (
 import mato_loop_backend.agent.loop as mock_agent_loop
 import mato_loop_backend.agent.memory_context as mock_memory_context
 import mato_loop_backend.agent.openscad_preview as mock_openscad_preview
-import mato_loop_backend.agent.runtime as agent_runtime
 import mato_loop_backend.agent.runtime as mock_agent_runtime
 import mato_loop_backend.agent.titles as mock_agent_titles
 import mato_loop_backend.agent.video_analysis as video_analysis
@@ -1493,337 +1491,48 @@ async def test_load_skill_is_rejected_when_called_with_another_tool(monkeypatch)
     tool_registry._execute_definition.assert_not_awaited()
 
 
-async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
-    monkeypatch, tmp_path, caplog
-) -> None:
-    caplog.set_level(logging.WARNING, logger=agent_runtime.__name__)
-    skills = SkillsSettings()
-    original_execute = ToolRegistry._execute_definition
-    db, run, requests, _projections, _events = await _runtime_setup(
-        monkeypatch,
-        [
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="build-skill",
-                        name="build_skill",
-                        arguments={
-                            "brief": "Create a reusable API validation workflow.",
-                            "name_hint": "API checks",
-                        },
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="invalid-draft",
-                        name="return_skill_draft",
-                        arguments={
-                            "name": "api-checks",
-                            "description": "x" * 1025,
-                            "instructions": "Validate the API response.",
-                        },
-                    )
-                ]
-            ),
-            ProviderResult(content="still invalid"),
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="draft",
-                        name="return_skill_draft",
-                        arguments={
-                            "name": "api-checks",
-                            "description": "Use when an API response must be validated.",
-                            "instructions": "Call the available API tool and validate its response.",
-                        },
-                    )
-                ]
-            ),
-            ProviderResult(content="Skill erstellt.", finish_reason="stop"),
-        ],
-        search_policy=WebSearchPolicy.AVAILABLE,
-        skills=skills,
-        skill_creation_model=True,
-        safety_reserve_tokens=128,
-    )
-
-    async def execute(call, context, bound_tool):
-        return await original_execute(tool_registry, call, context, bound_tool)
-
-    tool_registry._execute_definition.side_effect = execute
-    storage = SessionStorage(tmp_path / "sessions")
-    storage.provision(run.session_id)
-    def _mock_value(session_id, **kwargs):
-        return RootFileService(session_id, session_storage=storage)
-    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
-        monkeypatch.setattr(_mock_target, 'RootFileService', _mock_value)
-    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
-    monkeypatch.setattr(
-        AgentRuntime,
-        "_authorize",
-        AsyncMock(return_value=PermissionDecision.ALLOW),
-    )
-    async def confirm_fallback(*_args, **_kwargs):
-        assert len(requests) == 3
-        return {"skillModelFallback": ["Sessionmodell verwenden"]}
-
-    request_question = AsyncMock(side_effect=confirm_fallback)
-    monkeypatch.setattr(AgentRuntime, "_request_question", request_question)
-
-    await AgentRuntime._execute_loop(db, run)
-
-    assert all(request["safety_reserve_tokens"] == 128 for request in requests)
-    assert [request["model"].model_id for request in requests] == [
-        "local-model",
-        "skill-builder",
-        "skill-builder",
-        "local-model",
-        "local-model",
-    ]
-    builder_request, repair_request, fallback_request = requests[1:4]
-    assert all(
-        [tool["name"] for tool in request["tools"]] == ["return_skill_draft"]
-        for request in (builder_request, repair_request, fallback_request)
-    )
-    assert [message["role"] for message in builder_request["messages"]] == [
-        "system",
-        "user",
-    ]
-    assert "terms likely to appear in matching requests" in builder_request[
-        "messages"
-    ][0]["content"]
-    assert [message["role"] for message in repair_request["messages"]] == [
-        "system",
-        "user",
-        "user",
-    ]
-    assert repair_request["messages"][2]["content"].startswith(
-        "The output was invalid: description: string_too_long (max_length=1024)."
-    )
-    assert "1-1024 characters" in repair_request["messages"][2]["content"]
-    assert "validation=description: string_too_long (max_length=1024)" in caplog.text
-    assert "x" * 1025 not in caplog.text
-    assert [message["role"] for message in fallback_request["messages"]] == [
-        "system",
-        "user",
-    ]
-    builder_payload = json.loads(builder_request["messages"][1]["content"])
-    assert builder_payload["currentRequest"] == "Aktuelle Frage"
-    assert builder_payload["brief"] == "Create a reusable API validation workflow."
-    assert builder_payload["nameHint"] == "API checks"
-    assert builder_payload["effectiveTools"] == requests[0]["tools"]
-    assert set(builder_payload) == {
-        "currentRequest",
-        "brief",
-        "nameHint",
-        "effectiveTools",
-    }
-    request_question.assert_awaited_once()
-    assert [skill.name for skill in skills.skills] == ["api-checks"]
-    SettingsStore.save.assert_awaited_once()
-
-
-async def test_skill_editor_sends_current_skill_and_merges_partial_patch(
-    monkeypatch, tmp_path
-) -> None:
-    skill = SkillDefinition(
-        name="songfinder",
-        description="Findet Songs.",
-        instructions="Suche breit und prüfe Quellen.",
-    )
-    skills = [skill]
-    original_execute = ToolRegistry._execute_definition
-    db, run, requests, _projections, events = await _runtime_setup(
-        monkeypatch,
-        [
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="edit-skill",
-                        name="edit_skill",
-                        arguments={
-                            "skill_id": str(skill.id),
-                            "brief": "Ändere nur die Einsatzbeschreibung.",
-                        },
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="draft",
-                        name="return_skill_edit",
-                        arguments={
-                            "description": "Immer bei einer Song-Suche verwenden."
-                        },
-                    )
-                ]
-            ),
-            ProviderResult(content="Skill geändert.", finish_reason="stop"),
-        ],
-        search_policy=WebSearchPolicy.AVAILABLE,
-        skills=skills,
-    )
-
-    async def execute(call, context, bound_tool):
-        return await original_execute(tool_registry, call, context, bound_tool)
-
-    tool_registry._execute_definition.side_effect = execute
-    storage = SessionStorage(tmp_path / "sessions")
-    storage.provision(run.session_id)
-    def _mock_value(session_id, **kwargs):
-        return RootFileService(session_id, session_storage=storage)
-    for _mock_target in (mock_agent_runtime, mock_agent_loop,):
-        monkeypatch.setattr(_mock_target, 'RootFileService', _mock_value)
-    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
-    monkeypatch.setattr(
-        AgentRuntime,
-        "_authorize",
-        AsyncMock(return_value=PermissionDecision.ALLOW),
-    )
-
-    await AgentRuntime._execute_loop(db, run)
-
-    assert len(requests) == 3
-    internal_phase = next(event for event in events if event.get("modelRequest") == 2)
-    assert internal_phase.pop("startedAt").endswith("+00:00")
-    assert internal_phase == {
-        "type": "run.phase",
-        "phase": "processing_tool",
-        "activityLabel": "Skill bearbeiten",
-        "tool": "edit_skill",
-        "toolLabel": "Skill bearbeiten",
-        "toolDisplay": {
-            "group": "agent",
-            "groupLabel": "Agent",
-            "icon": "smart_toy",
-            "emoji": "🤖",
-            "label": "Skill bearbeiten",
-        },
-        "toolCallId": "edit-skill",
-        "index": 0,
-        "total": 1,
-        "modelRequest": 2,
-    }
-    builder_request = requests[1]
-    assert [tool["name"] for tool in builder_request["tools"]] == [
-        "return_skill_edit"
-    ]
-    builder_payload = json.loads(builder_request["messages"][1]["content"])
-    assert builder_payload["currentSkill"] == {
-        "name": "songfinder",
-        "description": "Findet Songs.",
-        "instructions": "Suche breit und prüfe Quellen.",
-        "files": [],
-        "frontmatter": {},
-    }
-    assert builder_payload["brief"] == "Ändere nur die Einsatzbeschreibung."
+async def test_skill_authoring_uses_normal_file_tools_and_preserves_source_bytes(monkeypatch, tmp_path):
+    from mato_loop_backend.skill_packages import SkillPackage, skill_md
     from mato_loop_backend.skills import SkillService
-    updated = await SkillService.get(db, skill.owner_id, skill.id, "personal")
-    assert (updated.description, updated.instructions) == ("Immer bei einer Song-Suche verwenden.", skill.instructions)
 
-
-async def test_skill_builder_uses_only_one_structured_repair_across_fallback(
-    monkeypatch,
-) -> None:
+    skills = SkillsSettings()
+    calls = [
+        ToolCall("package", "create_directory", {"root": "files", "path": "api-skill"}),
+        ToolCall("directory", "create_directory", {"root": "files", "path": "api-skill/references"}),
+        ToolCall("instructions", "write_file", {"root": "files", "path": "api-skill/SKILL.md", "content": skill_md("api-skill", "Use for application API requests.", "Read references/openapi.json before calling the API.").decode()}),
+        ToolCall("reference", "copy_path", {"source_root": "files", "source_path": "openapi.json", "destination_root": "files", "destination_path": "api-skill/references/openapi.json"}),
+        ToolCall("publish", "save_skill", {"path": "api-skill"}),
+    ]
+    original_execute = ToolRegistry._execute_definition
     db, run, requests, _projections, _events = await _runtime_setup(
         monkeypatch,
-        [
-            ProviderResult(
-                tool_calls=[
-                    ToolCall(
-                        id="build-skill",
-                        name="build_skill",
-                        arguments={"brief": "Create an API workflow."},
-                    )
-                ],
-                finish_reason="tool_calls",
-            ),
-            ProviderResult(content="invalid"),
-            ProviderResult(content="still invalid"),
-            ProviderResult(content="fallback invalid"),
-            ProviderResult(content="Der Skill konnte nicht erstellt werden.", finish_reason="stop"),
-        ],
-        search_policy=WebSearchPolicy.AVAILABLE,
-        skill_creation_model=True,
+        [ProviderResult(tool_calls=[call], finish_reason="tool_calls") for call in calls]
+        + [ProviderResult(content="Skill erstellt.", finish_reason="stop")],
+        search_policy=WebSearchPolicy.AVAILABLE, skills=skills,
+        user_content="Erstelle einen Skill mit der heruntergeladenen openapi.json als Referenz.",
     )
-    original_execute = ToolRegistry._execute_definition
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(run.session_id)
+    files = RootFileService(run.session_id, session_storage=storage)
+    source = json.dumps({"openapi": "3.1.0", "description": "API reference " * 5000})
+    files.write_file("session", "openapi.json", source)
+    monkeypatch.setattr(mock_agent_loop, "RootFileService", lambda session_id, **kwargs: RootFileService(session_id, session_storage=storage, run_id=run.id))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    monkeypatch.setattr(AgentRuntime, "_authorize", AsyncMock(return_value=PermissionDecision.ALLOW))
 
     async def execute(call, context, bound_tool):
         return await original_execute(tool_registry, call, context, bound_tool)
 
     tool_registry._execute_definition.side_effect = execute
-    monkeypatch.setattr(
-        AgentRuntime,
-        "_request_question",
-        AsyncMock(return_value={"skillModelFallback": ["Sessionmodell verwenden"]}),
-    )
-
     await AgentRuntime._execute_loop(db, run)
 
-    assert json.loads(_tool_messages(db)[0].content)["error"]["code"] == "skill.creationModelFailed"
-    assert _assistant_messages(db)[-1].content == "Der Skill konnte nicht erstellt werden."
-    assert [request["model"].model_id for request in requests] == [
-        "local-model",
-        "skill-builder",
-        "skill-builder",
-        "local-model",
-        "local-model",
-    ]
-    assert [message["role"] for message in requests[3]["messages"]] == [
-        "system",
-        "user",
-    ]
-
-
-async def test_failed_skill_builder_requests_are_locally_bounded_and_counted(monkeypatch) -> None:
-    db, run, requests, _projections, _events = await _runtime_setup(
-        monkeypatch,
-        [],
-        search_policy=WebSearchPolicy.AVAILABLE,
-        skill_creation_model=True,
-    )
-    main_result = ProviderResult(
-        tool_calls=[
-            ToolCall(
-                id="build-skill",
-                name="build_skill",
-                arguments={"brief": "Create an API workflow."},
-            )
-        ],
-        finish_reason="tool_calls",
-    )
-
-    async def complete(_db, **kwargs):
-        requests.append(kwargs)
-        if len(requests) == 1:
-            return main_result
-        if len(requests) == 4:
-            return ProviderResult(content="Der Skill konnte nicht erstellt werden.")
-        raise RuntimeError("builder unavailable")
-
-    original_execute = ToolRegistry._execute_definition
-
-    async def execute(call, context, bound_tool):
-        return await original_execute(tool_registry, call, context, bound_tool)
-
-    monkeypatch.setattr(ProviderService, "complete", staticmethod(complete))
-    tool_registry._execute_definition.side_effect = execute
-    question = AsyncMock(
-        return_value={"skillModelFallback": ["Sessionmodell verwenden"]}
-    )
-    monkeypatch.setattr(AgentRuntime, "_request_question", question)
-
-    await AgentRuntime._execute_loop(db, run)
-
-    assert len(requests) == 4
-    assert json.loads(_tool_messages(db)[0].content)["error"]["code"] == "skill.creationModelFailed"
-    assert _assistant_messages(db)[-1].provider_data["_matoloop"]["performance"]["modelRequest"] == 4
-    question.assert_awaited_once()
+    errors = [message.content for message in _tool_messages(db) if "error" in json.loads(message.content)]
+    assert not errors
+    saved = await SkillService.get(db, db.get.return_value.user_id, skills.skills[0].id, "personal")
+    package = await SkillService.package(saved)
+    assert SkillPackage.import_file(package.archive(), archive=True).files["references/openapi.json"].content == source.encode()
+    assert len(requests) == len(calls) + 1
+    assert all(request["model"].model_id == "local-model" for request in requests)
 
 
 async def test_runtime_persists_typed_file_actions_on_tool_results(monkeypatch) -> None:

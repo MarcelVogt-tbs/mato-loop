@@ -109,7 +109,7 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     prompt_tokens = estimate_tokens(prompt, 4.0) + estimate_tokens(memory_prompt, 4.0)
     schema_tokens = estimate_tokens(schemas, 4.0)
 
-    assert {"load_skill", "build_skill", "edit_skill", "request_session_permissions", "notify", "silence"} <= {
+    assert {"load_skill", "save_skill", "edit_skill", "request_session_permissions", "notify", "silence"} <= {
         schema["name"] for schema in schemas
     }
     # Includes task continuation, progress updates, grounding, media, permission failures, automation scope, and computer provenance.

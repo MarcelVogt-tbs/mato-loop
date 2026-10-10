@@ -24,20 +24,19 @@ Bitten Sie im Chat ausdrücklich um einen wiederverwendbaren Skill, zum Beispiel
 
 Neue Chat-Skills sind standardmäßig persönlich, auch bei Administratoren. Administratoren können ausdrücklich einen globalen Skill für alle Benutzer anfordern. Der Geltungsbereich ist im Entwurf sichtbar und wird vor dem Speichern erneut geprüft.
 
-Das Builder-Modell erhält eine kurze Aufgabe und optional einen Namensvorschlag. **Skill-Erstellung** wählen Sie unter **Standardmodelle**; ohne separates Modell dient das Sessionmodell. Scheitert ein separat konfigurierter Builder, fragt MatoLoop vor einem Versuch mit dem Sessionmodell.
+Der Agent erstellt Skills mit dem normalen Sessionmodell und den verfügbaren Werkzeugen. Er kann Dokumentation recherchieren, Dateien lesen oder herunterladen und ein Paket aus `SKILL.md`, Referenzen, Vorlagen und Skripten zusammenstellen. Bereits vorhandene Dateien kann er unverändert in das Paket kopieren.
 
-Fehlen für einen wiederverwendbaren Skill relevante Angaben, fragt der Agent diese vor der Erstellung gebündelt ab. Bereits vollständige Anfragen werden ohne zusätzliche Rückfragerunde an das Builder-Modell übergeben.
+Fehlen für einen wiederverwendbaren Skill relevante Angaben, fragt der Agent gezielt nach. Bei einer vollständigen Anfrage beginnt er direkt mit Recherche und Dateierstellung.
 
-!!! info "Isolierter Builder"
-    Das Builder-Modell erhält nicht den gesamten Chat. Es sieht nur Ihre neueste Anfrage, die kurze Aufgabenbeschreibung, den optionalen Namensvorschlag und die in diesem Schritt tatsächlich verfügbaren Tool-Schemas. Bei einer Bearbeitung erhält es zusätzlich den aktuellen Ziel-Skill. Frühere Nachrichten, Memories, Anhänge, Tool-Ergebnisse, Persona und andere Skills werden nicht mitgesendet.
+Beispiel: „Erstelle einen Skill für Anwendung X. Recherchiere die offizielle API-Dokumentation, lege die benötigten Referenzen unter `references/` ab und verweise aus der `SKILL.md` darauf.“ Die Dateien bleiben Bestandteil des gespeicherten Pakets und können bei späterer Nutzung nachgelesen werden. Sie werden nicht automatisch mit der externen Dokumentation synchronisiert.
 
-Modellwahl bestimmt Vertrauen und Pseudonymisierung. Öffentliche Builder erhalten die genannten Daten. Builder-Versuche erhöhen Modellanfrage-Metriken; eine eigenständige Anfragezahlgrenze gibt es nicht. Skill-Tools zählen weiterhin zum endlichen Tool-Limit des Profils und behalten ihre begrenzten Korrekturversuche.
+Es gelten die normalen Modell-, Kontext- und Werkzeuglimits sowie die Rechte der Session. Ein separates Skill-Modell oder ein eigenes kleines Generierungsbudget gibt es nicht. Zum Schreiben benötigt der Agent die entsprechenden Dateiwerkzeuge; für Webrecherche, Downloads oder Skripttests die jeweiligen weiteren Werkzeuge.
 
 ## Im Chat bearbeiten
 
 Bitten Sie ausdrücklich um die Änderung eines vorhandenen Skills, zum Beispiel: „Ändere beim Songfinder nur die Einsatzbeschreibung.“ Der Agent wählt den Skill anhand seiner festen ID aus. Name, Einsatzbeschreibung, Anweisungen, zusätzliche Metadaten und unterstützende Textdateien können geändert werden; die ID bleibt erhalten. Globale Änderungen erfordern Administratorrechte und eine ausdrückliche Anfrage.
 
-Das Builder-Modell erhält zusätzlich den aktuellen Skill und liefert nur die gewünschten Änderungen. MatoLoop ergänzt unveränderte Felder selbst und erstellt daraus den vollständigen prüfbaren Entwurf. Wird der gespeicherte Skill währenddessen anderweitig geändert, bricht der Import ab, statt die neuere Fassung zu überschreiben.
+MatoLoop stellt eine vollständige Arbeitskopie bereit, ohne die Anweisungen des Skills für die Bearbeitung zu aktivieren. Der Agent liest und ändert die gewünschten Dateien mit den normalen Dateiwerkzeugen und reicht anschließend das vollständige Paket zum Speichern ein. Unveränderte Dateien und Metadaten bleiben in der Arbeitskopie erhalten. Wird der gespeicherte Skill währenddessen anderweitig geändert, bricht das Speichern ab, statt die neuere Fassung zu überschreiben.
 
 ## Entwurf prüfen und freigeben
 
@@ -55,9 +54,9 @@ Eigene Skills verwalten Sie unter **Einstellungen > Skills**, globale unter **Ad
 - Einsatzbeschreibung mit höchstens 1.024 Zeichen
 - `SKILL.md` mit höchstens 128 KiB sowie optionale Begleitdateien
 
-Über **Importieren** übernehmen Sie eine `SKILL.md` oder ein ZIP-Paket. Über **Exportieren** erhalten Sie ein ZIP mit dem vollständigen Skill. Im Paketeditor wählen Sie einzelne Dateien aus; Textdateien lassen sich bearbeiten, Binärdateien herunterladen oder ersetzen. Änderungen speichern Sie mit **Speichern** oder Strg/Cmd+S. Ein Paket darf insgesamt 8 MiB und 256 Dateien enthalten, höchstens 4 MiB je Datei. Die Verzeichnisstruktur ist auf 16 Ebenen und 512 Verzeichnisse einschließlich Paketwurzel begrenzt.
+Über **Importieren** übernehmen Sie eine `SKILL.md` oder ein ZIP-Paket. **Skill erstellen** und das Stiftsymbol öffnen eine eigene Bearbeitungsseite. Dort erhalten Sie über **Paket herunterladen** ein ZIP mit dem vollständigen gespeicherten Skill. Im Paketeditor wählen Sie einzelne Dateien aus; Textdateien lassen sich bearbeiten, Binärdateien herunterladen oder ersetzen. Die gemeinsame Editor-Werkzeugleiste bietet unter anderem Suche, Zeilenumbruch und Markdown-Vorschau. Änderungen speichern Sie mit **Speichern** oder Strg/Cmd+S. Beim Dateiwechsel oder Verlassen der Seite werden Sie auf ungespeicherte Änderungen hingewiesen. Ein Paket darf insgesamt 8 MiB und 256 Dateien enthalten, höchstens 4 MiB je Datei. Die Verzeichnisstruktur ist auf 16 Ebenen und 512 Verzeichnisse einschließlich Paketwurzel begrenzt.
 
-Die persönliche Sammlung hat höchstens 20 Skills; auch der globale Einstellungsbereich ist begrenzt. Namen müssen im jeweiligen Bereich eindeutig sein. Aktivieren Sie gewünschte Skills ausdrücklich. Mit **Standard** gekennzeichnete mitgelieferte Skills sind nicht löschbar; ein veränderter Standard lässt sich zurücksetzen, ohne seinen Aktivierungsstatus zu ändern. Änderungen gelten ab dem nächsten Lauf; laufende Agenten behalten ihren Startkatalog.
+Die persönliche Sammlung hat höchstens 20 Skills; auch der globale Einstellungsbereich ist begrenzt. Namen müssen im jeweiligen Bereich eindeutig sein. Aktivieren Sie gewünschte Skills über den Schalter in der Liste. Löschen und gegebenenfalls Zurücksetzen finden Sie im Drei-Punkte-Menü. Mit **Standard** gekennzeichnete mitgelieferte Skills sind nicht löschbar; ein veränderter Standard lässt sich zurücksetzen, ohne seinen Aktivierungsstatus zu ändern. Änderungen gelten ab dem nächsten Lauf; laufende Agenten behalten ihren Startkatalog.
 
 !!! warning "Keine Secrets speichern"
-    Tragen Sie keine Passwörter, API-Schlüssel, Tokens oder andere Geheimnisse in Skills, Chat-Anfragen oder Entwurfsdateien ein. Skill-Inhalte können an das aktive Sessionmodell und bei Erstellung oder Bearbeitung an das ausgewählte Builder-Modell gesendet werden. Automatische Schutzmaßnahmen erkennen nicht jede Darstellung zuverlässig.
+    Tragen Sie keine Passwörter, API-Schlüssel, Tokens oder andere Geheimnisse in Skills, Chat-Anfragen oder Entwurfsdateien ein. Skill-Inhalte können bei Erstellung, Bearbeitung und Nutzung an das aktive Sessionmodell gesendet werden. Automatische Schutzmaßnahmen erkennen nicht jede Darstellung zuverlässig.

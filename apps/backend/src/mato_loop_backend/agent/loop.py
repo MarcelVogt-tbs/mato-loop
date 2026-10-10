@@ -722,7 +722,7 @@ async def execute_loop_body(
                 limits=instance_limits, integration_settings=integration_settings,
                 identity=agent_identity, agent_profile_id=agent_profile_id,
                 skill_state=skill_state, execution_client=execution_client,
-                records=records, projection=projection, schemas=schemas,
+                records=records, projection=projection,
                 trust_level=model_trust_level,
                 excluded_memory_content_hashes=excluded_memory_content_hashes,
                 delegated=delegated, max_tool_calls=tool_call_limit,

@@ -33,11 +33,19 @@ def materialize(files: RootFileService, package: SkillPackage, prefix: str) -> s
             name = parent.as_posix()
             if name == "." or name in created:
                 continue
+            # Reusing a parent does not mutate its run-owned descendants.
             try:
-                files.create_directory(FileRoot.SESSION, name)
+                exists = files.path_kind(FileRoot.SESSION, name) == "directory"
             except RootFileError as exc:
-                if exc.code != "file.pathAlreadyExists":
+                if exc.code != "file.pathNotFound":
                     raise
+                exists = False
+            if not exists:
+                try:
+                    files.create_directory(FileRoot.SESSION, name)
+                except RootFileError as exc:
+                    if exc.code != "file.pathAlreadyExists" or files.path_kind(FileRoot.SESSION, name) != "directory":
+                        raise
             created.add(name)
         files.create_file(FileRoot.SESSION, target.as_posix(), io.BytesIO(entry.content), max_bytes=MAX_FILE_BYTES)
     return prefix

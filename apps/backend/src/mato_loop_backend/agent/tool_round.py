@@ -23,7 +23,6 @@ from mato_loop_backend.agent.run_support import (
     _RESEARCH_TOOL_NAMES,
     MEMORY_WRITE_OUTCOME_PRIORITY,
 )
-from mato_loop_backend.agent.skill_drafts import generate_skill_draft
 from mato_loop_backend.agent.subagents import run_tasks
 from mato_loop_backend.diagnostics.service import schedule_diagnostic_event
 from mato_loop_backend.error_contract import error_payload
@@ -262,7 +261,6 @@ async def execute_tool_batch(
     execution_client: ExecutionClient | None,
     records: list[Message],
     projection: ContextProjection,
-    schemas: list[dict[str, Any]],
     trust_level: TrustLevel,
     excluded_memory_content_hashes: frozenset[str],
     delegated: bool,
@@ -426,13 +424,6 @@ async def execute_tool_batch(
                 "tool": call.name, "toolLabel": tool_label, "toolDisplay": display,
                 "toolCallId": call.id, "index": index, "total": len(calls),
             }
-            draft_handler = partial(
-                generate_skill_draft, db=db, run=run, ai_settings=ai_settings,
-                runtime_settings=runtime_settings, schemas=schemas, records=records,
-                model=model, provider=provider, question=question, tool_phase=tool_phase,
-                model_request_number=next_helper_request,
-                count_model_request=count_helper_request,
-            )
             (
                 pdf_vision_handler, video_analysis_handler, video_target,
                 analyze_image_batch, fallback_vision_model,
@@ -460,7 +451,7 @@ async def execute_tool_batch(
                 excluded_memory_content_hashes=excluded_memory_content_hashes,
                 model_id=model.id, model_trust_level=trust_level,
                 agent_persona_id=identity.persona.id, agent_profile_id=agent_profile_id,
-                skill_state=skill_state, skill_draft_handler=draft_handler,
+                skill_state=skill_state,
                 approval_resolution=approval_resolution, execution_client=execution_client,
                 session_read_cursors=session_read_cursors, one_time_secrets=one_time_secrets,
                 run_secret_refs=run_secret_refs,

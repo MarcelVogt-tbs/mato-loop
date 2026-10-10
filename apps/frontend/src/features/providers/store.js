@@ -132,9 +132,6 @@ export const useProviderStore = defineStore('providers', {
     visionModelOptions: (state) => effectiveVisionModelOptions(state),
     videoModelOptions: (state) => effectiveVideoModelOptions(state),
     audioAnalysisModelOptions: (state) => effectiveAudioAnalysisModelOptions(state),
-    skillCreationModelOptions: (state) => effectiveModelOptions(state)
-      .filter((option) => (state.availableModels || state.models)
-        .find((model) => model.id === option.value)?.supportsTools === true),
     selectionOptions: (state) => (modelId, requiresTools = false, capability = 'chat') => {
       const options = effectiveModelOptions(state, capability, requiresTools)
       if (!modelId || options.some((option) => option.value === modelId)) return options

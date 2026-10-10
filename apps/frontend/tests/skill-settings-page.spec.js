@@ -1,19 +1,21 @@
 // @vitest-environment jsdom
 import { createApp, h, nextTick } from 'vue'
 import { createPinia } from 'pinia'
+import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { EditorView } from '@codemirror/view'
 import { Notify, Quasar } from 'quasar'
 import { afterEach, expect, it, vi } from 'vitest'
 import { quasarOptions } from './quasar-options'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
-vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), put: vi.fn() } }))
+vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), put: vi.fn(), post: vi.fn() } }))
 const { confirm } = vi.hoisted(() => ({ confirm: vi.fn(async () => false) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm }) }))
 
-import Page from '../src/features/skills/SkillSettingsPage.vue'
+import { adminRoutes, settingsRoutes } from '../src/features/settings/routes'
 import { api } from 'src/boot/axios'
 import { useSkillStore } from '../src/stores/skills'
+import { useAuthStore } from '../src/stores/auth'
 
 let app, root
 afterEach(() => {
@@ -26,7 +28,7 @@ afterEach(() => {
 })
 
 async function selectFile(path) {
-  document.querySelector('.skill-dialog [role="combobox"]').click()
+  document.querySelector('[role="combobox"]').click()
   let option
   await vi.waitFor(() => {
     option = [...document.querySelectorAll('[role="option"]')].find((item) => item.textContent.trim() === path)
@@ -36,7 +38,7 @@ async function selectFile(path) {
   await nextTick()
 }
 
-it.each(['text', 'executable'])('keeps %s edits made during a pending save unsaved', async (change) => {
+async function mountPage(path = '/skills') {
   // jsdom cannot measure CodeMirror ranges; keep the real editor and its update events.
   Range.prototype.getBoundingClientRect = () => new DOMRect(0, 0, 1, 16)
   Range.prototype.getClientRects = () => [new DOMRect(0, 0, 1, 16)]
@@ -47,17 +49,28 @@ it.each(['text', 'executable'])('keeps %s edits made during a pending save unsav
     if (url === '/skills') return { data: { items: [skill] } }
     return { data: new TextEncoder().encode('print(1)\n').buffer, headers: { etag: '"a"', 'x-skill-executable': 'false' } }
   })
-  let finishSave
-  api.put.mockImplementation(() => new Promise((resolve) => { finishSave = resolve }))
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    ...settingsRoutes.filter((item) => item.name === 'settings-skills').map((item) => ({ ...item, path: '/skills' })),
+    ...adminRoutes.filter((item) => item.name === 'admin-skills').map((item) => ({ ...item, path: '/admin/skills' }))
+  ] })
+  await router.push(path)
   root = document.createElement('div')
   document.body.append(root)
   const pinia = createPinia()
-  app = createApp({ render: () => h(Page) })
-  app.use(pinia).use(Quasar, { ...quasarOptions, plugins: { Notify } })
+  app = createApp({ render: () => h(RouterView) })
+  app.use(pinia).use(router).use(Quasar, { ...quasarOptions, plugins: { Notify } })
+  useAuthStore(pinia).isAdmin = true
   app.mount(root)
+  return { router, pinia, skill }
+}
+
+it.each(['text', 'executable', 'navigation'])('keeps %s edits made during a pending save unsaved', async (change) => {
+  const { router, pinia, skill } = await mountPage()
+  let finishSave
+  api.put.mockImplementation(() => new Promise((resolve) => { finishSave = resolve }))
   await vi.waitFor(() => expect(root.querySelector('[aria-label="example bearbeiten"]')).not.toBeNull())
   root.querySelector('[aria-label="example bearbeiten"]').click()
-  await vi.waitFor(() => expect(document.querySelector('.skill-dialog .cm-editor')).not.toBeNull())
+  await vi.waitFor(() => expect(document.querySelector('.cm-editor')).not.toBeNull())
   await selectFile('script.py')
   await vi.waitFor(() => expect(document.querySelector('.cm-content').textContent).toContain('print(1)'))
   const editor = EditorView.findFromDOM(document.querySelector('.cm-editor'))
@@ -65,16 +78,40 @@ it.each(['text', 'executable'])('keeps %s edits made during a pending save unsav
   await nextTick()
   editor.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true }))
   await vi.waitFor(() => expect(api.put).toHaveBeenCalledOnce())
-  if (change === 'text') {
+  if (change !== 'executable') {
     const view = EditorView.findFromDOM(document.querySelector('.cm-editor'))
     view.dispatch({ changes: { from: 0, insert: '# Later edit\n' }, userEvent: 'input.type' })
   } else {
-    document.querySelector('.skill-dialog [role="checkbox"]').click()
+    document.querySelector('[role="checkbox"]').click()
   }
   await nextTick()
   finishSave({ data: { ...skill, revision: 'b' } })
   await vi.waitFor(() => expect(useSkillStore(pinia).saving).toBe(false))
   await nextTick()
-  await selectFile('SKILL.md')
-  await vi.waitFor(() => expect(confirm).toHaveBeenCalledWith('Ungespeicherte Änderungen verwerfen?', 'Datei wechseln'))
+  if (change === 'navigation') {
+    await router.push('/skills')
+    expect(router.currentRoute.value.name).toBe('settings-skill-edit')
+  } else {
+    await selectFile('SKILL.md')
+    await vi.waitFor(() => expect(confirm).toHaveBeenCalledWith('Ungespeicherte Änderungen verwerfen?', 'Datei wechseln'))
+  }
+})
+
+it.each(['/skills', '/admin/skills'])('creates a skill from %s without losing edits during the URL change', async (base) => {
+  const { router, skill } = await mountPage(`${base}/new`)
+  let finishSave
+  api.post.mockImplementation(() => new Promise((resolve) => { finishSave = resolve }))
+  await vi.waitFor(() => expect(document.querySelector('.cm-editor')).not.toBeNull())
+  const editor = EditorView.findFromDOM(document.querySelector('.cm-editor'))
+  editor.dispatch({ changes: { from: editor.state.doc.length, insert: 'First edit' } })
+  await nextTick()
+  editor.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true }))
+  await vi.waitFor(() => expect(api.post).toHaveBeenCalledOnce())
+  editor.dispatch({ changes: { from: editor.state.doc.length, insert: ' Later edit' } })
+  await nextTick()
+  const scope = base.startsWith('/admin') ? 'instance' : 'personal'
+  finishSave({ data: { ...skill, scope, document: api.post.mock.calls[0][1].document } })
+  await vi.waitFor(() => expect(router.currentRoute.value.path).toBe(`${base}/skill`))
+  expect(api.post.mock.calls[0][2]).toEqual({ params: { scope } })
+  expect(document.querySelector('.cm-content').textContent).toContain('First edit Later edit')
 })

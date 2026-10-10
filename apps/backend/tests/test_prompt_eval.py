@@ -834,42 +834,24 @@ def test_grouped_result_rejects_unknown_action() -> None:
     assert "never load the target" in edit_skill_messages[0]["content"]
 
     build_messages, build_tools = build_case(_case("vague_skill_build_uses_question"))
-    assert [tool["name"] for tool in build_tools] == ["question", "build_skill"]
-    assert "call question once for missing" in build_messages[0]["content"]
-    assert "Use build_skill only for explicit latest-message requests" in build_messages[0]["content"]
-    assert build_tools[1]["parameters"]["required"] == ["brief"]
+    assert [tool["name"] for tool in build_tools] == ["question", "write_file", "save_skill"]
+    assert "On explicit user requests, author skills with normal tools" in build_messages[0]["content"]
+    assert build_tools[2]["parameters"]["required"] == ["path"]
 
 
-def test_skill_build_case_checks_compact_brief_not_generated_draft() -> None:
-    case = replace(
-        _case("vague_skill_build_uses_question"),
-        id="explicit_skill_build_uses_tool",
-        user=(
-            "Erstelle einen Skill namens API-Recherche. Er soll bei API-Abfragen das vorhandene "
-            "API-Tool aufrufen und die Antwort validieren."
-        ),
-        expected_tool="build_skill",
-        expected_arguments={"name_hint": "API-Recherche"},
-        argument_contains={"brief": ("API", "Tool", "valid")},
-        max_argument_words={"brief": 20},
-        forbidden_tools=("question",),
-        question_concepts=(),
-        maximum_question_count=None,
-    )
-
-    assert case.argument_contains == {"brief": ("API", "Tool", "valid")}
-    assert case.expected_arguments == {"name_hint": "API-Recherche"}
+def test_skill_build_case_checks_a_normal_file_write() -> None:
+    case = _case("explicit_skill_build_uses_tool")
     assert evaluate(
         case,
         ProviderResult(
             tool_calls=[
                 ToolCall(
                     "skill-build",
-                    "build_skill",
+                    "write_file",
                     {
-                        "brief": "Check API requests with the Tool and validate responses.",
+                        "root": "files", "path": "api-recherche/SKILL.md",
+                        "content": "---\nname: api-recherche\ndescription: Validate API responses.\n---\nCheck responses.",
                         "_reason": "Den angeforderten Skill erstellen.",
-                        "name_hint": "API-Recherche",
                     },
                 )
             ]
@@ -986,10 +968,10 @@ def test_skill_build_cases_clarify_once_then_use_the_answers() -> None:
         vague,
         id="answered_skill_questions_continue_build",
         continuation=prompt_eval._exchange("question", questions, answer_result),
-        expected_tool="build_skill",
+        expected_tool="write_file",
         expected_arguments={},
         argument_contains={
-            "brief": (
+            "content": (
                 "Git diff",
                 "security",
                 "missing tests",
@@ -998,7 +980,6 @@ def test_skill_build_cases_clarify_once_then_use_the_answers() -> None:
                 "line",
             )
         },
-        max_argument_words={"brief": 60},
         forbidden_tools=("question",),
         question_concepts=(),
         maximum_question_count=None,
@@ -1012,9 +993,11 @@ def test_skill_build_cases_clarify_once_then_use_the_answers() -> None:
             tool_calls=[
                 ToolCall(
                     "skill-build",
-                    "build_skill",
+                    "write_file",
                     {
-                        "brief": (
+                        "root": "files", "path": "code-review/SKILL.md",
+                        "content": (
+                            "---\nname: code-review\ndescription: Review changes.\n---\n"
                             "Review a Git diff with file paths for correctness, security issues, "
                             "and missing tests while ignoring style. Return findings ordered by "
                             "severity with file path and line."
@@ -2367,10 +2350,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 138
-    assert payload["contractCount"] == 381
-    assert "Cases: 243" in report
+    assert payload["contractCount"] == 382
+    assert "Cases: 244" in report
     assert "Semantic contracts: 138" in report
-    assert "All inventory rows: 381" in report
+    assert "All inventory rows: 382" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

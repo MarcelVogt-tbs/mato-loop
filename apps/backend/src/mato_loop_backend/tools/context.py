@@ -18,14 +18,13 @@ from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
     AgentProfileUnavailable,
     IntegrationSettings,
-    SkillDefinition,
     ToolSettings,
     TrustLevel,
     load_agent_profile,
     load_effective_integrations,
 )
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
-from mato_loop_backend.skills import RunSkillState, SkillDraft
+from mato_loop_backend.skills import RunSkillState
 from mato_loop_backend.tools.arguments import (
     ProtectedQuestionResolution,
     QuestionRequestArguments,
@@ -38,11 +37,6 @@ class AskHandler(Protocol):
     def __call__(
         self, request: PermissionRequest, *, check_only: bool = False,
     ) -> Awaitable[PermissionDecision]: ...
-
-
-SkillDraftHandler = Callable[
-    [str, str | None, SkillDefinition | None], Awaitable[SkillDraft]
-]
 
 
 QuestionHandler = Callable[
@@ -104,7 +98,6 @@ class ToolContext:
     agent_profile_id: UUID | None = None
     bound_resource: IntegrationResource | None = None
     skill_state: RunSkillState = field(default_factory=RunSkillState)
-    skill_draft_handler: SkillDraftHandler | None = None
     approval_resolution: dict[str, str] = field(default_factory=dict)
     user_denied: bool = False
     execution_client: ExecutionClient | None = None

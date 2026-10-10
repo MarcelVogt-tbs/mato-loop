@@ -90,37 +90,47 @@ access. Working-copy changes do not modify the central library.
 
 ## Chat authoring and approval
 
-`build_skill` defaults to personal, including for administrators. `scope=instance`
+`save_skill` defaults to personal, including for administrators. `scope=instance`
 requires an explicit request for a global skill and live administrator authority.
 `edit_skill` uses the selected catalog ID and scope; it does not silently promote
 or demote a skill. The service checks authorization before generation and again
 when saving. Personal and global approval grants have different scope identities.
 
-The existing isolated builder receives the latest request, brief, effective tool
-schemas, and current skill when editing. Supporting text files may be created,
-replaced, or removed; unchanged binary files and metadata are retained. The builder
-has the normal model budget, repair attempt, and explicit model-fallback behavior.
-Its output becomes an editable directory under session files, not a JSON skill
-definition. Scope and file list are visible in the existing approval card.
+The normal session agent researches and authors packages with the existing web,
+file, transfer, and shell tools and their permissions. It writes `SKILL.md` and
+supporting files into a session-files directory, then calls `save_skill(path=...)`.
+Downloaded documentation can be copied into `references/` without being regenerated
+through a model response. Scripts can be tested on the selected computer through
+normal transfers and shell tools. There is no separate authoring model, brief,
+structured draft generator, or skill-specific output-token limit.
 
-It receives no earlier conversation, memory, retrieved episode, attachment content, tool result, persona, or active skill. Creation requires one strict `return_skill_draft` call; editing requires one strict `return_skill_edit` patch. Both may use only capabilities present in the supplied schemas. One repair request is allowed after an invalid response. The configured **Skill creation** model is used when available and tool-capable; otherwise the session model is the default. If a distinct configured builder fails, MatoLoop asks the user explicitly before trying the session model. There is no silent fallback.
+For edits, `edit_skill` checks ownership and policy, then provides a complete
+working copy without activating the skill's instructions. It returns the target
+ID, scope, expected revision and executable paths. The agent changes that copy
+with normal file tools and passes these values to `save_skill`. Publication replaces
+the complete package, so unchanged files and metadata must remain in the working
+copy. Executable paths are explicitly supplied because session files do not store
+portable executable flags.
+
+`save_skill` authorizes `session.files.read` for the source directory before
+reading it, then materializes a separate,
+editable review copy outside the run's file leases. Scope and file list are visible
+in the existing approval card. The startup settings migration removes the retired
+skill-creation model assignment and transfers the old `build_skill` availability
+flag to `save_skill` without widening access.
 
 Approval binds the entire package hash, including supporting scripts, rather than
 only `SKILL.md`. After editing the draft, refresh the package preview before
 approving. The host rereads the complete draft and rejects any change after review.
-`skills.write=auto` uses the original generated package revision. Drafts remain in
+`skills.write=auto` uses the original submitted package revision. Drafts remain in
 the session for inspection. Created and edited skills enter the next run's catalog.
 
 ## Privacy and budgets
 
-The builder request follows the selected builder model's effective trust and
-pseudonymization settings. Selecting a public builder releases the latest request,
-brief, name hint, current edit fields and supporting text, and effective schemas
-under those controls. Pseudonymization is best effort; secrets do not belong in skills.
-
-Builder attempts, repairs, and approved fallback requests increment model-request
-metrics, not an independent request-count cap. Requests use a 3,000-token output
-budget where supported. The package and file bounds above apply on every transport.
-Skill tools consume the profile's normal tool-call budget when finite. Catalog
-metadata, edit fields, instructions, and schemas count toward normal input context.
-Package bounds and bounded repair remain effective with unlimited tool calls.
+Authoring uses the session model's normal context, trust, pseudonymization and
+output budgets. Sources reach the model through ordinary authorized reads;
+copying a reference file into a package does not require sending all its bytes
+to the model. Source content remains untrusted and cannot authorize publishing.
+Secrets do not belong in skills. All authoring tools consume the profile's normal
+tool-call budget when finite. Package and file bounds apply regardless of the
+model or tool-call limit.

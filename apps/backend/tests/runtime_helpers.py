@@ -79,7 +79,6 @@ async def _runtime_setup(
     vision_fallback_private: bool = False,
     tool_result: ToolResult | None = None,
     skills: SkillsSettings | list | None = None,
-    skill_creation_model: bool = False,
     streamed_contents: list[str | None] | None = None,
     integration_settings: IntegrationSettings | None = None,
     execution_agent_id=None,
@@ -115,16 +114,11 @@ async def _runtime_setup(
         if vision_fallback
         else None
     )
-    builder_model = (
-        ModelConfig(provider_id=provider.id, model_id="skill-builder")
-        if skill_creation_model
-        else None
-    )
     ai_settings = AiSettings(
         providers=[provider],
-        models=[item for item in (model, vision_model, builder_model) if item is not None],
+        models=[item for item in (model, vision_model) if item is not None],
     )
-    model_defaults = ModelDefaultsSettings(default_model_id=model.id, vision_model_id=vision_model.id if vision_model else None, skill_creation_model_id=builder_model.id if builder_model else None)
+    model_defaults = ModelDefaultsSettings(default_model_id=model.id, vision_model_id=vision_model.id if vision_model else None)
     runtime_settings = AgentRuntimeSettings(safety_reserve_tokens=safety_reserve_tokens)
     session = ChatSession(
         id=uuid4(),

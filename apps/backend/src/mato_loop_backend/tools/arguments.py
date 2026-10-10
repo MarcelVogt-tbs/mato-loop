@@ -1028,47 +1028,23 @@ class PersonalSettingsArguments(ToolArguments):
         return self
 
 
-class BuildSkillArguments(ToolArguments):
-    scope: Literal["personal", "instance"] = Field(default="personal", description="Global: explicit latest-message request and administrator rights required.")
-    brief: str = Field(
-        min_length=1,
-        max_length=2_000,
-        description="Requested workflow.",
-    )
-    name_hint: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=64,
-        description="User-suggested name.",
-    )
+class SaveSkillArguments(ToolArguments):
+    scope: Literal["personal", "instance"] = Field(default="personal", description="Global requires explicit request and admin rights.")
+    path: str = Field(min_length=1, max_length=500)
+    skill_id: UUID | None = Field(default=None, description="Omit to create.")
+    expected_revision: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$", description="Base revision for updates.")
+    executable_paths: list[str] = Field(default_factory=list, max_length=256, description="Executable package-relative paths.")
 
-    @field_validator("brief", "name_hint")
-    @classmethod
-    def normalize_text(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("value must not be blank")
-        return cleaned
+    @model_validator(mode="after")
+    def require_update_revision(self) -> SaveSkillArguments:
+        if (self.skill_id is None) != (self.expected_revision is None):
+            raise ValueError("skill_id and expected_revision must be supplied together")
+        return self
 
 
 class EditSkillArguments(ToolArguments):
-    scope: Literal["personal", "instance"] = Field(default="personal", description="Catalog scope; global edits require explicit request and administrator rights.")
+    scope: Literal["personal", "instance"] = "personal"
     skill_id: UUID = Field(description="Exact catalog ID.")
-    brief: str = Field(
-        min_length=1,
-        max_length=2_000,
-        description="Requested changes.",
-    )
-
-    @field_validator("brief")
-    @classmethod
-    def normalize_brief(cls, value: str) -> str:
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("brief must not be blank")
-        return cleaned
 
 
 class LoadSkillArguments(ToolArguments):

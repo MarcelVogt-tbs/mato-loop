@@ -78,7 +78,7 @@ TOOL_ACTIVITY_LABELS = {
     "get_automation": "Automation anzeigen", "create_automation": "Automation erstellen",
     "edit_automation": "Automation ändern", "run_automation": "Automation starten",
     "delete_automation": "Automation löschen",
-    "load_skill": "Skill laden", "build_skill": "Skill speichern", "edit_skill": "Skill bearbeiten",
+    "load_skill": "Skill laden", "save_skill": "Skill speichern", "build_skill": "Skill speichern", "edit_skill": "Skill bearbeiten",
     "get_system_info": "Systeminformationen", "change_directory": "Verzeichnis wechseln",
     "list_execution_agents": "Computer anzeigen", "select_execution_agent": "Computer übernehmen",
     "render_openscad": "OpenSCAD-Modell rendern",
@@ -123,7 +123,7 @@ _TOOL_GROUPS = {
     **{
         name: "agent"
         for name in (
-            "question", "task", "todo_write", "load_skill", "build_skill", "edit_skill",
+            "question", "task", "todo_write", "load_skill", "save_skill", "build_skill", "edit_skill",
             "update_agent_identity", "update_user_profile",
             "customize_matoloop",
         )

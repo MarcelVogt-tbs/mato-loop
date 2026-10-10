@@ -102,7 +102,7 @@ def test_tool_display_supports_persisted_copy_and_move_arguments() -> None:
         ("coding_list_plans", "Pläne anzeigen", "coding"),
         ("coding_enqueue", "Pläne ausführen", "coding"),
         ("load_skill", "Skill laden", "agent"),
-        ("build_skill", "Skill speichern", "agent"),
+        ("save_skill", "Skill speichern", "agent"),
         ("edit_skill", "Skill bearbeiten", "agent"),
         ("get_system_info", "Systeminformationen", "process"),
         ("change_directory", "Verzeichnis wechseln", "process"),

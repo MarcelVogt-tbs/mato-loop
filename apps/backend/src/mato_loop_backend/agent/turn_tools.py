@@ -131,7 +131,7 @@ def select_turn_tools(
         if delegated:
             toolset = toolset.without(
                 "provide_file", "download_file", "generate_qr_code", "generate_image",
-                "edit_image", "generate_speech", "generate_audio", "build_skill",
+                "edit_image", "generate_speech", "generate_audio", "save_skill",
                 "edit_skill", "select_execution_agent",
             )
             if execution_client is None:

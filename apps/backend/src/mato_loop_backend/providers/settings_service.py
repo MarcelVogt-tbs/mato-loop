@@ -47,7 +47,6 @@ DEFAULT_MODEL_FIELDS: dict[str, tuple[str, ModelCapability]] = {
     "default_model_id": ("defaultModelId", ModelCapability.CHAT),
     "compaction_model_id": ("compactionModelId", ModelCapability.CHAT),
     "title_generation_model_id": ("titleGenerationModelId", ModelCapability.CHAT),
-    "skill_creation_model_id": ("skillCreationModelId", ModelCapability.CHAT),
     "dreaming_model_id": ("dreamingModelId", ModelCapability.CHAT),
     "vision_model_id": ("visionModelId", ModelCapability.CHAT),
     "video_model_id": ("videoModelId", ModelCapability.CHAT),
@@ -143,7 +142,7 @@ def model_reference_available(
         value
         and not (
             field
-            in {"default_model_id", "skill_creation_model_id", "dreaming_model_id"}
+            in {"default_model_id", "dreaming_model_id"}
             and not value.supports_tools
         )
         and not (

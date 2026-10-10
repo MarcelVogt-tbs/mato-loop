@@ -38,7 +38,7 @@ Gemeinsame Zuordnungen stehen unter **Administration > Standardmodelle > Verwalt
 
 - Agent und Reasoning-Vorgabe.
 - Kontextkomprimierung und Titelgenerierung.
-- Skill-Erstellung und Dreaming.
+- Dreaming.
 - Bild-, Video- und Audioanalyse.
 - Bild-, Sprach- und Audiogenerierung sowie Transkription.
 

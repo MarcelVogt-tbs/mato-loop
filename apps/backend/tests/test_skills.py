@@ -35,7 +35,7 @@ from mato_loop_backend.skill_packages import (
     parse_skill_md,
     skill_md,
 )
-from mato_loop_backend.skills import SkillDraft, SkillEditPatch, SkillService
+from mato_loop_backend.skills import SkillService
 
 pytestmark = pytest.mark.usefixtures("skill_library", "mock_db_settings")
 
@@ -112,14 +112,6 @@ def test_storage_verifies_content_and_rejects_symlinks(skill_library):
         skill_library.read(None, skill_id, original.revision, original.name)
 
 
-def test_partial_edit_preserves_binary_files_and_vendor_metadata():
-    updated = SkillDraft(name="pdf-processing", description="New description", instructions="New instructions").package(package())
-    assert updated.files["assets/template.bin"] == package().files["assets/template.bin"]
-    assert updated.metadata["metadata"] == package().metadata["metadata"]
-    with pytest.raises(ValidationError):
-        SkillEditPatch()
-
-
 @pytest.mark.parametrize(("old_name", "expected_name"), [("Mein Skill", "mein-skill"), ("CON", "skill-con")])
 async def test_migration_preserves_ownership_ids_enabled_and_removes_inline_payload(monkeypatch, skill_library, old_name, expected_name):
     user_id, skill_id = uuid4(), uuid4()
@@ -149,6 +141,19 @@ async def test_failed_migration_keeps_original_database_content(monkeypatch):
     db.commit.assert_not_awaited()
 
 
+async def test_migration_retires_builder_settings_without_widening_tool_access(monkeypatch):
+    records = [
+        SettingRecord(key="model-defaults", data={"skill_creation_model_id": str(uuid4()), "default_model_id": None}),
+        SettingRecord(key="model-defaults", user_id=uuid4(), data={"skillCreationModelId": str(uuid4())}),
+        SettingRecord(key="tools", data={"tool_availability": {"build_skill": False, "read": True}}),
+    ]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.side_effect = [SimpleNamespace(all=lambda: records), SimpleNamespace(all=lambda: [])]
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    await initialize_skill_library(db)
+    assert [record.data for record in records] == [{"default_model_id": None}, {}, {"tool_availability": {"save_skill": False, "read": True}}]
+
+
 async def test_service_conflict_preserves_current_package(monkeypatch):
     owner = uuid4()
     skill = SkillDefinition(name="research", description="Old", instructions="Old")
@@ -156,9 +161,9 @@ async def test_service_conflict_preserves_current_package(monkeypatch):
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     db = AsyncMock(spec=AsyncSession)
-    replacement = await SkillService.save_package(db, owner, skill.id, SkillDraft(name="research", description="New", instructions="New").package(), expected_revision=skill.revision)
+    replacement = await SkillService.save_package(db, owner, skill.id, SkillPackage({"SKILL.md": SkillFile(skill_md("research", "New", "New"))}), expected_revision=skill.revision)
     with pytest.raises(SkillError, match="skill.changed"):
-        await SkillService.save_package(db, owner, skill.id, SkillDraft(name="research", description="Stale", instructions="Stale").package(), expected_revision=skill.revision)
+        await SkillService.save_package(db, owner, skill.id, SkillPackage({"SKILL.md": SkillFile(skill_md("research", "Stale", "Stale"))}), expected_revision=skill.revision)
     assert (await SkillService.package(replacement)).metadata["description"] == "New"
     db.commit.assert_not_awaited()
 

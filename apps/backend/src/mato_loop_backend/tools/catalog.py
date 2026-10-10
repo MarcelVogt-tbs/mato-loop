@@ -177,7 +177,7 @@ tool_registry = ToolRegistry(
         tools_memory.MEMORY_WRITE,
         tools_memory.MEMORY_RETRIEVE,
         tools_skills.LOAD_SKILL,
-        tools_skills.BUILD_SKILL,
+        tools_skills.SAVE_SKILL,
         tools_skills.EDIT_SKILL,
         tools_interaction.VARIABLE_READ,
         tools_interaction.VARIABLE_WRITE,

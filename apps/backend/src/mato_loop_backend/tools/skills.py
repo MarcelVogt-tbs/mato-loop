@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 from uuid import uuid4
 
+import mato_loop_backend.files.access as files_access
 import mato_loop_backend.permissions.resolution as permissions_resolution
 import mato_loop_backend.tools.access as tools_access
 from mato_loop_backend.execution.client import ExecutionClientError
@@ -14,20 +15,20 @@ from mato_loop_backend.permissions.policy import (
     skill_load_permission,
     skill_write_permission,
 )
-from mato_loop_backend.settings import SkillDefinition, ToolExecutionPolicy
-from mato_loop_backend.skill_packages import SkillError
+from mato_loop_backend.settings import ToolExecutionPolicy
+from mato_loop_backend.skill_packages import SkillError, parse_skill_md, skill_path
 from mato_loop_backend.skill_resources import (
     materialize,
     prepare_computer,
     read_draft,
     session_package_path,
 )
-from mato_loop_backend.skills import SkillScope, SkillService
-from mato_loop_backend.tools.actions import _SKILL_LOAD, _SKILL_WRITE
+from mato_loop_backend.skills import SkillService
+from mato_loop_backend.tools.actions import _SESSION_FILES_READ, _SKILL_LOAD, _SKILL_WRITE
 from mato_loop_backend.tools.arguments import (
-    BuildSkillArguments,
     EditSkillArguments,
     LoadSkillArguments,
+    SaveSkillArguments,
 )
 from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import ToolDefinition, ToolResult
@@ -42,30 +43,43 @@ def session_files(context: ToolContext) -> RootFileService:
     )
 
 
-async def _save_skill_draft(context: ToolContext, brief: str, *, name_hint: str | None = None, current_skill: SkillDefinition | None = None, scope: SkillScope = "personal") -> ToolResult:
+async def _save_skill(arguments: SaveSkillArguments, context: ToolContext) -> ToolResult:
+    scope = arguments.scope
+    current_skill = None
     try:
         await SkillService.require_write(context.db, context.session.user_id, scope)
+        if arguments.skill_id is not None:
+            current_skill = await SkillService.get(context.db, context.session.user_id, arguments.skill_id, scope)
+            if current_skill.revision != arguments.expected_revision:
+                raise SkillError("skill.changed")
     except SkillError as exc:
         return ToolResult.error(exc.code)
     context.tool_settings = await tools_access.profile_tool_settings(context)
     policy = permissions_resolution.tool_execution_policy(context.tool_settings, "skills.write", ToolExecutionPolicy.ASK)
     if policy == ToolExecutionPolicy.DISABLED:
         return ToolResult.error("tool.unavailable")
-    if context.skill_draft_handler is None:
-        return ToolResult.error("skill.creationModelFailed")
     try:
-        draft = await context.skill_draft_handler(brief, name_hint, current_skill)
-        base = await SkillService.package(current_skill) if current_skill else None
-        package = draft.package(base)
+        path = skill_path(arguments.path)
+        executable = [skill_path(path) for path in arguments.executable_paths]
+        request = files_access.filesystem_permission(
+            context, root="session", path=path, capability="filesystem.read",
+            action_kind="save_skill", action_label="Skill-Paket lesen",
+        )
+        if not await tools_access.allow(context, request):
+            return ToolResult.error("permission.denied")
+        package = await asyncio.to_thread(read_draft, context.root_files, path, executable)
+        if not set(executable) <= package.files.keys():
+            raise SkillError("skill.draftInvalid")
+        # Publish a review copy outside the run's file leases, so the owner can edit it.
         draft_id = uuid4()
         path = f"skill-drafts/{draft_id}/{package.name}"
         files = session_files(context)
         await asyncio.to_thread(materialize, files, package, path)
     except (SkillError, RootFileError) as exc:
         return ToolResult.error(exc.code)
-    executable = [path for path, entry in package.files.items() if entry.executable]
+    metadata, instructions = parse_skill_md(package.files["SKILL.md"].content)
     details = {
-        "skillPreview": {"name": draft.name, "description": draft.description, "instructions": draft.instructions, "scope": scope, "files": sorted(package.files)},
+        "skillPreview": {"name": package.name, "description": metadata["description"], "instructions": instructions, "scope": scope, "files": sorted(package.files)},
         "skillDraft": {"path": path, "executablePaths": executable},
         "draftFile": {"root": "session", "path": f"{path}/SKILL.md", "filename": "SKILL.md", "sizeBytes": len(package.files["SKILL.md"].content), "initialRevision": package.revision, "fileRevision": hashlib.sha256(package.files["SKILL.md"].content).hexdigest()},
     }
@@ -76,7 +90,7 @@ async def _save_skill_draft(context: ToolContext, brief: str, *, name_hint: str 
         context.approval_resolution.clear()
         permission = (
             skill_edit_permission(current_skill.id, current_skill.name, approval_details=details, scope=scope)
-            if current_skill else skill_write_permission(context.session.user_id, draft.name, approval_details=details, scope=scope)
+            if current_skill else skill_write_permission(context.session.user_id, package.name, approval_details=details, scope=scope)
         )
         if not await tools_access.allow(context, permission):
             return ToolResult.error("permission.denied")
@@ -99,10 +113,6 @@ async def _save_skill_draft(context: ToolContext, brief: str, *, name_hint: str 
     return ToolResult.json({"id": str(skill.id), "name": skill.name, "scope": scope, "updated": current_skill is not None, "effectiveFrom": "next_run"})
 
 
-async def _build_skill(arguments: BuildSkillArguments, context: ToolContext) -> ToolResult:
-    return await _save_skill_draft(context, arguments.brief, name_hint=arguments.name_hint, scope=arguments.scope)
-
-
 async def _edit_skill(arguments: EditSkillArguments, context: ToolContext) -> ToolResult:
     skill = context.skill_state.catalog.get(arguments.skill_id)
     if skill is None:
@@ -112,12 +122,31 @@ async def _edit_skill(arguments: EditSkillArguments, context: ToolContext) -> To
     # Resolve the requested ownership scope; a personal override and the global original
     # may intentionally have the same stable default-skill ID.
     try:
+        await SkillService.require_write(context.db, context.session.user_id, arguments.scope)
         current = await SkillService.get(context.db, context.session.user_id, skill.id, arguments.scope)
         if current.revision != skill.revision or current.owner_id != skill.owner_id:
             return ToolResult.error("skill.changed")
-    except SkillError as exc:
+        context.tool_settings = await tools_access.profile_tool_settings(context)
+        if permissions_resolution.tool_execution_policy(context.tool_settings, "skills.write", ToolExecutionPolicy.ASK) == ToolExecutionPolicy.DISABLED:
+            return ToolResult.error("tool.unavailable")
+        if not await tools_access.allow(context, skill_load_permission(context.session.user_id, skill.name)):
+            return ToolResult.error("permission.denied")
+        context.tool_settings = await tools_access.profile_tool_settings(context)
+        if any(permissions_resolution.tool_execution_policy(context.tool_settings, capability, default) == ToolExecutionPolicy.DISABLED for capability, default in (("skills.load", ToolExecutionPolicy.AUTO), ("skills.write", ToolExecutionPolicy.ASK))):
+            return ToolResult.error("tool.unavailable")
+        await SkillService.require_write(context.db, context.session.user_id, arguments.scope)
+        package = await SkillService.package(current)
+        path = f"skill-drafts/{uuid4()}/{package.name}"
+        await asyncio.to_thread(materialize, context.root_files, package, path)
+    except (SkillError, RootFileError) as exc:
         return ToolResult.error(exc.code)
-    return await _save_skill_draft(context, arguments.brief, current_skill=current, scope=arguments.scope)
+    return ToolResult.json({
+        "id": str(skill.id), "scope": arguments.scope, "path": path,
+        "expected_revision": current.revision,
+        "executable_paths": [path for path, entry in package.files.items() if entry.executable],
+        "files": sorted(package.files),
+        "next": "Read and edit these session files with normal file tools, then call save_skill with this ID, scope and revision.",
+    })
 
 
 async def _load_skill(arguments: LoadSkillArguments, context: ToolContext) -> ToolResult:
@@ -170,11 +199,11 @@ LOAD_SKILL = ToolDefinition(
     "load_skill", "Load a matching catalog skill; call alone.",
     LoadSkillArguments, _load_skill, group="agent", label="Skill laden", icon="school", actions=(_SKILL_LOAD,),
 )
-BUILD_SKILL = ToolDefinition(
-    "build_skill", "Create a skill package only on an explicit latest-message request.",
-    BuildSkillArguments, _build_skill, group="agent", label="Skill speichern", icon="construction", actions=(_SKILL_WRITE,),
+SAVE_SKILL = ToolDefinition(
+    "save_skill", "Publish a session-files skill directory. SKILL.md: YAML name (lowercase-hyphenated) and description, then Markdown. Updates replace all files.",
+    SaveSkillArguments, _save_skill, group="agent", label="Skill speichern", icon="save", actions=(_SESSION_FILES_READ, _SKILL_WRITE),
 )
 EDIT_SKILL = ToolDefinition(
-    "edit_skill", "Edit a catalog skill only on an explicit latest-message request.",
-    EditSkillArguments, _edit_skill, group="agent", label="Skill bearbeiten", icon="edit_note", actions=(_SKILL_WRITE,),
+    "edit_skill", "Prepare a catalog skill's files for editing without activating it.",
+    EditSkillArguments, _edit_skill, group="agent", label="Skill bearbeiten", icon="edit_note", actions=(_SKILL_LOAD, _SKILL_WRITE),
 )

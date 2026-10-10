@@ -27,7 +27,19 @@ from mato_loop_backend.skills import default_package
 async def initialize_skill_library(db: AsyncSession) -> None:
     """Publish complete directories before removing any inline source content."""
     await SettingsStore._lock_scope(db, "skills", None)
-    records = list((await db.scalars(select(SettingRecord).where(SettingRecord.key == "skills").with_for_update())).all())
+    records = list((await db.scalars(select(SettingRecord).where(SettingRecord.key.in_(("skills", "model-defaults", "tools"))).with_for_update())).all())
+    for record in records:
+        if record.key == "model-defaults":
+            record.data = {key: value for key, value in record.data.items() if key not in {"skill_creation_model_id", "skillCreationModelId"}}
+        elif record.key == "tools":
+            data = dict(record.data)
+            for key in ("tool_availability", "toolAvailability"):
+                availability = dict(data.get(key, {}))
+                if "build_skill" in availability:
+                    availability["save_skill"] = availability.pop("build_skill") and availability.get("save_skill", True)
+                    data[key] = availability
+            record.data = data
+    records = [record for record in records if record.key == "skills"]
     storage = SkillStorage()
     for skill_id in DEFAULT_SKILLS:
         await asyncio.to_thread(storage.publish, None, skill_id, default_package(skill_id))
