@@ -74,7 +74,8 @@ const props = defineProps({
   showToolbar: { type: Boolean, default: true },
   markdown: Boolean,
   saving: Boolean,
-  dirty: Boolean
+  dirty: Boolean,
+  readonly: Boolean
 })
 const emit = defineEmits(['update:modelValue', 'update:session', 'save', 'cancel'])
 const $q = useQuasar()
@@ -86,6 +87,10 @@ const wrap = ref(props.session?.wrap ?? false)
 const theme = new Compartment()
 const wrapping = new Compartment()
 const language = new Compartment()
+const editable = new Compartment()
+watch(() => props.readonly, (value) => {
+  if (view) view.dispatch({ effects: editable.reconfigure(EditorState.readOnly.of(value)) })
+})
 let view
 let languageName = 'Text'
 let languageVersion = 0
@@ -132,6 +137,7 @@ function extensions(content, lineBreak) {
     keymap.of([{ key: 'Mod-h', run: openSearchPanel }, indentWithTab]),
     search({ top: true }),
     language.of([]),
+    editable.of(EditorState.readOnly.of(props.readonly)),
     wrapping.of(wrap.value ? EditorView.lineWrapping : []),
     // App surfaces take precedence over One Dark; its syntax colors stay intact.
     EditorView.theme({

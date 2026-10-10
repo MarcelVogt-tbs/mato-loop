@@ -17,6 +17,8 @@ SUPPORTED_OPERATIONS = frozenset(
     {
         "cache.clear",
         "cache.ensure",
+        "cache.skills.prepare",
+        "cache.skills.release",
         "cache.export",
         "cache.store",
         "filesystem.resolve",

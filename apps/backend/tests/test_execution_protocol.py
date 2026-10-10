@@ -173,6 +173,8 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "shell.run",
         "administrator.run",
         "cache.ensure",
+        "cache.skills.prepare",
+        "cache.skills.release",
         "cache.export",
         "cache.store",
         "cache.clear",

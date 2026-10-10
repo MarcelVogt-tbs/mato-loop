@@ -11,6 +11,7 @@ import pytest
 import zxingcpp
 from PIL import Image
 from pydantic import BaseModel, ValidationError
+from skill_helpers import store_skill
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import make_transient_to_detached
@@ -95,7 +96,9 @@ from mato_loop_backend.settings import (
     UserIntegrationSettings,
     UserProfileSettings,
 )
-from mato_loop_backend.skills import SkillDraft
+from mato_loop_backend.skill_packages import MAX_SKILL_BYTES, parse_skill_md, skill_md
+from mato_loop_backend.skill_resources import read_draft
+from mato_loop_backend.skills import SkillDraft, SkillService
 from mato_loop_backend.tools.actions import ApprovalEditField, ToolAction
 from mato_loop_backend.tools.arguments import (
     CreateAutomationArguments,
@@ -2941,7 +2944,7 @@ def test_update_user_profile_requires_a_field_and_rejects_blank_values() -> None
 
 @pytest.mark.parametrize("project_scope", [False, True])
 async def test_build_skill_uses_user_scoped_approval_and_persistence(
-    monkeypatch, tmp_path, project_scope
+    monkeypatch, tmp_path, project_scope, skill_library
 ) -> None:
     tool_settings = ToolSettings()
     skills = SkillsSettings()
@@ -2988,7 +2991,7 @@ async def test_build_skill_uses_user_scoped_approval_and_persistence(
         monkeypatch.setattr(_mock_target, 'RootFileService', _mock_value)
     context.skill_draft_handler = AsyncMock(
         return_value=SkillDraft(
-            name="API research",
+            name="api-research",
             description="Use when an API must be queried.",
             instructions="Call the available API tool and validate its response.",
         )
@@ -2998,29 +3001,26 @@ async def test_build_skill_uses_user_scoped_approval_and_persistence(
         draft_file = request.approval_details["draftFile"]
         assert context.root_files.run_id == context.run_id
         assert (
-            json.loads(
+            parse_skill_md(
                 ui_files.read_bytes(
                     "session",
                     draft_file["path"],
-                    limit=mock_tools_skills.SKILL_DRAFT_MAX_BYTES,
+                    limit=MAX_SKILL_BYTES,
                 )
-            )["name"]
-            == "API research"
+            )[0]["name"]
+            == "api-research"
         )
         assert ui_files.list_revisions("agent-private.txt") == ()
-        edited = json.dumps(
-            {
-                "name": "API checks",
-                "description": "Use when an API response must be checked.",
-                "instructions": "Call the available API tool and verify its response.",
-            }
-        )
-        context.approval_resolution["expected_revision"] = ui_files.replace_text_file(
+        edited = skill_md("api-checks", "Use when an API response must be checked.", "Call the available API tool and verify its response.").decode()
+        original = ui_files.read_bytes("session", draft_file["path"], limit=MAX_SKILL_BYTES)
+        ui_files.replace_text_file(
             "session",
             draft_file["path"],
             edited,
-            draft_file["initialRevision"],
+            hashlib.sha256(original).hexdigest(),
         )
+        draft = request.approval_details["skillDraft"]
+        context.approval_resolution["expected_revision"] = read_draft(ui_files, draft["path"], draft["executablePaths"]).revision
         return PermissionDecision.ALLOW
 
     context.ask_handler = AsyncMock(side_effect=approve_edited_draft)
@@ -3028,23 +3028,23 @@ async def test_build_skill_uses_user_scoped_approval_and_persistence(
     result = await tool_registry.execute(call, context)
 
     payload = json.loads(result.content)
-    assert payload["name"] == "API checks"
+    assert payload["name"] == "api-checks"
     assert payload["effectiveFrom"] == "next_run"
     assert len(skills.skills) == 1
     request = context.ask_handler.await_args.args[0]
     assert request.capability == "skills.write"
     assert request.resource_type == "skill_collection"
     assert request.resource_scope == str(context.session.user_id)
-    assert request.approval_details["skillPreview"]["name"] == "API research"
+    assert request.approval_details["skillPreview"]["name"] == "api-research"
     draft_file = request.approval_details["draftFile"]
-    assert draft_file["path"].startswith("skill-draft-")
+    assert draft_file["path"].startswith("skill-drafts/")
     draft_bytes = ui_files.read_bytes(
-        "session", draft_file["path"], limit=mock_tools_skills.SKILL_DRAFT_MAX_BYTES
+        "session", draft_file["path"], limit=MAX_SKILL_BYTES
     )
     assert (
-        context.approval_resolution["expected_revision"] == hashlib.sha256(draft_bytes).hexdigest()
+        context.approval_resolution["expected_revision"] == skills.skills[0].revision
     )
-    assert skills.skills[0].model_dump(exclude={"id", "enabled"}) == json.loads(draft_bytes)
+    assert skills.skills[0].name == parse_skill_md(draft_bytes)[0]["name"]
     assert draft_file["initialRevision"] != context.approval_resolution["expected_revision"]
     assert len(draft_services) == 1
     assert draft_services[0].run_id is None
@@ -3067,7 +3067,7 @@ async def test_build_skill_obeys_personal_gate_before_generation_and_after_appro
     monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=lambda _db, model, **_kwargs: instance if model is InstanceSkillsSettings else None))
     context = _context(tmp_path, ToolCall(id="blocked-skill", name="build_skill", arguments={"brief": "Create a reusable workflow."}))
     context.db.get.return_value = SimpleNamespace(is_admin=False)
-    context.skill_draft_handler = AsyncMock(return_value=SkillDraft(name="Workflow", description="Use for tasks.", instructions="Check results."))
+    context.skill_draft_handler = AsyncMock(return_value=SkillDraft(name="workflow", description="Use for tasks.", instructions="Check results."))
     async def approve(_request):
         instance.personal_skills_enabled = False
         return PermissionDecision.ALLOW
@@ -3100,7 +3100,7 @@ async def test_build_skill_rejects_a_draft_changed_after_approval(monkeypatch, t
     context.root_files.write_file("session", "agent-private.txt", "unfinished work")
     context.skill_draft_handler = AsyncMock(
         return_value=SkillDraft(
-            name="API research",
+            name="api-research",
             description="Use for API research.",
             instructions="Call the available API tool.",
         )
@@ -3109,16 +3109,15 @@ async def test_build_skill_rejects_a_draft_changed_after_approval(monkeypatch, t
     async def approve_then_change(request):
         draft = request.approval_details["draftFile"]
         initial = ui_files.read_bytes(
-            "session", draft["path"], limit=mock_tools_skills.SKILL_DRAFT_MAX_BYTES
+            "session", draft["path"], limit=MAX_SKILL_BYTES
         )
-        assert hashlib.sha256(initial).hexdigest() == draft["initialRevision"]
         context.approval_resolution["expected_revision"] = draft["initialRevision"]
         ui_files.write_file(
             "session",
             draft["path"],
-            '{"name":"Changed","description":"Changed","instructions":"Changed"}',
+            skill_md("changed", "Changed", "Changed").decode(),
             mode="replace",
-            expected_sha256=draft["initialRevision"],
+            expected_sha256=hashlib.sha256(initial).hexdigest(),
         )
         return PermissionDecision.ALLOW
 
@@ -3135,14 +3134,14 @@ async def test_build_skill_rejects_a_draft_changed_after_approval(monkeypatch, t
 
 
 async def test_edit_skill_reuses_draft_approval_and_preserves_target(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, skill_library
 ) -> None:
     existing = SkillDefinition(
-        name="Songfinder",
+        name="songfinder",
         description="Findet Songs.",
         instructions="Suche breit und prüfe Quellen.",
     )
-    skills = SkillsSettings(skills=[existing])
+    skills = SkillsSettings()
 
     async def load_settings(_db, settings_type, **_kwargs):
         return {ToolSettings: ToolSettings(), SkillsSettings: skills}.get(settings_type, settings_type())
@@ -3159,6 +3158,7 @@ async def test_edit_skill_reuses_draft_approval_and_preserves_target(
         },
     )
     context = _context(tmp_path, call)
+    skills.skills = [store_skill(existing, context.session.user_id)]
     target = existing.model_copy(deep=True)
     context.skill_state.catalog[existing.id] = target
     context.skill_draft_handler = AsyncMock(
@@ -3174,15 +3174,16 @@ async def test_edit_skill_reuses_draft_approval_and_preserves_target(
     payload = json.loads(result.content)
     assert payload == {
         "id": str(existing.id),
-        "name": "Songfinder",
+        "name": "songfinder",
+        "scope": "personal",
         "effectiveFrom": "next_run",
         "updated": True,
     }
     assert len(skills.skills) == 1
     assert skills.skills[0].id == existing.id
-    assert skills.skills[0].description.startswith("Immer bei")
-    assert skills.skills[0].instructions == existing.instructions
-    assert context.skill_state.edit_completed
+    updated = await SkillService.get(context.db, context.session.user_id, existing.id, "personal")
+    assert updated.description.startswith("Immer bei")
+    assert updated.instructions == existing.instructions
     context.skill_draft_handler.assert_awaited_once_with(
         "Ändere nur die Einsatzbeschreibung.", None, target
     )
@@ -3192,18 +3193,19 @@ async def test_edit_skill_reuses_draft_approval_and_preserves_target(
     assert request.resource_scope == str(existing.id)
     assert request.approval_details["skillTarget"] == {
         "id": str(existing.id),
-        "name": "Songfinder",
+        "name": "songfinder",
+        "scope": "personal",
     }
     save.assert_awaited_once()
 
 
-async def test_edit_skill_rejects_parallel_target_change(monkeypatch, tmp_path) -> None:
+async def test_edit_skill_rejects_parallel_target_change(monkeypatch, tmp_path, skill_library) -> None:
     existing = SkillDefinition(
-        name="Songfinder",
+        name="songfinder",
         description="Findet Songs.",
         instructions="Suche breit.",
     )
-    skills = SkillsSettings(skills=[existing])
+    skills = SkillsSettings()
 
     async def load_settings(_db, settings_type, **_kwargs):
         return {ToolSettings: ToolSettings(), SkillsSettings: skills}.get(settings_type, settings_type())
@@ -3220,6 +3222,7 @@ async def test_edit_skill_rejects_parallel_target_change(monkeypatch, tmp_path) 
         },
     )
     context = _context(tmp_path, call)
+    skills.skills = [store_skill(existing, context.session.user_id)]
     context.skill_state.catalog[existing.id] = existing.model_copy(deep=True)
     context.skill_draft_handler = AsyncMock(
         return_value=SkillDraft(
@@ -3230,9 +3233,7 @@ async def test_edit_skill_rejects_parallel_target_change(monkeypatch, tmp_path) 
     )
 
     async def approve_after_parallel_change(_request):
-        skills.skills[0] = existing.model_copy(
-            update={"description": "Parallel geändert."}
-        )
+        skills.skills[0] = store_skill(existing.model_copy(update={"description": "Parallel geändert."}), context.session.user_id)
         return PermissionDecision.ALLOW
 
     context.ask_handler = AsyncMock(side_effect=approve_after_parallel_change)
@@ -3241,16 +3242,15 @@ async def test_edit_skill_rejects_parallel_target_change(monkeypatch, tmp_path) 
 
     assert result.is_error
     assert result.metadata["errorCode"] == "skill.changed"
-    assert skills.skills[0].description == "Parallel geändert."
-    assert not context.skill_state.edit_completed
+    assert (await SkillService.get(context.db, context.session.user_id, existing.id, "personal")).description == "Parallel geändert."
     save.assert_not_awaited()
 
 
 async def test_load_skill_activates_snapshot_without_returning_instructions(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, skill_library
 ) -> None:
     skill = SkillDefinition(
-        name="API research",
+        name="api-research",
         description="Use when an API must be queried.",
         instructions="Call the available API tool.",
     )
@@ -3260,16 +3260,17 @@ async def test_load_skill_activates_snapshot_without_returning_instructions(
         arguments={"skill_id": str(skill.id)},
     )
     context = _context(tmp_path, call)
+    personal = SkillsSettings(skills=[store_skill(skill, context.session.user_id)])
     context.skill_state.catalog[skill.id] = skill
     monkeypatch.setattr(
-        SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_kw: kind())
+        SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_kw: personal if kind is SkillsSettings else kind())
     )
 
     result = await tool_registry.execute(call, context)
 
     assert not result.is_error
-    assert context.skill_state.active == skill
-    assert context.skill_state.active is not skill
+    assert context.skill_state.active[skill.id].instructions == skill.instructions
+    assert context.skill_state.active[skill.id] is not skill
     assert skill.instructions not in result.content
     context.ask_handler.assert_not_awaited()
 
@@ -3321,28 +3322,29 @@ async def test_load_skill_auto_to_ask_policy_transition_blocks(
     result = await tool_registry.execute(call, context)
 
     assert result.metadata == {"errorCode": "tool.unavailable"}
-    assert context.skill_state.active is None
+    assert not context.skill_state.active
     context.ask_handler.assert_not_awaited()
 
 
 async def test_load_skill_ask_policy_uses_the_user_skill_collection(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, skill_library
 ) -> None:
     skill = SkillDefinition(
-        name="API research",
+        name="api-research",
         description="Use when an API must be queried.",
         instructions="Call the available API tool.",
     )
     settings = _tool_settings(
         {"policies": {"skills.load": "ask"}}
     )
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_kw: settings if kind is ToolSettings else kind()))
     call = ToolCall(
         id="load-ask",
         name="load_skill",
         arguments={"skill_id": str(skill.id)},
     )
     context = _context(tmp_path, call)
+    personal = SkillsSettings(skills=[store_skill(skill, context.session.user_id)])
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_kw: settings if kind is ToolSettings else personal if kind is SkillsSettings else kind()))
     _set_profile_settings(context, settings)
     context.skill_state.catalog[skill.id] = skill
 
@@ -3353,6 +3355,58 @@ async def test_load_skill_ask_policy_uses_the_user_skill_collection(
     assert request.capability == "skills.load"
     assert request.resource_type == "skill_collection"
     assert request.resource_scope == str(context.session.user_id)
+
+
+@pytest.mark.parametrize("case", ["allowed", "not-admin", "revoked", "changed-script"])
+async def test_global_skill_creation_binds_admin_scope_and_complete_package(monkeypatch, tmp_path, skill_library, case):
+    from mato_loop_backend.models import UserAccount
+    from mato_loop_backend.skills import SkillTextFile
+
+    call = ToolCall("global-skill", "build_skill", {"brief": "Create a global skill for all users.", "scope": "instance"})
+    context = _context(tmp_path, call)
+    user = UserAccount(id=context.session.user_id, username="owner", password_hash="hash", is_admin=case != "not-admin", is_active=True)
+    context.db.scalar.return_value = user
+    instance = InstanceSkillsSettings()
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **kwargs: instance if kind is InstanceSkillsSettings else kind()))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=None))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    context.skill_draft_handler = AsyncMock(return_value=SkillDraft(name="global-workflow", description="Shared workflow", instructions="Run scripts/run.py.", files=[SkillTextFile(path="scripts/run.py", content="print('reviewed')")]))
+
+    async def approve(request):
+        assert request.approval_details["skillPreview"]["scope"] == "instance"
+        assert request.resource_scope == f"instance:{context.session.user_id}"
+        if case == "revoked":
+            user.is_admin = False
+        if case == "changed-script":
+            path = request.approval_details["skillDraft"]["path"] + "/scripts/run.py"
+            content = context.root_files.read_bytes("session", path, limit=1000)
+            context.root_files.write_file("session", path, "print('changed')", mode="replace", expected_sha256=hashlib.sha256(content).hexdigest())
+        return PermissionDecision.ALLOW
+
+    context.ask_handler = AsyncMock(side_effect=approve)
+    result = await tool_registry.execute(call, context)
+    if case == "allowed":
+        assert json.loads(result.content)["scope"] == "instance"
+        assert instance.skills[-1].name == "global-workflow"
+    else:
+        assert result.metadata["errorCode"] == ("file.changed" if case == "changed-script" else "auth.adminRequired")
+        SettingsStore.save.assert_not_awaited()
+
+
+async def test_multiple_skills_remain_active_with_readable_resource_paths(monkeypatch, tmp_path, skill_library):
+    context = _context(tmp_path, ToolCall("first", "load_skill", {}))
+    definitions = [SkillDefinition(name=name, description=name, instructions=f"Use {name}.") for name in ("first", "second")]
+    personal = SkillsSettings(skills=[store_skill(item, context.session.user_id) for item in definitions])
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **kwargs: personal if kind is SkillsSettings else kind()))
+    context.skill_state.catalog = {item.id: item for item in definitions}
+    for item in definitions:
+        call = ToolCall(item.name, "load_skill", {"skill_id": str(item.id)})
+        context.tool_call = call
+        result = await tool_registry.execute(call, context)
+        assert not result.is_error
+        path = json.loads(result.content)["filesBasePath"] + "/SKILL.md"
+        assert item.instructions.encode() in context.root_files.read_bytes("session", path, limit=1000)
+    assert set(context.skill_state.active) == {item.id for item in definitions}
 
 
 @pytest.mark.usefixtures("mock_db_settings")
@@ -5066,12 +5120,14 @@ def test_skill_write_schemas_delegate_compact_briefs() -> None:
         "_reason",
         "brief",
         "name_hint",
+        "scope",
     }
     assert build_schema["required"] == ["brief"]
     assert set(edit_schema["properties"]) == {
         "_reason",
         "skill_id",
         "brief",
+        "scope",
     }
     assert edit_schema["required"] == ["skill_id", "brief"]
 
@@ -5418,7 +5474,7 @@ async def test_effective_dispatch_preserves_ceiling_across_live_settings_reload(
         "permission.denied" if ceiling_policy == ToolExecutionPolicy.ASK else "tool.unavailable"
     )
     assert context.tool_settings._delegation_ceiling == snapshot
-    assert network_reads == [] and context.skill_state.active is None
+    assert network_reads == [] and not context.skill_state.active
     if ceiling_policy == ToolExecutionPolicy.ASK:
         context.ask_handler.assert_awaited_once()
         assert context.ask_handler.await_args.args[0].capability == capability

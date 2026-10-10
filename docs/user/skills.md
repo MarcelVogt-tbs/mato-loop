@@ -1,10 +1,10 @@
 # Skills
 
-Skills sind wiederverwendbare Anweisungen für bestimmte Aufgaben. Der wirksame Katalog enthält aktivierte globale, mitgelieferte und erlaubte persönliche Skills. Sie stellen keine Tools bereit und umgehen keine Sicherheitsgrenzen; beispielsweise können sie API-Prüfung oder Release Notes anleiten.
+Skills sind wiederverwendbare Anweisungen für bestimmte Aufgaben. Ein Skill-Paket enthält eine `SKILL.md` mit Metadaten und Anweisungen sowie optional Skripte, Referenzen und Vorlagen. MatoLoop verwaltet die Originale zentral im Backend. Der wirksame Katalog enthält aktivierte globale, mitgelieferte und erlaubte persönliche Skills. Sie stellen keine Tools bereit und umgehen keine Sicherheitsgrenzen; beispielsweise können sie API-Prüfung oder Release Notes anleiten.
 
 ## Skills verwenden
 
-Bei einer klar passenden Anfrage lädt der Agent genau einen Skill aus dem wirksamen Katalog. Sie können ihn auch ausdrücklich nennen. Vor dem Laden sieht das Modell nur Name und Einsatzbeschreibung, danach die vollständigen Anweisungen. Pro Lauf ist höchstens ein Skill aktiv.
+Bei einer klar passenden Anfrage lädt der Agent den Skill aus dem wirksamen Katalog. Sie können Skills auch ausdrücklich nennen und mehrere in einem Lauf kombinieren. Vor dem Laden sieht das Modell nur Name und Einsatzbeschreibung, danach die vollständigen Anweisungen. Referenzdateien liest es bei Bedarf nach.
 
 Ist Webrecherche für die Session verpflichtend, darf der Agent zunächst einen eindeutig passenden Skill laden. Die vorgeschriebene Suche bleibt trotzdem erforderlich und folgt im nächsten Schritt.
 
@@ -16,9 +16,13 @@ Im gewählten Agentenprofil legen Sie die Rechte für **Skills laden** und **Ski
 
 Eine Freigabe **Für Session erlauben** kann weitere passende Skill-Aktionen in derselben Session abdecken und lässt sich bei den Session-Freigaben widerrufen.
 
+Für Skripte und lokale Ressourcen stellt MatoLoop eine Arbeitskopie auf dem ausgewählten Computer bereit. Die normalen Datei- und Shell-Rechte gelten weiterhin; benötigte Programme müssen dort verfügbar sein. Nach einem Computerwechsel wird die Arbeitskopie auf dem neuen Computer bereitgestellt. Änderungen an Arbeitskopien verändern nicht automatisch die zentrale Bibliothek.
+
 ## Im Chat erstellen
 
-Bitten Sie im Chat ausdrücklich um einen wiederverwendbaren Skill, zum Beispiel: „Erstelle einen Skill namens API-Prüfung, der API-Beschreibungen auf gültige Tool-Schemas prüft.“ Nur eine direkte Bitte in Ihrer neuesten Nachricht startet die Erstellung. Zitierte oder zu übersetzende Skill-Anweisungen werden als Text behandelt und lösen keine Erstellung aus.
+Bitten Sie im Chat ausdrücklich um einen wiederverwendbaren Skill, zum Beispiel: „Erstelle einen Skill namens api-pruefung, der API-Beschreibungen auf gültige Tool-Schemas prüft.“ Nur eine direkte Bitte in Ihrer neuesten Nachricht startet die Erstellung. Zitierte oder zu übersetzende Skill-Anweisungen werden als Text behandelt und lösen keine Erstellung aus.
+
+Neue Chat-Skills sind standardmäßig persönlich, auch bei Administratoren. Administratoren können ausdrücklich einen globalen Skill für alle Benutzer anfordern. Der Geltungsbereich ist im Entwurf sichtbar und wird vor dem Speichern erneut geprüft.
 
 Das Builder-Modell erhält eine kurze Aufgabe und optional einen Namensvorschlag. **Skill-Erstellung** wählen Sie unter **Standardmodelle**; ohne separates Modell dient das Sessionmodell. Scheitert ein separat konfigurierter Builder, fragt MatoLoop vor einem Versuch mit dem Sessionmodell.
 
@@ -31,25 +35,27 @@ Modellwahl bestimmt Vertrauen und Pseudonymisierung. Öffentliche Builder erhalt
 
 ## Im Chat bearbeiten
 
-Bitten Sie ausdrücklich um die Änderung eines vorhandenen Skills, zum Beispiel: „Ändere beim Songfinder nur die Einsatzbeschreibung.“ Der Agent wählt den Skill anhand seiner festen ID aus und aktiviert ihn während der Bearbeitung nicht. Name, Einsatzbeschreibung und Anweisungen können geändert werden; die ID bleibt erhalten.
+Bitten Sie ausdrücklich um die Änderung eines vorhandenen Skills, zum Beispiel: „Ändere beim Songfinder nur die Einsatzbeschreibung.“ Der Agent wählt den Skill anhand seiner festen ID aus. Name, Einsatzbeschreibung, Anweisungen, zusätzliche Metadaten und unterstützende Textdateien können geändert werden; die ID bleibt erhalten. Globale Änderungen erfordern Administratorrechte und eine ausdrückliche Anfrage.
 
 Das Builder-Modell erhält zusätzlich den aktuellen Skill und liefert nur die gewünschten Änderungen. MatoLoop ergänzt unveränderte Felder selbst und erstellt daraus den vollständigen prüfbaren Entwurf. Wird der gespeicherte Skill währenddessen anderweitig geändert, bricht der Import ab, statt die neuere Fassung zu überschreiben.
 
 ## Entwurf prüfen und freigeben
 
-Bei der Richtlinie **Nachfragen** zeigt die Freigabekarte Name, Einsatzbeschreibung und Anweisungen. Über **Entwurf öffnen und bearbeiten** können Sie die strikte JSON-Datei im Session-Bereich `files` bearbeiten. Speichern Sie Änderungen vor der Entscheidung.
+Bei der Richtlinie **Nachfragen** zeigt die Freigabekarte Geltungsbereich, Name, Einsatzbeschreibung, Anweisungen und Paketdateien. Über **Entwurf öffnen und bearbeiten** öffnen Sie die `SKILL.md` im Session-Dateibereich. Begleitdateien liegen im selben Entwurfsordner. Speichern Sie Änderungen und wählen Sie **Paketvorschau aktualisieren**, bevor Sie entscheiden.
 
-MatoLoop importiert nur die exakt geprüfte Dateirevision. Geänderte oder ungültige Entwürfe werden abgelehnt. Lauf-Freigaben gelten im ausführenden Lauf, Session-Freigaben auch später. Erstellrechte gelten für die persönliche Sammlung; Bearbeitungsrechte nur für den ausgewählten Skill. **Automatisch** importiert den ursprünglichen generierten Entwurf direkt.
+MatoLoop importiert nur den exakt geprüften Paketstand einschließlich aller Skripte und Begleitdateien. Geänderte oder ungültige Entwürfe werden abgelehnt. Lauf-Freigaben gelten im ausführenden Lauf, Session-Freigaben auch später. Persönliche und globale Freigaben sind getrennt; Bearbeitungsrechte gelten nur für den ausgewählten Skill. **Automatisch** importiert den ursprünglichen generierten Entwurf direkt.
 
-Die Entwurfsdatei bleibt nach Import, Ablehnung oder Fehler in den Session-Dateien erhalten. Sie können sie dort später prüfen oder manuell löschen.
+Der Entwurfsordner bleibt nach Import, Ablehnung oder Fehler in den Session-Dateien erhalten. Sie können ihn dort später prüfen oder manuell löschen.
 
 ## Verwalten
 
 Eigene Skills verwalten Sie unter **Einstellungen > Skills**, globale unter **Administration > Skills > Verwaltung**. **Persönliche Skills erlauben** auf der administrativen Einstellungsseite ist anfangs aktiv. Deaktivierte persönliche Skills und Änderungen bleiben lesbar, werden aber nicht in neuen Läufen verwendet oder bearbeitet; globale Skills bleiben verfügbar. Dies gilt auch für Chat-Erstellung. Administratoren behalten ihre Ausnahme. Ein Skill besteht aus:
 
-- Name mit höchstens 64 Zeichen
-- Einsatzbeschreibung mit höchstens 240 Zeichen
-- Anweisungen mit höchstens 8.000 Zeichen
+- Name mit höchstens 64 Zeichen aus Kleinbuchstaben, Ziffern und einzelnen Bindestrichen; reservierte Dateinamen sind ausgeschlossen
+- Einsatzbeschreibung mit höchstens 1.024 Zeichen
+- `SKILL.md` mit höchstens 128 KiB sowie optionale Begleitdateien
+
+Über **Importieren** übernehmen Sie eine `SKILL.md` oder ein ZIP-Paket. Über **Exportieren** erhalten Sie ein ZIP mit dem vollständigen Skill. Im Paketeditor wählen Sie einzelne Dateien aus; Textdateien lassen sich bearbeiten, Binärdateien herunterladen oder ersetzen. Änderungen speichern Sie mit **Speichern** oder Strg/Cmd+S. Ein Paket darf insgesamt 8 MiB und 256 Dateien enthalten, höchstens 4 MiB je Datei. Die Verzeichnisstruktur ist auf 16 Ebenen und 512 Verzeichnisse einschließlich Paketwurzel begrenzt.
 
 Die persönliche Sammlung hat höchstens 20 Skills; auch der globale Einstellungsbereich ist begrenzt. Namen müssen im jeweiligen Bereich eindeutig sein. Aktivieren Sie gewünschte Skills ausdrücklich. Mit **Standard** gekennzeichnete mitgelieferte Skills sind nicht löschbar; ein veränderter Standard lässt sich zurücksetzen, ohne seinen Aktivierungsstatus zu ändern. Änderungen gelten ab dem nächsten Lauf; laufende Agenten behalten ihren Startkatalog.
 

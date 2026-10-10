@@ -69,11 +69,10 @@ from mato_loop_backend.settings import (
     load_effective_agent_identity,
     load_effective_ai,
     load_effective_integrations,
-    load_effective_skills,
 )
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
 from mato_loop_backend.settings.models import ReasoningEffort, TrustLevel
-from mato_loop_backend.skills import RunSkillState
+from mato_loop_backend.skills import RunSkillState, SkillService
 from mato_loop_backend.tools.display import tool_display
 from mato_loop_backend.tools.snapshots import collect_tool_snapshots
 from mato_loop_backend.user_profile import user_profile_content_hashes, user_profile_runtime_payload
@@ -114,9 +113,7 @@ async def execute_loop_body(
     user_profile = await SettingsStore.load(
         db, UserProfileSettings, user_id=chat_session.user_id
     )
-    skills = await load_effective_skills(
-        db, chat_session.user_id, enabled_only=True
-    )
+    skills = await SkillService.list(db, chat_session.user_id)
     skill_state = RunSkillState.from_skills(skills)
     selected_execution_agent = (
         await db.get(ExecutionAgent, run.execution_agent_id)
@@ -410,7 +407,7 @@ async def execute_loop_body(
                 and {"load_skill", "edit_skill"} & effective_toolset.tools.keys()
                 else ()
             ),
-            active_skill=skill_state.active,
+            active_skills=tuple(skill_state.active.values()),
             execution_agent_id=run.execution_agent_id,
             execution_agent_name=(
                 selected_execution_agent.display_name if selected_execution_agent else None

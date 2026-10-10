@@ -8,6 +8,7 @@
         </p>
       </div>
       <div v-if="showManagement" class="settings-scope-actions row items-center col-auto">
+        <q-btn flat no-caps icon="upload_file" label="Importieren" :disable="writeBlocked" @click="importOpen = true" />
         <q-btn
           unelevated
           no-caps
@@ -66,6 +67,7 @@
           </q-item-section>
           <q-item-section side top>
             <div class="row no-wrap q-gutter-xs">
+              <q-btn flat round dense icon="download" :aria-label="`${skillDisplayName(skill)} exportieren`" @click="exportSkill(skill)" />
               <q-toggle dense
                 :model-value="skill.enabled"
                 :aria-label="`${skillDisplayName(skill)} ${skill.enabled ? 'deaktivieren' : 'aktivieren'}`"
@@ -96,56 +98,53 @@
             <q-avatar color="primary" text-color="white" :icon="editingSkill ? 'edit' : 'auto_awesome'" />
             <div class="col">
               <div class="text-h6">{{ personalBlocked ? 'Skill ansehen' : editingSkill ? 'Skill bearbeiten' : 'Skill erstellen' }}</div>
-              <div class="text-body2 app-muted">Name, Einsatzbeschreibung und Arbeitsanweisungen festlegen.</div>
+              <div class="text-body2 app-muted">{{ scope === 'instance' ? 'Global – für alle Benutzer' : 'Persönlich' }} · SKILL.md und Begleitdateien</div>
             </div>
             <q-btn flat round dense icon="close" aria-label="Dialog schließen" :disable="saving" v-close-popup />
           </q-card-section>
           <q-separator />
-          <q-card-section class="col scroll q-gutter-md">
-            <q-input dense
-              v-model="form.name"
-              :readonly="personalBlocked"
-              outlined
-              autofocus
-              label="Name"
-              maxlength="64"
-              counter
-              lazy-rules
-              :rules="[requiredRule]"
-            />
-            <q-input dense
-              v-model="form.description"
-              :readonly="personalBlocked"
-              outlined
-              autogrow
-              type="textarea"
-              label="Einsatzbeschreibung"
-              maxlength="240"
-              counter
-              lazy-rules
-              :rules="[requiredRule]"
-              hint="Bestimmt die automatische Auswahl: Was macht der Skill und wann soll er verwendet werden?"
-            />
-            <q-input dense
-              v-model="form.instructions"
-              :readonly="personalBlocked"
-              outlined
-              type="textarea"
-              rows="12"
-              label="Anweisungen"
-              maxlength="8000"
-              counter
-              lazy-rules
-              :rules="[requiredRule]"
-              hint="Beschreibe konkret, wie der Skill arbeiten soll."
-            />
+          <q-card-section class="q-pb-none">
+            <div class="row items-center no-wrap">
+              <q-select class="col q-mr-sm" dense outlined label="Datei" :model-value="selectedPath" :options="editingSkill?.resourcePaths || ['SKILL.md']" :disable="saving" @update:model-value="selectFile" />
+              <q-btn v-if="editingSkill" flat round icon="download" aria-label="Datei herunterladen" @click="downloadResource" />
+              <q-btn v-if="editingSkill && !personalBlocked" flat round icon="add" aria-label="Datei hinzufügen" @click="uploadOpen = true" />
+              <q-btn v-if="editingSkill && selectedPath !== 'SKILL.md' && !personalBlocked" flat round color="negative" icon="delete_outline" aria-label="Datei löschen" @click="deleteResource" />
+            </div>
+            <q-checkbox v-if="selectedPath !== 'SKILL.md' && !binary" v-model="executable" :disable="personalBlocked" label="Ausführbare Datei" />
+          </q-card-section>
+          <q-card-section class="col column no-wrap overflow-hidden">
+            <q-banner v-if="binary" rounded class="app-surface-tonal">Binärdatei – zum Anzeigen herunterladen oder durch eine neue Datei ersetzen.</q-banner>
+            <WorkspaceFileEditor v-else v-model="form.document" class="col" :filename="selectedPath" :markdown="selectedPath.endsWith('.md')" :readonly="personalBlocked" :show-toolbar="false" :dirty="dirty" :saving="saving" @save="saveSkill" />
           </q-card-section>
           <q-separator />
           <q-card-actions align="right" class="q-pa-md">
             <q-btn flat no-caps label="Abbrechen" :disable="saving" v-close-popup />
-            <q-btn v-if="!personalBlocked" unelevated no-caps color="primary" label="Speichern" type="submit" :loading="saving" :disable="writeBlocked" />
+            <q-btn v-if="!personalBlocked && !binary" unelevated no-caps color="primary" label="Speichern" type="submit" :loading="saving" :disable="writeBlocked" />
           </q-card-actions>
         </q-form>
+      </q-card>
+    </q-dialog>
+    <q-dialog v-model="importOpen" :persistent="skills.saving">
+      <q-card class="q-pa-md">
+        <div class="text-h6">Skill importieren</div>
+        <p>{{ admin ? 'Global – für alle Benutzer' : 'Persönlicher Skill' }}</p>
+        <q-file v-model="importFile" outlined label="SKILL.md oder ZIP-Paket" accept=".md,.zip" :disable="skills.saving" />
+        <q-card-actions align="right">
+          <q-btn flat no-caps label="Abbrechen" :disable="skills.saving" v-close-popup />
+          <q-btn color="primary" no-caps label="Importieren" :disable="!importFile" :loading="skills.saving" @click="importSkill" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+    <q-dialog v-model="uploadOpen" :persistent="skills.saving">
+      <q-card class="q-pa-md">
+        <div class="text-h6 q-mb-md">Paketdatei hinzufügen oder ersetzen</div>
+        <q-input v-model="uploadPath" outlined label="Relativer Pfad" placeholder="scripts/example.py" class="q-mb-md" />
+        <q-file v-model="uploadFile" outlined label="Datei" />
+        <q-checkbox v-model="uploadExecutable" label="Ausführbar" />
+        <q-card-actions align="right">
+          <q-btn flat no-caps label="Abbrechen" :disable="skills.saving" v-close-popup />
+          <q-btn color="primary" no-caps label="Speichern" :disable="!uploadFile || !uploadPath.trim()" :loading="skills.saving" @click="uploadResource" />
+        </q-card-actions>
       </q-card>
     </q-dialog>
   </section>
@@ -153,7 +152,8 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { useQuasar } from 'quasar'
+import { exportFile, useQuasar } from 'quasar'
+import WorkspaceFileEditor from 'src/features/files/components/WorkspaceFileEditor.vue'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import PersonalSettingsGate from 'src/features/settings/PersonalSettingsGate.vue'
 import { useConfirm } from 'src/composables/confirm'
@@ -179,9 +179,19 @@ const section = ref('general')
 const showManagement = computed(() => !admin || section.value === 'management')
 const personalBlocked = computed(() => !admin && !auth.isAdmin && !skills.personalSkillsEnabled)
 const writeBlocked = computed(() => !loaded.value || loadFailed.value || !skills.settingsLoaded || personalBlocked.value || skills.saving)
-const form = reactive({ name: '', description: '', instructions: '' })
-
-const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Pflichtfeld'
+const form = reactive({ document: '' })
+const selectedPath = ref('SKILL.md')
+const original = ref('')
+const executable = ref(false)
+const originalExecutable = ref(false)
+const dirty = computed(() => form.document !== original.value || executable.value !== originalExecutable.value)
+const binary = ref(false)
+const importOpen = ref(false)
+const importFile = ref(null)
+const uploadOpen = ref(false)
+const uploadFile = ref(null)
+const uploadPath = ref('')
+const uploadExecutable = ref(false)
 
 async function load() {
   loaded.value = false
@@ -197,18 +207,24 @@ async function load() {
 
 function openCreateDialog() {
   editingSkill.value = null
-  Object.assign(form, { name: '', description: '', instructions: '' })
+  form.document = '---\nname: mein-skill\ndescription: Beschreibe, wann dieser Skill verwendet werden soll.\n---\n\n# Anweisungen\n\n'
+  selectedPath.value = 'SKILL.md'
+  original.value = form.document
+  executable.value = false
+  originalExecutable.value = false
+  binary.value = false
   dialogOpen.value = true
 }
 
 function openEditDialog(skill) {
   editingSkill.value = skill
   skills.selectScope(skill.scope)
-  Object.assign(form, {
-    name: skill.name,
-    description: skill.description,
-    instructions: skill.instructions
-  })
+  form.document = skill.document
+  selectedPath.value = 'SKILL.md'
+  original.value = form.document
+  executable.value = false
+  originalExecutable.value = false
+  binary.value = false
   dialogOpen.value = true
 }
 
@@ -217,26 +233,88 @@ async function saveSkill() {
   if (!await formRef.value?.validate()) return
   saving.value = true
   try {
-    const payload = {
-      name: form.name.trim(),
-      description: form.description.trim(),
-      instructions: form.instructions.trim()
-    }
+    const payload = { document: form.document, expectedRevision: editingSkill.value?.revision }
+    const submittedExecutable = executable.value
     if (editingSkill.value) {
-      await skills.updateSkill(editingSkill.value.id, payload)
+      editingSkill.value = selectedPath.value === 'SKILL.md'
+        ? await skills.updateSkill(editingSkill.value.id, payload)
+        : await skills.writeFile(editingSkill.value, selectedPath.value, new File([payload.document], selectedPath.value.split('/').pop()), submittedExecutable)
       $q.notify({ type: 'positive', message: 'Skill gespeichert' })
     } else {
       skills.selectScope(scope.value)
-      await skills.createSkill(payload)
+      editingSkill.value = await skills.createSkill(payload)
       $q.notify({ type: 'positive', message: 'Skill erstellt' })
     }
-    dialogOpen.value = false
-    await load()
+    original.value = payload.document
+    originalExecutable.value = submittedExecutable
   } catch {
     // The central Axios interceptor displays the error; keep the dialog open.
   } finally {
     saving.value = false
   }
+}
+
+async function selectFile(path) {
+  if (dirty.value && !await confirm('Ungespeicherte Änderungen verwerfen?', 'Datei wechseln')) return
+  if (!editingSkill.value) return
+  saving.value = true
+  try {
+    const response = await skills.readFile(editingSkill.value, path)
+    let text = ''
+    let isBinary = false
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(response.data); isBinary = text.includes('\0') } catch { isBinary = true }
+    form.document = text
+    original.value = text
+    selectedPath.value = path
+    binary.value = isBinary
+    executable.value = response.headers['x-skill-executable'] === 'true'
+    originalExecutable.value = executable.value
+    editingSkill.value = { ...editingSkill.value, revision: response.headers.etag.replaceAll('"', '') }
+  } catch { /* Central API toast. */ } finally { saving.value = false }
+}
+
+async function importSkill() {
+  try {
+    skills.selectScope(scope.value)
+    await skills.importSkill(importFile.value)
+    importOpen.value = false
+    importFile.value = null
+    $q.notify({ type: 'positive', message: 'Skill importiert' })
+  } catch { /* Central API toast. */ }
+}
+
+async function exportSkill(skill) {
+  try { exportFile(`${skill.name}.zip`, await skills.exportSkill(skill), 'application/zip') } catch { /* Central API toast. */ }
+}
+
+async function downloadResource() {
+  try { const { data } = await skills.readFile(editingSkill.value, selectedPath.value); exportFile(selectedPath.value.split('/').pop(), data) } catch { /* Central API toast. */ }
+}
+
+async function uploadResource() {
+  if (editingSkill.value.resourcePaths.includes(uploadPath.value) && !await confirm('Die vorhandene Datei ersetzen?', 'Datei ersetzen')) return
+  try {
+    editingSkill.value = await skills.writeFile(editingSkill.value, uploadPath.value, uploadFile.value, uploadExecutable.value)
+    if (uploadPath.value === selectedPath.value) {
+      original.value = form.document
+      originalExecutable.value = executable.value
+      await selectFile(selectedPath.value)
+    }
+    uploadOpen.value = false
+    uploadFile.value = null
+    $q.notify({ type: 'positive', message: 'Paketdatei gespeichert' })
+  } catch { /* Central API toast. */ }
+}
+
+async function deleteResource() {
+  if (!await confirm(`Datei „${selectedPath.value}“ löschen?`, 'Datei löschen', { okColor: 'negative' })) return
+  try {
+    editingSkill.value = await skills.deleteFile(editingSkill.value, selectedPath.value)
+    original.value = form.document
+    originalExecutable.value = executable.value
+    await selectFile('SKILL.md')
+    $q.notify({ type: 'positive', message: 'Paketdatei gelöscht' })
+  } catch { /* Central API toast. */ }
 }
 
 async function removeSkill(skill) {
@@ -298,12 +376,14 @@ watch(() => admin, load)
 <style scoped>
 .skill-dialog {
   width: min(720px, calc(100vw - 32px));
+  height: calc(100dvh - 32px);
   max-height: calc(100dvh - 32px);
 }
 
 @media (max-width: 599px) {
   .skill-dialog {
     width: 100%;
+    height: 100dvh;
     max-height: 100dvh;
   }
 }

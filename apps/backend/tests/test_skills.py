@@ -1,3 +1,8 @@
+import io
+import stat
+import zipfile
+from contextlib import nullcontext
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -5,383 +10,251 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from skill_helpers import store_skill
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.routes import skills as skill_routes
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import UserAccount
+from mato_loop_backend.models.setting import SettingRecord
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
     DEFAULT_SKILLS,
     WEATHER_SKILL_ID,
     InstanceSkillsSettings,
-    SettingsScope,
     SettingsStore,
     SkillDefinition,
     SkillsSettings,
-    load_effective_skills,
 )
-from mato_loop_backend.skills import (
-    SkillDraft,
-    SkillEditPatch,
+from mato_loop_backend.skill_migration import initialize_skill_library
+from mato_loop_backend.skill_packages import (
     SkillError,
-    SkillService,
-    parse_skill_draft,
-    serialize_skill_draft,
+    SkillFile,
+    SkillPackage,
+    parse_skill_md,
+    skill_md,
 )
+from mato_loop_backend.skills import SkillDraft, SkillEditPatch, SkillService
+
+pytestmark = pytest.mark.usefixtures("skill_library", "mock_db_settings")
 
 
-def _draft(name: str = "Recherche") -> SkillDraft:
-    return SkillDraft(
-        name=name,
-        description="Sucht belastbare Quellen.",
-        instructions="Pruefe Aussagen anhand aktueller Quellen.",
-    )
+def package():
+    return SkillPackage({
+        "SKILL.md": SkillFile(skill_md("pdf-processing", "Process PDF files.", "Run scripts/extract.py; see references/guide.md.", {"license": "MIT", "metadata": {"vendor": {"hint": "inert"}}})),
+        "scripts/extract.py": SkillFile(b"print('done')\n", True),
+        "references/guide.md": SkillFile(b"Read this only when needed.\n"),
+        "assets/template.bin": SkillFile(b"\x00\xff\x80"),
+    })
 
 
-def test_skill_settings_validate_and_normalize_definitions() -> None:
-    skill = SkillDefinition(
-        name="  Recherche  ",
-        description="  Sucht Quellen.  ",
-        instructions="  Pruefe die Quellen.  ",
-    )
+def test_package_round_trip_keeps_all_files_metadata_and_modes():
+    original = package()
+    assert SkillPackage.import_file(original.archive(), archive=True) == original
 
-    assert SkillsSettings.settings_scope == SettingsScope.USER
-    assert InstanceSkillsSettings.settings_scope == SettingsScope.GLOBAL
-    assert skill.enabled is True
-    assert (skill.name, skill.description, skill.instructions) == (
-        "Recherche",
-        "Sucht Quellen.",
-        "Pruefe die Quellen.",
-    )
-    for values in (
-        {"name": " "},
-        {"name": "Bad\u202ename"},
-        {"description": " "},
-        {"instructions": " "},
-        {"name": "x" * 65},
-    ):
-        with pytest.raises(ValidationError):
-            SkillDefinition(
-                name=values.get("name", "Name"),
-                description=values.get("description", "Description"),
-                instructions=values.get("instructions", "Instructions"),
-            )
+
+@pytest.mark.parametrize("name", ["../outside", "/absolute", "C:/outside", "x/../../outside", "x\\outside", "x/CON", "x/file.", "a" * 241, "bad\x80file"])
+def test_package_rejects_nonportable_or_escaping_paths(name):
+    with pytest.raises(SkillError):
+        SkillPackage({**package().files, name: SkillFile(b"bad")})
+
+
+@pytest.mark.parametrize("paths", [
+    ["a/" * 17 + "example.txt"],
+    [f"d{index}/a/b/example.txt" for index in range(255)],
+], ids=["depth", "directory-count"])
+def test_import_rejects_trees_the_storage_reader_cannot_read(paths):
+    content = io.BytesIO()
+    with zipfile.ZipFile(content, "w") as archive:
+        archive.writestr("SKILL.md", package().files["SKILL.md"].content)
+        for path in paths:
+            archive.writestr(path, b"small file")
+    with pytest.raises(SkillError, match="file.tooLarge"):
+        SkillPackage.import_file(content.getvalue(), archive=True)
+
+
+def test_import_rejects_links_and_duplicate_members():
+    for path, mode in (("pdf-processing/link", stat.S_IFLNK), ("pdf-processing/SKILL.md", stat.S_IFREG)):
+        content = io.BytesIO(package().archive())
+        with zipfile.ZipFile(content, "a") as archive:
+            info = zipfile.ZipInfo(path)
+            info.external_attr = mode << 16
+            with pytest.warns(UserWarning) if path.endswith("SKILL.md") else nullcontext():
+                archive.writestr(info, b"outside")
+        with pytest.raises(SkillError):
+            SkillPackage.import_file(content.getvalue(), archive=True)
+
+
+@pytest.mark.parametrize("header", ["name: Bad", "name: con", "name: good\nname: duplicate", "name: good\nx: &a [*a]", "name: good\ndescription: [not, text]"])
+def test_invalid_frontmatter_is_controlled(header):
+    with pytest.raises(SkillError):
+        parse_skill_md(f"---\ndescription: Description\n{header}\n---\nBody")
+
+
+def test_reference_registry_has_no_inline_content():
+    skill = SkillDefinition(name="research", description="Sources", instructions="Check sources.")
+    reference = store_skill(skill)
+    assert set(reference.model_dump()) == {"id", "name", "revision", "enabled"}
     with pytest.raises(ValidationError):
-        SkillsSettings(skills=[skill.model_copy() for _ in range(21)])
+        SkillsSettings(skills=[skill])
 
 
-def test_instance_settings_add_new_shipped_defaults(monkeypatch) -> None:
-    existing = SkillDefinition(
-        name="Existing", description="Already stored", instructions="Keep this skill."
-    )
-    shipped = SkillDefinition(
-        name="Standard", description="Ausgeliefert", instructions="Arbeite so.", enabled=False
-    )
-    monkeypatch.setitem(DEFAULT_SKILLS, shipped.id, shipped)
-
-    settings = InstanceSkillsSettings(skills=[existing])
-
-    assert [skill.id for skill in settings.skills] == [existing.id, *DEFAULT_SKILLS]
-    assert all(
-        skill is not DEFAULT_SKILLS[skill.id]
-        for skill in settings.skills
-        if skill.id in DEFAULT_SKILLS
-    )
+def test_storage_verifies_content_and_rejects_symlinks(skill_library):
+    skill_id = uuid4()
+    original = package()
+    skill_library.publish(None, skill_id, original)
+    assert skill_library.read(None, skill_id, original.revision, original.name) == original
+    resource = skill_library.root / "global" / str(skill_id) / original.revision / original.name / "references/guide.md"
+    resource.unlink()
+    resource.symlink_to("/etc/passwd")
+    with pytest.raises(SkillError):
+        skill_library.read(None, skill_id, original.revision, original.name)
 
 
-def test_shipped_weather_skill_is_disabled_and_model_facing() -> None:
-    weather = DEFAULT_SKILLS[WEATHER_SKILL_ID]
-
-    assert weather.name == "Weather"
-    assert weather.enabled is False
-    assert "Do not use for translation" in weather.description
-    assert "geocoding-api.open-meteo.com" in weather.instructions
-    assert "Percent-encode the complete place value" in weather.instructions
-    assert "api.open-meteo.com/v1/forecast" in weather.instructions
-    assert "Markdown table" in weather.instructions
-    assert "maximum hourly probability" in weather.instructions
+def test_partial_edit_preserves_binary_files_and_vendor_metadata():
+    updated = SkillDraft(name="pdf-processing", description="New description", instructions="New instructions").package(package())
+    assert updated.files["assets/template.bin"] == package().files["assets/template.bin"]
+    assert updated.metadata["metadata"] == package().metadata["metadata"]
+    with pytest.raises(ValidationError):
+        SkillEditPatch()
 
 
-def test_skill_draft_json_is_strict_stable_and_controlled() -> None:
-    draft = _draft("Uebersicht")
-    serialized = serialize_skill_draft(draft)
-
-    assert serialized.startswith('{\n  "name": "Uebersicht"')
-    assert serialized.endswith("\n")
-    assert parse_skill_draft(serialized) == draft
-    for value in (
-        '{"name":"x","description":"y","instructions":"z","extra":true}',
-        '{"name":1,"description":"y","instructions":"z"}',
-        "not-json",
-    ):
-        with pytest.raises(SkillError, match="skill.draftInvalid") as exc_info:
-            parse_skill_draft(value)
-        assert exc_info.value.code == "skill.draftInvalid"
-
-
-def test_skill_edit_patch_is_partial_strict_and_requires_a_change() -> None:
-    assert SkillEditPatch(description="  Neue Beschreibung  ").model_dump() == {
-        "name": None,
-        "description": "Neue Beschreibung",
-        "instructions": None,
-    }
-    for value in (
-        {},
-        {"description": None},
-        {"description": " "},
-        {"description": "Neu", "extra": True},
-    ):
-        with pytest.raises(ValidationError):
-            SkillEditPatch.model_validate(value)
-
-
-@pytest.mark.usefixtures("mock_db_settings")
-async def test_skill_service_locks_mutations_preserves_id_and_does_not_commit(
-    monkeypatch,
-) -> None:
-    user_id = uuid4()
-    existing = SkillDefinition(
-        name="Recherche", description="Alt", instructions="Alte Anweisung"
-    )
-    settings = SkillsSettings(skills=[existing])
-    load = AsyncMock(return_value=settings)
-    save = AsyncMock()
-    monkeypatch.setattr(SettingsStore, "load", load)
-    monkeypatch.setattr(SettingsStore, "save", save)
+@pytest.mark.parametrize(("old_name", "expected_name"), [("Mein Skill", "mein-skill"), ("CON", "skill-con")])
+async def test_migration_preserves_ownership_ids_enabled_and_removes_inline_payload(monkeypatch, skill_library, old_name, expected_name):
+    user_id, skill_id = uuid4(), uuid4()
+    record = SettingRecord(key="skills", user_id=user_id, data={"skills": [{"id": str(skill_id), "name": old_name, "description": "Beschreibung", "instructions": "Unverändert", "enabled": False}]})
     db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = SimpleNamespace(all=lambda: [record])
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    await initialize_skill_library(db)
+    reference = SkillsSettings.model_validate(record.data).skills[0]
+    assert (reference.id, reference.name, reference.enabled) == (skill_id, expected_name, False)
+    assert "instructions" not in record.data["skills"][0]
+    assert parse_skill_md(skill_library.read(user_id, skill_id, reference.revision, reference.name).files["SKILL.md"].content)[1] == "Unverändert"
+    await initialize_skill_library(db)
+    assert SkillsSettings.model_validate(record.data).skills[0] == reference
 
-    replacement = await SkillService.replace(
-        db,
-        user_id,
-        existing.id,
-        _draft("Quellenpruefung"),
-        expected=existing,
-    )
 
-    assert replacement.id == existing.id
-    assert replacement.enabled is True
-    assert load.await_args.kwargs == {"user_id": user_id, "for_update": True}
-    save.assert_awaited_once_with(db, settings, user_id=user_id)
+async def test_failed_migration_keeps_original_database_content(monkeypatch):
+    original = {"skills": [{"id": str(uuid4()), "name": "Original", "description": "Description", "instructions": "Original"}]}
+    record = SettingRecord(key="skills", user_id=uuid4(), data=original)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = SimpleNamespace(all=lambda: [record])
+    from mato_loop_backend.skill_storage import SkillStorage
+    monkeypatch.setattr(SkillStorage, "publish", lambda *args: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(OSError):
+        await initialize_skill_library(db)
+    assert record.data == original
     db.commit.assert_not_awaited()
 
-    with pytest.raises(SkillError) as exc_info:
-        await SkillService.replace(
-            db,
-            user_id,
-            existing.id,
-            _draft("Nochmals"),
-            expected=existing,
-        )
 
-    assert exc_info.value.code == "skill.changed"
-    save.assert_awaited_once()
-
-
-@pytest.mark.usefixtures("mock_db_settings")
-async def test_skill_service_rejects_casefold_duplicate(monkeypatch) -> None:
-    settings = SkillsSettings(
-        skills=[SkillDefinition(name="STRASSE", description="Alt", instructions="Alt")]
-    )
+async def test_service_conflict_preserves_current_package(monkeypatch):
+    owner = uuid4()
+    skill = SkillDefinition(name="research", description="Old", instructions="Old")
+    settings = SkillsSettings(skills=[store_skill(skill, owner)])
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
-    save = AsyncMock()
-    monkeypatch.setattr(SettingsStore, "save", save)
-
-    with pytest.raises(SkillError) as exc_info:
-        await SkillService.create(AsyncMock(spec=AsyncSession), uuid4(), _draft("strasse"))
-
-    assert exc_info.value.code == "skill.duplicate"
-    save.assert_not_awaited()
-
-
-@pytest.mark.usefixtures("mock_db_settings")
-async def test_skill_delete_removes_the_personal_definition(
-    monkeypatch,
-) -> None:
-    user_id = uuid4()
-    skill = SkillDefinition(name="Bericht", description="Erstellt Berichte", instructions="Pruefe Daten")
-    settings = SkillsSettings(skills=[skill])
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
-    save = AsyncMock()
-    monkeypatch.setattr(SettingsStore, "save", save)
-    db = AsyncMock(spec=AsyncSession)
-    await SkillService.delete(db, user_id, skill.id)
-    assert settings.skills == []
-    save.assert_awaited_once()
-
-
-def test_authenticated_skill_api_creates_and_commits(monkeypatch) -> None:
-    user = UserAccount(id=uuid4(), username="test", password_hash="hash")
-    db = AsyncMock(spec=AsyncSession)
-    created = SkillDefinition(**_draft().model_dump())
-    create = AsyncMock(return_value=created)
-    monkeypatch.setattr(SkillService, "create", create)
-    monkeypatch.setattr(SkillService, "list", AsyncMock(return_value=[created]))
-
-    async def override_db():
-        yield db
-
-    app = FastAPI()
-    register_error_handlers(app)
-    app.include_router(skill_routes.router, prefix="/api")
-    app.dependency_overrides[get_db_session] = override_db
-    app.dependency_overrides[require_user] = lambda: user
-
-    with TestClient(app) as client:
-        listed = client.get("/api/skills")
-        response = client.post("/api/skills", json=_draft().model_dump())
-
-    assert listed.json() == {"items": [{
-        **created.model_dump(mode="json"),
-        "scope": "instance",
-        "isDefault": False,
-        "modified": False,
-    }]}
-    assert response.status_code == 201
-    assert response.json()["id"] == str(created.id)
-    create.assert_awaited_once()
-    assert create.await_args.args[:2] == (db, user.id)
-    db.commit.assert_awaited_once()
-
-    create.side_effect = SkillError("skill.personalDisabled")
-    with TestClient(app) as client:
-        blocked = client.post("/api/skills", json=_draft().model_dump())
-    assert (blocked.status_code, blocked.json()["error"]["code"]) == (409, "skill.personalDisabled")
-
-
-async def test_effective_skills_merge_scopes_and_hide_disabled(monkeypatch) -> None:
-    user_id = uuid4()
-    instance = SkillDefinition(
-        name="Instanz", description="Global", instructions="Global", enabled=True
-    )
-    personal = SkillDefinition(
-        name="Persoenlich", description="Privat", instructions="Privat", enabled=False
-    )
-
-    monkeypatch.setattr(
-        SettingsStore, "load", AsyncMock(return_value=SkillsSettings(skills=[personal]))
-    )
-    monkeypatch.setattr(
-        SettingsStore,
-        "load_optional",
-        AsyncMock(return_value=InstanceSkillsSettings(skills=[instance])),
-    )
-    skills = await load_effective_skills(
-        AsyncMock(spec=AsyncSession), user_id, enabled_only=True
-    )
-
-    assert [skill.id for skill in skills] == [instance.id]
-    assert skills[0].owner_id is None
-
-
-@pytest.mark.usefixtures("mock_db_settings")
-async def test_personal_default_activation_creates_an_override(monkeypatch) -> None:
-    user_id = uuid4()
-    shipped = SkillDefinition(
-        name="Standard", description="Ausgeliefert", instructions="Arbeite so.", enabled=False
-    )
-    monkeypatch.setitem(DEFAULT_SKILLS, shipped.id, shipped)
-    personal = SkillsSettings()
-    instance = InstanceSkillsSettings()
-
-    async def load(_db, settings_type, **_kwargs):
-        return instance if settings_type is InstanceSkillsSettings else personal
-
-    save = AsyncMock()
-    monkeypatch.setattr(SettingsStore, "load", load)
-    monkeypatch.setattr(SettingsStore, "save", save)
-    db = AsyncMock(spec=AsyncSession)
-
-    skill = await SkillService.set_enabled(
-        db, user_id, shipped.id, True
-    )
-
-    assert skill.enabled is True
-    assert personal.skills == [skill]
-    assert next(skill for skill in instance.skills if skill.id == shipped.id).enabled is False
-    save.assert_awaited_once_with(db, personal, user_id=user_id)
-
-
-@pytest.mark.usefixtures("mock_db_settings")
-async def test_personal_reset_materializes_the_shipped_default(monkeypatch) -> None:
-    user_id = uuid4()
-    shipped = SkillDefinition(
-        name="Standard", description="Ausgeliefert", instructions="Arbeite so.", enabled=False
-    )
-    monkeypatch.setitem(DEFAULT_SKILLS, shipped.id, shipped)
-    personal = SkillsSettings()
-    instance = InstanceSkillsSettings(
-        skills=[shipped.model_copy(update={"description": "Instanzweit geändert", "enabled": True})]
-    )
-
-    async def load(_db, settings_type, **_kwargs):
-        return instance if settings_type is InstanceSkillsSettings else personal
-
-    monkeypatch.setattr(SettingsStore, "load", load)
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
-
-    reset = await SkillService.reset(
-        AsyncMock(spec=AsyncSession), user_id, shipped.id
-    )
-
-    assert reset.description == shipped.description
-    assert reset.enabled is True
-    assert personal.skills == [reset]
-
-
-def test_instance_skill_api_requires_admin(monkeypatch) -> None:
-    user = UserAccount(id=uuid4(), username="test", password_hash="hash")
     db = AsyncMock(spec=AsyncSession)
-    monkeypatch.setattr(SkillService, "list_scoped", AsyncMock(return_value=[]))
-
-    async def override_db():
-        yield db
-
-    app = FastAPI()
-    app.include_router(skill_routes.router, prefix="/api")
-    app.dependency_overrides[get_db_session] = override_db
-    app.dependency_overrides[require_user] = lambda: user
-
-    with TestClient(app) as client:
-        response = client.get("/api/skills?scope=instance")
-        settings_response = client.put("/api/skills/settings", json={"personalSkillsEnabled": False})
-
-    assert response.status_code == 403
-    assert response.json()["detail"] == "auth.adminRequired"
-    assert settings_response.status_code == 403
+    replacement = await SkillService.save_package(db, owner, skill.id, SkillDraft(name="research", description="New", instructions="New").package(), expected_revision=skill.revision)
+    with pytest.raises(SkillError, match="skill.changed"):
+        await SkillService.save_package(db, owner, skill.id, SkillDraft(name="research", description="Stale", instructions="Stale").package(), expected_revision=skill.revision)
+    assert (await SkillService.package(replacement)).metadata["description"] == "New"
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.parametrize("admin", [False, True])
-async def test_personal_skill_gate_preserves_stored_skills_and_admin_exception(monkeypatch, admin):
-    user = UserAccount(id=uuid4(), username="owner", password_hash="hash", is_admin=admin)
+async def test_personal_gate_and_global_admin_authority(monkeypatch, admin):
+    user = UserAccount(id=uuid4(), username="owner", password_hash="hash", is_admin=admin, is_active=True)
     shared = DEFAULT_SKILLS[WEATHER_SKILL_ID].model_copy(update={"enabled": True})
-    override = shared.model_copy(update={"instructions": "Personal weather instructions."})
-    own = SkillDefinition(**_draft().model_dump())
-    instance = InstanceSkillsSettings(personal_skills_enabled=False, skills=[shared])
-    personal = SkillsSettings(skills=[override, own])
-    async def load(_db, model, **_kwargs):
+    own = SkillDefinition(name="own", description="Own", instructions="Personal")
+    instance = InstanceSkillsSettings(personal_skills_enabled=False, skills=[store_skill(shared)])
+    personal = SkillsSettings(skills=[store_skill(own, user.id)])
+    async def load(_db, model, **kwargs):
         return instance if model is InstanceSkillsSettings else personal
     monkeypatch.setattr(SettingsStore, "load", load)
     monkeypatch.setattr(SettingsStore, "load_optional", load)
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = user
-    effective = await load_effective_skills(db, user.id, enabled_only=True)
-    assert [skill.instructions for skill in effective] == ([override.instructions, own.instructions] if admin else [shared.instructions])
-    assert [skill.instructions for skill in await SkillService.list_scoped(db, user.id, "personal")] == [override.instructions, own.instructions]
+    db.get.return_value = db.scalar.return_value = user
+    effective = await SkillService.list(db, user.id)
+    assert [skill.id for skill in effective] == ([shared.id, own.id] if admin else [shared.id])
     if admin:
-        await SkillService.set_enabled(db, user.id, own.id, False)
+        await SkillService.require_write(db, user.id, "instance")
     else:
+        with pytest.raises(SkillError, match="auth.adminRequired"):
+            await SkillService.require_write(db, user.id, "instance")
         with pytest.raises(SkillError, match="skill.personalDisabled"):
             await SkillService.set_enabled(db, user.id, own.id, False)
 
 
-async def test_admin_skill_gate_update_preserves_global_catalog(monkeypatch):
-    user = UserAccount(id=uuid4(), username="admin", password_hash="hash", is_admin=True)
-    instance = InstanceSkillsSettings()
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
-    save = AsyncMock()
-    monkeypatch.setattr(SettingsStore, "save", save)
-    await skill_routes.update_skill_settings(skill_routes.SkillSettingsRequest(personalSkillsEnabled=False), user, AsyncMock(spec=AsyncSession))
-    assert save.await_args.args[1].model_dump() == InstanceSkillsSettings(personal_skills_enabled=False).model_dump()
+async def test_default_personal_override_is_separate(monkeypatch):
+    user_id = uuid4()
+    personal, instance = SkillsSettings(), InstanceSkillsSettings()
+    async def load(_db, model, **kwargs):
+        return instance if model is InstanceSkillsSettings else personal
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    skill = await SkillService.set_enabled(AsyncMock(spec=AsyncSession), user_id, WEATHER_SKILL_ID, True)
+    assert skill.owner_id == user_id and skill.enabled
+    assert not instance.skills[0].enabled
+
+
+def test_skill_api_uses_package_service_and_requires_admin(monkeypatch):
+    user = UserAccount(id=uuid4(), username="test", password_hash="hash", is_admin=False, is_active=True)
+    db = AsyncMock(spec=AsyncSession)
+    created = SkillDefinition(name="test", description="Test", instructions="Do it")
+    save = AsyncMock(return_value=created)
+    monkeypatch.setattr(SkillService, "save_package", save)
+    async def override_db():
+        yield db
+    app = FastAPI()
+    register_error_handlers(app)
+    app.include_router(skill_routes.router, prefix="/api")
+    app.dependency_overrides[get_db_session] = override_db
+    app.dependency_overrides[require_user] = lambda: user
+    with TestClient(app) as client:
+        response = client.post("/api/skills", json={"document": skill_md("test", "Test", "Do it").decode()})
+        denied = client.post("/api/skills/import?scope=instance", files={"file": ("skill.zip", package().archive())})
+    assert response.status_code == 201
+    assert (denied.status_code, denied.json()["error"]["code"]) == (403, "auth.adminRequired")
+    save.assert_awaited_once()
+    db.commit.assert_awaited_once()
+
+
+async def test_computer_packages_use_owner_bound_transfers_and_release_every_selected_agent(monkeypatch):
+    from uuid import UUID
+
+    from mato_loop_backend.execution.client import ExecutionClient
+    from mato_loop_backend.execution.manager import execution_agent_connections
+    from mato_loop_backend.execution.protocol import ResponseMessage
+    from mato_loop_backend.execution.transfers import transfer_tickets
+    from mato_loop_backend.skill_resources import prepare_computer, release_computers
+
+    run = SimpleNamespace(id=uuid4(), session_id=uuid4())
+    original = package()
+    released = []
+    agents = [uuid4(), uuid4()]
+    monkeypatch.setattr(execution_agent_connections, "transfer_url", lambda owner, ticket: f"https://backend/{ticket}")
+
+    async def request(owner, operation, arguments, **kwargs):
+        assert arguments["sessionId"] == str(run.session_id)
+        assert arguments["runId"] == str(run.id)
+        if operation == "cache.skills.prepare":
+            transfer = arguments["transfer"]
+            ticket = transfer_tickets.claim(UUID(transfer["url"].rsplit("/", 1)[1]), transfer["token"], "download", owner_id=owner)
+            with ticket.content as source:
+                assert SkillPackage.import_file(source.read(), archive=True) == original
+            result = {"path": f"/cache/{owner}/pdf-processing"}
+        else:
+            assert operation == "cache.skills.release"
+            released.append(owner)
+            result = {}
+        return ResponseMessage(type="response", id=uuid4(), ok=True, result=result)
+
+    monkeypatch.setattr(execution_agent_connections, "request", request)
+    for agent_id in agents:
+        client = ExecutionClient(agent_id, frozenset({"cache.skills.prepare", "cache.skills.release"}))
+        assert str(agent_id) in await prepare_computer(client, run, original)
+    await release_computers(run)
+    assert released == agents

@@ -180,6 +180,8 @@ class WindowsPlatform:
             "filesystem.glob",
             "filesystem.grep",
             "cache.ensure",
+            "cache.skills.prepare",
+            "cache.skills.release",
             "cache.store",
             "cache.export",
             "cache.clear",

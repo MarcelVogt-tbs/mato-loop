@@ -118,7 +118,7 @@ def select_turn_tools(
         if model.supports_tools else None
     )
     hide_skill_catalog_tools = (
-        not skill_state.catalog or skill_state.active is not None or skill_state.edit_completed
+        not skill_state.catalog
     )
     if toolset is not None:
         if (session.session_type != "chat" or session.parent_session_id is not None
@@ -146,7 +146,7 @@ def select_turn_tools(
         toolset = toolset.without(*PROJECT_CODING_TOOL_NAMES)
     search_pending = required_search and not required_search_completed and not tool_budget_exhausted
     if search_pending and toolset is not None:
-        toolset = toolset.only("load_skill", "edit_skill", "web_search")
+        toolset = toolset.only("web_search") if skill_state.active else toolset.only("load_skill", "edit_skill", "web_search")
     elif memory_write_pending and toolset is not None:
         toolset = toolset.only("memory_retrieve", "memory_write")
     elif source_review_pending is not None and toolset is not None:

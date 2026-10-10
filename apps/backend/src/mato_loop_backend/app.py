@@ -42,6 +42,7 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.projects.coding import CodingScheduler
 from mato_loop_backend.settings import InstanceLimits, SettingsStore
+from mato_loop_backend.skill_migration import initialize_skill_library
 
 runtime_config = get_runtime_config()
 if not logging.getLogger().handlers:
@@ -84,6 +85,10 @@ def _mount_documentation(target: FastAPI, docs_dir: Path) -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    runtime_config.secrets_dir.mkdir(parents=True, exist_ok=True)
+    # Migration failures must prevent serving a partially converted library.
+    async with AsyncSessionFactory() as db:
+        await initialize_skill_library(db)
     debug_mcp_stack = AsyncExitStack()
     try:
         debug_mcp, debug_mcp_app = create_debug_mcp()
@@ -92,7 +97,6 @@ async def lifespan(_app: FastAPI):
     except Exception:
         logger.exception("Could not start the optional debug MCP")
         await debug_mcp_stack.aclose()
-    runtime_config.secrets_dir.mkdir(parents=True, exist_ok=True)
     try:
         async with AsyncSessionFactory() as db:
             attachments = AttachmentService(settings=await SettingsStore.load(db, InstanceLimits))

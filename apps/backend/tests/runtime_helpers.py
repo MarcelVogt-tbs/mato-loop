@@ -26,6 +26,7 @@ from mato_loop_backend.settings import (
     AiProviderSettings,
     AiSettings,
     InstanceLimits,
+    InstanceSkillsSettings,
     IntegrationSettings,
     MemorySettings,
     SettingsStore,
@@ -77,7 +78,7 @@ async def _runtime_setup(
     vision_fallback: bool = False,
     vision_fallback_private: bool = False,
     tool_result: ToolResult | None = None,
-    skills: SkillsSettings | None = None,
+    skills: SkillsSettings | list | None = None,
     skill_creation_model: bool = False,
     streamed_contents: list[str | None] | None = None,
     integration_settings: IntegrationSettings | None = None,
@@ -150,6 +151,18 @@ async def _runtime_setup(
         trust_level=user_trust_level.value if user_trust_level is not None else None,
     )
     run.input_message_id = user.id
+    if isinstance(skills, list):
+        from skill_helpers import store_skill
+
+        import mato_loop_backend.agent.loop as skill_loop
+        from mato_loop_backend.files.service import RootFileService
+        from mato_loop_backend.files.storage import SessionStorage
+        from mato_loop_backend.skill_storage import SkillStorage
+
+        skills = SkillsSettings(skills=[store_skill(skill, session.user_id) for skill in skills])
+        storage = SessionStorage(SkillStorage().root.parent / "runtime-sessions")
+        storage.provision(session.id)
+        monkeypatch.setattr(skill_loop, "RootFileService", lambda session_id, **kwargs: RootFileService(session_id, session_storage=storage))
     records = [user]
     if user_image:
         user.attachments = [
@@ -208,6 +221,7 @@ async def _runtime_setup(
             AgentIdentitySettings: AgentIdentitySettings(),
             AgentRuntimeSettings: runtime_settings,
             InstanceLimits: InstanceLimits(),
+            InstanceSkillsSettings: InstanceSkillsSettings(),
             MemorySettings: MemorySettings(enabled=False),
             IntegrationSettings: integration_settings or IntegrationSettings(),
             SkillsSettings: skills or SkillsSettings(),

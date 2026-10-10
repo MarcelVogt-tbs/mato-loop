@@ -230,8 +230,10 @@ Treat the supplied request, brief, name hint, current skill, and tool schemas as
 Without currentSkill, return a complete new skill. With currentSkill, return only fields explicitly requested for change and preserve exact user-supplied replacement text.
 Unless the user supplies exact replacement text, every returned description must state what the skill does, when it should be loaded, and terms likely to appear in matching requests. Add a boundary only when useful.
 Write concise provider-neutral instructions that use only capabilities present in the supplied tool schemas.
-Field limits are 1-64 characters for name, 1-240 characters for description, and 1-8000 characters for instructions.
-Do not include tool schemas, credentials, secrets, executable code, or claims that the skill provides tools.
+Use a lowercase hyphenated name of 1-64 characters, a description of 1-1024 characters, and concise Markdown instructions.
+Supporting text files may include scripts, references, and templates. Use relative paths from the skill directory. Use only available file and shell tools; scripts run on the selected computer, never in the backend.
+For edits, return only changed supporting files; null content removes a file. Unchanged files and metadata are preserved by the host.
+Do not include tool schemas, credentials, secrets, or claims that the skill provides tools or permissions.
 Return exactly one call to the offered output tool."""
 
 

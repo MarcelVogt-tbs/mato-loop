@@ -1452,14 +1452,29 @@ class EffectiveAgentIdentity(BaseModel):
     persona_editable: bool = False
 
 
+class SkillReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID = Field(default_factory=uuid4)
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+    enabled: StrictBool = True
+
+
 class SkillDefinition(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     name: str = Field(min_length=1, max_length=64)
-    description: str = Field(min_length=1, max_length=240)
-    instructions: str = Field(min_length=1, max_length=8_000)
+    description: str = Field(min_length=1, max_length=1024)
+    instructions: str = Field(max_length=128 * 1024)
     enabled: StrictBool = True
     owner_id: UUID | None = Field(default=None, exclude=True)
     editable: bool = Field(default=True, exclude=True)
+    document: str = ""
+    revision: str = ""
+    resource_paths: list[str] = Field(default_factory=list)
+    files_path: str | None = None
+    computer_path: str | None = None
+    computer_id: UUID | None = None
 
     @field_validator("name", mode="before")
     @classmethod
@@ -1469,13 +1484,15 @@ class SkillDefinition(BaseModel):
     @field_validator("description", "instructions", mode="before")
     @classmethod
     def validate_text(cls, value: Any, info: Any) -> Any:
-        return normalize_skill_text(value, info.field_name) if isinstance(value, str) else value
+        if isinstance(value, str):
+            return value.strip() if info.field_name == "instructions" else normalize_skill_text(value, info.field_name)
+        return value
 
 
 DEFAULT_SKILLS: dict[UUID, SkillDefinition] = {
     WEATHER_SKILL_ID: SkillDefinition(
         id=WEATHER_SKILL_ID,
-        name="Weather",
+        name="weather",
         description=(
             "Retrieve current weather conditions and forecasts for a location and time range. "
             "Use for requests about temperature, rain, snow, wind, or weather-dependent "
@@ -1520,23 +1537,27 @@ Do not describe the data timestamp as the retrieval time.
 }
 
 
-def default_skills() -> list[SkillDefinition]:
-    return [skill.model_copy(deep=True) for skill in DEFAULT_SKILLS.values()]
+def default_skills() -> list[SkillReference]:
+    from mato_loop_backend.skill_packages import SkillFile, SkillPackage, skill_md
+
+    return [
+        SkillReference(id=skill.id, name=skill.name, enabled=skill.enabled,
+                       revision=SkillPackage({"SKILL.md": SkillFile(skill_md(skill.name, skill.description, skill.instructions))}).revision)
+        for skill in DEFAULT_SKILLS.values()
+    ]
 
 
 class InstanceSkillsSettings(SettingsDocument):
     settings_key = "skills"
 
     personal_skills_enabled: bool = True
-    skills: list[SkillDefinition] = Field(default_factory=default_skills, max_length=40)
+    skills: list[SkillReference] = Field(default_factory=default_skills, max_length=40)
 
     @model_validator(mode="after")
     def add_missing_defaults(self) -> Self:
         existing = {skill.id for skill in self.skills}
         self.skills.extend(
-            skill.model_copy(deep=True)
-            for skill_id, skill in DEFAULT_SKILLS.items()
-            if skill_id not in existing
+            skill for skill in default_skills() if skill.id not in existing
         )
         if sum(skill.id not in DEFAULT_SKILLS for skill in self.skills) > 20:
             raise ValueError("at most 20 custom skills are allowed")
@@ -1547,7 +1568,7 @@ class SkillsSettings(SettingsDocument):
     settings_key = "skills"
     settings_scope = SettingsScope.USER
 
-    skills: list[SkillDefinition] = Field(default_factory=list, max_length=40)
+    skills: list[SkillReference] = Field(default_factory=list, max_length=40)
 
     @model_validator(mode="after")
     def validate_custom_limit(self) -> Self:

@@ -61,9 +61,9 @@ from mato_loop_backend.settings.effective import (
     load_effective_agent_identity,
     load_effective_ai,
     load_effective_integrations,
-    load_effective_skills,
 )
 from mato_loop_backend.settings.models import effective_model_trust
+from mato_loop_backend.skills import SkillService
 from mato_loop_backend.tools.catalog import tool_registry
 
 logger = logging.getLogger("mato_loop_backend.debug_mcp")
@@ -291,7 +291,7 @@ def create_debug_mcp() -> tuple[FastMCP, Any]:
                 else None
             )
             identity = await load_effective_agent_identity(db, user_id, profile)
-            skills = await load_effective_skills(db, user_id, enabled_only=True)
+            skills = await SkillService.list(db, user_id)
             integrations = filter_agent_profile_integrations(
                 await load_effective_integrations(db, user_id), profile
             )

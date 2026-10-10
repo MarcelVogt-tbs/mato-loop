@@ -127,7 +127,7 @@ services:
       - mato-loop
 
   matoloop-agent:
-    image: matoloop-agent-dev
+    image: ${MATOLOOP_AGENT_DEV_IMAGE:-matoloop-agent-dev}
     build:
       context: ./apps/matoloop-agent
       dockerfile: Dockerfile.dev

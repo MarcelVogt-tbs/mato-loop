@@ -1012,7 +1012,7 @@ def skill_load_permission(user_id: UUID, skill_name: str) -> PermissionRequest:
         action_kind="load_skill",
         risk_level="low",
         title="Skill laden?",
-        summary=f'Der Agent möchte den persönlichen Skill „{skill_name}“ verwenden.',
+        summary=f'Der Agent möchte den Skill „{skill_name}“ verwenden.',
         resource_display=skill_name,
     )
 
@@ -1022,15 +1022,16 @@ def skill_write_permission(
     skill_name: str,
     *,
     approval_details: dict[str, Any] | None = None,
+    scope: str = "personal",
 ) -> PermissionRequest:
     return PermissionRequest(
         capability="skills.write",
         resource_type="skill_collection",
-        resource_scope=str(user_id),
+        resource_scope=str(user_id) if scope == "personal" else f"instance:{user_id}",
         action_kind="build_skill",
         risk_level="medium",
         title="Skill speichern?",
-        summary=f'Der Agent möchte den persönlichen Skill „{skill_name}“ speichern.',
+        summary=f'Der Agent möchte den {"globalen" if scope == "instance" else "persönlichen"} Skill „{skill_name}“ speichern.',
         resource_display=skill_name,
         approval_details=approval_details,
     )
@@ -1041,15 +1042,16 @@ def skill_edit_permission(
     skill_name: str,
     *,
     approval_details: dict[str, Any] | None = None,
+    scope: str = "personal",
 ) -> PermissionRequest:
     return PermissionRequest(
         capability="skills.write",
         resource_type="skill",
-        resource_scope=str(skill_id),
+        resource_scope=str(skill_id) if scope == "personal" else f"instance:{skill_id}",
         action_kind="edit_skill",
         risk_level="medium",
         title="Skill ändern?",
-        summary=f'Der Agent möchte den persönlichen Skill „{skill_name}“ ändern.',
+        summary=f'Der Agent möchte den {"globalen" if scope == "instance" else "persönlichen"} Skill „{skill_name}“ ändern.',
         resource_display=skill_name,
         approval_details=approval_details,
     )
@@ -2015,14 +2017,16 @@ class PermissionPolicy:
             "media_model",
         }:
             return request.resource_scope == grant.resource_scope
-        if request.resource_type in {"agent_identity", "skill"}:
+        if request.resource_type == "agent_identity":
             try:
                 return UUID(request.resource_scope) == UUID(grant.resource_scope)
             except ValueError:
                 return False
-        if request.resource_type == "skill_collection":
+        if request.resource_type in {"skill_collection", "skill"}:
             try:
-                return UUID(request.resource_scope) == UUID(grant.resource_scope)
+                scope = request.resource_scope.removeprefix("instance:")
+                UUID(scope)
+                return request.resource_scope == grant.resource_scope
             except ValueError:
                 return False
         return False

@@ -836,7 +836,7 @@ def test_grouped_result_rejects_unknown_action() -> None:
     build_messages, build_tools = build_case(_case("vague_skill_build_uses_question"))
     assert [tool["name"] for tool in build_tools] == ["question", "build_skill"]
     assert "call question once for missing" in build_messages[0]["content"]
-    assert "Pass a compact brief" in build_messages[0]["content"]
+    assert "Use build_skill only for explicit latest-message requests" in build_messages[0]["content"]
     assert build_tools[1]["parameters"]["required"] == ["brief"]
 
 

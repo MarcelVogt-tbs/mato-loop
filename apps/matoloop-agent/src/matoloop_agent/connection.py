@@ -43,6 +43,8 @@ from .protocol import (
     Response,
     ShellArguments,
     ShellInspectArguments,
+    SkillCachePrepareArguments,
+    SkillCacheReleaseArguments,
     StatArguments,
     SystemInfo,
     SystemInfoArguments,
@@ -106,6 +108,9 @@ class MatoLoopAgent:
         self.platform = self.runtime.platform
         self.filesystem = self.runtime.filesystem
         self.cache = self.runtime.cache
+        from .skill_cache import SkillCache
+
+        self.skill_cache = SkillCache(self.cache)
         self.process = self.runtime.process
         self.terminal = self.runtime.terminal
         self.browser = self.runtime.browser
@@ -335,6 +340,12 @@ class MatoLoopAgent:
             if arguments.artifact.backend_id != backend_id:
                 raise AgentError("cache.invalidDescriptor", "Artifact backend does not match")
             return await self.cache.ensure(arguments.artifact, arguments.transfer, self.transfer)
+        if isinstance(arguments, SkillCachePrepareArguments):
+            return await self.skill_cache.prepare(arguments, backend_id, self.transfer)
+        if isinstance(arguments, SkillCacheReleaseArguments):
+            return await self.skill_cache.release(
+                backend_id, arguments.session_id, arguments.run_id
+            )
         if isinstance(arguments, CacheExportArguments):
             if arguments.artifact.backend_id != backend_id:
                 raise AgentError("cache.invalidDescriptor", "Artifact backend does not match")
@@ -591,3 +602,4 @@ class MatoLoopAgent:
                 finally:
                     await self.terminal.close_all()
                 await asyncio.gather(*tasks.values(), return_exceptions=True)
+                self.skill_cache.disconnect()

@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.models import ExecutionAgent, UserAccount
 from mato_loop_backend.settings.models import (
-    DEFAULT_SKILLS,
     GENERAL_PROFILE_ID,
     AgentIdentitySettings,
     AgentProfile,
@@ -25,8 +24,6 @@ from mato_loop_backend.settings.models import (
     ModelDefaults,
     ModelDefaultsSettings,
     PersonaProfile,
-    SkillDefinition,
-    SkillsSettings,
     ToolSettings,
     TrustLevel,
     UserAgentIdentitySettings,
@@ -384,33 +381,6 @@ async def load_effective_agent_profiles(
             profile.owner_id = user_id
             effective.profiles.append(profile)
     return effective
-
-
-async def load_effective_skills(
-    db: AsyncSession, user_id: UUID, *, enabled_only: bool = False
-) -> list[SkillDefinition]:
-    instance = await SettingsStore.load_optional(db, InstanceSkillsSettings)
-    instance = instance or InstanceSkillsSettings()
-    personal = (
-        await SettingsStore.load(db, SkillsSettings, user_id=user_id)
-        if await personal_settings_allowed(db, user_id, instance.personal_skills_enabled) else SkillsSettings()
-    )
-    skills: list[SkillDefinition] = []
-    for item in instance.skills:
-        skill = item.model_copy(deep=True)
-        skill.owner_id = None
-        skill.editable = False
-        skills.append(skill)
-    positions = {skill.id: index for index, skill in enumerate(skills)}
-    for item in personal.skills:
-        skill = item.model_copy(deep=True)
-        skill.owner_id = user_id
-        skill.editable = True
-        if skill.id in DEFAULT_SKILLS and skill.id in positions:
-            skills[positions[skill.id]] = skill
-        else:
-            skills.append(skill)
-    return [skill for skill in skills if skill.enabled] if enabled_only else skills
 
 
 async def load_agent_profile(

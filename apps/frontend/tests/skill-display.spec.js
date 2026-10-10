@@ -4,7 +4,7 @@ import { skillDisplayDescription, skillDisplayName } from '../src/features/skill
 
 const weather = {
   id: '00000000-0000-4000-8000-000000000101',
-  name: 'Weather',
+  name: 'weather',
   description: 'Retrieve current weather conditions and forecasts for a location and time range. Use for requests about temperature, rain, snow, wind, or weather-dependent activities. Do not use for translation or general explanations of weather.',
   isDefault: true
 }

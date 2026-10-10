@@ -6415,10 +6415,8 @@ def _general_case(
             SkillDefinition.model_validate(skill)
             for skill in system_options["skill_catalog"]
         )
-    if "active_skill" in system_options:
-        system_options["active_skill"] = SkillDefinition.model_validate(
-            system_options["active_skill"]
-        )
+    if "active_skills" in system_options:
+        system_options["active_skills"] = tuple(SkillDefinition.model_validate(skill) for skill in system_options["active_skills"])
     if effective.prompt_fragments:
         system_options["tool_instructions"] = (
             *system_options.get("tool_instructions", ()),

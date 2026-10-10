@@ -84,6 +84,8 @@ from mato_loop_backend.settings.models import (
 from mato_loop_backend.tools.catalog import ToolRegistry, tool_registry
 from mato_loop_backend.tools.contracts import ToolAttachment, ToolFileAction, ToolResult
 
+pytestmark = pytest.mark.usefixtures("skill_library")
+
 
 async def test_session_automation_context_refreshes_between_model_requests(monkeypatch) -> None:
     db, run, requests, _, _ = await _runtime_setup(
@@ -1310,7 +1312,7 @@ async def test_reasoning_summary_label_remains_after_content_updates(
 
 async def test_required_search_loads_matching_skill_before_search(monkeypatch) -> None:
     skill = SkillDefinition(
-        name="Current research",
+        name="current-research",
         description="Use for current web research.",
         instructions="Search official sources first.",
     )
@@ -1333,7 +1335,7 @@ async def test_required_search_loads_matching_skill_before_search(monkeypatch) -
             ),
             ProviderResult(content=f"Antwort {SOURCE_CITATION}", finish_reason="stop"),
         ],
-        skills=SkillsSettings(skills=[skill]),
+        skills=[skill],
     )
 
     async def execute(call, context, bound_tool):
@@ -1357,11 +1359,11 @@ async def test_required_search_loads_matching_skill_before_search(monkeypatch) -
     assert skill.instructions in projections[1]["system_prompt"]
 
 
-async def test_stale_skill_loads_after_activation_are_not_executed_or_persisted(
+async def test_repeated_skill_loads_do_not_satisfy_required_search(
     monkeypatch,
 ) -> None:
     skill = SkillDefinition(
-        name="Current research",
+        name="current-research",
         description="Use for current web research.",
         instructions="Search official sources first.",
     )
@@ -1387,7 +1389,7 @@ async def test_stale_skill_loads_after_activation_are_not_executed_or_persisted(
             ProviderResult(tool_calls=[stale], finish_reason="tool_calls"),
             ProviderResult(tool_calls=[stale], finish_reason="tool_calls"),
         ],
-        skills=SkillsSettings(skills=[skill]),
+        skills=[skill],
     )
 
     async def execute(call, context, bound_tool):
@@ -1415,7 +1417,7 @@ async def test_stale_skill_loads_after_activation_are_not_executed_or_persisted(
 
 async def test_invalid_skill_loads_consume_required_search_retries(monkeypatch) -> None:
     skill = SkillDefinition(
-        name="Current research",
+        name="current-research",
         description="Use for current web research.",
         instructions="Search official sources first.",
     )
@@ -1434,7 +1436,7 @@ async def test_invalid_skill_loads_consume_required_search_retries(monkeypatch) 
             )
             for index in range(3)
         ],
-        skills=SkillsSettings(skills=[skill]),
+        skills=[skill],
     )
 
     async def execute(call, context, bound_tool):
@@ -1454,7 +1456,7 @@ async def test_invalid_skill_loads_consume_required_search_retries(monkeypatch) 
 
 async def test_load_skill_is_rejected_when_called_with_another_tool(monkeypatch) -> None:
     skill = SkillDefinition(
-        name="Current research",
+        name="current-research",
         description="Use for current web research.",
         instructions="Search official sources first.",
     )
@@ -1475,7 +1477,7 @@ async def test_load_skill_is_rejected_when_called_with_another_tool(monkeypatch)
             ProviderResult(content="Ohne Skill fortgesetzt.", finish_reason="stop"),
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
-        skills=SkillsSettings(skills=[skill]),
+        skills=[skill],
     )
 
     await AgentRuntime._execute_loop(db, run)
@@ -1519,8 +1521,8 @@ async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
                         id="invalid-draft",
                         name="return_skill_draft",
                         arguments={
-                            "name": "API checks",
-                            "description": "x" * 241,
+                            "name": "api-checks",
+                            "description": "x" * 1025,
                             "instructions": "Validate the API response.",
                         },
                     )
@@ -1533,7 +1535,7 @@ async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
                         id="draft",
                         name="return_skill_draft",
                         arguments={
-                            "name": "API checks",
+                            "name": "api-checks",
                             "description": "Use when an API response must be validated.",
                             "instructions": "Call the available API tool and validate its response.",
                         },
@@ -1599,11 +1601,11 @@ async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
         "user",
     ]
     assert repair_request["messages"][2]["content"].startswith(
-        "The output was invalid: description: string_too_long (max_length=240)."
+        "The output was invalid: description: string_too_long (max_length=1024)."
     )
-    assert "description 1-240 characters" in repair_request["messages"][2]["content"]
-    assert "validation=description: string_too_long (max_length=240)" in caplog.text
-    assert "x" * 241 not in caplog.text
+    assert "1-1024 characters" in repair_request["messages"][2]["content"]
+    assert "validation=description: string_too_long (max_length=1024)" in caplog.text
+    assert "x" * 1025 not in caplog.text
     assert [message["role"] for message in fallback_request["messages"]] == [
         "system",
         "user",
@@ -1620,7 +1622,7 @@ async def test_skill_builder_is_isolated_and_confirms_session_model_fallback(
         "effectiveTools",
     }
     request_question.assert_awaited_once()
-    assert [skill.name for skill in skills.skills] == ["API checks"]
+    assert [skill.name for skill in skills.skills] == ["api-checks"]
     SettingsStore.save.assert_awaited_once()
 
 
@@ -1628,11 +1630,11 @@ async def test_skill_editor_sends_current_skill_and_merges_partial_patch(
     monkeypatch, tmp_path
 ) -> None:
     skill = SkillDefinition(
-        name="Songfinder",
+        name="songfinder",
         description="Findet Songs.",
         instructions="Suche breit und prüfe Quellen.",
     )
-    skills = SkillsSettings(skills=[skill])
+    skills = [skill]
     original_execute = ToolRegistry._execute_definition
     db, run, requests, _projections, events = await _runtime_setup(
         monkeypatch,
@@ -1713,22 +1715,16 @@ async def test_skill_editor_sends_current_skill_and_merges_partial_patch(
     ]
     builder_payload = json.loads(builder_request["messages"][1]["content"])
     assert builder_payload["currentSkill"] == {
-        "name": "Songfinder",
+        "name": "songfinder",
         "description": "Findet Songs.",
         "instructions": "Suche breit und prüfe Quellen.",
+        "files": [],
+        "frontmatter": {},
     }
     assert builder_payload["brief"] == "Ändere nur die Einsatzbeschreibung."
-    assert {tool["name"] for tool in requests[2]["tools"]}.isdisjoint(
-        {"load_skill", "edit_skill"}
-    )
-    assert skills.skills == [
-        SkillDefinition(
-            id=skill.id,
-            name=skill.name,
-            description="Immer bei einer Song-Suche verwenden.",
-            instructions=skill.instructions,
-        )
-    ]
+    from mato_loop_backend.skills import SkillService
+    updated = await SkillService.get(db, skill.owner_id, skill.id, "personal")
+    assert (updated.description, updated.instructions) == ("Immer bei einer Song-Suche verwenden.", skill.instructions)
 
 
 async def test_skill_builder_uses_only_one_structured_repair_across_fallback(

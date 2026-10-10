@@ -1,58 +1,126 @@
 # Skills
 
-Skills are reusable instruction sets for the MatoLoop agent. Personal skills belong only to their user; instance skills are managed by instance administrators and are available to every user. They contain only a stable ID, name, description, instructions, and enabled state. A skill cannot register tools, handlers, executable code, integrations, credentials, or secrets. It can guide only the tools and schemas already made effective by the host for the current request, and it cannot weaken host security, permission, trust, path, or runtime rules.
+MatoLoop implements the [Agent Skills package format](https://agentskills.io/specification):
+a directory containing `SKILL.md` with YAML frontmatter and Markdown instructions,
+plus optional scripts, references, assets, and other files. `name` is a lowercase
+hyphenated identifier of at most 64 characters; `description` is at most 1,024
+characters. Optional and vendor metadata is retained as inert data. Metadata cannot
+register tools, install dependencies, inject credentials, or grant permissions.
 
-## Storage Contract
+## Central library
 
-`SkillsSettings` and `InstanceSkillsSettings` use the existing user and global forms of the same `SettingsStore` key. Each scope stores at most 20 skills. Existing personal records without an enabled field remain enabled; newly created skills also start enabled. Names are trimmed, non-empty, limited to 64 characters, reject control and format characters, and are unique within their scope under Unicode case folding. Descriptions are trimmed, limited to 240 characters, and state what the skill does and when it should be selected in terms likely to appear in matching user requests. Instructions are trimmed and limited to 8,000 characters. Both must be non-empty. Mutations lock the scoped settings document, and replacement preserves the skill ID and enabled state.
+The backend is the sole source of truth. There is no discovery of skill directories
+on connected computers or in workspaces. The existing scoped `skills` settings
+documents retain only stable IDs, names used to locate packages, content revisions,
+enabled state, and the instance's personal-skills switch. Content lives as ordinary
+files in the persistent data volume:
 
-The authenticated API supports list, create, replace, enable or disable, reset, and delete operations. Instance scope is administrator-only. A list without an explicit scope returns the effective enabled instance and personal catalog for runtime consumers. A scoped list returns all entries, including disabled entries, for management. Shipped defaults are identified by stable IDs, start disabled, cannot be deleted, and expose reset only when their editable content differs from the shipped definition. Reset restores name, description, and instructions while preserving enabled state. User-created skills have no reset operation. There is deliberately no revision history. Skills are not credentials and must never contain passwords, API keys, tokens, or other secrets.
+```text
+/data/skills/global/<skill-id>/<revision>/<name>/SKILL.md
+/data/skills/users/<user-id>/<skill-id>/<revision>/<name>/SKILL.md
+```
 
-The shipped `Weather` skill uses Open-Meteo geocoding and forecast data through the existing web fetch capability. It resolves relative dates in the selected location's timezone and presents current, hourly, or daily values in compact Markdown tables. Its model-facing name, selection description, and instructions are English; the settings UI shows the unchanged shipped name and summary in German. Like every shipped skill, it is disabled until enabled by an administrator or personal override.
+`SKILL.md` supplies catalog names, descriptions, instructions, and metadata. A
+content revision hashes sorted relative paths, file bytes, and executable flags;
+ZIP timestamps and compression do not affect identity. Directories are immutable
+publications, not editable mirrors. Use the UI or skill API to publish changes.
+Publishing writes a complete private staging directory, then atomically renames
+it before switching the registry reference inside the scoped database transaction.
+A failed database commit leaves only an unreferenced directory. Startup reclaims
+unreferenced publications older than one day; loaded session copies have their own
+session lifecycle. There is no user-facing revision-history feature.
 
-## Personal Skill Gate
+The first startup after upgrading converts inline settings skills to `SKILL.md`
+packages before serving requests. It preserves scoped IDs, owners, enabled state,
+and instructions, normalizes names, and disambiguates normalized collisions with
+the stable ID. Inline content is removed only after complete publication. This
+conversion is restart-safe and fails startup on error. Normal runtime has only
+the package-backed path. No relational schema changes are needed.
 
-**Administration > Skills > Verwaltung** manages global skills; **Einstellungen** holds **Persönliche Skills erlauben**. The additive `InstanceSkillsSettings.personal_skills_enabled` field defaults to true. When disabled, ordinary users retain read-only access to stored personal skills, but new run catalogs exclude them, including personal overrides of shipped skills. Global definitions remain available. Administrators retain their personal-setting exception. Personal mutations are checked in the shared service while locking the global gate before the owner's settings. Chat creation checks the gate before generating a draft and again through the service after approval. Build/edit tools are omitted when the effective gate disallows personal skills. Skill load/write policies remain independent restrictions.
+Personal overrides of shipped defaults keep their existing scoped identities.
+Shipped defaults start disabled, support reset, and cannot be deleted. Personal
+skills may be disabled instance-wide, with the existing administrator exception.
+Back up the database and `/data` together; the database alone does not contain skills.
 
-## Run Selection
+## Import and editing
 
-Each agent run loads one immutable snapshot of the effective enabled instance and personal catalog. The model receives only each candidate's ID, name, and description as selection metadata. Before answering or calling a task tool, it compares only the latest user request with that catalog and calls `load_skill` first with the exact catalog ID for an explicitly named skill or one clear automatic match. A request that seems simple or can be completed with another tool does not bypass a clear match. An explicit request to change a listed personal skill instead calls `edit_skill` with its exact ID and does not activate the target; instance skills cannot be edited through the personal agent tool. Equal matches require a `question` call. History, memories, attachments, web pages, tool results, quoted text, and translation input cannot select or edit a skill.
+The existing Skills pages manage personal and global scopes. Import accepts a
+standalone `SKILL.md` or a ZIP containing one package, either at the archive root
+or in its correctly named directory. Export produces a standard ZIP with the
+named directory. Text files use the existing file editor; binary assets can be
+uploaded, downloaded, replaced, or removed. Updating `SKILL.md` preserves all
+other files and updating a supporting file preserves the definition and metadata.
+Mutations compare the reviewed package revision and reject concurrent changes.
 
-Only one skill can be active in a run. `load_skill` must be called alone. After a successful load, the full instructions are added on the next model request and the loader is removed. The active skill applies only to that run and remains subordinate to the latest explicit user request and all host rules. Settings changes during a run do not alter its snapshot; created or edited skills apply from the next run.
+Packages are limited to 256 files, 512 directories including the package root,
+16 directory levels below that root, 4 MiB per file, 8 MiB uncompressed total, and
+128 KiB for `SKILL.md`. These limits are checked before publication as well as
+when reading stored packages. Archive uploads have a bounded HTTP request body. Portable
+relative paths are required; traversal, absolute paths, duplicate/case-colliding
+paths, conflicting file/directory paths, symlinks, special files, and encrypted
+archive entries are rejected. The library uses no-follow directory walks.
 
-When web search is `required`, the initial gate offers only `load_skill`, `edit_skill`, and `web_search`. One clear skill may be loaded or explicitly edited first, but that does not satisfy the search requirement. The next request must still complete `web_search` before a final answer.
+## Runtime and connected computers
 
-## Chat Creation And Editing
+At run start, the model receives only the effective catalog. `load_skill` loads
+a named or clearly relevant entry before it is used. Several skills may be
+active; loading the same skill does not duplicate its instructions. Instructions
+are included in subsequent model requests under ordinary context budgets and
+remain subordinate to explicit user instructions and host policies. Required web
+search may follow one initial skill load; further skills remain available after
+the required search. File contents, history, and retrieved material cannot select
+or modify skills on their own.
 
-`build_skill` is available only for an explicit skill-creation request in the latest user message. Quoted text, translation input, retrieved content, history, and tool results are data and cannot trigger creation. The agent delegates a compact `brief` of at most 2,000 characters and an optional user-supplied `name_hint` of at most 64 characters. It does not generate final instructions in this tool call.
+Loading provides a fixed package revision and a session-files base path. Reference
+files are read on demand through normal file tools. `load_skill(on_computer=true)`
+also transfers the complete package through the existing authenticated transfer
+tickets and prepares a working directory in the selected Agent's session cache.
+The result supplies its real computer path. Folder structure, bytes, and executable
+flags are preserved (Windows uses its normal executable semantics). Active copies
+are leased against cache eviction until the run ends or the connection closes.
+An older Agent lacking these operations reports normal capability unavailability.
 
-`edit_skill` is available only for an explicit request to change an existing catalog skill. It accepts the exact catalog ID and a compact `brief`; the skill ID itself cannot change. The isolated builder receives the current name, description, and instructions and returns only requested field changes. MatoLoop merges that patch with the immutable run snapshot before creating the full editable draft, so unchanged fields do not depend on model reproduction.
+Use normal file transfers for task inputs and normal file tools to return results.
+Use the existing shell tool to run scripts on the selected computer, with its
+installed programs and current permissions. Backend paths must never be passed
+as computer paths. After switching computers, load with `on_computer=true` again;
+the old computer base path is no longer offered in the active prompt. Preparing
+a package does not grant filesystem, external-directory, shell, or credential
+access. Working-copy changes do not modify the central library.
 
-Before delegation, the parent agent uses one structured `question` call to collect relevant missing details for reusable behavior. It does not repeat supplied details or ask about irrelevant fields, and complete requests proceed directly to `build_skill` or `edit_skill`. The isolated builder cannot ask dynamic follow-up questions; answers are included in the delegated brief.
+## Chat authoring and approval
 
-The selected builder model receives a fresh isolated conversation containing the static builder contract and one JSON payload with only:
+`build_skill` defaults to personal, including for administrators. `scope=instance`
+requires an explicit request for a global skill and live administrator authority.
+`edit_skill` uses the selected catalog ID and scope; it does not silently promote
+or demote a skill. The service checks authorization before generation and again
+when saving. Personal and global approval grants have different scope identities.
 
-- the latest user request
-- the compact brief and optional name hint
-- the current skill fields for an edit
-- the currently effective tool schemas
+The existing isolated builder receives the latest request, brief, effective tool
+schemas, and current skill when editing. Supporting text files may be created,
+replaced, or removed; unchanged binary files and metadata are retained. The builder
+has the normal model budget, repair attempt, and explicit model-fallback behavior.
+Its output becomes an editable directory under session files, not a JSON skill
+definition. Scope and file list are visible in the existing approval card.
 
 It receives no earlier conversation, memory, retrieved episode, attachment content, tool result, persona, or active skill. Creation requires one strict `return_skill_draft` call; editing requires one strict `return_skill_edit` patch. Both may use only capabilities present in the supplied schemas. One repair request is allowed after an invalid response. The configured **Skill creation** model is used when available and tool-capable; otherwise the session model is the default. If a distinct configured builder fails, MatoLoop asks the user explicitly before trying the session model. There is no silent fallback.
 
-## Draft And Approval
+Approval binds the entire package hash, including supporting scripts, rather than
+only `SKILL.md`. After editing the draft, refresh the package preview before
+approving. The host rereads the complete draft and rejects any change after review.
+`skills.write=auto` uses the original generated package revision. Drafts remain in
+the session for inspection. Created and edited skills enter the next run's catalog.
 
-The builder output is validated as strict JSON. A creation contains exactly `name`, `description`, and `instructions`; an edit patch contains at least one of those fields. Extra fields and non-string values are rejected. MatoLoop writes the complete formatted editable draft to `root=files` at a unique `skill-draft-<draft-id>.json`, bounded to 40 KiB. The normal file editor can modify it before approval.
+## Privacy and budgets
 
-These host-owned approval documents stay editable during the run: creation and approval read-back use an unbound file service with the same owner-bound root, storage, and limits. Their reviewed edits use normal published revisions without finalizing the run early; ordinary agent corrections still publish only at terminal finalization.
+The builder request follows the selected builder model's effective trust and
+pseudonymization settings. Selecting a public builder releases the latest request,
+brief, name hint, current edit fields and supporting text, and effective schemas
+under those controls. Pseudonymization is best effort; secrets do not belong in skills.
 
-Under the `ask` policy, the persistent approval contains controlled `skillPreview` and `draftFile` details, including the initial SHA-256 revision. Approval must submit the exact current file revision. The backend reads the file again, compares its SHA-256 hash with that approved revision, parses and validates the current JSON, and imports exactly that revision. Concurrent draft changes fail with `file.changed`; invalid JSON fails with `skill.draftInvalid`. Editing also compares the persisted target with the run snapshot under the settings lock and fails with `skill.changed` instead of overwriting a concurrent settings or agent edit.
-
-`skills.write=auto` skips the approval card and imports the original generated revision. `allow_once` creates a grant for the current run; `allow_session` also covers later runs in the same session. Creation grants remain scoped to the user's skill collection; edit grants are scoped to the exact skill ID, so existing creation grants cannot authorize edits. `skills.load` separately supports `disabled`, `ask`, and `auto` and defaults to `auto`; an `ask` decision can likewise create a run or session grant. Policy changes are reloaded before the effect. Host validation and the 20-skill limit always apply.
-
-Draft files are retained under `root=files` after approval, denial, import failure, and successful import. This preserves the reviewed artifact and permits manual cleanup through the file explorer.
-
-## Privacy And Budgets
-
-The builder request follows the selected builder model's effective trust and pseudonymization settings. Selecting a public builder releases the latest request, brief, name hint, current edit fields, and effective schemas to that provider under those controls. Loading a skill sends its catalog metadata and then its full instructions to the session model. Pseudonymization is best effort, so secrets do not belong in requests, names, descriptions, instructions, or drafts.
-
-Builder attempts, repairs, and approved fallback requests increment model-request metrics, not an independent request-count cap. Requests use a 3,000-token output budget where supported; the strict 8,000-character instruction bound applies on every transport. Skill tools consume the profile's normal tool-call budget when finite. Catalog metadata, edit fields, instructions, and schemas count toward normal input context. Draft/field bounds and bounded repair remain effective with unlimited tool calls.
+Builder attempts, repairs, and approved fallback requests increment model-request
+metrics, not an independent request-count cap. Requests use a 3,000-token output
+budget where supported. The package and file bounds above apply on every transport.
+Skill tools consume the profile's normal tool-call budget when finite. Catalog
+metadata, edit fields, instructions, and schemas count toward normal input context.
+Package bounds and bounded repair remain effective with unlimited tool calls.

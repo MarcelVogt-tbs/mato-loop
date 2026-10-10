@@ -72,6 +72,10 @@ class RuntimeConfig(BaseSettings):
         return self.data_dir / "projects"
 
     @property
+    def skills_dir(self) -> Path:
+        return self.data_dir / "skills"
+
+    @property
     def web_push_configured(self) -> bool:
         return bool(
             self.web_push_enabled

@@ -1222,6 +1222,14 @@ class AgentRuntime:
                 image.data = b""
             ephemeral_images.clear()
             one_time_secrets.clear()
+            from mato_loop_backend.skill_resources import release_computers
+
+            cleanup = asyncio.create_task(release_computers(run))
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    continue
 
     @classmethod
     async def _execute_loop_body(

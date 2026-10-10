@@ -63,6 +63,8 @@ def _request_limit(scope: Scope) -> int | None:
         return None
     path = scope.get("path")
     method = scope.get("method")
+    if method in {"POST", "PUT"} and str(path).split("/")[1:3] == ["api", "skills"]:
+        return 9 * 1024 * 1024
     if path == "/api/appearance/logo" and method == "PUT":
         return 2 * 1024 * 1024
     if path == "/api/workspace/files" and method == "PUT":
@@ -136,7 +138,7 @@ class MediaRequestBodyLimitMiddleware:
             await self.app(scope, receive, send)
             return
         path = scope.get("path")
-        if path == "/api/workspace/files":
+        if path == "/api/workspace/files" or str(path).startswith("/api/skills"):
             error_body = _FILE_TOO_LARGE_BODY
         elif str(path).startswith("/api/agent-profiles"):
             error_body = _AGENT_PROFILE_TOO_LARGE_BODY

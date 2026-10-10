@@ -120,6 +120,8 @@ class WindowsCache:
             for _, size, path in sorted(files):
                 if total <= self.max_bytes:
                     break
+                if any(root in path.parents for root in getattr(self, "protected_paths", ())):
+                    continue
                 path.unlink(missing_ok=True)
                 total -= size
                 removed += 1
@@ -127,6 +129,8 @@ class WindowsCache:
 
     def clear(self) -> int:
         with self.lock:
+            if getattr(self, "protected_paths", None):
+                raise AgentError("cache.busy", "Active skills are using the cache")
             if self.root.is_symlink():
                 raise AgentError("cache.invalidPath", "Cache directory is a link")
             count = 0

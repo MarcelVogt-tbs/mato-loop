@@ -22,6 +22,7 @@ from mato_loop_backend.models import (
 @pytest.mark.parametrize("restored", [False, True])
 async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypatch, restored) -> None:
     db = AsyncMock(spec=AsyncSession)
+    monkeypatch.setattr(app_module, "initialize_skill_library", AsyncMock())
     order = []
     backfill = AsyncMock(side_effect=lambda _db: order.append("backfill"))
     monkeypatch.setattr(app_module.AttachmentService, "backfill_derived_files", backfill)

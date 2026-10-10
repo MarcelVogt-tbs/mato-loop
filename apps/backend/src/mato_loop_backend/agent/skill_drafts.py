@@ -24,7 +24,7 @@ from mato_loop_backend.settings import (
     effective_model_trust,
 )
 from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
-from mato_loop_backend.skills import SkillDraft, SkillEditPatch, SkillError
+from mato_loop_backend.skills import SkillDraft, SkillEditPatch, SkillError, SkillService
 from mato_loop_backend.tools.arguments import QuestionArguments
 
 
@@ -60,6 +60,13 @@ async def generate_skill_draft(
         payload["currentSkill"] = current_skill.model_dump(
             mode="json", include={"name", "description", "instructions"}
         )
+        package = await SkillService.package(current_skill)
+        payload["currentSkill"]["frontmatter"] = {key: value for key, value in package.metadata.items() if key not in {"name", "description"}}
+        payload["currentSkill"]["files"] = [
+            {"path": path, "executable": entry.executable,
+             "content": entry.content.decode("utf-8", errors="replace") if len(entry.content) <= 32_000 and b"\x00" not in entry.content else None}
+            for path, entry in package.files.items() if path != "SKILL.md"
+        ]
     user_payload = json.dumps(payload, ensure_ascii=False)
     editing = current_skill is not None
     output_tool = run_support._skill_draft_output_tool(editing=editing)
@@ -127,7 +134,7 @@ async def generate_skill_draft(
                             (
                                 str(item)
                                 for item in error.get("loc", ())
-                                if item in {"name", "description", "instructions"}
+                            if item in {"name", "description", "instructions", "files"}
                             ),
                             "arguments",
                         )
@@ -167,8 +174,8 @@ async def generate_skill_draft(
                         "content": (
                             f"The output was invalid: {failure}. Return exactly one "
                             f"{output_tool_name} tool call matching the schema. "
-                            "Limits: name 1-64 characters, description 1-240 "
-                            "characters, instructions 1-8000 characters."
+                            "Use a lowercase hyphenated name (1-64 characters), a description "
+                            "of 1-1024 characters, and concise Markdown instructions."
                         ),
                     }
                 )

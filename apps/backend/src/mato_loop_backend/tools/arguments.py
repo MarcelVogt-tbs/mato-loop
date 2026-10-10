@@ -1029,16 +1029,17 @@ class PersonalSettingsArguments(ToolArguments):
 
 
 class BuildSkillArguments(ToolArguments):
+    scope: Literal["personal", "instance"] = Field(default="personal", description="Global: explicit latest-message request and administrator rights required.")
     brief: str = Field(
         min_length=1,
         max_length=2_000,
-        description="Compact description of the skill the user wants.",
+        description="Requested workflow.",
     )
     name_hint: str | None = Field(
         default=None,
         min_length=1,
         max_length=64,
-        description="Optional short name suggested by the user.",
+        description="User-suggested name.",
     )
 
     @field_validator("brief", "name_hint")
@@ -1053,11 +1054,12 @@ class BuildSkillArguments(ToolArguments):
 
 
 class EditSkillArguments(ToolArguments):
-    skill_id: UUID = Field(description="Exact ID copied from the available skill catalog.")
+    scope: Literal["personal", "instance"] = Field(default="personal", description="Catalog scope; global edits require explicit request and administrator rights.")
+    skill_id: UUID = Field(description="Exact catalog ID.")
     brief: str = Field(
         min_length=1,
         max_length=2_000,
-        description="Compact description of the requested changes.",
+        description="Requested changes.",
     )
 
     @field_validator("brief")
@@ -1070,7 +1072,8 @@ class EditSkillArguments(ToolArguments):
 
 
 class LoadSkillArguments(ToolArguments):
-    skill_id: UUID = Field(description="Exact ID copied from the available skill catalog.")
+    skill_id: UUID = Field(description="Exact catalog ID.")
+    on_computer: bool = Field(default=False, description="Prepare package files on the selected computer; reload after switching computers.")
 
 
 class AutomationScheduleArguments(ToolArguments):

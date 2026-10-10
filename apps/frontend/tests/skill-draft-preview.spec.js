@@ -40,7 +40,7 @@ async function mountPage({ actionKind = 'build_skill', rootIdentity, reply } = {
     payload: { subagentSessionId: 'child', subagentTitle: 'Skill erstellen' },
     details: {
       skillPreview: { name: 'Dateien prüfen', description: 'Dateien lesen', instructions: 'Nur lesen' },
-      draftFile: { root: 'session', path: 'skill-draft.json', filename: 'skill-draft.json', initialRevision, ...(rootIdentity ? { rootIdentity } : {}) }
+      draftFile: { root: 'session', path: 'skill-draft.json', filename: 'skill-draft.json', initialRevision, fileRevision: initialRevision, ...(rootIdentity ? { rootIdentity } : {}) }
     }
   }
   api.post.mockResolvedValue({ data: {} })

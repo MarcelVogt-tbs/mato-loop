@@ -825,9 +825,9 @@ async function openApprovalDraft(approval) {
     try {
       const data = await approvals.previewSkillDraft(approval)
       if (approvalDraftPreview.value !== preview) return
-      if (data?.kind !== 'text' || typeof data.content !== 'string' || !draft.initialRevision) {
+      if (data?.kind !== 'text' || typeof data.content !== 'string' || !draft.fileRevision) {
         preview.error = { code: 'skill.draftInvalid' }
-      } else if (data.revision !== draft.initialRevision) {
+      } else if (data.revision !== draft.fileRevision) {
         preview.error = { code: 'file.changed' }
       } else {
         preview.content = data.content

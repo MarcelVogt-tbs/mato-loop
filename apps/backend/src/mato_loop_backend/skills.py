@@ -1,271 +1,249 @@
 from __future__ import annotations
 
-import json
+import asyncio
 from dataclasses import dataclass, field
-from json import JSONDecodeError
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    ValidationError,
-    field_validator,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.models.account import UserAccount
 from mato_loop_backend.settings import (
     DEFAULT_SKILLS,
     InstanceSkillsSettings,
     SettingsStore,
     SkillDefinition,
     SkillsSettings,
-    load_effective_skills,
 )
 from mato_loop_backend.settings.effective import personal_skills_allowed
-from mato_loop_backend.settings.models import normalize_skill_name, normalize_skill_text
+from mato_loop_backend.settings.models import SkillReference
+from mato_loop_backend.skill_packages import (
+    MAX_FILE_BYTES,
+    MAX_PACKAGE_FILES,
+    MAX_SKILL_BYTES,
+    SkillError,
+    SkillFile,
+    SkillPackage,
+    parse_skill_md,
+    skill_md,
+    skill_path,
+)
+from mato_loop_backend.skill_storage import SkillStorage
+
+SkillScope = Literal["instance", "personal"]
 
 
-class SkillError(Exception):
-    def __init__(self, code: str) -> None:
-        super().__init__(code)
-        self.code = code
+class SkillTextFile(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    path: str
+    content: str | None = Field(default=None, max_length=MAX_FILE_BYTES, description="UTF-8 text; null removes the supporting file.")
+    executable: bool = False
+
+    @field_validator("path")
+    @classmethod
+    def valid_path(cls, value: str) -> str:
+        if value.casefold() == "skill.md":
+            raise ValueError("Use the skill fields to edit SKILL.md")
+        return skill_path(value)
 
 
 class SkillDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    name: str = Field(min_length=1, max_length=64)
-    description: str = Field(min_length=1, max_length=240)
-    instructions: str = Field(min_length=1, max_length=8_000)
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    description: str = Field(min_length=1, max_length=1024)
+    instructions: str = Field(max_length=MAX_SKILL_BYTES)
+    files: list[SkillTextFile] = Field(default_factory=list, max_length=MAX_PACKAGE_FILES - 1)
+    frontmatter: dict[str, JsonValue] = Field(default_factory=dict, description="Additional SKILL.md fields, such as license, compatibility, or metadata. Null removes a field; omitted fields are preserved.")
 
-    @field_validator("name", mode="before")
+    @field_validator("description", "instructions")
     @classmethod
-    def validate_name(cls, value: Any) -> Any:
-        return normalize_skill_name(value) if isinstance(value, str) else value
+    def text(cls, value: str) -> str:
+        return value.strip()
 
-    @field_validator("description", "instructions", mode="before")
-    @classmethod
-    def validate_text(cls, value: Any, info: Any) -> Any:
-        return normalize_skill_text(value, info.field_name) if isinstance(value, str) else value
+    def package(self, base: SkillPackage | None = None) -> SkillPackage:
+        files = dict(base.files) if base else {}
+        metadata = {**(base.metadata if base else {}), **self.frontmatter}
+        metadata = {key: value for key, value in metadata.items() if value is not None}
+        files["SKILL.md"] = SkillFile(skill_md(self.name, self.description, self.instructions, metadata))
+        for change in self.files:
+            if change.content is None:
+                files.pop(change.path, None)
+            else:
+                files[change.path] = SkillFile(change.content.encode(), change.executable)
+        return SkillPackage(files)
 
 
 class SkillEditPatch(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    name: str | None = Field(default=None, min_length=1, max_length=64)
-    description: str | None = Field(default=None, min_length=1, max_length=240)
-    instructions: str | None = Field(default=None, min_length=1, max_length=8_000)
+    name: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    description: str | None = Field(default=None, min_length=1, max_length=1024)
+    instructions: str | None = Field(default=None, max_length=MAX_SKILL_BYTES)
+    files: list[SkillTextFile] | None = Field(default=None, max_length=MAX_PACKAGE_FILES - 1)
+    frontmatter: dict[str, JsonValue] | None = Field(default=None, description="Only changed additional SKILL.md fields; null values remove fields.")
 
-    @field_validator("name", mode="before")
+    @field_validator("name", "description", "instructions", "files", "frontmatter", mode="before")
     @classmethod
-    def validate_name(cls, value: Any) -> Any:
+    def not_null(cls, value: Any) -> Any:
         if value is None:
-            raise ValueError("name must not be null")
-        return normalize_skill_name(value) if isinstance(value, str) else value
-
-    @field_validator("description", "instructions", mode="before")
-    @classmethod
-    def validate_text(cls, value: Any, info: Any) -> Any:
-        if value is None:
-            raise ValueError(f"{info.field_name} must not be null")
-        return normalize_skill_text(value, info.field_name) if isinstance(value, str) else value
+            raise ValueError("An edited field must not be null")
+        return value.strip() if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def require_change(self) -> SkillEditPatch:
-        if self.name is None and self.description is None and self.instructions is None:
-            raise ValueError("at least one skill field is required")
+        if not self.model_fields_set:
+            raise ValueError("At least one skill field is required")
         return self
-
-
-def serialize_skill_draft(draft: SkillDraft) -> str:
-    return json.dumps(draft.model_dump(), ensure_ascii=False, indent=2) + "\n"
-
-
-def parse_skill_draft(value: str | bytes) -> SkillDraft:
-    try:
-        return SkillDraft.model_validate(json.loads(value))
-    except (JSONDecodeError, UnicodeDecodeError, TypeError, ValidationError) as exc:
-        raise SkillError("skill.draftInvalid") from exc
 
 
 @dataclass(slots=True)
 class RunSkillState:
     catalog: dict[UUID, SkillDefinition] = field(default_factory=dict)
-    active: SkillDefinition | None = None
-    edit_completed: bool = False
+    active: dict[UUID, SkillDefinition] = field(default_factory=dict)
 
     @classmethod
     def from_skills(cls, skills: list[SkillDefinition]) -> RunSkillState:
         return cls({skill.id: skill.model_copy(deep=True) for skill in skills if skill.enabled})
 
 
-SkillScope = Literal["instance", "personal"]
+def default_package(skill_id: UUID) -> SkillPackage:
+    skill = DEFAULT_SKILLS[skill_id]
+    return SkillDraft(name=skill.name, description=skill.description, instructions=skill.instructions).package()
+
+
+def definition(reference: SkillReference, owner_id: UUID | None, package: SkillPackage) -> SkillDefinition:
+    metadata, instructions = parse_skill_md(package.files["SKILL.md"].content)
+    return SkillDefinition(
+        id=reference.id, name=metadata["name"], description=metadata["description"],
+        instructions=instructions, enabled=reference.enabled, owner_id=owner_id,
+        document=package.files["SKILL.md"].content.decode("utf-8-sig"),
+        revision=package.revision, resource_paths=sorted(package.files),
+    )
 
 
 class SkillService:
     @staticmethod
-    async def list(db: AsyncSession, user_id: UUID) -> list[SkillDefinition]:
-        return await load_effective_skills(db, user_id, enabled_only=True)
-
-    @staticmethod
-    async def list_scoped(
-        db: AsyncSession, user_id: UUID, scope: SkillScope
-    ) -> list[SkillDefinition]:
-        settings, _ = await SkillService._load_scoped(db, user_id, scope)
+    async def require_write(db: AsyncSession, user_id: UUID, scope: SkillScope) -> None:
         if scope == "instance":
-            return settings.skills
+            user = await db.scalar(select(UserAccount).where(UserAccount.id == user_id).with_for_update().execution_options(populate_existing=True))
+            if user is None or not user.is_active or not user.is_admin:
+                raise SkillError("auth.adminRequired")
+        elif not await personal_skills_allowed(db, user_id, for_update=True):
+            raise SkillError("skill.personalDisabled")
+
+    @staticmethod
+    async def _load_scoped(db: AsyncSession, user_id: UUID, scope: SkillScope, *, for_update: bool = False) -> tuple[SkillsSettings | InstanceSkillsSettings, UUID | None]:
+        if for_update:
+            await SkillService.require_write(db, user_id, scope)
+        owner_id = user_id if scope == "personal" else None
+        settings = await SettingsStore.load(db, SkillsSettings if owner_id else InstanceSkillsSettings, user_id=owner_id, for_update=for_update)
+        return settings, owner_id
+
+    @staticmethod
+    async def _definition(reference: SkillReference, owner_id: UUID | None) -> SkillDefinition:
+        package = await asyncio.to_thread(SkillStorage().read, owner_id, reference.id, reference.revision, reference.name)
+        return definition(reference, owner_id, package)
+
+    @staticmethod
+    async def list_scoped(db: AsyncSession, user_id: UUID, scope: SkillScope) -> list[SkillDefinition]:
+        settings, owner_id = await SkillService._load_scoped(db, user_id, scope)
+        skills = [await SkillService._definition(item, owner_id) for item in settings.skills]
+        if scope == "personal":
+            existing = {item.id for item in skills}
+            instance = await SettingsStore.load(db, InstanceSkillsSettings)
+            skills = [await SkillService._definition(item, None) for item in instance.skills if item.id in DEFAULT_SKILLS and item.id not in existing] + skills
+        return skills
+
+    @staticmethod
+    async def list(db: AsyncSession, user_id: UUID) -> list[SkillDefinition]:
         instance = await SettingsStore.load_optional(db, InstanceSkillsSettings) or InstanceSkillsSettings()
-        personal = {skill.id: skill for skill in settings.skills}
-        defaults = [personal.get(skill.id, skill) for skill in instance.skills if skill.id in DEFAULT_SKILLS]
-        custom = [skill for skill in settings.skills if skill.id not in DEFAULT_SKILLS]
-        return [*defaults, *custom]
+        allowed = await personal_skills_allowed(db, user_id)
+        personal = await SettingsStore.load(db, SkillsSettings, user_id=user_id) if allowed else SkillsSettings()
+        overrides = {skill.id for skill in personal.skills}
+        references = [(item, None) for item in instance.skills if item.id not in overrides] + [(item, user_id) for item in personal.skills]
+        skills = [await SkillService._definition(item, owner_id) for item, owner_id in references if item.enabled]
+        user = await db.get(UserAccount, user_id)
+        for skill in skills:
+            skill.editable = bool(isinstance(user, UserAccount) and user.is_admin) if skill.owner_id is None else allowed
+            if allowed and skill.id in DEFAULT_SKILLS:
+                skill.editable = True
+        return skills
 
     @staticmethod
-    async def create(
-        db: AsyncSession, user_id: UUID, draft: SkillDraft, scope: SkillScope = "personal"
-    ) -> SkillDefinition:
-        return await SkillService.create_definition(
-            db, user_id, SkillDefinition(**draft.model_dump()), scope=scope
-        )
+    async def package(skill: SkillDefinition) -> SkillPackage:
+        return await asyncio.to_thread(SkillStorage().read, skill.owner_id, skill.id, skill.revision, skill.name)
 
     @staticmethod
-    async def create_definition(
-        db: AsyncSession, user_id: UUID, definition: SkillDefinition,
-        *, scope: SkillScope = "personal"
-    ) -> SkillDefinition:
-        settings, owner_id = await SkillService._load_scoped(
-            db, user_id, scope, for_update=True
-        )
-        SkillService._ensure_unique(settings, definition.name)
-        if sum(skill.id not in DEFAULT_SKILLS for skill in settings.skills) >= 20:
-            raise SkillError("skill.limitReached")
-        settings.skills.append(definition)
-        await SettingsStore.save(db, settings, user_id=owner_id)
-        return definition
-
-    @staticmethod
-    async def replace(
-        db: AsyncSession,
-        user_id: UUID,
-        skill_id: UUID,
-        draft: SkillDraft,
-        *,
-        expected: SkillDefinition | None = None,
-        scope: SkillScope = "personal",
-    ) -> SkillDefinition:
-        settings, owner_id = await SkillService._load_scoped(
-            db, user_id, scope, for_update=True
-        )
-        current = next((item for item in settings.skills if item.id == skill_id), None)
-        if current is None and scope == "personal" and skill_id in DEFAULT_SKILLS:
-            current = await SkillService._default_base(db, skill_id)
-            settings.skills.append(current)
-        if current is None:
-            raise SkillError("skill.notFound")
-        if expected is not None and current.model_dump() != expected.model_dump():
-            raise SkillError("skill.changed")
-        SkillService._ensure_unique(settings, draft.name, exclude_id=skill_id)
-        replacement = SkillDefinition(
-            id=current.id, enabled=current.enabled, **draft.model_dump()
-        )
-        settings.skills[settings.skills.index(current)] = replacement
-        await SettingsStore.save(db, settings, user_id=owner_id)
-        return replacement
-
-    @staticmethod
-    async def delete(
-        db: AsyncSession, user_id: UUID, skill_id: UUID,
-        scope: SkillScope = "personal",
-    ) -> None:
-        if skill_id in DEFAULT_SKILLS:
-            raise SkillError("skill.defaultProtected")
-        settings, owner_id = await SkillService._load_scoped(
-            db, user_id, scope, for_update=True
-        )
-        current = next((item for item in settings.skills if item.id == skill_id), None)
-        if current is None:
-            raise SkillError("skill.notFound")
-        settings.skills.remove(current)
-        await SettingsStore.save(db, settings, user_id=owner_id)
-
-    @staticmethod
-    async def set_enabled(
-        db: AsyncSession, user_id: UUID, skill_id: UUID, enabled: bool,
-        scope: SkillScope = "personal",
-    ) -> SkillDefinition:
-        settings, owner_id = await SkillService._load_scoped(
-            db, user_id, scope, for_update=True
-        )
-        skill = next((item for item in settings.skills if item.id == skill_id), None)
-        if skill is None and scope == "personal" and skill_id in DEFAULT_SKILLS:
-            skill = await SkillService._default_base(db, skill_id)
-            settings.skills.append(skill)
+    async def get(db: AsyncSession, user_id: UUID, skill_id: UUID, scope: SkillScope) -> SkillDefinition:
+        skill = next((item for item in await SkillService.list_scoped(db, user_id, scope) if item.id == skill_id), None)
         if skill is None:
             raise SkillError("skill.notFound")
-        skill.enabled = enabled
-        await SettingsStore.save(db, settings, user_id=owner_id)
         return skill
 
     @staticmethod
-    async def reset(
-        db: AsyncSession, user_id: UUID, skill_id: UUID,
-        scope: SkillScope = "personal",
+    async def save_package(
+        db: AsyncSession, user_id: UUID, skill_id: UUID, package: SkillPackage, *,
+        scope: SkillScope = "personal", create: bool = False, expected_revision: str | None = None,
     ) -> SkillDefinition:
-        default = DEFAULT_SKILLS.get(skill_id)
-        if default is None:
-            raise SkillError("skill.notFound")
-        settings, owner_id = await SkillService._load_scoped(
-            db, user_id, scope, for_update=True
-        )
+        settings, owner_id = await SkillService._load_scoped(db, user_id, scope, for_update=True)
         current = next((item for item in settings.skills if item.id == skill_id), None)
-        if current is None and scope == "personal":
+        if current is None and not create and scope == "personal" and skill_id in DEFAULT_SKILLS:
             current = await SkillService._default_base(db, skill_id)
+        if create and current is not None:
+            raise SkillError("skill.duplicate")
+        if not create and current is None:
+            raise SkillError("skill.notFound")
+        if current is not None and expected_revision != current.revision:
+            raise SkillError("skill.changed")
+        if any(item.id != skill_id and item.name == package.name for item in settings.skills):
+            raise SkillError("skill.duplicate")
+        if create and sum(item.id not in DEFAULT_SKILLS for item in settings.skills) >= 20:
+            raise SkillError("skill.limitReached")
+        revision = await asyncio.to_thread(SkillStorage().publish, owner_id, skill_id, package)
+        replacement = SkillReference(id=skill_id, name=package.name, revision=revision, enabled=current.enabled if current else True)
+        settings.skills = [replacement if item.id == skill_id else item for item in settings.skills]
+        if not any(item.id == skill_id for item in settings.skills):
+            settings.skills.append(replacement)
+        await SettingsStore.save(db, settings, user_id=owner_id)
+        return definition(replacement, owner_id, package)
+
+    @staticmethod
+    async def delete(db: AsyncSession, user_id: UUID, skill_id: UUID, scope: SkillScope = "personal") -> None:
+        if skill_id in DEFAULT_SKILLS:
+            raise SkillError("skill.defaultProtected")
+        settings, owner_id = await SkillService._load_scoped(db, user_id, scope, for_update=True)
+        if not any(item.id == skill_id for item in settings.skills):
+            raise SkillError("skill.notFound")
+        settings.skills = [item for item in settings.skills if item.id != skill_id]
+        await SettingsStore.save(db, settings, user_id=owner_id)
+
+    @staticmethod
+    async def set_enabled(db: AsyncSession, user_id: UUID, skill_id: UUID, enabled: bool, scope: SkillScope = "personal") -> SkillDefinition:
+        settings, owner_id = await SkillService._load_scoped(db, user_id, scope, for_update=True)
+        current = next((item for item in settings.skills if item.id == skill_id), None)
+        if current is None and scope == "personal" and skill_id in DEFAULT_SKILLS:
+            current = await SkillService._default_base(db, skill_id)
+            package = await asyncio.to_thread(SkillStorage().read, None, current.id, current.revision, current.name)
+            await asyncio.to_thread(SkillStorage().publish, owner_id, current.id, package)
             settings.skills.append(current)
         if current is None:
             raise SkillError("skill.notFound")
-        replacement = default.model_copy(deep=True)
-        replacement.enabled = current.enabled
-        settings.skills[settings.skills.index(current)] = replacement
+        current.enabled = enabled
         await SettingsStore.save(db, settings, user_id=owner_id)
-        return replacement
+        return await SkillService._definition(current, owner_id)
 
     @staticmethod
-    async def _load_scoped(
-        db: AsyncSession, user_id: UUID, scope: SkillScope, *, for_update: bool = False
-    ) -> tuple[InstanceSkillsSettings | SkillsSettings, UUID | None]:
-        if scope == "instance":
-            return await SettingsStore.load(
-                db, InstanceSkillsSettings, for_update=for_update
-            ), None
-        if for_update and not await personal_skills_allowed(db, user_id, for_update=True):
-            raise SkillError("skill.personalDisabled")
-        return await SettingsStore.load(
-            db, SkillsSettings, user_id=user_id, for_update=for_update
-        ), user_id
+    async def reset(db: AsyncSession, user_id: UUID, skill_id: UUID, scope: SkillScope = "personal") -> SkillDefinition:
+        if skill_id not in DEFAULT_SKILLS:
+            raise SkillError("skill.notFound")
+        current = await SkillService.get(db, user_id, skill_id, scope)
+        return await SkillService.save_package(db, user_id, skill_id, default_package(skill_id), scope=scope, expected_revision=current.revision)
 
     @staticmethod
-    async def _default_base(db: AsyncSession, skill_id: UUID) -> SkillDefinition:
+    async def _default_base(db: AsyncSession, skill_id: UUID) -> SkillReference:
         instance = await SettingsStore.load(db, InstanceSkillsSettings)
-        return next(
-            (
-                skill.model_copy(deep=True)
-                for skill in instance.skills
-                if skill.id == skill_id
-            ),
-            DEFAULT_SKILLS[skill_id].model_copy(deep=True),
-        )
-
-    @staticmethod
-    def _ensure_unique(
-        settings: InstanceSkillsSettings | SkillsSettings,
-        name: str, *, exclude_id: UUID | None = None
-    ) -> None:
-        folded = name.casefold()
-        if any(
-            item.id != exclude_id and item.name.casefold() == folded
-            for item in settings.skills
-        ):
-            raise SkillError("skill.duplicate")
+        return next(item.model_copy(deep=True) for item in instance.skills if item.id == skill_id)

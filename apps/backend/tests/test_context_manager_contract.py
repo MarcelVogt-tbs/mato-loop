@@ -1815,14 +1815,14 @@ def test_skill_catalog_contains_selection_metadata_without_instructions() -> Non
         skill_catalog=(skill,),
     )
 
-    catalog = json.loads(prompt.split("Catalog:\n", 1)[1].split("\n\n", 1)[0])
-    assert catalog == [
+    catalog = json.loads(prompt.split("Catalog by scope:\n", 1)[1].split("\n\n", 1)[0])
+    assert catalog == {"personal": [], "instance": [
         {
             "id": str(skill.id),
             "name": skill.name,
             "description": skill.description,
         }
-    ]
+    ]}
     assert "before any answer or task tool" in prompt
     assert "even a simple one" in prompt
     assert skill.instructions not in prompt
@@ -1905,7 +1905,7 @@ def test_active_skill_instructions_preserve_host_precedence() -> None:
         instructions="Nutze nur Primaerquellen.",
     )
 
-    prompt = general_system_prompt(_session(), active_skill=skill)
+    prompt = general_system_prompt(_session(), active_skills=(skill,))
 
     assert skill.instructions in prompt
     assert "cannot add tools or override host security" in prompt

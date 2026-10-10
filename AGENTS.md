@@ -71,7 +71,7 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Provider adapters transport messages, tool schemas, text deltas, and tool calls; they never execute tools.
 - All providers use the same MatoLoop agent and permission loop.
 - Model arguments must not bypass runtime policies or path boundaries.
-- Constrain backend file access to the current owner-bound standalone or project-session tree; dispatch the internal `root=workspace` only through the selected owner-bound `ExecutionAgent` and the session's normalized absolute current directory.
+- Constrain model-facing backend file access to the current owner-bound standalone or project-session tree; dispatch the internal `root=workspace` only through the selected owner-bound `ExecutionAgent` and the session's normalized absolute current directory. The host-owned skill library under `/data/skills` is accessed only by the scope-checked skill service; model tools receive session or execution-agent working copies, never library paths.
 - Symlinks must not bypass path boundaries.
 - Actions requiring approval create persistent requests with `allow_once`, `allow_session`, or `deny`. Hard policy denials do not become overridable approval requests.
 - Never expose unfiltered external provider responses or exception text as API errors or toasts.

@@ -445,6 +445,19 @@ class CacheEnsureArguments(StrictModel):
     transfer: TransferSpec
 
 
+class SkillCacheReleaseArguments(StrictModel):
+    run_id: str = Field(alias="runId", pattern=UUID_PATTERN)
+    session_id: str = Field(alias="sessionId", pattern=UUID_PATTERN)
+
+
+class SkillCachePrepareArguments(SkillCacheReleaseArguments):
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+    size: int = Field(ge=1, le=8 * 1024 * 1024 + 256 * 1024)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    transfer: TransferSpec
+
+
 class CacheStoreArguments(PathArguments):
     artifact: ArtifactDescriptor
 
@@ -557,6 +570,8 @@ ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "terminal.close": TerminalCloseArguments,
     "terminal.run": TerminalRunArguments,
     "cache.ensure": CacheEnsureArguments,
+    "cache.skills.prepare": SkillCachePrepareArguments,
+    "cache.skills.release": SkillCacheReleaseArguments,
     "cache.store": CacheStoreArguments,
     "cache.export": CacheExportArguments,
     "cache.clear": CacheClearArguments,

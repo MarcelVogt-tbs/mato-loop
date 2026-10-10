@@ -189,10 +189,13 @@
         </div>
         <div v-if="skillPreview" class="approval-resource q-mt-md">
           <div class="text-caption app-muted">Skill-Vorschau</div>
+          <q-badge :label="skillPreview.scope === 'instance' ? 'Global – für alle Benutzer' : 'Persönlich'" class="q-mt-xs" />
           <div class="text-subtitle1 text-weight-bold q-mt-xs">{{ skillPreview.name }}</div>
           <div class="text-body2 q-mt-xs">{{ skillPreview.description }}</div>
           <div class="text-caption app-muted q-mt-md">Anweisungen</div>
           <pre class="approval-details q-mt-xs">{{ skillPreview.instructions }}</pre>
+          <div class="text-caption q-mt-sm">Paketdateien: {{ skillPreview.files?.join(', ') }}</div>
+          <q-btn flat no-caps icon="refresh" label="Paketvorschau aktualisieren" :loading="reviewingSkill" @click="reviewSkill" />
           <q-btn
             v-if="draftFile && showDraftAction"
             outline
@@ -318,6 +321,7 @@ import {
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 import { useWorkspaceStore } from 'stores/workspace'
+import { useSkillStore } from 'stores/skills'
 
 defineOptions({ name: 'ApprovalCard' })
 
@@ -329,6 +333,8 @@ const emit = defineEmits(['open-approval-draft'])
 const approvals = useApprovalStore()
 const chat = useChatStore()
 const workspace = useWorkspaceStore()
+const skills = useSkillStore()
+const reviewingSkill = ref(false)
 const { confirm } = useConfirm()
 const loadingDecision = ref(null)
 const memoryEdit = ref(null)
@@ -400,7 +406,7 @@ const presentation = computed(() => toolPresentation(
   props.approval.details?.displayItems || props.approval.payload?.displayItems
 ))
 const skillPreview = computed(() => skillDraftApproval.value
-  ? props.approval.details?.skillPreview
+  ? skills.draftReviews[props.approval.id] || props.approval.details?.skillPreview
   : null)
 const draftFile = computed(() => skillDraftApproval.value
   ? props.approval.details?.draftFile
@@ -411,12 +417,10 @@ const matchingDraftDirty = computed(() => Boolean(
   && workspace.editorDirty
   && workspace.sessionId === props.approval.sessionId
   && workspace.scope === 'session'
-  && workspace.viewedEntry?.path === draftFile.value.path
+  && workspace.viewedEntry?.path?.startsWith(draftFile.value.path.slice(0, -'SKILL.md'.length))
 ))
 const draftRevision = computed(() => draftFile.value
-  ? childSkillDraft.value
-    ? draftFile.value.initialRevision
-    : workspace.filePreviews[draftFile.value.path]?.revision ?? draftFile.value.initialRevision
+  ? skills.draftReviews[props.approval.id]?.revision ?? draftFile.value.initialRevision
   : undefined)
 const hasBothAllowDecisions = computed(() => (
   hasDecision('allow_once') && hasDecision('allow_session')
@@ -428,6 +432,12 @@ const allowDecision = computed(() => (
 function hasDecision(decision) {
   return Array.isArray(props.approval.availableDecisions)
     && props.approval.availableDecisions.includes(decision)
+}
+
+async function reviewSkill() {
+  reviewingSkill.value = true
+  try { await skills.reviewDraft(props.approval.id) } catch { /* Central API toast. */ }
+  finally { reviewingSkill.value = false }
 }
 
 function memoryCategoryLabel(value) {

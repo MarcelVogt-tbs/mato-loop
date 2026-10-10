@@ -27,7 +27,7 @@ class SessionCache:
             raise ValueError("session cache path must be a real directory")
         os.chmod(self.root, 0o700, follow_symlinks=False)
         self._identity = (metadata.st_dev, metadata.st_ino)
-        self._lock = threading.RLock()
+        self.lock = threading.RLock()
         self.staging = data_dir / "transfers"
 
     @staticmethod
@@ -75,7 +75,7 @@ class SessionCache:
             os.close(fd)
 
     def _check(self, artifact: ArtifactDescriptor) -> bool:
-        with self._lock, self._parent_fd(artifact, create=True) as (parent, name):
+        with self.lock, self._parent_fd(artifact, create=True) as (parent, name):
             try:
                 metadata = os.stat(name, dir_fd=parent, follow_symlinks=False)
             except FileNotFoundError:
@@ -115,14 +115,14 @@ class SessionCache:
         return {"cached": False, "size": artifact.size, "sha256": artifact.sha256}
 
     def _publish(self, artifact: ArtifactDescriptor, temporary: Path) -> None:
-        with self._lock, self._parent_fd(artifact, create=True) as (parent, name):
+        with self.lock, self._parent_fd(artifact, create=True) as (parent, name):
             os.replace(temporary, name, dst_dir_fd=parent)
             os.chmod(name, 0o600, dir_fd=parent, follow_symlinks=False)
             os.fsync(parent)
             self._evict_unlocked()
 
     def store(self, artifact: ArtifactDescriptor, source) -> dict:
-        with self._lock, self._parent_fd(artifact, create=True) as (parent, name):
+        with self.lock, self._parent_fd(artifact, create=True) as (parent, name):
             temporary = f".cache-{uuid4().hex}.tmp"
             digest = hashlib.sha256()
             size = 0
@@ -156,7 +156,7 @@ class SessionCache:
 
     @contextmanager
     def open_export(self, artifact: ArtifactDescriptor) -> Iterator[tuple[BinaryIO, int, str]]:
-        with self._lock, self._parent_fd(artifact, create=False) as (parent, name):
+        with self.lock, self._parent_fd(artifact, create=False) as (parent, name):
             try:
                 descriptor = os.open(
                     name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent
@@ -181,7 +181,7 @@ class SessionCache:
             handle.close()
 
     def evict(self) -> int:
-        with self._lock:
+        with self.lock:
             self._verify_root()
             return self._evict_unlocked()
 
@@ -220,6 +220,8 @@ class SessionCache:
         for _, size, path in sorted(files):
             if total <= self.max_bytes:
                 break
+            if any(root in path.parents for root in getattr(self, "protected_paths", ())):
+                continue
             path.unlink(missing_ok=True)
             total -= size
             removed += 1
@@ -229,6 +231,11 @@ class SessionCache:
     def _remove_empty_directories(self) -> None:
         directories = [Path(directory) for directory, _, _ in os.walk(self.root)]
         for directory in sorted(directories, key=lambda item: len(item.parts), reverse=True):
+            if any(
+                root == directory or root in directory.parents
+                for root in getattr(self, "protected_paths", ())
+            ):
+                continue
             if directory != self.root:
                 try:
                     directory.rmdir()
@@ -236,7 +243,9 @@ class SessionCache:
                     pass
 
     def clear(self) -> int:
-        with self._lock:
+        with self.lock:
+            if getattr(self, "protected_paths", None):
+                raise AgentError("cache.busy", "Active skills are using the cache")
             fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
                 metadata = os.fstat(fd)
