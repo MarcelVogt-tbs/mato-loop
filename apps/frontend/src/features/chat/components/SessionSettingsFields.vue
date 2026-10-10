@@ -156,7 +156,7 @@ const executionAgentMessage = computed(() => {
   if (!liveWorkspaceContext.value.connected) return 'Der ausgewählte Computer ist nicht verfügbar.'
   return ''
 })
-const effectiveSelection = computed(() => sessionModel(props.session, providers.modelDefaults, displayedAgentProfileId.value))
+const effectiveSelection = computed(() => sessionModel(props.session, providers.modelDefaults, providers.modelOptions, displayedAgentProfileId.value))
 const effectiveModelId = computed(() => effectiveSelection.value.modelId)
 const modelSelectionOptions = computed(() => providers.selectionOptions(effectiveModelId.value, true))
 const selectedModelLabel = computed(() => {
@@ -322,7 +322,7 @@ const ModelField = defineComponent(() => () => h(AppSelect, selectProps({
   'aria-label': 'Modell auswählen',
   dropdownIcon: props.compact ? 'expand_more' : undefined,
   hideBottomSpace: props.compact,
-  displayValue: props.compact ? selectedModelLabel.value : undefined,
+  displayValue: props.compact || !effectiveModelId.value ? selectedModelLabel.value : undefined,
   class: props.compact ? 'composer-select composer-model col-auto rounded-borders q-px-sm' : undefined,
   hint: props.compact ? undefined : modelSupportsTools.value ? 'Modell für diesen Agenten in dieser Session.' : 'Das ausgewählte Modell unterstützt keine Tools.',
   persistentHint: !props.compact,

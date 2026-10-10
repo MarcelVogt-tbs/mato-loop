@@ -56,6 +56,8 @@ def documents(monkeypatch):
 async def test_template_copy_and_agent_model_resolution(documents):
     user_id = uuid4()
     global_model, personal_model, session_model, plan_model = (uuid4() for _ in range(4))
+    provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
+    documents[AiProviderSettings, None] = AiProviderSettings(providers=[provider], models=[ModelConfig(id=model_id, provider_id=provider.id, model_id=str(model_id)) for model_id in (global_model, personal_model, session_model, plan_model)])
     documents[ModelDefaultsSettings, None] = ModelDefaultsSettings(default_model_id=global_model, title_generation_model_id=global_model, reasoning_effort="low")
     documents[UserModelDefaultsSettings, user_id] = UserModelDefaultsSettings(default_model_id=personal_model)
     template = await load_template(AsyncMock(), user_id, CODING_TEMPLATE_ID)
@@ -73,6 +75,8 @@ async def test_template_copy_and_agent_model_resolution(documents):
 async def test_preview_resolves_the_current_draft_not_the_original_template(documents):
     user = UserAccount(id=uuid4(), username="owner", password_hash="hash")
     model_id = uuid4()
+    provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
+    documents[AiProviderSettings, None] = AiProviderSettings(providers=[provider], models=[ModelConfig(id=model_id, provider_id=provider.id, model_id="chat")])
     payload = SessionOptionsRequest(session_template_id=CODING_TEMPLATE_ID, agent_profile_id=PLAN_PROFILE_ID, memory_mode="read_only", session_profile=SessionProfileSnapshot(agent_ids=[PLAN_PROFILE_ID, BUILD_PROFILE_ID], agent_models={PLAN_PROFILE_ID: ChatModelOverride(model_id=model_id, reasoning_effort="high")}))
     result = await session_defaults(user, AsyncMock(spec=AsyncSession), payload)
     assert (result["effectiveModelId"], result["effectiveReasoningEffort"], result["memoryMode"], result["sessionProfile"]["messageSize"]) == (str(model_id), "high", "read_only", "standard")

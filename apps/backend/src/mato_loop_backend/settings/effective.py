@@ -44,10 +44,16 @@ if TYPE_CHECKING:
     from mato_loop_backend.models import ChatSession
 
 def apply_session_ai(settings: AiSettings, session: ChatSession, profile_id: UUID | None = None) -> AiSettings:
+    from mato_loop_backend.providers.settings_service import available_model
+    from mato_loop_backend.settings.models import ModelCapability
+
     effective = settings.model_copy(deep=True)
     configuration = SessionProfileSnapshot.model_validate(session.session_profile or {})
     override = configuration.agent_models.get(profile_id or session.agent_profile_id, ChatModelOverride())
-    effective.default_model_id = override.model_id or session.model_config_id or effective.default_model_id
+    effective.default_model_id = next((
+        model_id for model_id in (override.model_id, session.model_config_id, settings.default_model_id)
+        if available_model(settings, model_id, ModelCapability.CHAT) is not None
+    ), None)
     effective.reasoning_effort = override.reasoning_effort or session.reasoning_effort or effective.reasoning_effort
     return effective
 

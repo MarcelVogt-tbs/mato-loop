@@ -24,7 +24,7 @@ Neu erkannte Modelle beginnen in der Regel deaktiviert; vom Provider als natives
 
 Bei Providern ohne Modellerkennung kann eine Modell-ID manuell eingetragen werden.
 
-Deleting a model clears matching model defaults and explicit session-wide selections. Explicit per-agent session or template overrides remain visible as unavailable until changed. Synchronization, deactivation, capability changes, and Codex disconnection also clear invalid default assignments. A later synchronization may discover the same external model again with a new internal ID.
+Deleting a model clears matching model defaults and explicit session-wide selections. Sessions skip unavailable per-agent overrides and inherit the next available session-wide or default model; deleted and missing models disappear from selectors. If no model is available, select a model after configuring a provider. Synchronization, deactivation, capability changes, and Codex disconnection also clear invalid default assignments. A later synchronization may discover the same external model again with a new internal ID.
 
 ## Laufzeiteinstellungen
 

@@ -730,7 +730,7 @@ async def test_start_accepts_unavailable_model_for_persisted_host_failure(monkey
     db.scalar.side_effect = [session, None, True, True]
     monkeypatch.setattr(mock_agent_runtime.EpisodeIndexService, "enqueue", AsyncMock())
     run = await AgentRuntime.start(db, session, "Nachricht")
-    assert run.model_config_id == missing_model_id
+    assert run.model_config_id is None
     db.commit.assert_awaited_once()
 
 

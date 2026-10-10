@@ -8,6 +8,7 @@ from mato_loop_backend.settings import (
     load_effective_ai,
 )
 from mato_loop_backend.settings.effective import personal_settings_allowed
+from mato_loop_backend.settings.models import ModelCapability
 from mato_loop_backend.settings.session_profiles import (
     DEFAULT_TEMPLATE_ID,
     ChatModelOverride,
@@ -19,7 +20,7 @@ from mato_loop_backend.settings.session_profiles import (
 
 def validate_chat_model(ai, choice: ChatModelOverride, inherited_model_id=None, *, defer_unavailable=False):
     model_id = choice.model_id or inherited_model_id or ai.default_model_id
-    model = available_model(ai, model_id) if model_id else None
+    model = available_model(ai, model_id, ModelCapability.CHAT) if model_id else None
     if not defer_unavailable and choice.model_id and (model is None or not model.supports_tools):
         raise SessionServiceError(422, "session.modelUnavailable", field="modelId")
     if choice.reasoning_effort is not None and model is not None:
@@ -30,7 +31,7 @@ def validate_chat_model(ai, choice: ChatModelOverride, inherited_model_id=None, 
             raise SessionServiceError(422, "validation.invalidChoice", field="reasoningEffort")
 
 
-async def validate_session_profile(db, user_id, config: SessionProfileConfig, *, instance=False, model_id=None, defer_unavailable=False):
+async def validate_session_profile(db, user_id, config: SessionProfileConfig, *, instance=False, model_id=None, defer_unavailable=False, previous: SessionProfileConfig | None = None):
     profiles = await load_effective_agent_profiles(db, user_id, include_personal=not instance, include_integrations=False)
     requested = set(config.agent_ids or []) | set(config.agent_models)
     if not instance and requested - {profile.id for profile in profiles.profiles}:
@@ -39,8 +40,9 @@ async def validate_session_profile(db, user_id, config: SessionProfileConfig, *,
     if set(config.agent_models) - available or config.agent_ids is not None and set(config.agent_ids) - available:
         raise SessionServiceError(422, "agentProfile.selectedUnavailable", field="agentIds")
     ai = await load_effective_ai(db, user_id, include_personal=not instance)
-    for choice in config.agent_models.values():
-        validate_chat_model(ai, choice, model_id, defer_unavailable=defer_unavailable)
+    for agent_id, choice in config.agent_models.items():
+        unchanged_model = previous is not None and agent_id in previous.agent_models and choice.model_id == previous.agent_models[agent_id].model_id
+        validate_chat_model(ai, choice, model_id, defer_unavailable=defer_unavailable or unchanged_model)
     return ai
 
 
