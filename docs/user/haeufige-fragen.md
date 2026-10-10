@@ -2,7 +2,7 @@
 
 ## Warum erscheint meine neue Session noch nicht in der Navigation?
 
-Eine Session wird erst mit der ersten gesendeten Nachricht dauerhaft angelegt. Ein leerer Entwurf bleibt lokal im Browser.
+Eine Session entsteht beim ersten Senden oder beim Öffnen einer sessiongebundenen Control-Center-App. Die Startseite und ein leerer Entwurf allein bleiben lokal. Die feste Sessionansicht und globale Benachrichtigungen erzeugen keine leere Session.
 
 ## Warum kann der Agent nicht auf meinen Arbeitsordner zugreifen?
 
@@ -14,7 +14,7 @@ Provider und Modell müssen aktiviert sein. Das Modell muss außerdem verfügbar
 
 ## Warum kann ich keine Sprachnachricht aufnehmen oder transkribieren?
 
-Für die Aufnahme benötigt der Browser Mikrofonzugriff. Nur für die automatische Transkription nach dem Senden müssen Audiotranskription technisch aktiviert und im gewählten Agentenprofil ein verfügbares Transkriptionsmodell ausgewählt sein. Ohne Transkription können Sie den Originalanhang weiterhin aufnehmen, senden und abspielen.
+Der Browser braucht Mikrofonberechtigung. Für automatische Transkription müssen die Funktion verfügbar und ein geeignetes Modell unter **Standardmodelle > Transkription** gewählt sein. Das Agentenprofil enthält kein Transkriptionsmodell. Ohne Transkription bleiben Aufnahme, Versand und Wiedergabe möglich.
 
 ## Warum fragt MatoLoop trotz automatischer Tools nach einer Freigabe?
 

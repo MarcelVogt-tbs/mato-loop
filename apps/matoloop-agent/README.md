@@ -10,8 +10,8 @@ Standalone agent with a portable connection and dispatch core. Linux provides bo
 
 Platform adapters compose host operations behind the common core. Linux uses normalized absolute POSIX paths; Windows uses forward-slash drive-letter paths such as `C:/Users/Ada/workspace` on the wire. Native Windows paths are converted at the Windows adapter boundary. Unsupported capabilities are not advertised.
 
-The [Linux browser runtime](BROWSER.md) provides a persistent owner-bound headed Chromium,
-private graphical viewing, interactive prerequisite setup, and bounded browser actions.
+The [Linux browser runtime](BROWSER.md) provides persistent owner-bound Chromium,
+headless native automation, optional container graphical viewing, interactive prerequisite setup, and bounded browser actions.
 
 ## Configuration
 
@@ -56,7 +56,7 @@ The bootstrap installs pinned, private `uv` and Python runtimes below
 `~/.local/share/matoloop-agent`; it offers to install only the Agent's missing Debian/Ubuntu system
 packages and never changes shell profiles. Browser Python, Chromium, and browser host dependencies
 are installed later through the browser integration setup. From a
-checkout it uses the current source. A standalone script requires `git` to obtain the private
+checkout it uses the current source. A standalone script requires `git` to obtain the source
 repository because there is no native release package. The setup asks for the Agent home directory
 and normal MatoLoop instance URL, derives the WebSocket endpoint, and reuses the Agent's secure
 pairing prompt. An `http://` instance enables insecure transport; use `https://` outside a trusted
@@ -84,7 +84,7 @@ Dirty or unknown backend builds cannot supply a reproducible managed installatio
 `uninstall` preserves credentials, while `uninstall --purge` removes all managed Agent files. Both
 offer to remove only the system packages recorded as newly installed by MatoLoop. Agent
 home directories and workspaces are always preserved. The first platform implementation targets
-Linux system services with systemd. Browser and shared terminal capabilities remain unavailable
+Linux system services with systemd. Browser and personal terminal capabilities remain unavailable
 when their host prerequisites are declined or unsupported.
 
 ## Native Windows installation
@@ -97,7 +97,7 @@ Scheduled Task runs under the installing account, using a password supplied only
 to Windows Task Scheduler at installation. For cloning and updates, the installer
 uses Git from `PATH`, reuses its private Git, or downloads pinned MinGit 2.56.0.2
 for x64 or ARM64 Windows into `tools\git` after checking the archive's SHA-256.
-Access to the private MatoLoop repository is still required; an existing checkout
+Network access to the MatoLoop source repository is required; an existing checkout
 can be provided with `-Source`; Git is still used to stamp its source version. No system Git installation
 or global `PATH` change is made. Windows PowerShell is the shell for `shell_run`.
 
@@ -110,13 +110,18 @@ both tasks run under the installing account without elevation. Task Scheduler
 stores the account password, while the Agent's own pairing state uses DPAPI.
 Setup and updates follow the running backend's exact commit, including backward transitions. Deinstallation
 removes the private tools, including MinGit, and never removes the workspace.
-Browser, OpenSCAD, and interactive/shared terminals are not advertised by the
+Browser, OpenSCAD, and interactive terminals are not advertised by the
 Windows adapter.
 
-Run tests:
+## Container updates and development checks
+
+Managed Docker Agents can update to the running backend's exact commit through **Agent aktualisieren** or `matoloop-agent update`. Updates survive restart; recreation restores the selected image version. Data and workspaces remain in their mounts. See [computer maintenance](../../docs/computer-maintenance.md) for lifecycle and recovery details and [Windows acceptance](../../docs/windows-agent-acceptance.md) for native validation.
+
+Run repository checks from the root through the development stack:
 
 ```bash
-uv run python -m unittest discover -s tests -v
+./scripts/dev.sh check matoloop-agent
+./scripts/dev.sh test matoloop-agent
 ```
 
 ## Protocol v1

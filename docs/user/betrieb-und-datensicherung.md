@@ -1,156 +1,186 @@
 # Betrieb und Datensicherung
 
-MatoLoop ist selbst gehostet. Der bereitgestellte Produktions-Compose-Stack ist eine Grundlage, aber keine vollständig abgesicherte Standardinstallation für jedes Zielsystem.
+MatoLoop wird selbst gehostet. Die Produktionsvorlagen verwenden veröffentlichte Images; Entwicklung und Prüfungen verwenden dagegen `./scripts/dev.sh`. Die folgenden Betriebsbefehle gehören in das Verzeichnis Ihrer Produktionskonfiguration.
 
-## Vor einem Produktivbetrieb
+## Erstinstallation
 
-Planen und prüfen Sie mindestens:
+Benötigt werden Docker Engine, Compose v2 und für veröffentlichte Images ein `linux/amd64`-Host. Verwenden Sie `docker-compose.yaml` und `.env.example` aus dem zu installierenden Release des [GitHub-Repositorys](https://github.com/devmato/mato-loop). Kopieren Sie `.env.example` nach `.env` und bearbeiten Sie die Werte vor dem Start:
 
-- TLS und Reverse Proxy
-- sichere Session-Cookies
-- individuelle Datenbank-Zugangsdaten
-- Netzwerkzugriff auf Anwendung, Datenbank und Embedding-Dienst
-- regelmäßige Backups
-- getestete Wiederherstellung
-- Aktualisierungs- und Monitoring-Prozess
+- Zufälliges URL-sicheres `POSTGRES_PASSWORD`, beispielsweise aus Hex-Zeichen.
+- `MATO_LOOP_IMAGE` und `MATOLOOP_AGENT_IMAGE` mit demselben tatsächlich veröffentlichten festen `YYYY-MM-DD-<SHA8>`-Tag aus einem erfolgreichen Veröffentlichungsdurchlauf.
+- `MATO_LOOP_PUBLIC_BASE_URL` als Ihren öffentlichen HTTP(S)-Ursprung ohne Pfad, nicht den Beispielhost. **Administration > Allgemein** überschreibt später diesen Fallback; ist beides leer, gilt der eingehende Serverursprung.
+- Hostpfade für Datenbank, Backend und Agent sowie HTTP-Adresse/Port. Die Vorlage verwendet `/opt/mato-loop` und `/opt/matoloop-agent` und veröffentlicht HTTP-Port `10020` auf `0.0.0.0`.
+- HTTPS am Reverse Proxy und `MATO_LOOP_SECURE_COOKIES=true`. Die Vorlage liefert TLS nicht selbst; ein entferntes reines HTTP-Login mit Secure-Cookie ist keine passende Produktionskonfiguration.
 
-Copy `.env.example` to `.env` before the first start. Replace the database password and both image placeholders. Use the same GitHub Actions image tag for MatoLoop and MatoLoop Agent, in the format `YYYY-MM-DD-<SHA8>`.
+Bei einem Proxy auf demselben Host setzen Sie `MATO_LOOP_HOST_ADDRESS=127.0.0.1`; bei einem anderen Proxy eine geeignete private Adresse. Für ausdrücklich vertrauenswürdigen HTTP-Netzbetrieb kann Secure-Cookie deaktiviert werden. Speichern Sie `.env` mit beschränkten Dateirechten, nicht im Repository.
 
 ```bash
 cp .env.example .env
+# Hier .env bearbeiten und HTTPS einrichten.
 docker compose pull
 docker compose up -d
+docker compose ps
+docker compose logs --tail=100 mato-loop
 ```
 
-Der Stack veröffentlicht Port `10020` standardmäßig auf `0.0.0.0`. Begrenzen Sie den Zugriff mit der Host-Firewall und einem geeigneten Reverse Proxy. Die Standardwerte der vorbereiteten Compose-Datei sind nicht als sichere Internet-Konfiguration gedacht.
+Öffnen Sie anschließend den konfigurierten HTTPS-Ursprung, legen Sie das erste Administratorkonto an und folgen Sie dem [Schnellstart](schnellstart.md). Infinity lädt beim ersten Start sein gepinntes Modell; das kann Minuten dauern. Lexikalische Suche bleibt ohne Embeddings verfügbar.
 
-Bestehende Installationen, die bisher die eingebauten Compose-Fallbacks verwendet haben, tragen vor dem Wechsel ihre bisherigen Datenbankwerte sowie `./db`, `./data`, `./data/matoloop-agent` und `./data/home` ausdrücklich in `.env` ein. Verschieben Sie persistente Daten nur als separate, geprüfte Migration.
+Für die Variante ohne Agent verwenden Sie bei allen Befehlen `docker compose -f docker-compose.no-agent.yaml`. Beim Wechsel eines bestehenden Stacks ergänzt `up -d --remove-orphans` die Entfernung des früheren Agent-Containers. Bestehende Installationen übernehmen ihre bisherigen Datenbankwerte und Hostpfade ausdrücklich; ein Umzug persistenter Daten ist eine gesonderte Migration.
 
-Die Produktionsvorlage setzt `MATO_LOOP_SECURE_COOKIES=true`. Ändern Sie den Wert nur für einen ausdrücklich HTTP-basierten Betrieb in einem vertrauenswürdigen Netz; ohne `true` besitzt das Anmelde-Cookie kein `Secure`-Attribut.
+### Reverse Proxy und Monitoring
+
+Veröffentlichen Sie MatoLoop am Ursprung ohne URL-Unterpfad. Der Proxy muss WebSocket-Upgrades und lang laufende Verbindungen unterstützen sowie SSE ohne Antwortpufferung weiterleiten. Stimmen Sie Timeouts und Uploadlimits mit Ihrem Einsatz ab. PostgreSQL und Infinity bleiben intern; die Produktionsvorlagen veröffentlichen deren Ports nicht.
+
+- `/api/health/live` zeigt Prozess-Liveness.
+- `/api/health` ist Readiness; Datenbank-/pgvector-Fehler ergeben HTTP 503.
+- `embedding: "degraded"` bei sonst `status: "ok"` bedeutet fehlende Embeddings, nicht ausgefallenen Chat.
+
+Überwachen Sie Containerstatus, Fehlerlogs, freien Speicher, Backup-Erfolg und Embedding-Degradation getrennt. Der Produktionsdienst heißt `mato-loop`, der Entwicklungsdienst `backend`. API-Zugangsdaten und OAuth-Callback-Querywerte gehören nicht in Proxylogs.
 
 ## App und Push-Benachrichtigungen
 
-The production build is an installable web app. Serve MatoLoop over a trusted HTTPS address and set `MATO_LOOP_SECURE_COOKIES=true`. An administrator configures instance Web Push under **Administration > Benachrichtigungen** using a monitored contact email address. MatoLoop creates the private key `/data/secrets/web-push-vapid.pem` and supports the browser push services of Apple, Google, and Mozilla.
+Der Produktionsbuild ist als Web-App installierbar. Verwenden Sie vertrauenswürdiges HTTPS. Ein Administrator richtet Web Push unter **Administration > Benachrichtigungen** mit einer überwachten Kontaktadresse ein. MatoLoop erzeugt `/data/secrets/web-push-vapid.pem` und unterstützt Apple-, Google- und Mozilla-Browserpushdienste.
 
-Benutzer aktivieren Push anschließend für jeden Browser oder jede PWA-Installation über den Schalter im Benachrichtigungsbereich. Unter iOS und iPadOS ist dafür mindestens Version 16.4 erforderlich und MatoLoop muss zuvor über **Zum Home-Bildschirm** installiert worden sein. Die Systemberechtigung kann nur durch diese ausdrückliche Benutzeraktion angefordert werden.
+Benutzer aktivieren Push pro Browser/PWA im Benachrichtigungsbereich. Auf iOS/iPadOS ist mindestens 16.4 und eine vorherige Installation über **Zum Home-Bildschirm** nötig. Berechtigung wird nur nach dieser direkten Aktion angefragt. Bei fokussiertem MatoLoop wird Push für diesen Benutzer auf allen Geräten unterdrückt; gespeicherte Hinweise bleiben erhalten. Zustellung ist bestmöglich, kein Ersatz für den Verlauf.
 
-Solange MatoLoop in einem Browserfenster oder einer installierten PWA fokussiert ist, versendet MatoLoop keine Push-Benachrichtigungen an die Geräte dieses Benutzers. Die gespeicherten Benachrichtigungen und In-App-Aktionen bleiben davon unberührt.
+Sichern Sie den VAPID-Schlüssel gemeinsam mit Datenbank und Backenddaten. Verlust macht bestehende Geräteabonnements unbrauchbar. Der Service Worker speichert die Anwendungshülle, keine API-, Authentifizierungs-, SSE- oder Dateidaten offline. Ein bewusst bestätigtes App-Update lädt offene Appfenster neu und kann ungespeicherten Arbeitsspeicherzustand verlieren.
 
-Sichern Sie `/data/secrets/web-push-vapid.pem` zusammen mit Datenbank und Datenverzeichnis; ein verlorener Schlüssel macht bestehende Geräte-Abonnements unbrauchbar. Push-Zustellung erfolgt bestmöglich und ersetzt weder die gespeicherten Benachrichtigungen noch den Chatverlauf.
-
-Für den PWA-Entwicklungsmodus auf dem normalen Entwicklungsport `10020` verwenden Sie:
-
-```bash
-./scripts/dev.sh up --pwa --build -d
-```
-
-`localhost` gilt im Desktop-Browser als vertrauenswürdig. Für Tests auf Mobilgeräten ist auch in der Entwicklung eine HTTPS-Adresse erforderlich. Der PWA-Worker speichert keine Anwendungs-, API-, SSE-, Datei- oder Authentifizierungsdaten offline.
+Der Entwicklungsmodus verwendet `./scripts/dev.sh up --pwa --build -d`; localhost ist für Desktoptests vertrauenswürdig, mobile Geräte benötigen auch dort HTTPS.
 
 ## Optionalen Computer einrichten
 
-MatoLoop kann mehrere Computer verwalten. Öffnen Sie **Einstellungen > Computer**, wählen Sie **Computer hinzufügen**, vergeben Sie einen Namen und wählen Sie die Gültigkeit des Kopplungstokens zwischen 30 Minuten und 24 Stunden. Der Dialog zeigt Computer-ID, WebSocket-Adresse und das nur einmal sichtbare Token. Der Computer erzeugt damit beim ersten Start einen eigenen dauerhaften Zugangsschlüssel. Ein abgelaufenes oder verlorenes Kopplungstoken kann in der Übersicht ersetzt werden. Ein bereits gekoppelter Computer muss vor einer erneuten Kopplung ausdrücklich entkoppelt werden.
+Öffnen Sie **Einstellungen > Computer > Computer hinzufügen**. Wählen Sie Plattform und Installationsweg, optionalen Alias und Zugriffsrichtlinien. Kopplung verwendet Computer-ID, Backend-WebSocket-Adresse und ein nur einmal sichtbares Token mit begrenzter Gültigkeit. Ein gekoppelter Computer erzeugt einen dauerhaften eigenen Zugang; erneute Kopplung erfordert vorheriges Entkoppeln. **Verwalten > Aktionen** enthält Kopplung, Updates und unterstützte Deinstallation.
 
-Die beiden Host-Verzeichnisse des mitgelieferten MatoLoop Agent können vor dem Start angepasst werden:
+### Mitgelieferter Docker-Agent
 
-```env
-MATOLOOP_AGENT_DATA=/opt/matoloop-agent/data
-MATOLOOP_AGENT_HOME=/opt/matoloop-agent/home
-```
-
-Der Produktionsstack bindet `MATOLOOP_AGENT_DATA` als `/data` und `MATOLOOP_AGENT_HOME` als `/workspace` ein. Die Produktionsvorlage setzt dafür `/opt/matoloop-agent/data` und `/opt/matoloop-agent/home`; Compose behält für bestehende Installationen die früheren relativen Fallbacks. Der Entwicklungsdienst bindet zusätzlich den Quellcode und ein wegwerfbares Abhängigkeits-Volume ein. Die Konfiguration liegt unter `/data/config.json`; Zugang, Transfers und Cache bleiben ebenfalls unter `/data`. Das Backend verwaltet, migriert oder löscht den Inhalt des Agent-Arbeitsbereichs nicht.
-
-Der normale Produktions- und Entwicklungsstack startet den Computer automatisch. Solange er ungekoppelt ist, wartet er auf die einmalige Kopplung. Führen Sie diese im laufenden Produktionscontainer aus:
+`MATOLOOP_AGENT_DATA` wird als `/data`, `MATOLOOP_AGENT_HOME` als `/workspace` eingebunden. Konfiguration ist `/data/config.json`, Zugang und Zustand bleiben unter `/data`. Der Backenddienst verwaltet oder löscht den Agent-Arbeitsbereich nicht. Der Agent startet zunächst ungekoppelt:
 
 ```bash
 docker compose exec matoloop-agent matoloop-agent pair
 ```
 
-In der Entwicklungsumgebung lautet der Befehl:
+In der Entwicklung verwenden Sie stattdessen:
 
 ```bash
-docker compose -f docker-compose.dev.yaml exec matoloop-agent \
-  uv run --no-sync matoloop-agent pair
+./scripts/dev.sh compose exec matoloop-agent uv run --no-sync matoloop-agent pair
 ```
 
-Der Dialog fragt die Backend-WebSocket-Adresse, die Computer-ID und das verdeckt eingegebene Kopplungstoken ab. Bereits gesetzte Werte werden als Vorgabe angeboten. Für eine automatische Kopplung müssen `MATOLOOP_AGENT_BACKEND_URL`, `MATOLOOP_AGENT_ID` und `MATOLOOP_AGENT_PAIRING_TOKEN` vollständig im Container gesetzt sein. Compose stellt seine interne Backend-Adresse bereits bereit; Betreiber setzen deshalb noch ID und Token. Unvollständige Verbindungsvariablen starten keine automatische Kopplung. Entfernen Sie das Token nach erfolgreicher Kopplung aus der Umgebung. Alte Variablen-Aliase für Konfiguration, Name, Token oder Workspace werden nicht unterstützt. Verwenden Sie `docker compose -f docker-compose.no-agent.yaml up -d --remove-orphans` für den Produktionsstack ohne Computer. Linux und Docker sind derzeit die getesteten Umgebungen.
+Für nichtinteraktive Kopplung müssen Backend-WebSocket-URL, `MATOLOOP_AGENT_ID` und `MATOLOOP_AGENT_PAIRING_TOKEN` gemeinsam vorliegen. Compose setzt die interne URL bereits; Betreiber ergänzen ID und Token. Entfernen Sie das einmalige Token nach erfolgreicher Kopplung. Alte Umgebungsvariablen-Aliase werden nicht unterstützt.
 
-### Nativen Agent unter Windows installieren
-
-Open Windows PowerShell **as Administrator under the account that will run the Agent**. Copy the Windows installation command from **Einstellungen > Computer**. Access to the MatoLoop repository is required. If Git is missing on x64 or ARM64 Windows, the installer downloads pinned, SHA-256-verified MinGit into its private `tools\git` directory. Existing Git is preferred; no system installation or global `PATH` change is made. An existing checkout can be installed with `-Source C:\path\to\checkout`; Git is used to stamp its version. Task setup asks once for that account's password, which is not stored in MatoLoop files. The task starts at boot without sign-in. Installation data lives under `%LOCALAPPDATA%\matoloop-agent`; the default workspace is `%USERPROFILE%\mato-loop-agent\workspace`.
-
-Erstellen Sie anschließend im Portal einen Computer und koppeln Sie ihn interaktiv mit `& "$env:LOCALAPPDATA\matoloop-agent\installer.ps1" pair`. Dasselbe Skript unterstützt `update`, `status`, `uninstall` und `uninstall -Purge`. Setup und Updates installieren den exakten Commit des laufenden Backends, ohne Branch-Auswahl. Auch Rückwechsel auf ältere unterstützte Stände sind möglich. Die Deinstallation erhält den Arbeitsbereich auch mit `-Purge`. Der Windows-Agent verwendet PowerShell für Shell-Befehle; Browser, OpenSCAD und interaktive Terminals sind derzeit nicht verfügbar.
-
-Unter Windows ist auch **Agent aktualisieren** in den Computer-Einstellungen verfügbar. Ein beim Setup angelegter Wartungs-Task führt dasselbe Update wie das lokale Skript aus und bleibt aktiv, während der Agent-Task neu gestartet wird. Die Oberfläche meldet das tatsächliche Ergebnis. Der Windows-Aufgabenplaner verwaltet das Kontokennwort; beim Portal-Update wird es nicht erneut abgefragt. Für lokale Entwicklung installieren Sie ausdrücklich aus einem Checkout mit `-Source`. Updates bereiten einen eigenen Checkout vor und verändern Ihre lokalen Quelldateien nicht. Git muss ohne interaktive Anmeldung auf das Repository zugreifen können.
+Der Agent-Container läuft derzeit als root und setzt `seccomp:unconfined` sowie `no-new-privileges:true`. Docker-Seccomp ist damit deaktiviert; das ist weder eine MatoLoop-OS-Sandbox noch eine Abschaltung von Chromiums eigener Renderer-Sandbox. Die Vorlagen referenzieren keine zusätzliche `browser-seccomp.json`. Begrenzen Sie Mounts, Netzwerk und Betriebssystemrechte gemäß Ihrem Einsatzzweck.
 
 ### Nativen Agent unter Linux installieren
 
-MatoLoop enthält für Linux-Systeme mit systemd eine native Benutzerinstallation. Starten Sie sie als normaler Benutzer mit `./scripts/install-matoloop-agent.sh`. Der Bootstrap installiert `uv` und Python ausschließlich unter `~/.local/share/matoloop-agent`, trägt nichts in Shell-Profile ein und verwendet `sudo` nur für den systemweiten Dienst sowie bestätigte optionale Systempakete. Der Dienst startet beim Booten, läuft aber mit den Rechten des installierenden Benutzers. Innerhalb eines Checkouts verwendet der Installer dessen aktuellen Entwicklungsstand. Eine separat heruntergeladene Scriptdatei fragt die Instanz-URL ab und installiert deren exakten Backend-Commit aus dem Repository. Das gleiche Script wird als Befehl `matoloop-agent` installiert und bietet `install`, `update`, `status` und `uninstall`. `update` fragt den Zielstand neu beim verbundenen Backend ab, bereitet einen eigenen Checkout vor und verändert keine lokalen Entwickler-Quelldateien. Eine Branch-Auswahl ist nicht nötig; auch Rückwechsel sind möglich. `install` übernimmt dagegen einen vorhandenen lokalen Stand. Neue Umgebungen werden vor dem Umschalten geprüft. `uninstall` erhält Kopplungsdaten, `uninstall --purge` entfernt alle verwalteten Agent-Daten; Workspaces bleiben immer bestehen. Browser- und Shared-Terminal-Funktionen werden nur angeboten, wenn ihre Systemvoraussetzungen bereits vorhanden sind.
+Kopieren Sie den Linux-Befehl aus den Computereinstellungen oder starten Sie aus einem Checkout `./scripts/install-matoloop-agent.sh` als normalen Benutzer. Privates uv/Python liegt unter `~/.local/share/matoloop-agent`, ohne Shellprofiländerung. Der systemweite systemd-Dienst startet beim Booten mit den Rechten des installierenden Benutzers. sudo wird nur für Dienstverwaltung und bestätigte Systempakete benötigt.
 
-!!! warning "Prozess- und Shell-Zugriff"
-    Der Compose-Computer aktiviert mit der Beispielkonfiguration Prozess- und Shell-Funktionen und läuft derzeit als `root`. MatoLoop Agent verwendet Betriebssystemrechte sowie Descriptor- und No-Follow-Prüfungen, ist aber keine Betriebssystem-Sandbox. Ein gestarteter Prozess kann grundsätzlich auf beide eingebundenen Bereiche und erreichbare Netzwerke zugreifen. Begrenzen Sie deshalb Mounts, Netzwerk und Host-Richtlinien passend zum Einsatzzweck.
+Standalone-Setup und Updates installieren den exakten Commit des laufenden Backends. Lokales `install` übernimmt ausdrücklich den Checkout. `matoloop-agent` bietet `pair`, `install`, `update`, `status`, `uninstall` und `uninstall --purge`. Ohne Purge bleiben Zugangsdaten erhalten; Workspaces bleiben auch mit Purge erhalten. Browser-Setup ist optional und separat; native Browserautomatisierung ist headless. Interaktives Terminal und OpenSCAD erfordern ihre Hostvoraussetzungen.
+
+### Nativen Agent unter Windows installieren
+
+Öffnen Sie Windows PowerShell als Administrator unter dem Konto, das den Agenten besitzen soll, und kopieren Sie den Windows-Befehl aus den Computereinstellungen. Die Installation liegt unter `%LOCALAPPDATA%\matoloop-agent`, der Standardworkspace unter `%USERPROFILE%\mato-loop-agent\workspace`. Der Installer verwendet vorhandenes Git oder privates geprüftes MinGit, ohne globale PATH-Änderung.
+
+Der Starttask läuft unter dem Installationskonto ohne Anmeldung; dessen Passwort wird nur dem Aufgabenplaner übergeben. Pairing erfolgt danach in normaler PowerShell mit `& "$env:LOCALAPPDATA\matoloop-agent\installer.ps1" pair`. Dasselbe Skript unterstützt `update`, `status`, `uninstall` und `uninstall -Purge`. Ein lokaler Checkout kann mit `-Source` installiert werden. PowerShell-Shellzugriff ist verfügbar; Browser, OpenSCAD und interaktive Terminals sind nicht angeboten. Native Windows-Akzeptanz ist getrennt von Linux-/Containerprüfungen zu beurteilen.
 
 ## Zu sichernde Daten
 
-Für eine vollständige Wiederherstellung benötigen Sie gemeinsam:
+Eine vollständige Wiederherstellung braucht einen gemeinsamen Stand von:
 
-- PostgreSQL-Datenbank
-- MatoLoop-Datenverzeichnis `/data`
-- insbesondere `/data/secrets/credential.key`
-- `/data/secrets/web-push-vapid.pem`, falls Web Push aktiviert ist
-- alle benötigten Home- und Arbeitsverzeichnisse der Computer
-- das vollständige Verzeichnis `MATOLOOP_AGENT_DATA` mit `/data/config.json`, Zugang und dauerhaftem Zustand
+- PostgreSQL-Datenbank und Backend-`/data`, einschließlich Dateien/Versionen und `/data/secrets/credential.key`.
+- `/data/secrets/web-push-vapid.pem`, falls Push eingerichtet ist.
+- Agent-Konfiguration und vollständigem dauerhaften Datenverzeichnis sowie benötigten Home-/Workspaces.
+- `.env`, gewählter Compose-Konfiguration, Proxykonfiguration und tatsächlich eingesetzten Image-Tags.
 
-Provider- und OAuth-Zugangsdaten liegen verschlüsselt in der Datenbank. Ohne den zugehörigen Schlüssel `credential.key` können sie nach einer Wiederherstellung nicht entschlüsselt werden.
+Provider-, OAuth- und persönliche Variable-Zugangsdaten liegen verschlüsselt in der Datenbank. Ohne passenden Fernet-Schlüssel sind sie nicht entschlüsselbar. Browserprofile enthalten zusätzlich sensible unverschlüsselte Websitecookies/-zustände im Agent-Datenverzeichnis; schließen Sie Browser vor der Sicherung und bewahren Sie die Backend-/Agent-/Eigentümerbindung.
 
-Das Modell-Cache-Volume des Embedding-Dienstes und der Session-Cache des Computers müssen nicht gesichert werden. Die Zugangsdaten im Verzeichnis `MATOLOOP_AGENT_DATA` sind dagegen für eine Wiederherstellung ohne erneute Kopplung erforderlich. Gehen sie verloren, entkoppeln Sie den Computer in MatoLoop und stellen ein neues Kopplungstoken aus. Session-Dateien bleiben im Backend gespeichert.
+Infinity-Modellcache und wegwerfbarer Agent-Sessioncache sind reproduzierbar. Agent-Zugangsdaten sind dagegen für eine Wiederherstellung ohne neue Kopplung erforderlich. Linux verwendet `<config-parent>/agent-state/credential.json` mit Dateimodus `0600` und eigentümergebundenem Verzeichnis `0700`. Windows verwendet DPAPI-gebundenes `agent-state/credential.dat`: eine Kopie ist ohne denselben entschlüsselbaren Windows-Benutzerkontext nicht portabel. Fehlt dieser Kontext, installieren Sie die Tasks neu und koppeln Sie erneut.
 
-Beim Löschen eines Benutzers entfernt MatoLoop dessen Datenbankdaten und Session-Bäume. Dateien, Caches, dauerhafter Zustand und Konfigurationen aller MatoLoop Agents, einschließlich des Compose-Computers unter `MATOLOOP_AGENT_DATA` und `MATOLOOP_AGENT_HOME`, sowie bereits in externe Dienste geschriebene Inhalte liegen außerhalb dieser Löschung. Entfernen Sie diese bei Bedarf separat. Instanzressourcen sind gemeinsam und bleiben bestehen.
+### Konsistente Sicherung mit PostgreSQL-Dump
+
+Dieses Beispiel verwendet **die Standardhostpfade der Vorlage**. Passen Sie Archivquellen an Ihre tatsächlichen `.env`-Pfade an; der Backupordner muss außerhalb aller gesicherten Daten liegen. Stoppen Sie außerdem andere native Agents und Prozesse, die in gesicherte Workspaces schreiben. Verwenden Sie einen neuen privaten Backupordner:
+
+```bash
+umask 077
+BACKUP_DIR="$HOME/matoloop-backups/$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p -m 700 "$BACKUP_DIR"
+docker compose config --images > "$BACKUP_DIR/images.txt"
+cp .env docker-compose.yaml "$BACKUP_DIR/"
+# Laufende Aufträge beenden, Browser schließen und externe Workspace-Schreiber stoppen.
+docker compose stop mato-loop matoloop-agent
+docker compose exec -T db sh -c 'pg_dump --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --format=custom' > "$BACKUP_DIR/database.dump"
+sudo tar --acls --xattrs --numeric-owner -C /opt/mato-loop -cpf "$BACKUP_DIR/backend-data.tar" data
+sudo tar --acls --xattrs --numeric-owner -C /opt/matoloop-agent -cpf "$BACKUP_DIR/agent-data.tar" data home
+```
+
+Prüfen Sie **jeden Befehl auf Erfolg**, bevor Sie den Backupstand als vollständig markieren. Sichern Sie Proxy-/native Agentkonfigurationen zusätzlich. Die Datenbank bleibt für den logischen Dump aktiv, Backend- und Agent-Schreiber dagegen gestoppt. Ein laufendes PostgreSQL-Datenverzeichnis darf nicht als gewöhnliche Dateikopie dieses Dumps behandelt werden; eine physische Kopie erfordert einen vollständig gestoppten Datenbankdienst und kompatible PostgreSQL-Version.
+
+Listen Sie Dump/Archive zur Prüfung auf und starten Sie danach den vorherigen Betrieb:
+
+```bash
+docker compose exec -T db pg_restore --list < "$BACKUP_DIR/database.dump"
+sudo tar -tf "$BACKUP_DIR/backend-data.tar"
+sudo tar -tf "$BACKUP_DIR/agent-data.tar"
+docker compose up -d
+```
+
+Archive und Konfiguration sind vertraulich und benötigen geschützte, möglichst getrennt gelagerte Kopien. Das erfolgreiche Auflisten ist noch kein Wiederherstellungstest.
+
+### Wiederherstellung und Probe
+
+Verwenden Sie einen frischen isolierten Zielhost bzw. leere geprüfte Zielverzeichnisse, mit gesperrten externen Integrations-/Agentverbindungen. Übernehmen Sie die gesicherten festen Image-Tags und die passende Compose-/`.env`-Konfiguration; veröffentlichen Sie den Dienst zunächst nicht. Passen Sie Hostpfade bewusst an, ohne Browser-/Agent-Bindungsidentitäten stillschweigend umzuschreiben. Stellen Sie mit gestopptem Backend/Agent die Dateien samt numerischen Eigentümern und Rechten wieder her, für die Standardpfade etwa:
+
+```bash
+sudo mkdir -p /opt/mato-loop /opt/matoloop-agent
+sudo tar --acls --xattrs --numeric-owner -C /opt/mato-loop -xpf "$BACKUP_DIR/backend-data.tar"
+sudo tar --acls --xattrs --numeric-owner -C /opt/matoloop-agent -xpf "$BACKUP_DIR/agent-data.tar"
+docker compose pull
+docker compose up -d db
+# Auf eine gesunde, leere Ziel-Datenbank warten: docker compose ps
+docker compose exec -T db sh -c 'pg_restore --exit-on-error --no-owner --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' < "$BACKUP_DIR/database.dump"
+docker compose up -d embedding mato-loop
+```
+
+Prüfen Sie vor externer Freigabe: Readiness, Anmeldung, Entschlüsselung eines bestehenden Providers, Sessiondateien und historische Versionen, Memory, persönliche Variablen, Automationsdefinitionen und deren Zeitpläne. Begrenzen Sie ausgehendes Netz auch beim Backendstart, damit wiederhergestellte Aufgaben keine echten externen Änderungen auslösen. Starten und prüfen Sie den Agenten anschließend kontrolliert; prüfen Sie Zugang, Betriebssystemrechte, Originalbindung, Browserzustand und Workspace. Nicht entschlüsselbare Windows-Zugänge erfordern neue Kopplung.
+
+Erst nach der Probe stellen Sie Netzwerk und öffentliche URL wieder her und prüfen Integrationen und Push gezielt. Verpasste Automationstermine werden nicht rückwirkend ausgeführt. Dokumentieren Sie Datum, Image-Tags und Prüfergebnis jeder Wiederherstellungsprobe. Dieser Ablauf ist eine Betriebsanleitung, kein Nachweis einer für Ihre Installation bereits ausgeführten Wiederherstellung.
 
 ## Entwicklungsdaten
 
-Die Entwicklungsumgebung verwendet benannte Docker-Volumes. Der Befehl `./scripts/dev.sh reset-storage` löscht Datenbank, Benutzer, Secrets und Session-Dateien vollständig und darf nicht als normale Aufräumaktion verwendet werden. Die separat eingebundenen Verzeichnisse `MATOLOOP_AGENT_DATA` und `MATOLOOP_AGENT_HOME` werden nicht gelöscht.
+Entwicklungsdaten liegen in benannten Compose-Volumes; Agentdaten in separaten Bindpfaden. `./scripts/dev.sh reset-storage` löscht alle benannten Entwicklungsvolumes einschließlich Datenbank, Konten, Secrets und Backenddateien. Es ist keine normale Aufräumaktion. Parallelcheckouts müssen eigene Compose-Projektnamen, Ports und Agentpfade verwenden; Standardcheckouts teilen sonst dasselbe Projekt.
 
 ## Aktualisierung
 
-Sichern Sie Datenbank und Datenverzeichnis vor einem Update gemeinsam. Datenbankschemaänderungen werden beim Start über Alembic-Migrationen angewendet. Prüfen Sie nach dem Update Anmeldung, Providerverbindungen, Dateizugriff, Memory und laufende Integrationen.
-
-Beim Wechsel vom früheren Compose-Dienst liegt dessen Zugang gewöhnlich im benannten Volume `<compose-projekt>_execution_agent_data`. Ermitteln Sie den exakten Namen mit `docker volume ls`, stoppen Sie den alten Dienst und kopieren Sie den vollständigen Volume-Inhalt einschließlich Dateirechten vor dem ersten neuen Start in `MATOLOOP_AGENT_DATA`. Prüfen Sie danach, dass `credential.json` und gegebenenfalls `credential.pending.json` nicht für andere Benutzer lesbar sind. Bleiben diese Daten nicht erhalten, entkoppeln Sie den bestehenden Computer zuerst in MatoLoop und koppeln ihn anschließend neu. Alte Umgebungsvariablen-Aliase werden nicht unterstützt.
-
-### Removed Git Integration
-
-Before restarting an upgraded MatoLoop Agent, stop the agent and update its existing configuration JSON:
-
-1. Remove only the `gitExecutable` and `allowNetwork` fields, if present. The strict schema rejects these removed fields; setting them to `null` or `false` is not sufficient. Preserve all other fields, especially pairing and connection configuration.
-2. Remove only `<config-parent>/git-home`, if present. `<config-parent>` is the directory containing the agent configuration file; for Compose's `/data/config.json`, this is `/data/git-home` inside the agent container, or `MATOLOOP_AGENT_DATA/git-home` on the host. This directory is state owned by the removed integration. Do not remove the parent directory, pairing credentials, repositories, workspaces, or history.
-3. Restart the upgraded agent. The backend data migration cleans obsolete Git integration settings automatically; do not manually delete database records or historical messages, tool results, or approvals. No re-pairing is needed when the existing connection configuration and credentials are preserved.
-
-Git remains available through shell commands on a selected, connected agent with Git installed, under the existing shell permissions. The backend does not clone repositories.
-
-### Veröffentlichtes Image verwenden
-
-The standard Compose file uses published GHCR images. Set both image addresses to the same immutable GitHub Actions tag:
-
-```env
-MATO_LOOP_IMAGE=ghcr.io/devmato/mato-loop/mato-loop:2026-10-08-a1b2c3d4
-MATOLOOP_AGENT_IMAGE=ghcr.io/devmato/mato-loop/matoloop-agent:2026-10-08-a1b2c3d4
-```
-
-Melden Sie Docker bei einer privaten Registry an. Laden Sie die Images anschließend ausdrücklich und erstellen Sie die Container neu:
+Sichern und proben Sie den gemeinsamen Datenstand vor Updates. Ändern Sie beide Images auf denselben erfolgreich veröffentlichten festen Tag, ziehen Sie sie und erstellen Sie Container neu. Beim Backendstart laufen Alembic-Migrationen. Prüfen Sie danach Anmeldung, Entschlüsselung, Dateien, Memory, Agents und Integrationen.
 
 ```bash
 docker compose pull
 docker compose up -d
+docker compose ps
 ```
 
-Die veröffentlichten Images unterstützen derzeit nur `linux/amd64`. Native Agent-Installationen verwenden den Installer und den exakten Commit des laufenden Backends; CI veröffentlicht dafür kein separates Archiv. Eine Installation oder Aktualisierung auf Ihrem Server erfolgt nicht automatisch.
+`develop` und `latest` sind veränderlich, keine reproduzierbaren Update-/Rollbackziele. Die Datums-/SHA-Tags gelten für beide Branchkanäle. CI veröffentlicht, installiert aber nicht auf Ihrem Server.
 
-Der Tag `develop` ist veränderlich und nur für kurzlebige Testinstallationen vorgesehen. Für reproduzierbare Installationen und Rollbacks verwenden Sie den zugehörigen festen Tag im Format `YYYY-MM-DD-<SHA8>` und führen vor jeder Neuerstellung `docker compose pull` aus. Dieses Versionsschema gilt gleichermaßen für `develop` und `main`.
+Verwaltete Agents aktualisieren sich über **Einstellungen > Computer > Verwalten > Aktionen > Agent aktualisieren** auf den exakten Backendcommit. Docker unterstützt auch `docker compose exec matoloop-agent matoloop-agent update`. Neustart erhält dieses Containerupdate; Neuerstellung stellt die Imageversion wieder her. Native Updates bereiten einen eigenen Checkout vor und ändern keinen Entwicklerarbeitsbaum. Dirty-/Unknown-Backends liefern kein reproduzierbares Installationsziel.
 
-Verwaltete Docker-Agenten lassen sich unter **Einstellungen > Computer > Agent aktualisieren** auf den exakten Commit des laufenden Backends synchronisieren. Dasselbe Ziel verwendet `docker exec <container> matoloop-agent update`. Eine separate Branch-Einstellung entfällt. Ein Container-Neustart erhält dieses Update; beim Neuerstellen wird wieder die Version des gewählten Images verwendet. Kopplung und Workspace bleiben in den eingebundenen Datenverzeichnissen erhalten. Bestehende Container benötigen zunächst ein Image mit dem neuen Update-Launcher. Backend-Builds mit unbekanntem Commit oder lokalen Änderungen (`-dirty`) liefern kein reproduzierbares Installationsziel; verwenden Sie dafür den lokalen Entwicklungs-Checkout.
+Vor der Wartung müssen Aufträge, Terminals, Browser und Setup beendet sein; andernfalls ist der Agent beschäftigt. Native Linux-Wartung kann eine einmalige geschützte sudo-Eingabe benötigen; Windows verwendet den separat installierten Wartungstask. Eine Verbindungstrennung allein beweist kein erfolgreiches Update; prüfen Sie Ergebnis und gemeldete Version.
+
+### Migration vom früheren Compose-Agenten
+
+Ermitteln Sie das frühere Volume `<compose-projekt>_execution_agent_data` mit `docker volume ls`. Stoppen Sie den alten Dienst und übernehmen Sie den vollständigen Inhalt samt Eigentümern/Rechten in den neuen Agent-Datenpfad. Prüfen Sie insbesondere `agent-state/credential.json` (`0600`) und sein privates Elternverzeichnis (`0700`). Aktueller Pairingzustand liegt im selben Credentialobjekt, nicht in einer separaten `credential.pending.json`. Bei verlorenem Zugang entkoppeln und koppeln Sie neu.
+
+<a id="removed-git-integration"></a>
+
+### Entfernte Git-Integration
+
+Vor dem ersten Neustart eines betroffenen alten Agents:
+
+1. Stoppen Sie ihn und entfernen Sie aus seiner Konfigurations-JSON ausschließlich die früheren Felder `gitExecutable` und `allowNetwork`, falls vorhanden. Auch `null`/`false` sind keine gültigen Ersatzwerte.
+2. Entfernen Sie ausschließlich `<config-parent>/git-home`, falls vorhanden, beispielsweise `MATOLOOP_AGENT_DATA/git-home`. Erhalten Sie Elternverzeichnis, Zugang, Repositories, Workspaces und Verlauf.
+3. Starten Sie den neuen Agent. Das Backend bereinigt alte Integrationssettings per Migration; löschen Sie keine historischen Nachrichten, Tool-Ergebnisse oder Freigaben. Erhaltener Zugang braucht keine neue Kopplung.
+
+Git bleibt als gewöhnlicher Shellbefehl auf einem verbundenen Computer mit installiertem Git verfügbar, nicht als Backend-Clonefunktion.
 
 ### Rollback
 
-Setzen Sie für beide Images den vorherigen festen Datum/SHA-Tag, laden Sie ihn und erstellen Sie die Container erneut. Verwenden Sie weder `latest` noch `develop`, da beide Tags auf andere Images verschoben werden können.
+Setzen Sie beide Imagevariablen auf den vorherigen festen Tag, ziehen Sie ihn und erstellen Sie Container neu. Ein älteres Image kann mit dem bereits migrierten Schema unvereinbar sein. Stellen Sie dann die passende gemeinsam gesicherte Datenbank, Backenddateien und Schlüssel nach dem isolierten Wiederherstellungsverfahren wieder her; ein bloßer Imagewechsel ist kein Schema-Rollback.
 
-!!! warning "Datenbankschema beim Rollback"
-    Beim Start können Datenbankmigrationen ausgeführt werden. Ein älteres Image kann mit dem bereits migrierten Schema unvereinbar sein. Stellen Sie dann zusätzlich die gemeinsam vor dem Update gesicherte Datenbank und das zugehörige Datenverzeichnis wieder her.
+Beim Löschen eines Benutzers entfernt MatoLoop dessen Datenbankdaten und Backend-Sessionbäume. Dateien, dauerhafter Agentzustand und bereits geschriebene externe Daten bleiben außerhalb dieser Löschung. Gemeinsame Instanzressourcen bleiben bestehen.

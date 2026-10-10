@@ -44,19 +44,19 @@ Model arguments cannot choose the parent-managed browser endpoint or installatio
 Chromium always uses `chromium_sandbox=True`. Sandbox launch failures are reported as
 `browser.sandboxUnavailable`; there is no `--no-sandbox` fallback. Hosts must permit
 unprivileged user namespaces in their kernel, container seccomp and AppArmor policy.
-Compose uses `apps/matoloop-agent/docker/browser-seccomp.json`, a deny-by-default
-userspace profile permitting Chromium's `clone`, `setns` and `unshare` sandbox calls,
-following Playwright's Docker guidance. Deploy this companion file at the same relative
-path when using the prepared Compose stack. No added capabilities or unconfined mode
-are used; a host AppArmor user-namespace restriction can still prevent launch.
+Both prepared Agent Compose services use `seccomp:unconfined` and
+`no-new-privileges:true`, without privileged mode or added capabilities. Docker seccomp
+filtering is therefore disabled; the checked-in `docker/browser-seccomp.json` is not
+referenced or required by these templates. Chromium's own sandbox remains enabled.
+A host AppArmor user-namespace restriction can still prevent launch.
 
 Container images include pinned Playwright 1.59.0 and its matching Chromium build at
 `/usr/local/lib/matoloop-agent/tools/browser`, outside the development `/opt` dependency
 volume. `MATOLOOP_AGENT_CONTAINER=1` selects this fixed installation; RPC arguments cannot
 override it. Native managed installation is `<config-parent-parent>/tools/browser`,
 independent of the checkout and Python virtual environment location.
-Native setup uses the bundled script to install managed Chromium as the runtime user
-without changing system packages. It finishes with a disposable headless launch and
+Native setup installs managed Chromium as the runtime user and offers missing host
+packages only with explicit interactive consent. It finishes with a disposable headless launch and
 screenshot. Container setup retains the headed launch and private RFB handshake. A zero
 setup exit code means the mode-appropriate functional probe succeeded, not just that
 packages exist. Missing runtime libraries, inaccessible storage and launch failures exit

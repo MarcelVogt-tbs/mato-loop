@@ -25,16 +25,19 @@ The backend container uses reload mode and mounts the source tree through `/work
 - `src/mato_loop_backend/api`: routers, dependencies, and the central error contract
 - `src/mato_loop_backend/auth`: local authentication, login sessions, and credential storage
 - `src/mato_loop_backend/sessions`: session workflows and API payload serialization
-- `src/mato_loop_backend/agent`: model/tool loop, research and memory preparation, tool contracts, permissions, and approvals
+- `src/mato_loop_backend/agent`: model/tool loop, context preparation, delegation, compaction, and run lifecycle
+- `src/mato_loop_backend/tools`: typed tool definitions, catalog, and handlers
+- `src/mato_loop_backend/permissions`: policy resolution, typed matchers, grants, and approvals
 - `src/mato_loop_backend/providers`: adapter registry, provider settings workflows, and provider transports
 - `src/mato_loop_backend/api/workspace_service.py`: reusable HTTP workspace context and MatoLoop Agent dispatch
-- `src/mato_loop_backend/workspace.py`: backend-managed file roots and revisions
+- `src/mato_loop_backend/files`: backend-managed storage, revisions, root access, and file operations
+- `src/mato_loop_backend/execution`: owner-bound Agent connections, dispatch, terminals, and browsers
 - `src/mato_loop_backend/models`: relational models split by aggregate and exported through one package
 - `src/mato_loop_backend/settings`: typed operational settings
 - `src/mato_loop_backend/integrations/<product>/`: product adapters, clients, and services; the root contains shared contracts, registry, and cross-integration coordination
 - `src/mato_loop_backend/integrations/search.py`: no-key metasearch and provider fallback; SearXNG's adapter and HTTP client live in `integrations/searxng/`
 - `src/mato_loop_backend/web/fetch.py`: bounded fetching of concrete HTTP(S) URLs with configurable public-address enforcement
-- `src/mato_loop_backend/attachments.py`: validated persistent image storage
+- `src/mato_loop_backend/media`: validated attachments, processing, and provider media projection
 - `src/mato_loop_backend/memory`: durable-memory CRUD, optional dreaming, local indexing, and hybrid durable/episodic retrieval
 - `alembic`: migrations and Alembic runtime
 - `tests`: backend unit and contract tests
@@ -62,7 +65,7 @@ The initial migration enables pgvector and creates `memory_embeddings` as vector
 
 The multi-user migration promotes the earliest existing local account to administrator, adds account state and administrator roles, scopes memories and credentials, and introduces authentication-provider and external-identity records. The backend performs no workspace migration at startup.
 
-Infinity is not a hard readiness dependency. `/api/health` reports `degraded` when it is unavailable, while FTS, CRUD, and agent runs remain available. `./scripts/dev.sh doctor` displays the extension version, column type, queue states, and Infinity health.
+Infinity is not a hard readiness dependency. `/api/health` retains top-level `status: "ok"` with `embedding: "degraded"` when it is unavailable, while FTS, CRUD, and agent runs remain available. Database or pgvector failure returns readiness HTTP 503. `./scripts/dev.sh doctor` displays the extension version, column type, queue states, and Infinity health.
 
 ## Authentication and Ownership
 
@@ -79,7 +82,8 @@ Expected API errors are raised as `ApiError` from `src/mato_loop_backend/api/err
 ```json
 {
   "error": {
-    "code": "session.runAlreadyActive"
+    "code": "session.runAlreadyActive",
+    "message": "The session request could not be completed."
   }
 }
 ```
@@ -88,6 +92,7 @@ Expected API errors are raised as `ApiError` from `src/mato_loop_backend/api/err
 {
   "error": {
     "code": "validation.tooShort",
+    "message": "The request contains invalid data.",
     "field": "password",
     "params": {
       "minLength": 10
@@ -98,7 +103,7 @@ Expected API errors are raised as `ApiError` from `src/mato_loop_backend/api/err
 
 Rules:
 
-- Do not expose German or English user-facing text as part of the API contract.
+- Include the central catalog's controlled English `error.message` fallback. Frontend localization uses the stable code, field, and parameters rather than comparing that text.
 - Do not return raw Pydantic details, exception text, or provider responses.
 - Log technical causes server-side.
 - Map provider failures to safe codes such as `provider.authenticationFailed` or `provider.unavailable`.
@@ -113,13 +118,13 @@ Provider-specific data types must not enter the agent core. Technical provider e
 
 A provider can contain multiple model configurations. OpenAI-compatible discovery uses the server-side `/models` endpoint. ChatGPT Codex uses the private Codex model catalog after device-code authentication. Both paths normalize responses to a model ID and a bounded set of metadata. Synchronization preserves internal UUIDs and user settings, marks missing discovered models unavailable, and leaves manual models unchanged. Newly discovered models are not enabled automatically.
 
-AI, integration, and tool documents have instance and personal variants. Instance mutations require an administrator. Instance providers and integrations are shared effective resources; personal providers, integration credentials, and settings remain owner-scoped. Administrators separately gate personal providers, personal tool settings, and personal integrations, including the allowed built-in adapter types. Tool and integration policies have independent private- and public-model branches. The first personal save of a branch snapshots its current effective values until reset, while instance-controlled tool availability and Webfetch network limits remain hard bounds. Integration settings own connection configuration, search-provider selection, integration and resource defaults, and CalDAV standard resources. Agent profiles combine an optional persona and separate task instructions with sparse private and public overrides that live-inherit the effective tool, integration, and resource defaults. Disabled integrations and remote ACL restrictions also remain hard boundaries.
+AI, integration, and tool documents have instance and personal variants. Instance mutations require an administrator. Instance providers and integrations are shared effective resources; personal entries and credentials remain owner-scoped. Administrators gate personal settings and adapter availability. Models are configured independently of agent profiles under model defaults and session templates. Built-in tool presets and permitted personal overrides belong to the tool policy layer. Each integration owns its private/public capability and resource permissions; personal integrations may add sparse profile-specific overrides. Technical availability, Webfetch network restrictions, ownership, remote ACLs, and delegation ceilings remain hard bounds. See [session templates](../../docs/session-templates.md) and [integration policies](../../docs/integrations.md#resource-policies).
 
-Agent file access uses `RootFileService` with the stable internal roots `session` and `workspace`. `session` resolves directly to the current owner-bound backend-managed `files/` directory, while `workspace` dispatches through the selected owner-bound `ExecutionAgent` using the session's normalized absolute current directory. MatoLoop Agents advertise no roots or root IDs. The backend has no `/data/home` workspace. Without a selected agent and current directory, computer access is unavailable while chat and session-file access remain available. Model-facing paths remain relative to `files` or `computer`; standalone `filesystem.*` protocol requests use normalized absolute POSIX paths and the agent rejects symlink traversal with descriptor/no-follow checks.
+Agent file access uses `RootFileService` with internal roots `session` and `workspace`, exposed to models as `files` and `computer`. Session files resolve to the owner-bound backend store; computer access dispatches through the selected owner-bound `ExecutionAgent` and normalized absolute current directory. Agents advertise no roots or root IDs. Without a selected agent and directory, computer access is unavailable while chat and managed files remain available. Linux requests use absolute POSIX paths with descriptor/no-follow traversal; Windows uses forward-slash drive paths and rejects reparse points. See [the Agent boundary](../../docs/architecture.md#matoloop-agent-boundary).
 
 Browser file transport uses camel-case payload fields and lowercase operation names. `POST /browsers/{integrationId}/upload-source` takes the browser binding from query parameters and accepts `{source:{scope:"session"|"filesystem",path}}`; legacy multipart `POST .../upload` remains accepted. Filesystem uploads call `integration.browser.upload` with `browserId` and an absolute `path`. The structured `browser_upload` model tool accepts `root` (`files` or `computer`), `path`, a known `tabId` and `ref`, and `observe`; it authorizes the source and browser action together, stages a frozen source, revalidates after waits, and deletes temporary staging. Browser downloads are polled with `integration.browser.files`; each item contains `id`, `filename`, `status`, optional size/hash, and the opaque `origin` plus `controlEpoch` captured when the event began. The origin records the controller active when Playwright's actual download event starts; it does not causally attribute the download to an earlier click, timer, request, or page action. Ready downloads are published with `integration.browser.publish` using `browserId`, `fileId`, a collision-free normalized absolute `path`, and `expectedOrigin`, returning `path`, `size`, and `sha256`. Collisions use bounded `name`, `name (1)`, and later candidates. Human origins retry automatically. Model origins require both browser-read and filesystem-write policy for the actual candidate before automatic publication; ask remains `permission_required` until `browser_downloads` receives foreground approval for one frozen candidate.
 
-Standalone storage contains `/data/sessions/<session-id>/files`, `/data/sessions/<session-id>/revisions`, and `/data/sessions/<session-id>/attachments`. Project sessions share `/data/projects/<project-id>/files` and `/data/projects/<project-id>/revisions`, while `/data/projects/<project-id>/sessions/<session-id>/attachments` remains private. User message uploads stay in `attachments/`, with their derivatives below the owning attachment. Every durable byte-valued backend tool output becomes a managed file, and its message references the exact revision. Normal edits append revisions, moves preserve file identity and history, and activating a historical revision changes the current file without deleting retained versions. Individual revisions cannot be deleted. Deleting the file purges its complete history and may invalidate historical message references. Text, JSON, status, and error tool results remain relational `Message.content`.
+Standalone storage is `/data/sessions/<session-id>/{files,revisions}`; project sessions use `/data/projects/<project-id>/sessions/<session-id>/{files,revisions}`. Uploads, processing companions, and durable tool bytes all belong to that session's managed revision store. During a run, tools and users see the same current bytes; terminal finalization snapshots one final revision per changed file. Moves preserve identity and history. Activating a retained revision does not erase other versions. Deleting a file purges its history and explicitly owned companions. Text, JSON, status, and error tool results remain relational `Message.content`. See [managed-file contracts](../../docs/harness.md#typed-resource-matchers).
 
 ## Checks and Tests
 
@@ -132,12 +137,6 @@ From the repository root:
 ./scripts/dev.sh test rag
 ```
 
-The same tools can run directly from `apps/backend` when the `uv` environment already exists:
-
-```bash
-uv sync --frozen
-uv run ruff check .
-uv run pytest
-```
+Checks use the Docker development wrapper. For handbook-only validation and preview refresh, see [documentation maintenance](../../docs/development.md#documentation).
 
 `test rag` uses the running development stack and verifies Infinity and pgvector with real multilingual vectors. The normal backend test skips these integration tests. New error codes require at least one contract test for the backend response. Changes to path boundaries, credentials, permissions, or provider conversion require targeted unit tests.

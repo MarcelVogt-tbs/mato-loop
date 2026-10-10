@@ -1,216 +1,135 @@
-# MatoLoop
+<p align="center">
+  <img src="apps/frontend/public/icons/matoloop.svg" alt="MatoLoop" width="96" height="96">
+</p>
 
-MatoLoop is a self-hosted, provider-neutral AI chat and agent harness with persistent sessions, internal tools, human-in-the-loop approvals, optional memory, and enforceable web search.
+<h1 align="center">MatoLoop</h1>
 
-The primary repository is [devmato/mato-loop on GitHub](https://github.com/devmato/mato-loop). Forgejo remains a Git pull mirror; both platforms' workflows stay in the repository.
+<p align="center">Self-hosted AI chat and agents, with your choice of models and explicit control over tools.</p>
 
-## Current State
+<p align="center">
+  <a href="https://github.com/devmato/mato-loop/actions/workflows/ci.yaml"><img alt="CI" src="https://github.com/devmato/mato-loop/actions/workflows/ci.yaml/badge.svg?branch=develop"></a>
+  <a href="LICENSE"><img alt="License: AGPL-3.0-only" src="https://img.shields.io/badge/license-AGPL--3.0--only-blue.svg"></a>
+</p>
 
-The current implementation includes:
+MatoLoop is a provider-neutral AI chat and agent harness. It owns sessions, messages, files, tool execution, permissions, and memory; model providers transport requests and responses. The application and user handbook are in German.
 
-- multi-user local accounts with cookie-based authentication and administrator roles
-- ChatGPT Codex through device-code OAuth
-- OpenAI-compatible Chat Completions and Responses endpoints
-- persistent sessions, messages, and agent runs
-- one shared model and tool loop for all providers
-- owner-isolated sessions, memory, credentials, and MatoLoop Agents
-- persistent permission grants and approval decisions
-- scheduled automations with durable run history, notifications, and optional session output
-- built-in web search without an API key and additional SearXNG providers
-- CalDAV accounts with per-calendar read, write, and delete policies
-- language-neutral API error codes and human-readable frontend toasts
+## Disclaimer
 
-## Stack
+MatoLoop is developed with significant AI assistance. Large parts of the codebase have not been reviewed by a human.
 
-- FastAPI and Pydantic v2
-- asynchronous SQLAlchemy 2.x, PostgreSQL, and Alembic
-- pgvector and local Infinity for hybrid durable-memory and prior-session retrieval
-- Vue 3, Quasar, Pinia, and Vue Router
-- `uv` and Yarn 4
-- Docker Compose
+Use this software at your own risk. There is no warranty or guarantee that it will work correctly or avoid data loss, security issues, misconfiguration, downtime, or other problems caused directly or indirectly by using the application.
+
+Review agent permissions and test workflows, backups, and restores carefully before relying on this software for important data or systems.
+
+## Features
+
+- **Persistent conversations:** projects, sessions, attachments, revisioned files, queued messages, task progress, and delegated agent runs.
+- **Choice of providers:** ChatGPT Codex with device-code OAuth, OpenAI-compatible Chat Completions or Responses, Lemonade, and media providers such as Azure Speech.
+- **Controlled tool use:** private/public model policies, durable approvals, revocable session grants, and protected secret input.
+- **Connected computers:** outbound-connected Linux and Windows Agents for files, shell commands, and supported local operations, with managed installation and updates.
+- **Research and integrations:** built-in no-key web search, SearXNG, Webfetch, browser automation, mail, calendars, product adapters, and generic MCP servers.
+- **Personalization:** agent profiles, personas, skills, session templates, optional durable memory, and Dreaming.
+- **Automation and notifications:** scheduled work, Telegram channels, persistent notices, and optional Web Push.
+- **Multiple users:** local accounts, administrator controls, owner-isolated personal data, and deliberately shared instance resources.
+
+## Install with Docker Compose
+
+### Requirements
+
+- Docker Engine and Docker Compose v2.
+- A `linux/amd64` host for the published images.
+- An HTTPS origin and reverse proxy for production login; the production template enables Secure cookies but does not provide TLS itself.
+
+Clone the repository and use the deployment files from the version you intend to install:
+
+```bash
+git clone https://github.com/devmato/mato-loop.git
+cd mato-loop
+# Check out the published release tag you intend to deploy.
+git checkout <release-tag>
+cp .env.example .env
+```
+
+Edit `.env` before starting:
+
+1. Set a random, URL-safe `POSTGRES_PASSWORD`.
+2. Replace both image placeholders with the same immutable tag from a successful [GitHub release](https://github.com/devmato/mato-loop/releases) or publication run: `YYYY-MM-DD-<SHA8>`.
+3. Set `MATO_LOOP_PUBLIC_BASE_URL` to your public HTTP(S) origin without a path.
+4. Review host data paths and the HTTP listener. Set `MATO_LOOP_HOST_ADDRESS=127.0.0.1` when your reverse proxy runs on the same host; use the appropriate private binding for other proxy setups.
+5. Configure HTTPS and keep `MATO_LOOP_SECURE_COOKIES=true` for production.
+
+Then start the stack:
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose ps
+docker compose logs --tail=100 mato-loop
+```
+
+The stack includes PostgreSQL with pgvector, Infinity for local retrieval embeddings, MatoLoop, and a MatoLoop Agent. Infinity's first model download can take several minutes; lexical retrieval remains available while embeddings are degraded. The default HTTP port is `10020`.
+
+For a deployment without the bundled Agent, use `docker compose -f docker-compose.no-agent.yaml` for all deployment commands. Add `--remove-orphans` to `up -d` when switching an existing stack.
+
+See [operations, updates, and backup/restore](docs/user/betrieb-und-datensicherung.md) for the complete procedure, including cleanup required when upgrading installations that used the removed Git integration. Computer Agents execute with their operating-system user's rights; the bundled container currently runs as root.
+
+### First use
+
+1. Open your configured HTTPS origin and create the first local account; it becomes the administrator.
+2. Add a provider under **Administration > Provider**, synchronize its models, and enable the models you want to use.
+3. Configure **Administration > Standardmodelle**, then start a chat.
+4. Optionally add and pair a computer under **Einstellungen > Computer**, then choose it and a working directory in the session.
+
+Chat and backend-managed files work without a computer. Personal providers and integrations depend on the administrator's instance settings. Start with the [user quickstart](docs/user/schnellstart.md).
+
+## Documentation
+
+The [documentation index](docs/index.md) links the current contracts, operations guides, and historical evaluation reports.
+
+- [User handbook (German)](docs/user/index.md) — also served at `/docs/` by MatoLoop.
+- [Operations and backup/restore](docs/user/betrieb-und-datensicherung.md).
+- [Architecture](docs/architecture.md) and [agent harness](docs/harness.md).
+- [Integrations](docs/integrations.md), [browser](docs/browser.md), and [computer maintenance](docs/computer-maintenance.md).
+- [Backend](apps/backend/README.md), [frontend](apps/frontend/README.md), and [standalone Agent](apps/matoloop-agent/README.md).
+- [CI and releases](docs/ci-and-releases.md).
 
 ## Development
 
-The development stack is the standard environment for all local work:
+Use the Docker development stack from the repository root:
 
 ```bash
 ./scripts/dev.sh up --build -d
 ```
 
-The development Agent reloads automatically when its Python sources change. Active in-memory Agent
-state, including a running browser, ends during that reload, while persistent Agent data and browser
-profiles remain.
+| Endpoint | Default URL |
+| --- | --- |
+| Web UI | http://localhost:10020 |
+| User handbook | http://localhost:10020/docs/ |
+| Backend API | http://localhost:6020/api |
+| OpenAPI | http://localhost:6020/api/docs |
 
-The following endpoints are then available:
+The stack uses FastAPI, Pydantic v2, async SQLAlchemy, PostgreSQL/pgvector, Infinity, Vue 3, Quasar, Pinia, and Vue Router. Dependencies are managed with `uv` and Yarn 4.
 
-- Web UI: `http://localhost:10020`
-- User documentation: `http://localhost:10020/docs/`
-- Backend: `http://localhost:6020/api`
-- OpenAPI: `http://localhost:6020/api/docs`
-
-Useful commands:
+`.env.dev` is ready to use. Put local settings in the gitignored `.env.dev.override`; start from `.env.dev.override.example`. **Parallel checkouts need distinct Compose project names, ports, and Agent bind paths**; see [development and documentation maintenance](docs/development.md).
 
 ```bash
 ./scripts/dev.sh status
-./scripts/dev.sh doctor
 ./scripts/dev.sh logs backend
-./scripts/dev.sh logs matoloop-agent
-./scripts/dev.sh stop
-./scripts/dev.sh down
-```
-
-Checks and tests:
-
-```bash
-./scripts/dev.sh check
-./scripts/dev.sh test
-./scripts/dev.sh test rag
-```
-
-Individual targets can be selected with `backend`, `frontend`, or `matoloop-agent`:
-
-```bash
+./scripts/dev.sh doctor
 ./scripts/dev.sh check backend
 ./scripts/dev.sh test frontend
-./scripts/dev.sh check matoloop-agent
 ./scripts/dev.sh test matoloop-agent
-```
-
-`test rag` starts PostgreSQL and Infinity, waits for their health checks, and verifies real German-English hybrid retrieval, trust filtering, and the FTS fallback. The normal test run remains infrastructure-independent.
-
-Checks and tests use temporary virtual-environment volumes, so running them from another Git worktree does not modify the environments of the running development stack. Package downloads are reused from the worktree's named dependency-cache volumes.
-
-Migrations:
-
-```bash
 ./scripts/dev.sh db current
-./scripts/dev.sh db upgrade head
+./scripts/dev.sh stop
 ```
 
-`.env.dev` contains the ready-to-run development configuration. Local overrides belong in `.env.dev.override`; use `.env.dev.override.example` as a template.
+`check` and `test` without a target run all component checks or tests. `test rag` opts into real PostgreSQL/Infinity retrieval tests. Evaluations use `./scripts/eval.sh`; see the development guide for targets and data storage.
 
-### Evaluations
+## Contributing
 
-Opt-in evaluations have a separate entry point using the same development Compose project and environment files:
+Use [GitHub issues](https://github.com/devmato/mato-loop/issues) for bug reports and feature requests. Read [AGENTS.md](AGENTS.md) for repository conventions and select the checks relevant to your change. Documentation contributions follow the [documentation maintenance guide](docs/development.md#documentation).
 
-```bash
-./scripts/eval.sh help
-./scripts/eval.sh prompts --help
-./scripts/eval.sh session-cache --help
-./scripts/eval.sh coding-comparison --help
-./scripts/eval.sh browser-performance --help
-./scripts/eval.sh shell-decider --check
-```
-
-Arguments after the target are passed to the evaluator unchanged. `browser-performance` uses the running backend; the other targets use disposable containers. Shell-decider evaluations add `docker-compose.eval.yaml` and build their dedicated image only when invoked. The existing Qwen comparison and teacher experiments are available through `shell-decider --qwen-quick`, `--teacher-test`, and `--review-teacher`. See the [shell-decider report](docs/shell-decider-cpu-evaluation-2026-10.md) and [browser comparison](docs/browser-performance.md) for measurement details. Raw evaluation outputs remain local evidence under ignored `data/` paths.
-
-## Development Data
-
-The development stack uses named volumes:
-
-- `app_data`: backend session trees, credential key, and other MatoLoop runtime data
-- `db_data`: PostgreSQL data
-- `embedding_cache`: reproducible Infinity model cache
-- `backend_uv_data`: Python environment and `uv` cache
-- `frontend_node_modules`: installed frontend dependencies
-- `frontend_yarn_cache`: Yarn package cache mounted at `/opt/mato-loop/yarn-cache`
-
-Docker prefixes volume names with the Compose project name by default, for example `mato-loop_app_data`. MatoLoop Agent state and its home use the separate host bind mounts `${MATOLOOP_AGENT_DATA:-./data/matoloop-agent}` and `${MATOLOOP_AGENT_HOME:-./data/home}`. The backend and frontend repository bind mount at `/workspace` exists only for HMR and live code changes.
-
-On first startup, Infinity downloads the pinned `intfloat/multilingual-e5-small` revision. This cold start can take several minutes; the backend and lexical durable-memory and prior-session searches remain available. The cache does not require backup. `./scripts/dev.sh doctor` checks pgvector, durable-memory and episode indexing state, and the Infinity health endpoint.
-
-The following command deletes containers and all development named volumes, including the database, users, secrets, and backend session files. It does not delete the separately bind-mounted MatoLoop Agent data or home directories:
-
-```bash
-./scripts/dev.sh reset-storage
-```
-
-## Production Preparation
-
-`docker-compose.yaml` prepares a combined MatoLoop container, PostgreSQL with pgvector, an internal Infinity CPU service, and a MatoLoop Agent. The prepared `matoloop-agent` image includes OpenSCAD for CAD rendering and headed Chromium for the optional Browser integration. `docker-compose.no-agent.yaml` is the production stack without a MatoLoop Agent; use `--remove-orphans` when switching an existing deployment to it. Published images currently target `linux/amd64` only.
-
-When copying the production configuration, include `apps/matoloop-agent/docker/browser-seccomp.json` at that same relative path beside `docker-compose.yaml` and `.env`. Compose requires this companion security profile; the host must also permit Chromium's unprivileged user-namespace sandbox. See [Browser architecture and operations](docs/browser.md) before enabling the integration.
-
-Copy `.env.example` to `.env`, replace the database password and both image placeholders, and use the same immutable GitHub Actions tag in `MATO_LOOP_IMAGE` and `MATOLOOP_AGENT_IMAGE`. Images are published to GHCR with `YYYY-MM-DD-<SHA8>` tags derived from the UTC commit date and Git commit ID. Then authenticate to the registry when required and start the stack:
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-The `matoloop-agent` service has exactly two runtime mounts: `MATOLOOP_AGENT_DATA:/data` for `/data/config.json`, credentials, transfers, and cache data, and `MATOLOOP_AGENT_HOME:/workspace` for the configured home directory. The production template sets these to `/opt/matoloop-agent/data` and `/opt/matoloop-agent/home`. The backend does not access, migrate, or delete the host home directory. The Docker container currently runs as root, so MatoLoop policies are not an operating-system sandbox: mounted scope and host policy determine what it can access.
-
-When upgrading from the former standalone MatoLoop Agent, move or copy its credential and durable state into the new `MATOLOOP_AGENT_DATA` directory before starting `matoloop-agent`. Pair the agent again if that state is not retained. Old environment-variable aliases are unsupported.
-
-Existing installations must complete the [removed Git integration cleanup](docs/user/betrieb-und-datensicherung.md#removed-git-integration) before restarting the upgraded MatoLoop Agent.
-
-The production template stores backend and PostgreSQL data below `/opt/mato-loop` and MatoLoop Agent data below `/opt/matoloop-agent`. It publishes port `10020` on `0.0.0.0`; restrict access with the host firewall and configure TLS through a suitable reverse proxy. Before production use, verify secure cookies, credentials, backups, and restoration for the target environment.
-
-GitHub Actions, the retained Forgejo workflows, the mirror cutover, and the manual release process are documented in [CI and releases](docs/ci-and-releases.md). CI publishes images and releases; it does not deploy MatoLoop.
-
-## Accounts and Ownership
-
-The first local account created during setup is an administrator. Administrators can create local users, reset passwords, activate or deactivate accounts, assign or remove the administrator role, and delete deactivated accounts. Administrator status grants account and instance-configuration management only; it does not grant access to another user's sessions, messages, files, memories, credentials, workspaces, approvals, or MatoLoop Agents.
-
-Local authentication is the only implemented sign-in method. The backend already separates the internal `UserAccount` from authentication-provider records and external identities, but no external authentication provider or corresponding login UI is implemented. Future providers can opt into provider-specific just-in-time account creation and explicit self-linking by an authenticated user; identities are never linked merely by matching a username.
-
-Deleting an account removes its database-owned data and backend session trees. It does not remove any files, caches, durable state, or configuration owned by a MatoLoop Agent, including the bundled Compose agent, or data in an external service. Instance-scoped resources are shared intentionally and are not deleted with a user.
-
-## Providers
-
-Two LLM paths are available under **Einstellungen**:
-
-- **ChatGPT Codex**: device-code OAuth with an appropriate ChatGPT account. MatoLoop displays a one-time code for confirmation on the opened ChatGPT sign-in page; no local callback port is required. Available Codex models are synchronized afterward.
-- **OpenAI-kompatibel**: base URL, optional API key, and either `Chat Completions` or `Responses API`. MatoLoop reads available models from the compatible `/models` endpoint.
-
-Providers are model transports only. Sessions, tool calls, files, memory, web search, and approvals always pass through the MatoLoop harness.
-
-Each provider can contain multiple models. OpenAI-compatible providers and ChatGPT Codex support automatic model discovery. Newly discovered models start disabled and appear in chat only after explicit activation. Repeated synchronization preserves internal model IDs and runtime settings; missing models are marked unavailable instead of deleted. If a provider does not support discovery, an advanced manual fallback can store a model ID. Providers and models can be enabled independently.
-
-Providers, models, default-model settings, integrations, and tool settings have separate instance and personal scopes. Only administrators can change instance scope or enable personal providers, integrations, and tool settings. Administrators also select which built-in integration adapter types users may configure personally. Instance providers and integrations, including their remote resources, are intentionally shared with all users under the instance policies; personal entries and credentials remain visible only to their owner. Administrators use the **Persönlich** / **Instanz** toggle to edit their own personal scope or the shared instance scope.
-
-Without additional configuration, `web_search` uses the built-in no-key metasearch. It is not an integration and uses `ddgs` to query available public search services. Additional SearXNG instances, the primary provider, and the optional fallback are managed under **Einstellungen > Integrationen** for the current instance or personal scope. The model supplies only the query and cannot override this host selection. Fallback is used only for transient primary-provider failures.
-
-`webfetch` is configured independently of SearXNG under **Einstellungen > Tools**. It fetches concrete HTTP(S) URLs as Markdown, text, or HTML and supports image responses up to 5 MiB. One trust-scoped policy controls all targets. An instance-wide restriction allows only public addresses by default; administrators may disable it to permit every HTTP(S) target reachable from the backend. Models have no separate Webfetch override.
-
-Webfetch follows redirects only after renewed authorization and resolution and pins validated DNS targets. With the public-address restriction enabled, it blocks link-local, metadata, and other non-public addresses. Durable fetched images and rendered PDF pages become revisioned managed files; textual results remain message content. Image-capable models receive current or explicitly referenced images transiently in the provider request; text-only models receive only safe metadata and available text derivatives.
-
-## Working Directories
-
-New sessions start without a working directory. Their first persisted message creates only owner-bound internal session storage under `/data/sessions`; this is not a workspace. Standalone session storage under `/data/sessions/<session-id>` contains `files/`, `revisions/`, and private `attachments/`. Project sessions share `/data/projects/<project-id>/files` and `/data/projects/<project-id>/revisions`, while `/data/projects/<project-id>/sessions/<session-id>/attachments` remains private to one session. Attachment derivatives stay below their source attachment. Durable byte-valued backend tool outputs become revisioned managed files with exact message references; text, JSON, status, and error results remain relational message content. There are no separate generated, downloaded, or derived trees, and the backend has no `/data/home` workspace.
-
-A workspace is an ordinary normalized absolute POSIX path on the selected owner-bound MatoLoop Agent. The required `homeDirectory` is its initial directory suggestion; agents advertise no roots, root IDs, or root revisions. A session stores only its selected agent and current absolute directory. Without both, computer file, process, shell, and local integration operations are unavailable, while chat, backend tools, and persisted session files continue to work.
-
-Git operations use shell commands on the selected, connected MatoLoop Agent with Git installed, under the existing shell permissions. There is no dedicated Git integration or backend clone path.
-
-Authenticated Control Center file requests are owner-bound and may directly access any path available to the selected MatoLoop Agent's operating-system user. This intentionally bypasses model tool policies and approvals; it does not bypass operating-system permissions or the agent's descriptor-based no-follow checks.
-
-The file explorer accepts up to four generic uploads of 64 MiB each. Files are created atomically and never overwrite an existing path; its create dialog adds empty `.txt`, `.md`, or `.scad` files through the same path. Validated PNG, JPEG, WebP, GIF, and static self-contained SVG images up to 5 MiB and UTF-8 text or Markdown up to 1 MiB have previews. Editable UTF-8 files use explicit, revision-checked atomic saves so a concurrent change is never overwritten silently. Normal edits append a revision, and moves preserve file identity and history. Activating a historical revision changes the current file without deleting retained versions; individual revisions cannot be deleted. Deleting the file purges its complete history and may invalidate historical message references. Markdown can be edited as source or through the visual editor; documents with image references remain in source mode to prevent external requests. SVG previews reject scripts, event handlers, animation, XML entities, and external references. Binary STL files have a bounded interactive viewer; configured OpenSCAD source files render an interactive OFF preview from the source view and export STL only on request. Every regular file remains available as a forced download; arbitrary uploaded content is never rendered as active HTML or served inline with a caller-controlled media type.
-
-The authenticated application uses the full viewport without a global top bar. Branding and navigation controls live in the sidebar; when it is hidden, a floating navigation button appears. On chat screens, a separate floating file button is visible only while the explorer is closed. At least 1024 pixels wide, the explorer shares the page with the chat through a resizable Quasar split view; each panel keeps at least 30 percent of the width and the validated ratio is stored locally. Narrower screens use a maximized explorer dialog. A file opens in the integrated viewer with one click and returns to the preserved tree through the back action. Unsaved editor changes require confirmation before leaving. Writable files and directories have direct rename and delete menus; renames change only the basename and never overwrite an existing path.
-
-Successful file writes, copies, and moves use the existing file card; generated session files do not add a separate draft card. A newly generated session file opens automatically in the existing file browser only when the user has not changed its navigation during the run and no dirty editor would be displaced; an already open current file stays selected and refreshes. Text previews provide a direct copy action. A new session is created server-side only with its first message and appears in the sidebar afterward. Unsent text remains separately per session in browser-local storage.
-
-Agent profiles combine an optional persona and separate task instructions with sparse tool-policy overrides for private and public models. Every session selects one profile; the protected instance profile `Allgemein` has no complete policy snapshot and live-inherits the effective defaults. `working_directory.external` independently controls model access beyond the selected working directory for file tools and inspected shell targets. It defaults to `ask`; Plan and Build retain that default, while Sysadmin uses `auto`. Read, write, delete, and shell action policies still apply separately. **Einstellungen > Tools** retains personal and instance defaults for built-in tools only; integration tools remain on their integration pages. Technical tool and resource availability, disabled integrations, filesystem `deny`, shell-zone switches, and remote ACL restrictions remain hard boundaries.
-- Model-facing file tools use `root=files` for backend-managed files and `root=computer` for the selected MatoLoop Agent directory. Backend implementation maps these to the stable internal `session` and `workspace` roots. Agent protocol filesystem operations are all named `filesystem.*` and receive normalized absolute POSIX paths.
-- `Einmal erlauben`: applies only to the current action.
-- `Für Session erlauben`: creates a separate revocable permission grant.
-- `Später`: leaves the request pending and the agent run paused.
-
-## Configuration and Secrets
-
-Infrastructure values such as images, database credentials, ports, and host data paths come from the gitignored production `.env` or the tracked development `.env.dev`. Typed settings documents and the Web UI manage operational settings.
-
-API keys and OAuth tokens are encrypted in PostgreSQL. Personal credentials are owner-scoped; instance credentials belong to shared instance resources. The local Fernet key is stored at `/data/secrets/credential.key` and must be backed up together with the database.
-
-## Documentation
-
-- [User handbook](docs/user/index.md)
-- [Coding agent rules](AGENTS.md)
-- [Architecture](docs/architecture.md)
-- [CI and releases](docs/ci-and-releases.md)
-- [Backend](apps/backend/README.md)
-- [Frontend](apps/frontend/README.md)
+Noteworthy commits use an English `Release-Note: <category>: <text>` trailer; see [CI and releases](docs/ci-and-releases.md#release-process). Product versions are derived from commit dates and SHAs rather than manual version bumps.
 
 ## License
 

@@ -1,25 +1,37 @@
 # MatoLoop Dokumentation
 
-MatoLoop ist eine selbst gehostete Arbeitsumgebung für KI-gestützte Chats und Agenten. Sessions, Nachrichten, Dateien, Freigaben und Erinnerungen bleiben in MatoLoop gespeichert, während unterschiedliche Modellanbieter für die eigentliche Modellverarbeitung verwendet werden können.
+MatoLoop ist eine selbst gehostete Arbeitsumgebung für KI-Chats und Agenten. Sessions, Nachrichten, Dateien, Freigaben und Erinnerungen bleiben in MatoLoop gespeichert; unterschiedliche Modellanbieter übernehmen die Modellverarbeitung. Die Oberfläche und dieses Handbuch sind deutschsprachig.
 
-## Erste Schritte
+## Einstieg und tägliche Arbeit
 
-- [Schnellstart](schnellstart.md): erstes Administratorkonto einrichten, Provider verbinden und die erste Session starten
-- [Chat und Sessions](chat-und-sessions.md): Nachrichten, Modelle und Session-Verwaltung
-- [Dateien und Arbeitsordner](dateien-und-arbeitsordner.md): Computer, Arbeitsbereiche und Session-Dateien
-- [Freigaben und Datenfreigabe](freigaben-und-datenfreigabe.md): Entscheidungen über sensible Aktionen und externe Modelle
-- [Skills](skills.md): wiederverwendbare Anweisungen verwenden, im Chat erstellen und verwalten
-- [Automationen](automationen.md): Agent-Aufträge manuell sowie mit einmaligen oder wiederkehrenden Zeitplänen ausführen
-- [Kanäle](kanaele.md): persönliche Telegram-Bots für Chats und Automationen verbinden
+- [Schnellstart](schnellstart.md): Konto, Provider, Modell und erste Session.
+- [Anmeldung und Oberfläche](anmeldung-und-oberflaeche.md): Navigation, Suche, Archiv, Control Center und Darstellung.
+- [Chat und Sessions](chat-und-sessions.md): Sessionvorlagen, laufende Aufträge, Nachrichtenwarteschlange und Subagenten.
+- [Dateien und Arbeitsordner](dateien-und-arbeitsordner.md): Ablage, Computer-Dateien, Bearbeitung und Versionen.
+- [Anhänge, Diktat und Medien](anhaenge-und-medien.md): Uploads, Sprachnachrichten und Medienverarbeitung.
+- [Webrecherche und Quellen](webrecherche-und-quellen.md): Suche, Webseiten und Untertitel.
+- [Freigaben und Datenfreigabe](freigaben-und-datenfreigabe.md): Aktionsrechte, Modellwahl und Rückfragen.
+- [Variablen und Secrets](variablen-und-secrets.md): geschützte Eingaben und gespeicherte Werte.
+- [Automationen](automationen.md): Aufgaben, Zeitpläne und Ereignisauslöser.
+- [Kanäle](kanaele.md): persönliche Telegram-Bots verbinden.
 
-## Administration
+## Einstellungen und Administration
 
-Open **Einstellungen** to manage personal providers, profiles, skills, integrations, channels, personalization, and memory. **Personalisierung > Personas** manages your named personas, account-wide assistant name, and personal profile assignments when allowed. Global or owned personas can be assigned to accessible global or owned agents. Administrators manage the global persona catalog, its default, and shared assignments under **Administration > Personas**. Configure models and workflow on profiles, personal profile permissions under **Tools**, and integration permissions on the relevant connection; **Weitere Einstellungen** in the agent editor links to these related settings. Administrators manage global providers, profiles, skills, tools, integrations, and MCP servers in **Administration**. Sections using **Einstellungen / Verwaltung** open on **Einstellungen** first; **Verwaltung** contains their entries. Channel-provider gates and instance Web Push configuration also belong to Administration; device push subscriptions remain in the notification Control Center app. Personal tool overrides require both personal profiles and tool-right customization to be allowed; administrators may always use their own personal settings. Open your account through **Konto**. Automations are configured in the session's **Automation** Control Center app.
+- [Provider und Modelle](provider-und-modelle.md): Verbindungen, Standardmodelle und Sessionvorlagen.
+- [Tools und Integrationen](tools-und-integrationen.md): Rechte und Einrichtung der verfügbaren Dienste.
+- [Personalisierung](persona.md): Personas, Zuordnungen und Agentenname.
+- [Skills](skills.md): wiederverwendbare Anweisungen verwenden, erstellen und verwalten.
+- [Memory und Dreaming](memory-und-dreaming.md): Erinnerungen und frühere Sessions nutzen.
+- [Betrieb und Datensicherung](betrieb-und-datensicherung.md): Installation, Computer, Updates und Wiederherstellung.
+- [Debug-Zugang](debug-zugang.md): persönlicher schreibgeschützter Diagnosezugang für Administratoren.
+- [Häufige Fragen](haeufige-fragen.md) und [Changelog](changelog.md).
 
-Persönliche Sessions, Dateien, Arbeitsbereiche, Erinnerungen, Kanäle und Zugangsdaten sind nach Benutzer getrennt. Gemeinsame Provider, Modelle und Integrationen der Instanz stehen dagegen absichtlich allen Benutzern nach den festgelegten Richtlinien zur Verfügung.
+**Einstellungen** verwaltet Ihre persönlichen Einträge. **Administration** verwaltet gemeinsame Instanzressourcen und die Freigabe persönlicher Konfiguration. Bereiche mit **Einstellungen / Verwaltung** öffnen zuerst die Einstellungen; **Verwaltung** enthält die jeweiligen Einträge. Agentenprofile beschreiben Arbeitsweise und Rechte, **Standardmodelle** und **Sessionvorlagen** die Modellwahl. Integrationsrechte gehören zur jeweiligen Verbindung.
 
-Personal providers and personal tool-right customization start disabled for ordinary users; personal personas, skills, and agent profiles start enabled. Administrators retain their personal-setting exception. Communication channels start globally disabled for everyone, including administrators: activate them under **Administration > Kanäle > Einstellungen**, then manage individual provider allowances under **Verwaltung**. Telegram is allowed by default but requires global activation. Existing configuration without an explicit value uses these defaults; explicitly saved values are retained.
+Persönliche Sessions, Dateien, Erinnerungen, Kanäle, Zugangsdaten und Computer sind nach Benutzer getrennt. Instanzprovider und -integrationen stehen dagegen absichtlich allen Benutzern nach ihren Richtlinien zur Verfügung. Administratorrechte erlauben keinen Zugriff auf persönliche Inhalte anderer Konten.
+
+Persönliche Provider und eigene Tool-Rechte sind für gewöhnliche Benutzer anfangs deaktiviert; persönliche Personas, Skills und Agentenprofile sind aktiviert. Administratoren behalten ihre Ausnahme für persönliche Einstellungen. Kommunikationskanäle müssen unter **Administration > Kanäle > Einstellungen** auch für Administratoren global aktiviert werden; Telegram ist als Anbieter standardmäßig erlaubt. Ausdrücklich gespeicherte Einstellungen bleiben erhalten.
 
 ## Grundprinzip
 
-Provider transportieren Modellnachrichten und Antworten. Dateizugriffe, Webzugriffe, Tool-Aufrufe, Freigaben und Memory werden weiterhin durch MatoLoop kontrolliert. Das Modell führt keine Werkzeuge direkt aus.
+Provider transportieren Modellnachrichten und Antworten. MatoLoop kontrolliert Tool-Ausführung, Dateizugriff, Webzugriff, Memory und Freigaben. Eine erfolgreiche Tool-Ausführung ist kein Beweis dafür, dass das gewünschte Ergebnis richtig ist; prüfen Sie wichtige Ergebnisse anhand der tatsächlichen Daten.

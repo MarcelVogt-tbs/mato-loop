@@ -2,45 +2,46 @@
 
 ## Provider verwalten
 
-**Administration > Provider** opens on **Einstellungen**, where administrators control **Persönliche Provider**. The second tab, **Verwaltung**, adds, edits, enables, tests, and deletes global providers and their models.
-
-**Einstellungen > Provider** manages only your own providers, including when signed in as an administrator. This navigation entry is hidden when personal providers are disabled; existing personal configuration remains stored. New providers inherit the global or personal scope from the page where they are created. Global providers and their models remain available to all users in chat and agent profiles. Personal providers and encrypted credentials belong only to their owner.
+**Administration > Provider** öffnet zunächst **Einstellungen** mit dem Schalter für persönliche Provider. Unter **Verwaltung** legen Administratoren gemeinsame Verbindungen an und verwalten deren Modelle. **Einstellungen > Provider** verwaltet ausschließlich Ihre eigenen Provider, auch für Administratoren. Deaktivierte persönliche Konfiguration bleibt gespeichert; gemeinsame Modelle bleiben verfügbar.
 
 ### ChatGPT Codex
 
-MatoLoop zeigt einen einmaligen Gerätecode und öffnet die ChatGPT-Anmeldeseite. Nach erfolgreicher Bestätigung wird die Verbindung verschlüsselt gespeichert. Es ist derzeit eine Codex-Konfiguration vorgesehen.
+MatoLoop zeigt einen einmaligen Gerätecode und die ChatGPT-Anmeldeseite. Bestätigen Sie ihn mit einem geeigneten Konto. OAuth-Zugangsdaten werden verschlüsselt gespeichert; ein lokaler Callback-Port ist nicht nötig. Danach können Modelle synchronisiert werden.
 
 ### OpenAI-kompatibel
 
-Benötigt eine Basis-URL und optional einen API-Schlüssel. Als API-Variante stehen Chat Completions und Responses zur Verfügung. Verfügbare Modelle werden nach Möglichkeit über den `/models`-Endpunkt erkannt.
+Verwenden Sie Basis-URL, optionalen API-Schlüssel und entweder Chat Completions oder Responses. Modelle werden möglichst über `/models` erkannt; bei fehlender Erkennung ist eine manuelle Modell-ID möglich.
 
 ### Lemonade
 
-Verbindet einen lokalen Lemonade-Server. MatoLoop erkennt verfügbare Chat- und Medienmodelle sowie deren Fähigkeiten.
+MatoLoop erkennt installierte Chat- und Medienmodelle eines Lemonade-Servers. Laden, Entladen und Speicherbelegung verwalten Sie in Lemonade; MatoLoop übernimmt dessen Modellresidenz nicht. Nicht jede Modellart ist ein Chatmodell.
+
+### Azure Speech
+
+Verwenden Sie einen HTTPS-Ressourcen- oder regionalen Endpunkt und den API-Schlüssel. Synchronisierung prüft verfügbare Sprachen und bietet `azure-speech-fast-transcription` an. Aktivieren Sie es und wählen Sie es als **Transkription** unter Standardmodelle. Azure Speech verarbeitet aufgezeichnetes Audio, weder Chat noch Live-Transkription oder Sprachgenerierung. Das Originalaudio wird übertragen und kann nicht textlich pseudonymisiert werden. Dienstregion, Tarif, Quoten und Sprachen müssen bei Azure passend verfügbar sein.
 
 ## Modelle synchronisieren
 
-Neu erkannte Modelle beginnen in der Regel deaktiviert; vom Provider als natives Chatmodell gekennzeichnete Modelle können bereits aktiviert sein. Aktivieren und testen Sie nur die benötigten Modelle. Verschwindet ein Modell beim späteren Synchronisieren, bleibt seine Konfiguration als **Nicht verfügbar** erhalten.
+Neu erkannte Modelle beginnen normalerweise deaktiviert; bestimmte hostseitig ergänzte native Medienmodelle können aktiv sein. Aktivieren und testen Sie benötigte Modelle. Synchronisierung erhält interne IDs und eigene Laufzeiteinstellungen, kennzeichnet verschwundene Modelle als **Nicht verfügbar** und löscht sie nicht automatisch.
 
-Bei Providern ohne Modellerkennung kann eine Modell-ID manuell eingetragen werden.
-
-Deleting a model clears matching model defaults and explicit session-wide selections. Sessions skip unavailable per-agent overrides and inherit the next available session-wide or default model; deleted and missing models disappear from selectors. If no model is available, select a model after configuring a provider. Synchronization, deactivation, capability changes, and Codex disconnection also clear invalid default assignments. A later synchronization may discover the same external model again with a new internal ID.
+Löschen entfernt passende Standardmodellzuordnungen und explizite sessionweite Verweise. Nicht verfügbare agentenspezifische Sessionwerte werden bei der Auflösung übersprungen. Eine spätere Synchronisierung kann das externe Modell mit einer neuen internen ID wieder anlegen. Ein Fehler bei der Synchronisierung ersetzt nicht den zuletzt gültigen Katalog.
 
 ## Laufzeiteinstellungen
 
-Je Modell können unter anderem Kontextfenster, Ausgabelimit, Streaming, Tool-Unterstützung, Bildunterstützung, Datenfreigabe, Memory-Policy und Reasoning-Zusammenfassungen konfiguriert werden. Webfetch folgt stattdessen den Rechten des gewählten Agentenprofils für die effektive private oder öffentliche Modellklasse. MatoLoop bietet den Reasoning-Aufwand im Chat nur für ausdrücklich unterstützte Modelle an und berücksichtigt deren verfügbare Stufen und Providerformat. Qwen3.8-27B unterstützt **Aus**, **Niedrig**, **Mittel** und **Sehr hoch**; MatoLoop verwendet **Mittel** als Modellstandard. Codex übernimmt die unterstützten Stufen einschließlich **Maximum** und **Ultra** sowie den Modellstandard aus dem synchronisierten Katalog.
+Kontextfenster, Auto-/manuelles Ausgabelimit, Streaming, Tool-, Paralleltool- und Bildunterstützung, Memory, Vertrauenslevel und Reasoning werden je Modell konfiguriert. **Auto** lässt ein unbekanntes Ausgabelimit beim Provider; MatoLoop prüft trotzdem seinen lokalen Kontextbudget-Schätzwert. Ein manuelles Limit ist eine Obergrenze, keine reservierte feste Ausgabe.
 
-## Model defaults and session templates
+Reasoning-Stufen erscheinen nur für unterstützte Modelle. Verfügbare Stufen und Standards hängen vom Provider und dessen erkanntem Modellprofil ab; synchronisieren Sie nach Provideränderungen. Die Auswahl eines öffentlichen Modells gibt bereits autorisierte Inhalte an diesen Provider frei. [Datenfreigabe](freigaben-und-datenfreigabe.md) und Memory-Zielgruppen bleiben getrennte Themen.
 
-Configure global assignments under **Administration > Standardmodelle > Verwaltung** and permitted personal overrides under **Einstellungen > Standardmodelle**. The administrative **Einstellungen** tab controls the personal-setting gate. Available purposes include:
+## Standardmodelle und Sessionvorlagen
 
-- Agent
-- Bildanalyse
-- Kontextkomprimierung und Titelgenerierung
-- Dreaming
-- Bild-, Sprach- und Audiogenerierung
-- Transkription
+Gemeinsame Zuordnungen stehen unter **Administration > Standardmodelle > Verwaltung**, erlaubte persönliche Vorgaben unter **Einstellungen > Standardmodelle**. Die administrative Einstellungsseite steuert die persönliche Freigabe. Zwecke sind:
 
-Agent profiles contain no model settings. **Sessionvorlagen** configures available agents, the start agent, memory, and optional chat-model/reasoning overrides for the whole session or individual agents. Select a template before the project on Home or when starting a new session. **Allgemein** offers Allgemein and Sysadmin; **Coding** offers Plan and Build. Both start with full memory. Under **Session**, changing the template replaces the session's agent selection, memory, model, and reasoning settings. You can then change the active agent's model and reasoning, memory, computer, and web search directly. Template changes in administration do not affect existing sessions.
+- Agent und Reasoning-Vorgabe.
+- Kontextkomprimierung und Titelgenerierung.
+- Skill-Erstellung und Dreaming.
+- Bild-, Video- und Audioanalyse.
+- Bild-, Sprach- und Audiogenerierung sowie Transkription.
 
-An agent-specific session override wins over a session-wide value, followed by personal and global model defaults. Empty fields inherit their displayed defaults. Helper and media models always use **Standardmodelle** and the existing fallbacks.
+Agentenprofile enthalten keine Modellfelder. **Sessionvorlagen** wählen verfügbare Agenten, Startagent, Memory, Nachrichtengröße und optionale Chatmodell-/Reasoning-Werte für die Session oder einzelne Agenten. **Allgemein** bietet Allgemein/Sysadmin; **Coding** bietet Plan/Build und kleine Nachrichten. Beide beginnen mit vollem Memory. Eine Session kopiert die Vorlage einmal; spätere Vorlagenänderungen wirken nicht auf sie zurück.
+
+Ein agentenspezifischer Sessionwert gewinnt vor dem sessionweiten Wert, dann persönlicher und globaler Vorgabe. Nicht verfügbare Werte werden übersprungen. Ohne Agentmodell-Vorgabe dient das erste verfügbare toolfähige Chatmodell in der effektiven Liste. Hilfs-/Medienmodelle verwenden Standardmodelle und ihre bestehenden aktiven Modell-Fallbacks. Plan und Build verlangen außerdem einen verbundenen Computer mit zugänglichem Arbeitsordner.

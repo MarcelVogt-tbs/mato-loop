@@ -7,8 +7,9 @@ The tool must be the only tool call in that model response so later actions cann
 reply is known.
 
 Pending requests and accepted answers are persisted in `question_requests`. The runtime uses the
-same single-process waiter semantics as approvals, but question answers never create permission
-grants. Users can also reject a request, which returns a controlled rejected tool result. The
+same single-process waiter semantics as approvals. Ordinary question answers create no permission
+grants; submitted protected administrator input can grant run access or remembered session access.
+Users can also reject a request, which returns a controlled rejected tool result. The
 frontend loads pending requests independently of SSE and replaces the normal composer with a
 sequential question dock. Backend restarts expire pending requests and fail their active runs
 through the normal recovery path.
@@ -30,8 +31,13 @@ skipped questions unless requested. An empty durable-storage answer creates or u
 must send a change of direction as a normal chat message rather than entering it in a credential
 field.
 
-Question delivery is channel-neutral. A run started from a paired messaging endpoint persists a
+Ordinary question delivery is channel-neutral. A run started from a paired messaging endpoint persists a
 versioned question envelope in that endpoint's outbox. Providers may render the envelope with
 native controls and direct-reply text input, but all interactions use the same backend state
 machine and answer validation. Every interaction revalidates the endpoint owner, source message,
 session, run, delivered prompt, and pending request before changing canonical state.
+
+Protected credential questions are handled in MatoLoop rather than delivered as ordinary channel
+envelopes. Pending owned requests use `GET /api/questions/pending`; decisions use
+`POST /api/questions/{question_id}/answers` or `/reject`. See [protected tool text](protected-tool-text.md)
+for the reference/redaction boundary.

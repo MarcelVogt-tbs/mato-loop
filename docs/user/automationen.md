@@ -1,56 +1,53 @@
 # Automationen
 
-An automation is a saved agent task in a normal session. Open **Automationen** in the side drawer to find configured tasks. Each entry opens the same conversation that is available in the project or session list.
+Eine Automation ist ein gespeicherter Agentenauftrag in einer gewöhnlichen sichtbaren Session. **Automationen** in der Seitenleiste öffnet dieselbe Unterhaltung wie die Projekt- oder Sessionliste.
 
-## Create and edit
+## Erstellen und bearbeiten
 
-In an existing session, open **Control Center > App hinzufügen > Automationen**. To start in a new session, use the plus button next to **Automationen** in the drawer.
+Öffnen Sie **Control Center > App hinzufügen > Automationen** in einer Session. Für eine neue Unterhaltung verwenden Sie die Plusaktion bei Automationen. Das Öffnen der App legt bei Bedarf eine leere Session an.
 
-The app lists all automations in the session. Select **Neu** to create one or open a row to edit it. Enter a name and describe what the agent should do. Add a schedule or select an event under **Auslöser**. Without either, the task runs only on demand. Select **Speichern**. Each session supports multiple automations. The app remains attached after saving. Closing its tab does not stop the automations; add the app again to edit them.
+Die App listet alle Aufgaben der Session. **Neu** legt eine Definition mit Name und Auftrag an. Fügen Sie einen Zeitplan oder einen Ereignisauslöser hinzu und speichern Sie. Ohne beides läuft die Aufgabe nur auf Anforderung. Eine Session darf mehrere Aufgaben enthalten; das Schließen des App-Tabs stoppt oder löscht sie nicht.
 
-Schedule rows show readable descriptions such as **Täglich um 08:00 Uhr**. Open a row to edit it; other rows stay compact. Long tasks show a preview with **Vollständigen Auftrag anzeigen** and **Bearbeiten**. Save and run controls remain below the scrolling content. The advanced **Zeitregel bearbeiten** section preserves unusual existing rules without changing their meaning.
+Zeitplanzeilen zeigen lesbare Beschreibungen; öffnen Sie eine Zeile zum Bearbeiten. Lange Aufträge können über **Vollständigen Auftrag anzeigen** und **Bearbeiten** geöffnet werden. **Zeitregel bearbeiten** erhält ungewöhnliche bestehende Regeln.
 
-Model, agent profile, computer, working directory, and permissions come from the session's existing settings. To use a skill, explicitly ask the agent to load it by name in the task. Skills use the normal session mechanism; there is no separate skill binding or forced activation.
+Modell, Agent, Computer, Arbeitsordner und Rechte stammen bei der Ausführung aus den aktuellen Sessionvorgaben. Benötigte Skills nennen Sie im Auftrag ausdrücklich; eine zusätzliche Automations-Skillzuordnung gibt es nicht. Normale Chatnachrichten ändern die gespeicherte Definition nicht, können aber den Kontext späterer Läufe beeinflussen.
 
-## Run and interact
+## Ausführen und interagieren
 
-- **Jetzt ausführen** queues the saved task. Save or discard edits first.
-- **Deaktivieren** stops automatic starts from schedules and events; **Aktivieren** enables them again. Manual starts remain available. Running work is unaffected.
-- Use the normal chat stop button to stop the current agent.
-- Tools, results, errors, approval requests, and questions appear directly in the conversation. You can answer and continue chatting there.
-- Chat messages do not change the saved task automatically. Their conversation context can influence later runs.
-- If the agent is already working in the session, a queued automation waits. Further due occurrences of an already queued or running automation are recorded as skipped.
+- **Jetzt ausführen** reiht den gespeicherten Auftrag ein; speichern oder verwerfen Sie Änderungen zuerst.
+- **Deaktivieren** stoppt automatische Starts, nicht laufende Arbeit. Manuelle Starts bleiben möglich.
+- Der Chat-Stoppknopf beendet den aktuellen Agentenlauf.
+- Tools, Ergebnisse, Fehler, Freigaben und Fragen erscheinen im normalen Gespräch.
+- Ist ein Agent bereits aktiv, wartet eingereihte Automation. Weitere fällige Auslösungen einer bereits eingereihten/laufenden Aufgabe werden als übersprungen protokolliert.
 
-The app shows **Letzter Lauf** with the start time and status of the most recent actual execution. Skipped occurrences do not replace it. Select the row to jump to its result or error message in the conversation. An active execution may link to its input until a result exists. **Abgeschlossen** means the execution finished normally, not that a monitored condition was met. Definitions without an execution show **Noch nicht ausgeführt**.
+**Letzter Lauf** zeigt die letzte tatsächliche Ausführung mit Beginn, Status und Verweis auf Ergebnis oder Fehler; übersprungene Auslösungen ersetzen ihn nicht. Während der Arbeit führt der Link gegebenenfalls zur Eingabenachricht. **Abgeschlossen** bedeutet normales Laufende, nicht den Nachweis einer erfüllten überwachten Bedingung. Der Chat ist das vollständige Ausführungsprotokoll; eine zweite Detailhistorie gibt es in der App nicht.
 
-The conversation is the execution log: automation input messages identify the originating task by name, and intermediate findings, results, tools, and failures remain there. The app contains configuration, controls, and the compact last-run overview, without a separate execution transcript or history detail view.
+### Hinweise und stille Prüfungen
 
-Normal answers use the same unread indicators and response notifications as interactive sessions. The agent decides whether to use `notify` for a targeted alert or `silence` for a check without a reportable change. A successful `notify` replaces the run's automatic completion notice; `silence` suppresses that notice while keeping the final response and unread indicator. Neither suppresses runtime errors, approvals, questions, or explicit notices already created. Both tools are also available in ordinary chats; `silence` is appropriate when the user requests a quiet response, not merely because an answer is short. A focused, visible session does not create an automatic response notice; configured Web Push is sent only while the app is inactive.
+Antworten verwenden dieselben Ungelesen-Markierungen und Benachrichtigungen wie interaktive Chats. Der Agent kann mit `notify` einen gezielten Hinweis erzeugen oder mit `silence` den gewöhnlichen Abschluss-Hinweis unterdrücken, etwa wenn eine verlangte Prüfung nichts Berichtenswertes fand. Antwort und Ungelesen-Status bleiben erhalten. Fehler, Freigaben, Fragen und schon erzeugte Hinweise werden dadurch nicht unterdrückt.
 
-Within the available context budget, the agent receives current automation definitions for its own session before each model request, including disabled tasks, revisions, schedules, and the next effective scheduled start. It can reuse a matching task without first listing automations. When full definitions do not fit, the context contains a compact catalog with task excerpts and schedule counts; full details remain available through `get_automation`. If the catalog also needs shortening, it explicitly reports how many definitions were omitted. Automation context never makes an otherwise fitting chat request exceed the model's input budget. These definitions are configuration data, not instructions to start every task. Reading other sessions' automations and changing definitions still use the normal tool permission paths.
+Eine sichtbar fokussierte Session erzeugt keinen automatischen Antwort-Hinweis. Web Push wird nur bei fehlender aktiver Anwendungspräsenz gesendet; siehe [Benachrichtigungen](anmeldung-und-oberflaeche.md#benachrichtigungen).
 
-## Schedules
+Vor Modellschritten erhält der Agent aktuelle Definitionen seiner Session, einschließlich deaktivierter Aufgaben und nächstem wirksamem Termin, soweit das Kontextbudget reicht. Bei Platzmangel wird ein kompakter Katalog mit Auslassungszahl verwendet; Details können über das normale Tool nachgeladen werden. Definitionen sind Konfigurationsdaten, keine automatische Aufforderung, jede Aufgabe zu starten.
 
-Recurring presets cover daily, weekdays, weekly, and monthly schedules. **Eigener Rhythmus > Zeitregel bearbeiten** accepts five-field cron expressions, for example `0 8 * * 1-5` for weekdays at 08:00 in the saved timezone. New schedules use the browser's timezone; changing devices does not change saved schedules.
+## Zeitpläne
 
-One-time timestamps and optional end times are entered in the device's local timezone. A recurring end time is inclusive. Missed occurrences during server downtime are not replayed. Simultaneous schedules are combined into one execution. Failed or interrupted agent work is not automatically repeated.
+Vorlagen bieten täglich, werktags, wöchentlich und monatlich. **Eigener Rhythmus > Zeitregel bearbeiten** erlaubt fünfteilige Cron-Ausdrücke, etwa `0 8 * * 1-5` für werktags 08:00 in der gespeicherten Zeitzone. Neue Zeitpläne übernehmen die Browserzeitzone; ein Gerätewechsel ändert gespeicherte Regeln nicht.
 
-## Remove and migrate
+Einmalige Termine und optionale Endzeitpunkte werden in der lokalen Gerätezeitzone eingegeben. Das Ende eines wiederkehrenden Plans ist einschließlich. Während Serverstillstand verpasste Termine werden nicht nachgeholt; gleichzeitig fällige Pläne werden gebündelt. Fehlgeschlagene oder unterbrochene Arbeit wird nicht automatisch wiederholt.
 
-Use **Archivieren** in a session's menu or **Projekt archivieren** in a project's menu to put conversations aside. Open **Archiv** above the user menu to read or restore them. Project archival includes its sessions without changing their individual archive flags. Restoring a project therefore leaves independently archived sessions archived.
+## Entfernen und Migration
 
-Archived sessions remain readable, but new agent work and automation starts require restoration. Running work may finish. Automation activation settings are retained; queued automation work is cancelled and missed dates or events are not replayed. Automations themselves have no archive option.
+Archivieren betrifft die Session oder ihr Projekt, nicht die Automationsdefinition. Archivierte Sessions bleiben lesbar, neue Starts benötigen Wiederherstellung. Eingereihte Arbeit wird abgebrochen, aktive Arbeit darf enden. Die Aktivierungseinstellung bleibt gespeichert; verpasste Auslösungen werden nicht nachgeholt. Details stehen unter [Archiv](anmeldung-und-oberflaeche.md#archiv).
 
-**Automation entfernen** removes the task, schedules, and scheduling history. The conversation, files, permissions, and any running agent remain. Deleting the session or project also deletes its automation after confirmation.
+**Automation entfernen** löscht Definition, Zeitpläne und Auslösungsverlauf; Session, Dateien, Rechte und bereits laufender Agent bleiben erhalten. Das Löschen der Session oder ihres Projekts entfernt nach Bestätigung auch die abhängigen Automationen.
 
-Existing hidden automation sessions become visible with their original history and files. Former output chats retain previously delivered messages, but new work appears in the execution session. Old configuration links open that session and its Automation app; run links jump to the corresponding conversation message.
+Früher verborgene Ausführungssessions bleiben mit IDs, Verlauf und Dateien als normale Chats erhalten. Alte Ausgabekopien bleiben historisch; neue Ergebnisse erscheinen nur in der Ausführungssession. Alte Konfigurations-/Lauflinks öffnen diese Session bzw. die Nachricht. Ehemals archivierte Aufgaben werden deaktiviert; frühere Skillbindungen werden ausdrückliche Auftragsanweisungen.
 
-Previously archived automations become disabled. Existing skill bindings become explicit instructions in the saved task, including the original skill ID. Historical run snapshots remain available.
+## Ereignisauslöser und Rechte
 
-## Event triggers and permissions
+**Agent hat geantwortet** und **Agent-Auftrag fehlgeschlagen** reagieren auf abgeschlossene normale Läufe Ihrer eigenen Sessions. Streaming und fremde Konten lösen nichts aus. Automationsbedingte Läufe, ihre Retries und Subagenten erzeugen keine weiteren Automationsauslösungen.
 
-**Agent hat geantwortet** and **Agent-Auftrag fehlgeschlagen** react to completed normal agent runs across your own sessions. Streaming fragments and other users' activity do not trigger work. Automation-originated runs, retries and delegated work do not trigger further automations.
+Optionale Bedingungen gehören in den Auftrag und werden vom ausgelösten Agenten beurteilt. Ereigniskontext enthält Session-/Nachrichtenverweise; Lesen folgt weiterhin den Sessionrechten. Eine bereits beschäftigte Aufgabe protokolliert weitere Auslösungen als übersprungen.
 
-Put optional conditions in the task. The triggered agent evaluates them and may decide to do nothing. Event context contains message and session references; reading their content still requires normal session access. A busy automation records a further occurrence as skipped.
-
-Ask the agent to prepare session permissions when setting up a task. `request_session_permissions` uses the existing approval card without executing the proposed operation. Existing permissions are reused and disabled actions remain blocked. File access, supported shell inspection, session search/read, and integrations with declared permissions are supported. One-time-only or unsupported permissions are requested during actual execution. Grants retain their normal profile, trust, resource and session boundaries.
+Bitten Sie bei der Einrichtung um Vorbereitung von Session-Freigaben. `request_session_permissions` prüft unterstützte Datei-, Shell-, Session- und Integrationsaktionen ohne deren Ausführung und nutzt vorhandene Freigabekarten. Deaktivierte Aktionen bleiben blockiert, einmalige oder nicht vorab prüfbare Rechte werden bei der tatsächlichen Ausführung angefragt. Das Speichern einer Automation erlaubt deren spätere Aktionen nicht automatisch.
