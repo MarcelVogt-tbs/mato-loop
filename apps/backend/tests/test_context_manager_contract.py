@@ -2366,9 +2366,8 @@ def test_memory_context_prompt_uses_episode_excerpts_before_session_read() -> No
         offered_tool_names=frozenset({"session_read"}),
     )
 
-    assert "bounded conversation excerpts" in prompt
-    assert "Use a supplied excerpt directly when it is sufficient" in prompt
-    assert "call session_read" in prompt
+    assert "Use supplied session excerpts directly when they are sufficient" in prompt
+    assert "read missing details from matching supplied references with session_read" in prompt
     assert "not verified facts or complete conversations" in prompt
 
 
