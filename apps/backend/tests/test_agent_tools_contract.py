@@ -202,6 +202,32 @@ async def test_permission_preparation_never_executes_the_proposed_write(tmp_path
         assert context.ask_handler.await_args.args[0].available_decisions == ("allow_session", "deny")
 
 
+@pytest.mark.parametrize(("target", "code", "field", "params"), [
+    ({"tool": "functions.write_file", "arguments": {}},
+     "tool.invalidArguments", "requests.1.tool", {"reason": "invalid_choice"}),
+    ({"tool": "write_file", "arguments": {"root": "files", "path": "report.txt"}},
+     "tool.invalidArguments", "requests.1.arguments.content", {"reason": "missing"}),
+    ({"tool": "notify", "arguments": {"title": "Ready", "body": "Report ready"}},
+     "permission.preflightUnavailable", "requests.1", None),
+])
+async def test_permission_preparation_identifies_failed_target(tmp_path, monkeypatch, target, code, field, params):
+    import mato_loop_backend.tools.permissions as permissions
+
+    call = ToolCall("prepare", "request_session_permissions", {"requests": [
+        {"tool": "write_file", "arguments": {"root": "files", "path": "report.txt", "content": "text"}},
+        target,
+    ]})
+    context = _context(tmp_path, call)
+    context.ask_handler = AsyncMock(return_value=PermissionDecision.ALLOW)
+    monkeypatch.setattr(permissions, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=IntegrationSettings()))
+
+    result = await tool_registry.execute(call, context)
+    error = json.loads(result.content)["error"]
+
+    assert (error["code"], error["field"], error.get("params")) == (code, field, params)
+
+
 @pytest.mark.parametrize("blocked_by", ["policy", "delegation"])
 async def test_permission_preparation_cannot_offer_disabled_targets(tmp_path, monkeypatch, blocked_by):
     import mato_loop_backend.tools.permissions as permissions

@@ -2747,7 +2747,7 @@ async def test_user_denial_skips_the_remaining_tool_batch(monkeypatch) -> None:
         decision = await context.ask(request)
         assert decision == PermissionDecision.USER_DENIED
         assert await context.ask(request) == PermissionDecision.USER_DENIED
-        return ToolResult.error("permission.denied")
+        return ToolResult.error("permission.userDenied", field="requests.1")
 
     tool_registry._execute_definition.side_effect = execute
 
@@ -2763,6 +2763,7 @@ async def test_user_denial_skips_the_remaining_tool_batch(monkeypatch) -> None:
         "permission.userDenied",
         "tool.skippedAfterUserDenial",
     ]
+    assert json.loads(_tool_messages(db)[0].content)["error"]["field"] == "requests.1"
     assert _assistant_messages(db)[-1].content == "Die Aktion wurde abgelehnt."
 
 

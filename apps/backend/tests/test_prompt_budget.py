@@ -112,7 +112,7 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     assert {"load_skill", "build_skill", "edit_skill", "request_session_permissions", "notify", "silence"} <= {
         schema["name"] for schema in schemas
     }
-    # Includes task continuation, source grounding, media guidance, permissions, automation scope, and computer provenance.
-    assert prompt_tokens <= 9_050, prompt_tokens
+    # Includes task continuation, grounding, media, permission failures, automation scope, and computer provenance.
+    assert prompt_tokens <= 9_100, prompt_tokens
     assert schema_tokens <= 13_300, schema_tokens
-    assert prompt_tokens + schema_tokens <= 22_350, prompt_tokens + schema_tokens
+    assert prompt_tokens + schema_tokens <= 22_400, prompt_tokens + schema_tokens

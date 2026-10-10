@@ -71,7 +71,7 @@ _MESSAGES = {
     "automation.alreadyRunning": "The automation already has an active run.",
     "session.archived": "Restore the archived session or project before starting new work.",
     "project.archived": "Restore the archived project before starting new work.",
-    "permission.preflightUnavailable": "This action does not support advance session permissions.",
+    "permission.preflightUnavailable": "This access could not be prepared in advance. Approval may be required during execution.",
     "automation.changed": "The automation changed before the operation completed.",
     "automation.deliveryUnavailable": "The automation result cannot be delivered.",
     "automation.executionSessionMissing": "The automation execution context is unavailable.",

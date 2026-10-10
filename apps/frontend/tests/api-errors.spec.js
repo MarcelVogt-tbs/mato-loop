@@ -86,6 +86,9 @@ describe('API error messages', () => {
   })
 
   it('translates stable domain error codes', () => {
+    expect(apiErrorMessage({ error: { code: 'permission.preflightUnavailable' } })).toBe(
+      'Dieser Zugriff konnte nicht vorab vorbereitet werden. Bei der Ausführung kann eine Freigabe erforderlich sein.'
+    )
     expect(apiErrorMessage({ error: { code: 'tool.superseded' } })).toBe(
       'Die ausstehende Aktion wurde wegen deiner neuen Nachricht übersprungen.'
     )
