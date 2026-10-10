@@ -80,6 +80,7 @@
 
             <div v-if="section === 'general' && tool.name === 'webfetch'" class="row q-col-gutter-md q-mt-sm">
               <q-toggle dense v-model="form.webFetch.publicAddressesOnly" class="col-12" color="primary" label="Nur öffentliche Adressen zulassen" />
+              <q-input dense v-model="form.javascriptHostsText" class="col-12" outlined type="textarea" autogrow label="JavaScript standardmäßig für diese Hosts" hint="Ein Host pro Zeile, ohne URL, Port oder Platzhalter. Leer: standardmäßig ohne JavaScript. Explizite Toolargumente haben Vorrang." />
               <q-input dense v-model.trim="form.webFetch.userAgent" class="col-12 col-md-8" outlined maxlength="512" label="User-Agent" :rules="[userAgentRule]" />
               <q-input dense v-model.number="form.webFetch.maxResponseMiB" class="col-12 col-md-4" outlined type="number" min="1" max="256" suffix="MiB" label="Maximale Antwortgröße" :rules="[responseLimitRule]" />
             </div>
@@ -181,7 +182,7 @@ const descriptions = {
   delete_automation: 'Löscht eine Automation samt Verlauf.'
 }
 const emptyPermissions = () => ({ privatePermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} }, publicPermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} } })
-const form = reactive({ groups: [], webFetch: {}, timeouts: {}, personalSettingsEnabled: false, permissions: emptyPermissions(), shellCustom: true, shellRead: '', shellWrite: '' })
+const form = reactive({ groups: [], webFetch: {}, javascriptHostsText: '', timeouts: {}, personalSettingsEnabled: false, permissions: emptyPermissions(), shellCustom: true, shellRead: '', shellWrite: '' })
 const technicalGroups = computed(() => !admin || selectedId.value ? [] : form.groups.map((group) => ({ ...group, tools: group.tools.filter((tool) => showManagement.value || tool.name === 'webfetch' || mediaByName[tool.name]) })).filter((group) => group.tools.length))
 const parsePrefixes = (value) => value.split('\n').map((line) => line.trim().split(/\s+/).filter(Boolean)).filter((tokens) => tokens.length)
 const payload = () => ({
@@ -190,7 +191,7 @@ const payload = () => ({
   ...(!selectedId.value ? {
     personalSettingsEnabled: form.personalSettingsEnabled,
     toolAvailability: Object.fromEntries(form.groups.flatMap((group) => group.tools.map((tool) => [tool.name, tool.available]))),
-    webFetch: { ...form.webFetch },
+    webFetch: { ...form.webFetch, javascriptHosts: form.javascriptHostsText.split('\n').map((host) => host.trim()).filter(Boolean) },
     ...Object.fromEntries(Object.values(mediaByName).map((field) => [field, { ...form.timeouts[field] }]))
   } : {})
 })
@@ -233,6 +234,7 @@ async function loadPermissions() {
       form.personalSettingsEnabled = data.personalSettingsEnabled
       form.groups = tools.configurationGroups.map((group) => ({ ...group, tools: group.tools.map((tool) => ({ ...tool })) }))
       form.webFetch = { ...tools.configurationWebFetch }
+      form.javascriptHostsText = form.webFetch.javascriptHosts.join('\n')
       form.timeouts = Object.fromEntries(Object.values(mediaByName).map((field) => [field, { ...tools[field] }]))
     }
     saved.value = JSON.stringify(payload())

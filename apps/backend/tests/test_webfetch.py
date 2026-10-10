@@ -80,15 +80,18 @@ def _origin(port: int, host: str = "127.0.0.1") -> str:
     return f"http://{host}:{port}"
 
 
-@pytest.mark.parametrize(("host", "javascript", "expected"), [
-    ("reddit.com", None, "Rendered"),
-    ("WWW.Reddit.COM.", None, "Rendered"),
-    ("www.reddit.com", False, "HTTP"),
-    ("reddit.com.example.test", None, "HTTP"),
-    ("example.test", None, "HTTP"),
-    ("example.test", True, "Rendered"),
+@pytest.mark.parametrize(("host", "hosts", "javascript", "expected"), [
+    ("reddit.com", ["reddit.com", "www.reddit.com"], None, "Rendered"),
+    ("WWW.Reddit.COM.", ["reddit.com", "www.reddit.com"], None, "Rendered"),
+    ("www.reddit.com", ["www.reddit.com"], False, "HTTP"),
+    ("reddit.com.example.test", ["reddit.com"], None, "HTTP"),
+    ("example.test", ["reddit.com"], None, "HTTP"),
+    ("example.test", [], True, "Rendered"),
+    ("example.test", ["example.test"], None, "Rendered"),
+    ("sub.example.test", ["example.test"], None, "HTTP"),
+    ("reddit.com", [], None, "HTTP"),
 ])
-async def test_javascript_host_defaults_and_explicit_overrides(monkeypatch, host, javascript, expected):
+async def test_javascript_host_defaults_and_explicit_overrides(monkeypatch, host, hosts, javascript, expected):
     monkeypatch.setattr(web_fetch, "_resolve_addresses", AsyncMock(return_value=(ipaddress.ip_address("127.0.0.1"),)))
 
     async def render(target, **_kwargs):
@@ -100,7 +103,7 @@ async def test_javascript_host_defaults_and_explicit_overrides(monkeypatch, host
         return _response(b"<main>HTTP</main>", headers={"Content-Type": "text/html"})
 
     async with _server(responder) as port:
-        result = await fetch_web(_origin(port, host), javascript=javascript, public_addresses_only=False)
+        result = await fetch_web(_origin(port, host), javascript_hosts=hosts, javascript=javascript, public_addresses_only=False)
     assert result.content == expected
 
 

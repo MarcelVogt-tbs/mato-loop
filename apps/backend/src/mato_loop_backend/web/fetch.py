@@ -27,7 +27,10 @@ from mato_loop_backend.media.processing import (
     extract_pdf_pages,
     format_pdf_pages,
 )
-from mato_loop_backend.settings.models import DEFAULT_WEBFETCH_USER_AGENT
+from mato_loop_backend.settings.models import (
+    DEFAULT_WEBFETCH_JAVASCRIPT_HOSTS,
+    DEFAULT_WEBFETCH_USER_AGENT,
+)
 
 logger = logging.getLogger("mato_loop_backend.integrations.webfetch")
 
@@ -103,7 +106,6 @@ _PAGE_ACCEPT = {
     "text": "text/plain;q=1.0, text/markdown;q=0.9, text/html;q=0.8, */*;q=0.1",
     "html": "text/html;q=1.0, application/xhtml+xml;q=0.9, text/plain;q=0.8, text/markdown;q=0.7, */*;q=0.1",
 }
-_JAVASCRIPT_HOSTS = frozenset({"reddit.com", "www.reddit.com"})
 
 DOWNLOAD_TYPES = {
     "application/gzip": ".gz",
@@ -1071,6 +1073,7 @@ async def fetch_web(
     pdf_pages: tuple[int, ...] | list[int] = (),
     user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
     javascript: bool | None = None,
+    javascript_hosts: list[str] | tuple[str, ...] = DEFAULT_WEBFETCH_JAVASCRIPT_HOSTS,
 ) -> WebFetchResult:
     if format not in {"html", "markdown", "text"}:
         raise _error("formatUnsupported")
@@ -1085,7 +1088,7 @@ async def fetch_web(
     normalized_pdf_pages = tuple(sorted(set(pdf_pages)))
     _validate_fetch_limits(timeout, max_response_bytes)
     _, host, _ = _parse_url(url)
-    use_javascript = host in _JAVASCRIPT_HOSTS if javascript is None else javascript
+    use_javascript = host in javascript_hosts if javascript is None else javascript
     authorized = False
 
     async def authorize_page(value: str) -> None:

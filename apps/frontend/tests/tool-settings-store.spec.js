@@ -38,7 +38,7 @@ const configuration = {
     }]
   }],
   toolAvailability: { webfetch: true },
-  webFetch: { userAgent: 'MatoLoop/1.0', maxResponseMiB: 32, publicAddressesOnly: false },
+  webFetch: { javascriptHosts: ['example.com'], userAgent: 'MatoLoop/1.0', maxResponseMiB: 32, publicAddressesOnly: false },
   transcribeAudio: { timeoutSeconds: 180 }
 }
 
@@ -75,6 +75,13 @@ describe('tool settings store', () => {
     })
 
     expect(store.configurationWebFetch.publicAddressesOnly).toBe(true)
+    expect(store.configurationWebFetch.javascriptHosts).toEqual(['reddit.com', 'www.reddit.com'])
+  })
+
+  it('preserves an explicitly empty JavaScript host list', () => {
+    const store = useToolSettingsStore()
+    store.assignConfiguration({ ...configuration, webFetch: { ...configuration.webFetch, javascriptHosts: [] } })
+    expect(store.configurationWebFetch.javascriptHosts).toEqual([])
   })
 
   it('updates loaded tools after technical availability changes', () => {

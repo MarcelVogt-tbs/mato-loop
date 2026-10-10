@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import re
 from datetime import datetime
 from enum import StrEnum
@@ -47,6 +48,7 @@ _LEGACY_WEBFETCH_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 )
 DEFAULT_WEBFETCH_USER_AGENT = "MatoLoop/1.0"
+DEFAULT_WEBFETCH_JAVASCRIPT_HOSTS = ("reddit.com", "www.reddit.com")
 
 
 def _camel_case(value: str) -> str:
@@ -874,6 +876,11 @@ class IntegrationInstance(BaseModel):
 class WebFetchSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    javascript_hosts: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_WEBFETCH_JAVASCRIPT_HOSTS),
+        max_length=100,
+        validation_alias=AliasChoices("javascript_hosts", "javascriptHosts"),
+    )
     user_agent: str = Field(
         default=DEFAULT_WEBFETCH_USER_AGENT,
         min_length=1,
@@ -899,6 +906,28 @@ class WebFetchSettings(BaseModel):
         if isinstance(value, dict):
             return {key: item for key, item in value.items() if key != "engine"}
         return value
+
+    @field_validator("javascript_hosts")
+    @classmethod
+    def normalize_javascript_hosts(cls, value: list[str]) -> list[str]:
+        hosts = []
+        for host in value:
+            try:
+                host = host.strip().rstrip(".").encode("idna").decode("ascii").lower()
+            except UnicodeError as exc:
+                raise ValueError("Invalid JavaScript hostname") from exc
+            if len(host) > 253 or not re.fullmatch(
+                r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*",
+                host,
+            ):
+                raise ValueError("JavaScript hosts must be exact hostnames without URLs, ports or wildcards")
+            try:
+                ipaddress.ip_address(host)
+            except ValueError:
+                hosts.append(host)
+            else:
+                raise ValueError("JavaScript hosts must be DNS hostnames, not IP addresses")
+        return list(dict.fromkeys(hosts))
 
     @field_validator("user_agent", mode="before")
     @classmethod

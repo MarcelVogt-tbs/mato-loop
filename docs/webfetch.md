@@ -1,9 +1,15 @@
 # Webfetch and JavaScript
 
-`webfetch` has one optional `javascript` argument. Omitted or `null` uses host defaults:
-the normalized requested hostname must exactly match `reddit.com` or `www.reddit.com`
-to enable JavaScript; other hosts use HTTP. Explicit `true` or `false` overrides
-this choice. The small host list lives in `web/fetch.py`, not in prompts or settings.
+`webfetch` has one optional `javascript` argument. Omitted or `null` uses the global
+`web_fetch.javascript_hosts` setting (`javascriptHosts` in the administration API).
+Administrators edit **JavaScript standardmäßig für diese Hosts** under
+**Administration > Tools > Einstellungen**, one exact DNS hostname per line, without
+URLs, IP addresses, ports or wildcards. The default list is `reddit.com` and `www.reddit.com`;
+existing settings receive that default. Entries are trimmed, normalized to lowercase
+IDNA ASCII without trailing dots, and deduplicated. At most 100 entries are accepted.
+An empty list defaults all hosts to HTTP. Only the normalized requested hostname is
+matched, not subdomains or redirect destinations. Explicit `true` or `false` overrides
+this choice. The list is neither model-facing nor learned automatically.
 Selection happens once, before authorization, with no automatic retries or engine fallback.
 
 There is no administrator engine selection. Previously stored `engine` fields are

@@ -105,6 +105,7 @@ def tool_configuration_payload(settings: ToolSettings) -> dict:
         "groups": groups,
         "toolAvailability": settings.tool_availability,
         "webFetch": {
+            "javascriptHosts": settings.web_fetch.javascript_hosts,
             "userAgent": settings.web_fetch.user_agent,
             "maxResponseMiB": settings.web_fetch.max_response_mib,
             "publicAddressesOnly": settings.web_fetch.public_addresses_only,

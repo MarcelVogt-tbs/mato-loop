@@ -505,6 +505,7 @@ async def test_get_tool_configuration_returns_defaults(monkeypatch) -> None:
         )
     } == {
         "webFetch": {
+            "javascriptHosts": ["reddit.com", "www.reddit.com"],
             "userAgent": "MatoLoop/1.0",
             "maxResponseMiB": 64,
             "publicAddressesOnly": True,
@@ -560,6 +561,7 @@ def test_tool_configuration_removes_legacy_engine_and_uses_frontend_field_names(
         ToolSettings(
             web_fetch={
                 "engine": engine,
+                "javascriptHosts": [" Example.COM. ", "example.com", "bücher.de"],
                 "userAgent": "MatoLoop/1.0",
                 "maxResponseMiB": 32,
                 "publicAddressesOnly": False,
@@ -568,10 +570,22 @@ def test_tool_configuration_removes_legacy_engine_and_uses_frontend_field_names(
     )
 
     assert result["webFetch"] == {
+        "javascriptHosts": ["example.com", "xn--bcher-kva.de"],
         "userAgent": "MatoLoop/1.0",
         "maxResponseMiB": 32,
         "publicAddressesOnly": False,
     }
+
+
+def test_webfetch_empty_javascript_host_list_survives_settings_round_trip() -> None:
+    settings = ToolSettings(web_fetch={"javascriptHosts": []})
+    assert ToolSettings.model_validate(settings.model_dump()).web_fetch.javascript_hosts == []
+
+
+@pytest.mark.parametrize("host", ["", "https://example.com", "example.com/path", "example.com:443", "*.example.com", "a b.com", "-example.com", "127.0.0.1", "a" * 64 + ".com"])
+def test_webfetch_rejects_non_host_javascript_entries(host) -> None:
+    with pytest.raises(ValidationError):
+        WebFetchSettings(javascriptHosts=[host])
 
 
 async def test_tool_availability_exposes_hard_caps(monkeypatch) -> None:
