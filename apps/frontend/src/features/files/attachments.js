@@ -18,6 +18,12 @@ const PROVIDED_IMAGE_MIME_TYPES = new Map([
   ['.svg', 'image/svg+xml'],
   ['.webp', 'image/webp']
 ])
+const PROVIDED_MEDIA_MIME_TYPES = new Map([
+  ['.mp3', 'audio/mpeg'], ['.wav', 'audio/wav'], ['.ogg', 'audio/ogg'], ['.oga', 'audio/ogg'],
+  ['.m4a', 'audio/mp4'], ['.aac', 'audio/aac'], ['.flac', 'audio/flac'], ['.opus', 'audio/ogg'],
+  ['.mp4', 'video/mp4'], ['.webm', 'video/webm'], ['.mov', 'video/quicktime'],
+  ['.stl', 'model/stl'], ['.off', 'model/vnd.off']
+])
 const UUID_PATTERN = new RegExp(`^${UUID}$`, 'i')
 const PROVIDED_FILE_DOWNLOAD_URL = new RegExp(
   `^/api/workspace/files/provided/(${UUID})/(${UUID})/(0|[1-9][0-9]*)/download$`, 'i'
@@ -104,6 +110,7 @@ export function safeFileDownloadUrl(value) {
 }
 
 function safeFileContentUrl(value) {
+  if (typeof value === 'string' && value.endsWith('/content') && PROVIDED_FILE_DOWNLOAD_URL.test(value.replace(/content$/, 'download'))) return value
   return safeFileUrl(value, INTERNAL_FILE_CONTENT_PATH)
 }
 
@@ -280,6 +287,31 @@ export function toolOpenFileActions(tool, result) {
   ])).values()]
 }
 
+export function providedFileAttachments(actions, { maxImagePreviewBytes = PROVIDED_IMAGE_MAX_BYTES, maxUploadBytes = 64 * 1024 * 1024 } = {}) {
+  return toolFileActions({ fileActions: actions }).filter((action) => action.operation === 'provide').map((action) => {
+    const archive = ['directory', 'collection'].includes(action.kind)
+    const filename = action.kind === 'directory' ? `${action.filename}.zip` : action.filename
+    const suffix = filename.match(/\.[^.]+$/u)?.[0].toLowerCase() || ''
+    const mimeType = archive ? 'application/zip' : PROVIDED_IMAGE_MIME_TYPES.get(suffix) || PROVIDED_MEDIA_MIME_TYPES.get(suffix)
+    const limit = mimeType?.startsWith('image/')
+      ? suffix === '.svg' ? Math.min(maxImagePreviewBytes, PROVIDED_IMAGE_MAX_BYTES) : maxImagePreviewBytes
+      : mimeType?.startsWith('model/') ? 64 * 1024 * 1024 : maxUploadBytes
+    const preview = Boolean(!archive && mimeType && action.sizeBytes != null && action.sizeBytes <= limit)
+    return {
+      id: action.downloadUrl,
+      kind: preview && mimeType.startsWith('image/') ? 'image'
+        : preview && mimeType.startsWith('audio/') ? 'audio'
+          : preview && mimeType.startsWith('video/') ? 'video' : 'file',
+      filename,
+      mimeType: mimeType || 'application/octet-stream',
+      sizeBytes: action.sizeBytes,
+      url: preview ? action.downloadUrl.replace(/download(?=\?|$)/, 'content') : action.downloadUrl,
+      downloadUrl: action.downloadUrl,
+      fileAction: { ...action, kind: action.kind || 'file' }
+    }
+  })
+}
+
 export function supportedAttachments(attachments) {
   if (!Array.isArray(attachments)) return []
   return attachments.flatMap((attachment) => {
@@ -289,7 +321,7 @@ export function supportedAttachments(attachments) {
       ? attachment.mimeType.split(';', 1)[0].trim().toLowerCase()
       : ''
     const safeUrl = safeAttachmentUrl(attachment.url)
-      || (attachment.kind === 'image' ? safeFileContentUrl(attachment.url) : null)
+      || safeFileContentUrl(attachment.url)
       || (attachment.kind === 'file' ? safeFileDownloadUrl(attachment.url) : null)
     return [{
       ...attachment,
@@ -299,6 +331,7 @@ export function supportedAttachments(attachments) {
         ? attachment.metadata
         : {},
       safeUrl,
+      downloadUrl: safeAttachmentUrl(attachment.downloadUrl) || safeFileDownloadUrl(attachment.downloadUrl) || safeUrl,
       audioSources: attachment.kind === 'audio' ? [
         ...(safeUrl ? [{ src: safeUrl, type: mimeType }] : []),
         ...(safeUrl && attachment.playbackUrl === `${safeUrl}?playback=true`

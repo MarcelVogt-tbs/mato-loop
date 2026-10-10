@@ -131,7 +131,7 @@
       @rendered="emit('rendered')"
       @trust-image-origin="emit('trust-image-origin', $event)"
     />
-    <MessageAttachments
+    <ChatFiles
       v-if="entry.message.attachments?.length"
       class="q-mt-sm"
       :attachments="entry.message.attachments"
@@ -153,12 +153,12 @@
       class="work-history__outputs"
     >
       <div v-if="entry.tool.name !== 'provide_file'" class="tool-call__section-label">Ausgaben</div>
-      <MessageAttachments
-        v-if="entry.output.attachments.length"
+      <ChatFiles
         :attachments="entry.output.attachments"
+        :actions="entry.output.fileActions"
+        :read-only="readOnly"
         @open-file="emit('open-file', $event)"
       />
-      <ProvidedFiles :actions="entry.output.fileActions" :read-only="readOnly" @open-file="emit('open-file', $event)" />
     </div>
   </div>
 </template>
@@ -166,9 +166,8 @@
 <script setup>
 import { computed, nextTick, useId } from 'vue'
 import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
-import MessageAttachments from 'src/features/chat/components/MessageAttachments.vue'
+import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
-import ProvidedFiles from 'src/features/chat/components/ProvidedFiles.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'
 import { parseToolResult, shellCommand, toolIdentity, toolPresentation, toolStatus } from 'src/utils/tool-display'
 

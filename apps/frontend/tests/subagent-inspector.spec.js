@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() } }))
 vi.mock('src/features/chat/components/MessageContent.vue', () => ({ default: defineComponent({ props: ['content'], setup: (props) => () => h('div', props.content) }) }))
-vi.mock('src/features/chat/components/MessageAttachments.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/files/components/FileViewerPanel.vue', () => ({ default: { render: () => null } }))
 
 import SubagentInspector from '../src/features/subagents/SubagentInspector.vue'
 import SubagentRows from '../src/features/subagents/SubagentRows.vue'

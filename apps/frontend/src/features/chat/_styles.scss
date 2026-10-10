@@ -1361,25 +1361,6 @@
   margin-top: 10px;
 }
 
-.work-history__file-outputs {
-  display: grid;
-  gap: 8px;
-}
-
-.work-history__file-output {
-  width: fit-content;
-  max-width: 100%;
-  min-width: 0;
-  gap: 8px;
-}
-
-@media (any-pointer: coarse) {
-  .work-history__file-action {
-    min-width: 40px;
-    min-height: 40px;
-  }
-}
-
 .tool-call {
   min-width: 0;
   color: var(--app-text);

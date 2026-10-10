@@ -87,7 +87,7 @@
                 />
                 <div v-else-if="message.content" class="chat-message__content">{{ message.content }}</div>
               </template>
-              <MessageAttachments v-if="message.attachments?.length" :attachments="message.attachments" class="q-mt-sm" />
+              <ChatFiles v-if="message.attachments?.length" :attachments="message.attachments" class="q-mt-sm" />
               <FileChanges :actions="message.fileChanges" read-only />
               <div v-if="message.generationStatus === 'interrupted'" class="text-caption app-muted q-mt-sm" role="status">
                 Anfrage gestoppt
@@ -110,7 +110,7 @@ import { useRoute } from 'vue-router'
 import AgentActivityPanel from 'src/features/chat/components/AgentActivityPanel.vue'
 import FileChanges from 'src/features/chat/components/FileChanges.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
-import MessageAttachments from 'src/features/chat/components/MessageAttachments.vue'
+import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
 import { useSubagentStore, subagentStatus } from 'stores/subagents'
 import { useApprovalStore } from 'stores/approvals'
 import { useQuestionStore } from 'stores/questions'

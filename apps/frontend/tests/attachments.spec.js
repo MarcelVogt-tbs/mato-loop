@@ -6,6 +6,7 @@ import {
   audioMimeTypeSupported,
   formatAttachmentDuration,
   managedSessionFileTarget,
+  providedFileAttachments,
   safeAttachmentUrl,
   safeFileDownloadUrl,
   supportedAttachments,
@@ -206,6 +207,46 @@ describe('persisted attachments', () => {
 
     expect(toolFileActions({ fileActions: [action] })).toEqual([{ ...action, sessionId }])
     expect(toolFileActions({ fileActions: [action, action] })).toHaveLength(2)
+  })
+
+  it.each([
+    ['image.png', 'image', 'image/png'], ['sound.mp3', 'audio', 'audio/mpeg'],
+    ['video.mp4', 'video', 'video/mp4'], ['model.stl', 'file', 'model/stl'],
+    ['model.off', 'file', 'model/vnd.off']
+  ])('previews provided %s through its bound content route and retains its download', (filename, kind, mimeType) => {
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+    const downloadUrl = `/api/workspace/files/provided/${sessionId}/550e8400-e29b-41d4-a716-446655440001/0/download`
+    const actions = [{
+      operation: 'provide', kind: 'file', root: 'session', rootIdentity: sessionId,
+      path: filename, filename, sizeBytes: 12, downloadUrl
+    }]
+    const attachment = supportedAttachments(providedFileAttachments(actions))[0]
+    expect([attachment.kind, attachment.mimeType, attachment.safeUrl, attachment.downloadUrl]).toEqual([
+      kind, mimeType, downloadUrl.replace(/download$/, 'content'), downloadUrl
+    ])
+  })
+
+  it('keeps provided archives and oversized images as downloads', () => {
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000'
+    const base = {
+      operation: 'provide', root: 'session', rootIdentity: sessionId,
+      downloadUrl: `/api/workspace/files/provided/${sessionId}/550e8400-e29b-41d4-a716-446655440001/0/download`
+    }
+    expect(providedFileAttachments([
+      { ...base, kind: 'directory', path: '.', filename: 'files', sizeBytes: null },
+      { ...base, kind: 'collection', path: 'one.txt', filename: 'files.zip', sizeBytes: null },
+      { ...base, kind: 'file', path: 'big.png', filename: 'big.png', sizeBytes: 6 * 1024 * 1024 }
+    ]).map((item) => [item.filename, item.kind, item.url === item.downloadUrl])).toEqual([
+      ['files.zip', 'file', true], ['files.zip', 'file', true], ['big.png', 'file', true]
+    ])
+  })
+
+  it('rejects unbound provided preview and download addresses', () => {
+    const contentUrl = '/api/workspace/files/provided/550e8400-e29b-41d4-a716-446655440000/550e8400-e29b-41d4-a716-446655440001/0/content'
+    expect([
+      `https://example.com${contentUrl}`, `${contentUrl}?path=secret`, contentUrl.replace('/0/', '/../')
+    ].map((url) => supportedAttachments([{ kind: 'image', url, downloadUrl: url }])[0])
+      .map((item) => [item.safeUrl, item.downloadUrl])).toEqual([[null, null], [null, null], [null, null]])
   })
 
   it('derives an open target only for a newly managed session file', () => {

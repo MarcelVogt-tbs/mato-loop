@@ -831,8 +831,8 @@ function download() {
     return
   }
   const anchor = document.createElement('a')
-  anchor.href = directModel.value.url
-    anchor.download = directModel.value.name || `modell.${directModel.value.format || 'stl'}`
+  anchor.href = directModel.value.downloadUrl || directModel.value.url
+  anchor.download = directModel.value.name || `modell.${directModel.value.format || 'stl'}`
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()

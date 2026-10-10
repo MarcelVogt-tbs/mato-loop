@@ -183,13 +183,13 @@
               />
               <div v-else-if="message.content" class="chat-message__content">{{ message.content }}</div>
             </template>
-            <MessageAttachments
+            <ChatFiles
               v-if="message.attachments?.length"
               class="q-mt-sm"
               :attachments="message.attachments"
             />
             <FileChanges :actions="message.fileChanges" @open-file="openToolFile" />
-            <ProvidedFiles
+            <ChatFiles
               :actions="message.providedFiles"
               class="q-my-sm"
               @open-file="openToolFile"
@@ -537,7 +537,6 @@ import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
 import AgentActivityPanel from 'src/features/chat/components/AgentActivityPanel.vue'
-import ProvidedFiles from 'src/features/chat/components/ProvidedFiles.vue'
 import FileChanges from 'src/features/chat/components/FileChanges.vue'
 import HomeContent from 'src/features/home/HomeContent.vue'
 import ComputerChoiceStrip from 'src/features/chat/components/ComputerChoiceStrip.vue'
@@ -547,7 +546,7 @@ import SessionTodoStrip from 'src/features/chat/components/SessionTodoStrip.vue'
 import SessionSettingsFields from 'src/features/chat/components/SessionSettingsFields.vue'
 import ControlCenterPanel from 'src/app/control-center/ControlCenterPanel.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
-import MessageAttachments from 'src/features/chat/components/MessageAttachments.vue'
+import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
 import QuestionDock from 'src/features/questions/QuestionDock.vue'
 import SubagentInspector from 'src/features/subagents/SubagentInspector.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'

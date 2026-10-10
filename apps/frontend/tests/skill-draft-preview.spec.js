@@ -10,7 +10,7 @@ vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), patch: vi
 vi.mock('src/features/chat/components/ChatComposer.vue', () => ({ default: { methods: { focus() {} }, render: () => null } }))
 vi.mock('src/app/control-center/ControlCenterPanel.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/chat/components/MessageContent.vue', () => ({ default: { render: () => null } }))
-vi.mock('src/features/chat/components/MessageAttachments.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/chat/components/ChatFiles.vue', () => ({ default: { render: () => null } }))
 
 import ChatPage from '../src/features/chat/ChatPage.vue'
 import { api } from 'src/boot/axios'

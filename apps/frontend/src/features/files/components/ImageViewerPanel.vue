@@ -83,7 +83,7 @@ function close() {
 
 function download() {
   const anchor = document.createElement('a')
-  anchor.href = props.image.url
+  anchor.href = props.image.downloadUrl || props.image.url
   anchor.download = props.image.name || 'bild'
   document.body.appendChild(anchor)
   anchor.click()

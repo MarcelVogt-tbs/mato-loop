@@ -215,6 +215,26 @@ it('plays audio through the binary content endpoint', async () => {
   expect(root.querySelector('audio[controls]').getAttribute('src')).toBe(workspace.fileUrl('content', 'song.mp3'))
 })
 
+it.each(['image', 'model'])('downloads the original %s from fullscreen instead of its preview', (kind) => {
+  const root = document.createElement('div')
+  app = createApp({ render: () => h(FileViewerPanel, {
+    [kind]: { url: '/preview', downloadUrl: '/original', name: 'file', format: 'stl' }, fullscreen: true
+  }) })
+  app.use(createPinia())
+  app.config.globalProperties.$q = { screen: { gt: { xs: true }, lt: { sm: false } } }
+  for (const name of ['QToolbar', 'QToolbarTitle', 'QBtn', 'QBtnToggle', 'QTooltip', 'QSeparator', 'QSpinner', 'QBanner', 'QIcon', 'QItem', 'QItemSection', 'QItemLabel', 'QCard', 'QCardSection', 'QCardActions', 'QChip', 'QList']) {
+    app.component(name, { render() { return h('div', this.$attrs, this.$slots.default?.()) } })
+  }
+  app.component('QDialog', { render: () => null })
+  app.directive('close-popup', {})
+  app.directive('ripple', {})
+  let destination
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function () { destination = this.getAttribute('href') })
+  app.mount(root)
+  root.querySelector('[icon="download"]').click()
+  expect(destination).toBe('/original')
+})
+
 it.each(['/image.png', 'blob:local-svg'])('offers fullscreen exit and only safe document navigation for %s', (url) => {
   const root = document.createElement('div')
   const exit = vi.fn()

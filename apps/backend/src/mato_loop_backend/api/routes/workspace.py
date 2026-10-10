@@ -155,6 +155,11 @@ _AUDIO_MIME_TYPES = {
     ".flac": "audio/flac",
     ".opus": "audio/ogg",
 }
+_VIDEO_MIME_TYPES = {
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+}
 _FILE_RESPONSE_HEADERS = {
     "Cache-Control": "private, no-store",
     "Cross-Origin-Resource-Policy": "same-origin",
@@ -1063,8 +1068,8 @@ async def preview_image(
     )
     suffix = PurePosixPath(path).suffix.casefold()
     image_preview_bytes = context.instance_limits.max_image_preview_bytes
-    max_bytes = _STL_PREVIEW_BYTES if suffix == ".stl" else image_preview_bytes
-    if suffix in _AUDIO_MIME_TYPES:
+    max_bytes = _STL_PREVIEW_BYTES if suffix in {".stl", ".off"} else image_preview_bytes
+    if suffix in _AUDIO_MIME_TYPES or suffix in _VIDEO_MIME_TYPES:
         max_bytes = context.instance_limits.max_upload_bytes
     if suffix == ".svg":
         max_bytes = min(max_bytes, MAX_SAFE_SVG_BYTES)
@@ -1081,11 +1086,18 @@ async def preview_image(
             data = await asyncio.to_thread(
                 _read_context, context, path, max_bytes
             )
+        if len(data) > max_bytes:
+            raise ApiError(413, "file.tooLarge")
         if suffix in _AUDIO_MIME_TYPES:
             mime_type = _AUDIO_MIME_TYPES[suffix]
+        elif suffix in _VIDEO_MIME_TYPES:
+            mime_type = _VIDEO_MIME_TYPES[suffix]
         elif suffix == ".stl":
             await asyncio.to_thread(validate_binary_stl, data)
             mime_type = "model/stl"
+        elif suffix == ".off":
+            await asyncio.to_thread(validate_off, data)
+            mime_type = "model/vnd.off"
         elif suffix == ".svg":
             await asyncio.to_thread(_validate_svg, data)
             mime_type = "image/svg+xml"
@@ -1324,7 +1336,7 @@ async def provided_file(
     session_id: UUID,
     message_id: UUID,
     index: int,
-    action: Literal["target", "download"],
+    action: Literal["target", "download", "content"],
     request: Request,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
@@ -1357,9 +1369,16 @@ async def provided_file(
             path = revision.path
         except RootFileError as exc:
             raise _context_error(exc) from exc
-    if action == "target":
+    if action in {"target", "content"}:
         if reference["kind"] != "file":
             raise ApiError(400, "file.notAFile")
+        if action == "content":
+            return await preview_image(
+                user, db, path, request, scope, session_id,
+                current_directory=reference.get("currentDirectory"),
+                root_identity=reference.get("rootIdentity"),
+                execution_agent_id=context.agent_id,
+            )
         return {**reference, "path": path, "filename": PurePosixPath(path).name, "sessionId": str(session_id)}
     return await download_file(
         user, db, path, request, scope, session_id,

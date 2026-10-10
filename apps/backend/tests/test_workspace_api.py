@@ -244,15 +244,57 @@ async def test_provided_download_follows_file_identity_and_reads_current_bytes(t
     assert b"".join([part async for part in response.body_iterator]) == b"updated"
 
 
-async def test_provided_download_rejects_unowned_message_before_file_access(monkeypatch):
+@pytest.mark.parametrize("action", ["download", "content", "target"])
+async def test_provided_download_rejects_unowned_message_before_file_access(monkeypatch, action):
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = None
     access = AsyncMock()
     monkeypatch.setattr(workspace_route, "_file_context", access)
     with pytest.raises(ApiError) as error:
-        await workspace_route.provided_file(uuid4(), uuid4(), 0, "download", MagicMock(), _user(), db)
+        await workspace_route.provided_file(uuid4(), uuid4(), 0, action, MagicMock(), _user(), db)
     assert error.value.code == "file.fileNotFound"
     access.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("filename", "data", "media_type"),
+    [
+        ("image.svg", b'<svg xmlns="http://www.w3.org/2000/svg"/>', "image/svg+xml"),
+        ("sound.mp3", b"audio", "audio/mpeg"),
+        ("video.mp4", b"video", "video/mp4"),
+        ("model.off", b"OFF\n3 1 0\n0 0 0\n1 0 0\n0 1 0\n3 0 1 2\n", "model/vnd.off"),
+    ],
+)
+async def test_provided_content_follows_file_identity(tmp_path, monkeypatch, filename, data, media_type):
+    context, _ = _session_context(tmp_path)
+    files = context.root_files
+    files.write_file("session", filename, data.decode())
+    revision = files.working_revision(filename)
+    message = Message(id=uuid4(), session_id=files.session_id, role="tool", provider_data={"_matoloop": {
+        "fileActions": [{
+            "operation": "provide", "kind": "file", "root": "session", "rootIdentity": str(files.session_id),
+            "path": filename, "filename": filename, "sizeBytes": len(data),
+            "fileId": str(revision.file_id), "fileRevision": revision.revision,
+        }],
+    }})
+    files.move_path("session", filename, "session", "renamed-" + filename)
+    files.write_file("session", filename, "different file")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = message
+    monkeypatch.setattr(workspace_route, "_file_context", AsyncMock(return_value=context))
+    response = await workspace_route.provided_file(files.session_id, message.id, 0, "content", MagicMock(), _user(), db)
+    assert (response.body, response.media_type) == (data, media_type)
+
+
+@pytest.mark.parametrize("filename", ["sound.mp3", "video.mp4"])
+async def test_session_media_content_rejects_oversized_current_file(tmp_path, monkeypatch, filename):
+    context, root = _session_context(tmp_path)
+    context.instance_limits = InstanceLimits(max_upload_mib=1)
+    (root / "files" / filename).write_bytes(b"x" * (1024 * 1024 + 1))
+    monkeypatch.setattr(workspace_route, "_file_context", AsyncMock(return_value=context))
+    with pytest.raises(ApiError) as error:
+        await workspace_route.preview_image(_user(), AsyncMock(spec=AsyncSession), filename)
+    assert error.value.code == "file.tooLarge"
 
 
 async def test_download_streams_the_bound_session_file(tmp_path: Path, monkeypatch) -> None:

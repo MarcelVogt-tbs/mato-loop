@@ -34,7 +34,7 @@ vi.mock('src/app/control-center/ControlCenterPanel.vue', () => ({ default: { ren
 vi.mock('src/features/chat/components/MessageContent.vue', () => ({ default: {
   props: ['content'], render() { return h('div', this.content) }
 } }))
-vi.mock('src/features/chat/components/MessageAttachments.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/chat/components/ChatFiles.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/questions/QuestionDock.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/subagents/SubagentInspector.vue', () => ({ default: { render: () => null } }))
 
