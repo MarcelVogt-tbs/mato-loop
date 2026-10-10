@@ -172,7 +172,7 @@ def test_exclusive_viewer_attachment_survives_viewer_and_control_disconnect(env)
         assert restored["viewId"] == state["viewId"]
         assert env.coordinator.connections[env.agent.id] is connection
         assert not connection.closed
-        with env.client.websocket_connect(view_url(env, restored), headers=ORIGIN):
+        with open_view(env, restored):
             assert env.coordinator.attached_for(env.session.id, env.agent.id) is connection
     assert sum(op == "integration.browser.open" for op, _ in env.calls) == 1
     assert not any(op == "integration.browser.setup" for op, _ in env.calls)
