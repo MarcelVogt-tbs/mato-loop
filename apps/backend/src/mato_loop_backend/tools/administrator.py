@@ -9,6 +9,8 @@ from mato_loop_backend.permissions.policy import (
     PermissionDisplayItem,
     PermissionRequest,
 )
+from mato_loop_backend.permissions.resolution import tool_execution_policy
+from mato_loop_backend.settings import ToolExecutionPolicy
 from mato_loop_backend.tools import access
 from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import ToolResult
@@ -24,7 +26,10 @@ class AdministratorAuthenticationResult(ExecutionResult):
 
 
 async def authorize(context: ToolContext, request: PermissionRequest, reference=None) -> bool:
-    if context.user_denied or await context.ask_handler(request, check_only=True) in {PermissionDecision.DENY, PermissionDecision.USER_DENIED}:
+    if context.user_denied:
+        return False
+    decision = await context.ask_handler(request, check_only=True)
+    if decision in {PermissionDecision.DENY, PermissionDecision.USER_DENIED}:
         return False
     reference = effective_sudo_reference(context.session.id, context.run_secret_refs, context.execution_client.agent_id, reference)
     if reference is None:
@@ -33,7 +38,12 @@ async def authorize(context: ToolContext, request: PermissionRequest, reference=
         )
         if not authentication.passwordless:
             raise ExecutionClientError("process.sudoAuthRequired")
-    if context.execution_client.agent_id in context.administrator_access and not request.force_ask:
+    if context.execution_client.agent_id in context.administrator_access and (
+        not request.sensitive_access or decision == PermissionDecision.ALLOW
+        or tool_execution_policy(
+            await access.profile_tool_settings(context), "sensitive_data.access",
+        ) == ToolExecutionPolicy.AUTO
+    ):
         return True
     previews = []
     fields = (

@@ -642,7 +642,7 @@ def general_system_prompt(
         dynamic_parts.append("No MatoLoop Agent is selected for this session.")
     if "select_execution_agent" in offered_tool_names:
         parts.append(
-            "To change computers, call select_execution_agent alone. After approval, use the returned "
+            "To change computers, call select_execution_agent alone. After success, use the returned "
             "computer and directory for subsequent tool calls; previous computer results remain historical. "
             "File and shell tools have no per-call computer or session selector. "
             "If a required path belongs to another computer, switch to that computer first."

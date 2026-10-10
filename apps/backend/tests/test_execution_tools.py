@@ -786,7 +786,7 @@ async def test_elevated_shell_uses_read_classification_and_privileged_inspection
     request = context.ask_handler.await_args.args[0]
     assert request.capability == "shell.read"
     assert request.resource_type == "execution_administrator"
-    assert not request.force_ask
+    assert not request.sensitive_access
 
 
 @pytest.mark.parametrize("operation", ["shell.run", "administrator.run"])
@@ -1082,6 +1082,27 @@ async def test_administrator_input_grants_run_or_revocable_session_access(tmp_pa
         session_secrets.clear_session(context.session.id)
 
 
+@pytest.mark.parametrize("sensitive_policy", list(ToolExecutionPolicy))
+async def test_administrator_run_consent_honors_sensitive_policy(tmp_path, monkeypatch, sensitive_policy):
+    from mato_loop_backend.tools.administrator import authorize
+
+    client = FakeExecutionClient({}, {"administrator.run"})
+    context = _context(tmp_path, ToolCall("read", "read", {}), client, decision=(
+        PermissionDecision.DENY if sensitive_policy == ToolExecutionPolicy.DISABLED else PermissionDecision.ASK
+    ))
+    context.administrator_access.add(client.agent_id)
+    context.tool_settings.permissions.policies["sensitive_data.access"] = sensitive_policy
+    monkeypatch.setattr(
+        "mato_loop_backend.tools.access.profile_tool_settings", AsyncMock(return_value=context.tool_settings),
+    )
+    allowed = await authorize(context, administrator_permission(
+        client.agent_id, client.current_directory, capability="filesystem.read", path="/root/.env",
+    ))
+    assert (allowed, context.ask_handler.await_count) == (
+        sensitive_policy == ToolExecutionPolicy.AUTO, 2 if sensitive_policy == ToolExecutionPolicy.ASK else 1,
+    )
+
+
 async def test_secret_input_reports_skipped_administrator_password_without_grant(tmp_path):
     client = FakeExecutionClient({}, {"administrator.run"})
     call = ToolCall("secret", "secret_input", {"inputs": [
@@ -1187,8 +1208,8 @@ def test_shell_permission_displays_confidential_paths() -> None:
     assert request.display_items[-1] == PermissionDisplayItem(
         "Besonders geschützte Pfade", ("/work/.env.prod.example",), "list"
     )
-    assert "benötigen immer eine Freigabe" in request.summary
-    assert request.available_decisions == ("allow_once", "deny")
+    assert "Richtlinie für vertrauliche Daten" in request.summary
+    assert request.sensitive_access
 
 
 @pytest.mark.parametrize(("command_line", "tokens", "targets"), [
@@ -1208,7 +1229,7 @@ def test_shell_permission_displays_confidential_paths() -> None:
     ("env", ["env"], []),
     ("export -p", ["export", "-p"], []),
 ])
-def test_shell_permission_forces_one_time_approval_for_possible_secret_output(
+def test_shell_permission_marks_possible_secret_output(
     command_line, tokens, targets,
 ) -> None:
     request = shell_command_permission(
@@ -1225,8 +1246,7 @@ def test_shell_permission_forces_one_time_approval_for_possible_secret_output(
         ),
     )
 
-    assert request.force_ask
-    assert request.available_decisions == ("allow_once", "deny")
+    assert request.sensitive_access
     assert request.display_items[-1].label == "Mögliche Secret-Ausgabe"
     assert "nicht sicher unterscheiden" in request.display_items[-1].value
 
@@ -1252,7 +1272,7 @@ def test_shell_permission_does_not_flag_ordinary_output(command_line, tokens) ->
         ),
     )
 
-    assert not request.force_ask
+    assert not request.sensitive_access
 
 
 async def test_possible_secret_output_requires_approval_under_auto_policy(tmp_path) -> None:
@@ -1710,7 +1730,7 @@ async def test_shell_resolves_variable_reference_only_for_process_transport(
     permission = context.ask_handler.await_args_list[0].args[0]
     assert permission.capability == f"shell.{classification}"
     assert permission.approval_details["shellAnalysisComplete"] is False
-    assert permission.force_ask is (classification == "read")
+    assert permission.sensitive_access is (classification == "read")
     assert context.ask_handler.await_args_list[1].args[0].capability == "secrets.access"
 
 

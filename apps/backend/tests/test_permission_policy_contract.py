@@ -13,6 +13,7 @@ import mato_loop_backend.agent.run_support as mock_agent_run_support
 import mato_loop_backend.agent.runtime as mock_agent_runtime
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.subagents import permission_snapshot
+from mato_loop_backend.execution import ShellInspectResult
 from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.models import (
@@ -44,6 +45,7 @@ from mato_loop_backend.permissions.policy import (
     session_browse_permission,
     session_permission,
     session_search_permission,
+    shell_command_permission,
     shell_command_scope,
     skill_edit_permission,
     skill_load_permission,
@@ -327,18 +329,18 @@ async def test_profile_session_write_paths_restrict_actual_permission(tmp_path) 
 
 @pytest.mark.parametrize("trust_level", list(TrustLevel))
 @pytest.mark.parametrize("policy", [None, *ToolExecutionPolicy])
-async def test_managed_deletion_asks_but_honors_grants_and_disabled(
+async def test_managed_deletion_honors_policy_grants_and_disabled(
     tmp_path, trust_level, policy
 ) -> None:
     session = _session()
     root_files = _root_files(tmp_path, session)
     request = _path_request(root_files, "output.txt", capability="filesystem.delete")
-    assert not request.force_ask
+    assert not request.sensitive_access
     assert "allow_session" in request.available_decisions
     disabled = policy == ToolExecutionPolicy.DISABLED
     assert await PermissionPolicy.evaluate(
         _db_with_grants(), session, request, root_files, policy, trust_level=trust_level
-    ) == (PermissionDecision.DENY if disabled else PermissionDecision.ASK)
+    ) == (PermissionDecision.DENY if disabled else PermissionDecision.ALLOW if policy == ToolExecutionPolicy.AUTO else PermissionDecision.ASK)
     grant = _grant(request, session.id, trust_level=trust_level.value)
     assert await PermissionPolicy.evaluate(
         _db_with_grants(grant), session, request, root_files, policy, trust_level=trust_level
@@ -561,15 +563,17 @@ async def test_shell_uses_external_working_directory_policy_for_known_targets(
     assert await PermissionPolicy.evaluate(
         db,
         session,
-        replace(request, force_ask=True),
+        replace(request, sensitive_access=True),
         root_files,
         ToolExecutionPolicy.AUTO,
         external_working_directory_policy=ToolExecutionPolicy.DISABLED,
     ) == PermissionDecision.DENY
 
 
-async def test_confidential_workspace_paths_always_require_one_time_approval(
-    tmp_path,
+@pytest.mark.parametrize("sensitive_policy", list(ToolExecutionPolicy))
+@pytest.mark.parametrize("kind", ["file", "shell", "administrator"])
+async def test_confidential_workspace_paths_honor_sensitive_policy(
+    tmp_path, sensitive_policy, kind,
 ) -> None:
     session = _session(user_id=uuid4(), current_directory="/home/user/project")
     root_files = _root_files(tmp_path, session)
@@ -584,14 +588,30 @@ async def test_confidential_workspace_paths_always_require_one_time_approval(
     request = execution_directory_permission(
         agent.id, "/home/user/project/.env", capability="filesystem.read"
     )
+    if kind == "shell":
+        request = shell_command_permission(agent.id, session.current_directory, "cat .env", ShellInspectResult(
+            classification="read", read_only=True, analysis_complete=True, inspection_revision="a" * 64,
+            commands=[],
+            targets=[{"path": "/home/user/project/.env", "kind": "path", "access": "read"}],
+        ))
+        agent.home_shell_enabled = True
+    elif kind == "administrator":
+        session.preferred_execution_agent_id = agent.id
+        request = administrator_permission(
+            agent.id, session.current_directory, capability="filesystem.read", path="/home/user/project/.env",
+        )
     grant = _grant(request, session.id)
     db = _db_with_grants(grant)
     db.scalar.return_value = agent
 
-    assert request.available_decisions == ("allow_once", "deny")
     assert await PermissionPolicy.evaluate(
-        db, session, request, root_files, ToolExecutionPolicy.AUTO
-    ) == PermissionDecision.ASK
+        db, session, request, root_files, ToolExecutionPolicy.AUTO,
+        sensitive_data_policy=sensitive_policy,
+    ) == {
+        ToolExecutionPolicy.AUTO: PermissionDecision.ALLOW,
+        ToolExecutionPolicy.ASK: PermissionDecision.ASK,
+        ToolExecutionPolicy.DISABLED: PermissionDecision.DENY,
+    }[sensitive_policy]
     outside = execution_directory_permission(
         agent.id, "/home/user/.env", capability="filesystem.read"
     )
@@ -602,6 +622,7 @@ async def test_confidential_workspace_paths_always_require_one_time_approval(
         root_files,
         ToolExecutionPolicy.AUTO,
         external_working_directory_policy=ToolExecutionPolicy.DISABLED,
+        sensitive_data_policy=sensitive_policy,
     ) == PermissionDecision.DENY
 
 
@@ -769,8 +790,9 @@ async def test_global_policy_can_require_or_deny_a_host_bound_file_action(tmp_pa
     ) == PermissionDecision.DENY
 
 
+@pytest.mark.parametrize("capability", ["filesystem.delete", "sensitive_data.access"])
 async def test_policy_revocation_while_waiting_for_approval_stops_action(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, capability,
 ) -> None:
     session = _session()
     root_files = _root_files(tmp_path, session)
@@ -779,6 +801,7 @@ async def test_policy_revocation_while_waiting_for_approval_stops_action(
         "files/notes.txt",
         capability="filesystem.delete",
     )
+    request = replace(request, sensitive_access=capability == "sensitive_data.access")
     settings_loads = 0
 
     async def load_settings(_db, settings_type, **_kwargs):
@@ -795,7 +818,8 @@ async def test_policy_revocation_while_waiting_for_approval_stops_action(
         return _profile_settings(
             {
                 "policies": {
-                    "filesystem.delete": (
+                    "filesystem.delete": "auto",
+                    capability: (
                         "ask" if settings_loads == 1 else "disabled"
                     )
                 }
@@ -861,7 +885,7 @@ async def test_runtime_grant_lifetime_and_boundaries(tmp_path, monkeypatch, life
     session = _session(user_id=uuid4(), agent_profile_id=uuid4())
     run = AgentRun(id=uuid4(), session_id=session.id, trust_level="public")
     roots = _root_files(tmp_path, session)
-    request = replace(_path_request(roots, "notes.txt"), force_ask=lifetime == "exact")
+    request = replace(_path_request(roots, "notes.txt"), sensitive_access=lifetime == "exact")
     call = ToolCall("first", "read", {"path": "notes.txt"})
     grant = _grant(request, session.id, run_id=None if lifetime == "session" else run.id,
                    agent_profile_id=session.agent_profile_id, trust_level="public")
@@ -1456,7 +1480,13 @@ async def test_current_session_read_honors_automatic_policy(tmp_path) -> None:
     db.scalars.assert_not_awaited()
 
 
-async def test_computer_list_and_select_permissions_are_owner_scoped(tmp_path) -> None:
+@pytest.mark.parametrize(("policy", "granted", "expected"), [
+    (ToolExecutionPolicy.AUTO, False, PermissionDecision.ALLOW),
+    (ToolExecutionPolicy.ASK, False, PermissionDecision.ASK),
+    (ToolExecutionPolicy.ASK, True, PermissionDecision.ALLOW),
+    (ToolExecutionPolicy.DISABLED, True, PermissionDecision.DENY),
+])
+async def test_computer_list_and_select_permissions_are_owner_scoped(tmp_path, policy, granted, expected) -> None:
     session = _session(user_id=uuid4())
     roots = _root_files(tmp_path, session)
     agent = ExecutionAgent(id=uuid4(), user_id=session.user_id, alias="Server")
@@ -1472,13 +1502,48 @@ async def test_computer_list_and_select_permissions_are_owner_scoped(tmp_path) -
         ToolExecutionPolicy.AUTO,
     ) == PermissionDecision.DENY
     request = execution_agent_select_permission(agent.id, agent.alias)
+    if granted:
+        db.scalars.return_value.all.return_value = [_grant(request, session.id)]
     assert await PermissionPolicy.evaluate(
-        db, session, request, roots, ToolExecutionPolicy.AUTO,
-    ) == PermissionDecision.ASK
+        db, session, request, roots, policy,
+    ) == expected
     agent.user_id = uuid4()
     assert await PermissionPolicy.evaluate(
         db, session, request, roots, ToolExecutionPolicy.ASK,
     ) == PermissionDecision.DENY
+
+
+@pytest.mark.parametrize("sensitive_policy", list(ToolExecutionPolicy))
+@pytest.mark.parametrize("ceiling_policy", [None, ToolExecutionPolicy.ASK, ToolExecutionPolicy.DISABLED])
+async def test_runtime_resolves_sensitive_policy_without_overriding_action_policy(tmp_path, monkeypatch, sensitive_policy, ceiling_policy):
+    agent = ExecutionAgent(id=uuid4(), user_id=uuid4(), home_directory="/work", home_filesystem_policy="auto")
+    session = _session(user_id=agent.user_id, current_directory="/work")
+    settings = _tool_settings({"policies": {"filesystem.read": "auto", "sensitive_data.access": sensitive_policy}})
+    monkeypatch.setattr(mock_agent_runtime, "permission_origin", AsyncMock(return_value=session))
+    ceiling = None
+    if ceiling_policy is not None:
+        parent_settings = settings.model_copy(deep=True)
+        parent_settings.permissions.policies["sensitive_data.access"] = ceiling_policy
+        ceiling = permission_snapshot(parent_settings, {"read"})
+        sensitive_policy = min((sensitive_policy, ceiling_policy), key=list(ToolExecutionPolicy).index)
+    monkeypatch.setattr(mock_agent_runtime, "delegation_snapshot", AsyncMock(return_value=ceiling))
+    monkeypatch.setattr(mock_agent_runtime, "load_agent_profile_tools", AsyncMock(return_value=(settings, sysadmin_profile())))
+    monkeypatch.setattr(mock_agent_runtime, "load_effective_integrations", AsyncMock(return_value=IntegrationSettings()))
+    approve = AsyncMock(return_value="deny")
+    monkeypatch.setattr(AgentRuntime, "_request_approval", approve)
+    db = _db_with_grants()
+    db.scalar.return_value = agent
+    decision = await AgentRuntime._authorize(
+        db, AgentRun(id=uuid4(), session_id=session.id, trust_level="public"), session,
+        ToolCall("read", "read", {"root": "computer", "path": "/work/.env"}),
+        execution_directory_permission(agent.id, "/work/.env", capability="filesystem.read"),
+        _root_files(tmp_path, session),
+    )
+    assert (decision, approve.await_count) == {
+        ToolExecutionPolicy.AUTO: (PermissionDecision.ALLOW, 0),
+        ToolExecutionPolicy.ASK: (PermissionDecision.USER_DENIED, 1),
+        ToolExecutionPolicy.DISABLED: (PermissionDecision.DENY, 0),
+    }[sensitive_policy]
 
 
 @pytest.mark.parametrize("kind", ["url", "root", "execution", "shell"])

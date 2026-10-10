@@ -4,6 +4,7 @@ import asyncio
 import json
 import traceback
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID, uuid4
@@ -1578,6 +1579,11 @@ class AgentRuntime:
             )
         policy = agent_run_support._tool_policy(tool_settings, integration_settings, request)
         external_working_directory_policy = agent_run_support._external_working_directory_policy(tool_settings)
+        sensitive_request = replace(
+            request, capability="sensitive_data.access", resource_type="sensitive_data",
+            policy_integration_id=None, policy_resource_key=None,
+        )
+        sensitive_data_policy = agent_run_support._tool_policy(tool_settings, integration_settings, sensitive_request)
         if ceiling is not None:
             ceiling_policy = agent_run_support._tool_policy(
                 ceiling_settings(ceiling, TrustLevel(run.trust_level)), integration_settings, request,
@@ -1594,8 +1600,15 @@ class AgentRuntime:
                 ),
                 key=policies.index,
             )
-        if request.force_ask and policy == ToolExecutionPolicy.AUTO:
-            policy = ToolExecutionPolicy.ASK
+            sensitive_data_policy = max((
+                sensitive_data_policy,
+                agent_run_support._tool_policy(
+                    ceiling_settings(ceiling, TrustLevel(run.trust_level)), integration_settings,
+                    sensitive_request, snapshot=ceiling,
+                ),
+            ), key=policies.index)
+        if request.sensitive_access and sensitive_data_policy == ToolExecutionPolicy.ASK:
+            request = replace(request, available_decisions=("allow_once", "deny"))
         decision = await PermissionPolicy.evaluate(
             db,
             chat_session,
@@ -1603,6 +1616,7 @@ class AgentRuntime:
             root_files,
             policy,
             external_working_directory_policy=external_working_directory_policy,
+            sensitive_data_policy=sensitive_data_policy,
             agent_profile_id=agent_profile_id,
             trust_level=TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
             session_write_paths=session_write_paths,
@@ -1638,7 +1652,7 @@ class AgentRuntime:
                 str(origin.id), str(agent_profile_id), run.trust_level or TrustLevel.PUBLIC.value,
                 request.capability, request.resource_type, request.resource_scope,
                 request.use_integration_policy, str(request.policy_integration_id),
-                request.policy_resource_key, request.force_ask,
+                request.policy_resource_key, request.sensitive_access,
             ])
         if action_approved:
             decision = PermissionDecision.ALLOW
@@ -1748,6 +1762,7 @@ class AgentRuntime:
             )
         current_policy = agent_run_support._tool_policy(tool_settings, integration_settings, request)
         current_external_working_directory_policy = agent_run_support._external_working_directory_policy(tool_settings)
+        current_sensitive_data_policy = agent_run_support._tool_policy(tool_settings, integration_settings, sensitive_request)
         if ceiling is not None:
             ceiling_policy = agent_run_support._tool_policy(
                 ceiling_settings(ceiling, TrustLevel(run.trust_level)), integration_settings, request,
@@ -1763,6 +1778,13 @@ class AgentRuntime:
                 ),
                 key=policies.index,
             )
+            current_sensitive_data_policy = max((
+                current_sensitive_data_policy,
+                agent_run_support._tool_policy(
+                    ceiling_settings(ceiling, TrustLevel(run.trust_level)), integration_settings,
+                    sensitive_request, snapshot=ceiling,
+                ),
+            ), key=policies.index)
         current_decision = await PermissionPolicy.evaluate(
             db,
             chat_session,
@@ -1770,6 +1792,7 @@ class AgentRuntime:
             root_files,
             current_policy,
             external_working_directory_policy=current_external_working_directory_policy,
+            sensitive_data_policy=current_sensitive_data_policy,
             agent_profile_id=agent_profile_id,
             trust_level=TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
             session_write_paths=session_write_paths,

@@ -597,7 +597,7 @@ def _run_action_scope(request: PermissionRequest, call: ToolCall) -> str:
     """Bind narrow run consent to the action, arguments, target and content revision."""
     return hashlib.sha256(json.dumps([
         _tool_call_signature(call), _argument_edit_permission_binding(request),
-        request.capability, request.resource_scope, request.force_ask,
+        request.capability, request.resource_scope, request.sensitive_access,
         request.approval_details, request.administrator_paths,
         request.administrator_analysis_complete,
     ], sort_keys=True, separators=(",", ":")).encode()).hexdigest()

@@ -14,7 +14,7 @@ Benötigt eine zulässige Aktion Zustimmung, pausiert der ausführende Agent und
 | Für diesen Lauf erlauben | Passender angezeigter Zugriff gilt bis zum Ende des ausführenden Laufs. |
 | Für Session erlauben | Passender Zugriff gilt auch für spätere Läufe derselben Session bis zum Widerruf. |
 
-Der Haken **Passende Aktionen in dieser Session nicht mehr nachfragen** ändert den Hauptbutton zur Session-Freigabe. Er ist bei neuen Anfragen ausgeschaltet. Sensible oder nicht wiederverwendbare Aktionen bieten keine Session-Freigabe; ihre Zustimmung bleibt an exakte Werte und geprüfte Revisionen gebunden.
+Der Haken **Passende Aktionen in dieser Session nicht mehr nachfragen** ändert den Hauptbutton zur Session-Freigabe. Er ist bei neuen Anfragen ausgeschaltet. Wenn **Vertrauliche Pfade und mögliche Secret-Ausgabe** auf **Nachfragen** steht, bieten betroffene Aktionen keine Session-Freigabe; ihre Zustimmung bleibt an exakte Werte und geprüfte Revisionen gebunden. Dasselbe gilt für technisch nicht wiederverwendbare Aktionen.
 
 Unter **Session > Session-Freigaben** zeigen und widerrufen Sie gespeicherte Rechte einzeln oder gemeinsam. Sie sind keine offenen Anfragen und zählen nicht zum Benachrichtigungszähler. Reload beendet eine Freigabe nicht. Profil, Vertrauenslevel, Computer/Ressource, Lesen/Schreiben und gegebenenfalls Integrationsrevision grenzen sie weiterhin ein. Ein Subagenten-Laufrecht überträgt sich nicht auf andere Läufe.
 

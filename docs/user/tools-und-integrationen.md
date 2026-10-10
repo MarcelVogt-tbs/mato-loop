@@ -10,6 +10,8 @@ Globale Tool-Vorgaben und eingebaute Profil-Presets konfigurieren Administratore
 
 Hostseitige Sicherheitsgrenzen gelten auch bei **Automatisch** weiterhin.
 
+Computerwechsel, das Löschen von Session-Dateien und E-Mail-Senden/-Löschen folgen den konfigurierten Aktionsrechten. Unter **Dateisystem** steuert **Vertrauliche Pfade und mögliche Secret-Ausgabe** zusätzlich Zugriffe auf erkannte geschützte Computerpfade sowie Shell-Befehle, die Zugangsdaten ausgeben könnten. Die Vorgabe ist für beide Modellklassen **Nachfragen**, mit Zustimmung für die konkrete Aktion. **Deaktiviert** blockiert solche Zugriffe; **Automatisch** hebt nur diese zusätzliche Nachfrage auf. Aktionsrechte, Außenordnerrechte und technische Grenzen gelten weiter.
+
 **Allgemein**, **Plan**, **Build** und **Sysadmin** haben geschützte Arbeitsabläufe und editierbare Tool-Presets. Eigene Profile erben eine Basis. Mindestens ein globales Profil muss aktiv bleiben. Für eigene Tool-Overrides müssen gewöhnlichen Benutzern persönliche Profile und Tool-Anpassungen erlaubt sein; Administratoren behalten ihre Ausnahme. Deaktivierte Overrides bleiben gespeichert, werden aber ignoriert. Technische Grenzen gelten unabhängig von dieser Erlaubnis.
 
 Neue Chats verwenden den Startagenten ihrer Sessionvorlage. Plan blockiert erkannte Computer-Schreibaktionen, Build erlaubt sie automatisch, Sysadmin fragt. **Zugriff außerhalb des Arbeitsverzeichnisses** betrifft Dateien und erkannte Shell-Ziele: Plan/Build fragen, Sysadmin erlaubt gewöhnliche Lesezugriffe. Administratoren können Presets ändern oder mit **Tool-Rechte auf Standard zurücksetzen** wiederherstellen. Historische Sessions bleiben bei deaktiviertem Profil lesbar, benötigen aber für neue Läufe ein aktives Profil. Abschaltungen, Remote-ACLs, Pfad-, Eigentümer- und Delegationsgrenzen bleiben bindend.
@@ -72,7 +74,7 @@ Unter Linux können nur geprüfte statische Ausgaben auf das echte `/dev/null` u
 
 Aktualisieren Sie Backend und MatoLoop Agent gemeinsam, damit diese Shell-Semantik übereinstimmt. Protokollversion 1 erhält die zusätzlichen Zielarten und Fehler ohne Shell-bezogene Datenbankmigration. Ältere Agents bleiben konservativ; das Backend deutet deren Schreibeinstufung nicht als Lesen um. Bestehende Freigaben behalten ihre Klassenbindung und ihr JSON-Format, historische Freigabetexte werden nicht umgeschrieben.
 
-Shell-Präfixe konfigurieren Sie unter **Tools**, getrennt für Lesen/Schreiben mit einem Tokenpräfix pro Zeile. Jeder Teilbefehl muss passen. Präfixe können eine Aktionsrückfrage ersetzen, keine Abschaltung, Außenordner-, Shellzonen-, Deny- oder vertraulichen Pfadgrenzen.
+Shell-Präfixe konfigurieren Sie unter **Tools**, getrennt für Lesen/Schreiben mit einem Tokenpräfix pro Zeile. Jeder Teilbefehl muss passen. Präfixe können eine Aktionsrückfrage ersetzen, keine Abschaltung, Außenordner-, Shellzonen-, Deny- oder konfigurierte Rechte für vertrauliche Daten.
 
 Git-Aktionen verwenden Shell-Befehle auf dem gewählten, verbundenen Computer mit installiertem Git. Es gibt keine eigene Git-Integration, Git-Konfigurationsseite oder Clone-Funktion im Backend. Git-Befehle des Modells folgen den Profilrechten, Präfixlisten, Session-Freigaben und harten Grenzen der Shell; automatisch erlaubte Befehle benötigen keine einzelne Freigabe. Konfigurieren Sie Git und die Anmeldung auf diesem Computer. Bestehende Installationen müssen die [Hinweise zur Bereinigung nach dem Upgrade](betrieb-und-datensicherung.md#removed-git-integration) beachten.
 

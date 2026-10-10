@@ -41,7 +41,6 @@ _SEND = ToolAction(
     ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
     mutates=True,
-    allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
 )
 _DELETE = ToolAction(
     "mail.delete",
@@ -49,7 +48,6 @@ _DELETE = ToolAction(
     ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
     mutates=True,
-    allowed_policies=(ToolExecutionPolicy.DISABLED, ToolExecutionPolicy.ASK),
 )
 
 
@@ -666,10 +664,6 @@ async def _permission(capability: str, operation: str, arguments: Any, context: 
         resource_display=instance.name,
         action_kind=operation,
         risk_level="high" if capability in {"mail.send", "mail.delete"} else "medium",
-        force_ask=capability in {"mail.send", "mail.delete"},
-        available_decisions=("allow_once", "deny")
-        if capability in {"mail.send", "mail.delete"}
-        else ("allow_once", "allow_session", "deny"),
     )
     if (
         capability in {"mail.send", "mail.delete"}

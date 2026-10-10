@@ -108,7 +108,7 @@ class PermissionRequest:
     policy_hard_unavailable_capabilities: frozenset[str] = frozenset()
     approval_details: dict[str, Any] | None = None
     display_items: tuple[PermissionDisplayItem, ...] = ()
-    force_ask: bool = False
+    sensitive_access: bool = False
     available_decisions: tuple[str, ...] = (
         "allow_once",
         "allow_session",
@@ -330,7 +330,6 @@ def integration_operation_permission(
     action_kind: str = "integration_operation",
     risk_level: str = "medium",
     display_items: tuple[PermissionDisplayItem, ...] = (),
-    force_ask: bool = False,
     available_decisions: tuple[str, ...] = (
         "allow_once",
         "allow_session",
@@ -356,7 +355,6 @@ def integration_operation_permission(
         policy_integration_id=integration_id,
         policy_resource_key=resource_key,
         display_items=display_items,
-        force_ask=force_ask,
         available_decisions=available_decisions,
         session_grants=(
             SessionGrantScope(
@@ -583,10 +581,10 @@ def execution_directory_permission(
         summary=summary or f"Der Agent möchte das Verzeichnis {path} verwenden.",
         resource_display=path,
         use_integration_policy=False,
+        sensitive_access=capability != "file.provide" and confidential_execution_path(path),
         available_decisions=(
             ("allow_once", "allow_session", "deny")
             if access is not None
-            and (capability == "file.provide" or not confidential_execution_path(path))
             else ("allow_once", "deny")
         ),
         session_grants=(
@@ -627,7 +625,7 @@ def execution_agent_select_permission(agent_id: UUID, alias: str) -> PermissionR
         resource_scope=str(agent_id), action_kind="select_execution_agent", risk_level="medium",
         title="Computer übernehmen?",
         summary=f"Der Agent möchte für diese Session den Computer {alias} übernehmen.",
-        resource_display=alias, force_ask=True, available_decisions=("allow_once", "deny"),
+        resource_display=alias,
     )
 
 
@@ -1211,10 +1209,10 @@ def shell_command_permission(
             " Die Analyse ist unvollständig; nicht alle Befehle und Pfade konnten geprüft werden."
             if not inspection.analysis_complete else ""
         ) + (
-            " Besonders geschützte Pfade benötigen immer eine Freigabe."
+            " Die Richtlinie für vertrauliche Daten gilt zusätzlich für die geschützten Pfade."
             if confidential_paths else ""
         ) + (
-            " Eine mögliche Ausgabe oder Prozessübergabe von Zugangsdaten benötigt immer eine Freigabe."
+            " Die Richtlinie für vertrauliche Daten gilt zusätzlich für die mögliche Secret-Ausgabe."
             if may_expose_secret else ""
         ),
         resource_display=current_directory,
@@ -1235,10 +1233,10 @@ def shell_command_permission(
             "shellPrefixes": prefixes,
         },
         display_items=display_items,
-        force_ask=may_expose_secret,
+        sensitive_access=bool(confidential_paths) or may_expose_secret,
         available_decisions=(
             ("allow_once", "allow_session", "deny")
-            if reusable and not confidential_paths and not may_expose_secret
+            if reusable
             else ("allow_once", "deny")
         ),
     )
@@ -1272,8 +1270,7 @@ def administrator_permission(
         },
         administrator_paths=tuple(value for value in paths if value),
         administrator_analysis_complete=inspection.analysis_complete if inspection else True,
-        force_ask=confidential or secret_output,
-        available_decisions=("allow_once", "deny") if confidential or secret_output else ("allow_once", "allow_session", "deny"),
+        sensitive_access=confidential or secret_output,
         session_grants=tuple(SessionGrantScope(
             access, "execution_administrator", str(agent_id), str(agent_id),
         ) for access in ("read", "write")),
@@ -1449,6 +1446,7 @@ class PermissionPolicy:
         policy: ToolExecutionPolicy | None = None,
         *,
         external_working_directory_policy: ToolExecutionPolicy = ToolExecutionPolicy.ASK,
+        sensitive_data_policy: ToolExecutionPolicy = ToolExecutionPolicy.ASK,
         agent_profile_id: UUID | None = None,
         trust_level: TrustLevel | None = None,
         permission_session_id: UUID | None = None,
@@ -1473,6 +1471,13 @@ class PermissionPolicy:
                 else PermissionGrant.agent_profile_id == agent_profile_id
             )
             return (lifetime, profile_condition, PermissionGrant.trust_level == trust_level.value)
+
+        def sensitive_decision(sensitive: bool) -> PermissionDecision | None:
+            if sensitive and policy == ToolExecutionPolicy.DISABLED:
+                return PermissionDecision.DENY
+            if not sensitive or sensitive_data_policy == ToolExecutionPolicy.AUTO:
+                return None
+            return PermissionDecision.DENY if sensitive_data_policy == ToolExecutionPolicy.DISABLED else PermissionDecision.ASK
 
         if request.resource_type == "user_profile":
             scope = _user_profile_scope(request.resource_scope)
@@ -1672,8 +1677,8 @@ class PermissionPolicy:
                     or outside and external_working_directory_policy == ToolExecutionPolicy.DISABLED
                 ):
                     return PermissionDecision.DENY
-                if request.force_ask:
-                    return PermissionDecision.ASK
+                if (decision := sensitive_decision(request.sensitive_access)) is not None:
+                    return decision
                 if policy == ToolExecutionPolicy.AUTO and (not outside or external_working_directory_policy == ToolExecutionPolicy.AUTO):
                     return PermissionDecision.ALLOW
                 access = _access_for_capability(request.capability)
@@ -1721,8 +1726,10 @@ class PermissionPolicy:
             inside_workspace = workspace is not None and _path_is_within(path, workspace)
             if not inside_workspace and external_working_directory_policy == ToolExecutionPolicy.DISABLED:
                 return PermissionDecision.DENY
-            if request.capability != "file.provide" and confidential_execution_path(str(path)):
-                return PermissionDecision.ASK
+            if (decision := sensitive_decision(
+                request.sensitive_access or request.capability != "file.provide" and confidential_execution_path(str(path))
+            )) is not None:
+                return decision
             if policy == ToolExecutionPolicy.AUTO and inside_workspace:
                 return PermissionDecision.ALLOW
             if (
@@ -1799,8 +1806,8 @@ class PermissionPolicy:
             confidential = any(
                 confidential_execution_path(str(path)) for path in target_paths
             )
-            if confidential or request.force_ask:
-                return PermissionDecision.ASK
+            if (decision := sensitive_decision(confidential or request.sensitive_access)) is not None:
+                return decision
             if policy == ToolExecutionPolicy.AUTO and inside_workspace:
                 return PermissionDecision.ALLOW
             if (
@@ -1860,7 +1867,7 @@ class PermissionPolicy:
                 return PermissionDecision.DENY
             if policy == ToolExecutionPolicy.DISABLED:
                 return PermissionDecision.DENY
-            if request.capability == "filesystem.delete":
+            if request.capability == "filesystem.delete" and policy is None:
                 policy = ToolExecutionPolicy.ASK
             if session_write_paths is not None and root == FileRoot.SESSION and (
                 request.capability in {"session.files.write", "filesystem.delete"}
@@ -1870,6 +1877,8 @@ class PermissionPolicy:
                 )
             ):
                 policy = ToolExecutionPolicy.DISABLED
+            if (decision := sensitive_decision(request.sensitive_access)) is not None:
+                return decision
             if policy in {None, ToolExecutionPolicy.AUTO}:
                 return PermissionDecision.ALLOW
 
@@ -1880,8 +1889,8 @@ class PermissionPolicy:
 
         if policy == ToolExecutionPolicy.DISABLED:
             return PermissionDecision.DENY
-        if request.force_ask:
-            return PermissionDecision.ASK
+        if (decision := sensitive_decision(request.sensitive_access)) is not None:
+            return decision
         if policy == ToolExecutionPolicy.AUTO:
             return PermissionDecision.ALLOW
 

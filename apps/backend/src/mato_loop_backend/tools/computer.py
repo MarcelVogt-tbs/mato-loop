@@ -352,7 +352,7 @@ LIST_EXECUTION_AGENTS = ToolDefinition(
 
 SELECT_EXECUTION_AGENT = ToolDefinition(
             "select_execution_agent",
-            "Select one listed connected MatoLoop Agent for this session. Call alone; user approval is required for every change. The next model step uses the selected agent and its directory.",
+            "Select one listed connected MatoLoop Agent for this session. Call alone. Configured policies and grants determine approval. The next model step uses the selected agent and its directory.",
             SelectExecutionAgentArguments, _select_execution_agent,
             group="agent", label="Computer übernehmen", icon="computer",
             actions=(_EXECUTION_AGENT_SELECT,),

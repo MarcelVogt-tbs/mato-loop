@@ -57,6 +57,13 @@ _WORKING_DIRECTORY_EXTERNAL = ToolAction(
     ToolExecutionPolicy.ASK,
 )
 
+_SENSITIVE_DATA_ACCESS = ToolAction(
+    "sensitive_data.access",
+    "Vertrauliche Pfade und mögliche Secret-Ausgabe",
+    ToolExecutionPolicy.ASK,
+    ToolExecutionPolicy.ASK,
+)
+
 _SESSION_FILES_READ = ToolAction(
     "session.files.read", "Session-Dateien lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO
 )

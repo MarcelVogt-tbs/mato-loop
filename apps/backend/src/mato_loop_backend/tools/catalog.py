@@ -20,6 +20,7 @@ from mato_loop_backend.integrations.registry import (
 )
 from mato_loop_backend.settings import ModelCapability, ToolExecutionPolicy, ToolSettings
 from mato_loop_backend.tools.actions import (
+    _SENSITIVE_DATA_ACCESS,
     _WORKING_DIRECTORY_EXTERNAL,
     ToolAction,
 )
@@ -192,5 +193,8 @@ tool_registry = ToolRegistry(
         tools_computer.CHANGE_DIRECTORY,
         tools_computer.SHELL_RUN,
     ],
-    group_actions={"working_directory": (_WORKING_DIRECTORY_EXTERNAL,)},
+    group_actions={
+        "working_directory": (_WORKING_DIRECTORY_EXTERNAL,),
+        "filesystem": (_SENSITIVE_DATA_ACCESS,),
+    },
 )

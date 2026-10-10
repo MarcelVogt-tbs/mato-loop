@@ -452,8 +452,8 @@ async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkey
     assert run.current_directory_snapshot == "/srv/new"
     assert run.execution_operations == ["filesystem.resolve", "shell.run"]
     permission = context.ask_handler.await_args.args[0]
-    assert permission.force_ask is True
-    assert permission.available_decisions == ("allow_once", "deny")
+    assert permission.sensitive_access is False
+    assert permission.available_decisions == ("allow_once", "allow_session", "deny")
     assert permission.resource_scope == str(first.id)
 
 

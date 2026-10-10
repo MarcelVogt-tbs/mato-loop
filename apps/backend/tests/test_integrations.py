@@ -550,17 +550,14 @@ def _resource_adapter(
     )
 
 
-def test_mail_send_and_delete_policy_metadata_disallows_auto() -> None:
+def test_mail_send_and_delete_policy_metadata_supports_all_policies() -> None:
     adapter = integration_registry._ADAPTERS[("mail", "imap_smtp")]
 
     actions = {
         action.capability: action.allowed_policies
         for action in adapter.resource_actions
     }
-    assert actions["mail.send"] == actions["mail.delete"] == (
-        ToolExecutionPolicy.DISABLED,
-        ToolExecutionPolicy.ASK,
-    )
+    assert actions["mail.send"] == actions["mail.delete"] == tuple(ToolExecutionPolicy)
     assert all(
         action.allowed_policies == actions[action.capability]
         for tool in adapter.shared_tools

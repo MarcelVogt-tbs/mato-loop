@@ -13,6 +13,7 @@ from mato_loop_backend.permissions.policy import (
     session_search_permission,
     shell_command_permission,
 )
+from mato_loop_backend.permissions.resolution import tool_execution_policy
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import ToolExecutionPolicy
 from mato_loop_backend.tools.access import profile_tool_settings
@@ -85,6 +86,10 @@ async def authorize_session_requests(context: ToolContext, requests) -> ToolResu
             continue
         if decision != PermissionDecision.ASK:
             return ToolResult.error("permission.denied")
+        if request.sensitive_access and tool_execution_policy(
+            await profile_tool_settings(context), "sensitive_data.access",
+        ) != ToolExecutionPolicy.AUTO:
+            return ToolResult.error("permission.preflightUnavailable")
         if "allow_session" not in request.available_decisions or not request.effective_session_grants:
             return ToolResult.error("permission.preflightUnavailable")
         if await context.ask(replace(request, available_decisions=("allow_session", "deny"),

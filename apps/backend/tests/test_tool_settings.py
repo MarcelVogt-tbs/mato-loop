@@ -534,6 +534,13 @@ async def test_get_tool_configuration_returns_defaults(monkeypatch) -> None:
         for group in result["groups"]
         for tool in group["tools"]
     } == {"builtin"}
+    sensitive = next(
+        action for group in result["groups"] for action in group["actions"]
+        if action["capability"] == "sensitive_data.access"
+    )
+    assert (sensitive["policy"], sensitive["allowedPolicies"]) == (
+        "ask", [policy.value for policy in ToolExecutionPolicy],
+    )
     webfetch = next(
         tool
         for group in result["groups"]

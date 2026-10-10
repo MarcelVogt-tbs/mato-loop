@@ -329,8 +329,8 @@ async def test_mail_config_and_adapter_allow_only_encrypted_transports_and_accou
         ),
         context,
     ))[0]
-    assert request.available_decisions == ("allow_once", "deny")
-    assert request.force_ask
+    assert request.available_decisions == ("allow_once", "allow_session", "deny")
+    assert not request.sensitive_access
     assert [(item.label, item.value) for item in request.display_items] == [
         ("An", ("other@example.com",)),
         ("Bcc", ("hidden@example.com",)),

@@ -132,10 +132,10 @@ async def test_administrator_decision_creates_scoped_grants(monkeypatch, decisio
     path = "/root/.ssh/config" if confidential else "/etc/demo.conf"
     request = administrator_permission(uuid4(), "/work", capability="filesystem.write", path=path)
     approval.resource_type, approval.resource_scope, approval.capability = request.resource_type, request.resource_scope, request.capability
-    approval.available_decisions = list(request.available_decisions)
+    approval.available_decisions = ["allow_once", "deny"] if confidential else list(request.available_decisions)
     approval.payload = {
         **request.approval_details, "sessionGrants": session_grants_payload(request),
-        "runActionOnly": request.force_ask,
+        "runActionOnly": "allow_session" not in approval.available_decisions,
         "runActionScope": _run_action_scope(request, ToolCall("edit", "edit_file", {"path": path})),
     }
     _fingerprint(approval)

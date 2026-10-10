@@ -108,7 +108,7 @@ async def request_approval(
             "trustLevel": run.trust_level,
             "sessionGrants": grant_payload,
             "runActionScope": agent_run_support._run_action_scope(permission, call),
-            "runActionOnly": permission.force_ask,
+            "runActionOnly": "allow_session" not in permission.available_decisions,
             "sessionGrantsFingerprint": session_grants_fingerprint(
                 permission.capability,
                 permission.resource_type,
