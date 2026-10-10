@@ -439,6 +439,11 @@ def general_system_prompt(
             "If the task requires interaction with a specific page or browser-authenticated access, "
             "request browser control with a concrete reason."
         )
+    if "browser_request_control" in offered_tool_names:
+        parts.append(
+            "If a browser tool returns browser.dependenciesMissing, tell the user to open the Browser "
+            "integration on the selected computer and complete setup before retrying."
+        )
     if "browser_release_control" in offered_tool_names:
         parts.append(
             "Browser handoff contract: Before asking the human to interact with the browser, release "
@@ -640,12 +645,15 @@ def general_system_prompt(
         )
     else:
         dynamic_parts.append("No MatoLoop Agent is selected for this session.")
+    if {"list_execution_agents", "select_execution_agent"} <= offered_tool_names:
+        parts.append(
+            "For computer/browser tasks with no computer, list_execution_agents, then select a connected computer."
+        )
     if "select_execution_agent" in offered_tool_names:
         parts.append(
-            "To change computers, call select_execution_agent alone. After success, use the returned "
-            "computer and directory for subsequent tool calls; previous computer results remain historical. "
-            "File and shell tools have no per-call computer or session selector. "
-            "If a required path belongs to another computer, switch to that computer first."
+            "Call select_execution_agent alone. After success, check tools and use its computer and directory. "
+            "Previous results keep their computer binding. File/shell calls cannot select computers or sessions. "
+            "Switch first for paths on another computer."
         )
     if "save_skill" in offered_tool_names:
         parts.append(

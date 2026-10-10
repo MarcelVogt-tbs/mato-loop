@@ -513,6 +513,19 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["errorCode"], "browser.dependenciesMissing")
         spawn.assert_not_awaited()
 
+    async def test_native_open_reports_missing_python_packages(self):
+        self.manager.container = False
+        with (
+            patch("importlib.util.find_spec", return_value=None),
+            patch.object(self.manager, "runtime_root", return_value=self.root),
+        ):
+            with self.assertRaises(AgentError) as error:
+                await self.manager.dispatch(
+                    "integration.browser.open",
+                    BrowserOpenArguments(ownerId=self.owner_id, browserId=self.browser_id),
+                )
+        self.assertEqual(error.exception.code, "browser.dependenciesMissing")
+
     async def test_headless_control_needs_no_desktop_fence(self):
         with patch.dict(os.environ, {"MATOLOOP_AGENT_CONTAINER": "0"}):
             worker = BrowserWorker(self.root)

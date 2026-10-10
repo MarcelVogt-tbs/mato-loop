@@ -165,7 +165,20 @@ class BrowserManager:
             raise AgentError("browser.profileOwnerMismatch", "Browser profile is a symlink")
         return runtime
 
+    def missing_python_packages(self) -> list[str]:
+        if self.container:
+            return []
+        from importlib.util import find_spec
+
+        return [
+            "pillow" if name == "PIL" else name
+            for name in ("PIL", "playwright")
+            if find_spec(name) is None
+        ]
+
     async def spawn(self, root: Path) -> None:
+        if self.missing_python_packages():
+            raise AgentError("browser.dependenciesMissing", "Required browser packages are missing")
         environment, options = self.environment()
         self.worker = await asyncio.create_subprocess_exec(
             *browser_command("browser-worker"),
@@ -351,16 +364,12 @@ class BrowserManager:
             return BrowserStatus(
                 state="error", setupId=self.setup.terminal_id, errorCode="browser.setupFailed"
             ).model_dump(by_alias=True)
-        if not self.container:
-            from importlib.util import find_spec
-
-            missing = [name for name in ("PIL", "playwright") if find_spec(name) is None]
-            if missing:
-                return BrowserStatus(
-                    state="missing",
-                    missing=["pillow" if name == "PIL" else name for name in missing],
-                    errorCode="browser.dependenciesMissing",
-                ).model_dump(by_alias=True)
+        if missing := self.missing_python_packages():
+            return BrowserStatus(
+                state="missing",
+                missing=missing,
+                errorCode="browser.dependenciesMissing",
+            ).model_dump(by_alias=True)
         if self.worker is not None:
             try:
                 if (await self.rpc("health"))["ok"]:
