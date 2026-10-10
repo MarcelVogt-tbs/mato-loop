@@ -532,7 +532,7 @@ class SecretInputField(ToolArguments):
     masked: bool = True
     administrator: bool = Field(
         default=False,
-        description="Request administrator access to the selected computer with this password input.",
+        description="Authenticate to the selected computer with this password input; actions require separate authorization.",
     )
 
     @field_validator("label", "question")

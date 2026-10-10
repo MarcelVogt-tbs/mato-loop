@@ -9,8 +9,6 @@ from mato_loop_backend.permissions.policy import (
     PermissionDisplayItem,
     PermissionRequest,
 )
-from mato_loop_backend.permissions.resolution import tool_execution_policy
-from mato_loop_backend.settings import ToolExecutionPolicy
 from mato_loop_backend.tools import access
 from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import ToolResult
@@ -38,13 +36,6 @@ async def authorize(context: ToolContext, request: PermissionRequest, reference=
         )
         if not authentication.passwordless:
             raise ExecutionClientError("process.sudoAuthRequired")
-    if context.execution_client.agent_id in context.administrator_access and (
-        not request.sensitive_access or decision == PermissionDecision.ALLOW
-        or tool_execution_policy(
-            await access.profile_tool_settings(context), "sensitive_data.access",
-        ) == ToolExecutionPolicy.AUTO
-    ):
-        return True
     previews = []
     fields = (
         (("oldText", "Vorher"), ("newText", "Nachher")) if context.tool_call.name == "edit_file"

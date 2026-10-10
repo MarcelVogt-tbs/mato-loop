@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.events import run_events
-from mato_loop_backend.models import AgentRun, ChatSession, PermissionGrant, QuestionRequest
+from mato_loop_backend.models import AgentRun, ChatSession, QuestionRequest
 from mato_loop_backend.personal_variables import (
     PersonalVariableError,
     create_personal_variable,
@@ -94,7 +93,6 @@ async def answer_question(
         await db.commit()
         raise QuestionDecisionError(409, "question.runInactive")
 
-    created_grants = []
     try:
         for question in questions.questions:
             if question.id not in remembered or not question.administrator:
@@ -106,18 +104,6 @@ async def answer_question(
                 or session.preferred_execution_agent_id != question.administrator.agent_id
             ):
                 raise QuestionDecisionError(409, "approval.targetChanged")
-            for access in ("read", "write"):
-                scope = dict(
-                    run_id=None,
-                    session_id=request.session_id, capability=f"resource.{access}",
-                    resource_type="execution_administrator", resource_scope=str(question.administrator.agent_id),
-                    agent_profile_id=run.agent_profile_id or session.agent_profile_id,
-                    trust_level=run.trust_level or "public",
-                )
-                if await db.scalar(select(PermissionGrant).filter_by(**scope)) is None:
-                    grant = PermissionGrant(**scope)
-                    db.add(grant)
-                    created_grants.append(grant)
     except BaseException:
         AgentRuntime.release_question_resolution(request.id)
         raise
@@ -217,8 +203,6 @@ async def answer_question(
         request.status = "expired"
         request.answers = None
         request.answered_at = None
-        for grant in created_grants:
-            await db.delete(grant)
         await db.commit()
         raise QuestionDecisionError(409, "question.runInactive")
     await run_events.publish(

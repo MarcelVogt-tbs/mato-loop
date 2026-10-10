@@ -151,9 +151,6 @@ async def _secret_input(
         await context.db.refresh(context.session)
         if context.session.preferred_execution_agent_id != administrator.agent_id:
             return ToolResult.error("permission.denied")
-        admin_input = next(item for item in missing if item.administrator)
-        if admin_input.name not in answers.remember_for_session:
-            context.administrator_access.add(administrator.agent_id)
     remembered = {
         item.name: answers.answers[item.name][0]
         for item in provided
@@ -364,7 +361,7 @@ SECRET_INPUT = ToolDefinition(
             "parts, shell_run.environment, or the personal settings tool. "
             "For the selected computer's administrator password, set administrator=true and masked=true "
             "on that field, then pass its reference as sudo_password_ref to elevated tools. "
-            "Submitting this field grants administrator access for the run; the user may grant session access instead. "
+             "Submitting this field authenticates only; elevated actions require separate authorization. "
             "Reuse the exact name/reference pairs instead of asking again. Set masked false only for values the user may see while "
             "typing. Use customize_matoloop only for explicitly requested durable storage.",
             SecretInputArguments,

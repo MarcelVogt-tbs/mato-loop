@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
@@ -28,6 +29,19 @@ from mato_loop_backend.sessions.service import (
     SessionServiceError,
     get_owned_session,
 )
+from mato_loop_backend.settings import (
+    AgentProfileUnavailable,
+    TrustLevel,
+    effective_model_trust,
+    load_agent_profile_tools,
+    load_effective_ai,
+    load_effective_integrations,
+)
+from mato_loop_backend.settings.effective import (
+    apply_session_ai,
+    filter_agent_profile_integrations,
+)
+from mato_loop_backend.tools.catalog import tool_registry
 
 router = APIRouter(prefix="/approvals", dependencies=[Depends(require_user)])
 
@@ -53,10 +67,12 @@ class ApprovalDecisionRequest(BaseModel):
 
 
 async def _permission_payload(
-    db: AsyncSession, user: UserAccount, grant: PermissionGrant, source: ApprovalRequest | None = None
+    db: AsyncSession, user: UserAccount, grant: PermissionGrant, source: ApprovalRequest | None,
+    session: ChatSession, binding: tuple[UUID | None, TrustLevel],
 ) -> dict:
     resource_display = None
     shell_details = {}
+    applicable = True
     if grant.source_approval_id is not None:
         if grant.resource_type == "skill_collection":
             resource_display = "Persönliche Skills"
@@ -86,6 +102,43 @@ async def _permission_payload(
         computer = await db.get(ExecutionAgent, UUID(grant.resource_scope))
         if computer is not None and computer.user_id == user.id:
             resource_display = computer.display_name
+        applicable = False
+    profile_id, trust = binding
+    applicable = applicable and grant.agent_profile_id == profile_id and grant.trust_level == trust.value
+    target = source if grant.resource_type == "run_action" and source is not None else grant
+    try:
+        scope = json.loads(target.resource_scope)
+        if not isinstance(scope, dict):
+            scope = {}
+        if target.resource_type == "shell_command" and isinstance(scope.get("action"), str):
+            scope = json.loads(scope["action"])
+            if not isinstance(scope, dict):
+                scope = {}
+    except (ValueError, TypeError):
+        scope = {}
+    if grant.resource_type in {"root_path", "execution_directory"} and grant.capability in {"resource.read", "resource.write"}:
+        applicable = False
+    if grant.resource_type == "shell_command":
+        applicable = False
+    if target.resource_type in {"execution_directory", "execution_path", "administrator_path", "shell_action", "shell_command", "execution_administrator"}:
+        try:
+            computer_id = UUID(scope["agentId"])
+            computer = await db.get(ExecutionAgent, computer_id)
+        except (KeyError, ValueError, TypeError):
+            computer = None
+        if computer is not None and computer.user_id == user.id:
+            shell_details.update(executionAgentId=str(computer.id), executionAgentName=computer.display_name)
+            applicable = applicable and computer.revoked_at is None and computer.id == session.preferred_execution_agent_id
+        else:
+            applicable = False
+        resource_display = scope.get("path") or scope.get("currentDirectory") or resource_display
+        if target.capability in {"shell.read", "shell.write"} or target.resource_type == "shell_action":
+            shell_details.update(command=scope.get("command"), currentDirectory=scope.get("currentDirectory"), elevated=scope.get("elevated", target.resource_type == "execution_administrator"))
+            applicable = applicable and scope.get("currentDirectory") == session.current_directory
+    elif target.resource_type in {"root_path", "session_path"}:
+        resource_display = f"{scope.get('root', 'session')}:{scope.get('path', '')}"
+    if target.resource_type in {"administrator_path", "execution_administrator"}:
+        shell_details["elevated"] = True
     return {
         "id": str(grant.id),
         "runId": str(grant.run_id) if grant.run_id is not None else None,
@@ -99,8 +152,44 @@ async def _permission_payload(
             else None
         ),
         "trustLevel": grant.trust_level,
+        "applicable": applicable,
         **shell_details,
         "createdAt": grant.created_at.isoformat(),
+    }
+
+
+async def _permission_binding(db: AsyncSession, session: ChatSession) -> tuple[UUID | None, TrustLevel]:
+    run = await db.scalar(select(AgentRun).where(
+        AgentRun.session_id == session.id, AgentRun.status.in_(ACTIVE_RUN_STATUSES),
+    ).order_by(AgentRun.created_at.desc()).limit(1))
+    if run is not None:
+        return run.agent_profile_id or session.agent_profile_id, TrustLevel(run.trust_level or "public")
+    ai = apply_session_ai(await load_effective_ai(db, session.user_id), session)
+    model = next((item for item in ai.models if item.id == ai.default_model_id), None)
+    provider = next((item for item in ai.providers if model and item.id == model.provider_id), None)
+    return session.agent_profile_id, effective_model_trust(provider, model) if provider and model else TrustLevel.PRIVATE
+
+
+@router.get("/sessions/{session_id}/rules")
+async def session_rules(
+    session_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    session = await db.get(ChatSession, session_id)
+    if session is None or session.user_id != user.id:
+        raise ApiError(404, "session.notFound")
+    profile_id, trust = await _permission_binding(db, session)
+    try:
+        tools, profile = await load_agent_profile_tools(db, user.id, profile_id, trust)
+    except AgentProfileUnavailable:
+        raise ApiError(404, "agentProfile.notFound") from None
+    integrations = filter_agent_profile_integrations(await load_effective_integrations(db, user.id), profile)
+    return {
+        "trustLevel": trust.value,
+        "groups": tool_registry.catalog(tools, integrations),
+        "scopedPolicies": tools.permissions.model_dump(mode="json", by_alias=True),
+        "shellPrefixes": tools.shell_prefixes.model_dump(mode="json"),
     }
 
 
@@ -255,13 +344,14 @@ async def list_permissions(
         ).all()
     )
     payloads = []
+    binding = await _permission_binding(db, session)
     for item in grants:
         source = (
             await db.get(ApprovalRequest, item.source_approval_id)
             if item.source_approval_id is not None
             else None
         )
-        payloads.append(await _permission_payload(db, user, item, source))
+        payloads.append(await _permission_payload(db, user, item, source, session, binding))
     return payloads
 
 
@@ -285,9 +375,11 @@ async def all_permissions(
             .order_by(PermissionGrant.created_at)
         )
     ).all()
+    bindings = {session.id: session for _, session, _ in rows}
+    bindings = {key: await _permission_binding(db, session) for key, session in bindings.items()}
     return [
         {
-            **await _permission_payload(db, user, grant, source),
+            **await _permission_payload(db, user, grant, source, session, bindings[session.id]),
             "sessionId": str(session.id),
             "sourceSession": {"id": str(session.id), "title": session.title},
         }

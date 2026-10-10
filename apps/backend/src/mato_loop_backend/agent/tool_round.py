@@ -280,7 +280,6 @@ async def execute_tool_batch(
     session_read_cursors: dict[UUID, UUID | None],
     one_time_secrets: dict[UUID, str],
     run_secret_refs: dict[str, str],
-    administrator_access: set[UUID],
     ephemeral_images: dict[tuple[UUID, int, str, int], ProviderImageInput],
     live_tool_calls: dict[UUID, list[dict[str, Any]]],
     model_request: int,
@@ -455,7 +454,6 @@ async def execute_tool_batch(
                 approval_resolution=approval_resolution, execution_client=execution_client,
                 session_read_cursors=session_read_cursors, one_time_secrets=one_time_secrets,
                 run_secret_refs=run_secret_refs,
-                administrator_access=administrator_access,
                 task_handler=(
                     partial(
                         run_tasks, runtime, db, run, session, tool_call_id=call.id,

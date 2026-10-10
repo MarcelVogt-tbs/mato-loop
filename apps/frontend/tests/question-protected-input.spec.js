@@ -68,7 +68,7 @@ it('masks password questions, submits exact values, and clears failed drafts', a
   await vi.waitFor(() => expect(input.value).toBe(''))
 })
 
-it.each([[false, false], [true, false], [true, true]])('submits protected credentials with optional administrator consent (admin=%s, early=%s)', async (administrator, early) => {
+it.each([[false, false], [true, false], [true, true]])('submits protected credentials with optional session retention (admin=%s, early=%s)', async (administrator, early) => {
   api.post.mockRejectedValue(new Error('network'))
   const request = {
     id: 'question-1',
@@ -116,8 +116,8 @@ it.each([[false, false], [true, false], [true, true]])('submits protected creden
   const password = root.querySelector('input[type="password"]')
   expect(root.querySelector('[role="checkbox"]').getAttribute('aria-checked')).toBe('false')
   if (administrator) {
-    expect(root.textContent).toContain('Administratorzugriffe auf AI-PC für diese Session erlauben')
-    expect(root.textContent).not.toContain('Für diese Session merken')
+    expect(root.textContent).toContain('Es erteilt keine Aktionsfreigabe.')
+    expect(root.textContent).toContain('Für diese Session merken')
     root.querySelector('[role="checkbox"]').click()
   }
   expect(password.autocomplete).toBe('new-password')

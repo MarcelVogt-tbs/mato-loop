@@ -260,6 +260,7 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         permission = administrator_permission(
             client.agent_id, client.current_directory, capability=f"shell.{inspection.classification}",
             command=arguments.command, inspection=inspection,
+            environment=arguments.model_dump(mode="json").get("environment"),
         )
         if not await administrator.authorize(context, permission, arguments.sudo_password_ref):
             return ToolResult.error("permission.denied")
@@ -271,6 +272,7 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         permission = administrator_permission(
             client.agent_id, client.current_directory, capability=f"shell.{inspection.classification}",
             command=arguments.command, inspection=inspection,
+            environment=arguments.model_dump(mode="json").get("environment"),
         )
         if not await administrator.authorize(context, permission, arguments.sudo_password_ref):
             return ToolResult.error("permission.denied")
@@ -313,6 +315,7 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         inspection = inspection.model_copy(update={"analysis_complete": False})
     permission = shell_command_permission(
         client.agent_id, client.current_directory, executed["command"], inspection,
+        environment=arguments.model_dump(mode="json").get("environment"),
     )
     if not await tools_access.allow(context, permission):
         return ToolResult.error("permission.denied")
@@ -404,8 +407,8 @@ SHELL_RUN = ToolDefinition(
             "those named variables through sudo. "
              "Select an existing password reference by its name or description and target computer, "
              "or call secret_input with administrator=true on the masked password field. "
-             "Pass the reference as sudo_password_ref. The input grants administrator access for "
-             "this run; the user may extend it to the session in the input dialog. "
+              "Pass the reference as sudo_password_ref. Password input authenticates only; "
+              "each command requires its own authorization. Run or session consent covers the same command and execution context. "
             "Do not put sudo, password pipes, or a password in the command.",
             ShellRunArguments,
             _shell_run,

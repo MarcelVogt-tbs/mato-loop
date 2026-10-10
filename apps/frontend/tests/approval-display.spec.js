@@ -100,7 +100,7 @@ describe('approval display', () => {
     })).toEqual({ label: 'Datei oder Ordner', value: 'session:plan.md' })
 
     for (const [capability, label, icon] of [
-      ['execution.directory', 'Aktuellen Ordner wechseln', 'drive_file_move'],
+      ['execution.directory', 'Als Arbeitsverzeichnis verwenden', 'drive_file_move'],
       ['system.info', 'Systeminformationen lesen', 'computer'],
       ['process.execute', 'Befehl ausführen', 'terminal']
     ]) {
@@ -112,14 +112,14 @@ describe('approval display', () => {
     }
   })
 
-  it('describes unified read and write areas explicitly', () => {
+  it('does not describe legacy areas as inherited file and shell access', () => {
     expect(permissionGrantDisplay({
       capability: 'resource.read',
       resourceType: 'execution_directory',
       resourceDisplay: '/opt'
     })).toEqual({
-      label: 'Alle passenden lesenden Datei- und Shell-Aktionen',
-      value: '/opt und Unterordner',
+      label: 'Frühere Bereichsfreigabe',
+      value: '/opt',
       icon: 'visibility'
     })
     expect(permissionGrantDisplay({
@@ -136,10 +136,26 @@ describe('approval display', () => {
       resourceType: 'root_path',
       resourceDisplay: 'Sitzungsdateien'
     })).toEqual({
-      label: 'Alle passenden lesenden Dateiaktionen',
-      value: 'Sitzungsdateien und Unterordner',
+      label: 'Frühere Bereichsfreigabe',
+      value: 'Sitzungsdateien',
       icon: 'visibility'
     })
+  })
+
+  it.each(['execution_path', 'session_path', 'administrator_path'])('shows the exact %s resource rather than its parent directory', (resourceType) => {
+    expect(permissionGrantDisplay({
+      capability: 'resource.write', resourceType, resourceDisplay: '/opt/config.ini'
+    })).toEqual({
+      label: 'Exakter Pfad · Schreiben', value: '/opt/config.ini',
+      icon: resourceType === 'administrator_path' ? 'admin_panel_settings' : 'edit'
+    })
+  })
+
+  it('labels shell-action grants independently of file access and uses their bound directory', () => {
+    expect(permissionGrantDisplay({
+      capability: 'resource.read', resourceType: 'shell_action',
+      currentDirectory: '/opt/project', command: 'git status'
+    })).toEqual({ label: 'Exakter Shell-Befehl · Lesen', value: '/opt/project', icon: 'terminal' })
   })
 
   it.each([

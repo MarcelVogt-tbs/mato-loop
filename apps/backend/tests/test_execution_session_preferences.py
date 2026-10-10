@@ -190,7 +190,7 @@ async def test_directory_grant_is_bound_to_profile_and_model_trust(zone_policy, 
     agent.id = agent_id
     db.scalar.return_value = agent
     db.scalars.return_value = Mock(all=Mock(return_value=[grant]))
-    request = execution_directory_permission(agent_id, "/srv/project/src")
+    request = execution_directory_permission(agent_id, "/srv/project")
     roots = RootFileService(session.id)
     assert await PermissionPolicy.evaluate(
         db, session, request, roots, ToolExecutionPolicy.ASK,

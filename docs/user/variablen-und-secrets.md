@@ -24,7 +24,7 @@ Mit **Fertig** können Sie auch nur einen Teil der Felder beantworten oder alle 
 
 ## Administratorzugriff
 
-Ein geschütztes Administratorpasswort ist an den ausgewählten eigenen Computer gebunden. Neue Eingabe kann Administratorzugriff für diesen Lauf erlauben. Das ausdrückliche Merken kann zusätzlich widerrufbare Sessionrechte für Administrator-Lese-/Schreibzugriff erzeugen, gebunden an Computer, Profil und Modellvertrauen. Ein gespeicherter oder ausgewählter Passwortverweis allein gewährt kein solches Recht; ein übersprungenes Passwort erlaubt nichts.
+Ein geschütztes Administratorpasswort ist an den ausgewählten eigenen Computer gebunden. Eingeben, Auswählen oder **Für diese Session merken** dient nur der Authentifizierung und erzeugt keine Zugriffsrechte. Administratoraktionen werden unabhängig davon nach den wirksamen Regeln und passenden Freigaben geprüft: Dateifreigaben gelten für exakte Pfade, Shell-Freigaben für exakte Befehle samt Computer, Arbeitsverzeichnis, Umgebung und Administrator-Einstellung.
 
 Diese Rechte überstimmen weder deaktivierte Aktionen noch Computer-/Pfadgrenzen. Ein abgelehntes Passwort kann erneut geschützt angefragt werden. Das Betriebssystem bleibt für sudo-Rechte zuständig; der Agent wird dadurch nicht dauerhaft als Administratordienst betrieben.
 

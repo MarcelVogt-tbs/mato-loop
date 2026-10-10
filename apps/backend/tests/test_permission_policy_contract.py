@@ -45,6 +45,7 @@ from mato_loop_backend.permissions.policy import (
     session_browse_permission,
     session_permission,
     session_search_permission,
+    shell_action_scope,
     shell_command_permission,
     shell_command_scope,
     skill_edit_permission,
@@ -242,13 +243,16 @@ async def test_coding_permission_is_scoped_to_current_project(tmp_path) -> None:
     ) == PermissionDecision.DENY
 
 
-def test_root_path_grant_matches_only_same_root_identity_and_subtree(tmp_path) -> None:
+def test_root_path_grant_matches_only_same_root_identity_and_path(tmp_path) -> None:
     session = _session()
     root_files = _root_files(tmp_path, session)
     granted = _path_request(root_files, "files/docs")
     grant = _grant(granted, session.id)
 
     assert PermissionPolicy.grant_matches(
+        grant, _path_request(root_files, "files/docs"), root_files
+    )
+    assert not PermissionPolicy.grant_matches(
         grant, _path_request(root_files, "files/docs/readme.md"), root_files
     )
     assert not PermissionPolicy.grant_matches(
@@ -347,7 +351,7 @@ async def test_managed_deletion_honors_policy_grants_and_disabled(
     ) == (PermissionDecision.DENY if disabled else PermissionDecision.ALLOW)
 
 
-def test_execution_directory_grant_matches_only_same_agent_subtree(tmp_path) -> None:
+def test_execution_directory_grant_matches_only_same_agent_path(tmp_path) -> None:
     session = _session()
     root_files = _root_files(tmp_path, session)
     agent_id = uuid4()
@@ -363,6 +367,9 @@ def test_execution_directory_grant_matches_only_same_agent_subtree(tmp_path) -> 
     )
 
     assert PermissionPolicy.grant_matches(
+        grant, execution_directory_permission(agent_id, "/home/user/project"), root_files
+    )
+    assert not PermissionPolicy.grant_matches(
         grant,
         execution_directory_permission(
             agent_id, "/home/user/project/src"
@@ -381,7 +388,7 @@ def test_execution_directory_grant_matches_only_same_agent_subtree(tmp_path) -> 
     )
 
 
-async def test_shell_paths_require_complete_coverage_from_directory_grants(tmp_path) -> None:
+async def test_shell_paths_cannot_be_authorized_by_directory_grants(tmp_path) -> None:
     session = _session(user_id=uuid4(), current_directory="/work")
     root_files = _root_files(tmp_path, session)
     agent = ExecutionAgent(
@@ -415,7 +422,7 @@ async def test_shell_paths_require_complete_coverage_from_directory_grants(tmp_p
 
     assert await PermissionPolicy.evaluate(
         db, session, request, root_files, ToolExecutionPolicy.ASK
-    ) == PermissionDecision.ALLOW
+    ) == PermissionDecision.ASK
     db.scalars.return_value.all.return_value = grants[:1]
     assert await PermissionPolicy.evaluate(
         db, session, request, root_files, ToolExecutionPolicy.ASK
@@ -881,19 +888,37 @@ async def test_administrator_once_approval_is_reused_for_revalidation(tmp_path, 
 
 
 @pytest.mark.parametrize("lifetime", ["run", "session", "exact"])
-async def test_runtime_grant_lifetime_and_boundaries(tmp_path, monkeypatch, lifetime):
-    session = _session(user_id=uuid4(), agent_profile_id=uuid4())
+@pytest.mark.parametrize("kind", ["file", "shell", "administrator"])
+async def test_runtime_grant_lifetime_and_boundaries(tmp_path, monkeypatch, lifetime, kind):
+    session = _session(user_id=uuid4(), agent_profile_id=uuid4(), current_directory="/work")
+    agent = ExecutionAgent(id=uuid4(), user_id=session.user_id, home_directory="/home/user",
+        home_filesystem_policy="auto", external_filesystem_policy="auto",
+        home_shell_enabled=True, external_shell_enabled=True)
+    session.preferred_execution_agent_id = agent.id
     run = AgentRun(id=uuid4(), session_id=session.id, trust_level="public")
     roots = _root_files(tmp_path, session)
-    request = replace(_path_request(roots, "notes.txt"), sensitive_access=lifetime == "exact")
-    call = ToolCall("first", "read", {"path": "notes.txt"})
+    inspection = ShellInspectResult(targets=[], commands=[], read_only=False, classification="write",
+        analysis_complete=True, inspection_revision="a" * 64)
+
+    def requested(target):
+        if kind == "file":
+            result = _path_request(roots, target)
+        elif kind == "shell":
+            result = shell_command_permission(agent.id, "/work", f"touch {target}", inspection)
+        else:
+            result = administrator_permission(agent.id, "/work", capability="shell.write", command=f"touch {target}", inspection=inspection)
+        return replace(result, sensitive_access=lifetime == "exact")
+
+    request = requested("notes.txt")
+    call = ToolCall("first", "read" if kind == "file" else "shell_run",
+        {"path": "notes.txt"} if kind == "file" else {"command": "touch notes.txt"})
     grant = _grant(request, session.id, run_id=None if lifetime == "session" else run.id,
                    agent_profile_id=session.agent_profile_id, trust_level="public")
     if lifetime == "exact":
         grant.capability = request.capability
         grant.resource_type = "run_action"
         grant.resource_scope = mock_agent_run_support._run_action_scope(request, call)
-    settings = _tool_settings({"policies": {request.capability: "ask"}})
+    settings = _tool_settings({"policies": {request.capability: "ask", "working_directory.external": "auto"}})
     monkeypatch.setattr(mock_agent_runtime, "load_agent_profile_tools", AsyncMock(return_value=(settings, sysadmin_profile())))
     monkeypatch.setattr(mock_agent_runtime, "load_effective_integrations", AsyncMock(return_value=IntegrationSettings()))
     monkeypatch.setattr(AgentRuntime, "_request_approval", AsyncMock(return_value="deny"))
@@ -904,7 +929,7 @@ async def test_runtime_grant_lifetime_and_boundaries(tmp_path, monkeypatch, life
             stored.add(grant)
             stored.commit()
             db = AsyncMock(spec=AsyncSession)
-            db.scalar.side_effect = stored.scalar
+            db.scalar.side_effect = lambda statement: agent if statement.column_descriptions[0]["entity"] is ExecutionAgent else stored.scalar(statement)
             db.scalars.side_effect = stored.scalars
 
             async def authorize(current_run=run, permission=request, tool_call=call):
@@ -912,9 +937,9 @@ async def test_runtime_grant_lifetime_and_boundaries(tmp_path, monkeypatch, life
 
             outcomes = [
                 await authorize(),
-                await authorize(tool_call=ToolCall("next", "read", {"path": "notes.txt", "_reason": "Read again"})),
+                await authorize(tool_call=ToolCall("next", call.name, {**call.arguments, "_reason": "Repeat access"})),
                 await authorize(AgentRun(id=uuid4(), session_id=session.id, trust_level="public")),
-                await authorize(permission=replace(request, resource_scope=_path_request(roots, "other.txt").resource_scope)),
+                await authorize(permission=requested("other.txt")),
                 await authorize(AgentRun(id=run.id, session_id=session.id, trust_level="private")),
                 await authorize(AgentRun(id=run.id, session_id=session.id, trust_level="public", agent_profile_id=uuid4())),
             ]
@@ -1559,8 +1584,10 @@ async def test_child_uses_parent_grants_and_revocation_stops_execution(tmp_path,
         "root": _path_request(roots, "note.txt"),
         "execution": execution_directory_permission(agent.id, "/work", capability="filesystem.read"),
         "shell": PermissionRequest(capability="shell.read", resource_type="shell_command",
-            resource_scope=shell_command_scope(agent.id, "/work", "read", [["pwd"]], [], True),
-            action_kind="shell", risk_level="low", title="Read", summary="Read"),
+            resource_scope=shell_command_scope(agent.id, "/work", "read", [["pwd"]], [], True,
+                action=shell_action_scope(agent.id, "/work", "pwd")),
+            action_kind="shell", risk_level="low", title="Read", summary="Read",
+            session_grants=(SessionGrantScope("read", "shell_action", shell_action_scope(agent.id, "/work", "pwd")),)),
     }[kind]
     grant = _grant(request, parent.id)
     db = _db_with_grants(grant)

@@ -251,7 +251,7 @@ async def _decide_agent_action(
             or not isinstance(scope["resourceType"], str)
             or not 1 <= len(scope["resourceType"]) <= 80
             or not isinstance(scope["resourceScope"], str)
-            or len(scope["resourceScope"]) > 50_000
+            or len(scope["resourceScope"]) > 1_048_576
             or scope["resourceDisplay"] is not None
             and not isinstance(scope["resourceDisplay"], str)
             or not session_grant_matches_request(

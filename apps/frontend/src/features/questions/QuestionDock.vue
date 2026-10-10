@@ -73,8 +73,8 @@
         <q-banner v-if="oneTime" rounded class="app-surface-tonal q-mt-sm">
           <template #avatar><q-icon name="lock_clock" color="primary" /></template>
           <template v-if="current.administrator">
-            Wenn du dieses Passwort sendest, erlaubst du Administratorzugriffe auf „{{ current.administrator.alias }}“
-            für den laufenden Durchlauf.
+            Dieses Passwort dient zur Authentifizierung auf „{{ current.administrator.alias }}“ im laufenden Durchlauf.
+            Es erteilt keine Aktionsfreigabe. Zugriffe werden separat nach den wirksamen Regeln und Freigaben geprüft.
           </template>
           <template v-else>
             Diese Antwort wird im laufenden Durchlauf verwendet. Du kannst sie stattdessen flüchtig für diese
@@ -179,16 +179,14 @@
             <q-checkbox dense
               v-model="draft.rememberForSession[current.id]"
               color="primary"
-              :label="current.administrator
-                ? `Administratorzugriffe auf ${current.administrator.alias} für diese Session erlauben`
-                : 'Für diese Session merken'"
+              label="Für diese Session merken"
               :disable="busy"
               class="q-mt-sm"
             />
             <div class="text-caption app-muted q-ml-sm">
               <template v-if="current.administrator">
-                Merkt auch das Passwort flüchtig. Die Zugriffsfreigabe kannst du in den Session-Freigaben widerrufen.
-                Nach einem Backend-Neustart wird das Passwort erneut benötigt.
+                Merkt nur das Passwort flüchtig, keine Zugriffsrechte.
+                Beim Löschen der Session oder beim Backend-Neustart wird es verworfen.
               </template>
               <template v-else>Wird beim Löschen der Session oder beim Backend-Neustart verworfen.</template>
             </div>

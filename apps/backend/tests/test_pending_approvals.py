@@ -9,11 +9,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent.run_support import approval_payload
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.approvals import (
+    _permission_payload,
     all_permissions,
     pending_approvals,
     revoke_permissions,
+    session_rules,
 )
-from mato_loop_backend.models import ApprovalRequest, ChatSession, PermissionGrant, UserAccount
+from mato_loop_backend.models import (
+    ApprovalRequest,
+    ChatSession,
+    ExecutionAgent,
+    PermissionGrant,
+    UserAccount,
+)
+from mato_loop_backend.permissions.policy import (
+    administrator_permission,
+    execution_directory_scope,
+    shell_action_scope,
+)
+from mato_loop_backend.settings import TrustLevel
 
 
 def _approval(user_id, session_id, created_at: datetime, *, request_type="agent_action") -> ApprovalRequest:
@@ -100,7 +114,8 @@ async def test_pending_memory_approval_has_no_required_session() -> None:
     assert result[0]["sourceSession"] is None
 
 
-async def test_all_permissions_include_owned_session_context() -> None:
+async def test_all_permissions_include_owned_session_context(monkeypatch) -> None:
+    monkeypatch.setattr("mato_loop_backend.api.routes.approvals._permission_binding", AsyncMock(return_value=(None, TrustLevel.PRIVATE)))
     user = UserAccount(id=uuid4(), username="test", password_hash="hash")
     first_session = ChatSession(id=uuid4(), user_id=user.id, title="Projekt Aurora")
     second_session = ChatSession(id=uuid4(), user_id=user.id, title="Recherche")
@@ -156,6 +171,40 @@ async def test_all_permissions_include_owned_session_context() -> None:
     assert "chat_sessions.user_id =" in sql
     assert "ORDER BY permission_grants.created_at" in sql
     assert user.id in statement.compile().params.values()
+
+
+@pytest.mark.parametrize("kind", ["execution_directory", "execution_path", "administrator_path", "shell_action", "run_action"])
+@pytest.mark.parametrize("same_computer", [True, False])
+async def test_permission_target_display_does_not_require_source_approval(kind, same_computer):
+    user = UserAccount(id=uuid4())
+    computer = ExecutionAgent(id=uuid4(), user_id=user.id, alias="Server")
+    session = ChatSession(id=uuid4(), user_id=user.id, current_directory="/work",
+        preferred_execution_agent_id=computer.id if same_computer else uuid4())
+    grant = PermissionGrant(id=uuid4(), session_id=session.id, resource_type=kind,
+        resource_scope=shell_action_scope(computer.id, "/work", "pwd") if kind == "shell_action" else execution_directory_scope(computer.id, "/work"),
+        capability="execution.directory" if kind == "execution_directory" else "resource.read",
+        trust_level="public", created_at=datetime.now(UTC))
+    source = None
+    if kind == "run_action":
+        request = administrator_permission(computer.id, "/work", capability="shell.read", command="cat /root/.ssh/config")
+        source = _approval(user.id, session.id, grant.created_at)
+        source.resource_type, source.resource_scope, source.capability = request.resource_type, request.resource_scope, request.capability
+        grant.source_approval_id, grant.resource_scope = source.id, "a" * 64
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = computer
+    payload = await _permission_payload(db, user, grant, source, session, (None, TrustLevel.PUBLIC))
+    assert (payload["resourceDisplay"], payload["executionAgentName"], payload["applicable"], payload.get("command"), payload.get("elevated", False)) == (
+        "/work", "Server", same_computer, "cat /root/.ssh/config" if kind == "run_action" else "pwd" if kind == "shell_action" else None,
+        kind in {"administrator_path", "run_action"},
+    )
+
+
+async def test_session_rules_reject_foreign_session():
+    user = UserAccount(id=uuid4())
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = ChatSession(id=uuid4(), user_id=uuid4())
+    with pytest.raises(ApiError, match="session.notFound"):
+        await session_rules(db.get.return_value.id, user, db)
 
 
 async def test_revoke_permissions_deletes_only_session_wide_grants_for_owned_session() -> None:

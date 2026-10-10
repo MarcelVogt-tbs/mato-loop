@@ -26,8 +26,8 @@ def test_windows_paths_are_absolute_drive_paths_and_grants_are_case_insensitive(
         with pytest.raises(ValueError):
             absolute_path(invalid)
     agent_id = uuid4()
-    grant = SessionGrantScope("read", "execution_directory",
-                              execution_directory_scope(agent_id, "C:/Users/Test"))
+    grant = SessionGrantScope("read", "execution_path",
+                              execution_directory_scope(agent_id, "C:/Users/Test/file.txt"))
     assert session_grant_matches_request(
         "filesystem.read", "execution_directory",
         execution_directory_scope(agent_id, "C:/USERS/test/file.txt"), grant,

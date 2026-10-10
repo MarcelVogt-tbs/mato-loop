@@ -11,8 +11,10 @@ vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), delete: v
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm }) }))
 
 import ApprovalCard from '../src/features/approvals/ApprovalCard.vue'
+import SessionApp from '../src/features/chat/components/SessionApp.vue'
 import MemorySettingsPage from '../src/features/memory/MemorySettingsPage.vue'
 import { useApprovalStore } from '../src/stores/approvals'
+import { useChatStore } from '../src/stores/chat'
 import { api } from 'src/boot/axios'
 
 const { confirm } = vi.hoisted(() => ({ confirm: vi.fn() }))
@@ -43,6 +45,12 @@ afterEach(() => {
 })
 
 async function mountApproval(approval = responses['/approvals/pending'][0]) {
+  const store = useApprovalStore()
+  store.pending = [approval]
+  await mountView(() => store.pending.map((approval) => h(ApprovalCard, { approval, showDraftAction: false })))
+}
+
+async function mountView(render) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -53,13 +61,7 @@ async function mountApproval(approval = responses['/approvals/pending'][0]) {
   await router.push('/')
   root = document.createElement('div')
   document.body.append(root)
-  app = createApp({
-    setup() {
-      const store = useApprovalStore()
-      store.pending = [approval]
-      return () => store.pending.map((approval) => h(ApprovalCard, { approval, showDraftAction: false }))
-    }
-  })
+  app = createApp({ render })
   app.use(pinia).use(router).use(Quasar, quasarOptions)
   app.mount(root)
   await nextTick()
@@ -87,9 +89,72 @@ async function selectOption(card, label, option) {
 }
 
 describe('approval card', () => {
+  it.each(['shell_action', 'run_action'])('shows %s run grants with their exact shell context in the session list', async (resourceType) => {
+    useChatStore().current = { id: 'session-1' }
+    responses['/approvals/permissions'] = [{
+      id: 'grant-1', sessionId: 'session-1', runId: 'child-run', applicable: false,
+      capability: 'resource.write', resourceType, resourceDisplay: '/opt/project',
+      executionAgentName: 'Notebook', currentDirectory: '/opt/project',
+      command: 'printf reviewed > output.txt', elevated: true
+    }]
+    await mountView(() => h(SessionApp))
+    await vi.waitFor(() => expect(root.querySelector('[aria-labelledby="session-permissions-title"]')?.textContent).toMatch(
+      /Arbeitsverzeichnis.*\/opt\/project.*Computer: Notebook.*printf reviewed > output.txt.*Mit Administratorrechten.*Bis zum Ende des ausführenden Laufs.*Inaktiv/s
+    ))
+  })
+
+  it('hides stale grant binding claims after a failed refresh on computer change', async () => {
+    useChatStore().current = { id: 'session-1', preferredExecutionAgentId: 'old' }
+    responses['/approvals/permissions'] = [{
+      id: 'grant-1', sessionId: 'session-1', applicable: true,
+      capability: 'resource.read', resourceType: 'execution_path', resourceDisplay: '/work/file'
+    }]
+    await mountView(() => h(SessionApp))
+    const section = root.querySelector('[aria-labelledby="session-permissions-title"]')
+    await vi.waitFor(() => expect(section.textContent).toContain('Bindung passt'))
+    api.get.mockRejectedValue(new Error('offline'))
+    useChatStore().current.preferredExecutionAgentId = 'new'
+    await vi.waitFor(() => expect(section.textContent).toContain('Freigaben konnten nicht geladen werden.'))
+    expect(section.textContent).not.toContain('Bindung passt')
+  })
+
+  it('shows deduplicated session rules without treating integration catalog policies as universal', async () => {
+    useChatStore().current = { id: 'session-1' }
+    const read = { capability: 'filesystem.read', label: 'Dateien lesen', policy: 'auto', available: true }
+    responses['/approvals/sessions/session-1/rules'] = {
+      trustLevel: 'public',
+      groups: [{ id: 'files', label: 'Dateien', tools: [
+        { name: 'read', actions: [read] }, { name: 'glob', actions: [read] },
+        { name: 'write', available: false, actions: [{ capability: 'filesystem.write', label: 'Dateien schreiben', policy: 'disabled' }] },
+        { name: 'calendar', source: { type: 'integration' }, actions: [{ capability: 'calendar.read', label: 'Kalender lesen', policy: 'auto' }] }
+      ] }],
+      scopedPolicies: {
+        integrationPolicies: { calendar: { 'calendar.read': 'ask' } },
+        resourcePolicies: { calendar: { 'private-calendar': { 'calendar.read': 'disabled' } } }
+      },
+      shellPrefixes: { read: [['git', 'status']], write: [] }
+    }
+    await mountView(() => h(SessionApp))
+    const section = root.querySelector('[aria-labelledby="session-rules-title"]')
+    await vi.waitFor(() => expect(section.textContent).toContain('Öffentliche Modelle'))
+    expect(section.textContent.match(/Dateien lesen/g)).toHaveLength(1)
+    expect(section.textContent).toMatch(/Dateien lesen.*filesystem.read.*Automatisch/s)
+    expect(section.textContent).toContain('Technisch nicht verfügbar')
+    const integrationRow = [...section.querySelectorAll('.q-item')].find((item) => item.textContent.includes('Kalender lesen'))
+    expect(integrationRow.textContent).toContain('Je nach Integration und Ressource')
+    expect(integrationRow.textContent).not.toContain('Automatisch')
+    expect(section.textContent).toMatch(/calendar.read · Nachfragen.*Integrationsregel.*calendar.read · Deaktiviert.*Ressourcenregel.*private-calendar/s)
+    expect(section.textContent).toContain('git status')
+
+    api.get.mockRejectedValue(new Error('offline'))
+    useChatStore().current = { id: 'session-2' }
+    await vi.waitFor(() => expect(section.textContent).toContain('Regeln konnten nicht geladen werden.'))
+    expect(section.textContent).not.toContain('private-calendar')
+  })
+
   it('submits administrator session approval without collecting a password', async () => {
     responses['/approvals/pending'][0] = {
-      ...responses['/approvals/pending'][0], requestType: 'agent_action', resourceType: 'execution_administrator',
+      ...responses['/approvals/pending'][0], requestType: 'agent_action', resourceType: 'administrator_path',
       capability: 'filesystem.write', availableDecisions: ['allow_once', 'allow_session', 'deny'],
       payload: {}
     }
@@ -117,7 +182,7 @@ describe('approval card', () => {
         displayItems: [
           { label: 'Shell-Befehl', value: command, format: 'code' },
           { label: 'Terminal-Ordner', value: currentDirectory, format: 'code' },
-          { label: 'Für diese Session', value: ['Alle passenden lesenden Datei- und Shell-Aktionen: /extern und Unterordner'], format: 'list' }
+          { label: 'Freigegebener Bereich', value: ['Exakter Shell-Befehl auf diesem Computer mit gleichem Arbeitsverzeichnis und gleicher Umgebung'], format: 'list' }
         ]
       },
       details: { tool: 'shell_run', arguments: { command: 'unreviewed original' } }
@@ -133,7 +198,7 @@ describe('approval card', () => {
     expect(api.post).not.toHaveBeenCalled()
     root.querySelector('.q-checkbox').click()
     await nextTick()
-    expect(root.textContent).toContain('Alle passenden lesenden Datei- und Shell-Aktionen: /extern und Unterordner')
+    expect(root.textContent).toContain('Exakter Shell-Befehl auf diesem Computer mit gleichem Arbeitsverzeichnis und gleicher Umgebung')
     const allow = [...root.querySelectorAll('button')].find((button) => button.textContent === 'Für Session erlauben')
     expect(allow).toBeTruthy()
     allow.click()

@@ -230,16 +230,14 @@
           v-if="hasBothAllowDecisions"
           v-model="rememberForSession"
           color="primary"
-          :label="approval.resourceType === 'execution_administrator'
-            ? 'Administratorzugriffe auf diesen Computer für diese Session erlauben'
-            : 'Passende Aktionen in dieser Session nicht mehr nachfragen'"
+          label="Passende Aktionen in dieser Session nicht mehr nachfragen"
           :disable="Boolean(loadingDecision) || matchingDraftDirty"
         />
         <ul class="text-body2 q-my-sm q-pl-md">
           <li v-for="line in sessionGrantDisplay" :key="line">{{ line }}</li>
         </ul>
         <div v-if="rememberForSession || !hasBothAllowDecisions" class="text-caption app-muted q-ml-sm">
-          Gilt auch für weitere Läufe dieser Session. Kann in den Session-Freigaben widerrufen werden.
+          Gilt auch für weitere Läufe dieser Session. Kann unter Session > Explizite Freigaben widerrufen werden.
         </div>
         <div v-else class="text-caption app-muted q-ml-sm">
           Gilt bis zum Abschluss oder Abbruch dieses Laufs.

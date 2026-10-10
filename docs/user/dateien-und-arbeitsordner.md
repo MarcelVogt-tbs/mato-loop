@@ -40,7 +40,7 @@ Im Dateibrowser ist zunächst die aktuelle Session ausgewählt. Innerhalb eines 
 
 Versionen gelten nur für verwaltete Dateien. **Ordner als ZIP herunterladen** lädt einen Ordner samt Inhalt; große oder unsichere Dateibäume können die Transfergrenzen überschreiten. Home-, absolute Pfad- und Arbeitsordneraktionen gehören ausschließlich zu **Computer-Dateien**.
 
-Session-Freigaben zeigen und widerrufen Sie unter **Session > Session-Freigaben**, nicht in der Datei-App oder im Benachrichtigungsbereich.
+Lauf- und Session-Freigaben zeigen und widerrufen Sie unter **Session > Explizite Freigaben**, nicht in der Datei-App oder im Benachrichtigungsbereich. Ordnernavigation ist von Datei- und Shell-Rechten getrennt; eine Dateifreigabe gilt für den exakten Pfad, nicht für dessen Unterordner.
 
 Nachrichten verweisen bei Uploads und dauerhaften Binärausgaben auf die exakte Dateiversion. Normales Bearbeiten, Umbenennen und Verschieben erhalten diese Verweise. Löschen entfernt Datei und vollständigen Versionsverlauf; die Nachricht zeigt die Datei danach als nicht mehr verfügbar. Reine Text-, JSON-, Status- und Fehlerergebnisse bleiben Teil der Nachricht.
 

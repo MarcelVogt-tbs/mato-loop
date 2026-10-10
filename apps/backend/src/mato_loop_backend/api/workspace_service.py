@@ -263,7 +263,7 @@ async def _clear_file_grants(
             await db.scalars(
                 select(PermissionGrant)
                 .where(
-                    PermissionGrant.resource_type.in_(("execution_directory", "root_path"))
+                    PermissionGrant.resource_type.in_(("execution_directory", "root_path", "execution_path", "session_path", "administrator_path"))
                 )
                 .join(ChatSession, ChatSession.id == PermissionGrant.session_id)
                 .where(ChatSession.user_id == user.id)
@@ -272,7 +272,7 @@ async def _clear_file_grants(
     )
     for grant in grants:
         remove = False
-        if grant.resource_type == "execution_directory":
+        if grant.resource_type in {"execution_directory", "execution_path", "administrator_path"}:
             if context.agent_id is None:
                 continue
             try:
@@ -288,7 +288,7 @@ async def _clear_file_grants(
                 )
             except (KeyError, TypeError, json.JSONDecodeError):
                 remove = True
-        elif grant.resource_type == "root_path":
+        elif grant.resource_type in {"root_path", "session_path"}:
             try:
                 scope = json.loads(grant.resource_scope)
                 grant_path = scope["path"]

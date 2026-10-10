@@ -70,23 +70,23 @@ export function approvalResource(approval, sessions = []) {
   if (approval?.capability === 'memory.write') {
     return { label: 'Dauerhafte Erinnerungen', value: 'Persönliche Memories' }
   }
-  if (['shell_command', 'execution_administrator'].includes(approval?.resourceType)) {
+  if (['shell_command', 'shell_action', 'execution_administrator'].includes(approval?.resourceType)) {
     return {
-      label: approval?.actionKind === 'shell_run' ? 'Arbeitsverzeichnis' : 'Datei oder Ordner',
-      value: approval?.resourceDisplay || 'Ausgewählter Bereich'
+      label: approval?.resourceType === 'shell_action' || approval?.actionKind === 'shell_run' ? 'Arbeitsverzeichnis' : 'Datei oder Ordner',
+      value: approval?.currentDirectory || approval?.resourceDisplay || 'Pfad nicht verfügbar'
     }
   }
-  if (['path', 'root_path', 'execution_root_path'].includes(approval?.resourceType)) {
+  if (['path', 'root_path', 'execution_root_path', 'execution_path', 'session_path', 'administrator_path'].includes(approval?.resourceType)) {
     return {
       label: 'Datei oder Ordner',
-      value: approval?.resourceDisplay || (approval?.resourceType === 'path' ? scope : '') || 'Ausgewählter Pfad'
+      value: approval?.resourceDisplay || (approval?.resourceType === 'path' ? scope : '') || 'Pfad nicht verfügbar'
     }
   }
   if (approval?.resourceType === 'execution_directory') {
     return {
       label: approval?.capability?.startsWith('filesystem.') || approval?.capability === 'file.provide'
         ? 'Datei oder Ordner' : 'Aktueller Ordner',
-      value: approval?.resourceDisplay || 'Ausgewählter Ordner'
+      value: approval?.resourceDisplay || 'Pfad nicht verfügbar'
     }
   }
   if (approval?.resourceType === 'execution_agent') {
@@ -230,29 +230,33 @@ function sanitize(value, depth, seen, key = '', truncate = true) {
 
 export function permissionGrantDisplay(grant, sessions = []) {
   if (grant?.resourceType === 'run_action') {
-    return { label: 'Bestätigte Aktion', value: grant.resourceDisplay || 'Mit den freigegebenen Werten', icon: 'verified_user' }
+    return { label: grant.command ? 'Bestätigter Shell-Befehl' : 'Bestätigte Aktion', value: grant.resourceDisplay || 'Mit den freigegebenen Werten', icon: grant.command ? 'terminal' : 'verified_user' }
   }
   if (grant?.resourceType === 'execution_administrator') {
     return {
-      label: grant.capability === 'resource.write' ? 'Administrator-Schreibzugriffe' : 'Administrator-Lesezugriffe',
+      label: 'Frühere Administratorfreigabe',
       value: grant.resourceDisplay || `Computer ${grant.resourceScope}`,
       icon: 'admin_panel_settings'
     }
   }
   const resource = approvalResource(grant, sessions)
-  if (['resource.read', 'resource.write'].includes(grant?.capability)) {
-    const includesShell = grant.resourceType === 'execution_directory'
-    const includesChildren = ['execution_directory', 'root_path'].includes(grant.resourceType)
-    const write = grant.capability === 'resource.write'
-    const target = includesShell
-      ? 'Datei- und Shell-Aktionen'
-      : grant.resourceType === 'root_path' ? 'Dateiaktionen' : 'Aktionen'
+  if (grant?.resourceType === 'shell_action') {
     return {
-      label: `Alle passenden ${write ? 'schreibenden' : 'lesenden'} ${target}`,
-      value: includesChildren
-        ? `${resource.value} und Unterordner`
-        : resource.value,
-      icon: write ? 'edit' : 'visibility'
+      label: grant.capability === 'resource.write' ? 'Exakter Shell-Befehl · Schreiben' : 'Exakter Shell-Befehl · Lesen',
+      value: resource.value,
+      icon: 'terminal'
+    }
+  }
+  if (['resource.read', 'resource.write'].includes(grant?.capability)) {
+    const write = grant.capability === 'resource.write'
+    const exactPath = ['execution_path', 'session_path', 'administrator_path'].includes(grant.resourceType)
+    const legacyPath = ['execution_directory', 'root_path'].includes(grant.resourceType)
+    return {
+      label: exactPath
+        ? `Exakter Pfad · ${write ? 'Schreiben' : 'Lesen'}`
+        : legacyPath ? 'Frühere Bereichsfreigabe' : `Alle passenden ${write ? 'schreibenden' : 'lesenden'} Aktionen`,
+      value: resource.value,
+      icon: grant.resourceType === 'administrator_path' ? 'admin_panel_settings' : write ? 'edit' : 'visibility'
     }
   }
   if (grant?.resourceType === 'shell_command') {
@@ -286,7 +290,7 @@ export function permissionGrantDisplay(grant, sessions = []) {
     'filesystem.read': { label: 'Dateien lesen', icon: 'visibility' },
     'filesystem.write': { label: 'Dateien schreiben', icon: 'edit' },
     'filesystem.delete': { label: 'Dateien löschen', icon: 'delete_outline' },
-    'execution.directory': { label: 'Aktuellen Ordner wechseln', icon: 'drive_file_move' },
+    'execution.directory': { label: 'Als Arbeitsverzeichnis verwenden', icon: 'drive_file_move' },
     'system.info': { label: 'Systeminformationen lesen', icon: 'computer' },
     'process.execute': { label: 'Befehl ausführen', icon: 'terminal' },
     'network.search': { label: 'Websuche verwenden', icon: 'travel_explore' },

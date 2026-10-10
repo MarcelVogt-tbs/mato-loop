@@ -25,7 +25,6 @@ from mato_loop_backend.execution import (
     WorkspaceWriteResult,
 )
 from mato_loop_backend.execution.paths import absolute_path
-from mato_loop_backend.execution.paths import parent as computer_parent
 from mato_loop_backend.files.archives import MAX_EXPORT_BYTES
 from mato_loop_backend.files.service import (
     FileRevision,
@@ -143,7 +142,6 @@ def filesystem_permission(
     root_files: RootFileService | None = None,
     target_session_id: UUID | None = None,
 ) -> PermissionRequest:
-    parent_grant = action_kind in {"write_file", "edit_file", "apply_patch"}
     if FileRoot(root) is FileRoot.WORKSPACE:
         client = workspace_client(context)
         absolute_path = execution_path(context, path)
@@ -154,7 +152,6 @@ def filesystem_permission(
             action_kind=action_kind,
             title=f"{action_label} erlauben?",
             summary=f"Der Agent möchte {absolute_path} verwenden.",
-            grant_path=computer_parent(absolute_path) if parent_grant else absolute_path,
         )
     selected_files = root_files or context.root_files
     if target_session_id is not None and target_session_id != context.session.id:
@@ -174,7 +171,6 @@ def filesystem_permission(
         relative_path=path,
         action_kind=action_kind,
         action_label=action_label,
-        grant_path=(posixpath.dirname(path) or "." if parent_grant else path),
     )
 
 

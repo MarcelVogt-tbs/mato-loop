@@ -28,6 +28,7 @@ from mato_loop_backend.permissions.policy import (
     integration_operation_permission,
     session_grants_fingerprint,
     session_grants_payload,
+    shell_action_scope,
     shell_command_scope,
 )
 from mato_loop_backend.providers.base import ToolCall
@@ -69,8 +70,9 @@ async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision
     agent_id = uuid4()
     approval.capability = "shell.write"
     approval.resource_type = "shell_command"
+    action = shell_action_scope(agent_id, "/source", "touch /target/file")
     approval.resource_scope = shell_command_scope(
-        agent_id, "/source", "write", [], ["/target/file"], True, ["write"]
+        agent_id, "/source", "write", [], ["/target/file"], True, ["write"], action
     )
     approval.payload = {
         "agentProfileId": str(profile_id),
@@ -78,15 +80,9 @@ async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision
         "sessionGrants": [
             {
                 "access": "write",
-                "resourceType": "execution_directory",
-                "resourceScope": execution_directory_scope(agent_id, "/source"),
-                "resourceDisplay": "/source",
-            },
-            {
-                "access": "write",
-                "resourceType": "execution_directory",
-                "resourceScope": execution_directory_scope(agent_id, "/target"),
-                "resourceDisplay": "/target",
+                "resourceType": "shell_action",
+                "resourceScope": action,
+                "resourceDisplay": "touch /target/file",
             },
         ],
     }
@@ -108,11 +104,8 @@ async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision
 
     grants = [call.args[0] for call in db.add.call_args_list]
     assert all(isinstance(grant, PermissionGrant) for grant in grants)
-    assert [grant.capability for grant in grants] == ["resource.write", "resource.write"]
-    assert [grant.resource_scope for grant in grants] == [
-        execution_directory_scope(agent_id, "/source"),
-        execution_directory_scope(agent_id, "/target"),
-    ]
+    assert [grant.capability for grant in grants] == ["resource.write"]
+    assert [grant.resource_scope for grant in grants] == [action]
     assert all(grant.session_id == approval.session_id for grant in grants)
     assert all(grant.run_id == (approval.run_id if decision == "allow_once" else None) for grant in grants)
     assert all(grant.agent_profile_id == profile_id for grant in grants)
@@ -150,7 +143,7 @@ async def test_administrator_decision_creates_scoped_grants(monkeypatch, decisio
     await decide_approval(approval.id, ApprovalDecisionRequest(decision=decision), user, db)
     assert [(call.args[0].resource_type, call.args[0].run_id) for call in db.add.call_args_list] == (
         [("run_action", approval.run_id)] if confidential else
-        [("execution_administrator", approval.run_id if decision == "allow_once" else None)] * 2
+        [("administrator_path", approval.run_id if decision == "allow_once" else None)]
     )
 
 
@@ -328,7 +321,8 @@ async def test_allow_session_rejects_entire_malformed_grant_set(monkeypatch) -> 
     release.assert_called_once_with(approval.id)
 
 
-async def test_allow_session_accepts_257_scopes_and_rejects_258(monkeypatch) -> None:
+@pytest.mark.parametrize("count", [1, 257, 258])
+async def test_allow_session_rejects_legacy_shell_directory_scopes(monkeypatch, count) -> None:
     approval = _approval()
     agent_id = uuid4()
     paths = [f"/target/{index}" for index in range(256)]
@@ -363,7 +357,7 @@ async def test_allow_session_accepts_257_scopes_and_rejects_258(monkeypatch) -> 
             for index in range(count)
         ]
 
-    approval.payload = {"sessionGrants": scopes(258)}
+    approval.payload = {"sessionGrants": scopes(count)}
     _fingerprint(approval)
     with pytest.raises(ApiError) as exc_info:
         await decide_approval(
@@ -372,14 +366,6 @@ async def test_allow_session_accepts_257_scopes_and_rejects_258(monkeypatch) -> 
     assert exc_info.value.code == "approval.targetChanged"
     release.assert_called_once_with(approval.id)
     db.add.assert_not_called()
-
-    approval.payload = {"sessionGrants": scopes(257)}
-    _fingerprint(approval)
-    await decide_approval(
-        approval.id, ApprovalDecisionRequest(decision="allow_session"), user, db
-    )
-    assert db.add.call_count == 257
-
 
 @pytest.mark.parametrize("decision", ["allow_once", "allow_session"])
 async def test_allow_rejects_a_changed_scope_fingerprint(monkeypatch, decision) -> None:

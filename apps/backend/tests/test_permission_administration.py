@@ -16,6 +16,7 @@ from mato_loop_backend.api.routes.agent_profiles import (
     set_agent_profile_enabled,
     set_default_agent_profile,
 )
+from mato_loop_backend.api.routes.approvals import session_rules
 from mato_loop_backend.api.routes.integrations import (
     ProfileIntegrationAvailabilityRequest,
     get_integration_permissions,
@@ -30,7 +31,7 @@ from mato_loop_backend.api.routes.tool_settings import (
 )
 from mato_loop_backend.integrations.contracts import IntegrationResource
 from mato_loop_backend.integrations.tbs_desk.adapter import profile_id as integration_profile_id
-from mato_loop_backend.models import UserAccount
+from mato_loop_backend.models import AgentRun, ChatSession, UserAccount
 from mato_loop_backend.permissions.resolution import tool_execution_policy
 from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
@@ -216,6 +217,17 @@ async def test_tool_permission_display_uses_the_same_profile_inheritance_as_runt
     response = await get_profile_tool_permissions(PLAN_PROFILE_ID, user, db, "instance")
     actions = [action for group in response["groupsByTrust"]["public"] for tool in group["tools"] for action in tool["actions"]]
     assert next(action["policy"] for action in actions if action["capability"] == "session.files.read") == "auto"
+
+
+async def test_session_rules_use_executing_profile_and_trust(monkeypatch):
+    user = UserAccount(id=uuid4(), username="owner", password_hash="hash")
+    session = ChatSession(id=uuid4(), user_id=user.id, agent_profile_id=GENERAL_PROFILE_ID)
+    db = settings_db(monkeypatch, {})
+    db.get.side_effect = lambda model, _id: session if model is ChatSession else user
+    db.scalar.return_value = AgentRun(agent_profile_id=PLAN_PROFILE_ID, trust_level="public")
+    response = await session_rules(session.id, user, db)
+    actions = [action for group in response["groups"] for tool in group["tools"] for action in tool["actions"]]
+    assert (response["trustLevel"], next(action["policy"] for action in actions if action["capability"] == "shell.write")) == ("public", "disabled")
 
 
 async def test_provided_integration_profiles_work_when_personal_tool_overrides_are_disabled(monkeypatch):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
@@ -44,13 +45,12 @@ async def request_approval(
     if run.id in cls._pending_continuations:
         raise ToolCallSuperseded
     origin = await permission_origin(db, chat_session)
-    if permission.resource_type == "execution_administrator":
-        agent = await db.get(ExecutionAgent, UUID(permission.approval_details["administratorAgentId"]))
+    if permission.resource_type in {"execution_administrator", "execution_directory", "shell_command"}:
+        agent = await db.get(ExecutionAgent, UUID(json.loads(permission.resource_scope)["agentId"]))
         if isinstance(agent, ExecutionAgent) and agent.user_id == chat_session.user_id:
             permission = replace(
-                permission, title=f"Administratorzugriff auf „{agent.display_name}“ erlauben?",
+                permission, title=f"Administratorzugriff auf „{agent.display_name}“ erlauben?" if permission.resource_type == "execution_administrator" else permission.title,
                 display_items=tuple(replace(item, value=agent.display_name) if item.label == "Computer" else item for item in permission.display_items),
-                session_grants=tuple(replace(grant, resource_display=agent.display_name) for grant in permission.session_grants),
             )
     grant_payload = session_grants_payload(permission)
     available_decisions = [

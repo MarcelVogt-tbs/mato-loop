@@ -7,8 +7,9 @@ The tool must be the only tool call in that model response so later actions cann
 reply is known.
 
 Pending requests and accepted answers are persisted in `question_requests`. The runtime uses the
-same single-process waiter semantics as approvals. Ordinary question answers create no permission
-grants; submitted protected administrator input can grant run access or remembered session access.
+same single-process waiter semantics as approvals. Question answers, including protected
+administrator input, create no permission grants. Password entry and session retention provide
+authentication only; actions independently require effective policy or matching explicit consent.
 Users can also reject a request, which returns a controlled rejected tool result. The
 frontend loads pending requests independently of SSE and replaces the normal composer with a
 sequential question dock. Backend restarts expire pending requests and fail their active runs
@@ -22,7 +23,7 @@ discards the draft instead of submitting it.
 
 Protected questions from `secret_input` and `variable_write` also allow empty answer lists.
 Only filled fields receive secret references or can be remembered for the session. A skipped
-administrator password grants no access. Temporary protected answers persist only a received
+administrator password supplies no authentication. Temporary protected answers persist only a received
 marker for filled fields and an empty list for skipped fields; their values are never persisted.
 `secret_input` returns the available references in `environment` and the skipped input names in
 `unanswered`, with instructions to explain blocked work instead of assuming values or repeating

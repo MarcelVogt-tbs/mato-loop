@@ -70,6 +70,7 @@ from mato_loop_backend.permissions.policy import (
     execution_directory_permission,
     execution_directory_scope,
     session_grant_matches_request,
+    shell_action_scope,
     shell_command_permission,
     shell_command_scope,
     shell_prefix_allowed,
@@ -498,7 +499,7 @@ async def test_workspace_directory_read_grants_only_that_directory(tmp_path) -> 
     assert request.effective_session_grants == (
         SessionGrantScope(
             "read",
-            "execution_directory",
+            "execution_path",
             execution_directory_scope(client.agent_id, "/etc"),
             "/etc",
         ),
@@ -674,7 +675,7 @@ async def test_execution_error_params_are_validated_before_tool_serialization(tm
 def _shell_permission(
     client, classification="write", prefixes=None, directory=None, paths=None, analysis_complete=True
 ):
-    grant_paths = paths or [directory or client.current_directory]
+    action = shell_action_scope(client.agent_id, directory or client.current_directory, json.dumps(prefixes or []))
     return PermissionRequest(
         capability=f"shell.{classification}",
         resource_type="shell_command",
@@ -685,20 +686,13 @@ def _shell_permission(
             prefixes or [],
             paths or [],
             analysis_complete,
+            action=action,
         ),
         action_kind="shell_run",
         risk_level="high",
         title="Shell-Befehl ausführen?",
         summary="Test",
-        session_grants=tuple(
-            SessionGrantScope(
-                classification,
-                "execution_directory",
-                execution_directory_scope(client.agent_id, path),
-                path,
-            )
-            for path in grant_paths
-        ),
+        session_grants=(SessionGrantScope(classification, "shell_action", action),),
     )
 
 
@@ -724,7 +718,7 @@ def test_shell_grant_matches_access_class_agent_and_directory(tmp_path) -> None:
     assert not PermissionPolicy.grant_matches(grant, wrong_directory, context.root_files)
 
 
-async def test_administrator_grants_cover_file_and_shell_actions_but_not_disabled_rights(tmp_path) -> None:
+async def test_administrator_grants_cover_only_exact_action_and_never_disabled_rights(tmp_path) -> None:
     client = FakeExecutionClient({}, {"shell.inspect", "shell.run", "shell.classify", "administrator.run"})
     context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)
     context.session.preferred_execution_agent_id = client.agent_id
@@ -752,7 +746,7 @@ async def test_administrator_grants_cover_file_and_shell_actions_but_not_disable
         context.db, context.session, request, context.root_files, ToolExecutionPolicy.ASK,
     ) == PermissionDecision.ALLOW
     changed = administrator_permission(client.agent_id, client.current_directory, capability="filesystem.read", path="/root/other")
-    assert PermissionPolicy.grant_matches(exact_grant, changed, context.root_files)
+    assert not PermissionPolicy.grant_matches(exact_grant, changed, context.root_files)
     changed = administrator_permission(client.agent_id, client.current_directory, capability="filesystem.write", path="/root/other")
     assert not PermissionPolicy.grant_matches(exact_grant, changed, context.root_files)
     changed = administrator_permission(uuid4(), client.current_directory, capability="shell.read", command="id")
@@ -768,6 +762,10 @@ async def test_administrator_grants_cover_file_and_shell_actions_but_not_disable
     context.db.scalar.return_value.home_directory = "/home/user"
     context.db.scalar.return_value.home_filesystem_policy = "deny"
     file_request = administrator_permission(client.agent_id, client.current_directory, capability="filesystem.read", path="/etc/demo.conf")
+    file_scope = file_request.effective_session_grants[0]
+    context.db.scalars.return_value = Mock(all=Mock(return_value=[PermissionGrant(
+        capability=file_scope.capability, resource_type=file_scope.resource_type, resource_scope=file_scope.resource_scope,
+    )]))
     assert await PermissionPolicy.evaluate(
         context.db, context.session, file_request, context.root_files, ToolExecutionPolicy.ASK,
     ) == PermissionDecision.ALLOW
@@ -1007,7 +1005,7 @@ async def test_elevated_shell_requires_a_capable_agent_before_approval(tmp_path)
 
 
 @pytest.mark.parametrize("remember", [False, True])
-async def test_administrator_input_grants_run_or_revocable_session_access(tmp_path, monkeypatch, remember):
+async def test_administrator_input_authenticates_without_granting_access(tmp_path, monkeypatch, remember):
     client = FakeExecutionClient({"administrator.run": ProcessResult(
         exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0,
         stderr_bytes=0, stdout_truncated=False, stderr_truncated=False,
@@ -1052,9 +1050,7 @@ async def test_administrator_input_grants_run_or_revocable_session_access(tmp_pa
         target = context.question_handler.await_args.args[0].questions[0].administrator
         assert (target.agent_id, target.alias) == (client.agent_id, "AI-PC")
         grants = [item.args[0] for item in context.db.add.call_args_list]
-        assert {grant.capability for grant in grants} == ({"resource.read", "resource.write"} if remember else set())
-        assert all(grant.resource_scope == str(client.agent_id) and grant.session_id == context.session.id
-                   and grant.agent_profile_id == context.agent_profile_id and grant.trust_level == "public" for grant in grants)
+        assert grants == []
         context.db.scalar.side_effect = None
         context.db.scalar.return_value = agent
         context.db.scalars.return_value = Mock(all=Mock(side_effect=lambda: grants))
@@ -1068,29 +1064,19 @@ async def test_administrator_input_grants_run_or_revocable_session_access(tmp_pa
 
         context.ask_handler = AsyncMock(side_effect=permission)
         shell = ShellRunArguments(command="id -u", elevated=True, sudo_password_ref=reference)
-        assert not (await _shell_run(shell, context)).is_error
-        assert client.requests[-1][1]["sudoPassword"] == "private password"
-        if remember:
-            grants.clear()
-        else:
-            context.administrator_access.clear()
-        assert (await _shell_run(shell, context)).is_error
-        context.administrator_access.add(client.agent_id)
-        agent.external_shell_enabled = False
         assert (await _shell_run(shell, context)).is_error
     finally:
         session_secrets.clear_session(context.session.id)
 
 
 @pytest.mark.parametrize("sensitive_policy", list(ToolExecutionPolicy))
-async def test_administrator_run_consent_honors_sensitive_policy(tmp_path, monkeypatch, sensitive_policy):
+async def test_administrator_authentication_preserves_action_policy(tmp_path, monkeypatch, sensitive_policy):
     from mato_loop_backend.tools.administrator import authorize
 
     client = FakeExecutionClient({}, {"administrator.run"})
     context = _context(tmp_path, ToolCall("read", "read", {}), client, decision=(
         PermissionDecision.DENY if sensitive_policy == ToolExecutionPolicy.DISABLED else PermissionDecision.ASK
     ))
-    context.administrator_access.add(client.agent_id)
     context.tool_settings.permissions.policies["sensitive_data.access"] = sensitive_policy
     monkeypatch.setattr(
         "mato_loop_backend.tools.access.profile_tool_settings", AsyncMock(return_value=context.tool_settings),
@@ -1099,7 +1085,7 @@ async def test_administrator_run_consent_honors_sensitive_policy(tmp_path, monke
         client.agent_id, client.current_directory, capability="filesystem.read", path="/root/.env",
     ))
     assert (allowed, context.ask_handler.await_count) == (
-        sensitive_policy == ToolExecutionPolicy.AUTO, 2 if sensitive_policy == ToolExecutionPolicy.ASK else 1,
+        False, 1 if sensitive_policy == ToolExecutionPolicy.DISABLED else 2,
     )
 
 
@@ -1120,7 +1106,6 @@ async def test_secret_input_reports_skipped_administrator_password_without_grant
 
     assert result["unanswered"] == ["SSH_PASSWORD"]
     assert set(result["environment"]) == {"SSH_USERNAME"}
-    assert context.administrator_access == set()
 
 
 async def test_variable_write_reports_skipped_value(tmp_path, monkeypatch):
@@ -1147,7 +1132,7 @@ async def test_missing_administrator_password_returns_to_input_before_approval(t
     assert all(item.kwargs.get("check_only") for item in context.ask_handler.await_args_list)
 
 
-def test_shell_session_grants_include_cwd_and_every_target_directory() -> None:
+def test_shell_session_grants_bind_exact_command_and_context() -> None:
     agent_id = uuid4()
     request = shell_command_permission(
         agent_id,
@@ -1167,10 +1152,10 @@ def test_shell_session_grants_include_cwd_and_every_target_directory() -> None:
         ),
     )
 
-    assert [
-        (grant.access, json.loads(grant.resource_scope)["path"])
-        for grant in request.effective_session_grants
-    ] == [("write", "/work"), ("read", "/outside"), ("write", "/other"), ("write", "/generic")]
+    assert request.effective_session_grants == (SessionGrantScope(
+        "write", "shell_action", shell_action_scope(agent_id, "/work", "cat /outside/input.txt > /other/output.txt"),
+        "cat /outside/input.txt > /other/output.txt",
+    ),)
     assert json.loads(request.resource_scope)["targetAccesses"] == ["read", "write", "write"]
     assert all(
         session_grant_matches_request(
@@ -1178,12 +1163,12 @@ def test_shell_session_grants_include_cwd_and_every_target_directory() -> None:
         )
         for grant in request.effective_session_grants
     )
-    outside_read = request.effective_session_grants[1]
+    outside_read = request.effective_session_grants[0]
     assert not session_grant_matches_request(
         request.capability,
         request.resource_type,
         request.resource_scope,
-        replace(outside_read, access="write"),
+        replace(outside_read, access="read"),
     )
 
 
@@ -1311,7 +1296,7 @@ async def test_possible_secret_output_requires_approval_under_auto_policy(tmp_pa
     context.db.scalars.assert_not_awaited()
 
 
-def test_legacy_shell_targets_remain_one_shot_only() -> None:
+def test_legacy_shell_targets_can_use_exact_command_consent() -> None:
     agent_id = uuid4()
     request = shell_command_permission(
         agent_id,
@@ -1323,7 +1308,7 @@ def test_legacy_shell_targets_remain_one_shot_only() -> None:
             commands=[], inspection_revision="a" * 64,
         ),
     )
-    assert request.available_decisions == ("allow_once", "deny")
+    assert request.available_decisions == ("allow_once", "allow_session", "deny")
     assert json.loads(request.resource_scope)["targetAccesses"] == [None]
 
 
@@ -1341,7 +1326,6 @@ async def test_legacy_shell_target_is_not_authorized_by_existing_directory_grant
             commands=[], inspection_revision="a" * 64,
         ),
     )
-    cwd = request.effective_session_grants[0]
     context.db.scalar.return_value = ExecutionAgent(
         id=client.agent_id, user_id=context.session.user_id,
         home_filesystem_policy="ask", external_filesystem_policy="ask",
@@ -1349,9 +1333,9 @@ async def test_legacy_shell_target_is_not_authorized_by_existing_directory_grant
     )
     context.db.scalars.return_value = Mock(all=Mock(return_value=[PermissionGrant(
         session_id=context.session.id,
-        capability=cwd.capability,
-        resource_type=cwd.resource_type,
-        resource_scope=cwd.resource_scope,
+        capability="resource.read",
+        resource_type="execution_directory",
+        resource_scope=execution_directory_scope(client.agent_id, "/work"),
     )]))
 
     assert await PermissionPolicy.evaluate(
@@ -2112,6 +2096,7 @@ async def test_shell_metadata_only_paths_preserve_profile_and_trust_policies(
     assert request.shell_metadata_paths == frozenset(target["path"] for target in targets[:-1])
     assert json.loads(request.resource_scope) == {
         "agentId": str(client.agent_id), "currentDirectory": client.current_directory,
+        "action": shell_action_scope(client.agent_id, client.current_directory, command),
         "classification": classification, "analysisComplete": analysis_complete,
         "prefixes": [unit.prefix for unit in inspection.commands],
         "paths": [target["path"] for target in targets],
