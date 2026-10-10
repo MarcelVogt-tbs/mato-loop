@@ -219,22 +219,23 @@
         @click="back"
       />
       <q-btn
-        v-if="!last"
-        outline
-        no-caps
-        color="primary"
-        label="Weiter"
-        :disable="busy"
-        @click="next"
-      />
-      <q-btn
-        unelevated
+        :outline="!last"
+        :unelevated="last"
         no-caps
         color="primary"
         label="Fertig"
         :loading="answering"
         :disable="busy"
         @click="finish"
+      />
+      <q-btn
+        v-if="!last"
+        unelevated
+        no-caps
+        color="primary"
+        label="Weiter"
+        :disable="busy"
+        @click="next"
       />
     </q-card-actions>
   </q-card>
