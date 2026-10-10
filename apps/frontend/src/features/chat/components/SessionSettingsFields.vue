@@ -1,16 +1,16 @@
 <template>
-  <div :class="equalFields ? 'session-start-fields' : compact ? 'row items-center q-gutter-xs' : 'column q-gutter-md'">
+  <div :class="equalFields ? 'session-start-fields' : compact ? 'row items-center q-gutter-xs' : grouped ? 'q-gutter-y-md' : 'column q-gutter-md'">
     <slot name="before" />
-    <q-banner v-if="showWarning && warning" dense rounded class="app-surface-tonal">
-      <template #avatar><q-icon name="warning_amber" color="warning" /></template>
-      {{ warning }}
+    <q-banner v-if="showWarning && (warning || computerInfo)" dense rounded class="app-surface-tonal" :role="warning ? 'alert' : 'status'">
+      <template #avatar><q-icon :name="warning ? 'warning_amber' : 'info_outline'" :color="warning ? 'warning' : 'info'" /></template>
+      {{ warning || computerInfo }}
     </q-banner>
 
-    <section v-if="grouped && hasSessionFields" aria-labelledby="session-settings-title">
+    <section v-if="grouped && hasSessionFields" class="session-settings-group" aria-labelledby="session-settings-title">
       <div id="session-settings-title" class="text-subtitle1 text-weight-bold q-mb-sm">
         Session-Einstellungen
       </div>
-      <div class="column q-gutter-sm">
+      <div class="session-settings-grid items-start">
         <TemplateField v-if="has('template')" />
         <MessageSizeField v-if="has('messageSize')" />
         <AgentField v-if="has('agent')" />
@@ -20,11 +20,11 @@
       </div>
     </section>
 
-    <section v-if="grouped && hasLlmFields" aria-labelledby="session-llm-settings-title">
+    <section v-if="grouped && hasLlmFields" class="session-settings-group" aria-labelledby="session-llm-settings-title">
       <div id="session-llm-settings-title" class="text-subtitle1 text-weight-bold q-mb-sm">
         LLM-Einstellungen
       </div>
-      <div class="column q-gutter-sm">
+      <div class="session-settings-grid items-start">
         <ModelField v-if="has('model')" />
         <ReasoningField v-if="has('reasoning')" />
       </div>
@@ -169,7 +169,7 @@ const modelSupportsTools = computed(() => selectedModelConfig.value?.supportsToo
 const memoryModeOptions = [
   { label: 'Vollständig', value: 'full', icon: 'memory', description: 'Vorherige Chats und Erinnerungen nutzen; neue Erinnerungen speichern' },
   { label: 'Lesen', value: 'read_only', icon: 'visibility', description: 'Vorherige Chats und Erinnerungen nutzen; nichts speichern' },
-  { label: 'Deaktiviert', value: 'disabled', icon: 'memory_alt', description: 'Keine Inhalte aus vorherigen Chats oder Erinnerungen nutzen' }
+  { label: 'Deaktiviert', value: 'disabled', icon: 'memory', description: 'Keine Inhalte aus vorherigen Chats oder Erinnerungen nutzen' }
 ]
 const effectiveMemoryMode = computed(() => props.session?.effectiveMemoryMode || props.session?.memoryMode || 'disabled')
 const memoryMessage = computed(() => {
@@ -182,7 +182,7 @@ const memoryMessage = computed(() => {
     disabled: 'Keine Inhalte aus vorherigen Chats oder Erinnerungen nutzen.'
   }[effectiveMemoryMode.value]
 })
-const memoryModeIcon = computed(() => ({ full: 'memory', read_only: 'visibility', disabled: 'memory_alt' })[props.session?.memoryMode] || 'memory')
+const memoryModeIcon = computed(() => ({ full: 'memory', read_only: 'visibility', disabled: 'memory' })[props.session?.memoryMode] || 'memory')
 const searchAvailable = computed(() => integrations.search.effectiveEnabled)
 const webSearchOptions = computed(() => [
   {
@@ -224,6 +224,10 @@ const webSearchMessage = computed(() => (
 const requiredSearchUnavailable = computed(() => (
   props.session?.webSearchPolicy === 'required' && (!searchAvailable.value || !modelSupportsTools.value)
 ))
+const computerInfo = computed(() => (
+  has('computer') && !executionAgents.loadFailed && !props.session?.preferredExecutionAgentId
+    ? executionAgentMessage.value : ''
+))
 const warning = computed(() => {
   const warnings = []
   const profile = agentProfiles.byId(displayedAgentProfileId.value)
@@ -236,7 +240,7 @@ const warning = computed(() => {
     && (props.session?.memoryUnavailableReason || (!props.session?.memoryToolsAvailable && effectiveMemoryMode.value !== 'disabled'))
   ) warnings.push(memoryMessage.value)
   if (requiredSearchUnavailable.value) warnings.push(webSearchTooltip.value || 'Die erforderliche Websuche ist nicht verfügbar.')
-  if (has('computer') && executionAgentMessage.value) warnings.push(executionAgentMessage.value)
+  if (has('computer') && executionAgentMessage.value && !computerInfo.value) warnings.push(executionAgentMessage.value)
   return warnings.join(' ')
 })
 
@@ -370,10 +374,10 @@ const ComputerField = defineComponent(() => () => [
     )?.label) : undefined
   }),
   executionAgentMessage.value && !props.showWarning && !props.compact
-    ? h(QBanner, { dense: true, rounded: true, class: 'app-surface-tonal' }, {
+    ? h(QBanner, { dense: true, rounded: true, class: 'app-surface-tonal', role: warning.value ? 'alert' : 'status' }, {
         avatar: () => h(QIcon, {
           name: selectedExecutionAgent.value?.connected === false ? 'cloud_off' : 'info_outline',
-          color: 'warning'
+          color: warning.value ? 'warning' : 'info'
         }),
         default: () => executionAgentMessage.value
       })

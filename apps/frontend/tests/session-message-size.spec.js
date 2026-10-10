@@ -12,16 +12,17 @@ import SessionSettingsFields from '../src/features/chat/components/SessionSettin
 let app, root
 afterEach(() => { app?.unmount(); root?.remove() })
 
-it('changes message size while retaining the session configuration', async () => {
+it('changes message size while retaining configuration and shows an unselected computer as information', async () => {
   const sessionProfile = { templateId: 'coding', agentIds: ['plan', 'build'], agentModels: { plan: { modelId: 'model' } }, messageSize: 'standard' }
   const update = vi.fn()
   root = document.createElement('div')
   document.body.append(root)
   app = createApp({ render: () => h(SessionSettingsFields, {
-    session: { sessionProfile }, fields: ['messageSize'], onUpdate: update
+    session: { sessionProfile }, fields: ['messageSize', 'computer'], showWarning: true, onUpdate: update
   }) })
   app.use(createPinia()).use(Quasar, { components: { QSelect, QIcon, QItem, QItemLabel, QItemSection } })
   app.mount(root)
+  expect(root.querySelector('.q-banner[role="status"] .text-info')?.textContent).toBe('info_outline')
   root.querySelector('.q-field__native').click()
   const option = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find((item) => item.querySelector('.q-item__label')?.textContent === 'Klein'))
   option.click()

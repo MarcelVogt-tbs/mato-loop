@@ -1,7 +1,7 @@
 // Quasar 2.18 has no field size between dense (40px) and the composer's 28px.
-// Keep its single-line input/select internals together here; recheck on upgrades.
-// Textareas and the composer's existing borderless controls keep their own sizing.
-.q-field:is(.q-input, .q-select):not(.q-textarea):not(.composer-select):not(.chat-start-select) {
+// Keep the input/select/file/textarea internals together here; recheck on upgrades.
+// Only the composer's controls keep their own sizing.
+.q-field:is(.q-input, .q-select, .q-file, .q-textarea):not(.composer-select):not(.chat-composer__input) {
   --app-field-height: 44px;
   --app-field-label-space: 14px;
   font-size: 16px;
@@ -27,6 +27,10 @@
     padding-block: 0;
   }
 
+  .q-field__native .q-chip {
+    font-size: inherit;
+  }
+
   &.q-field--labeled {
     .q-field__native,
     .q-field__prefix,
@@ -35,7 +39,12 @@
     }
   }
 
-  &.q-field--auto-height {
+  &.q-textarea .q-field__control-container {
+    padding-block: 0;
+  }
+
+  &.q-field--auto-height,
+  &.q-textarea {
     .q-field__control {
       height: auto;
       min-height: var(--app-field-height);
@@ -61,6 +70,10 @@
     }
   }
 
+  &.q-textarea.q-field--labeled .q-field__native {
+    padding-block: calc((var(--app-field-height) - var(--app-field-label-space) - 20px) / 2);
+  }
+
   // Narrow fields need wrapping hints/errors in normal flow, not a fixed bottom slot.
   &.q-field--with-bottom {
     padding-bottom: 0;
@@ -73,22 +86,9 @@
   }
 
   @media (min-width: 1024px) and (hover: hover) and (pointer: fine) and (not (any-pointer: coarse)) {
-    --app-field-height: 32px;
+    --app-field-height: 34px;
     --app-field-label-space: 12px;
-    font-size: 13px;
-
-    &.q-field--labeled {
-      --app-field-height: 36px;
-    }
-
-    &:not(.q-field--borderless) {
-      max-width: min(100%, var(--app-field-max-width, 28rem));
-    }
-
-    &:has(input[type='url']),
-    &.app-field--wide {
-      --app-field-max-width: 42rem;
-    }
+    font-size: 14px;
 
     .q-field__marginal {
       font-size: 18px;
