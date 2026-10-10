@@ -93,7 +93,7 @@ def test_notification_draft_normalizes_text_and_rejects_blanks() -> None:
 
     assert (draft.title, draft.body, draft.deduplication_key) == (
         "Fertig",
-        "Ergebnis",
+        "  Ergebnis",
         "run:1",
     )
     with pytest.raises(ValidationError):
@@ -232,11 +232,15 @@ def test_notification_cursor_is_owner_bound() -> None:
     assert exc_info.value.field == "cursor"
 
 
-async def test_notification_previews_remove_markdown_before_truncating(monkeypatch) -> None:
-    source = (
+@pytest.mark.parametrize("source,expected", [
+    (
         "# **Bericht**\n\n[Dokument](https://example.test/" + "x" * 600 + ")\n\n"
-        "- `status_code`\n- ~~erledigt~~\n\n" + "weiter " * 90
-    )
+        "- `status_code`\n- ~~erledigt~~\n\n" + "weiter " * 90,
+        "Bericht Dokument status_code erledigt" + " weiter" * 66 + "…",
+    ),
+    ('    print("**warning**")\n', 'print("**warning**")'),
+])
+async def test_notification_previews_remove_markdown_before_truncating(monkeypatch, source, expected) -> None:
     session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test", session_type="chat")
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = session
@@ -251,7 +255,7 @@ async def test_notification_previews_remove_markdown_before_truncating(monkeypat
         _notification_payload(item).body,
         web_push_payload(title=item.title, body=item.body, tag="notice", target=None).notification.body,
     ]
-    assert previews == ["Bericht Dokument status_code erledigt" + " weiter" * 66 + "…"] * 2
+    assert previews == [expected] * 2
 
 
 async def test_notification_list_returns_cursor_target_and_global_unread_count(monkeypatch) -> None:

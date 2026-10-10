@@ -57,7 +57,7 @@ class NotificationDraft(BaseModel):
     @field_validator("body")
     @classmethod
     def normalize_body(cls, value: str | None) -> str | None:
-        return value.strip() or None if value is not None else None
+        return value.rstrip() or None if value is not None else None
 
 
 class NotificationError(ValueError):
@@ -168,7 +168,7 @@ class NotificationService:
                 body=(
                     "Der Agent-Auftrag konnte nicht abgeschlossen werden. Details stehen in der Session."
                     # ponytail: snapshots retain at most 4,000 source characters; read source messages if more is needed.
-                    if message.error_code else canonical_assistant_content(message.content).strip()[:4_000]
+                    if message.error_code else canonical_assistant_content(message.content).rstrip()[:4_000]
                     or "Die Antwort ist in der Session verfügbar."
                 ),
                 deduplication_key=f"message:{message.id}",
