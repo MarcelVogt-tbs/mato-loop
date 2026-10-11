@@ -8,7 +8,8 @@ import { quasarOptions } from './quasar-options'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), put: vi.fn() } }))
-vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: async () => true }) }))
+const { confirm } = vi.hoisted(() => ({ confirm: vi.fn(async () => true) }))
+vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm }) }))
 
 import ToolPage from '../src/features/settings/ToolSettingsPage.vue'
 import IntegrationPage from '../src/features/integrations/IntegrationAccessPage.vue'
@@ -53,6 +54,36 @@ it('saves the model distinction switch from basic settings', async () => {
   await nextTick()
   root.querySelector('button').click()
   await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/general-settings', { publicBaseUrl: null, modelTrustEnabled: false }))
+})
+
+it.each([true, false])('confirms visible tool presets and does not reapply them on ordinary saves (model distinction: %s)', async (modelTrustEnabled) => {
+  vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+  const current = { publicBaseUrl: null, effectivePublicBaseUrl: 'https://mato.test', publicUrlSource: 'automatic', modelTrustEnabled, toolPermissionPresets: { private: null, public: 'ask_all' } }
+  const chosen = { private: 'ask_delete_sensitive', ...(modelTrustEnabled ? { public: 'ask_sensitive' } : {}) }
+  api.get.mockResolvedValue({ data: current })
+  api.put.mockResolvedValue({ data: { ...current, toolPermissionPresets: { ...current.toolPermissionPresets, ...chosen } } })
+  await mount(GeneralPage, {}, '/tools', 'settings-tools')
+  const choose = async (label, option) => {
+    const select = await vi.waitUntil(() => root.querySelector(`[aria-label="${label}: Tool-Vorgabe"]:not([aria-disabled="true"])`))
+    select.click()
+    const item = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find(item => item.querySelector('.q-item__label')?.textContent === option))
+    item.click()
+    await vi.waitUntil(() => !document.querySelector('[role="option"]'))
+  }
+  await vi.waitFor(() => expect(root.textContent).toContain('Individuell angepasst'))
+  expect(root.querySelector('a[aria-label="Tool-Vorgaben erklärt (öffnet neuen Tab)"]').getAttribute('href')).toBe('/docs/tools-und-integrationen/#globale-tool-vorgaben-anwenden')
+  await choose(modelTrustEnabled ? 'Privat' : 'Alle Modelle', 'Löschen und sensible Zugriffe bestätigen')
+  if (modelTrustEnabled) await choose('Öffentlich', 'Nur sensible Zugriffe bestätigen')
+  confirm.mockResolvedValueOnce(false)
+  root.querySelector('button').click()
+  await vi.waitFor(() => expect(confirm).toHaveBeenCalledOnce())
+  expect(api.put).not.toHaveBeenCalled()
+  await nextTick()
+  root.querySelector('button').click()
+  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/general-settings', { publicBaseUrl: null, modelTrustEnabled, toolPermissionPresets: chosen }))
+  await vi.waitUntil(() => !root.querySelector('button').disabled)
+  root.querySelector('button').click()
+  await vi.waitFor(() => expect(api.put).toHaveBeenLastCalledWith('/general-settings', { publicBaseUrl: null, modelTrustEnabled }))
 })
 
 it('edits only owned profile tool rights in settings, including for an admin', async () => {

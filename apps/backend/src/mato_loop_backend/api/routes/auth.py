@@ -22,7 +22,13 @@ from mato_loop_backend.security import (
     require_admin,
     require_user,
 )
-from mato_loop_backend.settings import AgentProfilesSettings, GeneralSettings, SettingsStore
+from mato_loop_backend.settings import (
+    AgentProfilesSettings,
+    GeneralSettings,
+    SettingsStore,
+    ToolSettings,
+)
+from mato_loop_backend.settings.tool_presets import tool_preset_policies
 
 router = APIRouter(prefix="/auth")
 config = get_runtime_config()
@@ -115,6 +121,11 @@ async def setup(
         raise ApiError(status.HTTP_409_CONFLICT, "auth.setupCompleted")
     # Create the instance document; shipped profiles remain code-owned.
     await SettingsStore.save(db, AgentProfilesSettings())
+    if await SettingsStore.load_optional(db, ToolSettings, for_update=True) is None:
+        tools = ToolSettings()
+        tools.private_permissions.policies.update(tool_preset_policies("ask_changes"))
+        tools.public_permissions.policies.update(tool_preset_policies("ask_all"))
+        await SettingsStore.save(db, tools)
     user = UserAccount(
         username=username,
         password_hash=hash_password(payload.password),

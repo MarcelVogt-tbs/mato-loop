@@ -20,6 +20,55 @@ Unter **Administration > Tools > Einstellungen** steht die Freigabe persönliche
 
 Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte oder wegen Profilrechten, Modellwahl oder fehlender Integration nicht aufrufbare Fähigkeiten erscheinen für den Agenten lediglich als kompakter Hinweis. Dieser Hinweis kann weder eine Aktion noch eine Freigabe auslösen.
 
+### Globale Tool-Vorgaben anwenden
+
+**Administration > Grundeinstellungen > Globale Tool-Vorgaben** setzt vorhandene globale Tool-Berechtigungen gesammelt.
+
+- **Privat / Öffentlich:** getrennte Dropdowns bei aktiver Modelltrennung.
+- **Alle Modelle:** bearbeitet bei ausgeschalteter Modelltrennung die privaten Werte. Öffentliche Werte bleiben gespeichert.
+- **Info-Symbol:** öffnet diesen Abschnitt in einem neuen Tab; der Formularentwurf bleibt erhalten.
+- **Individuell angepasst:** Die aktuellen globalen Einzelregeln entsprechen keiner Vorlage. Dieser Text ist eine Zustandsanzeige, keine zusätzliche Vorlage.
+
+#### Welche Auswahl passt?
+
+| Vorlage | Lesen | Ändern | Löschen | Sensible Zugriffe |
+| --- | --- | --- | --- | --- |
+| Alles bestätigen | Nachfragen | Nachfragen | Nachfragen | Nachfragen |
+| Änderungen bestätigen | Automatisch | Nachfragen | Nachfragen | Nachfragen |
+| Löschen und sensible Zugriffe bestätigen | Automatisch | Automatisch | Nachfragen | Nachfragen |
+| Nur sensible Zugriffe bestätigen | Automatisch | Automatisch | Automatisch | Nachfragen |
+| Alles automatisch ausführen | Automatisch | Automatisch | Automatisch | Automatisch |
+
+- **Vorgabe privat:** Änderungen bestätigen.
+- **Vorgabe öffentlich:** Alles bestätigen.
+- Diese Vorgaben gelten für neue Installationen. Bestehende Installationen werden nicht automatisch umgestellt.
+
+#### Was bedeuten die Kategorien?
+
+- **Lesen:** beispielsweise Dateien lesen oder Informationen suchen.
+- **Ändern:** beispielsweise Dateien schreiben oder Automationen bearbeiten.
+- **Löschen:** ausdrücklich ausgewiesene Löschrechte für Dateien und Automationen.
+- **Sensible Zugriffe:** erkannte vertrauliche Dateien wie `.env`, mögliche Secret-Ausgaben sowie Variablen/Secrets verwenden oder speichern. Diese Kategorie gilt auch dann, wenn die Aktion nur liest oder etwas schreibt.
+
+#### Vorlage anwenden
+
+1. Die gewünschte Vorlage im jeweiligen Dropdown auswählen. **Vorgabe** kennzeichnet die Ausgangseinstellung.
+2. **Speichern** anklicken.
+3. Das Ersetzen der globalen Toolregeln bestätigen. **Abbrechen** speichert nichts.
+
+- Geändert werden nur ausdrücklich ausgewählte Modellbereiche.
+- Die Vorlage setzt auch Löschrechte und sensible Zugriffe gemäß Tabelle. Manuelle Anpassungen dieser globalen Regeln werden überschrieben.
+- Profil- und Integrations-Overrides, Shell-Präfixe und die technische Tool-Verfügbarkeit bleiben erhalten.
+- Speichern ohne erneute Auswahl wendet keine Vorlage an.
+- Es werden konkrete Berechtigungen gespeichert, kein zusätzlicher Automatikmodus.
+
+#### Geltungsbereich und Grenzen
+
+- Die Tabelle beschreibt globale Tool-Vorgaben. Eigene Profilregeln können abweichen, beispielsweise automatische Schreibaktionen bei Build.
+- Technische Sperren und die für eine Aktion zulässigen Berechtigungswerte gelten weiterhin.
+- Ein automatisch erlaubter Shell-Befehl kann löschen. Die Kategorie **Löschen** erfasst keine beliebigen Löschwirkungen innerhalb anderer Aktionen.
+- Die Erkennung sensibler Dateien und Ausgaben ist nicht vollständig; sie erkennt nicht jede vertrauliche Information.
+
 Eigene direkte Oberflächeaktionen verwenden keine Modell-Freigabekarte, etwa in **Ablage**, **Computer-Dateien** oder bei einer Mikrofonaufnahme. Ihre Eigentümer- und technischen Grenzen gelten weiter.
 
 Der direkte Dateizugriff im Control Center ist an Ihr Konto und den ausgewählten MatoLoop Agent gebunden. Er umgeht absichtlich die Profilrechte für Modellaktionen und kann auf alle Pfade zugreifen, die dessen Betriebssystembenutzer erreichen kann. MatoLoop Agent verwendet Descriptor- und No-Follow-Prüfungen, ist aber keine Betriebssystem-Sandbox.

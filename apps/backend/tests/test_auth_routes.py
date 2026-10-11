@@ -30,9 +30,10 @@ async def test_setup_locks_before_check_and_creates_first_admin(monkeypatch) -> 
     db = AsyncMock(spec=AsyncSession)
     db.execute.side_effect = lambda _statement: events.append("lock")
     db.scalar.side_effect = lambda _statement: events.append("count") or 0
-    save = AsyncMock(side_effect=lambda *_args: events.append("profiles"))
+    save = AsyncMock(side_effect=lambda _db, settings: events.append(settings.settings_key))
     monkeypatch.setattr(SettingsStore, "save", save)
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=GeneralSettings()))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(return_value=None))
     db.commit.side_effect = lambda: events.append("commit")
     monkeypatch.setattr(auth_routes, "hash_password", lambda _password: "hashed")
     monkeypatch.setattr(
@@ -49,8 +50,10 @@ async def test_setup_locks_before_check_and_creates_first_admin(monkeypatch) -> 
     )
 
     user = db.add.call_args.args[0]
-    assert events == ["lock", "count", "profiles", "commit"]
-    save.assert_awaited_once_with(db, AgentProfilesSettings())
+    assert events == ["lock", "count", "agent-profiles", "tools", "commit"]
+    save.assert_any_await(db, AgentProfilesSettings())
+    tools = save.await_args_list[1].args[1]
+    assert (tools.private_permissions.policies["filesystem.read"], tools.private_permissions.policies["filesystem.write"], tools.public_permissions.policies["filesystem.read"], tools.private_permissions.policies["sensitive_data.access"]) == ("auto", "ask", "ask", "ask")
     assert user.username == "admin"
     assert user.is_admin and user.is_active
     assert result["isAdmin"] is True

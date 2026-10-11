@@ -3,7 +3,7 @@ import { api } from 'src/boot/axios'
 import { useAuthStore } from 'stores/auth'
 
 export const useGeneralSettingsStore = defineStore('general-settings', {
-  state: () => ({ publicBaseUrl: null, effectivePublicBaseUrl: '', publicUrlSource: 'automatic', modelTrustEnabled: true, loading: false, loaded: false, loadFailed: false, saving: false }),
+  state: () => ({ publicBaseUrl: null, effectivePublicBaseUrl: '', publicUrlSource: 'automatic', modelTrustEnabled: true, toolPermissionPresets: { private: null, public: null }, loading: false, loaded: false, loadFailed: false, saving: false }),
   actions: {
     async fetchSettings() {
       this.loading = true
@@ -18,10 +18,10 @@ export const useGeneralSettingsStore = defineStore('general-settings', {
         throw error
       } finally { this.loading = false }
     },
-    async saveSettings({ publicBaseUrl, modelTrustEnabled }) {
+    async saveSettings({ publicBaseUrl, modelTrustEnabled, toolPermissionPresets }) {
       this.saving = true
       try {
-        const { data } = await api.put('/general-settings', { publicBaseUrl: publicBaseUrl || null, modelTrustEnabled })
+        const { data } = await api.put('/general-settings', { publicBaseUrl: publicBaseUrl || null, modelTrustEnabled, ...(toolPermissionPresets ? { toolPermissionPresets } : {}) })
         Object.assign(this, data)
         useAuthStore().modelTrustEnabled = this.modelTrustEnabled
         return data
