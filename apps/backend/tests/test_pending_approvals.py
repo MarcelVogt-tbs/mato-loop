@@ -13,7 +13,6 @@ from mato_loop_backend.api.routes.approvals import (
     all_permissions,
     pending_approvals,
     revoke_permissions,
-    session_rules,
 )
 from mato_loop_backend.models import (
     ApprovalRequest,
@@ -197,14 +196,6 @@ async def test_permission_target_display_does_not_require_source_approval(kind, 
         "/work", "Server", same_computer, "cat /root/.ssh/config" if kind == "run_action" else "pwd" if kind == "shell_action" else None,
         kind in {"administrator_path", "run_action"},
     )
-
-
-async def test_session_rules_reject_foreign_session():
-    user = UserAccount(id=uuid4())
-    db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = ChatSession(id=uuid4(), user_id=uuid4())
-    with pytest.raises(ApiError, match="session.notFound"):
-        await session_rules(db.get.return_value.id, user, db)
 
 
 async def test_revoke_permissions_deletes_only_session_wide_grants_for_owned_session() -> None:

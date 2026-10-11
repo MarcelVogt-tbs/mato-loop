@@ -274,7 +274,18 @@ async def mcp_resources(
     return tuple(
         IntegrationResource(
             key=mcp_resource_key(tool.name),
-            label=labels.get(tool.name, tool.name[:160]),
+            label=labels.get(tool.name, tool.title or tool.name[:160]),
+            tool_name=tool.name,
+            description=tool.description,
+            hints=tuple(
+                label
+                for enabled, label in (
+                    (tool.annotations.readOnlyHint, "Als nur lesend markiert"),
+                    (tool.annotations.destructiveHint, "Als destruktiv markiert"),
+                    (tool.annotations.openWorldHint, "Externer Datenzugriff laut Server"),
+                )
+                if enabled is True
+            ),
         )
         for tool in config.tools
     )

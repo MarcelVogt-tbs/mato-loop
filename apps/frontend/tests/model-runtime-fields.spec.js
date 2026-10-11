@@ -12,6 +12,18 @@ import { modelRuntimeForm, modelRuntimePayload } from '../src/utils/model-runtim
 let app, root
 afterEach(() => { app?.unmount(); root?.remove() })
 
+it('keeps pseudonymization active with private models when the trust selector is hidden', async () => {
+  const form = reactive(modelRuntimeForm({ trustLevel: 'private', pseudonymizationEnabled: true }))
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp({ render: () => h(ModelRuntimeFields, { modelValue: form, modelTrustEnabled: false }) })
+  app.use(Quasar, quasarOptions)
+  app.mount(root)
+  root.querySelector('.q-expansion-item .q-item').click()
+  await nextTick()
+  expect(root.textContent).toMatch(/Schutz von Kennungen und Secrets.*Effektiv: Aktiv/s)
+})
+
 it('toggles Auto, validates manual ceilings independently and never edits them on context changes', async () => {
   const form = reactive(modelRuntimeForm({ discoveredContextWindowTokens: 4096 }))
   let qform

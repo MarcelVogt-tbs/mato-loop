@@ -18,8 +18,10 @@ from mato_loop_backend.settings.models import (
     AiProviderSettings,
     AiSettings,
     EffectiveAgentIdentity,
+    GeneralSettings,
     InstanceSkillsSettings,
     IntegrationAdapterAvailability,
+    IntegrationInstance,
     IntegrationSettings,
     ModelDefaults,
     ModelDefaultsSettings,
@@ -172,6 +174,13 @@ async def load_effective_ai(db: AsyncSession, user_id: UUID, *, include_personal
 
         instance.default_model_id = first_available_agent_model(instance)
 
+    general = await SettingsStore.load_optional(db, GeneralSettings) or GeneralSettings()
+    if not general.model_trust_enabled:
+        for provider in instance.providers:
+            provider.trust_level = TrustLevel.PRIVATE
+        for model in instance.models:
+            model.trust_level = TrustLevel.PRIVATE
+
     return instance
 
 
@@ -241,6 +250,16 @@ async def load_effective_integrations(
     return instance
 
 
+def integration_profile_available(instance: IntegrationInstance, profile: AgentProfile) -> bool:
+    override = instance.profile_permissions.get(profile.id)
+    if override is not None and override.available is not None:
+        return override.available
+    if str(instance.id) in profile.integration_availability:
+        return profile.integration_availability[str(instance.id)]
+    base = instance.profile_permissions.get(profile.base_profile_id)
+    return base.available if base is not None and base.available is not None else profile.integrations_enabled_by_default
+
+
 def filter_agent_profile_integrations(
     settings: IntegrationSettings,
     profile: AgentProfile | None,
@@ -255,11 +274,7 @@ def filter_agent_profile_integrations(
         if (ceiling is None or str(item.id) in ceiling)
         and (
             profile is None
-            or (
-                item.profile_permissions[profile.id].available
-                if item.owner_id is not None and profile.id in item.profile_permissions and item.profile_permissions[profile.id].available is not None
-                else profile.integration_availability.get(str(item.id), profile.integrations_enabled_by_default)
-            )
+            or integration_profile_available(item, profile)
         )
     ]
     selected_ids = {item.id for item in effective.instances}
@@ -287,6 +302,7 @@ async def load_effective_tools(
     for branch in (instance.private_permissions, instance.public_permissions):
         branch.integration_policies = {}
         branch.resource_policies = {}
+        branch.resource_availability = {}
     return instance.select_trust(trust_level)
 
 
@@ -295,18 +311,22 @@ def apply_integration_permissions(tools: ToolSettings, integrations: Integration
         target = getattr(tools, field)
         target.integration_policies = {}
         target.resource_policies = {}
+        target.resource_availability = {}
         for instance in integrations.instances:
             branch = getattr(instance.permissions, field)
             policies = dict(branch.policies)
             resources = {key: dict(value) for key, value in branch.resource_policies.items()}
-            override = instance.profile_permissions.get(profile_id) if instance.owner_id is not None else None
+            availability = dict(instance.permissions.resource_availability)
+            override = instance.profile_permissions.get(profile_id)
             if override is not None:
                 selected = getattr(override, field)
                 policies.update(selected.policies)
                 for key, value in selected.resource_policies.items():
                     resources.setdefault(key, {}).update(value)
+                availability.update(override.resource_availability)
             target.integration_policies[str(instance.id)] = policies
             target.resource_policies[str(instance.id)] = resources
+            target.resource_availability[str(instance.id)] = availability
 
 
 def personal_integration_tool_settings(instance: ToolSettings) -> UserToolSettings:

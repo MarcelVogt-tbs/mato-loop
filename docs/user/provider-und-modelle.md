@@ -32,6 +32,8 @@ Kontextfenster, Auto-/manuelles Ausgabelimit, Streaming, Tool-, Paralleltool- un
 
 Reasoning-Stufen erscheinen nur für unterstützte Modelle. Verfügbare Stufen und Standards hängen vom Provider und dessen erkanntem Modellprofil ab; synchronisieren Sie nach Provideränderungen. Die Auswahl eines öffentlichen Modells gibt bereits autorisierte Inhalte an diesen Provider frei. [Datenfreigabe](freigaben-und-datenfreigabe.md) und Memory-Zielgruppen bleiben getrennte Themen.
 
+**Öffentliche und private Modelle unterscheiden** unter **Administration > Grundeinstellungen** steuert die instanzweite Trennung. Ausgeschaltet gelten alle Modelle für neue Läufe als privat; gespeicherte Einstufungen bleiben erhalten. **Kennungen und Secrets pseudonymisieren** bleibt unabhängig einstellbar. Modelle können den Providerwert übernehmen oder überschreiben.
+
 ## Standardmodelle und Sessionvorlagen
 
 Gemeinsame Zuordnungen stehen unter **Administration > Standardmodelle > Verwaltung**, erlaubte persönliche Vorgaben unter **Einstellungen > Standardmodelle**. Die administrative Einstellungsseite steuert die persönliche Freigabe. Zwecke sind:

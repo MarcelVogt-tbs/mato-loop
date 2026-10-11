@@ -8,7 +8,7 @@ Benötigt werden Docker Engine, Compose v2 und für veröffentlichte Images ein 
 
 - Zufälliges URL-sicheres `POSTGRES_PASSWORD`, beispielsweise aus Hex-Zeichen.
 - `MATO_LOOP_IMAGE` und `MATOLOOP_AGENT_IMAGE` mit demselben tatsächlich veröffentlichten festen `YYYY-MM-DD-<SHA8>`-Tag aus einem erfolgreichen Veröffentlichungsdurchlauf.
-- `MATO_LOOP_PUBLIC_BASE_URL` als Ihren öffentlichen HTTP(S)-Ursprung ohne Pfad, nicht den Beispielhost. **Administration > Allgemein** überschreibt später diesen Fallback; ist beides leer, gilt der eingehende Serverursprung.
+- `MATO_LOOP_PUBLIC_BASE_URL` als Ihren öffentlichen HTTP(S)-Ursprung ohne Pfad, nicht den Beispielhost. **Administration > Grundeinstellungen** überschreibt später diesen Fallback; ist beides leer, gilt der eingehende Serverursprung.
 - Hostpfade für Datenbank, Backend und Agent sowie HTTP-Adresse/Port. Die Vorlage verwendet `/opt/mato-loop` und `/opt/matoloop-agent` und veröffentlicht HTTP-Port `10020` auf `0.0.0.0`.
 - HTTPS am Reverse Proxy und `MATO_LOOP_SECURE_COOKIES=true`. Die Vorlage liefert TLS nicht selbst; ein entferntes reines HTTP-Login mit Secure-Cookie ist keine passende Produktionskonfiguration.
 

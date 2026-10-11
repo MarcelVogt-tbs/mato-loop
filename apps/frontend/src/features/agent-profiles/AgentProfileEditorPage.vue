@@ -71,10 +71,13 @@
               <q-icon name="extension" color="primary" size="sm" class="col-auto" />
               <div class="col">
                 <div class="text-subtitle1 text-weight-bold">Integrationen</div>
-                <div class="text-body2 app-muted">{{ inheritedAccess ? `Verbindungszuordnungen des Basisprofils „${accessProfileName}“.` : 'Welche Verbindungen dieser Agent verwenden darf.' }}</div>
+                <div class="text-body2 app-muted">Einzelne Verbindungen und deren Rechte werden unter Integrationen konfiguriert.</div>
               </div>
               <div class="col-12 col-sm-auto">
-                <q-btn flat no-caps color="primary" label="Zuordnungen öffnen" :disable="!accessProfileId || agents.loading || agents.saving" :to="{ name: admin ? 'admin-integrations' : 'settings-integrations', query: { profileId: accessProfileId } }" />
+                <q-btn flat no-caps color="primary" label="Integrationen öffnen" :to="{ name: admin ? 'admin-integrations' : 'settings-integrations', query: { tab: 'management' } }" />
+              </div>
+              <div v-if="accessProfileId && (auth.isAdmin || agents.personalAgentsEnabled && agents.personalToolPermissionsEnabled)" class="col-12">
+                <ProfileIntegrationDefault :profile-id="accessProfileId" :scope="admin ? 'instance' : 'personal'" />
               </div>
             </q-card-section>
           </q-card>
@@ -93,6 +96,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 import { useConfirm } from 'src/composables/confirm'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useAuthStore } from 'stores/auth'
+import ProfileIntegrationDefault from 'src/features/integrations/ProfileIntegrationDefault.vue'
 
 defineOptions({ name: 'AgentProfileEditorPage' })
 const $q = useQuasar()

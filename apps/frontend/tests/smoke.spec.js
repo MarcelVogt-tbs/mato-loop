@@ -67,7 +67,7 @@ describe('MatoLoop frontend scaffold', () => {
     expect(
       settingsRoute.children.find((route) => route.name === 'settings-integrations').children
         .map((route) => route.name)
-    ).toEqual(['settings-integration-resources'])
+    ).toEqual(['settings-integration-create', 'settings-integration-edit', 'settings-integration-resources'])
     expect(
       settingsRoute.children.find((route) => route.name === 'settings-mcp').children
         .map((route) => ({ name: route.name, path: route.path }))

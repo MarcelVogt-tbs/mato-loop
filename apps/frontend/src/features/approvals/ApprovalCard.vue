@@ -73,6 +73,7 @@
               :options="memoryCategoryOptions" :disable="Boolean(loadingDecision)"
             />
             <AppSelect dense
+              v-if="auth.modelTrustEnabled"
               v-model="memoryEdit.audience"
               outlined emit-value map-options label="Verfügbar für" class="q-mt-md"
               hint="Legt fest, welche Modellarten diese Erinnerung verwenden dürfen."
@@ -237,7 +238,7 @@
           <li v-for="line in sessionGrantDisplay" :key="line">{{ line }}</li>
         </ul>
         <div v-if="rememberForSession || !hasBothAllowDecisions" class="text-caption app-muted q-ml-sm">
-          Gilt auch für weitere Läufe dieser Session. Kann unter Session > Explizite Freigaben widerrufen werden.
+          Gilt auch für weitere Läufe dieser Session. Kann unter Session > Session-Freigaben widerrufen werden.
         </div>
         <div v-else class="text-caption app-muted q-ml-sm">
           Gilt bis zum Abschluss oder Abbruch dieses Laufs.
@@ -317,6 +318,7 @@ import {
   toolPresentation
 } from 'src/utils/tool-display'
 import { useApprovalStore } from 'stores/approvals'
+import { useAuthStore } from 'stores/auth'
 import { useChatStore } from 'stores/chat'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useSkillStore } from 'stores/skills'
@@ -329,6 +331,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['open-approval-draft'])
 const approvals = useApprovalStore()
+const auth = useAuthStore()
 const chat = useChatStore()
 const workspace = useWorkspaceStore()
 const skills = useSkillStore()

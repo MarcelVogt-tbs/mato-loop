@@ -1,8 +1,8 @@
 # Freigaben und Datenfreigabe
 
-## Arbeitskontext, Regeln und Freigaben
+## Freigaben und Arbeitsverzeichnis
 
-Unter **Session** sind drei Dinge getrennt: **Arbeitskontext** zeigt Computer und Arbeitsverzeichnis; **Wirksame Regeln** zeigt die Tool-Regeln einschließlich Integrations- und Ressourcenregeln; **Explizite Freigaben** zeigt erteilte Lauf- und Sessionrechte. Eine Ordnerwahl erlaubt Navigation, keine Datei- oder Shell-Aktionen. Automatische Regeln und konfigurierte Shell-Präfixe gelten auch bei leerer Freigabeliste. Eine Freigabe überstimmt keine deaktivierte Aktion oder harte Grenze.
+Unter **Session > Freigaben und Arbeitsverzeichnis** sehen Sie die **Session-Freigaben** und darunter das aktuelle Arbeitsverzeichnis. Eine Ordnerwahl erlaubt Navigation, keine Datei- oder Shell-Aktionen. Automatische Regeln und konfigurierte Shell-Präfixe gelten auch bei leerer Freigabeliste. Eine Freigabe überstimmt keine deaktivierte Aktion oder harte Grenze.
 
 ## Freigabeanfragen
 
@@ -20,7 +20,7 @@ Benötigt eine zulässige Aktion Zustimmung, pausiert der ausführende Agent und
 
 Der Haken **Passende Aktionen in dieser Session nicht mehr nachfragen** ändert den Hauptbutton zur Session-Freigabe. Er ist bei neuen Anfragen ausgeschaltet. Wenn **Vertrauliche Pfade und mögliche Secret-Ausgabe** auf **Nachfragen** steht, bieten betroffene Aktionen keine Session-Freigabe; ihre Zustimmung bleibt an exakte Werte und geprüfte Revisionen gebunden. Dasselbe gilt für technisch nicht wiederverwendbare Aktionen.
 
-Unter **Session > Explizite Freigaben** sehen Sie Sessionrechte und Rechte noch aktiver Läufe mit Zielpfad, Computer und Laufzeit. Alle Einträge sind einzeln widerrufbar; **Alle Session-Freigaben widerrufen** entfernt nur Sessionrechte. Sie sind keine offenen Anfragen und zählen nicht zum Benachrichtigungszähler. Reload beendet eine Freigabe nicht. Profil, Vertrauenslevel, Computer/Ressource, Lesen/Schreiben und gegebenenfalls Integrationsrevision grenzen sie weiterhin ein. **Inaktiv** kennzeichnet eine nicht mehr passende Bindung oder einen nicht mehr unterstützten alten Freigabetyp. Ein Subagenten-Laufrecht überträgt sich nicht auf andere Läufe.
+Unter **Session > Session-Freigaben** sehen Sie Sessionrechte mit Zielpfad, Computer und Laufzeit. Alle Einträge sind einzeln oder gemeinsam widerrufbar. Laufrechte erscheinen dort nicht und bleiben von **Alle Session-Freigaben widerrufen** unberührt. Die Einträge sind keine offenen Anfragen und zählen nicht zum Benachrichtigungszähler. Reload beendet eine Freigabe nicht. Profil, Vertrauenslevel, Computer/Ressource, Lesen/Schreiben und gegebenenfalls Integrationsrevision grenzen sie weiterhin ein. **Inaktiv** kennzeichnet eine nicht mehr passende Bindung oder einen nicht mehr unterstützten alten Freigabetyp. Ein Subagenten-Laufrecht überträgt sich nicht auf andere Läufe.
 
 Dateirechte gelten für den exakten angezeigten Pfad und dieselbe Lese- oder Schreibklasse, ohne Vererbung an Unterordner oder Shell-Befehle. Geänderte Dateiinhalte allein heben ein solches Recht nicht auf. Administrator-Dateizugriffe sind gesondert markiert und an den exakten Pfad gebunden. Frühere pauschale Bereichs- oder computerweite Administratorfreigaben erlauben keine neuen Aktionen.
 
@@ -32,12 +32,14 @@ Eine wiederverwendbare Shell-Freigabe gilt für den exakten Befehl auf demselben
 
 ## Vertrauenslevel und Datenfreigabe
 
-- **Privat** bezeichnet einen von Ihnen als vertrauenswürdig eingestuften Provider; Pseudonymisierung ist aus.
-- **Öffentlich** behandelt ihn als externen Empfänger und erlaubt den Schutz erkannter Kennungen und Secrets.
+- **Privat** bezeichnet einen von Ihnen als vertrauenswürdig eingestuften Provider.
+- **Öffentlich** behandelt ihn als externen Empfänger und verwendet die dafür konfigurierten Berechtigungen und Memory-Zielgruppen.
+
+Unter **Administration > Grundeinstellungen** können Sie **Öffentliche und private Modelle unterscheiden** ausschalten. Alle Modelle werden dann für neue Läufe als privat behandelt, einschließlich Memory und persönlicher Profilangaben. Die Auswahlfelder für die Trennung werden ausgeblendet; Berechtigungen verwenden den privaten Zweig unter **Alle Modelle**. Gespeicherte Einstufungen und öffentliche Regeln bleiben zum Wiedereinschalten erhalten. Laufende Läufe behalten ihre eingefrorene Einstufung.
 
 Die Einstellung prüft weder Lokalität noch TLS oder Betreiber. Mit der Modellwahl entscheiden Sie über die Übertragung bereits autorisierter Nachrichten, Dateien, Tool-Ergebnisse und Integrationsdaten an diesen Provider. Es gibt dafür keine zweite pauschale Session-Datenfreigabe. Eigentümergrenzen, Memory-Zielgruppen und Aktionsrechte gelten trotzdem. Ein Widerruf kann bereits übertragene Daten nicht zurückholen.
 
-Pseudonymisierung öffentlicher Textanfragen erkennt bestimmte Kennungen und strukturierte Secrets, aber nicht beliebige vertrauliche Aussagen, Personen oder Orte. Bilder, Audio und andere Binärdaten werden nicht pseudonymisiert. Die Erkennung ersetzt keine bewusste Provider- und Datenwahl.
+Pseudonymisierung ist unabhängig vom Vertrauenslevel am Provider und optional am Modell einstellbar. Die ausdrückliche Auswahl **Öffentlich** schaltet sie im Formular zunächst ein; Sie können sie danach ausschalten. Die Auswahl **Privat** oder das Abschalten der Trennung ändert den gespeicherten Pseudonymisierungswert nicht. Sie erkennt bestimmte Kennungen und strukturierte Secrets, aber nicht beliebige vertrauliche Aussagen, Personen oder Orte. Bilder, Audio und andere Binärdaten werden nicht pseudonymisiert. Die Erkennung ersetzt keine bewusste Provider- und Datenwahl.
 
 ## Rückfragen und geschützte Eingaben
 

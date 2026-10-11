@@ -89,17 +89,17 @@ async function selectOption(card, label, option) {
 }
 
 describe('approval card', () => {
-  it.each(['shell_action', 'run_action'])('shows %s run grants with their exact shell context in the session list', async (resourceType) => {
+  it('shows session grants with their exact shell context', async () => {
     useChatStore().current = { id: 'session-1' }
     responses['/approvals/permissions'] = [{
-      id: 'grant-1', sessionId: 'session-1', runId: 'child-run', applicable: false,
-      capability: 'resource.write', resourceType, resourceDisplay: '/opt/project',
+      id: 'grant-1', sessionId: 'session-1', applicable: false,
+      capability: 'resource.write', resourceType: 'shell_action', resourceDisplay: '/opt/project',
       executionAgentName: 'Notebook', currentDirectory: '/opt/project',
       command: 'printf reviewed > output.txt', elevated: true
     }]
     await mountView(() => h(SessionApp))
     await vi.waitFor(() => expect(root.querySelector('[aria-labelledby="session-permissions-title"]')?.textContent).toMatch(
-      /Arbeitsverzeichnis.*\/opt\/project.*Computer: Notebook.*printf reviewed > output.txt.*Mit Administratorrechten.*Bis zum Ende des ausführenden Laufs.*Inaktiv/s
+      /Arbeitsverzeichnis.*\/opt\/project.*Computer: Notebook.*printf reviewed > output.txt.*Mit Administratorrechten.*Für diese Session.*Inaktiv/s
     ))
   })
 
@@ -114,42 +114,26 @@ describe('approval card', () => {
     await vi.waitFor(() => expect(section.textContent).toContain('Bindung passt'))
     api.get.mockRejectedValue(new Error('offline'))
     useChatStore().current.preferredExecutionAgentId = 'new'
-    await vi.waitFor(() => expect(section.textContent).toContain('Freigaben konnten nicht geladen werden.'))
+    await vi.waitFor(() => expect(section.textContent).toContain('Session-Freigaben konnten nicht geladen werden.'))
     expect(section.textContent).not.toContain('Bindung passt')
   })
 
-  it('shows deduplicated session rules without treating integration catalog policies as universal', async () => {
-    useChatStore().current = { id: 'session-1' }
-    const read = { capability: 'filesystem.read', label: 'Dateien lesen', policy: 'auto', available: true }
-    responses['/approvals/sessions/session-1/rules'] = {
-      trustLevel: 'public',
-      groups: [{ id: 'files', label: 'Dateien', tools: [
-        { name: 'read', actions: [read] }, { name: 'glob', actions: [read] },
-        { name: 'write', available: false, actions: [{ capability: 'filesystem.write', label: 'Dateien schreiben', policy: 'disabled' }] },
-        { name: 'calendar', source: { type: 'integration' }, actions: [{ capability: 'calendar.read', label: 'Kalender lesen', policy: 'auto' }] }
-      ] }],
-      scopedPolicies: {
-        integrationPolicies: { calendar: { 'calendar.read': 'ask' } },
-        resourcePolicies: { calendar: { 'private-calendar': { 'calendar.read': 'disabled' } } }
-      },
-      shellPrefixes: { read: [['git', 'status']], write: [] }
-    }
+  it('keeps loaded grants mounted during background refresh of an unchanged session', async () => {
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', sessionProfile: { agentIds: ['plan'] } }
+    responses['/approvals/permissions'] = [{ id: 'grant-1', sessionId: 'session-1', resourceDisplay: '/work/file' }]
     await mountView(() => h(SessionApp))
-    const section = root.querySelector('[aria-labelledby="session-rules-title"]')
-    await vi.waitFor(() => expect(section.textContent).toContain('Öffentliche Modelle'))
-    expect(section.textContent.match(/Dateien lesen/g)).toHaveLength(1)
-    expect(section.textContent).toMatch(/Dateien lesen.*filesystem.read.*Automatisch/s)
-    expect(section.textContent).toContain('Technisch nicht verfügbar')
-    const integrationRow = [...section.querySelectorAll('.q-item')].find((item) => item.textContent.includes('Kalender lesen'))
-    expect(integrationRow.textContent).toContain('Je nach Integration und Ressource')
-    expect(integrationRow.textContent).not.toContain('Automatisch')
-    expect(section.textContent).toMatch(/calendar.read · Nachfragen.*Integrationsregel.*calendar.read · Deaktiviert.*Ressourcenregel.*private-calendar/s)
-    expect(section.textContent).toContain('git status')
-
-    api.get.mockRejectedValue(new Error('offline'))
-    useChatStore().current = { id: 'session-2' }
-    await vi.waitFor(() => expect(section.textContent).toContain('Regeln konnten nicht geladen werden.'))
-    expect(section.textContent).not.toContain('private-calendar')
+    const section = root.querySelector('[aria-labelledby="session-permissions-title"]')
+    const list = await vi.waitUntil(() => section.querySelector('.q-list'))
+    let finishRefresh
+    api.get.mockImplementation(() => new Promise((resolve) => { finishRefresh = resolve }))
+    chat.current = JSON.parse(JSON.stringify(chat.current))
+    await nextTick()
+    const refresh = useApprovalStore().fetchGrants()
+    await nextTick()
+    expect(section.querySelector('.q-list')).toBe(list)
+    finishRefresh({ data: responses['/approvals/permissions'] })
+    await refresh
   })
 
   it('submits administrator session approval without collecting a password', async () => {

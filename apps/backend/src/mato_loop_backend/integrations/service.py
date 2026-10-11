@@ -37,6 +37,7 @@ def _clear_integration_policies(
         return False
     for permissions in (tools.private_permissions, tools.public_permissions):
         changed = permissions.integration_policies.pop(key, None) is not None or changed
+        changed = permissions.resource_availability.pop(key, None) is not None or changed
         if resources:
             changed = permissions.resource_policies.pop(key, None) is not None or changed
     return changed

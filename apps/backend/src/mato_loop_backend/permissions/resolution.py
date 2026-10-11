@@ -27,6 +27,8 @@ def resolve_tool_execution_policy(
         return ToolPolicyResolution(policy, source, "configured")
 
     permissions = settings.permissions
+    if integration_id is not None and resource_key is not None and permissions.resource_availability.get(str(integration_id), {}).get(resource_key) is False:
+        return ToolPolicyResolution(ToolExecutionPolicy.DISABLED, "resource", "resource_disabled")
     configured = permissions.policies.get(capability) if integration_id is None or settings._legacy_integration_permissions else None
     # Preserve saved read rules until a session-specific rule replaces them.
     if integration_id is None and configured is None and capability == "session.files.read":

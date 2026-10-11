@@ -185,10 +185,7 @@ async def execute_loop_body(
     run_pseudonymization_enabled = (
         run.pseudonymization_enabled
         if run.pseudonymization_enabled is not None
-        else (
-            model_trust_level == TrustLevel.PUBLIC
-            and effective_model_pseudonymization(provider, model)
-        )
+        else effective_model_pseudonymization(provider, model)
     )
 
     memory_state: memory_policy.EffectiveMemory | None = None

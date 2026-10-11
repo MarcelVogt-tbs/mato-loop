@@ -22,6 +22,9 @@ class IntegrationResource:
     binding: object | None = field(default=None, repr=False, compare=False)
     applicable_capabilities: frozenset[str] | None = None
     group_key: str | None = None
+    tool_name: str | None = None
+    description: str = ""
+    hints: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(

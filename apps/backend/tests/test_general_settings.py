@@ -64,6 +64,16 @@ async def test_admin_public_url_is_saved_and_used_by_next_oauth_login(monkeypatc
     db.commit.assert_awaited_once()
 
 
+async def test_model_trust_switch_preserves_stored_general_settings(monkeypatch, http_request):
+    settings = GeneralSettings(default_timezone="UTC")
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    result = await general_settings.update_general_settings(
+        GeneralSettings(modelTrustEnabled=False), http_request, AsyncMock()
+    )
+    assert (result["modelTrustEnabled"], settings.model_trust_enabled, settings.default_timezone) == (False, False, "UTC")
+
+
 def test_general_settings_are_admin_only():
     assert all(
         any(

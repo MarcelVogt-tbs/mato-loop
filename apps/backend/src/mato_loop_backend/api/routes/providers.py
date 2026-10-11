@@ -50,6 +50,7 @@ from mato_loop_backend.security import (
 from mato_loop_backend.settings import (
     AiProviderSettings,
     AiSettings,
+    GeneralSettings,
     SettingsStore,
     effective_model_pseudonymization,
     effective_model_trust,
@@ -309,6 +310,7 @@ def _settings_payload(
     settings: AiSettingsBase,
     *,
     include_configuration: bool = True,
+    model_trust_enabled: bool = True,
 ) -> dict[str, Any]:
     from mato_loop_backend.settings.models import ModelDefaults
 
@@ -398,7 +400,7 @@ def _settings_payload(
                 "trustLevel": model.trust_level.value if model.trust_level else None,
                 "effectiveTrustLevel": effective_model_trust(
                     providers_by_id[model.provider_id], model
-                ).value,
+                ).value if model_trust_enabled else TrustLevel.PRIVATE.value,
                 "pseudonymizationEnabled": model.pseudonymization_enabled,
                 "effectivePseudonymizationEnabled": effective_model_pseudonymization(
                     providers_by_id[model.provider_id], model
@@ -417,7 +419,11 @@ async def _settings_response(
     *,
     include_configuration: bool = True,
 ) -> dict[str, Any]:
-    return _settings_payload(settings, include_configuration=include_configuration)
+    general = await SettingsStore.load_optional(db, GeneralSettings) or GeneralSettings()
+    return _settings_payload(
+        settings, include_configuration=include_configuration,
+        model_trust_enabled=general.model_trust_enabled,
+    )
 
 
 async def _save_openai_provider(

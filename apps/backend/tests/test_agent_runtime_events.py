@@ -639,7 +639,7 @@ async def test_child_authorization_uses_main_grants_child_roots_and_snapshot(mon
     ("provider_trust", "model_trust", "expected_trust", "expected_pseudonymization"),
     [
         (TrustLevel.PRIVATE, TrustLevel.PUBLIC, TrustLevel.PUBLIC, True),
-        (TrustLevel.PRIVATE, None, TrustLevel.PRIVATE, False),
+        (TrustLevel.PRIVATE, None, TrustLevel.PRIVATE, True),
     ],
 )
 @pytest.mark.parametrize("tool_limit", [25, None])

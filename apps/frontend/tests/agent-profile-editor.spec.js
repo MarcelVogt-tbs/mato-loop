@@ -86,7 +86,7 @@ it.each([
   tab.click()
   await nextTick()
   expect([...root.querySelectorAll('.q-tab-panel a')].map((link) => link.getAttribute('href'))).toEqual([
-    personaLink, `${prefix}/tools?profileId=${accessId}`, `${prefix}/integrations?profileId=${accessId}`
+    personaLink, `${prefix}/tools?profileId=${accessId}`, `${prefix}/integrations?tab=management`
   ])
 })
 

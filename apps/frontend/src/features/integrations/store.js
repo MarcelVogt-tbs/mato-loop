@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { notifyError } from 'src/utils/notifications'
 import { useAuthStore } from 'stores/auth'
+import { browserStatusLabel } from 'src/utils/browser'
 
 const emptySearch = () => ({
   configured: false,
@@ -127,6 +128,13 @@ export const useIntegrationStore = defineStore('integrations', {
     effectiveLoadVersion: 0
   }),
   getters: {
+    configuredIntegrations: (state) => [
+      ...state.search.providers, ...state.calendar.accounts, ...state.mail.accounts,
+      ...state.knowledge.bases, ...state.recipes.accounts, ...state.arcane.instances,
+      ...state.music.instances, ...state.openscad.instances, ...state.coding.instances,
+      ...state.tbsDesk.accounts,
+      ...state.browser.instances.map((item) => ({ ...item, integrationType: 'browser', providerType: 'browser' }))
+    ],
     adapterAvailable: (state) => (adapterType, scope = state.scope) => {
       const adapter = state.catalog.find((item) => item.adapterType === adapterType)
       if (!adapter || state.catalogLoadFailed) return false
@@ -136,6 +144,17 @@ export const useIntegrationStore = defineStore('integrations', {
     }
   },
   actions: {
+    async testIntegration(integration) {
+      if (integration.integrationType === 'browser') {
+        const result = await this.browserStatus(integration.id, true)
+        return { type: result.state === 'ready' ? 'positive' : 'warning', message: browserStatusLabel(result) }
+      }
+      const method = { search: 'testSearch', calendar: 'testCalendar', mail: 'testMail', support: 'testTbsDesk', knowledge: 'testKnowledge', recipes: 'testRecipes', infrastructure: 'testArcane', music: 'testSonoBin', openscad: 'testOpenScad', coding: 'testOpenCode' }[integration.integrationType]
+      const result = await this[method](integration.id)
+      return integration.integrationType === 'openscad' && result?.headlessPreview === false
+        ? { type: 'warning', message: 'OpenSCAD ist erreichbar, unterstützt aber keine Headless-Vorschau.' }
+        : { type: 'positive', message: 'Verbindung erfolgreich' }
+    },
     async fetchProfileAvailability(id, scope) {
       return (await api.get(`/integrations/profiles/${id}/availability`, { params: { scope } })).data
     },

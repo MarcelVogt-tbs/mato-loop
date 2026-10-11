@@ -12,7 +12,7 @@ from mato_loop_backend.api.routes import auth as auth_routes
 from mato_loop_backend.auth import local as local_auth
 from mato_loop_backend.models import LoginSession, UserAccount
 from mato_loop_backend.security import create_login_session, hash_token, require_admin, require_user
-from mato_loop_backend.settings import AgentProfilesSettings, SettingsStore
+from mato_loop_backend.settings import AgentProfilesSettings, GeneralSettings, SettingsStore
 
 
 def _user(*, active: bool = True, admin: bool = False) -> UserAccount:
@@ -32,6 +32,7 @@ async def test_setup_locks_before_check_and_creates_first_admin(monkeypatch) -> 
     db.scalar.side_effect = lambda _statement: events.append("count") or 0
     save = AsyncMock(side_effect=lambda *_args: events.append("profiles"))
     monkeypatch.setattr(SettingsStore, "save", save)
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=GeneralSettings()))
     db.commit.side_effect = lambda: events.append("commit")
     monkeypatch.setattr(auth_routes, "hash_password", lambda _password: "hashed")
     monkeypatch.setattr(

@@ -27,17 +27,19 @@
 
         <div v-if="providerType" class="provider-form-grid">
           <AppSelect dense
+            v-if="auth.modelTrustEnabled"
             v-model="form.trust_level"
             outlined
             emit-value
             map-options
             label="Vertrauenslevel"
             :options="trustLevelOptions"
+            @update:model-value="selectTrust"
           />
           <q-toggle dense
             v-model="form.pseudonymization_enabled"
             color="primary"
-            label="Kennungen und Secrets für öffentliche Modelle schützen"
+            label="Kennungen und Secrets pseudonymisieren"
           />
           <AppSelect dense
             v-model="form.memory_policy"
@@ -197,6 +199,7 @@ import { copyToClipboard, useQuasar } from 'quasar'
 import { useConfirm } from 'src/composables/confirm'
 import { notifyError } from 'src/utils/notifications'
 import { useProviderStore } from 'stores/providers'
+import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'ProviderConfigDialog' })
 
@@ -209,6 +212,7 @@ const emit = defineEmits(['update:modelValue', 'provider-created', 'provider-upd
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const providers = useProviderStore()
+const auth = useAuthStore()
 const providerType = ref(null)
 const formRef = ref(null)
 const saving = ref(false)
@@ -290,6 +294,10 @@ function defaultForm(type = null) {
     pseudonymization_enabled: !isLemonade,
     memory_policy: 'inherit'
   }
+}
+
+function selectTrust(value) {
+  if (value === 'public') form.pseudonymization_enabled = true
 }
 
 function requiredRule(value) {

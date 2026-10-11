@@ -10,7 +10,8 @@ function identityFrom(data, authenticated = data.authenticated) {
     authenticated: Boolean(authenticated),
     userId: data.userId ?? data.user_id ?? null,
     username: data.username ?? null,
-    isAdmin: Boolean(data.isAdmin ?? data.is_admin)
+    isAdmin: Boolean(data.isAdmin ?? data.is_admin),
+    modelTrustEnabled: data.modelTrustEnabled ?? data.model_trust_enabled ?? true
   }
 }
 
@@ -27,7 +28,8 @@ export const useAuthStore = defineStore('auth', {
     authenticated: false,
     userId: null,
     username: null,
-    isAdmin: false
+    isAdmin: false,
+    modelTrustEnabled: true
   }),
   actions: {
     async clearIdentityState() {

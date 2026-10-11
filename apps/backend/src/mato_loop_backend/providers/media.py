@@ -227,10 +227,7 @@ def _optional_positive_number(
 async def _protected_text(
     provider: LlmProviderConfig, model: ModelConfig, value: str
 ) -> str:
-    if (
-        effective_model_trust(provider, model) != TrustLevel.PUBLIC
-        or not effective_model_pseudonymization(provider, model)
-    ):
+    if not effective_model_pseudonymization(provider, model):
         return value
     try:
         return await asyncio.to_thread(RequestPseudonymizer().protect_text, value)

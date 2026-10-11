@@ -221,8 +221,7 @@ class AgentRuntime:
         provider = agent_run_support._provider_for_model(ai_settings, model) if model is not None else None
         trust_level = effective_model_trust(provider, model) if provider and model else TrustLevel.PUBLIC
         pseudonymization_enabled = (
-            trust_level == TrustLevel.PUBLIC
-            and provider is not None and model is not None
+            provider is not None and model is not None
             and effective_model_pseudonymization(provider, model)
         )
         execution_agent = None

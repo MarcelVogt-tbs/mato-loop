@@ -119,6 +119,10 @@ def apply_delegation_ceiling(settings: ToolSettings, snapshot: dict[str, Any] | 
                     current = settings.permissions.resource_policies.setdefault(integration_id, {})
                     for resource_key in resources:
                         current.setdefault(resource_key, {})
+                for integration_id, resources in permissions.get("resource_availability", {}).items():
+                    current = settings.permissions.resource_policies.setdefault(integration_id, {})
+                    for resource_key in resources:
+                        current.setdefault(resource_key, {})
     return settings
 
 

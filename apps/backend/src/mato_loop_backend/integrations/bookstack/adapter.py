@@ -420,7 +420,8 @@ def _resource_keys(context: Any, instance: IntegrationInstance) -> set[str]:
         if profile_permissions is not None
         else {}
     )
-    return {key for key in baseline | overrides if _BOOK_KEY_RE.match(key)}
+    availability = tool_settings.permissions.resource_availability.get(str(instance.id), {})
+    return {key for key in baseline | overrides | availability if _BOOK_KEY_RE.match(key)}
 
 
 def _refuse_blocked_books(

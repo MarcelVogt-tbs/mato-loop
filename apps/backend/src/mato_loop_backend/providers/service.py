@@ -560,12 +560,9 @@ class ProviderService:
             input_modalities=model.input_modalities,
         )
         use_pseudonymization = (
-            model_trust_level == TrustLevel.PUBLIC
-            and (
-                pseudonymization_enabled
-                if pseudonymization_enabled is not None
-                else effective_model_pseudonymization(provider, model)
-            )
+            pseudonymization_enabled
+            if pseudonymization_enabled is not None
+            else effective_model_pseudonymization(provider, model)
         )
         profile = (
             reasoning_profile(model.model_id, model.discovery_metadata)

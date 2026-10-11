@@ -106,6 +106,7 @@
                 @update:model-value="applyFilters"
               />
               <AppSelect
+                v-if="auth.modelTrustEnabled"
                 v-model="filters.audience"
                 outlined
                 dense
@@ -507,6 +508,7 @@
                 :rules="[requiredRule]"
               />
               <AppSelect dense
+                v-if="auth.modelTrustEnabled"
                 v-model="memoryForm.audience"
                 outlined
                 emit-value
@@ -560,6 +562,7 @@ import { useConfirm } from 'src/composables/confirm'
 import { useChatStore } from 'stores/chat'
 import { useApprovalStore } from 'stores/approvals'
 import { useMemoryStore } from 'stores/memories'
+import { useAuthStore } from 'stores/auth'
 import { apiErrorMessage } from 'src/utils/api-errors'
 
 defineOptions({ name: 'MemorySettingsPage' })
@@ -568,6 +571,7 @@ const $q = useQuasar()
 const { confirm } = useConfirm()
 const chat = useChatStore()
 const memories = useMemoryStore()
+const auth = useAuthStore()
 const approvals = useApprovalStore()
 const route = useRoute()
 const router = useRouter()
@@ -587,6 +591,12 @@ const savedSettings = ref(null)
 const dreamSessionId = ref(null)
 const advancedSettingsOpen = ref(false)
 const filters = reactive({ query: '', category: null, sourceType: null, audience: null, pinned: null })
+watch(() => auth.modelTrustEnabled, (enabled) => {
+  if (!enabled && filters.audience) {
+    filters.audience = null
+    void applyFilters()
+  }
+})
 const memoryForm = reactive({ content: '', category: null, audience: 'both', pinned: false })
 const settingsForm = reactive({
   enabled: false,

@@ -45,7 +45,7 @@
           </template>
         </q-banner>
 
-        <q-banner rounded class="app-surface-tonal q-mb-md">
+        <q-banner v-if="auth.modelTrustEnabled" rounded class="app-surface-tonal q-mb-md">
           <template #avatar><q-icon name="privacy_tip" color="primary" /></template>
           <div class="text-subtitle1 text-weight-bold">Sichtbarkeit bewusst wählen</div>
           <div class="text-body2 app-muted q-mt-xs">
@@ -56,7 +56,7 @@
         </q-banner>
 
         <q-card flat class="app-surface">
-          <q-card-section>
+          <q-card-section v-if="auth.modelTrustEnabled">
             <q-btn-toggle
               v-model="profileAudience"
               spread
@@ -67,7 +67,7 @@
               :disable="profile.loading || profile.saving || !profile.loaded"
             />
           </q-card-section>
-          <q-separator />
+          <q-separator v-if="auth.modelTrustEnabled" />
           <q-card-section>
             <q-form class="q-gutter-y-md" @submit.prevent="save">
               <div v-if="visibleFields.length" class="q-gutter-y-md">
@@ -78,6 +78,7 @@
                   :model-value="fieldValue(field.name)"
                   :shared="draft[field.name].shared"
                   :audience="profileAudience"
+                  :model-trust-enabled="auth.modelTrustEnabled"
                   :hint="fieldHint(field)"
                   :input-disabled="fieldDisabled(field.name)"
                   :disabled="profile.loading || profile.saving || !profile.loaded"
@@ -162,12 +163,13 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import UserProfileFieldEditor from 'src/features/personalization/UserProfileFieldEditor.vue'
 import AgentIdentitySettingsPage from 'src/features/personalization/AgentIdentitySettingsPage.vue'
 import { useConfirm } from 'src/composables/confirm'
+import { useAuthStore } from 'stores/auth'
 import {
   profileFactDraft,
   profileFactPayload,
@@ -182,7 +184,9 @@ const route = useRoute()
 const router = useRouter()
 const { confirm } = useConfirm()
 const profile = useUserProfileStore()
+const auth = useAuthStore()
 const profileAudience = ref('private')
+watch(() => auth.modelTrustEnabled, (enabled) => { if (!enabled) profileAudience.value = 'private' })
 const addFieldDialogOpen = ref(false)
 const activeFieldNames = ref([])
 const draft = reactive(Object.fromEntries(

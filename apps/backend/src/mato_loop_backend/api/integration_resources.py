@@ -170,6 +170,8 @@ def _access_payload(
                 "key": resource.key,
                 "groupKey": resource.group_key,
                 "label": resource.label.strip(),
+                **({"toolName": resource.tool_name, "description": resource.description, "hints": list(resource.hints)} if resource.tool_name is not None else {}),
+                "available": tools.permissions.resource_availability.get(str(instance.id), {}).get(resource.key, True),
                 "hardUnavailableCapabilities": sorted(
                     resource.hard_unavailable_capabilities
                 ),

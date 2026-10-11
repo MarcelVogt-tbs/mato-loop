@@ -70,7 +70,7 @@ def _validate_permissions(
     allowed: dict[str, set[ToolExecutionPolicy]],
     field: str,
 ) -> None:
-    if permissions.integration_policies or permissions.resource_policies:
+    if permissions.integration_policies or permissions.resource_policies or permissions.resource_availability:
         raise ApiError(422, "validation.invalidChoice", field=field)
     for capability, policy in permissions.policies.items():
         if policy not in allowed.get(capability, set()):

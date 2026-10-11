@@ -21,6 +21,7 @@ def _payload(settings: GeneralSettings, request: Request) -> dict:
         "publicBaseUrl": settings.public_base_url,
         "effectivePublicBaseUrl": effective,
         "publicUrlSource": source,
+        "modelTrustEnabled": settings.model_trust_enabled,
     }
 
 
@@ -37,6 +38,8 @@ async def update_general_settings(
 ):
     settings = await SettingsStore.load(db, GeneralSettings, for_update=True)
     settings.public_base_url = payload.public_base_url
+    if "model_trust_enabled" in payload.model_fields_set:
+        settings.model_trust_enabled = payload.model_trust_enabled
     result = _payload(settings, request)
     await SettingsStore.save(db, settings)
     await db.commit()

@@ -116,7 +116,7 @@ def test_trust_defaults_and_inheritance() -> None:
     assert effective_model_trust(provider, model) == TrustLevel.PUBLIC
     assert effective_model_pseudonymization(provider, model) is True
     model.trust_level = TrustLevel.PRIVATE
-    assert effective_model_pseudonymization(provider, model) is False
+    assert effective_model_pseudonymization(provider, model) is True
 
 
 @pytest.mark.parametrize(

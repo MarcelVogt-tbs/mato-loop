@@ -428,9 +428,11 @@ async def test_public_complete_pseudonymizes_and_restores_request_scope(
 
 
 @pytest.mark.parametrize("api_type", ["chat_completions", "responses"])
-async def test_run_privacy_keeps_serialized_prefix_and_request_scope(monkeypatch, api_type) -> None:
+@pytest.mark.parametrize("trust_level", ["public", "private"])
+async def test_run_privacy_keeps_serialized_prefix_and_request_scope(monkeypatch, api_type, trust_level) -> None:
     provider = LlmProviderConfig(
         name="Public", adapter_type="openai-compatible",
+        trust_level=trust_level,
         config={"base_url": "http://public.test/v1", "api_type": api_type},
     )
     model = ModelConfig(provider_id=provider.id, model_id="public-model")

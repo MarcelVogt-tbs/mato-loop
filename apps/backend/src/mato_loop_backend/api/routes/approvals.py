@@ -30,18 +30,11 @@ from mato_loop_backend.sessions.service import (
     get_owned_session,
 )
 from mato_loop_backend.settings import (
-    AgentProfileUnavailable,
     TrustLevel,
     effective_model_trust,
-    load_agent_profile_tools,
     load_effective_ai,
-    load_effective_integrations,
 )
-from mato_loop_backend.settings.effective import (
-    apply_session_ai,
-    filter_agent_profile_integrations,
-)
-from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.settings.effective import apply_session_ai
 
 router = APIRouter(prefix="/approvals", dependencies=[Depends(require_user)])
 
@@ -168,29 +161,6 @@ async def _permission_binding(db: AsyncSession, session: ChatSession) -> tuple[U
     model = next((item for item in ai.models if item.id == ai.default_model_id), None)
     provider = next((item for item in ai.providers if model and item.id == model.provider_id), None)
     return session.agent_profile_id, effective_model_trust(provider, model) if provider and model else TrustLevel.PRIVATE
-
-
-@router.get("/sessions/{session_id}/rules")
-async def session_rules(
-    session_id: UUID,
-    user: Annotated[UserAccount, Depends(require_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> dict:
-    session = await db.get(ChatSession, session_id)
-    if session is None or session.user_id != user.id:
-        raise ApiError(404, "session.notFound")
-    profile_id, trust = await _permission_binding(db, session)
-    try:
-        tools, profile = await load_agent_profile_tools(db, user.id, profile_id, trust)
-    except AgentProfileUnavailable:
-        raise ApiError(404, "agentProfile.notFound") from None
-    integrations = filter_agent_profile_integrations(await load_effective_integrations(db, user.id), profile)
-    return {
-        "trustLevel": trust.value,
-        "groups": tool_registry.catalog(tools, integrations),
-        "scopedPolicies": tools.permissions.model_dump(mode="json", by_alias=True),
-        "shellPrefixes": tools.shell_prefixes.model_dump(mode="json"),
-    }
 
 
 @router.get("/pending")

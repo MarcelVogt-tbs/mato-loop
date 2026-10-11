@@ -1211,7 +1211,7 @@ def test_provider_payload_contains_discovery_fields_in_camel_case() -> None:
     assert payload["models"][0]["trustLevel"] is None
     assert payload["models"][0]["effectiveTrustLevel"] == "private"
     assert payload["models"][0]["pseudonymizationEnabled"] is None
-    assert payload["models"][0]["effectivePseudonymizationEnabled"] is False
+    assert payload["models"][0]["effectivePseudonymizationEnabled"] is True
     assert payload["models"][0]["reasoningEffort"] == "medium"
     assert payload["models"][0]["reasoningEfforts"] == [
         "none",

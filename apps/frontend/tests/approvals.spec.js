@@ -141,33 +141,6 @@ describe('inline approvals', () => {
     expect(approvals.pending).toEqual([])
   })
 
-  it('clears session rules on switch and ignores the previous response', async () => {
-    const pending = {}
-    api.get.mockImplementation((url) => new Promise((resolve) => { pending[url] = resolve }))
-    const approvals = useApprovalStore()
-    approvals.rules = { trustLevel: 'private' }
-    const oldRequest = approvals.fetchRules('old')
-    const newRequest = approvals.fetchRules('new')
-    pending['/approvals/sessions/old/rules']({ data: { trustLevel: 'private' } })
-    await oldRequest
-
-    expect([approvals.rulesSessionId, approvals.rules, approvals.rulesLoading]).toEqual(['new', null, true])
-    const rules = { trustLevel: 'public', groups: [], scopedPolicies: {}, shellPrefixes: { read: [], write: [] } }
-    pending['/approvals/sessions/new/rules']({ data: rules })
-    await newRequest
-    expect(approvals.rules).toEqual(rules)
-  })
-
-  it('does not retain rules as current when refresh fails', async () => {
-    api.get.mockRejectedValue(new Error('request failed'))
-    const approvals = useApprovalStore()
-    approvals.rules = { trustLevel: 'private' }
-
-    await expect(approvals.fetchRules('session-1')).rejects.toThrow('request failed')
-
-    expect([approvals.rules, approvals.rulesLoading, approvals.rulesLoadFailed]).toEqual([null, false, true])
-  })
-
   it('loads grants from all sessions', async () => {
     api.get.mockResolvedValue({ data: [{ id: 'grant-1', sessionId: 'session-1' }] })
     const approvals = useApprovalStore()
@@ -180,7 +153,7 @@ describe('inline approvals', () => {
     expect(approvals.grantsLoadFailed).toBe(false)
   })
 
-  it('exposes session and active run grants returned for the selected session', () => {
+  it('exposes only session-wide grants for the selected session', () => {
     const approvals = useApprovalStore()
     approvals.grants = [
       { id: 'grant-1', sessionId: 'session-1' },
@@ -189,8 +162,7 @@ describe('inline approvals', () => {
     ]
 
     expect(approvals.grantsForSession('session-1')).toEqual([
-      { id: 'grant-1', sessionId: 'session-1' },
-      { id: 'grant-3', sessionId: 'session-1', runId: 'run-1' }
+      { id: 'grant-1', sessionId: 'session-1' }
     ])
     expect(approvals.grantsForSession(null)).toEqual([])
   })

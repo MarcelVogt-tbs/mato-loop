@@ -28,7 +28,7 @@
       </q-btn>
     </div>
     <q-checkbox dense
-      v-if="audience === 'private'"
+      v-if="audience === 'private' && modelTrustEnabled"
       :model-value="shared"
       class="q-mt-sm"
       color="primary"
@@ -47,6 +47,7 @@ defineProps({
   modelValue: { type: String, default: null },
   shared: Boolean,
   audience: { type: String, required: true },
+  modelTrustEnabled: { type: Boolean, default: true },
   hint: { type: String, required: true },
   inputDisabled: Boolean,
   disabled: Boolean

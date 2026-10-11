@@ -16,7 +16,6 @@ from mato_loop_backend.api.routes.agent_profiles import (
     set_agent_profile_enabled,
     set_default_agent_profile,
 )
-from mato_loop_backend.api.routes.approvals import session_rules
 from mato_loop_backend.api.routes.integrations import (
     ProfileIntegrationAvailabilityRequest,
     get_integration_permissions,
@@ -31,7 +30,7 @@ from mato_loop_backend.api.routes.tool_settings import (
 )
 from mato_loop_backend.integrations.contracts import IntegrationResource
 from mato_loop_backend.integrations.tbs_desk.adapter import profile_id as integration_profile_id
-from mato_loop_backend.models import AgentRun, ChatSession, UserAccount
+from mato_loop_backend.models import UserAccount
 from mato_loop_backend.permissions.resolution import tool_execution_policy
 from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
@@ -46,6 +45,10 @@ from mato_loop_backend.settings import (
     UserAgentProfilesSettings,
     UserIntegrationSettings,
     load_agent_profile_tools,
+)
+from mato_loop_backend.settings.effective import (
+    apply_integration_permissions,
+    integration_profile_available,
 )
 from mato_loop_backend.settings.models import AgentProfileAccessOverrides, IntegrationPermissions
 
@@ -107,7 +110,51 @@ async def test_integration_permission_page_lists_configured_rights_and_resources
     monkeypatch.setattr("mato_loop_backend.api.integration_resources._integration_resources", AsyncMock(return_value=(IntegrationResource("calendar:work", "Arbeit"),)))
     response = await get_integration_permissions(integration.id, user, db, "personal")
     assert (response["permissions"]["privatePermissions"]["policies"],
-            {resource["key"] for resource in response["inherited"]["private"]["resources"]}) == ({"calendar.read": "ask"}, {"calendar:work"})
+             {resource["key"] for resource in response["inherited"]["private"]["resources"]}) == ({"calendar.read": "ask"}, {"calendar:work"})
+
+
+async def test_global_profile_permissions_and_legacy_assignment_transfer(monkeypatch):
+    user = UserAccount(id=uuid4(), is_admin=True)
+    integration = IntegrationInstance(name="Shared", integration_type="calendar", adapter_type="caldav", config={"base_url": "https://calendar.test", "username": "owner"})
+    documents = {
+        (IntegrationSettings, None): IntegrationSettings(instances=[integration]),
+        (AgentProfilesSettings, None): AgentProfilesSettings(builtin_access_overrides={GENERAL_PROFILE_ID: AgentProfileAccessOverrides(integration_availability={str(integration.id): False})}),
+    }
+    db = settings_db(monkeypatch, documents)
+    monkeypatch.setattr("mato_loop_backend.api.integration_resources._integration_resources", AsyncMock(return_value=()))
+    await update_profile_integration_availability(GENERAL_PROFILE_ID, ProfileIntegrationAvailabilityRequest(integrationsEnabledByDefault=True), user, db, "instance")
+    page = await get_integration_permissions(integration.id, user, db, "instance", GENERAL_PROFILE_ID)
+    assert page["permissions"]["available"] is False
+    await update_integration_permissions(integration.id, IntegrationPermissions(available=True, publicPermissions={"policies": {"calendar.write": "auto"}}), user, db, "instance", GENERAL_PROFILE_ID)
+    tools, profile = await load_agent_profile_tools(db, user.id, GENERAL_PROFILE_ID, TrustLevel.PUBLIC)
+    stored = documents[IntegrationSettings, None].instances[0]
+    assert (integration_profile_available(stored, profile), tool_execution_policy(tools, "calendar.write", integration_id=stored.id), profile.integration_availability) == (True, "auto", {})
+
+
+@pytest.mark.parametrize("admin", [False, True])
+async def test_global_connection_rejects_non_admin_or_personal_profile(monkeypatch, admin):
+    user = UserAccount(id=uuid4(), is_admin=admin)
+    integration = IntegrationInstance(name="Shared", integration_type="calendar", adapter_type="caldav")
+    personal = CustomAgentProfile(name="Own", description="", base_profile_id=GENERAL_PROFILE_ID, overrides={})
+    db = settings_db(monkeypatch, {(IntegrationSettings, None): IntegrationSettings(instances=[integration]), (UserAgentProfilesSettings, user.id): UserAgentProfilesSettings(profiles=[personal])})
+    with pytest.raises(ApiError, match="agentProfile.notFound" if admin else "auth.adminRequired"):
+        await update_integration_permissions(integration.id, IntegrationPermissions(), user, db, "instance", personal.id)
+
+
+def test_resource_activation_retains_rules_and_delegated_denial():
+    from mato_loop_backend.agent.subagents import apply_delegation_ceiling
+    instance = IntegrationInstance(name="Shared", integration_type="calendar", adapter_type="caldav",
+        permissions=IntegrationPermissions(privatePermissions={"resourcePolicies": {"calendar:work": {"calendar.read": "auto"}}}, resourceAvailability={"calendar:work": False}))
+    tools = ToolSettings()
+    apply_integration_permissions(tools, IntegrationSettings(instances=[instance]))
+    snapshot = {"permissionVersion": 2, "permissions": tools.permissions.model_dump(mode="json"), "agentPermissions": None,
+                "shellPrefixes": {"read": [], "write": []}, "integrationDefaults": {str(instance.id): {"calendar.read": "ask"}}, "actionDefaults": {}}
+    assert tool_execution_policy(tools, "calendar.read", integration_id=instance.id, resource_key="calendar:work") == "disabled"
+    instance.permissions.resource_availability["calendar:work"] = True
+    apply_integration_permissions(tools, IntegrationSettings(instances=[instance]))
+    assert tool_execution_policy(tools, "calendar.read", integration_id=instance.id, resource_key="calendar:work") == "auto"
+    apply_delegation_ceiling(tools, snapshot)
+    assert tool_execution_policy(tools, "calendar.read", integration_id=instance.id, resource_key="calendar:work") == "disabled"
 
 
 @pytest.mark.parametrize("save", [False, True])
@@ -217,17 +264,6 @@ async def test_tool_permission_display_uses_the_same_profile_inheritance_as_runt
     response = await get_profile_tool_permissions(PLAN_PROFILE_ID, user, db, "instance")
     actions = [action for group in response["groupsByTrust"]["public"] for tool in group["tools"] for action in tool["actions"]]
     assert next(action["policy"] for action in actions if action["capability"] == "session.files.read") == "auto"
-
-
-async def test_session_rules_use_executing_profile_and_trust(monkeypatch):
-    user = UserAccount(id=uuid4(), username="owner", password_hash="hash")
-    session = ChatSession(id=uuid4(), user_id=user.id, agent_profile_id=GENERAL_PROFILE_ID)
-    db = settings_db(monkeypatch, {})
-    db.get.side_effect = lambda model, _id: session if model is ChatSession else user
-    db.scalar.return_value = AgentRun(agent_profile_id=PLAN_PROFILE_ID, trust_level="public")
-    response = await session_rules(session.id, user, db)
-    actions = [action for group in response["groups"] for tool in group["tools"] for action in tool["actions"]]
-    assert (response["trustLevel"], next(action["policy"] for action in actions if action["capability"] == "shell.write")) == ("public", "disabled")
 
 
 async def test_provided_integration_profiles_work_when_personal_tool_overrides_are_disabled(monkeypatch):

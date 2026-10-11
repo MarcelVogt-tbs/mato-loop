@@ -60,7 +60,11 @@ from mato_loop_backend.permissions.policy import (
     integration_operation_permission,
 )
 from mato_loop_backend.providers.base import ToolCall
-from mato_loop_backend.settings.effective import AgentProfileUnavailable, load_agent_profile
+from mato_loop_backend.settings.effective import (
+    AgentProfileUnavailable,
+    integration_profile_available,
+    load_agent_profile,
+)
 
 if TYPE_CHECKING:
     from mato_loop_backend.execution.browser_control import ControlRequest
@@ -157,9 +161,7 @@ async def validate_browser_access(
                 raise ExecutionClientError("browser.notConnected")
             try:
                 profile = await load_agent_profile(db, owner_id, session.agent_profile_id)
-                can_attach = profile.integration_availability.get(
-                    str(integration_id), profile.integrations_enabled_by_default,
-                )
+                can_attach = integration_profile_available(instance, profile)
             except AgentProfileUnavailable:
                 pass
         return instance, can_attach

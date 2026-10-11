@@ -1,5 +1,5 @@
 <template>
-  <router-view v-if="showAccessPage" />
+  <router-view v-if="showDetailPage" />
   <section v-else>
     <header class="settings-section-header">
       <div>
@@ -35,8 +35,6 @@
       <q-tab name="general" icon="settings" label="Einstellungen" />
       <q-tab name="management" icon="extension" label="Verwaltung" />
     </q-tabs>
-
-    <q-banner v-if="route.query.profileId && !agents.loading && (!profileAssignmentsAllowed || !profileOptions.some((profile) => profile.value === route.query.profileId))" rounded class="app-surface-tonal q-mb-md">Die Profilzuordnungen für diesen Agenten sind hier nicht verfügbar.</q-banner>
 
     <template v-if="admin && section === 'general'">
       <q-banner v-if="integrations.catalogLoadFailed" rounded class="app-surface-tonal q-mb-md">
@@ -163,22 +161,6 @@
       </q-card-section>
     </q-card>
 
-    <q-card v-if="section === 'general' && profileOptions.length && profileAssignmentsAllowed" flat class="app-surface q-mb-md">
-      <q-card-section class="q-gutter-md">
-        <div class="text-subtitle1 text-weight-bold">Profilzuordnungen</div>
-        <div class="text-body2 app-muted">Legt fest, welche Integrationen ein Profil verwenden darf. Abweichungen an einer persönlichen Verbindung haben Vorrang.</div>
-        <AppSelect dense v-model="assignmentProfileId" outlined emit-value map-options label="Agentenprofil" :options="profileOptions" :disable="assignmentsLoading" />
-        <q-banner v-if="assignmentsFailed" rounded class="app-surface-tonal">
-          Die Profilzuordnungen konnten nicht geladen werden.
-          <template #action><q-btn flat no-caps color="primary" label="Erneut laden" @click="loadAssignments" /></template>
-        </q-banner>
-        <template v-if="assignments">
-          <AppSelect dense :model-value="assignments.integrationsEnabledByDefault" outlined emit-value map-options label="Integrationen standardmäßig" :options="availabilityChoices(assignments.inheritedIntegrationsEnabledByDefault)" :disable="assignmentsLoading" @update:model-value="saveAssignments({ integrationsEnabledByDefault: $event })" />
-          <AppSelect dense v-for="integration in agents.integrations" :key="integration.id" :model-value="assignments.integrationAvailability[integration.id] ?? null" outlined emit-value map-options :label="integration.name" :options="availabilityChoices(assignments.inheritedIntegrationAvailability[integration.id] ?? assignments.integrationsEnabledByDefault ?? assignments.inheritedIntegrationsEnabledByDefault)" :disable="assignmentsLoading" @update:model-value="setIntegrationAvailability(integration.id, $event)" />
-        </template>
-      </q-card-section>
-    </q-card>
-
     <q-card v-show="showInstances" flat class="app-surface integration-list-card">
       <q-list separator>
         <q-item v-if="integrations.loaded && !configuredIntegrations.length && !integrations.loading" class="q-py-lg">
@@ -236,34 +218,8 @@
                 @update:model-value="toggleIntegration(integration, $event)"
               />
               <div class="row items-center no-wrap q-gutter-xs">
-                <q-btn flat round dense icon="edit" :aria-label="`${integration.name} bearbeiten`" :disable="!canEditIntegration(integration)" @click="openEditDialog(integration)" />
-                <q-btn flat round dense icon="more_vert" :aria-label="`Aktionen für ${integration.name}`" :loading="testingId === integration.id || removingId === integration.id">
-                  <AppMenu>
-                    <q-list>
-                      <q-item clickable v-close-popup :disable="!canEditIntegration(integration)" :to="{ name: admin ? 'admin-integration-resources' : 'settings-integration-resources', params: { integrationId: integration.id } }">
-                        <q-item-section avatar><q-icon name="folder_open" /></q-item-section>
-                        <q-item-section>Berechtigungen</q-item-section>
-                      </q-item>
-                      <q-item v-if="integration.integrationType === 'browser'" clickable v-close-popup :disable="!canEditIntegration(integration)" @click="setupId = integration.id">
-                        <q-item-section avatar><q-icon name="terminal" /></q-item-section>
-                        <q-item-section>Einrichtung / Status</q-item-section>
-                      </q-item>
-                      <q-item clickable v-close-popup :disable="!canEditIntegration(integration) || testingId === integration.id" @click="testIntegration(integration)">
-                        <q-item-section avatar><q-icon name="network_check" /></q-item-section>
-                        <q-item-section>Verbindung testen</q-item-section>
-                      </q-item>
-                      <q-separator />
-                      <q-item v-if="integration.integrationType === 'browser'" clickable v-close-popup class="text-negative" :disable="!canEditIntegration(integration) || resettingId !== null" @click="resetBrowser(integration)">
-                        <q-item-section avatar><q-icon name="restart_alt" /></q-item-section>
-                        <q-item-section>Profil zurücksetzen</q-item-section>
-                      </q-item>
-                      <q-item clickable v-close-popup class="text-negative" :disable="removingId !== null || (integration.scope === 'instance' && !auth.isAdmin)" @click="removeIntegration(integration)">
-                        <q-item-section avatar><q-icon name="delete" /></q-item-section>
-                        <q-item-section>Löschen</q-item-section>
-                      </q-item>
-                    </q-list>
-                  </AppMenu>
-                </q-btn>
+                <q-btn flat round dense icon="edit" :aria-label="`${integration.name} bearbeiten`" :disable="!canEditIntegration(integration)" :to="{ name: admin ? 'admin-integration-edit' : 'settings-integration-edit', params: { integrationId: integration.id } }" />
+                <q-btn flat round dense icon="delete_outline" color="negative" :aria-label="`${integration.name} löschen`" :loading="removingId === integration.id" :disable="removingId !== null || (integration.scope === 'instance' && !auth.isAdmin)" @click="removeIntegration(integration)" />
               </div>
             </div>
           </q-item-section>
@@ -272,55 +228,39 @@
       <q-inner-loading :showing="integrations.loading || (integrations.catalogLoading && !integrations.catalogLoaded)" />
     </q-card>
 
-    <IntegrationConfigDialog v-if="showInstances" v-model="dialogOpen" :integration="selectedIntegration" @update:model-value="onDialogChange" />
-    <BrowserSetupDialog v-if="setupId" :model-value="Boolean(setupId)" :integration-id="setupId" @update:model-value="setupId = null" />
+    <IntegrationCreateDialog v-if="showInstances" v-model="dialogOpen" :scope="admin ? 'instance' : 'personal'" @continue="router.push({ name: admin ? 'admin-integration-create' : 'settings-integration-create', query: $event })" />
   </section>
 </template>
 
 <script setup>
 import { agentDisplayName } from 'src/features/computers/display'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
-import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from 'src/boot/axios'
-import IntegrationConfigDialog from 'src/features/integrations/IntegrationConfigDialog.vue'
-import BrowserSetupDialog from 'src/features/browser/BrowserSetupDialog.vue'
+import IntegrationCreateDialog from 'src/features/integrations/IntegrationCreateDialog.vue'
 import { browserStatusLabel } from 'src/utils/browser'
 import { useConfirm } from 'src/composables/confirm'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import { useAuthStore } from 'stores/auth'
-import { useAgentProfileStore } from 'stores/agent-profiles'
 
 defineOptions({ name: 'IntegrationSettingsPage' })
 const { admin } = defineProps({ admin: { type: Boolean, default: false } })
 
 const $q = useQuasar()
 const route = useRoute()
+const router = useRouter()
 const { confirm } = useConfirm()
 const integrations = useIntegrationStore()
 const auth = useAuthStore()
-const agents = useAgentProfileStore()
-const assignmentProfileId = ref(null)
-const assignments = ref(null)
-const assignmentsLoading = ref(false)
-const assignmentsFailed = ref(false)
-let assignmentsRevision = 0
-const profileAssignmentsAllowed = computed(() => admin || auth.isAdmin || agents.personalAgentsEnabled && agents.personalToolPermissionsEnabled)
-const profileOptions = computed(() => agents.manageableAgents.filter((agent) => admin ? agent.scope === 'instance' && agent.protected : agent.scope === 'personal').map((agent) => ({ label: agent.name, value: agent.id })))
-const availabilityChoices = (inherited) => [{ label: `Erben: ${inherited ? 'Verfügbar' : 'Nicht verfügbar'}`, value: null }, { label: 'Verfügbar', value: true }, { label: 'Nicht verfügbar', value: false }]
 const executionAgents = useExecutionAgentStore()
 const dialogOpen = ref(false)
-const selectedIntegration = ref(null)
-const setupId = ref(null)
-const resettingId = ref(null)
-const testingId = ref(null)
 const removingId = ref(null)
 const togglingId = ref(null)
 const searchSelectionSaving = ref(false)
-const section = ref('general')
+const section = ref(route.query.tab === 'management' ? 'management' : 'general')
 const instanceIntegrations = computed(() => [
   ...integrations.search.providers, ...integrations.calendar.accounts,
   ...integrations.mail.accounts, ...integrations.knowledge.bases,
@@ -328,7 +268,7 @@ const instanceIntegrations = computed(() => [
 ])
 const storedPersonalIntegrations = ref([])
 const searchSelection = ref({ primaryProvider: 'no_key', fallbackProvider: null, providerOptions: [{ name: 'Websuche ohne API-Key', value: 'no_key' }] })
-const showAccessPage = computed(() => ['settings-integration-resources', 'admin-integration-resources'].includes(route.name))
+const showDetailPage = computed(() => route.name !== (admin ? 'admin-integrations' : 'settings-integrations'))
 const showInstances = computed(() => section.value === 'management')
 const searchProviderOptions = computed(() => searchSelection.value.providerOptions.map((provider) => ({
   label: provider.integrationId ? `${provider.name} · SearXNG` : provider.name,
@@ -420,18 +360,7 @@ async function setFallbackSearchProvider(fallbackProvider) {
 
 function openCreateDialog() {
   integrations.selectScope(admin ? 'instance' : 'personal')
-  selectedIntegration.value = null
   dialogOpen.value = true
-}
-
-function openEditDialog(integration) {
-  integrations.selectScope(integration.scope)
-  selectedIntegration.value = integration
-  dialogOpen.value = true
-}
-
-function onDialogChange(open) {
-  if (!open) void reload()
 }
 
 function providerLabel(providerType) {
@@ -482,42 +411,6 @@ function executionAgentName(integration) {
     || 'Nicht verfügbarer Computer'
 }
 
-async function testIntegration(integration) {
-  integrations.selectScope(integration.scope)
-  testingId.value = integration.id
-  try {
-    let result
-    if (integration.integrationType === 'calendar') result = await integrations.testCalendar(integration.id)
-    else if (integration.integrationType === 'mail') result = await integrations.testMail(integration.id)
-    else if (integration.integrationType === 'support') result = await integrations.testTbsDesk(integration.id)
-    else if (integration.integrationType === 'knowledge') result = await integrations.testKnowledge(integration.id)
-    else if (integration.integrationType === 'recipes') result = await integrations.testRecipes(integration.id)
-    else if (integration.integrationType === 'infrastructure') result = await integrations.testArcane(integration.id)
-    else if (integration.integrationType === 'music') result = await integrations.testSonoBin(integration.id)
-    else if (integration.integrationType === 'openscad') result = await integrations.testOpenScad(integration.id)
-    else if (integration.integrationType === 'coding') result = await integrations.testOpenCode(integration.id)
-    else if (integration.integrationType === 'browser') {
-      result = await integrations.browserStatus(integration.id, true)
-      $q.notify({ type: result.state === 'ready' ? 'positive' : 'warning', message: browserStatusLabel(result) })
-      return
-    }
-    else result = await integrations.testSearch(integration.id)
-    if (integration.integrationType === 'openscad' && result?.headlessPreview === false) {
-      $q.notify({
-        type: 'warning',
-        message: 'OpenSCAD ist erreichbar, unterstützt aber keine Headless-Vorschau.'
-      })
-      return
-    }
-    $q.notify({ type: 'positive', message: 'Verbindung erfolgreich' })
-  } catch {
-    // The central API interceptor displays the error as a toast.
-  } finally {
-    testingId.value = null
-    if (integration.scope === 'instance') await reload()
-  }
-}
-
 async function removeIntegration(integration) {
   const confirmed = await confirm(
     `Integration „${integration.name}“ vollständig löschen?`,
@@ -552,69 +445,14 @@ async function reload() {
     await Promise.all([
       integrations.fetchCatalog(),
       integrations.fetchAll(),
-      agents.fetchAgents(admin ? 'instance' : 'personal'),
       executionAgents.fetchAll()
     ])
     searchSelection.value = { ...integrations.search }
     const visible = (await api.get('/integrations/visible')).data
     storedPersonalIntegrations.value = visible.filter((item) => item.scope === 'personal')
-    selectRequestedProfile()
   } catch {
     // The central API interceptor displays the error as a toast.
   }
-}
-
-async function resetBrowser(integration) {
-  if (!await confirm('Alle Browser-Anmeldungen, Cookies und Profildaten auf diesem Computer löschen? Die Installation bleibt erhalten. Schließe vorher alle Browser-Verbindungen.', 'Browserprofil zurücksetzen?', { okLabel: 'Zurücksetzen', okColor: 'negative' })) return
-  resettingId.value = integration.id
-  try {
-    await integrations.resetBrowser(integration.id)
-    $q.notify({ type: 'positive', message: 'Browserprofil zurückgesetzt' })
-  } catch { /* Central API toast. */ }
-  finally { resettingId.value = null }
-}
-
-async function loadAssignments() {
-  const revision = ++assignmentsRevision
-  assignments.value = null
-  assignmentsFailed.value = false
-  assignmentsLoading.value = Boolean(assignmentProfileId.value)
-  if (!assignmentProfileId.value) return
-  try {
-    const data = await integrations.fetchProfileAvailability(assignmentProfileId.value, admin ? 'instance' : 'personal')
-    if (revision === assignmentsRevision) assignments.value = data
-  } catch { if (revision === assignmentsRevision) assignmentsFailed.value = true }
-  finally { if (revision === assignmentsRevision) assignmentsLoading.value = false }
-}
-
-function selectRequestedProfile() {
-  const id = route.query.profileId
-  if (!id) return
-  section.value = 'general'
-  assignmentProfileId.value = profileAssignmentsAllowed.value && profileOptions.value.some((profile) => profile.value === id) ? id : null
-}
-
-async function saveAssignments(changes) {
-  const revision = ++assignmentsRevision
-  assignmentsLoading.value = true
-  try {
-    const data = await integrations.saveProfileAvailability(assignmentProfileId.value, admin ? 'instance' : 'personal', {
-      integrationsEnabledByDefault: assignments.value.integrationsEnabledByDefault,
-      integrationAvailability: assignments.value.integrationAvailability,
-      ...changes
-    })
-    if (revision !== assignmentsRevision) return
-    assignments.value = data
-    $q.notify({ type: 'positive', message: 'Profilzuordnungen gespeichert' })
-  } catch { /* Central API toast. */ }
-  finally { if (revision === assignmentsRevision) assignmentsLoading.value = false }
-}
-
-function setIntegrationAvailability(id, value) {
-  const integrationAvailability = { ...assignments.value.integrationAvailability }
-  if (value === null) delete integrationAvailability[id]
-  else integrationAvailability[id] = value
-  return saveAssignments({ integrationAvailability })
 }
 
 async function loadCatalog() {
@@ -633,10 +471,12 @@ async function setAdapterAvailability(adapterType, availability) {
   }
 }
 
-onMounted(() => {
-  if (!showAccessPage.value) void reload()
+onMounted(() => { if (!showDetailPage.value) void reload() })
+watch(showDetailPage, (detail) => {
+  if (!detail) {
+    if (route.query.tab === 'management') section.value = 'management'
+    void reload()
+  }
 })
-watch(() => admin, () => { assignmentProfileId.value = null; assignments.value = null; void reload() })
-watch(assignmentProfileId, loadAssignments)
-watch(() => route.query.profileId, selectRequestedProfile)
+watch(() => admin, reload)
 </script>

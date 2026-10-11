@@ -71,6 +71,7 @@
               :reasoning-summary-forced="provider?.adapterType === 'openai-codex'"
               :provider-trust-level="provider?.trustLevel"
               :provider-pseudonymization-enabled="provider?.pseudonymizationEnabled"
+              :model-trust-enabled="auth.modelTrustEnabled"
             />
             <q-banner v-else rounded class="provider-form-section app-surface-tonal">
               Die LLM-Laufzeitfelder gelten nur für Chatmodelle. Die ausgewählten Medienfähigkeiten bleiben davon unabhängig.
@@ -104,6 +105,7 @@ import ModelRuntimeFields from 'src/features/providers/ModelRuntimeFields.vue'
 import { modelRuntimeForm, modelRuntimePayload } from 'src/utils/model-runtime'
 import { MODEL_CAPABILITY_OPTIONS, modelSupportsCapability } from 'src/utils/provider-models'
 import { useProviderStore } from 'stores/providers'
+import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'ModelConfigDialog' })
 
@@ -115,6 +117,7 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'saved'])
 const $q = useQuasar()
 const providers = useProviderStore()
+const auth = useAuthStore()
 const saving = ref(false)
 const form = reactive(defaultForm())
 const isDiscovered = computed(() => props.model?.origin === 'discovered')

@@ -159,6 +159,7 @@ class AgentProfilePermissions(BaseModel):
     resource_policies: dict[
         str, dict[str, dict[str, ToolExecutionPolicy]]
     ] = Field(default_factory=dict)
+    resource_availability: dict[str, dict[str, StrictBool]] = Field(default_factory=dict)
 
     def merged(self, override: AgentProfilePermissions, *, include_policies: bool = True) -> AgentProfilePermissions:
         data = self.model_dump()
@@ -170,6 +171,8 @@ class AgentProfilePermissions(BaseModel):
             target = data["resource_policies"].setdefault(integration_id, {})
             for resource_key, policies in resources.items():
                 target.setdefault(resource_key, {}).update(policies)
+        for integration_id, resources in override.resource_availability.items():
+            data["resource_availability"].setdefault(integration_id, {}).update(resources)
         return AgentProfilePermissions.model_validate(data)
 
 
@@ -828,8 +831,6 @@ def effective_model_trust(
 def effective_model_pseudonymization(
     provider: LlmProviderConfig, model: ModelConfig
 ) -> bool:
-    if effective_model_trust(provider, model) != TrustLevel.PUBLIC:
-        return False
     if model.pseudonymization_enabled is not None:
         return model.pseudonymization_enabled
     return provider.pseudonymization_enabled
@@ -848,6 +849,7 @@ class IntegrationPermissions(BaseModel):
     private_permissions: IntegrationPermissionBranch = Field(default_factory=IntegrationPermissionBranch)
     public_permissions: IntegrationPermissionBranch = Field(default_factory=IntegrationPermissionBranch)
     available: StrictBool | None = None
+    resource_availability: dict[str, StrictBool] = Field(default_factory=dict)
 
 
 class IntegrationInstance(BaseModel):
@@ -1136,6 +1138,7 @@ class GeneralSettings(SettingsDocument):
     default_locale: str = "de-DE"
     default_timezone: str = "Europe/Berlin"
     public_base_url: str | None = Field(default=None, max_length=2083, alias="publicBaseUrl")
+    model_trust_enabled: StrictBool = Field(default=True, alias="modelTrustEnabled")
 
     model_config = ConfigDict(populate_by_name=True)
     _normalize_public_url = field_validator("public_base_url", mode="before")(normalize_public_base_url)

@@ -1,6 +1,6 @@
 <template>
   <section :aria-busy="loading">
-    <q-toolbar class="settings-detail-toolbar q-px-none q-mb-md">
+    <q-toolbar v-if="!embedded" class="settings-detail-toolbar q-px-none q-mb-md">
       <q-btn
         flat
         round
@@ -67,14 +67,11 @@
       :inert="adapterBlocked"
       @submit.prevent="save"
     >
-      <AppSelect dense v-if="scope === 'personal'" :model-value="profileId" outlined emit-value map-options label="Agentenprofil" :options="profileOptions" :disable="saving || loading" @update:model-value="selectProfile" />
-      <AppSelect dense v-if="profileId" v-model="permissions.available" outlined emit-value map-options label="Integration für dieses Profil" :options="[{ label: `Erben: ${permissionsData?.inheritedAvailable ? 'Verfügbar' : 'Nicht verfügbar'}`, value: null }, { label: 'Verfügbar', value: true }, { label: 'Nicht verfügbar', value: false }]" :disable="saving || loading" />
-      <q-banner rounded class="app-surface-tonal">
-        {{ profileId ? 'Diese Abweichungen gelten nur für diese persönliche Integration und das gewählte Profil.' : 'Diese Integration hat eigene Berechtigungen, unabhängig von globalen Tool-Defaults.' }}
-      </q-banner>
-      <PermissionFields v-model="permissions" :groups-by-trust="permissionGroups" :resources="permissionsData?.inherited.private?.resources || []" :inherited-resources="inheritedResources" :disabled="adapterBlocked" />
-      <q-banner v-if="!permissionGroups.private?.[0]?.actions.length" rounded class="app-surface-tonal">Diese Integration bietet keine konfigurierbaren Ausführungsrechte.</q-banner>
-      <q-card v-if="supportsDefaultResources" flat class="app-surface-tonal">
+      <AppSelect dense :model-value="profileId" outlined emit-value map-options label="Agentenprofil" :options="profileOptions" :disable="saving || loading" @update:model-value="selectProfile" />
+      <IntegrationPermissionEditor v-model="permissions" :key="profileId || 'default'" :data="permissionsData" :profile-id="profileId" :model-trust-enabled="auth.modelTrustEnabled" :disabled="adapterBlocked || saving" />
+      <q-banner v-if="permissionsData.providerType === 'mcp_streamable_http' && !permissionsData.inherited.private?.resources.length" rounded class="app-surface-tonal">Dieser Server stellt derzeit keine Tools bereit.</q-banner>
+      <q-banner v-if="!permissionsData?.inherited.private?.actions.length" rounded class="app-surface-tonal">Diese Integration bietet keine konfigurierbaren Ausführungsrechte.</q-banner>
+      <q-card v-if="!profileId && supportsDefaultResources" flat class="app-surface-tonal">
         <q-card-section>
           <div class="text-subtitle1 text-weight-bold">Standardressourcen dieses Kontos</div>
           <div class="text-caption app-muted">
@@ -113,7 +110,7 @@
         </q-card-section>
       </q-card>
 
-      <div class="row justify-end q-gutter-sm q-pb-md">
+      <div v-if="!embedded" class="row justify-end q-gutter-sm q-pb-md">
         <q-btn
           flat
           no-caps
@@ -142,28 +139,29 @@ import { computed, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
 import { useConfirm } from 'src/composables/confirm'
-import PermissionFields from 'src/features/settings/PermissionFields.vue'
+import IntegrationPermissionEditor from './IntegrationPermissionEditor.vue'
 import {
   calendarResources,
   taskListResources
 } from 'src/utils/integration-access'
 import { useIntegrationStore } from 'stores/integrations'
+import { useAuthStore } from 'stores/auth'
 
 defineOptions({ name: 'IntegrationAccessPage' })
+const props = defineProps({ embedded: Boolean })
 
 const $q = useQuasar()
 const route = useRoute()
 const { confirm } = useConfirm()
 const integrations = useIntegrationStore()
+const auth = useAuthStore()
 const access = ref(null)
 const permissionsData = ref(null)
-const permissions = ref({ privatePermissions: { policies: {}, resourcePolicies: {} }, publicPermissions: { policies: {}, resourcePolicies: {} } })
+const permissions = ref({ resourceAvailability: {}, privatePermissions: { policies: {}, resourcePolicies: {} }, publicPermissions: { policies: {}, resourcePolicies: {} } })
 const profileId = ref(null)
 const savedPermissions = ref('')
 const listRoute = computed(() => `${String(route.name).startsWith('admin-') ? 'admin' : 'settings'}-${String(route.name).includes('mcp') ? 'mcp' : 'integrations'}`)
-const profileOptions = computed(() => [{ label: 'Standard für alle Profile', value: null }, ...(permissionsData.value?.profiles || []).map((item) => ({ label: `${item.name} (${item.scope === 'instance' ? 'Global' : 'Persönlich'})`, value: item.id }))])
-const permissionGroups = computed(() => Object.fromEntries(['private', 'public'].map((trust) => [trust, [{ id: 'integration', label: 'Berechtigungen', icon: 'security', tools: [], actions: (permissionsData.value?.inherited[trust]?.actions || []).map((action) => ({ ...action, available: !profileId.value || (permissions.value.available ?? permissionsData.value?.inheritedAvailable) })) }]])))
-const inheritedResources = computed(() => Object.fromEntries(['private', 'public'].map((trust) => [trust, permissionsData.value?.inherited[trust]?.resources || []])))
+const profileOptions = computed(() => [{ label: 'Standard für diese Integration', value: null }, ...(permissionsData.value?.profiles || []).map((item) => ({ label: `${item.name} (${item.scope === 'instance' ? 'Global' : 'Persönlich'})`, value: item.id }))])
 const defaultResourceKey = ref(null)
 const defaultTaskListKey = ref(null)
 const loading = ref(false)
@@ -180,6 +178,7 @@ const adapterBlocked = computed(() => (
 const dirty = computed(() => Boolean(
     access.value && (JSON.stringify(requestPayload()) !== savedPayload.value || JSON.stringify(permissions.value) !== savedPermissions.value)
 ))
+const canSave = computed(() => !adapterBlocked.value && !loading.value && !loadFailed.value && !saving.value && dirty.value)
 const calendarResourceList = computed(() => calendarResources(access.value?.resources || []))
 const taskListResourceList = computed(() => taskListResources(access.value?.resources || []))
 const hasDefaultResourceFields = computed(() => Boolean(
@@ -235,7 +234,7 @@ async function load() {
     const rights = await integrations.fetchPermissions(id, profileId.value)
     if (token !== loadToken || integrationId.value !== id) return
     permissionsData.value = rights
-    permissions.value = rights.permissions
+    permissions.value = { ...rights.permissions, resourceAvailability: rights.permissions.resourceAvailability || {} }
     savedPermissions.value = JSON.stringify(permissions.value)
     const value = rights.providerType === 'caldav' ? await integrations.fetchAccess(id) : {}
     if (token === loadToken && integrationId.value === id) assignAccess(value)
@@ -280,6 +279,7 @@ async function confirmDiscardedChanges() {
 }
 
 watch([integrationId, scope], load, { immediate: true })
-onBeforeRouteUpdate(confirmDiscardedChanges)
-onBeforeRouteLeave(confirmDiscardedChanges)
+onBeforeRouteUpdate(() => props.embedded || confirmDiscardedChanges())
+onBeforeRouteLeave(() => props.embedded || confirmDiscardedChanges())
+defineExpose({ dirty, saving, canSave, save, load })
 </script>

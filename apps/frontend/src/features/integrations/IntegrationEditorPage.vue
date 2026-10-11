@@ -1,50 +1,33 @@
 <template>
-  <q-dialog
-    :model-value="modelValue"
-    :maximized="$q.screen.lt.sm"
-    :persistent="saving"
-    @hide="close"
-  >
-    <q-card class="integration-dialog app-surface column">
-      <q-card-section class="row items-start no-wrap q-gutter-md">
+  <section :aria-busy="loading">
+      <q-toolbar class="settings-detail-toolbar q-px-none q-mb-md">
+        <q-btn flat round dense icon="arrow_back" aria-label="Zurück zu den Integrationen" :disable="saving || testing || accessRef?.saving" :to="{ name: listRoute, query: { tab: 'management' } }" />
         <q-avatar color="primary" text-color="white" :icon="dialogIcon" />
-        <div class="col">
-          <div class="text-h6">{{ isEditing ? `${integration.name} bearbeiten` : 'Integration hinzufügen' }}</div>
-          <div class="text-body2 app-muted">
-            Wähle die Fähigkeit und den dazugehörigen Anbieter.
-          </div>
+        <div class="col q-px-sm">
+          <div class="text-h6 text-weight-bold">{{ integration?.name || 'Integration hinzufügen' }}</div>
+          <div class="text-body2 app-muted">{{ providerDefaults[form.integration_type]?.label }} · {{ scope === 'instance' ? 'Globale Verbindung' : 'Persönliche Verbindung' }}</div>
         </div>
-        <q-btn flat round dense icon="close" aria-label="Dialog schließen" @click="close" />
-      </q-card-section>
+        <q-btn unelevated no-caps color="primary" icon="save" label="Speichern" :loading="saving || accessRef?.saving" :disable="blocked || loading || loadFailed || testing || (section === 'permissions' ? !accessRef?.canSave : !dirty)" @click="section === 'permissions' ? accessRef?.save() : save()" />
+      </q-toolbar>
 
-      <q-separator />
-      <q-form ref="formRef" class="col column no-wrap">
-        <q-card-section class="col scroll q-gutter-md">
-          <AppSelect dense
-            v-model="form.integration_type"
-            outlined
-            emit-value
-            map-options
-            label="Integrationstyp"
-            :options="integrationTypes"
-            :disable="isEditing"
-            @update:model-value="selectIntegrationType"
-          />
-          <AppSelect dense
-            v-model="form.provider_type"
-            outlined
-            emit-value
-            map-options
-            label="Anbieter"
-            :options="providerTypes"
-            :disable="isEditing"
-          />
+      <q-tabs v-model="section" dense no-caps align="left" active-color="primary" indicator-color="primary" class="q-mb-md">
+        <q-tab name="settings" icon="settings" label="Einstellungen" :disable="saving || testing || accessRef?.saving" />
+        <q-tab name="permissions" icon="security" label="Berechtigungen" :disable="!integration || loading || blocked || saving || testing || accessRef?.saving" />
+      </q-tabs>
 
-          <template v-if="providerTypes.some(({ value }) => value === form.provider_type)">
+      <q-banner v-if="loadFailed" rounded class="app-surface-tonal q-mb-md">
+        Die Integration konnte nicht geladen werden.
+        <template #action><q-btn flat no-caps label="Erneut laden" @click="load" /></template>
+      </q-banner>
+      <q-banner v-else-if="blocked && !loading" rounded class="app-surface-tonal q-mb-md">Diese Integration kann hier nicht bearbeitet werden.</q-banner>
+      <q-form v-if="!loading && !loadFailed && !blocked" v-show="section === 'settings'" ref="formRef" :inert="saving || testing" @submit.prevent="save">
+        <q-card flat class="app-surface">
+        <q-card-section class="q-gutter-md">
             <q-input dense
               v-model="form.name"
               outlined
               label="Name"
+              maxlength="160"
               lazy-rules
               :rules="[requiredRule]"
             />
@@ -249,92 +232,73 @@
             <template v-if="form.integration_type === 'browser'">
               <p class="text-caption app-muted">Ein dauerhaftes Browserprofil pro Computer. Die Agent-Freigabe erfolgt in der Browser-App; die Integrationsauswahl im Agentenprofil bleibt maßgeblich.</p>
               <q-btn v-if="integration?.id" outline no-caps icon="terminal" label="Browser einrichten / Status anzeigen" @click="setupOpen = true" />
+              <q-btn v-if="integration?.id" flat no-caps color="negative" icon="restart_alt" label="Browserprofil zurücksetzen" :disable="dirty || saving || testing" @click="resetBrowser" />
               <div v-else class="text-caption">Nach dem Speichern kannst du die Einrichtung öffnen.</div>
             </template>
-          </template>
         </q-card-section>
+        <q-separator />
+        <q-card-section>
+          <q-btn outline no-caps icon="network_check" label="Verbindung testen" :loading="testing" :disable="!integration || saving || dirty" @click="testConnection" />
+          <div v-if="!integration || dirty" class="text-caption app-muted q-mt-sm">Speichere die Konfiguration vor dem Verbindungstest.</div>
+          <div v-if="testResult" class="text-body2 q-mt-sm" role="status">{{ testResult }}</div>
+        </q-card-section>
+        </q-card>
       </q-form>
-
-      <q-separator />
-      <q-card-actions class="q-pa-md">
-        <q-btn flat no-caps label="Abbrechen" @click="close" />
-        <q-space />
-        <q-btn
-          unelevated
-          no-caps
-          color="primary"
-          :label="isEditing ? 'Änderungen speichern' : 'Integration hinzufügen'"
-          :loading="saving"
-          @click="save"
-        />
-      </q-card-actions>
-    </q-card>
-  </q-dialog>
+      <IntegrationAccessPage v-if="integration && accessOpened && !loading && !loadFailed && !blocked" v-show="section === 'permissions'" ref="accessRef" :key="integration.id" embedded />
+      <q-inner-loading :showing="loading" />
   <BrowserSetupDialog v-if="setupOpen && integration?.id" v-model="setupOpen" :integration-id="integration.id" />
+  </section>
 </template>
 
 <script setup>
 import AppSelect from 'src/shared/ui/AppSelect.vue'
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
+import { useConfirm } from 'src/composables/confirm'
+import { useAuthStore } from 'stores/auth'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import BrowserSetupDialog from 'src/features/browser/BrowserSetupDialog.vue'
+import IntegrationAccessPage from './IntegrationAccessPage.vue'
 import { agentDisplayName } from 'src/features/computers/display'
+import { providerDefaults, integrationTypes as allIntegrationTypes } from './configuration'
 
-defineOptions({ name: 'IntegrationConfigDialog' })
-
-const props = defineProps({
-  modelValue: { type: Boolean, required: true },
-  integration: { type: Object, default: null }
-})
-const emit = defineEmits(['update:modelValue'])
+defineOptions({ name: 'IntegrationEditorPage' })
 
 const $q = useQuasar()
+const route = useRoute()
+const router = useRouter()
+const auth = useAuthStore()
+const { confirm } = useConfirm()
 const integrations = useIntegrationStore()
+const integration = ref(null)
+const loading = ref(false)
+const loadFailed = ref(false)
+const saved = ref('')
+const testing = ref(false)
+const testResult = ref('')
+const scope = computed(() => String(route.name).startsWith('admin-') ? 'instance' : 'personal')
+const listRoute = computed(() => scope.value === 'instance' ? 'admin-integrations' : 'settings-integrations')
+const isEditing = computed(() => Boolean(route.params.integrationId))
+const section = computed({
+  get: () => isEditing.value && route.query.tab === 'permissions' ? 'permissions' : 'settings',
+  set: (tab) => router.replace({ query: { ...route.query, tab } })
+})
+const accessRef = ref(null)
+const accessOpened = ref(false)
+const blocked = computed(() => scope.value === 'instance' && !auth.isAdmin || !integrations.adapterAvailable(form.provider_type, scope.value) || isEditing.value && !integration.value)
+const dirty = computed(() => Boolean(saved.value) && JSON.stringify(form) !== saved.value)
+let loadVersion = 0
 const executionAgents = useExecutionAgentStore()
 const formRef = ref(null)
 const saving = ref(false)
 const setupOpen = ref(false)
-const allIntegrationTypes = [
-  { label: 'Websuche', value: 'search' },
-  { label: 'Kalender & Aufgaben', value: 'calendar' },
-  { label: 'Mail', value: 'mail' },
-  { label: 'Support', value: 'support' },
-  { label: 'Wissensdatenbank', value: 'knowledge' },
-  { label: 'Rezepte & Essensplanung', value: 'recipes' },
-  { label: 'Docker-Verwaltung', value: 'infrastructure' },
-  { label: 'Musikbibliothek', value: 'music' },
-  { label: '3D-Modellierung', value: 'openscad' },
-  { label: 'Programmierung', value: 'coding' },
-  { label: 'Browser', value: 'browser' }
-]
-const PROVIDER_DEFAULTS = {
-  search: { provider: 'searxng', label: 'SearXNG', placeholder: 'https://search.example.com' },
-  calendar: { provider: 'caldav', label: 'CalDAV', placeholder: 'https://calendar.example.com' },
-  mail: { provider: 'imap_smtp', label: 'IMAP/SMTP', placeholder: '' },
-  support: { provider: 'tbs-desk', label: 'tbs.Desk', placeholder: 'http://192.168.1.30:9000' },
-  knowledge: { provider: 'bookstack', label: 'BookStack', placeholder: 'https://wiki.example.com' },
-  recipes: { provider: 'mealie', label: 'Mealie', placeholder: 'http://mealie.example.com' },
-  infrastructure: { provider: 'arcane', label: 'Arcane', placeholder: 'https://arcane.example.com' },
-  music: { provider: 'sonobin', label: 'SonoBin', placeholder: 'https://sonobin.example.com' },
-  openscad: { provider: 'openscad', label: 'OpenSCAD', placeholder: '' },
-  coding: { provider: 'opencode', label: 'OpenCode', placeholder: 'http://localhost:4096' },
-  browser: { provider: 'browser', label: 'Browser', placeholder: '' }
-}
-const integrationTypes = computed(() => allIntegrationTypes.filter((type) => {
-  const adapterType = PROVIDER_DEFAULTS[type.value].provider
-  return integrations.adapterAvailable(adapterType)
-}))
-const providerTypes = computed(() => {
-  const preset = PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search
-  return [{ label: preset.label, value: preset.provider }]
-})
 const baseUrlLabel = computed(
-  () => `${(PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).label}-Basis-URL`
+  () => `${providerDefaults[form.integration_type]?.label}-Basis-URL`
 )
 const baseUrlPlaceholder = computed(
-  () => (PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).placeholder
+  () => providerDefaults[form.integration_type]?.placeholder
 )
 const requiresHttps = computed(() => !['search', 'recipes', 'coding', 'support', 'infrastructure'].includes(form.integration_type))
 const dialogIcon = computed(() => ({ coding: 'code', mail: 'mail', support: 'confirmation_number', music: 'library_music', infrastructure: 'dns', openscad: 'view_in_ar', browser: 'web' })[form.integration_type] || 'extension')
@@ -350,7 +314,6 @@ const executionAgentOptions = computed(() => {
   return options
 })
 const form = reactive(defaultForm())
-const isEditing = computed(() => Boolean(props.integration))
 const discovering = ref(false)
 const discovery = ref(null)
 let discoveryVersion = 0
@@ -387,15 +350,6 @@ function defaultForm() {
   }
 }
 
-function selectIntegrationType(type) {
-  const preset = PROVIDER_DEFAULTS[type] || PROVIDER_DEFAULTS.search
-  form.provider_type = preset.provider
-  form.name = preset.label
-  if (type === 'coding' && !form.username) form.username = 'opencode'
-  invalidateDiscovery()
-  if (['openscad', 'browser'].includes(type)) void fetchComputers()
-}
-
 async function fetchComputers() {
   try {
     await executionAgents.fetchAll()
@@ -430,7 +384,7 @@ async function discoverOpenScad() {
     const result = await integrations.discoverOpenScad(executionAgentId)
     if (
       version !== discoveryVersion
-      || !props.modelValue
+      || blocked.value
       || form.integration_type !== 'openscad'
       || form.executionAgentId !== executionAgentId
     ) return
@@ -458,7 +412,7 @@ function tokenPairRule() {
 }
 
 function urlRule(value) {
-  const label = (PROVIDER_DEFAULTS[form.integration_type] || PROVIDER_DEFAULTS.search).label
+  const label = providerDefaults[form.integration_type].label
   try {
     const protocol = new URL(value).protocol
     const allowed = requiresHttps.value
@@ -475,35 +429,26 @@ function urlRule(value) {
 }
 
 async function save() {
+  if (blocked.value || loading.value || saving.value || testing.value || loadFailed.value) return
   if (!await formRef.value?.validate()) return
-  if (!integrations.adapterAvailable(form.provider_type)) {
-    $q.notify({ type: 'warning', message: 'Dieser Integrationstyp ist nicht verfügbar.' })
-    return
-  }
+  integrations.selectScope(scope.value)
+  const previousIds = new Set(integrations.configuredIntegrations.map((item) => item.id))
   saving.value = true
   try {
     if (form.integration_type === 'browser') {
-      await integrations.saveBrowser(props.integration?.id, {
+      await integrations.saveBrowser(integration.value?.id, {
         name: form.name.trim(), executionAgentId: form.executionAgentId, enabled: form.enabled, config: {}
       })
-      $q.notify({ type: 'positive', message: 'Integration gespeichert' })
-      close()
-      return
-    }
-    if (form.integration_type === 'openscad') {
+    } else if (form.integration_type === 'openscad') {
       const payload = {
         executionAgentId: form.executionAgentId,
         name: form.name.trim(),
         config: { binaryPath: form.binaryPath.trim() },
         enabled: form.enabled
       }
-      if (props.integration) await integrations.updateOpenScad(props.integration.id, payload)
+      if (integration.value) await integrations.updateOpenScad(integration.value.id, payload)
       else await integrations.createOpenScad(payload)
-      $q.notify({ type: 'positive', message: 'Integration gespeichert' })
-      close()
-      return
-    }
-    if (form.integration_type === 'mail') {
+    } else if (form.integration_type === 'mail') {
       const payload = {
         integration_type: 'mail',
         provider_type: 'imap_smtp',
@@ -519,13 +464,9 @@ async function save() {
         password: form.password,
         enabled: form.enabled
       }
-      if (props.integration) await integrations.updateMail(props.integration.id, payload)
+      if (integration.value) await integrations.updateMail(integration.value.id, payload)
       else await integrations.createMail(payload)
-      $q.notify({ type: 'positive', message: 'Integration gespeichert' })
-      close()
-      return
-    }
-    if (form.integration_type === 'coding') {
+    } else if (form.integration_type === 'coding') {
       const payload = {
         name: form.name.trim(),
         baseUrl: form.base_url.trim(),
@@ -534,13 +475,9 @@ async function save() {
         removePassword: form.removePassword,
         enabled: form.enabled
       }
-      if (props.integration) await integrations.updateOpenCode(props.integration.id, payload)
+      if (integration.value) await integrations.updateOpenCode(integration.value.id, payload)
       else await integrations.createOpenCode(payload)
-      $q.notify({ type: 'positive', message: 'Integration gespeichert' })
-      close()
-      return
-    }
-    if (form.integration_type === 'support') {
+    } else if (form.integration_type === 'support') {
       const payload = {
         name: form.name.trim(),
         baseUrl: form.base_url.trim(),
@@ -548,13 +485,9 @@ async function save() {
         password: form.password,
         enabled: form.enabled
       }
-      if (props.integration) await integrations.updateTbsDesk(props.integration.id, payload)
+      if (integration.value) await integrations.updateTbsDesk(integration.value.id, payload)
       else await integrations.createTbsDesk(payload)
-      $q.notify({ type: 'positive', message: 'Integration gespeichert' })
-      close()
-      return
-    }
-    if (form.integration_type === 'music') {
+    } else if (form.integration_type === 'music') {
       const payload = {
         integration_type: 'music',
         provider_type: 'sonobin',
@@ -563,72 +496,77 @@ async function save() {
         bearerToken: form.bearerToken,
         enabled: form.enabled
       }
-      if (props.integration) await integrations.updateSonoBin(props.integration.id, payload)
+      if (integration.value) await integrations.updateSonoBin(integration.value.id, payload)
       else await integrations.createSonoBin(payload)
-      $q.notify({ type: 'positive', message: 'Integration gespeichert' })
-      close()
-      return
-    }
-    if (form.integration_type === 'infrastructure') {
+    } else if (form.integration_type === 'infrastructure') {
       const payload = { name: form.name.trim(), base_url: form.base_url.trim(), api_key: form.apiKey, enabled: form.enabled }
-      if (props.integration) await integrations.updateArcane(props.integration.id, payload)
+      if (integration.value) await integrations.updateArcane(integration.value.id, payload)
       else await integrations.createArcane(payload)
-      $q.notify({ type: 'positive', message: 'Integration gespeichert' })
-      close()
-      return
+    } else {
+      const payload = {
+        integration_type: form.integration_type,
+        provider_type: form.provider_type,
+        name: form.name.trim(),
+        base_url: form.base_url.trim(),
+        enabled: form.enabled
+      }
+      if (form.integration_type === 'calendar') {
+        payload.username = form.username.trim()
+        payload.password = form.password
+        if (integration.value) await integrations.updateCalendar(integration.value.id, payload)
+        else await integrations.createCalendar(payload)
+      } else if (form.integration_type === 'knowledge') {
+        payload.token_id = form.token_id.trim()
+        payload.token_secret = form.token_secret
+        if (integration.value) await integrations.updateKnowledge(integration.value.id, payload)
+        else await integrations.createKnowledge(payload)
+      } else if (form.integration_type === 'recipes') {
+        payload.token = form.token
+        if (integration.value) await integrations.updateRecipes(integration.value.id, payload)
+        else await integrations.createRecipes(payload)
+      } else if (integration.value) await integrations.updateSearch(integration.value.id, payload)
+      else await integrations.createSearch(payload)
     }
-    const payload = {
-      integration_type: form.integration_type,
-      provider_type: form.provider_type,
-      name: form.name.trim(),
-      base_url: form.base_url.trim(),
-      enabled: form.enabled
-    }
-    if (form.integration_type === 'calendar') {
-      payload.username = form.username.trim()
-      payload.password = form.password
-      if (props.integration) await integrations.updateCalendar(props.integration.id, payload)
-      else await integrations.createCalendar(payload)
-    } else if (form.integration_type === 'knowledge') {
-      payload.token_id = form.token_id.trim()
-      payload.token_secret = form.token_secret
-      if (props.integration) await integrations.updateKnowledge(props.integration.id, payload)
-      else await integrations.createKnowledge(payload)
-    } else if (form.integration_type === 'recipes') {
-      payload.token = form.token
-      if (props.integration) await integrations.updateRecipes(props.integration.id, payload)
-      else await integrations.createRecipes(payload)
-    } else if (props.integration) await integrations.updateSearch(props.integration.id, payload)
-    else await integrations.createSearch(payload)
+    const stored = integration.value
+      ? integrations.configuredIntegrations.find((item) => item.id === integration.value.id)
+      : integrations.configuredIntegrations.find((item) => !previousIds.has(item.id) && item.integrationType === form.integration_type)
+    saved.value = JSON.stringify(form)
+    testResult.value = ''
     $q.notify({ type: 'positive', message: 'Integration gespeichert' })
-    close()
+    if (stored && !isEditing.value) {
+      saving.value = false
+      await router.replace({ name: scope.value === 'instance' ? 'admin-integration-edit' : 'settings-integration-edit', params: { integrationId: stored.id } })
+    } else if (stored) {
+      assignForm(stored)
+      if (accessRef.value && !accessRef.value.dirty) await accessRef.value.load()
+    }
+    else {
+      saving.value = false
+      await router.replace({ name: listRoute.value, query: { tab: 'management' } })
+    }
+  } catch {
+    // The central API interceptor displays the error; keep the current draft.
   } finally {
     saving.value = false
   }
 }
 
-function close() {
-  setupOpen.value = false
+function assignForm(value = null) {
   invalidateDiscovery()
-  emit('update:modelValue', false)
-}
-
-watch([() => props.modelValue, () => props.integration?.id], ([open]) => {
-  invalidateDiscovery()
-  if (!open) return
-  Object.assign(form, defaultForm(), props.integration ? {
-    integration_type: props.integration.integrationType,
-    provider_type: props.integration.providerType,
-    name: props.integration.name,
-    base_url: props.integration.config?.baseUrl || '',
-    username: props.integration.config?.username || '',
-    imap_host: props.integration.config?.imapHost || '',
-    imap_port: props.integration.config?.imapPort || 993,
-    imap_security: props.integration.config?.imapSecurity || 'tls',
-    smtp_host: props.integration.config?.smtpHost || '',
-    smtp_port: props.integration.config?.smtpPort || 465,
-    smtp_security: props.integration.config?.smtpSecurity || 'tls',
-    from_address: props.integration.config?.fromAddress || '',
+  integration.value = value
+  Object.assign(form, defaultForm(), value ? {
+    integration_type: value.integrationType,
+    provider_type: value.providerType,
+    name: value.name,
+    base_url: value.config?.baseUrl || '',
+    username: value.config?.username || '',
+    imap_host: value.config?.imapHost || '',
+    imap_port: value.config?.imapPort || 993,
+    imap_security: value.config?.imapSecurity || 'tls',
+    smtp_host: value.config?.smtpHost || '',
+    smtp_port: value.config?.smtpPort || 465,
+    smtp_security: value.config?.smtpSecurity || 'tls',
+    from_address: value.config?.fromAddress || '',
     password: '',
     removePassword: false,
     token_id: '',
@@ -636,16 +574,84 @@ watch([() => props.modelValue, () => props.integration?.id], ([open]) => {
     token: '',
     apiKey: '',
     bearerToken: '',
-    executionAgentId: props.integration.executionAgentId
-      || props.integration.config?.executionAgentId
+    executionAgentId: value.executionAgentId
+      || value.config?.executionAgentId
       || null,
-    binaryPath: props.integration.config?.binaryPath || '/usr/bin/openscad',
-    enabled: props.integration.enabled
+    binaryPath: value.config?.binaryPath || '/usr/bin/openscad',
+    enabled: value.enabled
   } : {})
-  if (!props.integration && integrationTypes.value.length) {
-    form.integration_type = integrationTypes.value[0].value
-    selectIntegrationType(form.integration_type)
+  if (!value) {
+    const type = allIntegrationTypes.find((item) => item.value === route.query.type)?.value
+    form.integration_type = type || ''
+    form.provider_type = providerDefaults[type]?.provider || ''
+    form.name = typeof route.query.name === 'string' ? route.query.name : providerDefaults[type]?.label || ''
+    if (type === 'coding') form.username = 'opencode'
   }
+  saved.value = JSON.stringify(form)
   if (['openscad', 'browser'].includes(form.integration_type)) void fetchComputers()
-})
+}
+
+async function load() {
+  const version = ++loadVersion
+  loading.value = true
+  loadFailed.value = false
+  saved.value = ''
+  integration.value = null
+  accessOpened.value = section.value === 'permissions'
+  setupOpen.value = false
+  testResult.value = ''
+  invalidateDiscovery()
+  try {
+    if (scope.value === 'instance' && !auth.isAdmin) return
+    integrations.selectScope(scope.value)
+    await integrations.fetchCatalog()
+    if (version !== loadVersion) return
+    await integrations.fetchAll()
+    if (version !== loadVersion) return
+    const stored = isEditing.value ? integrations.configuredIntegrations.find((item) => item.id === route.params.integrationId) : null
+    if (isEditing.value && !stored) { loadFailed.value = true; return }
+    assignForm(stored)
+  } catch { if (version === loadVersion) loadFailed.value = true }
+  finally { if (version === loadVersion) loading.value = false }
+}
+
+async function testConnection() {
+  if (!integration.value || dirty.value || blocked.value || saving.value || testing.value) return
+  integrations.selectScope(scope.value)
+  testing.value = true
+  testResult.value = ''
+  try {
+    testResult.value = (await integrations.testIntegration(integration.value)).message
+  } catch { testResult.value = 'Verbindungstest fehlgeschlagen.' }
+  finally { testing.value = false }
+}
+
+async function resetBrowser() {
+  if (!integration.value || dirty.value || blocked.value || saving.value || testing.value) return
+  if (!await confirm('Alle Browser-Anmeldungen, Cookies und Profildaten auf diesem Computer löschen? Die Installation bleibt erhalten. Schließe vorher alle Browser-Verbindungen.', 'Browserprofil zurücksetzen?', { okLabel: 'Zurücksetzen', okColor: 'negative' })) return
+  testing.value = true
+  try {
+    await integrations.resetBrowser(integration.value.id)
+    testResult.value = ''
+    $q.notify({ type: 'positive', message: 'Browserprofil zurückgesetzt' })
+  } catch { /* Central API toast. */ }
+  finally { testing.value = false }
+}
+
+async function confirmDiscardedChanges() {
+  if (saving.value || testing.value || accessRef.value?.saving) return false
+  if (!dirty.value && !accessRef.value?.dirty) return true
+  return confirm('Sollen die ungespeicherten Änderungen verworfen werden?', 'Änderungen verwerfen?', { okLabel: 'Verwerfen' })
+}
+
+watch([() => route.name, () => route.params.integrationId, () => route.query.type, () => route.query.name], load, { immediate: true })
+watch(section, (tab) => { if (tab === 'permissions') accessOpened.value = true }, { immediate: true })
+watch(form, () => { testResult.value = '' })
+onBeforeRouteLeave(confirmDiscardedChanges)
+onBeforeRouteUpdate((to, from) => (
+  to.name === from.name && to.params.integrationId === from.params.integrationId
+  && to.query.type === from.query.type && to.query.name === from.query.name
+    ? true : confirmDiscardedChanges()
+))
+onBeforeUnmount(() => { loadVersion += 1; invalidateDiscovery() })
 </script>

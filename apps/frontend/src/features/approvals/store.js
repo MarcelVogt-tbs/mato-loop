@@ -25,40 +25,18 @@ export const useApprovalStore = defineStore('approvals', {
     grantsLoading: false,
     grantsLoaded: false,
     grantsLoadFailed: false,
-    grantRevision: 0,
-    rules: null,
-    rulesSessionId: null,
-    rulesLoading: false,
-    rulesLoadFailed: false,
-    rulesRevision: 0
+    grantRevision: 0
   }),
   getters: {
     pendingCount: (state) => state.pending.length,
     grantsForSession: (state) => (sessionId) => state.grants.filter((item) => (
-      item.sessionId === sessionId
+      item.sessionId === sessionId && !item.runId
     )),
     forSession: (state) => (sessionId) => state.pending.filter((item) => (
       item.sessionId === sessionId && (item.requestType !== 'memory_change' || item.payload?.subagentSessionId)
     ))
   },
   actions: {
-    async fetchRules(sessionId, config = {}) {
-      const revision = ++this.rulesRevision
-      this.rulesSessionId = sessionId || null
-      this.rules = null
-      this.rulesLoadFailed = false
-      this.rulesLoading = Boolean(sessionId)
-      if (!sessionId) return
-      try {
-        const { data } = await api.get(`/approvals/sessions/${sessionId}/rules`, config)
-        if (revision === this.rulesRevision) this.rules = data
-      } catch (error) {
-        if (revision === this.rulesRevision) this.rulesLoadFailed = true
-        throw error
-      } finally {
-        if (revision === this.rulesRevision) this.rulesLoading = false
-      }
-    },
     async previewSkillDraft(approval) {
       const sessionId = approval?.payload?.subagentSessionId
       const draft = approval?.details?.draftFile

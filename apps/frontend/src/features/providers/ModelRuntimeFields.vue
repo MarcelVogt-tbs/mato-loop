@@ -72,6 +72,7 @@
         :rules="[positiveNumberRule]"
       />
       <AppSelect dense
+        v-if="modelTrustEnabled"
         :model-value="form.trustLevel ?? 'inherit'"
         outlined
         hide-bottom-space
@@ -80,7 +81,7 @@
         label="Vertrauenslevel"
         :options="trustLevelOptions"
         :hint="`Effektiv: ${effectiveTrustLevel === 'private' ? 'Privat' : 'Öffentlich'}`"
-        @update:model-value="form.trustLevel = $event === 'inherit' ? null : $event"
+        @update:model-value="selectTrust"
       />
       <AppSelect dense
         :model-value="form.pseudonymizationEnabled ?? 'inherit'"
@@ -186,14 +187,19 @@ const props = defineProps({
   reasoningSummaryAvailable: Boolean,
   reasoningSummaryForced: Boolean,
   providerTrustLevel: { type: String, default: 'public' },
-  providerPseudonymizationEnabled: { type: Boolean, default: true }
+  providerPseudonymizationEnabled: { type: Boolean, default: true },
+  modelTrustEnabled: { type: Boolean, default: true }
 })
 
 const effectiveTrustLevel = computed(() => form.value.trustLevel ?? props.providerTrustLevel)
 const effectivePseudonymizationEnabled = computed(() => (
-  effectiveTrustLevel.value === 'public'
-  && (form.value.pseudonymizationEnabled ?? props.providerPseudonymizationEnabled)
+  form.value.pseudonymizationEnabled ?? props.providerPseudonymizationEnabled
 ))
+
+function selectTrust(value) {
+  form.value.trustLevel = value === 'inherit' ? null : value
+  if (value === 'public') form.value.pseudonymizationEnabled = true
+}
 const contextWindowHint = computed(() => {
   if (form.value.discoveredContextWindowTokens == null) {
     return 'Der Provider meldet kein Kontextfenster; der konfigurierte Wert wird verwendet.'

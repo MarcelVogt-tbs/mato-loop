@@ -41,22 +41,46 @@
     <q-form v-else-if="canEdit" ref="formRef" @submit.prevent="save">
       <PersonalSettingsGate v-if="admin && section === 'general'" v-model="form.personalSettingsEnabled" title="Tool-Rechte für persönliche Agentenprofile anpassen erlauben" description="Benutzer können die Tool-Rechte ihrer eigenen Profile frei anpassen." :disabled="saving || loading" />
       <template v-if="showManagement">
-      <q-banner rounded class="app-surface-tonal q-mb-md">
-        {{ selectedId ? 'Einzelne Werte können angepasst werden. Ohne eigenen Wert gilt die angezeigte Vorgabe.' : 'Berechtigungen sind Defaults. Ein technisch nicht verfügbares Tool kann durch Overrides nicht aktiviert werden.' }}
+      <q-banner v-if="!selectedId" rounded class="app-surface-tonal q-mb-md">
+        Berechtigungen sind Defaults. Ein technisch nicht verfügbares Tool kann durch Overrides nicht aktiviert werden.
       </q-banner>
-      <q-btn v-if="admin && selectedId" flat no-caps icon="restore" label="Tool-Rechte auf Standard zurücksetzen" class="q-mb-md" @click="resetPermissions" />
-      <PermissionFields v-model="form.permissions" :groups-by-trust="permissionGroups" />
-      <q-card flat class="app-surface q-mb-md">
-        <q-card-section>
-          <div class="text-subtitle1 text-weight-bold">Shell-Präfixe</div>
-          <AppSelect dense v-if="selectedId" v-model="form.shellCustom" outlined emit-value map-options label="Shell-Präfixe" :options="[{ label: 'Vom Basisprofil übernehmen', value: false }, { label: 'Eigene Werte', value: true }]" />
-          <div class="row q-col-gutter-md q-mt-sm">
-            <q-input dense v-model="form.shellRead" class="col-12 col-md-6" outlined type="textarea" autogrow label="Lesende Befehle" hint="Ein Präfix pro Zeile, z. B. git status." :disable="!form.shellCustom" />
-            <q-input dense v-model="form.shellWrite" class="col-12 col-md-6" outlined type="textarea" autogrow label="Schreibende Befehle" hint="Ein Präfix pro Zeile, z. B. npm install." :disable="!form.shellCustom" />
-          </div>
-        </q-card-section>
-      </q-card>
-      </template>
+      <ProfileToolOverrides v-if="selectedId" :key="selectedId" v-model="form.permissions" :settings="form" :groups-by-trust="permissionGroups" :model-trust-enabled="auth.modelTrustEnabled" :disabled="loading || saving || loadFailed">
+        <template #actions>
+          <q-btn v-if="admin" flat round dense icon="delete_outline" color="negative" aria-label="Alle Overrides löschen" :disable="loading || saving || loadFailed || !hasOverrides" @click="resetPermissions">
+            <q-tooltip>Alle Overrides löschen</q-tooltip>
+          </q-btn>
+        </template>
+      </ProfileToolOverrides>
+      <PermissionFields v-else v-model="form.permissions" :groups-by-trust="permissionGroups" :model-trust-enabled="auth.modelTrustEnabled">
+        <template #before-action="{ action }">
+          <q-card-section v-if="(admin && !selectedId && (action.toolName === 'webfetch' || mediaByName[action.toolName])) || action.capability === 'shell.read'">
+            <div v-if="action.toolName === 'webfetch'" class="row q-col-gutter-md">
+              <div class="col-12">
+                <div class="row items-center q-col-gutter-sm">
+                  <div class="col-12 col-sm-6">
+                    <q-toggle dense v-model="form.webFetch.publicAddressesOnly" color="primary" label="Nur öffentliche Adressen zulassen" />
+                  </div>
+                  <div class="col-12 col-sm-6 row justify-end">
+                    <q-btn flat no-caps dense icon="edit" label="JavaScript-Konfiguration" :disable="loading || saving" @click="editJavascript" />
+                  </div>
+                </div>
+              </div>
+              <q-input dense v-model.trim="form.webFetch.userAgent" class="col-12 col-md-8" outlined maxlength="512" label="User-Agent" :rules="[userAgentRule]" />
+              <q-input dense v-model.number="form.webFetch.maxResponseMiB" class="col-12 col-md-4" outlined type="number" min="1" max="256" suffix="MiB" label="Maximale Antwortgröße" :rules="[responseLimitRule]" />
+            </div>
+
+            <q-input dense
+              v-if="mediaByName[action.toolName]"
+              v-model.number="form.timeouts[mediaByName[action.toolName]].timeoutSeconds"
+              outlined type="number" min="10" max="3600" step="10"
+              label="Zeitlimit" suffix="Sekunden" :rules="[timeoutRule]"
+            />
+            <div v-if="action.capability === 'shell.read'" class="row justify-end">
+              <q-btn flat no-caps dense icon="edit" label="Shell-Präfixe konfigurieren" :disable="loading || saving" @click="editShellPrefixes" />
+            </div>
+          </q-card-section>
+        </template>
+      </PermissionFields>
       <q-card v-for="group in technicalGroups" :key="group.id" flat class="app-surface q-mb-md">
         <q-card-section class="row items-center q-gutter-md">
           <q-avatar color="primary" text-color="white" :icon="group.icon" />
@@ -73,39 +97,33 @@
                   <div class="text-caption app-muted">{{ descriptions[tool.name] || tool.name }}</div>
                 </div>
               </div>
-              <div v-if="showManagement" class="col-12 col-sm-auto row justify-end">
+              <div class="col-12 col-sm-auto row justify-end">
                 <q-toggle dense v-model="tool.available" color="primary" label="Verfügbar" :aria-label="`${tool.label}: verfügbar`" />
               </div>
             </div>
-
-            <div v-if="section === 'general' && tool.name === 'webfetch'" class="row q-col-gutter-md q-mt-sm">
-              <div class="col-12">
-                <div class="row items-center q-col-gutter-sm">
-                  <div class="col-12 col-sm-6">
-                    <q-toggle dense v-model="form.webFetch.publicAddressesOnly" color="primary" label="Nur öffentliche Adressen zulassen" />
-                  </div>
-                  <div class="col-12 col-sm-6 row justify-end">
-                    <q-btn flat no-caps dense icon="edit" label="JavaScript-Konfiguration" :disable="loading || saving" @click="editJavascript" />
-                  </div>
-                </div>
-              </div>
-              <q-input dense v-model.trim="form.webFetch.userAgent" class="col-12 col-md-8" outlined maxlength="512" label="User-Agent" :rules="[userAgentRule]" />
-              <q-input dense v-model.number="form.webFetch.maxResponseMiB" class="col-12 col-md-4" outlined type="number" min="1" max="256" suffix="MiB" label="Maximale Antwortgröße" :rules="[responseLimitRule]" />
-            </div>
-
-            <q-input dense
-              v-if="section === 'general' && mediaByName[tool.name]"
-              v-model.number="form.timeouts[mediaByName[tool.name]].timeoutSeconds"
-              class="q-mt-md"
-              outlined type="number" min="10" max="3600" step="10"
-              label="Zeitlimit" suffix="Sekunden" :rules="[timeoutRule]"
-            />
           </q-card-section>
           <q-separator v-if="index < group.tools.length - 1" />
         </template>
       </q-card>
+      </template>
       <q-inner-loading :showing="loading" />
     </q-form>
+    <q-dialog v-model="shellDialogOpen" :maximized="$q.screen.lt.sm" aria-labelledby="shell-prefixes-title">
+      <q-card class="app-surface column no-wrap full-width">
+        <q-card-section class="row items-center">
+          <div id="shell-prefixes-title" class="text-h6 col">Shell-Präfixe</div>
+          <q-btn v-close-popup flat round dense icon="close" aria-label="Dialog schließen" />
+        </q-card-section>
+        <q-card-section class="col scroll">
+          <ShellPrefixFields v-model="shellDraft" />
+          <div class="text-caption app-muted q-mt-md">Mit „Übernehmen“ wird das Formular aktualisiert. Anschließend die Einstellungen auf der Seite speichern.</div>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn v-close-popup flat no-caps label="Abbrechen" />
+          <q-btn unelevated no-caps color="primary" label="Übernehmen" @click="applyShellPrefixes" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
     <q-dialog v-model="javascriptDialogOpen" :maximized="$q.screen.lt.sm" aria-labelledby="javascript-title">
       <q-card class="app-surface column no-wrap full-width">
         <q-card-section class="row items-center">
@@ -137,6 +155,8 @@ import { useAuthStore } from 'stores/auth'
 import { useToolSettingsStore } from 'stores/tool-settings'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import PermissionFields from './PermissionFields.vue'
+import ProfileToolOverrides from './ProfileToolOverrides.vue'
+import ShellPrefixFields from './ShellPrefixFields.vue'
 import PersonalSettingsGate from './PersonalSettingsGate.vue'
 
 defineOptions({ name: 'ToolSettingsPage' })
@@ -166,6 +186,8 @@ const loadFailed = ref(false)
 const saved = ref('')
 const javascriptDialogOpen = ref(false)
 const javascriptDraft = ref({ enabled: true, hosts: '' })
+const shellDialogOpen = ref(false)
+const shellDraft = ref({ shellCustom: true, shellRead: '', shellWrite: '' })
 const mediaByName = {
   generate_image: 'generateImage', edit_image: 'editImage', generate_speech: 'generateSpeech',
   generate_audio: 'generateAudio', transcribe_audio: 'transcribeAudio', analyze_video: 'analyzeVideo',
@@ -211,7 +233,8 @@ const descriptions = {
 }
 const emptyPermissions = () => ({ privatePermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} }, publicPermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} } })
 const form = reactive({ groups: [], webFetch: {}, javascriptHostsText: '', timeouts: {}, personalSettingsEnabled: false, permissions: emptyPermissions(), shellCustom: true, shellRead: '', shellWrite: '' })
-const technicalGroups = computed(() => !admin || selectedId.value ? [] : form.groups.map((group) => ({ ...group, tools: group.tools.filter((tool) => showManagement.value || tool.name === 'webfetch' || mediaByName[tool.name]) })).filter((group) => group.tools.length))
+const hasOverrides = computed(() => form.shellCustom || ['privatePermissions', 'publicPermissions'].some((branch) => Object.keys(form.permissions[branch].policies).length))
+const technicalGroups = computed(() => admin && !selectedId.value ? form.groups : [])
 const parsePrefixes = (value) => value.split('\n').map((line) => line.trim().split(/\s+/).filter(Boolean)).filter((tokens) => tokens.length)
 const payload = () => ({
   ...form.permissions,
@@ -230,6 +253,16 @@ const responseLimitRule = (value) => Number.isInteger(value) && value >= 1 && va
 const userAgentRule = (value) => typeof value === 'string' && value.length >= 1 && value.length <= 512
   && [...value].every((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) <= 126)
   || '1 bis 512 sichtbare ASCII-Zeichen eingeben.'
+
+function editShellPrefixes() {
+  shellDraft.value = { shellCustom: form.shellCustom, shellRead: form.shellRead, shellWrite: form.shellWrite }
+  shellDialogOpen.value = true
+}
+
+function applyShellPrefixes() {
+  Object.assign(form, shellDraft.value)
+  shellDialogOpen.value = false
+}
 
 function editJavascript() {
   javascriptDraft.value = { enabled: form.webFetch.javascriptEnabled, hosts: form.javascriptHostsText }
@@ -297,12 +330,12 @@ async function selectSection(value) {
 }
 
 async function resetPermissions() {
-  if (!await confirm('Tool-Rechte dieses Profils auf die mitgelieferten Vorgaben zurücksetzen?', 'Tool-Rechte zurücksetzen?', { okLabel: 'Zurücksetzen' })) return
+  if (!await confirm('Alle Berechtigungs- und Einstellungs-Overrides dieses Profils löschen, einschließlich öffentlicher Werte? Danach gelten wieder die geerbten Vorgaben.', 'Overrides löschen?', { okLabel: 'Löschen', okColor: 'negative' })) return
   saving.value = true
   try {
     await tools.saveProfilePermissions(selectedId.value, 'instance', { ...emptyPermissions(), shellPrefixes: null })
     await loadPermissions()
-    $q.notify({ type: 'positive', message: 'Tool-Rechte zurückgesetzt' })
+    $q.notify({ type: 'positive', message: 'Overrides gelöscht' })
   } catch { /* Central API toast. */ }
   finally { saving.value = false }
 }

@@ -22,7 +22,7 @@ from mato_loop_backend.security import (
     require_admin,
     require_user,
 )
-from mato_loop_backend.settings import AgentProfilesSettings, SettingsStore
+from mato_loop_backend.settings import AgentProfilesSettings, GeneralSettings, SettingsStore
 
 router = APIRouter(prefix="/auth")
 config = get_runtime_config()
@@ -44,13 +44,15 @@ class AuthStatusResponse(BaseModel):
     user_id: str | None = None
     username: str | None = None
     is_admin: bool = False
+    model_trust_enabled: bool = True
 
 
-def _identity_payload(user: UserAccount) -> dict[str, str | bool]:
+def _identity_payload(user: UserAccount, model_trust_enabled: bool = True) -> dict[str, str | bool]:
     return {
         "userId": str(user.id),
         "username": user.username,
         "isAdmin": user.is_admin,
+        "modelTrustEnabled": model_trust_enabled,
     }
 
 
@@ -84,6 +86,7 @@ async def auth_status(
         user_id=str(user.id),
         username=user.username,
         is_admin=user.is_admin,
+        model_trust_enabled=(await SettingsStore.load(db, GeneralSettings)).model_trust_enabled,
     )
 
 
@@ -123,7 +126,7 @@ async def setup(
     token, expires_at = await create_login_session(db, user)
     await db.commit()
     _set_cookie(response, token, expires_at)
-    return _identity_payload(user)
+    return _identity_payload(user, (await SettingsStore.load(db, GeneralSettings)).model_trust_enabled)
 
 
 @router.post("/login")
@@ -138,7 +141,7 @@ async def login(
     token, expires_at = await create_login_session(db, user)
     await db.commit()
     _set_cookie(response, token, expires_at)
-    return _identity_payload(user)
+    return _identity_payload(user, (await SettingsStore.load(db, GeneralSettings)).model_trust_enabled)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -155,8 +158,11 @@ async def logout(
 
 
 @router.get("/me")
-async def me(user: Annotated[UserAccount, Depends(require_user)]) -> dict[str, str | bool]:
-    return _identity_payload(user)
+async def me(
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, str | bool]:
+    return _identity_payload(user, (await SettingsStore.load(db, GeneralSettings)).model_trust_enabled)
 
 
 @router.get("/debug-token")

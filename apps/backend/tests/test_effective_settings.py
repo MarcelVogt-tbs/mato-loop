@@ -9,6 +9,7 @@ from mato_loop_backend.api.integration_access import _load_scoped_integrations
 from mato_loop_backend.settings import (
     AiProviderSettings,
     AiSettings,
+    GeneralSettings,
     IntegrationAdapterAvailability,
     IntegrationInstance,
     IntegrationSettings,
@@ -29,6 +30,7 @@ from mato_loop_backend.settings.models import (
     ModelConfig,
     ModelDefaults,
     ModelDefaultsSettings,
+    effective_model_trust,
 )
 
 
@@ -84,8 +86,9 @@ def test_integration_settings_normalizes_legacy_availability() -> None:
     assert set(disabled.model_dump()) == {"instances", "adapter_availability"}
 
 
+@pytest.mark.parametrize("model_trust_enabled", [True, False])
 async def test_effective_ai_combines_provider_inventory_without_personal_defaults(
-    monkeypatch,
+    monkeypatch, model_trust_enabled,
 ) -> None:
     user_id = uuid4()
     instance_provider = LlmProviderConfig(name="Instance", adapter_type="openai-compatible")
@@ -115,7 +118,7 @@ async def test_effective_ai_combines_provider_inventory_without_personal_default
         }
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
-    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=lambda _db, model, **_kw: personal if model is UserAiSettings else ModelDefaultsSettings(**instance.model_dump(include=set(ModelDefaults.model_fields))) if model is ModelDefaultsSettings else None))
+    monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=lambda _db, model, **_kw: personal if model is UserAiSettings else ModelDefaultsSettings(**instance.model_dump(include=set(ModelDefaults.model_fields))) if model is ModelDefaultsSettings else GeneralSettings(modelTrustEnabled=model_trust_enabled) if model is GeneralSettings else None))
 
     effective = await load_effective_ai(AsyncMock(spec=AsyncSession), user_id)
 
@@ -129,6 +132,10 @@ async def test_effective_ai_combines_provider_inventory_without_personal_default
     assert effective.compaction_model_id == instance_model.id
     assert effective.title_generation_model_id == instance_model.id
     assert effective.title_vision_fallback_enabled is False
+    assert (
+        [effective_model_trust(provider, model).value for provider in effective.providers for model in effective.models if model.provider_id == provider.id],
+        instance_provider.trust_level.value, personal_provider.trust_level.value,
+    ) == (["public" if model_trust_enabled else "private"] * 3, "public", "public")
     assert instance_provider.owner_id is None
     assert personal_provider.owner_id is None
     assert "owner_id" not in effective.providers[1].model_dump()

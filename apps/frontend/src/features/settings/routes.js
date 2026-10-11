@@ -16,12 +16,16 @@ export const settingsRoutes = [
   {
     path: 'integrations', name: 'settings-integrations', component: () => import('src/features/integrations/IntegrationSettingsPage.vue'),
     meta: { settingsLabel: 'Integrationen', settingsIcon: 'extension' },
-    children: [{ path: ':integrationId/resources', name: 'settings-integration-resources', component: () => import('src/features/integrations/IntegrationAccessPage.vue') }]
+    children: [
+      { path: 'new', name: 'settings-integration-create', component: () => import('src/features/integrations/IntegrationEditorPage.vue') },
+      { path: ':integrationId/edit', name: 'settings-integration-edit', component: () => import('src/features/integrations/IntegrationEditorPage.vue') },
+      { path: ':integrationId/resources', name: 'settings-integration-resources', redirect: (to) => ({ name: 'settings-integration-edit', params: to.params, query: { ...to.query, tab: 'permissions' } }) }
+    ]
   },
   {
     path: 'mcp', name: 'settings-mcp', component: () => import('src/features/mcp/McpSettingsPage.vue'),
     meta: { settingsLabel: 'MCP-Server', settingsIcon: 'hub' },
-    children: [{ path: ':serverId/tools', name: 'settings-mcp-tools', component: () => import('src/features/mcp/McpAccessPage.vue') }]
+    children: [{ path: ':serverId/tools', name: 'settings-mcp-tools', component: () => import('src/features/integrations/IntegrationAccessPage.vue') }]
   },
   {
     path: 'skills', name: 'settings-skills', component: () => import('src/features/skills/SkillSettingsPage.vue'),
@@ -73,7 +77,7 @@ export const settingsRoutes = [
 export const adminRoutes = [
   {
     path: 'general', name: 'admin-general', component: () => import('src/features/settings/GeneralSettingsPage.vue'),
-    meta: { settingsLabel: 'Allgemein', settingsIcon: 'settings' }
+    meta: { settingsLabel: 'Grundeinstellungen', settingsIcon: 'settings' }
   },
   {
     path: 'appearance', name: 'admin-appearance', component: () => import('./AppearanceSettingsPage.vue'),
@@ -99,12 +103,16 @@ export const adminRoutes = [
   {
     path: 'integrations', name: 'admin-integrations', component: () => import('src/features/integrations/IntegrationSettingsPage.vue'),
     props: { admin: true }, meta: { settingsLabel: 'Integrationen', settingsIcon: 'extension' },
-    children: [{ path: ':integrationId/resources', name: 'admin-integration-resources', component: () => import('src/features/integrations/IntegrationAccessPage.vue') }]
+    children: [
+      { path: 'new', name: 'admin-integration-create', component: () => import('src/features/integrations/IntegrationEditorPage.vue') },
+      { path: ':integrationId/edit', name: 'admin-integration-edit', component: () => import('src/features/integrations/IntegrationEditorPage.vue') },
+      { path: ':integrationId/resources', name: 'admin-integration-resources', redirect: (to) => ({ name: 'admin-integration-edit', params: to.params, query: { ...to.query, tab: 'permissions' } }) }
+    ]
   },
   {
     path: 'mcp', name: 'admin-mcp', component: () => import('src/features/mcp/McpSettingsPage.vue'),
     props: { admin: true }, meta: { settingsLabel: 'MCP-Server', settingsIcon: 'hub' },
-    children: [{ path: ':serverId/tools', name: 'admin-mcp-tools', component: () => import('src/features/mcp/McpAccessPage.vue') }]
+    children: [{ path: ':serverId/tools', name: 'admin-mcp-tools', component: () => import('src/features/integrations/IntegrationAccessPage.vue') }]
   },
   {
     path: 'skills', name: 'admin-skills', component: () => import('src/features/skills/SkillSettingsPage.vue'),

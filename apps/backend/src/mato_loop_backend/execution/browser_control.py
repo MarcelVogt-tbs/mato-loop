@@ -30,7 +30,11 @@ from mato_loop_backend.permissions.policy import (
 )
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import TrustLevel
-from mato_loop_backend.settings.effective import AgentProfileUnavailable, load_agent_profile_tools
+from mato_loop_backend.settings.effective import (
+    AgentProfileUnavailable,
+    integration_profile_available,
+    load_agent_profile_tools,
+)
 
 if TYPE_CHECKING:
     from mato_loop_backend.tools.context import ToolContext
@@ -119,7 +123,7 @@ class ControlRequest:
             except AgentProfileUnavailable as exc:
                 raise ExecutionClientError("tool.unavailable") from exc
             if (not _tool_available("browser_request_control", tools)
-                    or not profile.integration_availability.get(str(instance.id), profile.integrations_enabled_by_default)):
+                    or not integration_profile_available(instance, profile)):
                 raise ExecutionClientError("tool.unavailable")
             if authorized and await AgentRuntime._authorize(
                 db, run, session, self.call, self.permission, self.root_files,

@@ -387,7 +387,10 @@ def test_mcp_permission_accepts_catalog_sized_binding_revision() -> None:
     assert request.capability == "mcp.call"
 
 
-async def test_mcp_resource_label_is_bounded_without_changing_tool_name() -> None:
+@pytest.mark.parametrize("title", [None, "Nachschlagen"])
+async def test_mcp_resource_label_is_bounded_without_changing_tool_name(title) -> None:
+    from mato_loop_backend.api.integration_resources import _access_payload
+
     name = "x" * 256
     instance = IntegrationInstance(
         name="Server",
@@ -395,14 +398,18 @@ async def test_mcp_resource_label_is_bounded_without_changing_tool_name() -> Non
         adapter_type="mcp_streamable_http",
         config={
             "endpoint": "https://mcp.example.test/rpc",
-            "tools": [{"name": name, "input_schema": {"type": "object"}}],
+            "tools": [{"name": name, "title": title, "description": "Lookup details", "annotations": {"readOnlyHint": True}, "input_schema": {"type": "object"}}],
         },
     )
 
     resources = await MCP_ADAPTER.resources(instance, None)
 
     assert resources[0].key == mcp_resource_key(name)
-    assert resources[0].label == name[:160]
+    assert resources[0].label == (title or name[:160])
+    payload = _access_payload(instance, resources, ToolSettings())["resources"][0]
+    assert {key: payload[key] for key in ("toolName", "description", "hints")} == {
+        "toolName": name, "description": "Lookup details", "hints": ["Als nur lesend markiert"],
+    }
 
 
 def test_dynamic_mcp_schema_keeps_file_roots_and_allows_only_local_refs() -> None:

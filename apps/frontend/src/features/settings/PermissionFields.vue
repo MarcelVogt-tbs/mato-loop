@@ -4,7 +4,9 @@
       <q-icon :name="group.icon || 'security'" color="primary" size="sm" />
       <div class="text-subtitle1 text-weight-bold">{{ group.label }}</div>
     </q-card-section>
+    <slot name="group-settings" :group="group" />
     <template v-for="action in group.actions" :key="action.capability">
+      <slot name="before-action" :action="action" />
       <q-separator />
       <q-card-section class="row items-start q-col-gutter-md">
         <div class="col-12 col-md">
@@ -17,14 +19,29 @@
             :model-value="policyOverride(branch(audience.value).policies, [action.capability])"
             outlined dense emit-value map-options :label="audience.label" :aria-label="`${action.label}: ${audience.label}`"
             :options="options(action)" :disable="disabled || action.available === false"
+            :readonly="readonly"
             :hint="`Wirksam: ${label(effective(audience.value, action))}`" persistent-hint
             @update:model-value="setPolicyOverride(branch(audience.value).policies, [action.capability], $event)"
           />
         </div>
+        <slot name="action-controls" :action="action" />
       </q-card-section>
     </template>
   </q-card>
   <q-expansion-item v-for="resource in resources" :key="resource.key" :label="resource.label" icon="folder_open" class="app-surface q-mb-md">
+    <template #header>
+      <q-item-section avatar><q-icon name="folder_open" /></q-item-section>
+      <q-item-section>
+        <q-item-label class="settings-list-name">{{ resource.label }}</q-item-label>
+        <q-item-label v-if="resource.toolName && resource.toolName !== resource.label" caption class="settings-list-name">{{ resource.toolName }}</q-item-label>
+      </q-item-section>
+      <q-item-section v-if="$slots['resource-controls']" side @click.stop @keydown.stop><slot name="resource-controls" :resource="resource" /></q-item-section>
+    </template>
+    <q-card-section v-if="resource.description || resource.hints?.length" class="text-body2 app-muted">
+      <div v-if="resource.description" class="settings-list-name">{{ resource.description }}</div>
+      <div v-if="resource.hints?.length" class="text-caption">{{ resource.hints.join(' · ') }}</div>
+    </q-card-section>
+    <div v-if="resourceOverridesOnly && !resourceActions(resource).length" class="text-caption app-muted q-pa-md">Keine eigenen Berechtigungs-Overrides. Es gelten die geerbten Vorgaben.</div>
     <q-card-section v-for="action in resourceActions(resource)" :key="action.capability" class="row q-col-gutter-md">
       <div class="col-12 col-md text-weight-medium">{{ action.label }}</div>
       <div v-for="audience in audiences" :key="audience.value" class="col-12 col-sm-6 col-md-3">
@@ -33,10 +50,12 @@
           outlined dense emit-value map-options :label="audience.label" :aria-label="`${resource.label}: ${action.label}, ${audience.label}`"
           :options="options(action)"
           :disable="disabled || resource.hardUnavailableCapabilities?.includes(action.capability)"
+          :readonly="readonly || resourceOverridesOnly"
           :hint="`Wirksam: ${label(effective(audience.value, action, resource))}`" persistent-hint
           @update:model-value="setPolicyOverride(branch(audience.value).resourcePolicies, [resource.key, action.capability], $event)"
         />
       </div>
+      <slot name="resource-action-controls" :resource="resource" :action="action" />
     </q-card-section>
   </q-expansion-item>
 </template>
@@ -47,30 +66,33 @@ import { computed } from 'vue'
 import { policyOverride, setPolicyOverride } from 'src/utils/agent-permissions'
 
 const permissions = defineModel({ type: Object, required: true })
-const props = defineProps({ groupsByTrust: { type: Object, required: true }, resources: { type: Array, default: () => [] }, inheritedResources: { type: Object, default: () => ({}) }, disabled: Boolean })
-const audiences = [{ value: 'private', label: 'Private Modelle' }, { value: 'public', label: 'Öffentliche Modelle' }]
+const props = defineProps({ groupsByTrust: { type: Object, required: true }, resources: { type: Array, default: () => [] }, inheritedResources: { type: Object, default: () => ({}) }, modelTrustEnabled: { type: Boolean, default: true }, overridesOnly: Boolean, resourceOverridesOnly: Boolean, settingGroupIds: { type: Array, default: () => [] }, readonly: Boolean, disabled: Boolean })
+const audiences = computed(() => props.modelTrustEnabled
+  ? [{ value: 'private', label: 'Private Modelle' }, { value: 'public', label: 'Öffentliche Modelle' }]
+  : [{ value: 'private', label: 'Alle Modelle' }])
 const labels = { disabled: 'Deaktiviert', ask: 'Nachfragen', auto: 'Automatisch' }
 const label = (value) => labels[value] || value
 const branch = (trust) => permissions.value[`${trust}Permissions`]
-const groups = computed(() => {
+const catalogGroups = computed(() => {
   const seen = new Set()
   return (props.groupsByTrust.private || []).map((group) => ({ ...group, actions: [
-    ...(group.actions || []), ...(group.tools || []).flatMap((tool) => (tool.actions || []).map((action) => ({ ...action, label: `${tool.label}: ${action.label}`, available: tool.available !== false && action.available !== false })))
+    ...(group.actions || []), ...(group.tools || []).flatMap((tool) => (tool.actions || []).map((action) => ({ ...action, toolName: tool.name, label: `${tool.label}: ${action.label}`, available: tool.available !== false && action.available !== false })))
   ].filter((action) => {
     if (action.configurable === false || seen.has(action.capability)) return false
     seen.add(action.capability)
     return true
-  }) })).filter((group) => group.actions.length)
+  }) }))
 })
+const groups = computed(() => catalogGroups.value.map((group) => ({ ...group, actions: group.actions.filter((action) => !props.overridesOnly || audiences.value.some(({ value }) => branch(value).policies[action.capability] != null)) })).filter((group) => group.actions.length || props.settingGroupIds.includes(group.id)))
 const actions = (trust) => (props.groupsByTrust[trust] || []).flatMap((group) => [...(group.actions || []), ...(group.tools || []).flatMap((tool) => tool.actions || [])])
-const resourceActions = (resource) => groups.value.flatMap((group) => group.actions).filter((action) => !resource.applicableCapabilities || resource.applicableCapabilities.includes(action.capability))
+const resourceActions = (resource) => catalogGroups.value.flatMap((group) => group.actions).filter((action) => (!resource.applicableCapabilities || resource.applicableCapabilities.includes(action.capability)) && (!props.resourceOverridesOnly || audiences.value.some(({ value }) => branch(value).resourcePolicies?.[resource.key]?.[action.capability] != null)))
 function inherited(trust, action, resource) {
-  if (resource) return props.inheritedResources[trust]?.find((item) => item.key === resource.key)?.effectivePolicies?.[action.capability] || effective(trust, action)
+  if (resource) return props.inheritedResources[trust]?.find((item) => item.key === resource.key)?.policies?.[action.capability] || effective(trust, action)
   const original = actions(trust).find((item) => item.capability === action.capability)
   return original?.policy || original?.effectiveIntegrationPolicy || 'ask'
 }
 function effective(trust, action, resource) {
-  if (action.available === false || resource?.hardUnavailableCapabilities?.includes(action.capability)) return 'disabled'
+  if (action.available === false || resource?.available === false || resource?.hardUnavailableCapabilities?.includes(action.capability)) return 'disabled'
   const value = resource ? branch(trust).resourcePolicies?.[resource.key]?.[action.capability] : branch(trust).policies[action.capability]
   const result = value || inherited(trust, action, resource)
   return result === 'auto' && action.allowedPolicies && !action.allowedPolicies.includes('auto') ? 'ask' : result
