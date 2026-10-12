@@ -7,7 +7,7 @@ import { Quasar } from 'quasar'
 import { quasarOptions } from './quasar-options'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
-vi.mock('src/boot/axios', () => ({ api: { get: vi.fn() } }))
+vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), put: vi.fn() } }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: async () => true }) }))
 
 import Page from '../src/features/providers/ProviderSettingsPage.vue'
@@ -26,6 +26,7 @@ afterEach(() => {
 it('keeps global and personal lists and creation scopes separate when switching pages', async () => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   api.get.mockImplementation((url, config) => {
+    if (url === '/general-settings') return Promise.resolve({ data: { modelTrustEnabled: true, publicBaseUrl: 'https://mato.test' } })
     if (url === '/providers/personal-policy') return Promise.resolve({ data: { personalProvidersEnabled: false } })
     if (url === '/providers/codex/status') return Promise.resolve({ data: { authenticated: false } })
     if (url === '/providers' && config?.params?.scope === 'instance') return Promise.resolve({ data: {
@@ -50,6 +51,7 @@ it('keeps global and personal lists and creation scopes separate when switching 
   app = createApp({ render: () => h(Page, props) })
   app.use(pinia).use(router).use(Quasar, quasarOptions)
   useAuthStore(pinia).isAdmin = true
+  app.config.globalProperties.$q.notify = vi.fn()
   app.mount(root)
   const providers = useProviderStore(pinia)
   for (const admin of [true, false]) {
@@ -60,6 +62,14 @@ it('keeps global and personal lists and creation scopes separate when switching 
       await vi.waitFor(() => expect(root.querySelector('[aria-label="Persönliche Provider erlauben"]')).not.toBeNull())
       expect(root.querySelector('.provider-card-list')).toBeNull()
       expect(root.textContent).not.toContain('Provider hinzufügen')
+      api.put.mockResolvedValueOnce({ data: { modelTrustEnabled: false, publicBaseUrl: 'https://mato.test' } }).mockRejectedValueOnce(new Error('offline'))
+      const trustToggle = await vi.waitUntil(() => root.querySelector('[aria-label="Erinnerungen und Profilangaben trennen"]:not(.disabled)'))
+      trustToggle.click()
+      await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/general-settings', { modelTrustEnabled: false }))
+      await vi.waitUntil(() => !trustToggle.classList.contains('disabled'))
+      trustToggle.click()
+      await vi.waitFor(() => expect(api.put).toHaveBeenCalledTimes(2))
+      expect(useAuthStore(pinia).modelTrustEnabled).toBe(false)
       tabs.find((tab) => tab.textContent.includes('Verwaltung')).click()
       await vi.waitFor(() => expect(root.textContent).toContain('Team'))
     } else {

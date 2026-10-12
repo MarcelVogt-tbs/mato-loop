@@ -16,6 +16,7 @@ from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
+    GeneralSettings,
     IntegrationSettings,
     SettingsStore,
     ToolSettings,
@@ -29,6 +30,11 @@ from mato_loop_backend.settings.models import (
     AgentProfilesSettings,
     ShellPrefixSettings,
     TrustLevel,
+)
+from mato_loop_backend.settings.tool_presets import (
+    ToolPermissionPreset,
+    tool_permission_presets,
+    tool_preset_policies,
 )
 from mato_loop_backend.tools.catalog import tool_registry
 
@@ -52,6 +58,7 @@ class ToolConfigurationRequest(BaseModel):
     private_permissions: AgentProfilePermissions = Field(default_factory=AgentProfilePermissions, alias="privatePermissions")
     public_permissions: AgentProfilePermissions = Field(default_factory=AgentProfilePermissions, alias="publicPermissions")
     shell_prefixes: ShellPrefixSettings = Field(default_factory=ShellPrefixSettings, alias="shellPrefixes")
+    tool_permission_presets: dict[TrustLevel, ToolPermissionPreset] = Field(default_factory=dict, alias="toolPermissionPresets")
 
     tool_availability: dict[str, bool] = Field(
         validation_alias=AliasChoices("toolAvailability", "tool_availability")
@@ -97,6 +104,7 @@ def tool_configuration_payload(settings: ToolSettings) -> dict:
             tool["available"] = settings.tool_availability.get(tool["name"], True)
     return {
         "personalSettingsEnabled": settings.personal_settings_enabled,
+        "toolPermissionPresets": tool_permission_presets(settings),
         "privatePermissions": _tool_permissions_payload(settings.private_permissions, tool_registry.catalog(defaults, IntegrationSettings())),
         "publicPermissions": _tool_permissions_payload(settings.public_permissions, tool_registry.catalog(defaults, IntegrationSettings())),
         "shellPrefixes": settings.shell_prefixes.model_dump(),
@@ -155,6 +163,10 @@ async def update_tool_configuration(
 ) -> dict:
     if not user.is_admin:
         raise ApiError(403, "auth.adminRequired")
+    if payload.tool_permission_presets:
+        general = await SettingsStore.load(db, GeneralSettings, for_update=True)
+        if not general.model_trust_enabled and TrustLevel.PUBLIC in payload.tool_permission_presets:
+            raise ApiError(422, "validation.invalidChoice", field="toolPermissionPresets")
     settings = await SettingsStore.load(db, ToolSettings, for_update=True)
     known_tools = {
         tool["name"]
@@ -185,6 +197,8 @@ async def update_tool_configuration(
         getattr(settings, field_name).timeout_seconds = getattr(
             payload, field_name
         ).timeout_seconds
+    for trust, preset in payload.tool_permission_presets.items():
+        getattr(settings, f"{trust.value}_permissions").policies.update(tool_preset_policies(preset))
     await SettingsStore.save(db, settings)
     await db.commit()
     return tool_configuration_payload(settings)

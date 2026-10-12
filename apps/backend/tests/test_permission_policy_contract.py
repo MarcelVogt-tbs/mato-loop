@@ -351,14 +351,14 @@ async def test_managed_deletion_honors_policy_grants_and_disabled(
     ) == (PermissionDecision.DENY if disabled else PermissionDecision.ALLOW)
 
 
-def test_execution_directory_grant_matches_only_same_agent_path(tmp_path) -> None:
+def test_execution_directory_grant_matches_only_same_agent_subtree(tmp_path) -> None:
     session = _session()
     root_files = _root_files(tmp_path, session)
     agent_id = uuid4()
     granted = execution_directory_permission(
         agent_id, "/home/user/project"
     )
-    assert granted.available_decisions == ("allow_once", "deny")
+    assert granted.available_decisions == ("allow_once", "allow_session", "deny")
     grant = PermissionGrant(
         session_id=session.id,
         capability=granted.capability,
@@ -369,7 +369,7 @@ def test_execution_directory_grant_matches_only_same_agent_path(tmp_path) -> Non
     assert PermissionPolicy.grant_matches(
         grant, execution_directory_permission(agent_id, "/home/user/project"), root_files
     )
-    assert not PermissionPolicy.grant_matches(
+    assert PermissionPolicy.grant_matches(
         grant,
         execution_directory_permission(
             agent_id, "/home/user/project/src"
@@ -386,6 +386,9 @@ def test_execution_directory_grant_matches_only_same_agent_path(tmp_path) -> Non
     assert not PermissionPolicy.grant_matches(
         grant, _path_request(root_files, "docs/readme.md", root="session"), root_files
     )
+    assert not PermissionPolicy.grant_matches(grant, execution_directory_permission(uuid4(), "/home/user/project/src"), root_files)
+    assert not PermissionPolicy.grant_matches(grant, execution_directory_permission(agent_id, "/home/user"), root_files)
+    assert not PermissionPolicy.grant_matches(grant, execution_directory_permission(agent_id, "/home/user/project/src", capability="filesystem.read"), root_files)
 
 
 async def test_shell_paths_cannot_be_authorized_by_directory_grants(tmp_path) -> None:
@@ -888,7 +891,7 @@ async def test_administrator_once_approval_is_reused_for_revalidation(tmp_path, 
 
 
 @pytest.mark.parametrize("lifetime", ["run", "session", "exact"])
-@pytest.mark.parametrize("kind", ["file", "shell", "administrator"])
+@pytest.mark.parametrize("kind", ["file", "shell", "administrator", "directory"])
 async def test_runtime_grant_lifetime_and_boundaries(tmp_path, monkeypatch, lifetime, kind):
     session = _session(user_id=uuid4(), agent_profile_id=uuid4(), current_directory="/work")
     agent = ExecutionAgent(id=uuid4(), user_id=session.user_id, home_directory="/home/user",
@@ -905,6 +908,8 @@ async def test_runtime_grant_lifetime_and_boundaries(tmp_path, monkeypatch, life
             result = _path_request(roots, target)
         elif kind == "shell":
             result = shell_command_permission(agent.id, "/work", f"touch {target}", inspection)
+        elif kind == "directory":
+            result = execution_directory_permission(agent.id, f"/work/{target}")
         else:
             result = administrator_permission(agent.id, "/work", capability="shell.write", command=f"touch {target}", inspection=inspection)
         return replace(result, sensitive_access=lifetime == "exact")
@@ -912,8 +917,12 @@ async def test_runtime_grant_lifetime_and_boundaries(tmp_path, monkeypatch, life
     request = requested("notes.txt")
     call = ToolCall("first", "read" if kind == "file" else "shell_run",
         {"path": "notes.txt"} if kind == "file" else {"command": "touch notes.txt"})
+    if kind == "directory":
+        call = ToolCall("first", "change_directory", {"path": "/work/notes.txt"})
     grant = _grant(request, session.id, run_id=None if lifetime == "session" else run.id,
                    agent_profile_id=session.agent_profile_id, trust_level="public")
+    if kind == "directory":
+        session.current_directory = "/work/notes.txt/child"
     if lifetime == "exact":
         grant.capability = request.capability
         grant.resource_type = "run_action"

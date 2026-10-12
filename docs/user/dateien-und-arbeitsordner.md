@@ -42,6 +42,16 @@ Versionen gelten nur für verwaltete Dateien. **Ordner als ZIP herunterladen** l
 
 Session-Freigaben zeigen und widerrufen Sie unter **Session > Session-Freigaben**, nicht in der Datei-App oder im Benachrichtigungsbereich. Laufrechte erscheinen dort nicht. Ordnernavigation ist von Datei- und Shell-Rechten getrennt; eine Dateifreigabe gilt für den exakten Pfad, nicht für dessen Unterordner.
 
+### Navigation im Ordnerbaum
+
+- Eine Navigationsfreigabe gilt für den angezeigten Ordner und seine Unterordner auf demselben Computer.
+- Wechsel zwischen Unterordnern und zurück zum freigegebenen Ausgangsordner benötigen keine neue Navigationsfreigabe, sofern keine zusätzliche Sperre greift.
+- **Lauffreigabe:** gilt nur im aktuellen Lauf. Ein Ordnerwechsel macht daraus keine Session-Freigabe.
+- **Session-Freigabe:** gilt auch für spätere Läufe bis zum Widerruf. Eine ausdrückliche Ordnerauswahl in der Oberfläche erteilt diese Freigabe für die aktuelle Profil-/Modellvertrauensbindung.
+- Nachbarordner und übergeordnete Ordner außerhalb des freigegebenen Baums sind nicht eingeschlossen.
+- Dateiaktionen, Shell-Befehle, sensible Zugriffe und Computer-Sperren werden weiterhin separat geprüft. Symlinks umgehen diese Grenzen nicht.
+- Beim Update werden bisherige Navigationsfreigaben einmalig zurückgesetzt. Wählen Sie den Ordner erneut aus oder bestätigen Sie die nächste Navigationsanfrage. Datei- und Shell-Freigaben bleiben erhalten.
+
 Nachrichten verweisen bei Uploads und dauerhaften Binärausgaben auf die exakte Dateiversion. Normales Bearbeiten, Umbenennen und Verschieben erhalten diese Verweise. Löschen entfernt Datei und vollständigen Versionsverlauf; die Nachricht zeigt die Datei danach als nicht mehr verfügbar. Reine Text-, JSON-, Status- und Fehlerergebnisse bleiben Teil der Nachricht.
 
 Bestätigte Dateiaktionen erscheinen als **Dateiänderungen** an der Antwort; ausdrücklich bereitgestellte Dateien haben Öffnen-/Downloadaktionen. Öffentliche Ausgabeverweise und endgültige Versionen erscheinen erst am Laufende. Bereits geöffnete aktuelle Dateien werden aktualisiert, ohne Ihre zwischenzeitliche Navigation zu überschreiben. **Kopieren** erzeugt eine eigenständige Zieldatei mit eigenem Verlauf. Während eines Laufs sind geänderte verwaltete Dateien sichtbar, aber für konkurrierende Änderungen gesperrt; am Ende entsteht je tatsächlich geänderter Datei eine endgültige Vollversion.

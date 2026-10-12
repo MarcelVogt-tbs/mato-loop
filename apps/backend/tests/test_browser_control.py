@@ -22,6 +22,7 @@ from mato_loop_backend.integrations.registry import effective_execution_integrat
 from mato_loop_backend.models import AgentRun
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import IntegrationSettings, ToolSettings, TrustLevel
+from mato_loop_backend.settings.models import IntegrationPermissions
 from mato_loop_backend.tools.context import ToolContext
 
 
@@ -292,7 +293,7 @@ def test_changes_during_approval_prevent_start(request_case, change):
         elif change == "policy":
             case.settings.permissions.integration_policies.setdefault(str(case.instance.id), {})["browser.control"] = "disabled"
         else:
-            case.profile.integration_availability[str(case.instance.id)] = False
+            case.instance.profile_permissions[case.profile.id] = IntegrationPermissions(available=False)
         return "allow_once"
 
     case.approval.side_effect = approve

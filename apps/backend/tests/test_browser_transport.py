@@ -36,6 +36,7 @@ from mato_loop_backend.settings import (
     ToolSettings,
     UserIntegrationSettings,
 )
+from mato_loop_backend.settings.models import IntegrationPermissions
 from mato_loop_backend.tools.context import ToolContext
 
 
@@ -225,7 +226,7 @@ def test_profile_gate_allows_manual_view_but_never_attachment(env, monkeypatch, 
     if gate == "default":
         env.profile.integrations_enabled_by_default = False
     elif gate == "explicit":
-        env.profile.integration_availability[str(env.instance.id)] = False
+        env.instance.profile_permissions[env.profile.id] = IntegrationPermissions(available=False)
     else:
         monkeypatch.setattr(execution, "load_agent_profile", AsyncMock(side_effect=execution.AgentProfileUnavailable))
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
@@ -269,7 +270,7 @@ def test_live_access_revocation_closes_or_detaches_viewer(env, monkeypatch, chan
             elif change == "generation":
                 env.generation = 2
             else:
-                env.profile.integration_availability[str(env.instance.id)] = False
+                env.instance.profile_permissions[env.profile.id] = IntegrationPermissions(available=False)
             env.client.portal.call(watch_gate.set)
             event = control.receive_json()
             assert event["type"] == ("state" if change == "profile" else "error")

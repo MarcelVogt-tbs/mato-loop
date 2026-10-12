@@ -30,6 +30,7 @@ from mato_loop_backend.settings.models import (
     AgentProfilesSettings,
     CustomAgentProfile,
     IntegrationInstance,
+    IntegrationPermissions,
     IntegrationSettings,
     ToolSettings,
     TrustLevel,
@@ -84,15 +85,9 @@ def test_profile_limit_requires_a_positive_strict_integer(model, value):
 @pytest.mark.parametrize("model", [AgentProfile, AgentProfileOverrides])
 @pytest.mark.parametrize(
     "overrides",
-    [
-        {"not-a-uuid": True},
-        {str(uuid4()).upper(): False},
-        {str(uuid4()): 1},
-        {str(uuid4()): "false"},
-        {str(uuid4()): None},
-    ],
+    [{}, {str(uuid4()): True}],
 )
-def test_profile_availability_requires_canonical_ids_and_strict_booleans(model, overrides):
+def test_removed_profile_connection_assignments_are_rejected(model, overrides):
     values = {"integrationAvailability": overrides}
     if model is AgentProfile:
         values.update(name="Agent", instructions="Task")
@@ -147,22 +142,19 @@ def mock_settings(monkeypatch, integrations, profile, *, personal=None):
     monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=optional))
 
 
-async def test_profile_update_preserves_omitted_new_fields_and_unchanged_stale_ids(monkeypatch):
-    stale_id = str(uuid4())
+async def test_profile_update_preserves_omitted_access_defaults(monkeypatch):
     profile = AgentProfile(
         name="Agent",
         instructions="Task",
         maxToolCalls=None,
         integrationsEnabledByDefault=False,
-        integrationAvailability={stale_id: False},
     )
     mock_settings(monkeypatch, IntegrationSettings(), profile)
     user = UserAccount(id=uuid4(), username="admin", password_hash="hash", is_admin=True)
     existing = CustomAgentProfile(
         id=profile.id, name=profile.name, description="",
         baseProfileId=GENERAL_PROFILE_ID,
-        overrides={"maxToolCalls": None, "integrationsEnabledByDefault": False,
-                   "integrationAvailability": {stale_id: False}},
+        overrides={"maxToolCalls": None, "integrationsEnabledByDefault": False},
     )
     for overrides in ({}, {"maxToolCalls": None}):
         result = await _profile_from_request(
@@ -177,20 +169,8 @@ async def test_profile_update_preserves_omitted_new_fields_and_unchanged_stale_i
             existing=existing,
         )
         assert result.overrides.model_dump(exclude_unset=True, by_alias=True) == {
-            **overrides, "integrationsEnabledByDefault": False, "integrationAvailability": {stale_id: False},
+            **overrides, "integrationsEnabledByDefault": False,
         }
-    for overrides in ({stale_id: True}, {str(uuid4()): False}):
-        with pytest.raises(ApiError, match="tools.usePermissionSettings"):
-            await _profile_from_request(
-                AsyncMock(),
-                user,
-                None,
-                AgentProfileRequest(
-                    name="Agent", description="", baseProfileId=GENERAL_PROFILE_ID,
-                    overrides={"integrationAvailability": overrides},
-                ),
-                existing=existing,
-            )
     result = await _profile_from_request(
         AsyncMock(),
         user,
@@ -205,7 +185,6 @@ async def test_profile_update_preserves_omitted_new_fields_and_unchanged_stale_i
     )
     assert result.overrides.max_tool_calls is None
     assert result.overrides.integrations_enabled_by_default is False
-    assert result.overrides.integration_availability == {stale_id: False}
 
 
 async def test_profile_scope_validation_and_listing_include_option_only_integrations(monkeypatch):
@@ -221,7 +200,7 @@ async def test_profile_scope_validation_and_listing_include_option_only_integrat
     user = UserAccount(id=uuid4(), username="admin", password_hash="hash", is_admin=True)
     request = AgentProfileRequest(
         name="Agent", description="", baseProfileId=GENERAL_PROFILE_ID,
-        overrides={"integrationAvailability": {str(coding.id): True}},
+        overrides={"integrationsEnabledByDefault": True},
     )
     with pytest.raises(ApiError, match="tools.usePermissionSettings"):
         await _profile_from_request(AsyncMock(), user, None, request)
@@ -243,9 +222,10 @@ def test_shared_accounts_opt_in_is_separate_from_permissions_and_does_not_mutate
         name="Agent",
         instructions="Task",
         integrationsEnabledByDefault=False,
-        integrationAvailability={str(first.id): True, str(hidden.id): False},
         privatePermissions={"policies": {"calendar.read": "ask"}},
     )
+    first.profile_permissions[profile.id] = IntegrationPermissions(available=True)
+    hidden.profile_permissions[profile.id] = IntegrationPermissions(available=False)
     tools = ToolSettings()
     tools._agent_profile = profile
     before = settings.model_dump_json(), profile.model_dump_json(), tools.model_dump_json()
@@ -269,7 +249,7 @@ def test_shared_accounts_opt_in_is_separate_from_permissions_and_does_not_mutate
         first.id,
         future.id,
     ]
-    assert profile.integration_availability == {str(first.id): True, str(hidden.id): False}
+    assert (first.profile_permissions[profile.id].available, hidden.profile_permissions[profile.id].available) == (True, False)
 
 
 @pytest.mark.parametrize(
@@ -298,7 +278,7 @@ def test_profile_selection_covers_execution_builtin_and_option_tools(kind, adapt
             settings, tool_settings=tools, tool_capabilities={"project.coding"}
         ).tools
     )
-    profile.integration_availability[str(integration.id)] = True
+    integration.profile_permissions[profile.id] = IntegrationPermissions(available=True)
     effective = tool_registry.effective(
         settings, tool_settings=tools, tool_capabilities={"project.coding"}
     )
@@ -314,7 +294,7 @@ def test_profile_selection_covers_execution_builtin_and_option_tools(kind, adapt
             ).tools
         )
     if kind == "search":
-        profile.integration_availability[str(integration.id)] = False
+        integration.profile_permissions[profile.id].available = False
         filtered = filter_agent_profile_integrations(settings, profile)
         assert not effective_integration_contributions(filtered).tool_options
         tools.web_search.primary_provider = "no_key"
@@ -351,8 +331,8 @@ async def test_shared_binding_guards_selection_before_and_after_approval(monkeyp
         name="Agent",
         instructions="Task",
         integrationsEnabledByDefault=False,
-        integrationAvailability={str(first.id): True},
     )
+    first.profile_permissions[profile.id] = IntegrationPermissions(available=True)
     call = ToolCall(
         id="call",
         name="calendar_list_calendars",
@@ -366,11 +346,11 @@ async def test_shared_binding_guards_selection_before_and_after_approval(monkeyp
         bound, definition=replace(bound.definition, handler=handler)
     )
     if revoke == "before":
-        profile.integration_availability[str(first.id)] = False
+        first.profile_permissions[profile.id].available = False
     if revoke == "approval":
 
         async def approve(_request):
-            profile.integration_availability[str(first.id)] = False
+            first.profile_permissions[profile.id].available = False
             return PermissionDecision.ALLOW
 
         context.ask_handler = approve
@@ -398,7 +378,7 @@ async def test_search_and_coding_recheck_selection_after_approval(monkeypatch, k
     context = await tool_context(monkeypatch, settings, profile, call)
 
     async def approve(_request):
-        profile.integration_availability[str(integration.id)] = False
+        integration.profile_permissions[profile.id] = IntegrationPermissions(available=False)
         return PermissionDecision.ALLOW
 
     context.ask_handler = approve
@@ -438,8 +418,8 @@ async def test_account_discovery_and_helper_reloads_never_expand_the_selection(
         name="Agent",
         instructions="Task",
         integrationsEnabledByDefault=False,
-        integrationAvailability={str(first.id): True},
     )
+    first.profile_permissions[profile.id] = IntegrationPermissions(available=True)
     call = ToolCall(id="call", name=f"{kind}_list_accounts", arguments={})
     context = await tool_context(monkeypatch, settings, profile, call)
     if delegated:

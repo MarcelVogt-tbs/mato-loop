@@ -43,14 +43,14 @@ class PermissionDisplayItem:
 
 @dataclass(frozen=True, slots=True)
 class SessionGrantScope:
-    access: Literal["read", "write"]
+    access: Literal["read", "write", "navigate"]
     resource_type: str
     resource_scope: str
     resource_display: str | None = None
 
     @property
     def capability(self) -> str:
-        return f"resource.{self.access}"
+        return "execution.directory" if self.access == "navigate" else f"resource.{self.access}"
 
 
 _READ_CAPABILITIES = frozenset({
@@ -83,7 +83,9 @@ _WRITE_CAPABILITIES = frozenset({
 })
 
 
-def _access_for_capability(capability: str) -> Literal["read", "write"] | None:
+def _access_for_capability(capability: str) -> Literal["read", "write", "navigate"] | None:
+    if capability == "execution.directory":
+        return "navigate"
     if capability in _READ_CAPABILITIES or capability == "shell.read":
         return "read"
     if capability in _WRITE_CAPABILITIES or capability == "shell.write":
@@ -176,6 +178,9 @@ def session_grants_fingerprint(
 def session_grants_display(request: PermissionRequest) -> list[str]:
     result = []
     for grant in request.effective_session_grants:
+        if grant.access == "navigate":
+            result.append(f"Navigation im Ordner und seinen Unterordnern: {grant.resource_display}")
+            continue
         if grant.resource_type == "shell_action":
             scope = json.loads(grant.resource_scope)
             result.append(f"Diesen Shell-Befehl{' als Administrator' if scope['elevated'] else ''} ausführen: {scope['command']} · Arbeitsverzeichnis: {scope['currentDirectory']}")
@@ -565,7 +570,10 @@ def execution_directory_permission(
         action_kind=action_kind,
         risk_level="medium",
         title=title,
-        summary=summary or f"Der Agent möchte das Verzeichnis {path} verwenden.",
+        summary=summary or (
+            f"Der Agent möchte im Verzeichnis {path} und seinen Unterordnern navigieren. Datei- und Shell-Rechte werden separat geprüft."
+            if access == "navigate" else f"Der Agent möchte das Verzeichnis {path} verwenden."
+        ),
         resource_display=path,
         use_integration_policy=False,
         sensitive_access=capability != "file.provide" and confidential_execution_path(path),
@@ -578,7 +586,7 @@ def execution_directory_permission(
         session_grants=(
             SessionGrantScope(
                 access,
-                "execution_path",
+                "execution_directory" if access == "navigate" else "execution_path",
                 execution_directory_scope(agent_id, path),
                 path,
             ),
@@ -1354,6 +1362,13 @@ def session_grant_matches_request(
 ) -> bool:
     if grant.access != _access_for_capability(capability):
         return False
+    if grant.access == "navigate":
+        return (
+            resource_type == "execution_directory"
+            and grant.resource_type == "execution_directory"
+            and _execution_directory_scope(resource_scope) is not None
+            and grant.resource_scope == resource_scope
+        )
     if resource_type in {"execution_administrator", "shell_command"}:
         try:
             scope = json.loads(resource_scope)
@@ -1914,8 +1929,9 @@ class PermissionPolicy:
             return bool(
                 resource
                 and granted
+                and request.capability == "execution.directory"
                 and resource[0] == granted[0]
-                and _path_key(resource[1]) == _path_key(granted[1])
+                and _path_is_within(resource[1], granted[1])
             )
         if request.resource_type == "session":
             try:

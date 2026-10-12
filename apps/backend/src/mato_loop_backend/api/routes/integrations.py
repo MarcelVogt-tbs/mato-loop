@@ -120,7 +120,6 @@ from mato_loop_backend.settings.models import (
     AgentProfilesSettings,
     IntegrationPermissions,
     TrustLevel,
-    UserAgentProfilesSettings,
 )
 from mato_loop_backend.tools.catalog import tool_registry
 
@@ -1726,7 +1725,6 @@ class ProfileIntegrationAvailabilityRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     integrations_enabled_by_default: bool | None = Field(default=None, alias="integrationsEnabledByDefault")
-    integration_availability: dict[str, bool] = Field(default_factory=dict, alias="integrationAvailability")
 
 
 @router.get("/profiles/{profile_id}/availability")
@@ -1739,9 +1737,7 @@ async def get_profile_integration_availability(
     _, _, overrides, baseline, _ = await _load_profile_access(db, user, profile_id, scope)
     return {
         "integrationsEnabledByDefault": overrides.integrations_enabled_by_default,
-        "integrationAvailability": overrides.integration_availability or {},
         "inheritedIntegrationsEnabledByDefault": baseline.integrations_enabled_by_default,
-        "inheritedIntegrationAvailability": baseline.integration_availability,
     }
 
 
@@ -1754,14 +1750,9 @@ async def update_profile_integration_availability(
     scope: SettingsApiScope = "personal",
 ) -> dict:
     settings, owner_id, overrides, _, _ = await _load_profile_access(db, user, profile_id, scope, for_update=True)
-    integrations = await load_effective_integrations(db, user.id) if owner_id is not None else await SettingsStore.load(db, IntegrationSettings)
-    if set(payload.integration_availability) - {str(item.id) for item in integrations.instances}:
-        raise ApiError(422, "validation.invalidChoice", field="integrationAvailability")
-    values = overrides.model_dump(exclude_unset=True, exclude={"integrations_enabled_by_default"} | ({"integration_availability"} if "integration_availability" in payload.model_fields_set else set()))
+    values = overrides.model_dump(exclude_unset=True, exclude={"integrations_enabled_by_default"})
     if payload.integrations_enabled_by_default is not None:
         values["integrations_enabled_by_default"] = payload.integrations_enabled_by_default
-    if payload.integration_availability:
-        values["integration_availability"] = payload.integration_availability
     if isinstance(settings, AgentProfilesSettings):
         settings.builtin_access_overrides[profile_id] = AgentProfileAccessOverrides.model_validate(values)
     else:
@@ -1778,14 +1769,6 @@ async def _permission_instance(db, user, scope, integration_id, *, for_update=Fa
         raise ApiError(404, "integration.notFound")
     await api_integration_access._load_scoped_integrations(db, scope, user, adapter_type=instance.adapter_type)
     return settings, owner_id, instance
-
-
-async def _legacy_profile_assignment(db, profile, integration_id, *, for_update=False):
-    kind = UserAgentProfilesSettings if profile.owner_id is not None else AgentProfilesSettings
-    settings = await SettingsStore.load(db, kind, user_id=profile.owner_id, for_update=for_update)
-    stored = next((item for item in settings.profiles if item.id == profile.id), None)
-    overrides = stored.overrides if stored is not None else settings.builtin_access_overrides.get(profile.id) if isinstance(settings, AgentProfilesSettings) else None
-    return settings, overrides, (overrides.integration_availability or {}).get(str(integration_id)) if overrides is not None else None
 
 
 @router.get("/{integration_id}/permissions")
@@ -1814,18 +1797,9 @@ async def get_integration_permissions(
     profile = next((item for item in profiles.profiles if item.id == profile_id), None)
     inherited_available = True
     if profile is not None:
-        _, _, legacy = await _legacy_profile_assignment(db, profile, instance.id)
-        if configured.available is None and legacy is not None:
-            configured = configured.model_copy(update={"available": legacy})
-        inherited_profile = profile.model_copy(deep=True)
-        if legacy is not None:
-            inherited_profile.integration_availability.pop(str(instance.id), None)
-            base = next((item for item in profiles.profiles if item.id == profile.base_profile_id), None)
-            if base is not None and str(instance.id) in base.integration_availability:
-                inherited_profile.integration_availability[str(instance.id)] = base.integration_availability[str(instance.id)]
         inherited_instance = instance.model_copy(deep=True)
         inherited_instance.profile_permissions.pop(profile.id, None)
-        inherited_available = integration_profile_available(inherited_instance, inherited_profile)
+        inherited_available = integration_profile_available(inherited_instance, profile)
     return {
         "integrationId": str(instance.id), "name": instance.name, "providerType": instance.adapter_type,
         "permissions": configured.model_dump(mode="json", by_alias=True),
@@ -1883,12 +1857,6 @@ async def update_integration_permissions(
         current.profile_permissions[profile_id] = payload
     else:
         current.profile_permissions.pop(profile_id, None)
-    if profile_id is not None:
-        profile = next(item for item in profiles.profiles if item.id == profile_id)
-        profile_settings, old_override, legacy = await _legacy_profile_assignment(db, profile, integration_id, for_update=True)
-        if legacy is not None:
-            old_override.integration_availability.pop(str(integration_id))
-            await SettingsStore.save(db, profile_settings, user_id=profile.owner_id)
     await SettingsStore.save(db, settings, user_id=owner_id)
     await db.commit()
     return await get_integration_permissions(integration_id, user, db, scope, profile_id)

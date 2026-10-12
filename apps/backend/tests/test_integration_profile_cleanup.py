@@ -56,7 +56,7 @@ async def test_instance_cleanup_removes_profile_policies_from_all_scopes(
                         integration_id: {"calendar:old": {"calendar.read": "ask"}}
                     }
                 },
-                integrationAvailability={integration_id: True},
+                integrationsEnabledByDefault=True,
             )
         },
     )
@@ -96,7 +96,7 @@ async def test_instance_cleanup_removes_profile_policies_from_all_scopes(
         assert permissions.instructions == "Keep these instructions"
     builtin = instance.builtin_access_overrides[PLAN_PROFILE_ID]
     assert integration_id not in builtin.private_permissions.resource_policies
-    assert builtin.integration_availability == {integration_id: True}
+    assert builtin.integrations_enabled_by_default is True
     assert [call.kwargs.get("user_id") for call in save.await_args_list] == [
         None,
         first_user_id,

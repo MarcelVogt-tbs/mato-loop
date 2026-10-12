@@ -38,6 +38,19 @@
 
     <PersonalSettingsGate v-if="admin && section === 'general'" :model-value="providers.personalProvidersEnabled" title="Persönliche Provider erlauben" description="Benutzer können eigene Provider und Modelle verwalten." :disabled="gateLoading || pageLoading || loadFailed" @update:model-value="togglePersonalProviders" />
 
+    <q-card v-if="admin && section === 'general'" flat class="app-surface q-mt-md">
+      <q-card-section class="row items-center q-col-gutter-md">
+        <div class="col-12 col-sm row items-center no-wrap q-gutter-md">
+          <q-avatar color="primary" text-color="white" icon="security" />
+          <div class="col">
+            <div class="text-subtitle1 text-weight-bold">Erinnerungen und Profilangaben trennen</div>
+            <div class="text-caption app-muted">Lege getrennt fest, welche Erinnerungen und persönlichen Angaben lokale und Cloud-Modelle verwenden dürfen. Ohne Trennung gelten für alle Modelle dieselben Datenfreigaben.</div>
+          </div>
+        </div>
+        <q-toggle dense :model-value="generalSettings.modelTrustEnabled" class="col-12 col-sm-auto" color="primary" aria-label="Erinnerungen und Profilangaben trennen" :disable="pageLoading || generalSettings.saving || loadFailed" @update:model-value="toggleModelTrust" />
+      </q-card-section>
+    </q-card>
+
     <q-banner v-if="loadFailed" rounded class="app-surface-tonal q-mb-md">
       Die Provider konnten nicht geladen werden.
       <template #action><q-btn flat no-caps color="primary" label="Erneut laden" @click="loadPage" /></template>
@@ -278,7 +291,7 @@
 import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from 'src/boot/axios'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import ModelConfigDialog from 'src/features/providers/ModelConfigDialog.vue'
@@ -297,15 +310,18 @@ import {
 import { useProviderStore } from 'stores/providers'
 import { useAuthStore } from 'stores/auth'
 import PersonalSettingsGate from 'src/features/settings/PersonalSettingsGate.vue'
+import { useGeneralSettingsStore } from 'src/features/settings/general-settings-store'
 
 defineOptions({ name: 'ProviderSettingsPage' })
 
 const { admin } = defineProps({ admin: { type: Boolean, default: false } })
 const $q = useQuasar()
 const router = useRouter()
+const route = useRoute()
 const { confirm } = useConfirm()
 const providers = useProviderStore()
 const auth = useAuthStore()
+const generalSettings = useGeneralSettingsStore()
 const dialogOpen = ref(false)
 const modelDialogOpen = ref(false)
 const selectedProvider = ref(null)
@@ -343,6 +359,8 @@ async function loadPage() {
   pageLoading.value = true
   loadFailed.value = false
   try {
+    if (admin) await generalSettings.fetchSettings()
+    if (scope.value !== requestedScope) return
     await providers.fetchPersonalPolicy()
     if (scope.value !== requestedScope) return
     if (!admin && personalBlocked.value) {
@@ -370,6 +388,13 @@ async function togglePersonalProviders(enabled) {
   } finally {
     gateLoading.value = false
   }
+}
+
+async function toggleModelTrust(enabled) {
+  try {
+    await generalSettings.saveSettings({ modelTrustEnabled: enabled })
+    $q.notify({ type: 'positive', message: 'Einstellung gespeichert.' })
+  } catch { /* Central API toast. */ }
 }
 
 function openCreateDialog() {
@@ -584,11 +609,12 @@ async function removeProvider(provider) {
 }
 
 watch(scope, () => {
-  section.value = 'general'
+  section.value = route.query.tab === 'management' ? 'management' : 'general'
   dialogOpen.value = false
   modelDialogOpen.value = false
   listedProviders.value = []
   listedModels.value = []
   void loadPage()
 }, { immediate: true })
+watch(() => route.query.tab, (tab) => { section.value = tab === 'management' ? 'management' : 'general' })
 </script>

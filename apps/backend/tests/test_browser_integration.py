@@ -1111,7 +1111,7 @@ def test_browser_client_is_generation_bound(monkeypatch):
 async def test_current_tool_context_cannot_bypass_profile_with_attachment(monkeypatch):
     instance = _instance()
     session = ChatSession(id=uuid4(), user_id=instance.owner_id, agent_profile_id=uuid4())
-    profile = AgentProfile(id=session.agent_profile_id, name="Browser excluded", instructions="Test profile", integration_availability={str(instance.id): False})
+    profile = AgentProfile(id=session.agent_profile_id, name="Browser excluded", instructions="Test profile", integrations_enabled_by_default=False)
     monkeypatch.setattr(mock_tools_context, 'load_effective_integrations', AsyncMock(return_value=IntegrationSettings(instances=[instance])))
     monkeypatch.setattr(mock_tools_context, 'load_agent_profile', AsyncMock(return_value=profile))
     coordinator = SimpleNamespace(attached_for=Mock())

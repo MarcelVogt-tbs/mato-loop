@@ -78,7 +78,7 @@ async def _permission_payload(
                     if isinstance(item, dict)
                     and item.get("resourceType") == grant.resource_type
                     and item.get("resourceScope") == grant.resource_scope
-                    and f"resource.{item.get('access')}" == grant.capability
+                    and ("execution.directory" if item.get("access") == "navigate" else f"resource.{item.get('access')}") == grant.capability
                 ),
                 None,
             )

@@ -2,7 +2,7 @@
 
 ## Tool-Rechte
 
-Globale Tool-Vorgaben und eingebaute Profil-Presets konfigurieren Administratoren unter **Administration > Tools**. Erlaubte eigene Profilrechte stehen unter **Einstellungen > Tools**. Arbeitsanweisungen bleiben am Profil; Modellwahl gehört zu **Standardmodelle** und **Sessionvorlagen**, Persona-Zuordnungen zu **Personas**. Integrations- und Ressourcenrechte bearbeiten Sie an der Verbindung. Rechte haben getrennte Werte für private und öffentliche Modelle:
+Das globale Freigabeverhalten und eingebaute Profil-Presets konfigurieren Administratoren unter **Administration > Tools**. Erlaubte eigene Profilrechte stehen unter **Einstellungen > Tools**. Arbeitsanweisungen bleiben am Profil; Modellwahl gehört zu **Standardmodelle** und **Sessionvorlagen**, Persona-Zuordnungen zu **Personas**. Integrations- und Ressourcenrechte bearbeiten Sie an der Verbindung. Rechte haben getrennte Werte für private und öffentliche Modelle:
 
 - **Deaktiviert**: Das Tool kann nicht aufgerufen werden. Der Agent kennt die installierte Fähigkeit weiterhin und kann bei einer passenden Anfrage erklären, wie sie aktiviert wird.
 - **Nachfragen**: Vor Agent-Tool-Aufrufen ist eine Freigabe erforderlich.
@@ -20,9 +20,9 @@ Unter **Administration > Tools > Einstellungen** steht die Freigabe persönliche
 
 Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte oder wegen Profilrechten, Modellwahl oder fehlender Integration nicht aufrufbare Fähigkeiten erscheinen für den Agenten lediglich als kompakter Hinweis. Dieser Hinweis kann weder eine Aktion noch eine Freigabe auslösen.
 
-### Globale Tool-Vorgaben anwenden
+### Freigabeverhalten {#globale-tool-vorgaben-anwenden}
 
-**Administration > Grundeinstellungen > Globale Tool-Vorgaben** setzt vorhandene globale Tool-Berechtigungen gesammelt.
+**Administration > Tools > Einstellungen > Freigabeverhalten** legt fest, welche Aktionen der Agent standardmäßig automatisch ausführt und wann er um Erlaubnis fragt. Die Auswahl setzt vorhandene globale Tool-Berechtigungen gesammelt. **Grundeinstellungen** enthält einen gleich benannten direkten Link zu diesem Tab.
 
 - **Privat / Öffentlich:** getrennte Dropdowns bei aktiver Modelltrennung.
 - **Alle Modelle:** bearbeitet bei ausgeschalteter Modelltrennung die privaten Werte. Öffentliche Werte bleiben gespeichert.
@@ -60,6 +60,7 @@ Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte od
 - Die Vorlage setzt auch Löschrechte und sensible Zugriffe gemäß Tabelle. Manuelle Anpassungen dieser globalen Regeln werden überschrieben.
 - Profil- und Integrations-Overrides, Shell-Präfixe und die technische Tool-Verfügbarkeit bleiben erhalten.
 - Speichern ohne erneute Auswahl wendet keine Vorlage an.
+- Beim Tabwechsel mit einer noch nicht angewendeten Vorlage können Sie den Entwurf ausdrücklich verwerfen oder abbrechen und zuerst speichern.
 - Es werden konkrete Berechtigungen gespeichert, kein zusätzlicher Automatikmodus.
 
 #### Geltungsbereich und Grenzen
@@ -153,7 +154,14 @@ Im Tab **Berechtigungen** wählen Sie **Standard für diese Integration** oder e
 
 Ressourcen erscheinen als aufklappbare Zeilen mit Verfügbarkeitsschalter. Beim Standard sind alle erkannten Ressourcen sichtbar, bei einem Profil nur Ressourcen mit eigenen Abweichungen. Im aufgeklappten Bereich stehen nur eigene Berechtigungs-Overrides. Ausschalten sperrt die Ressource im gewählten Bereich, ohne Regeln zu löschen. Beim Einschalten gelten die gespeicherten Regeln wieder. Profilabweichungen haben gegenüber dem Verbindungsstandard Vorrang; entfernte oder serverseitig gesperrte Ressourcen werden dadurch nicht zugänglich. Der Pfeil zum Zurücksetzen der Verfügbarkeit stellt die Vererbung wieder her. Der Instanzschalter für Public/Private gilt auch hier.
 
-Die allgemeine Vorgabe **Integrationen standardmäßig verfügbar** steht im Agentenprofil unter **Weitere Einstellungen**. Einzelne Verbindungen werden ausschließlich an der Verbindung konfiguriert. Frühere Profilzuordnungen bleiben wirksam und werden beim Speichern eines entsprechenden Verbindungs-Overrides übernommen. Ältere Zuordnungen persönlicher Profile zu globalen Verbindungen bleiben erhalten; sie werden nicht in die gemeinsame Konfiguration eines anderen Benutzers übertragen.
+Die allgemeine Vorgabe **Integrationen standardmäßig verfügbar** steht im Agentenprofil unter **Weitere Einstellungen**. Einzelne Verbindungen werden ausschließlich an der Verbindung konfiguriert.
+
+Beim Update werden frühere Profilzuordnungen einmalig bereinigt:
+
+- Unterstützte Zuordnungen werden an die Verbindung übertragen. Dort bereits konfigurierte Verfügbarkeits-Overrides haben Vorrang.
+- Persönliche Zuordnungen zu globalen Verbindungen und Verweise auf entfernte Verbindungen werden gelöscht.
+- Danach gelten für diese Profile wieder die Profilvorgabe und gegebenenfalls der Verbindungs-Override des Basisprofils. Eine Verbindung kann dadurch verfügbar werden oder wegfallen.
+- Es gibt keine zusätzliche Altzuordnungsverwaltung. Die entfernten Werte werden bei einem Downgrade nicht wiederhergestellt.
 
 ## SearXNG integrieren
 

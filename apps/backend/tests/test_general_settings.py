@@ -7,8 +7,18 @@ from starlette.requests import Request
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import general_settings, mcp
+from mato_loop_backend.api.routes.tool_settings import (
+    ToolConfigurationRequest,
+    tool_configuration_payload,
+    update_tool_configuration,
+)
 from mato_loop_backend.public_url import resolve_public_base_url
-from mato_loop_backend.settings import GeneralSettings, SettingsStore, ToolSettings
+from mato_loop_backend.settings import (
+    GeneralSettings,
+    SettingsStore,
+    ToolExecutionPolicy,
+    ToolSettings,
+)
 
 
 @pytest.fixture
@@ -67,13 +77,20 @@ async def test_admin_public_url_is_saved_and_used_by_next_oauth_login(monkeypatc
 
 
 async def test_model_trust_switch_preserves_stored_general_settings(monkeypatch, http_request):
-    settings = GeneralSettings(default_timezone="UTC")
+    settings = GeneralSettings(default_timezone="UTC", publicBaseUrl="https://public.example.test")
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_: settings if kind is GeneralSettings else kind()))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     result = await general_settings.update_general_settings(
         general_settings.GeneralSettingsUpdate(modelTrustEnabled=False), http_request, AsyncMock()
     )
-    assert (result["modelTrustEnabled"], settings.model_trust_enabled, settings.default_timezone) == (False, False, "UTC")
+    assert (result["modelTrustEnabled"], settings.model_trust_enabled, settings.default_timezone, settings.public_base_url) == (False, False, "UTC", "https://public.example.test")
+
+
+def tool_request(settings, **updates):
+    payload = tool_configuration_payload(settings)
+    for key in ("groups", "privateGroups", "publicGroups", "toolPermissionPresets"):
+        payload.pop(key)
+    return ToolConfigurationRequest.model_validate({**payload, **updates})
 
 
 @pytest.mark.parametrize("trust", ["private", "public"])
@@ -84,7 +101,7 @@ async def test_model_trust_switch_preserves_stored_general_settings(monkeypatch,
     ("ask_sensitive", "auto", "auto", "auto", "ask"),
     ("auto_all", "auto", "auto", "auto", "auto"),
 ])
-async def test_tool_presets_change_only_selected_global_policies(monkeypatch, http_request, trust, preset, read, write, delete, sensitive):
+async def test_tool_presets_change_only_selected_global_policies(monkeypatch, trust, preset, read, write, delete, sensitive):
     tools = ToolSettings(
         private_permissions={"policies": {"filesystem.delete": "disabled"}},
         public_permissions={"policies": {"filesystem.delete": "disabled"}},
@@ -96,8 +113,8 @@ async def test_tool_presets_change_only_selected_global_policies(monkeypatch, ht
     save = AsyncMock()
     monkeypatch.setattr(SettingsStore, "save", save)
     db = AsyncMock()
-    result = await general_settings.update_general_settings(
-        general_settings.GeneralSettingsUpdate(toolPermissionPresets={trust: preset}), http_request, db
+    result = await update_tool_configuration(
+        tool_request(tools, toolPermissionPresets={trust: preset}), SimpleNamespace(is_admin=True), db
     )
     policies = getattr(tools, f"{trust}_permissions").policies
     assert tuple(policies[key] for key in (
@@ -108,27 +125,27 @@ async def test_tool_presets_change_only_selected_global_policies(monkeypatch, ht
     after[f"{trust}_permissions"]["policies"] = before[f"{trust}_permissions"]["policies"]
     assert after == before
     assert result["toolPermissionPresets"][trust] == preset
-    assert {type(call.args[1]) for call in save.await_args_list} == {GeneralSettings, ToolSettings}
+    assert {type(call.args[1]) for call in save.await_args_list} == {ToolSettings}
     db.commit.assert_awaited_once()
 
-    policies["filesystem.read"] = "disabled"
-    result = await general_settings.update_general_settings(general_settings.GeneralSettingsUpdate(), http_request, db)
+    policies["filesystem.read"] = ToolExecutionPolicy.DISABLED
+    result = await update_tool_configuration(tool_request(tools), SimpleNamespace(is_admin=True), db)
     assert result["toolPermissionPresets"][trust] is None
-    assert len(save.await_args_list) == 3
+    assert len(save.await_args_list) == 2
 
 
-async def test_disabled_model_distinction_preserves_public_tool_permissions(monkeypatch, http_request):
+async def test_disabled_model_distinction_preserves_public_tool_permissions(monkeypatch):
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=GeneralSettings(modelTrustEnabled=False)))
     with pytest.raises(ApiError, match="validation.invalidChoice"):
-        await general_settings.update_general_settings(
-            general_settings.GeneralSettingsUpdate(toolPermissionPresets={"public": "auto_all"}), http_request, AsyncMock()
+        await update_tool_configuration(
+            tool_request(ToolSettings(), toolPermissionPresets={"public": "auto_all"}), SimpleNamespace(is_admin=True), AsyncMock()
         )
 
 
 @pytest.mark.parametrize("presets", [{"other": "auto_all"}, {"private": "unknown"}, {"private": None}])
 def test_tool_presets_validate_requested_branch_and_preset(presets):
     with pytest.raises(ValidationError):
-        general_settings.GeneralSettingsUpdate(toolPermissionPresets=presets)
+        tool_request(ToolSettings(), toolPermissionPresets=presets)
 
 
 def test_general_settings_are_admin_only():

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import make_transient_to_detached
 
@@ -113,22 +114,22 @@ async def test_integration_permission_page_lists_configured_rights_and_resources
              {resource["key"] for resource in response["inherited"]["private"]["resources"]}) == ({"calendar.read": "ask"}, {"calendar:work"})
 
 
-async def test_global_profile_permissions_and_legacy_assignment_transfer(monkeypatch):
+async def test_global_profile_permissions_override_default_availability(monkeypatch):
     user = UserAccount(id=uuid4(), is_admin=True)
     integration = IntegrationInstance(name="Shared", integration_type="calendar", adapter_type="caldav", config={"base_url": "https://calendar.test", "username": "owner"})
     documents = {
         (IntegrationSettings, None): IntegrationSettings(instances=[integration]),
-        (AgentProfilesSettings, None): AgentProfilesSettings(builtin_access_overrides={GENERAL_PROFILE_ID: AgentProfileAccessOverrides(integration_availability={str(integration.id): False})}),
+        (AgentProfilesSettings, None): AgentProfilesSettings(),
     }
     db = settings_db(monkeypatch, documents)
     monkeypatch.setattr("mato_loop_backend.api.integration_resources._integration_resources", AsyncMock(return_value=()))
-    await update_profile_integration_availability(GENERAL_PROFILE_ID, ProfileIntegrationAvailabilityRequest(integrationsEnabledByDefault=True), user, db, "instance")
+    await update_profile_integration_availability(GENERAL_PROFILE_ID, ProfileIntegrationAvailabilityRequest(integrationsEnabledByDefault=False), user, db, "instance")
     page = await get_integration_permissions(integration.id, user, db, "instance", GENERAL_PROFILE_ID)
-    assert page["permissions"]["available"] is False
+    assert page["inheritedAvailable"] is False
     await update_integration_permissions(integration.id, IntegrationPermissions(available=True, publicPermissions={"policies": {"calendar.write": "auto"}}), user, db, "instance", GENERAL_PROFILE_ID)
     tools, profile = await load_agent_profile_tools(db, user.id, GENERAL_PROFILE_ID, TrustLevel.PUBLIC)
     stored = documents[IntegrationSettings, None].instances[0]
-    assert (integration_profile_available(stored, profile), tool_execution_policy(tools, "calendar.write", integration_id=stored.id), profile.integration_availability) == (True, "auto", {})
+    assert (integration_profile_available(stored, profile), tool_execution_policy(tools, "calendar.write", integration_id=stored.id)) == (True, "auto")
 
 
 @pytest.mark.parametrize("admin", [False, True])
@@ -193,7 +194,7 @@ async def test_reset_builtin_tool_permissions_preserves_integration_selection(mo
 
 
 @pytest.mark.parametrize("scope", ["instance", "personal"])
-async def test_profile_integration_assignment_preserves_tool_overrides(monkeypatch, scope):
+async def test_profile_integration_default_preserves_tool_overrides(monkeypatch, scope):
     user = UserAccount(id=uuid4(), username="owner", password_hash="hash", is_admin=scope == "instance")
     integration = IntegrationInstance(name="Calendar", integration_type="calendar", adapter_type="caldav")
     profile = CustomAgentProfile(name="Own", description="", base_profile_id=GENERAL_PROFILE_ID,
@@ -209,21 +210,16 @@ async def test_profile_integration_assignment_preserves_tool_overrides(monkeypat
     db = settings_db(monkeypatch, documents)
     profile_id = GENERAL_PROFILE_ID if scope == "instance" else profile.id
     await update_profile_integration_availability(profile_id, ProfileIntegrationAvailabilityRequest(
-        integrationsEnabledByDefault=False, integrationAvailability={str(integration.id): True},
+        integrationsEnabledByDefault=False,
     ), user, db, scope)
     response = await get_profile_integration_availability(profile_id, user, db, scope)
     tools, _ = await load_agent_profile_tools(db, user.id, profile_id, TrustLevel.PUBLIC)
-    assert (response["integrationsEnabledByDefault"], response["integrationAvailability"],
-            tool_execution_policy(tools, "shell.write")) == (False, {str(integration.id): True}, "auto")
+    assert (response["integrationsEnabledByDefault"], tool_execution_policy(tools, "shell.write")) == (False, "auto")
 
 
-async def test_profile_integration_assignment_rejects_unknown_connections(monkeypatch):
-    user = UserAccount(id=uuid4(), username="admin", password_hash="hash", is_admin=True)
-    db = settings_db(monkeypatch, {})
-    with pytest.raises(ApiError, match="validation.invalidChoice"):
-        await update_profile_integration_availability(GENERAL_PROFILE_ID, ProfileIntegrationAvailabilityRequest(
-            integrationAvailability={str(uuid4()): True},
-        ), user, db, "instance")
+def test_profile_integration_default_rejects_removed_connection_assignments():
+    with pytest.raises(ValidationError):
+        ProfileIntegrationAvailabilityRequest(integrationAvailability={str(uuid4()): True})
 
 
 async def test_profile_content_cannot_bypass_tool_permission_gate():

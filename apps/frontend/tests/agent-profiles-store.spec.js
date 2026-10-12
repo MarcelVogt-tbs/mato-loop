@@ -59,7 +59,6 @@ describe('agent profiles store', () => {
         instructions: 'Arbeite sorgfältig.',
         maxToolCalls: null,
         integrationsEnabledByDefault: false,
-        integrationAvailability: { 'integration-1': false, 'integration-2': true },
         publicPermissions: { policies: { 'network.search': 'auto' } },
         privatePermissions: { policies: { 'network.search': 'ask' } }
       }

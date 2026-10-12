@@ -24,6 +24,7 @@ from mato_loop_backend.permissions.decisions import ApprovalDecisionError, decid
 from mato_loop_backend.permissions.policy import (
     PermissionRequest,
     administrator_permission,
+    execution_directory_permission,
     execution_directory_scope,
     integration_operation_permission,
     session_grants_fingerprint,
@@ -64,7 +65,8 @@ def _fingerprint(approval: ApprovalRequest) -> None:
 
 
 @pytest.mark.parametrize("decision", ["allow_once", "allow_session"])
-async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision) -> None:
+@pytest.mark.parametrize("navigation", [False, True])
+async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision, navigation) -> None:
     approval = _approval()
     profile_id = uuid4()
     agent_id = uuid4()
@@ -86,6 +88,11 @@ async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision
             },
         ],
     }
+    if navigation:
+        request = execution_directory_permission(agent_id, "/source")
+        approval.capability, approval.resource_type, approval.resource_scope = request.capability, request.resource_type, request.resource_scope
+        approval.payload["sessionGrants"] = session_grants_payload(request)
+        action = request.resource_scope
     _fingerprint(approval)
     user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
     db = AsyncMock(spec=AsyncSession)
@@ -104,7 +111,9 @@ async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision
 
     grants = [call.args[0] for call in db.add.call_args_list]
     assert all(isinstance(grant, PermissionGrant) for grant in grants)
-    assert [grant.capability for grant in grants] == ["resource.write"]
+    assert [(grant.capability, grant.resource_type) for grant in grants] == [
+        ("execution.directory", "execution_directory") if navigation else ("resource.write", "shell_action")
+    ]
     assert [grant.resource_scope for grant in grants] == [action]
     assert all(grant.session_id == approval.session_id for grant in grants)
     assert all(grant.run_id == (approval.run_id if decision == "allow_once" else None) for grant in grants)

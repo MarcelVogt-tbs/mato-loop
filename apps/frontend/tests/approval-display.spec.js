@@ -83,7 +83,7 @@ describe('approval display', () => {
       resourceType: 'execution_directory',
       resourceScope: 'opaque',
       resourceDisplay: '/home/user/projekt'
-    })).toEqual({ label: 'Aktueller Ordner', value: '/home/user/projekt' })
+    })).toEqual({ label: 'Ordner und Unterordner', value: '/home/user/projekt' })
     expect(approvalResource({
       resourceType: 'execution_agent',
       resourceDisplay: 'Notebook'
@@ -100,7 +100,7 @@ describe('approval display', () => {
     })).toEqual({ label: 'Datei oder Ordner', value: 'session:plan.md' })
 
     for (const [capability, label, icon] of [
-      ['execution.directory', 'Als Arbeitsverzeichnis verwenden', 'drive_file_move'],
+      ['execution.directory', 'Im Ordnerbaum navigieren', 'drive_file_move'],
       ['system.info', 'Systeminformationen lesen', 'computer'],
       ['process.execute', 'Befehl ausführen', 'terminal']
     ]) {

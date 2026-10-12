@@ -35,7 +35,13 @@ Eine wiederverwendbare Shell-Freigabe gilt für den exakten Befehl auf demselben
 - **Privat** bezeichnet einen von Ihnen als vertrauenswürdig eingestuften Provider.
 - **Öffentlich** behandelt ihn als externen Empfänger und verwendet die dafür konfigurierten Berechtigungen und Memory-Zielgruppen.
 
-Unter **Administration > Grundeinstellungen** können Sie **Öffentliche und private Modelle unterscheiden** ausschalten. Alle Modelle werden dann für neue Läufe als privat behandelt, einschließlich Memory und persönlicher Profilangaben. Die Auswahlfelder für die Trennung werden ausgeblendet; Berechtigungen verwenden den privaten Zweig unter **Alle Modelle**. Gespeicherte Einstufungen und öffentliche Regeln bleiben zum Wiedereinschalten erhalten. Laufende Läufe behalten ihre eingefrorene Einstufung.
+Unter **Administration > Provider > Einstellungen > Erinnerungen und Profilangaben trennen** legen Sie getrennt fest, welche Erinnerungen und persönlichen Angaben lokale und Cloud-Modelle verwenden dürfen. **Grundeinstellungen** verlinkt unter demselben Namen direkt dorthin.
+
+- Die Änderung wird sofort gespeichert.
+- Ohne Trennung gelten für alle Modelle dieselben Datenfreigaben. Auch Cloud-Modelle können dann privat freigegebene Erinnerungen und Profilangaben erhalten.
+- Die Auswahlfelder für die Trennung werden ausgeblendet; Berechtigungen verwenden den privaten Zweig unter **Alle Modelle**.
+- Gespeicherte Einstufungen und öffentliche Regeln bleiben zum Wiedereinschalten erhalten.
+- Laufende Läufe behalten ihre eingefrorene Einstufung.
 
 Die Einstellung prüft weder Lokalität noch TLS oder Betreiber. Mit der Modellwahl entscheiden Sie über die Übertragung bereits autorisierter Nachrichten, Dateien, Tool-Ergebnisse und Integrationsdaten an diesen Provider. Es gibt dafür keine zweite pauschale Session-Datenfreigabe. Eigentümergrenzen, Memory-Zielgruppen und Aktionsrechte gelten trotzdem. Ein Widerruf kann bereits übertragene Daten nicht zurückholen.
 

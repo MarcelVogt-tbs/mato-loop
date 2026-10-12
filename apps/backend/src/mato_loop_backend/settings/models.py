@@ -125,12 +125,6 @@ WEATHER_SKILL_ID = UUID("00000000-0000-4000-8000-000000000101")
 ProfileToolCallLimit = Annotated[int, Field(strict=True, gt=0)] | None
 
 
-def validate_integration_availability(value: dict[str, bool]) -> dict[str, bool]:
-    if any(str(UUID(key)) != key for key in value):
-        raise ValueError("integration availability keys must be canonical UUIDs")
-    return value
-
-
 class PersonaProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -201,14 +195,9 @@ class AgentProfileAccessOverrides(BaseModel):
     model_config = ConfigDict(alias_generator=lambda value: _camel_case(value), populate_by_name=True, extra="forbid")
 
     integrations_enabled_by_default: StrictBool | None = None
-    integration_availability: dict[str, StrictBool] | None = None
     private_permissions: AgentProfilePermissions | None = None
     public_permissions: AgentProfilePermissions | None = None
     shell_prefixes: ShellPrefixSettings | None = None
-
-    _validate_availability = field_validator("integration_availability")(
-        lambda value: validate_integration_availability(value) if value is not None else value
-    )
 
     @model_validator(mode="after")
     def reject_null_overrides(self) -> Self:
@@ -250,7 +239,6 @@ class AgentProfile(BaseModel):
     todo_enabled: StrictBool = False
     repository_instructions_enabled: StrictBool = False
     integrations_enabled_by_default: StrictBool = True
-    integration_availability: dict[str, StrictBool] = Field(default_factory=dict)
     private_permissions: AgentProfilePermissions = Field(
         default_factory=AgentProfilePermissions
     )
@@ -264,10 +252,6 @@ class AgentProfile(BaseModel):
     owner_id: UUID | None = Field(default=None, exclude=True)
     integration_id: UUID | None = Field(default=None, exclude=True)
     editable: bool = Field(default=True, exclude=True)
-
-    _validate_availability = field_validator("integration_availability")(
-        validate_integration_availability
-    )
 
     @field_validator("name", "description", "instructions", "runtime_instructions", mode="before")
     @classmethod
@@ -312,16 +296,12 @@ class AgentProfileOverrides(BaseModel):
     todo_enabled: StrictBool | None = None
     repository_instructions_enabled: StrictBool | None = None
     integrations_enabled_by_default: StrictBool | None = None
-    integration_availability: dict[str, StrictBool] | None = None
     private_permissions: AgentProfilePermissions | None = None
     public_permissions: AgentProfilePermissions | None = None
     shell_prefixes: ShellPrefixSettings | None = None
     delegation_enabled: StrictBool | None = None
     session_write_paths: list[str] | None = None
 
-    _validate_availability = field_validator("integration_availability")(
-        lambda value: validate_integration_availability(value) if value is not None else value
-    )
     _validate_paths = field_validator("session_write_paths")(
         lambda value: AgentProfile.validate_session_write_paths(value)
     )
@@ -402,8 +382,6 @@ def apply_profile_overrides(
 ) -> AgentProfile:
     values = base.model_dump()
     values.update(overrides.model_dump(exclude_unset=True))
-    if "integration_availability" in overrides.model_fields_set:
-        values["integration_availability"] = {**base.integration_availability, **overrides.integration_availability}
     for field in ("private_permissions", "public_permissions"):
         if field in overrides.model_fields_set:
             values[field] = getattr(base, field).merged(getattr(overrides, field)).model_dump()

@@ -26,7 +26,7 @@ from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.sessions.serialization import message_payload
 from mato_loop_backend.settings import IntegrationInstance, IntegrationSettings, ToolSettings
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
-from mato_loop_backend.settings.models import AgentProfile
+from mato_loop_backend.settings.models import AgentProfile, IntegrationPermissions
 from mato_loop_backend.tools.arguments import ProtectedQuestionResolution
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.contracts import ToolResult
@@ -393,7 +393,8 @@ def test_child_integration_snapshot_is_concrete_and_legacy_fails_closed():
     first = IntegrationInstance(name="First", integration_type="search", adapter_type="searxng")
     second = IntegrationInstance(name="Second", integration_type="search", adapter_type="searxng")
     settings = IntegrationSettings(instances=[first, second])
-    profile = AgentProfile(name="Custom", instructions="Follow the task.", integrationsEnabledByDefault=False, integrationAvailability={str(first.id): True})
+    profile = AgentProfile(name="Custom", instructions="Follow the task.", integrationsEnabledByDefault=False)
+    first.profile_permissions[profile.id] = IntegrationPermissions(available=True)
     selected = filter_agent_profile_integrations(settings, profile)
     snapshot = permission_snapshot(ToolSettings(), {"web_search"}, selected)
     assert snapshot["integrationIds"] == [str(first.id)]

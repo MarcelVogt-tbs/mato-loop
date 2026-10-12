@@ -247,7 +247,7 @@ async def _decide_agent_action(
             or set(scope) != {
                 "access", "resourceType", "resourceScope", "resourceDisplay"
             }
-            or scope["access"] not in {"read", "write"}
+            or scope["access"] not in {"read", "write", "navigate"}
             or not isinstance(scope["resourceType"], str)
             or not 1 <= len(scope["resourceType"]) <= 80
             or not isinstance(scope["resourceScope"], str)
@@ -293,7 +293,7 @@ async def _decide_agent_action(
     if reusable:
         grant_run_id = approval.run_id if decision == "allow_once" else None
         for scope in scopes:
-            capability = f"resource.{scope['access']}"
+            capability = SessionGrantScope(scope["access"], scope["resourceType"], scope["resourceScope"]).capability
             existing_grant = await db.scalar(
                 select(PermissionGrant).where(
                     PermissionGrant.session_id == approval.session_id,

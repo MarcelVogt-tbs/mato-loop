@@ -85,7 +85,7 @@ export function approvalResource(approval, sessions = []) {
   if (approval?.resourceType === 'execution_directory') {
     return {
       label: approval?.capability?.startsWith('filesystem.') || approval?.capability === 'file.provide'
-        ? 'Datei oder Ordner' : 'Aktueller Ordner',
+        ? 'Datei oder Ordner' : 'Ordner und Unterordner',
       value: approval?.resourceDisplay || 'Pfad nicht verfügbar'
     }
   }
@@ -290,7 +290,7 @@ export function permissionGrantDisplay(grant, sessions = []) {
     'filesystem.read': { label: 'Dateien lesen', icon: 'visibility' },
     'filesystem.write': { label: 'Dateien schreiben', icon: 'edit' },
     'filesystem.delete': { label: 'Dateien löschen', icon: 'delete_outline' },
-    'execution.directory': { label: 'Als Arbeitsverzeichnis verwenden', icon: 'drive_file_move' },
+    'execution.directory': { label: 'Im Ordnerbaum navigieren', icon: 'drive_file_move' },
     'system.info': { label: 'Systeminformationen lesen', icon: 'computer' },
     'process.execute': { label: 'Befehl ausführen', icon: 'terminal' },
     'network.search': { label: 'Websuche verwenden', icon: 'travel_explore' },

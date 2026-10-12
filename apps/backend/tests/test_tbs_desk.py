@@ -258,7 +258,6 @@ def test_profile_is_stable_and_only_visible_for_effective_enabled_integration() 
     assert profile.id == profile_id(instance.id)
     assert profile.editable is False
     assert profile.integrations_enabled_by_default is False
-    assert profile.integration_availability == {str(instance.id): True}
     assert "An unfamiliar standalone word may be a customer name" in profile.instructions
     assert "do not reinterpret them as the support employee's personal issue" in profile.instructions
     assert "Distinguish documented observations from hypotheses" in profile.instructions

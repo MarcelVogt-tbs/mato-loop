@@ -242,7 +242,6 @@ def test_custom_profile_stores_only_sparse_typed_overrides() -> None:
             "todoEnabled": False,
             "repositoryInstructionsEnabled": False,
             "maxToolCalls": None,
-            "integrationAvailability": {},
             "privatePermissions": {},
             "sessionWritePaths": [],
         },
@@ -253,7 +252,6 @@ def test_custom_profile_stores_only_sparse_typed_overrides() -> None:
         "todoEnabled": False,
         "repositoryInstructionsEnabled": False,
         "maxToolCalls": None,
-        "integrationAvailability": {},
         "privatePermissions": {},
         "sessionWritePaths": [],
     }
@@ -638,13 +636,13 @@ async def test_builtin_access_inherits_per_entry_and_respects_scope(monkeypatch)
     child = CustomAgentProfile(name="Child", description="", baseProfileId=PLAN_PROFILE_ID,
         overrides={"privatePermissions": {"policies": {"shell.read": "ask"}}})
     instance = AgentProfilesSettings(profiles=[child], builtin_access_overrides={PLAN_PROFILE_ID:
-        AgentProfileAccessOverrides(integrationAvailability={integration_id: True},
+        AgentProfileAccessOverrides(integrationsEnabledByDefault=True,
             privatePermissions={"policies": {"filesystem.read": "ask"},
                 "integrationPolicies": {integration_id: {"browser.read": "auto", "browser.write": "ask"}},
                 "resourcePolicies": {integration_id: {"page": {"browser.read": "ask"}}}})})
     personal = UserAgentProfilesSettings(profiles=[CustomAgentProfile(
         name="Personal", description="", baseProfileId=PLAN_PROFILE_ID,
-        overrides={"integrationAvailability": {integration_id: False}, "privatePermissions": {
+        overrides={"integrationsEnabledByDefault": False, "privatePermissions": {
             "policies": {"shell.read": "ask"},
             "integrationPolicies": {integration_id: {"browser.read": "disabled"}}}},
     )])
@@ -657,14 +655,14 @@ async def test_builtin_access_inherits_per_entry_and_respects_scope(monkeypatch)
         return (await load_effective_agent_profiles(AsyncMock(), uuid4(), include_personal=include_personal)).profiles[-1]
 
     effective = await get()
-    assert effective.integration_availability[integration_id] is False
+    assert effective.integrations_enabled_by_default is False
     assert effective.private_permissions.policies["filesystem.write"] == ToolExecutionPolicy.DISABLED
     assert effective.private_permissions.policies["filesystem.read"] == ToolExecutionPolicy.ASK
     assert effective.private_permissions.policies["shell.read"] == ToolExecutionPolicy.ASK
     assert effective.private_permissions.integration_policies[integration_id] == {
         "browser.read": ToolExecutionPolicy.DISABLED, "browser.write": ToolExecutionPolicy.ASK}
     assert effective.private_permissions.resource_policies[integration_id]["page"]["browser.read"] == ToolExecutionPolicy.ASK
-    assert (await get(False)).integration_availability[integration_id] is True
+    assert (await get(False)).integrations_enabled_by_default is True
     instance.builtin_access_overrides[PLAN_PROFILE_ID].private_permissions.policies["filesystem.read"] = ToolExecutionPolicy.AUTO
     assert (await get()).private_permissions.policies["filesystem.read"] == ToolExecutionPolicy.AUTO
 

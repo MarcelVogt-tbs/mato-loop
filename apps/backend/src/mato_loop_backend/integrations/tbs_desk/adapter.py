@@ -151,7 +151,6 @@ def binding_revision(instance: IntegrationInstance) -> str:
 
 
 def _profile(instance: IntegrationInstance) -> AgentProfile:
-    integration_id = str(instance.id)
     return AgentProfile(
         id=profile_id(instance.id),
         name="Support-Assistent",
@@ -173,7 +172,6 @@ def _profile(instance: IntegrationInstance) -> AgentProfile:
             "search memories or prior chats to guess a customer."
         ),
         integrations_enabled_by_default=False,
-        integration_availability={integration_id: True},
         integration_id=instance.id,
         editable=False,
     )

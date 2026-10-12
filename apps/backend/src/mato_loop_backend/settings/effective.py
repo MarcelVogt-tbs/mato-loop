@@ -254,10 +254,10 @@ def integration_profile_available(instance: IntegrationInstance, profile: AgentP
     override = instance.profile_permissions.get(profile.id)
     if override is not None and override.available is not None:
         return override.available
-    if str(instance.id) in profile.integration_availability:
-        return profile.integration_availability[str(instance.id)]
     base = instance.profile_permissions.get(profile.base_profile_id)
-    return base.available if base is not None and base.available is not None else profile.integrations_enabled_by_default
+    return base.available if base is not None and base.available is not None else (
+        profile.integration_id == instance.id or profile.integrations_enabled_by_default
+    )
 
 
 def filter_agent_profile_integrations(

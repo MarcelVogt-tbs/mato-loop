@@ -342,7 +342,7 @@ async def test_delegation_intersects_live_spawn_scope_and_both_permission_ceilin
         ToolExecutionPolicy,
     )
     from mato_loop_backend.settings.effective import filter_agent_profile_integrations
-    from mato_loop_backend.settings.models import AgentProfile
+    from mato_loop_backend.settings.models import AgentProfile, IntegrationPermissions
 
     _session, _parent, objects, _databases, delegate = delegated_runtime
     accounts = [IntegrationInstance(
@@ -353,8 +353,8 @@ async def test_delegation_intersects_live_spawn_scope_and_both_permission_ceilin
     offered_integrations = IntegrationSettings(instances=accounts[:2])
     live_integrations = IntegrationSettings(instances=accounts)
     profile = AgentProfile(name="Build", instructions="Follow the task.", integrationsEnabledByDefault=True,
-                           delegationEnabled=True,
-                           integrationAvailability={str(accounts[0].id): False})
+                           delegationEnabled=True)
+    accounts[0].profile_permissions[profile.id] = IntegrationPermissions(available=False)
     offered_tools = ToolSettings(public_permissions={
         "policies": {"session.files.write": "ask", "network.fetch": "auto", "calendar.read": "auto"},
         "integration_policies": {str(account_id): {"calendar.read": "auto"}},
@@ -371,7 +371,7 @@ async def test_delegation_intersects_live_spawn_scope_and_both_permission_ceilin
 
     async def execute(db, run, _visible):
         # Reopening settings after persistence must not reopen the child snapshot.
-        profile.integration_availability[str(accounts[0].id)] = True
+        accounts[0].profile_permissions[profile.id].available = True
         live_tools.tool_availability["question"] = True
         metadata = objects[Message, run.input_message_id].provider_data["_matoloop"]
         snapshot = metadata["delegationCeiling"]

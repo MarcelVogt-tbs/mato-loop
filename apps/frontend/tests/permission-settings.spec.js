@@ -28,7 +28,7 @@ const action = (capability) => ({ capability, label: 'Schreiben', policy: 'ask',
 const groups = (capability) => Object.fromEntries(['private', 'public'].map((trust) => [trust, [{ id: 'test', label: 'Rechte', actions: [action(capability)], tools: [] }]]))
 
 async function mount(Page, props, path, name, pinia = createPinia()) {
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/tools', name: 'settings-tools', component: Page }, { path: '/integrations/:integrationId/resources', name: 'settings-integration-resources', component: Page }, { path: '/integrations', name: 'settings-integrations', component: { render: () => null } }] })
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/tools', name: 'settings-tools', component: Page }, { path: '/admin/tools', name: 'admin-tools', component: Page }, { path: '/admin/providers', name: 'admin-providers', component: { render: () => null } }, { path: '/integrations/:integrationId/resources', name: 'settings-integration-resources', component: Page }, { path: '/integrations', name: 'settings-integrations', component: { render: () => null } }] })
   await router.push(path)
   expect(router.currentRoute.value.name).toBe(name)
   root = document.createElement('div')
@@ -44,34 +44,39 @@ async function mount(Page, props, path, name, pinia = createPinia()) {
 }
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); vi.clearAllMocks() })
 
-it('saves the model distinction switch from basic settings', async () => {
+it('saves only the public address from basic settings and links to provider and tool settings', async () => {
   const current = { publicBaseUrl: null, effectivePublicBaseUrl: 'https://mato.test', publicUrlSource: 'automatic', modelTrustEnabled: true }
   api.get.mockResolvedValue({ data: current })
-  api.put.mockResolvedValue({ data: { ...current, modelTrustEnabled: false } })
+  api.put.mockResolvedValue({ data: current })
   await mount(GeneralPage, {}, '/tools', 'settings-tools')
-  await vi.waitUntil(() => root.querySelector('.q-toggle:not(.disabled)'))
-  root.querySelector('.q-toggle').click()
-  await nextTick()
+  await vi.waitUntil(() => root.querySelector('button:not([disabled])'))
+  expect(root.querySelector('.q-card').textContent).toContain('Öffentliche Adresse')
+  expect([...root.querySelectorAll('a')].map(link => link.getAttribute('href'))).toEqual(['/admin/providers?tab=general', '/admin/tools?tab=general'])
   root.querySelector('button').click()
-  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/general-settings', { publicBaseUrl: null, modelTrustEnabled: false }))
+  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/general-settings', { publicBaseUrl: null }))
 })
 
 it.each([true, false])('confirms visible tool presets and does not reapply them on ordinary saves (model distinction: %s)', async (modelTrustEnabled) => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
-  const current = { publicBaseUrl: null, effectivePublicBaseUrl: 'https://mato.test', publicUrlSource: 'automatic', modelTrustEnabled, toolPermissionPresets: { private: null, public: 'ask_all' } }
+  let current = { ...rights(), personalSettingsEnabled: false, groups: [], privateGroups: [], publicGroups: [], shellPrefixes: { read: [], write: [] }, webFetch: { userAgent: 'MatoLoop/1.0' }, toolPermissionPresets: { private: null, public: 'ask_all' } }
   const chosen = { private: 'ask_delete_sensitive', ...(modelTrustEnabled ? { public: 'ask_sensitive' } : {}) }
-  api.get.mockResolvedValue({ data: current })
-  api.put.mockResolvedValue({ data: { ...current, toolPermissionPresets: { ...current.toolPermissionPresets, ...chosen } } })
-  await mount(GeneralPage, {}, '/tools', 'settings-tools')
+  api.get.mockImplementation(async url => ({ data: url === '/agent-profiles' ? { agents: [], effectiveAgents: [] } : current }))
+  api.put.mockImplementation(async (_url, payload) => {
+    current = { ...current, ...payload, toolPermissionPresets: { ...current.toolPermissionPresets, ...payload.toolPermissionPresets } }
+    return { data: current }
+  })
+  const pinia = createPinia()
+  useAuthStore(pinia).modelTrustEnabled = modelTrustEnabled
+  await mount(ToolPage, { admin: true }, '/admin/tools?tab=general', 'admin-tools', pinia)
   const choose = async (label, option) => {
-    const select = await vi.waitUntil(() => root.querySelector(`[aria-label="${label}: Tool-Vorgabe"]:not([aria-disabled="true"])`))
+    const select = await vi.waitUntil(() => root.querySelector(`[aria-label="${label}: Freigabeverhalten"]:not([aria-disabled="true"])`))
     select.click()
     const item = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find(item => item.querySelector('.q-item__label')?.textContent === option))
     item.click()
     await vi.waitUntil(() => !document.querySelector('[role="option"]'))
   }
   await vi.waitFor(() => expect(root.textContent).toContain('Individuell angepasst'))
-  expect(root.querySelector('a[aria-label="Tool-Vorgaben erklärt (öffnet neuen Tab)"]').getAttribute('href')).toBe('/docs/tools-und-integrationen/#globale-tool-vorgaben-anwenden')
+  expect(root.querySelector('a[aria-label="Freigabeverhalten erklärt (öffnet neuen Tab)"]').getAttribute('href')).toBe('/docs/tools-und-integrationen/#globale-tool-vorgaben-anwenden')
   await choose(modelTrustEnabled ? 'Privat' : 'Alle Modelle', 'Löschen und sensible Zugriffe bestätigen')
   if (modelTrustEnabled) await choose('Öffentlich', 'Nur sensible Zugriffe bestätigen')
   confirm.mockResolvedValueOnce(false)
@@ -80,10 +85,13 @@ it.each([true, false])('confirms visible tool presets and does not reapply them 
   expect(api.put).not.toHaveBeenCalled()
   await nextTick()
   root.querySelector('button').click()
-  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/general-settings', { publicBaseUrl: null, modelTrustEnabled, toolPermissionPresets: chosen }))
+  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/tools/configuration', expect.objectContaining({ toolPermissionPresets: chosen })))
+  const gate = await vi.waitUntil(() => root.querySelector('[aria-label="Tool-Rechte für persönliche Agentenprofile anpassen erlauben"]:not(.disabled)'))
+  gate.click()
   await vi.waitUntil(() => !root.querySelector('button').disabled)
   root.querySelector('button').click()
-  await vi.waitFor(() => expect(api.put).toHaveBeenLastCalledWith('/general-settings', { publicBaseUrl: null, modelTrustEnabled }))
+  await vi.waitFor(() => expect(api.put).toHaveBeenCalledTimes(2))
+  expect(api.put.mock.lastCall[1]).not.toHaveProperty('toolPermissionPresets')
 })
 
 it('edits only owned profile tool rights in settings, including for an admin', async () => {

@@ -262,7 +262,7 @@ async def test_inherited_auto_cannot_restore_excluded_browser(browser_action_cas
     if restriction == "profile":
         case.settings._agent_profile = AgentProfile(
             name="Excluded browser", instructions="Test profile",
-            integration_availability={str(case.instance.id): False},
+            integrations_enabled_by_default=False,
         )
     else:
         case.settings._delegation_ceiling = permission_snapshot(case.settings, set(BROWSER_TOOL_ACTIONS))

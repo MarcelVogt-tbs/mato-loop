@@ -11,7 +11,7 @@
         v-if="canEdit"
         color="primary" unelevated no-caps icon="save" label="Speichern"
         :loading="saving"
-        :disable="loading || !dirty"
+        :disable="loading || confirming || !dirty"
         @click="save"
       />
     </header>
@@ -40,6 +40,34 @@
 
     <q-form v-else-if="canEdit" ref="formRef" @submit.prevent="save">
       <PersonalSettingsGate v-if="admin && section === 'general'" v-model="form.personalSettingsEnabled" title="Tool-Rechte für persönliche Agentenprofile anpassen erlauben" description="Benutzer können die Tool-Rechte ihrer eigenen Profile frei anpassen." :disabled="saving || loading" />
+      <q-card v-if="admin && section === 'general'" flat class="app-surface q-mt-md">
+        <q-card-section class="row items-center q-gutter-md">
+          <q-avatar color="primary" text-color="white" icon="verified_user" />
+          <div class="col">
+            <div class="text-subtitle1 text-weight-bold">Freigabeverhalten</div>
+            <div class="text-caption app-muted">Lege fest, welche Aktionen der Agent standardmäßig automatisch ausführt und wann er um Erlaubnis fragt.</div>
+          </div>
+        </q-card-section>
+        <q-separator />
+        <q-card-section class="row no-wrap items-start q-gutter-sm">
+          <div class="col">
+            <div class="row q-col-gutter-md">
+              <div v-for="audience in audiences" :key="audience.value" :class="auth.modelTrustEnabled ? 'col-12 col-sm-6' : 'col-12'">
+                <AppSelect
+                  :model-value="selectedPresets[audience.value]" outlined stack-label emit-value map-options
+                  :label="audience.label" :aria-label="`${audience.label}: Freigabeverhalten`"
+                  :options="presetOptions.map(option => ({ ...option, caption: option.value === audience.default ? 'Vorgabe' : undefined }))"
+                  :disable="loading || saving || loadFailed || confirming"
+                  @update:model-value="selectPreset(audience.value, $event)"
+                >
+                  <template #selected><span class="ellipsis">{{ presetOptions.find(option => option.value === selectedPresets[audience.value])?.label || 'Individuell angepasst' }}</span></template>
+                </AppSelect>
+              </div>
+            </div>
+          </div>
+          <q-btn flat round dense icon="info_outline" aria-label="Freigabeverhalten erklärt (öffnet neuen Tab)" href="/docs/tools-und-integrationen/#globale-tool-vorgaben-anwenden" target="_blank" rel="noopener noreferrer" />
+        </q-card-section>
+      </q-card>
       <template v-if="showManagement">
       <q-banner v-if="!selectedId" rounded class="app-surface-tonal q-mb-md">
         Berechtigungen sind Defaults. Ein technisch nicht verfügbares Tool kann durch Overrides nicht aktiviert werden.
@@ -169,7 +197,7 @@ const agents = useAgentProfileStore()
 const route = useRoute()
 const tools = useToolSettingsStore()
 const selectedId = ref(route.query.profileId || null)
-const section = ref(route.query.profileId ? 'management' : 'general')
+const section = ref(route.query.profileId || route.query.tab === 'management' ? 'management' : 'general')
 const showManagement = computed(() => !admin || section.value === 'management')
 const permissionGroups = ref({ private: [], public: [] })
 const permissionsLoading = ref(false)
@@ -184,6 +212,24 @@ const formRef = ref(null)
 const saving = ref(false)
 const loadFailed = ref(false)
 const saved = ref('')
+const confirming = ref(false)
+const selectedPresets = ref({ private: null, public: null })
+const pendingPresets = ref({})
+const audiences = computed(() => auth.modelTrustEnabled
+  ? [{ value: 'private', label: 'Privat', default: 'ask_changes' }, { value: 'public', label: 'Öffentlich', default: 'ask_all' }]
+  : [{ value: 'private', label: 'Alle Modelle', default: 'ask_changes' }])
+const presetOptions = [
+  { value: 'ask_all', label: 'Alles bestätigen' },
+  { value: 'ask_changes', label: 'Änderungen bestätigen' },
+  { value: 'ask_delete_sensitive', label: 'Löschen und sensible Zugriffe bestätigen' },
+  { value: 'ask_sensitive', label: 'Nur sensible Zugriffe bestätigen' },
+  { value: 'auto_all', label: 'Alles automatisch ausführen' }
+]
+const requestedPresets = computed(() => Object.fromEntries(audiences.value.filter(audience => pendingPresets.value[audience.value]).map(audience => [audience.value, pendingPresets.value[audience.value]])))
+function selectPreset(trust, preset) {
+  selectedPresets.value[trust] = preset
+  pendingPresets.value[trust] = preset
+}
 const javascriptDialogOpen = ref(false)
 const javascriptDraft = ref({ enabled: true, hosts: '' })
 const shellDialogOpen = ref(false)
@@ -240,6 +286,7 @@ const payload = () => ({
   ...form.permissions,
   shellPrefixes: form.shellCustom ? { read: parsePrefixes(form.shellRead), write: parsePrefixes(form.shellWrite) } : null,
   ...(!selectedId.value ? {
+    ...(Object.keys(requestedPresets.value).length ? { toolPermissionPresets: requestedPresets.value } : {}),
     personalSettingsEnabled: form.personalSettingsEnabled,
     toolAvailability: Object.fromEntries(form.groups.flatMap((group) => group.tools.map((tool) => [tool.name, tool.available]))),
     webFetch: { ...form.webFetch, javascriptHosts: form.javascriptHostsText.split('\n').map((host) => host.trim()).filter(Boolean) },
@@ -276,7 +323,7 @@ function applyJavascript() {
 }
 
 async function load() {
-  if (route.query.profileId) section.value = 'management'
+  section.value = route.query.profileId || route.query.tab === 'management' ? 'management' : 'general'
   loadFailed.value = false
   selectedId.value = route.query.profileId || null
   try {
@@ -296,6 +343,8 @@ async function loadPermissions() {
   try {
     const data = selectedId.value ? await tools.fetchProfilePermissions(selectedId.value, admin ? 'instance' : 'personal') : await tools.fetchConfiguration()
     if (token !== loadToken) return
+    selectedPresets.value = { private: null, public: null, ...data.toolPermissionPresets }
+    pendingPresets.value = {}
     form.permissions = { privatePermissions: data.privatePermissions || emptyPermissions().privatePermissions, publicPermissions: data.publicPermissions || emptyPermissions().publicPermissions }
     permissionGroups.value = data.groupsByTrust || { private: data.privateGroups, public: data.publicGroups }
     const prefixes = data.shellPrefixes || data.inheritedShellPrefixes || { read: [], write: [] }
@@ -321,6 +370,10 @@ async function selectProfile(id) {
 }
 
 async function selectSection(value) {
+  if (value !== section.value && Object.keys(pendingPresets.value).length) {
+    if (!await confirmDiscardedChanges()) return
+    await loadPermissions()
+  }
   if (value === 'general' && selectedId.value) {
     if (!await confirmDiscardedChanges()) return
     selectedId.value = null
@@ -341,7 +394,15 @@ async function resetPermissions() {
 }
 
 async function save() {
+  if (loading.value || saving.value || loadFailed.value || confirming.value) return
   if (!await formRef.value?.validate()) return
+  if (!selectedId.value && Object.keys(requestedPresets.value).length) {
+    const labels = audiences.value.filter(audience => requestedPresets.value[audience.value]).map(audience => audience.label).join(' und ')
+    confirming.value = true
+    try {
+      if (!await confirm(`Die globalen Tool-Berechtigungen für ${labels} werden einschließlich Löschrechten und sensiblen Zugriffen gemäß Auswahl gesetzt. Manuelle Anpassungen dieser Standardwerte gehen verloren. Profil- und Integrationsregeln bleiben erhalten.`, 'Freigabeverhalten anwenden?', { okLabel: 'Anwenden' })) return
+    } finally { confirming.value = false }
+  }
   saving.value = true
   try {
     if (selectedId.value) await tools.saveProfilePermissions(selectedId.value, admin ? 'instance' : 'personal', payload())
@@ -357,7 +418,7 @@ async function save() {
 }
 
 async function confirmDiscardedChanges() {
-  if (saving.value) return false
+  if (saving.value || confirming.value) return false
   if (!dirty.value) return true
   return confirm(
     'Sollen die ungespeicherten Änderungen verworfen werden?',
@@ -367,6 +428,6 @@ async function confirmDiscardedChanges() {
 }
 
 onMounted(load)
-watch(() => [admin, route.query.profileId], load)
+watch(() => [admin, route.query.profileId, route.query.tab], load)
 onBeforeRouteLeave(confirmDiscardedChanges)
 </script>
