@@ -658,6 +658,7 @@ GENERATE_IMAGE = ToolDefinition(
                     "Bilder erzeugen",
                     ToolExecutionPolicy.AUTO,
                     ToolExecutionPolicy.AUTO,
+                    category="write",
                     mutates=True,
                 ),
             ),
@@ -682,6 +683,7 @@ EDIT_IMAGE = ToolDefinition(
                     "Bilder bearbeiten",
                     ToolExecutionPolicy.ASK,
                     ToolExecutionPolicy.ASK,
+                    category="write",
                     mutates=True,
                 ),
             ),
@@ -702,6 +704,7 @@ GENERATE_SPEECH = ToolDefinition(
                     "Sprache erzeugen",
                     ToolExecutionPolicy.ASK,
                     ToolExecutionPolicy.ASK,
+                    category="write",
                     mutates=True,
                 ),
             ),
@@ -722,6 +725,7 @@ GENERATE_AUDIO = ToolDefinition(
                     "Audio erzeugen",
                     ToolExecutionPolicy.ASK,
                     ToolExecutionPolicy.ASK,
+                    category="write",
                     mutates=True,
                 ),
             ),
@@ -743,6 +747,7 @@ TRANSCRIBE_AUDIO = ToolDefinition(
                     "Audio transkribieren",
                     ToolExecutionPolicy.ASK,
                     ToolExecutionPolicy.ASK,
+                    category="read",
                 ),
             ),
         )
@@ -767,6 +772,7 @@ ANALYZE_VIDEO = ToolDefinition(
                     "Videos analysieren",
                     ToolExecutionPolicy.ASK,
                     ToolExecutionPolicy.ASK,
+                    category="read",
                 ),
             ),
         )
@@ -787,5 +793,6 @@ ANALYZE_AUDIO = ToolDefinition(
     icon="audio_file",
     actions=(ToolAction(
         "media.analyze.audio", "Audio analysieren", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK,
+        category="read",
     ),),
 )

@@ -60,7 +60,7 @@
               <q-icon name="build" color="primary" size="sm" class="col-auto" />
               <div class="col">
                 <div class="text-subtitle1 text-weight-bold">Tool-Rechte</div>
-                <div class="text-body2 app-muted">{{ inheritedAccess ? `Vorgaben des Basisprofils „${accessProfileName}“.` : 'Berechtigungen und abweichende Regeln dieses Agenten.' }}</div>
+                <div class="text-body2 app-muted">Tool-Einstellungen und eigene Regeln dieses Agenten.</div>
               </div>
               <div class="col-12 col-sm-auto">
                 <q-btn flat no-caps color="primary" label="Tool-Rechte öffnen" :disable="!accessProfileId || agents.loading || agents.saving" :to="{ name: admin ? 'admin-tools' : 'settings-tools', query: { profileId: accessProfileId } }" />
@@ -117,9 +117,7 @@ const scope = computed(() => admin.value ? 'instance' : 'personal')
 const listRoute = computed(() => admin.value ? 'admin-agents' : 'settings-agents')
 const isCreate = computed(() => ['settings-agent-create', 'admin-agent-create'].includes(route.name))
 const isProtected = computed(() => editingAgent.value?.protected === true)
-const inheritedAccess = computed(() => admin.value && editingAgent.value && !isProtected.value)
-const accessProfileId = computed(() => inheritedAccess.value ? editingAgent.value.baseProfileId : editingAgent.value?.id)
-const accessProfileName = computed(() => agents.baseProfiles.find((profile) => profile.id === accessProfileId.value)?.name || 'Basisprofil')
+const accessProfileId = computed(() => editingAgent.value?.id)
 const accessProtected = computed(() => admin.value && !auth.isAdmin || isProtected.value)
 const blocked = computed(() => !admin.value && !auth.isAdmin && !agents.personalAgentsEnabled)
 const inheritOptions = [{ label: 'Erben', value: 'inherit' }, { label: 'Eigener Wert', value: 'own' }]

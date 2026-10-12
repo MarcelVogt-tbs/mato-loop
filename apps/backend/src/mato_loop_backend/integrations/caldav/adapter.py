@@ -60,12 +60,14 @@ _READ = ToolAction(
     "Kalender lesen",
     ToolExecutionPolicy.AUTO,
     ToolExecutionPolicy.ASK,
+    category="read",
 )
 _WRITE = ToolAction(
     "calendar.write",
     "Kalender ändern",
     ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
+    category="write",
     mutates=True,
 )
 _DELETE = ToolAction(
@@ -73,6 +75,7 @@ _DELETE = ToolAction(
     "Kalendereinträge löschen",
     ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
+    category="delete",
     mutates=True,
 )
 _TASKS_READ = ToolAction(
@@ -80,12 +83,14 @@ _TASKS_READ = ToolAction(
     "Aufgaben lesen",
     ToolExecutionPolicy.AUTO,
     ToolExecutionPolicy.ASK,
+    category="read",
 )
 _TASKS_WRITE = ToolAction(
     "tasks.write",
     "Aufgaben ändern",
     ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
+    category="write",
     mutates=True,
 )
 _TASKS_DELETE = ToolAction(
@@ -93,6 +98,7 @@ _TASKS_DELETE = ToolAction(
     "Aufgaben löschen",
     ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
+    category="delete",
     mutates=True,
 )
 _CALENDAR_CAPABILITIES = frozenset(

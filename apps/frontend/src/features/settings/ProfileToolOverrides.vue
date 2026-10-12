@@ -1,76 +1,61 @@
 <template>
   <div class="row items-center justify-end q-gutter-sm q-mb-md">
     <slot name="actions" />
-    <q-btn flat no-caps color="primary" icon="add" label="Override hinzufügen" :disable="disabled || (!availableActions.length && (!shellGroup || settings.shellCustom))" @click="edit()" />
+    <q-btn flat no-caps color="primary" icon="add" label="Eigene Regel hinzufügen" :disable="disabled || !availableActions.length" @click="edit()" />
   </div>
-  <q-card v-if="!overrides.length && !settings.shellCustom" flat class="app-surface q-mb-md">
-    <q-card-section class="app-muted">Keine eigenen Overrides. Es gelten die geerbten Vorgaben.</q-card-section>
+  <q-card v-if="!overrides.length" flat class="app-surface q-mb-md">
+    <q-card-section class="app-muted">Keine eigenen Regeln. Es gelten die Vorgaben.</q-card-section>
   </q-card>
-  <PermissionFields v-model="permissions" :groups-by-trust="groupsByTrust" :model-trust-enabled="modelTrustEnabled" overrides-only readonly :disabled="disabled" :setting-group-ids="settings.shellCustom && shellGroup ? [shellGroup.id] : []">
-    <template #action-controls="{ action }">
-      <div class="col-12 col-md-auto row justify-end no-wrap">
-        <q-btn flat round dense icon="edit" :aria-label="`${action.label} bearbeiten`" :disable="disabled" @click="edit(action.capability)" />
-        <q-btn flat round dense color="negative" icon="delete_outline" :aria-label="`${action.label} entfernen`" :disable="disabled" @click="remove(action.capability)" />
+  <PermissionFields v-model="permissions" :groups-by-trust="groupsByTrust" :model-trust-enabled="modelTrustEnabled" tool-hierarchy overrides-only readonly :disabled="disabled">
+    <template #policy="{ action, audience, toolName }">
+      <div class="text-caption app-muted">{{ audience.label }}</div>
+      <div class="row items-center no-wrap">
+        <template v-if="branch(audience.value).policies[action.capability] != null">
+          <div class="col">{{ labels[branch(audience.value).policies[action.capability]] }}</div>
+          <q-btn flat round dense icon="edit" :aria-label="`${action.label}: ${audience.label} bearbeiten`" :disable="disabled" @click="edit(action.capability, audience.value, toolName)" />
+          <q-btn flat round dense color="negative" icon="delete_outline" :aria-label="`${action.label}: ${audience.label} entfernen`" :disable="disabled" @click="remove(action.capability, audience)" />
+        </template>
+        <template v-else>
+          <div class="col app-muted">Keine eigene Regel</div>
+          <q-btn flat round dense icon="add" :aria-label="`${action.label}: ${audience.label} hinzufügen`" :disable="disabled" @click="edit(action.capability, audience.value, toolName)" />
+        </template>
       </div>
-    </template>
-    <template #group-settings="{ group }">
-      <template v-if="settings.shellCustom && group.id === shellGroup?.id">
-        <q-separator />
-        <q-card-section class="row items-center q-col-gutter-md">
-          <div class="col">
-            <div class="text-weight-medium">Shell-Präfixe</div>
-            <div class="text-caption app-muted">Eigene Werte</div>
-          </div>
-          <div class="col-auto row no-wrap">
-            <q-btn flat round dense icon="edit" aria-label="Shell-Präfixe bearbeiten" :disable="disabled" @click="edit(null, 'setting')" />
-            <q-btn flat round dense color="negative" icon="delete_outline" aria-label="Shell-Präfixe entfernen" :disable="disabled" @click="removeShellPrefixes" />
-          </div>
-        </q-card-section>
-      </template>
     </template>
   </PermissionFields>
 
   <q-dialog v-model="dialogOpen" :maximized="$q.screen.lt.sm" aria-labelledby="permission-override-title">
     <q-card class="app-surface column no-wrap full-width">
       <q-card-section class="row items-center">
-        <div id="permission-override-title" class="text-h6 col">{{ editing ? 'Override bearbeiten' : 'Override hinzufügen' }}</div>
+        <div id="permission-override-title" class="text-h6 col">Eigene Regel {{ editing ? 'bearbeiten' : 'hinzufügen' }}</div>
         <q-btn v-close-popup flat round dense icon="close" aria-label="Dialog schließen" />
       </q-card-section>
       <q-card-section class="col scroll q-gutter-md">
-        <AppSelect v-model="kind" outlined emit-value map-options label="Override-Art" :options="[{ label: 'Berechtigung', value: 'permission', disable: !editing && !availableActions.length }, { label: 'Einstellung', value: 'setting', disable: !shellGroup || (!editing && settings.shellCustom) }]" :disable="editing || disabled" />
-        <template v-if="kind === 'setting'">
-          <div class="text-subtitle2">Shell-Präfixe</div>
-          <ShellPrefixFields v-model="shellDraft" :allow-inheritance="editing" :disabled="disabled" />
-        </template>
-        <AppSelect v-else v-model="draft.capability" outlined emit-value map-options use-input :input-debounce="0" label="Aktion" :options="actionOptions" :disable="editing || disabled" @filter="filterActions" />
-        <template v-if="kind === 'permission' && draft.capability">
-          <AppSelect v-for="audience in audiences" :key="audience.value"
-            v-model="draft[audience.value]" outlined emit-value map-options :label="audience.label"
-            :options="policyOptions(audience.value)" :disable="disabled"
-            :hint="`Geerbte Vorgabe: ${labels[catalog[audience.value][draft.capability]?.policy] || 'Nicht verfügbar'}`" persistent-hint
-          />
+          <AppSelect :model-value="selectedTool" outlined emit-value map-options use-input :input-debounce="0" label="Tool oder Bereich" :options="toolOptions" :disable="editing || disabled" @filter="filterTools" @update:model-value="selectTool" />
+          <AppSelect v-if="selectedTool" v-model="draft.capability" outlined emit-value map-options label="Aktion" :options="actionOptions" :disable="editing || disabled" />
+          <div v-if="sharedAction" class="text-caption app-muted">Diese Regel gilt auch für weitere Tools, die dieselbe Aktion verwenden.</div>
+        <template v-if="draft.capability">
+          <AppSelect v-if="modelTrustEnabled" v-model="draft.trust" outlined emit-value map-options label="Modellbereich" :options="audiences.map(audience => ({ ...audience, disable: !editing && branch(audience.value).policies[draft.capability] != null }))" :disable="disabled || editing" />
+          <AppSelect v-model="draft.policy" outlined emit-value map-options label="Berechtigung" :options="policyOptions" :disable="disabled" />
         </template>
         <div class="text-caption app-muted">Mit „Übernehmen“ wird das Formular aktualisiert. Anschließend die Einstellungen auf der Seite speichern.</div>
       </q-card-section>
       <q-card-actions align="right">
         <q-btn v-close-popup flat no-caps label="Abbrechen" />
-        <q-btn unelevated no-caps color="primary" label="Übernehmen" :disable="disabled || (kind === 'permission' && !draft.capability)" @click="apply" />
+        <q-btn unelevated no-caps color="primary" label="Übernehmen" :disable="disabled || !draft.capability" @click="apply" />
       </q-card-actions>
     </q-card>
   </q-dialog>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
 import PermissionFields from './PermissionFields.vue'
-import ShellPrefixFields from './ShellPrefixFields.vue'
 import { useConfirm } from 'src/composables/confirm'
-import { policyOverride, setPolicyOverride } from 'src/utils/agent-permissions'
+import { setPolicyOverride } from 'src/utils/agent-permissions'
 
 const permissions = defineModel({ type: Object, required: true })
-const settings = defineModel('settings', { type: Object, required: true })
 const props = defineProps({ groupsByTrust: { type: Object, required: true }, modelTrustEnabled: { type: Boolean, default: true }, disabled: Boolean })
 const $q = useQuasar()
 const { confirm } = useConfirm()
@@ -84,62 +69,67 @@ const catalog = computed(() => Object.fromEntries(['private', 'public'].map((tru
   for (const group of props.groupsByTrust[trust] || []) {
     for (const action of [
       ...(group.actions || []),
-      ...(group.tools || []).flatMap((tool) => (tool.actions || []).map((action) => ({ ...action, label: `${tool.label}: ${action.label}` })))
+      ...(group.tools || []).flatMap(tool => tool.actions || [])
     ]) {
       if (action.configurable === false || actions[action.capability]) continue
-      actions[action.capability] = action
+      actions[action.capability] = { ...action, label: `${group.label}: ${action.label}` }
     }
   }
   return [trust, actions]
 })))
 const actionLabel = (capability) => catalog.value.private[capability]?.label || capability
 const overrides = computed(() => [...new Set(audiences.value.flatMap(({ value }) => Object.keys(branch(value).policies)))])
-const availableActions = computed(() => Object.values(catalog.value.private).filter((action) => !overrides.value.includes(action.capability)))
-const shellGroup = computed(() => (props.groupsByTrust.private || []).find((group) =>
-  (group.tools || []).some((tool) => tool.name === 'shell_run') || (group.actions || []).some((action) => action.capability === 'shell.read')))
+const availableActions = computed(() => Object.values(catalog.value.private).filter(action => audiences.value.some(({ value }) => branch(value).policies[action.capability] == null)))
 const dialogOpen = ref(false)
 const editing = ref(false)
-const kind = ref('permission')
-const shellDraft = ref({ shellCustom: true, shellRead: '', shellWrite: '' })
 const search = ref('')
-const draft = ref({ capability: null, private: 'inherit', public: 'inherit' })
-const actionOptions = computed(() => (editing.value ? Object.values(catalog.value.private) : availableActions.value)
-  .filter((action) => `${action.label} ${action.capability}`.toLocaleLowerCase().includes(search.value.toLocaleLowerCase()))
-  .map((action) => ({ label: action.label, value: action.capability, caption: action.capability })))
+const selectedTool = ref(null)
+const draft = ref({ capability: null, trust: 'private', policy: 'ask' })
+const toolEntries = computed(() => (props.groupsByTrust.private || []).flatMap(group => [
+  { value: `group:${group.id}`, label: `${group.label}: Zusatzrechte`, caption: group.label, actions: group.actions || [] },
+  ...(group.tools || []).map(tool => ({ value: tool.name, label: tool.label, caption: group.label, actions: tool.actions || [] }))
+]).map(tool => ({ ...tool, actions: tool.actions.filter(action => action.configurable !== false) })).filter(tool => tool.actions.length))
+const canAdd = action => availableActions.value.some(item => item.capability === action.capability)
+const toolOptions = computed(() => toolEntries.value.filter(tool => (editing.value || tool.actions.some(canAdd)) && `${tool.label} ${tool.caption} ${tool.value}`.toLocaleLowerCase().includes(search.value.toLocaleLowerCase())))
+const actionOptions = computed(() => (toolEntries.value.find(tool => tool.value === selectedTool.value)?.actions || [])
+  .filter(action => editing.value || canAdd(action))
+  .map(action => ({ label: action.label, value: action.capability, caption: action.capability })))
+const sharedAction = computed(() => Boolean(draft.value.capability) && (props.groupsByTrust.private || []).flatMap(group => group.tools || []).filter(tool => tool.actions?.some(action => action.capability === draft.value.capability)).length > 1)
 
-function filterActions(value, update) {
+function filterTools(value, update) {
   update(() => { search.value = value })
 }
 
-function policyOptions(trust) {
-  return [
-    { label: 'Vorgabe übernehmen', value: 'inherit' },
-    ...(catalog.value[trust][draft.value.capability]?.allowedPolicies || ['disabled', 'ask', 'auto']).map((value) => ({ label: labels[value], value }))
-  ]
+function selectTool(value) {
+  selectedTool.value = value
+  draft.value.capability = actionOptions.value.length === 1 ? actionOptions.value[0].value : null
 }
 
-function edit(capability = null, type = 'permission') {
+const policyOptions = computed(() => (catalog.value[draft.value.trust][draft.value.capability]?.allowedPolicies || ['disabled', 'ask', 'auto']).map(value => ({ label: labels[value], value })))
+
+function edit(capability = null, trust = 'private', toolName = null) {
   search.value = ''
-  editing.value = Boolean(capability) || type === 'setting'
-  kind.value = !editing.value && !availableActions.value.length ? 'setting' : type
-  shellDraft.value = { shellCustom: true, shellRead: settings.value.shellRead, shellWrite: settings.value.shellWrite }
-  draft.value = { capability, ...Object.fromEntries(audiences.value.map(({ value }) => [value, policyOverride(branch(value).policies, [capability])])) }
+  editing.value = branch(trust).policies[capability] != null
+  selectedTool.value = toolName || toolEntries.value.find(tool => tool.actions.some(action => action.capability === capability))?.value || null
+  draft.value = { capability, trust, policy: branch(trust).policies[capability] || catalog.value[trust][capability]?.policy || 'ask' }
   dialogOpen.value = true
 }
 
 function apply() {
-  if (kind.value === 'setting') Object.assign(settings.value, shellDraft.value)
-  else for (const { value } of audiences.value) setPolicyOverride(branch(value).policies, [draft.value.capability], draft.value[value])
+  setPolicyOverride(branch(draft.value.trust).policies, [draft.value.capability], draft.value.policy)
   dialogOpen.value = false
 }
 
-async function removeShellPrefixes() {
-  if (!await confirm('Eigene Shell-Präfixe entfernen und die Vorgabe wieder übernehmen?', 'Override entfernen?', { okLabel: 'Entfernen' })) return
-  settings.value.shellCustom = false
+async function remove(capability, audience) {
+  if (!await confirm(`Eigene Regel „${actionLabel(capability)}“ für „${audience.label}“ entfernen? Danach gilt wieder die geerbte Vorgabe.`, 'Eigene Regel entfernen?', { okLabel: 'Entfernen' })) return
+  setPolicyOverride(branch(audience.value).policies, [capability], 'inherit')
 }
 
-async function remove(capability) {
-  if (!await confirm(`Override „${actionLabel(capability)}“ entfernen? Für die angezeigten Modellbereiche gelten danach wieder die geerbten Vorgaben.`, 'Override entfernen?', { okLabel: 'Entfernen' })) return
-  for (const { value } of audiences.value) setPolicyOverride(branch(value).policies, [capability], 'inherit')
-}
+watch(() => [draft.value.capability, draft.value.trust], ([capability, trust]) => {
+  if (!capability) return
+  if (!editing.value && branch(trust).policies[capability] != null) {
+    draft.value.trust = audiences.value.find(({ value }) => branch(value).policies[capability] == null)?.value || trust
+  }
+  draft.value.policy = branch(draft.value.trust).policies[capability] || catalog.value[draft.value.trust][capability]?.policy || 'ask'
+})
 </script>

@@ -26,8 +26,9 @@ from mato_loop_backend.settings import IntegrationInstance, ToolExecutionPolicy
 from mato_loop_backend.tools.actions import ToolAction
 
 MCP_CREDENTIAL_KIND = "mcp.bearer"
+# shortcut: remote operations share one write category; split them before per-tool category defaults.
 MCP_ACTION = ToolAction(
-    "mcp.call", "MCP-Tool aufrufen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK
+    "mcp.call", "MCP-Tool aufrufen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="write"
 )
 MAX_MCP_SCHEMA_BYTES = 64 * 1024
 MAX_MCP_SCHEMA_DEPTH = 64

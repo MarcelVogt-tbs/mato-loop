@@ -199,7 +199,7 @@ async def _profile_from_request(
         raise ApiError(422, "validation.invalidChoice", field="baseProfileId")
     overrides = payload.overrides
     # Profile-content updates preserve permissions edited through the tool settings API.
-    permission_fields = {"private_permissions", "public_permissions", "shell_prefixes", "integrations_enabled_by_default"}
+    permission_fields = {"private_permissions", "public_permissions", "shell_prefixes", "tool_availability", "integrations_enabled_by_default"}
     if permission_fields & overrides.model_fields_set:
         raise ApiError(422, "tools.usePermissionSettings", field="overrides")
     values = overrides.model_dump(exclude_unset=True)

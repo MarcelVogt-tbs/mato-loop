@@ -147,6 +147,28 @@ async def _successful_handler(_arguments, _context) -> ToolResult:
     return ToolResult.json({"ok": True})
 
 
+@pytest.mark.parametrize("category", [{}, {"category": "unknown"}])
+def test_tool_action_requires_an_explicit_valid_category(category):
+    with pytest.raises((TypeError, ValueError), match="category"):
+        ToolAction("example.read", "Lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, **category)
+
+
+@pytest.mark.parametrize("contributed", [False, True])
+def test_tool_registry_rejects_conflicting_categories(monkeypatch, contributed):
+    read = ToolAction("example.shared", "Aktion", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="read")
+    write = ToolAction("example.shared", "Aktion", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="write")
+    if not contributed:
+        with pytest.raises(ValueError, match="conflicting categories"):
+            ToolRegistry([], group_actions={"example": (read, write)})
+    else:
+        registry = ToolRegistry([], group_actions={"example": (read,)})
+        monkeypatch.setattr(mock_tools_catalog, "effective_integration_contributions", lambda _: IntegrationContributions(tools=(
+            ToolContribution(name="example", description="Example", arguments_model=_EmptyArguments, handler=_successful_handler, actions=(write,)),
+        )))
+        with pytest.raises(ValueError, match="conflicting categories"):
+            registry.policy_actions(IntegrationSettings())
+
+
 async def test_sqlalchemy_tool_errors_reach_runtime_rollback() -> None:
     async def handler(_arguments, _context):
         raise SQLAlchemyError("database failed")
@@ -564,6 +586,7 @@ def _shared_adapter(
         "Aufgaben lesen",
         ToolExecutionPolicy.ASK,
         ToolExecutionPolicy.ASK,
+        category="read",
     )
 
     async def resources(_instance, _credential):
@@ -930,6 +953,7 @@ async def test_bound_integration_tool_rechecks_source_after_approval(
                 "Integration verwenden",
                 ToolExecutionPolicy.ASK,
                 ToolExecutionPolicy.ASK,
+                category="write",
             ),
         ),
         integration_id=str(integration.id),
@@ -1076,7 +1100,7 @@ async def test_aggregate_shared_tool_binds_all_current_instances(
     tmp_path, monkeypatch
 ) -> None:
     action = ToolAction(
-        "tasks.read", "Aufgaben lesen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK
+        "tasks.read", "Aufgaben lesen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="read"
     )
 
     async def handler(_arguments, context):
@@ -1185,10 +1209,10 @@ async def test_contributed_authorization_must_cover_every_declared_action(
         handler=_successful_handler,
         actions=(
             ToolAction(
-                "integration.read", "Lesen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK
+                "integration.read", "Lesen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="read"
             ),
             ToolAction(
-                "integration.write", "Schreiben", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK
+                "integration.write", "Schreiben", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="write"
             ),
         ),
         integration_id=str(integration.id),
@@ -1221,6 +1245,7 @@ async def test_resource_policy_disabled_blocks_contributed_tool_effect(
         "Lesen",
         ToolExecutionPolicy.ASK,
         ToolExecutionPolicy.ASK,
+        category="read",
     )
     request = PermissionRequest(
         capability=action.capability,
@@ -1437,7 +1462,7 @@ def test_tool_catalog_exposes_types_but_model_schemas_do_not() -> None:
     assert working_directory["actions"] == [{
         "capability": "working_directory.external",
         "label": "Zugriff außerhalb des Arbeitsverzeichnisses",
-        "policy": "ask",
+        "policy": "auto",
         "configurable": True,
         "allowedPolicies": ["disabled", "ask", "auto"],
         "available": True,
@@ -1874,9 +1899,12 @@ def test_policy_disabled_integration_tool_points_to_integration_settings(monkeyp
 
 
 @pytest.mark.parametrize("trust", list(TrustLevel))
-async def test_session_file_operations_only_ask_for_deletion(tmp_path, trust) -> None:
+async def test_session_file_operations_follow_delete_confirmation_preset(tmp_path, trust) -> None:
     context = _context(tmp_path, ToolCall("setup", "write_file", {}))
-    context.tool_settings = ToolSettings().select_trust(trust)
+    context.tool_settings = ToolSettings(
+        private_permission_preset="ask_delete",
+        public_permission_preset="ask_delete",
+    ).select_trust(trust)
     context.model_trust_level = trust
     context.db.scalar.return_value = None
     context.db.scalars.return_value = Mock(all=Mock(return_value=[]))
@@ -1926,6 +1954,29 @@ async def test_session_file_operations_only_ask_for_deletion(tmp_path, trust) ->
         ] * (2 if name in {"copy_path", "move_path"} else 1)
 
     assert context.root_files.read_file("session", "output/moved.txt").content == "1: after"
+
+
+async def test_disabling_tool_during_approval_prevents_file_write(tmp_path, monkeypatch):
+    from mato_loop_backend.agent.runtime import AgentRuntime
+
+    call = ToolCall("write", "write_file", {"root": "files", "path": "blocked.txt", "content": "blocked"})
+    context = _context(tmp_path, call)
+    context.db.scalar.return_value = None
+    context.db.scalars.return_value = Mock(all=Mock(return_value=[]))
+    current = ToolSettings()
+    monkeypatch.setattr("mato_loop_backend.agent.runtime.load_agent_profile_tools", AsyncMock(return_value=(current, None)))
+    monkeypatch.setattr("mato_loop_backend.agent.runtime.load_effective_integrations", AsyncMock(return_value=context.integration_settings))
+
+    async def approve(*_args, **_kwargs):
+        current.tool_availability["write_file"] = False
+        return "allow_once"
+
+    approval = AsyncMock(side_effect=approve)
+    monkeypatch.setattr(AgentRuntime, "_request_approval", approval)
+    run = AgentRun(id=context.run_id, session_id=context.session.id, trust_level="private")
+    context.ask_handler = lambda request: AgentRuntime._authorize(context.db, run, context.session, call, request, context.root_files)
+    result = await tool_registry.effective(context.integration_settings, tool_settings=context.tool_settings).execute(call, context)
+    assert (approval.await_count, result.metadata.get("errorCode"), (context.root_files.resolve("session", ".") / "blocked.txt").exists()) == (1, "permission.denied", False)
 
 
 @pytest.mark.parametrize("name", ["copy_path", "move_path"])

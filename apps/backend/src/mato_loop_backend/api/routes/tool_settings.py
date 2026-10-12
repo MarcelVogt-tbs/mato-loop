@@ -2,7 +2,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictBool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
@@ -27,18 +27,22 @@ from mato_loop_backend.settings.models import (
     AgentProfileAccessOverrides,
     AgentProfileOverrides,
     AgentProfilePermissions,
-    AgentProfilesSettings,
     ShellPrefixSettings,
-    TrustLevel,
-)
-from mato_loop_backend.settings.tool_presets import (
     ToolPermissionPreset,
-    tool_permission_presets,
-    tool_preset_policies,
+    TrustLevel,
 )
 from mato_loop_backend.tools.catalog import tool_registry
 
 router = APIRouter(prefix="/tools", dependencies=[Depends(require_user)])
+MEDIA_FIELDS = {
+    "generate_image": "generateImage", "edit_image": "editImage", "generate_speech": "generateSpeech",
+    "generate_audio": "generateAudio", "transcribe_audio": "transcribeAudio",
+    "analyze_video": "analyzeVideo", "analyze_audio": "analyzeAudio",
+}
+WEB_FIELDS = {
+    "javascript_enabled": "javascriptEnabled", "javascript_hosts": "javascriptHosts", "user_agent": "userAgent",
+    "max_response_mib": "maxResponseMiB", "public_addresses_only": "publicAddressesOnly",
+}
 
 
 class MediaTimeoutRequest(BaseModel):
@@ -60,7 +64,7 @@ class ToolConfigurationRequest(BaseModel):
     shell_prefixes: ShellPrefixSettings = Field(default_factory=ShellPrefixSettings, alias="shellPrefixes")
     tool_permission_presets: dict[TrustLevel, ToolPermissionPreset] = Field(default_factory=dict, alias="toolPermissionPresets")
 
-    tool_availability: dict[str, bool] = Field(
+    tool_availability: dict[str, StrictBool] = Field(
         validation_alias=AliasChoices("toolAvailability", "tool_availability")
     )
     web_fetch: WebFetchSettings = Field(
@@ -104,28 +108,16 @@ def tool_configuration_payload(settings: ToolSettings) -> dict:
             tool["available"] = settings.tool_availability.get(tool["name"], True)
     return {
         "personalSettingsEnabled": settings.personal_settings_enabled,
-        "toolPermissionPresets": tool_permission_presets(settings),
+        "toolPermissionPresets": {trust.value: getattr(settings, f"{trust.value}_permission_preset") for trust in TrustLevel},
         "privatePermissions": _tool_permissions_payload(settings.private_permissions, tool_registry.catalog(defaults, IntegrationSettings())),
         "publicPermissions": _tool_permissions_payload(settings.public_permissions, tool_registry.catalog(defaults, IntegrationSettings())),
         "shellPrefixes": settings.shell_prefixes.model_dump(),
+        "webFetch": {alias: getattr(settings.web_fetch, field) for field, alias in WEB_FIELDS.items()},
+        **{alias: {"timeoutSeconds": getattr(settings, field).timeout_seconds} for field, alias in MEDIA_FIELDS.items()},
         "privateGroups": tool_registry.catalog(defaults.model_copy(deep=True).select_trust(TrustLevel.PRIVATE), IntegrationSettings()),
         "publicGroups": tool_registry.catalog(defaults.model_copy(deep=True).select_trust(TrustLevel.PUBLIC), IntegrationSettings()),
         "groups": groups,
         "toolAvailability": settings.tool_availability,
-        "webFetch": {
-            "javascriptEnabled": settings.web_fetch.javascript_enabled,
-            "javascriptHosts": settings.web_fetch.javascript_hosts,
-            "userAgent": settings.web_fetch.user_agent,
-            "maxResponseMiB": settings.web_fetch.max_response_mib,
-            "publicAddressesOnly": settings.web_fetch.public_addresses_only,
-        },
-        "generateImage": {"timeoutSeconds": settings.generate_image.timeout_seconds},
-        "editImage": {"timeoutSeconds": settings.edit_image.timeout_seconds},
-        "generateSpeech": {"timeoutSeconds": settings.generate_speech.timeout_seconds},
-        "generateAudio": {"timeoutSeconds": settings.generate_audio.timeout_seconds},
-        "transcribeAudio": {"timeoutSeconds": settings.transcribe_audio.timeout_seconds},
-        "analyzeVideo": {"timeoutSeconds": settings.analyze_video.timeout_seconds},
-        "analyzeAudio": {"timeoutSeconds": settings.analyze_audio.timeout_seconds},
     }
 
 
@@ -163,19 +155,24 @@ async def update_tool_configuration(
 ) -> dict:
     if not user.is_admin:
         raise ApiError(403, "auth.adminRequired")
-    if payload.tool_permission_presets:
-        general = await SettingsStore.load(db, GeneralSettings, for_update=True)
-        if not general.model_trust_enabled and TrustLevel.PUBLIC in payload.tool_permission_presets:
-            raise ApiError(422, "validation.invalidChoice", field="toolPermissionPresets")
+    general = await SettingsStore.load(db, GeneralSettings, for_update=True) if payload.tool_permission_presets else None
     settings = await SettingsStore.load(db, ToolSettings, for_update=True)
+    if general is not None and not general.model_trust_enabled and payload.tool_permission_presets.get(TrustLevel.PUBLIC, settings.public_permission_preset) != settings.public_permission_preset:
+        raise ApiError(422, "validation.invalidChoice", field="toolPermissionPresets")
     known_tools = {
         tool["name"]
         for group in tool_registry.catalog(settings, IntegrationSettings())
         for tool in group["tools"]
     }
-    if set(payload.tool_availability) - known_tools:
+    if any(
+        settings.tool_availability.get(name) != payload.tool_availability[name]
+        for name in payload.tool_availability.keys() - known_tools
+    ):
         raise ApiError(422, "validation.invalidChoice", field="toolAvailability")
-    settings.tool_availability = dict(payload.tool_availability)
+    settings.tool_availability = {
+        **{name: value for name, value in settings.tool_availability.items() if name not in known_tools},
+        **payload.tool_availability,
+    }
     for field in ("private_permissions", "public_permissions"):
         if field in payload.model_fields_set:
             value = getattr(payload, field)
@@ -185,20 +182,10 @@ async def update_tool_configuration(
         if field in payload.model_fields_set:
             setattr(settings, field, getattr(payload, field))
     settings.web_fetch = payload.web_fetch
-    for field_name in (
-        "generate_image",
-        "edit_image",
-        "generate_speech",
-        "generate_audio",
-        "transcribe_audio",
-        "analyze_video",
-        "analyze_audio",
-    ):
-        getattr(settings, field_name).timeout_seconds = getattr(
-            payload, field_name
-        ).timeout_seconds
+    for field in MEDIA_FIELDS:
+        getattr(settings, field).timeout_seconds = getattr(payload, field).timeout_seconds
     for trust, preset in payload.tool_permission_presets.items():
-        getattr(settings, f"{trust.value}_permissions").policies.update(tool_preset_policies(preset))
+        setattr(settings, f"{trust.value}_permission_preset", preset)
     await SettingsStore.save(db, settings)
     await db.commit()
     return tool_configuration_payload(settings)
@@ -210,6 +197,7 @@ class ProfileToolPermissionsRequest(BaseModel):
     private_permissions: AgentProfilePermissions = Field(default_factory=AgentProfilePermissions, alias="privatePermissions")
     public_permissions: AgentProfilePermissions = Field(default_factory=AgentProfilePermissions, alias="publicPermissions")
     shell_prefixes: ShellPrefixSettings | None = Field(default=None, alias="shellPrefixes")
+    tool_availability: dict[str, StrictBool] = Field(default_factory=dict, alias="toolAvailability")
 
 
 async def _profile_permissions(db, user, profile_id, scope, *, for_update=False):
@@ -218,11 +206,16 @@ async def _profile_permissions(db, user, profile_id, scope, *, for_update=False)
     for trust in TrustLevel:
         copy = tools.model_copy(deep=True).select_trust(trust)
         copy._agent_permissions = getattr(baseline, f"{trust.value}_permissions")
+        for name, available in {**baseline.tool_availability, **(overrides.tool_availability or {})}.items():
+            copy.tool_availability[name] = tools.tool_availability.get(name, True) and available
         groups[trust.value] = tool_registry.catalog(copy, IntegrationSettings())
     payload = {
         "groupsByTrust": groups,
         "shellPrefixes": overrides.shell_prefixes.model_dump() if overrides.shell_prefixes is not None else None,
         "inheritedShellPrefixes": (baseline.shell_prefixes if baseline._shell_prefixes_configured else tools.shell_prefixes).model_dump(),
+        "toolAvailability": overrides.tool_availability or {},
+        "globalToolAvailability": tools.tool_availability,
+        "inheritedToolAvailability": {**tools.tool_availability, **{name: tools.tool_availability.get(name, True) and available for name, available in baseline.tool_availability.items()}},
         **{f"{trust.value}Permissions": _tool_permissions_payload(getattr(overrides, f"{trust.value}_permissions") or AgentProfilePermissions(), groups[trust.value]) for trust in TrustLevel},
     }
     return settings, owner_id, overrides, payload
@@ -250,15 +243,25 @@ async def update_profile_tool_permissions(
     values = overrides.model_dump(exclude_unset=True)
     for trust in TrustLevel:
         field = f"{trust.value}_permissions"
+        if field not in payload.model_fields_set:
+            continue
         branch = getattr(payload, field)
         _validate_permissions(branch, _catalog_policies(current["groupsByTrust"][trust.value]), field)
         values.pop(field, None)
         if branch.policies:
             values[field] = branch.model_dump()
-    values.pop("shell_prefixes", None)
-    if payload.shell_prefixes is not None:
-        values["shell_prefixes"] = payload.shell_prefixes.model_dump()
-    if isinstance(settings, AgentProfilesSettings):
+    if "shell_prefixes" in payload.model_fields_set:
+        values.pop("shell_prefixes", None)
+        if payload.shell_prefixes is not None:
+            values["shell_prefixes"] = payload.shell_prefixes.model_dump()
+    if "tool_availability" in payload.model_fields_set:
+        known = {tool["name"] for group in current["groupsByTrust"]["private"] for tool in group["tools"]}
+        if payload.tool_availability.keys() - known:
+            raise ApiError(422, "validation.invalidChoice", field="toolAvailability")
+        values.pop("tool_availability", None)
+        if payload.tool_availability:
+            values["tool_availability"] = payload.tool_availability
+    if isinstance(overrides, AgentProfileAccessOverrides):
         settings.builtin_access_overrides[profile_id] = AgentProfileAccessOverrides.model_validate(values)
     else:
         next(item for item in settings.profiles if item.id == profile_id).overrides = AgentProfileOverrides.model_validate(values)

@@ -46,8 +46,6 @@ async def _load_profile_access(db, user, profile_id, scope, *, for_update=False)
         stored = next((item for item in settings.profiles if item.id == profile_id), None)
         if stored is None:
             raise ApiError(404, "agentProfile.notFound")
-        if owner_id is None:
-            raise ApiError(409, "agentProfile.defaultProtected")
         overrides = stored.overrides
         profiles = await load_effective_agent_profiles(db, user.id, include_personal=False, include_integrations=False)
         baseline = next(item for item in profiles.profiles if item.id == stored.base_profile_id)

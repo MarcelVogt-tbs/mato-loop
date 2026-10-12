@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Annotated, Any, ClassVar, Self
+from typing import Annotated, Any, ClassVar, Literal, Self
 from unicodedata import category as unicode_category
 from uuid import UUID, uuid4
 
@@ -100,6 +100,8 @@ class MemoryPolicy(StrEnum):
 class TrustLevel(StrEnum):
     PUBLIC = "public"
     PRIVATE = "private"
+
+ToolPermissionPreset = Literal["ask_all", "ask_changes_sensitive", "ask_changes", "ask_delete", "auto_all"]
 
 
 class ToolExecutionPolicy(StrEnum):
@@ -198,6 +200,7 @@ class AgentProfileAccessOverrides(BaseModel):
     private_permissions: AgentProfilePermissions | None = None
     public_permissions: AgentProfilePermissions | None = None
     shell_prefixes: ShellPrefixSettings | None = None
+    tool_availability: dict[str, StrictBool] | None = None
 
     @model_validator(mode="after")
     def reject_null_overrides(self) -> Self:
@@ -246,6 +249,7 @@ class AgentProfile(BaseModel):
         default_factory=AgentProfilePermissions
     )
     shell_prefixes: ShellPrefixSettings = Field(default_factory=ShellPrefixSettings)
+    tool_availability: dict[str, StrictBool] = Field(default_factory=dict)
     delegation_enabled: StrictBool = False
     session_write_paths: list[str] | None = None
     base_profile_id: UUID | None = Field(default=None, exclude=True)
@@ -299,6 +303,7 @@ class AgentProfileOverrides(BaseModel):
     private_permissions: AgentProfilePermissions | None = None
     public_permissions: AgentProfilePermissions | None = None
     shell_prefixes: ShellPrefixSettings | None = None
+    tool_availability: dict[str, StrictBool] | None = None
     delegation_enabled: StrictBool | None = None
     session_write_paths: list[str] | None = None
 
@@ -385,6 +390,8 @@ def apply_profile_overrides(
     for field in ("private_permissions", "public_permissions"):
         if field in overrides.model_fields_set:
             values[field] = getattr(base, field).merged(getattr(overrides, field)).model_dump()
+    if overrides.tool_availability is not None:
+        values["tool_availability"] = {**base.tool_availability, **overrides.tool_availability}
     result = AgentProfile.model_validate(values)
     result._shell_prefixes_configured = base._shell_prefixes_configured or "shell_prefixes" in overrides.model_fields_set
     return result
@@ -554,7 +561,7 @@ def cap_agent_profile_policy(
         return ToolExecutionPolicy.DISABLED
     if permissions is None:
         return baseline
-    profile_policy = permissions.policies.get(capability) if integration_id is None or settings._legacy_integration_permissions else None
+    profile_policy = permissions.policies.get(capability) if integration_id is None else None
     if integration_id is None and profile_policy is None and capability == "session.files.read":
         profile_policy = permissions.policies.get("filesystem.read")
     if integration_id is not None:
@@ -1001,8 +1008,10 @@ class ToolSettings(IntegrationToolSettings):
     settings_key = "tools"
 
     personal_settings_enabled: bool = False
+    private_permission_preset: ToolPermissionPreset = "ask_changes"
+    public_permission_preset: ToolPermissionPreset = "ask_all"
 
-    _legacy_integration_permissions: bool = PrivateAttr(default=False)
+    _frozen_action_defaults: dict[str, ToolExecutionPolicy] | None = PrivateAttr(default=None)
     _agent_profile: AgentProfile | None = PrivateAttr(default=None)
     _delegation_ceiling: dict[str, Any] | None = PrivateAttr(default=None)
     _agent_permissions: AgentProfilePermissions | None = PrivateAttr(default=None)

@@ -53,7 +53,7 @@ async def test_setup_locks_before_check_and_creates_first_admin(monkeypatch) -> 
     assert events == ["lock", "count", "agent-profiles", "tools", "commit"]
     save.assert_any_await(db, AgentProfilesSettings())
     tools = save.await_args_list[1].args[1]
-    assert (tools.private_permissions.policies["filesystem.read"], tools.private_permissions.policies["filesystem.write"], tools.public_permissions.policies["filesystem.read"], tools.private_permissions.policies["sensitive_data.access"]) == ("auto", "ask", "ask", "ask")
+    assert (tools.private_permission_preset, tools.public_permission_preset, tools.private_permissions.policies, tools.public_permissions.policies) == ("ask_changes", "ask_all", {}, {})
     assert user.username == "admin"
     assert user.is_admin and user.is_active
     assert result["isAdmin"] is True

@@ -1156,6 +1156,7 @@ async def test_runtime_uses_bound_integration_resource_policy(
                     "Suchen",
                     ToolExecutionPolicy.AUTO,
                     ToolExecutionPolicy.AUTO,
+                    category="read",
                 ),
             )
         ),
@@ -1318,6 +1319,7 @@ def test_integration_policy_precedence_and_hard_limits() -> None:
         "Aufgaben lesen",
         ToolExecutionPolicy.AUTO,
         ToolExecutionPolicy.ASK,
+        category="read",
     )
     settings = _tool_settings(
         {
@@ -1386,6 +1388,7 @@ def test_integration_policy_precedence_and_hard_limits() -> None:
         "Aufgaben löschen",
         ToolExecutionPolicy.ASK,
         ToolExecutionPolicy.ASK,
+        category="delete",
     )
     settings.permissions.policies[restricted.capability] = ToolExecutionPolicy.AUTO
     automatic = resolve_tool_execution_policy(
@@ -1649,7 +1652,7 @@ async def test_parent_can_read_only_its_own_child_sessions(tmp_path):
     assert await PermissionPolicy.evaluate(db, parent, session_permission(child.id), roots, ToolExecutionPolicy.AUTO) == PermissionDecision.DENY
 
 
-@pytest.mark.parametrize("layer", ["default", "global", "integration", "resource", "profile"])
+@pytest.mark.parametrize("layer", ["default", "integration", "resource", "profile"])
 async def test_child_integration_ceiling_cannot_widen_ask_to_auto(tmp_path, monkeypatch, layer):
     integration = IntegrationInstance(name="Calendar", integration_type="calendar", adapter_type="caldav",
                                       config={"base_url": "https://example.org", "username": "private-user"},
@@ -1657,9 +1660,7 @@ async def test_child_integration_ceiling_cannot_widen_ask_to_auto(tmp_path, monk
     integrations = IntegrationSettings(instances=[integration])
     settings = ToolSettings().select_trust(TrustLevel.PUBLIC)
     capability = "calendar.read"
-    if layer == "global":
-        settings.permissions.policies[capability] = ToolExecutionPolicy.ASK
-    elif layer == "integration":
+    if layer == "integration":
         settings.permissions.integration_policies[str(integration.id)] = {capability: ToolExecutionPolicy.ASK}
     elif layer == "resource":
         settings.permissions.resource_policies[str(integration.id)] = {"calendar:test": {capability: ToolExecutionPolicy.ASK}}
@@ -1671,12 +1672,10 @@ async def test_child_integration_ceiling_cannot_widen_ask_to_auto(tmp_path, monk
         else ToolExecutionPolicy.AUTO
     )
     actions = Mock(
-        return_value=(ToolAction(capability, "Read", default, default),)
+        return_value=(ToolAction(capability, "Read", default, default, category="read"),)
     )
     monkeypatch.setattr(tool_registry, "integration_resource_actions", actions)
     snapshot = permission_snapshot(settings, {"calendar_query_events"}, integrations)
-    if layer == "global":
-        snapshot.pop("permissionVersion")  # Legacy children retain their former global ceiling.
     assert "private-user" not in str(snapshot) and str(integration.credential_id) not in str(snapshot)
     parent = _session(user_id=uuid4())
     child = _session(user_id=parent.user_id, parent_session_id=parent.id)
@@ -1690,6 +1689,7 @@ async def test_child_integration_ceiling_cannot_widen_ask_to_auto(tmp_path, monk
             "Read",
             ToolExecutionPolicy.AUTO,
             ToolExecutionPolicy.AUTO,
+            category="read",
         ),
     )
     _mock_value = AsyncMock(return_value=(ToolSettings().select_trust(TrustLevel.PUBLIC), None))
@@ -1740,7 +1740,7 @@ def test_external_working_directory_delegation_ceiling(current, offered) -> None
     )
 
 
-def test_legacy_delegation_ceiling_disables_external_working_directory() -> None:
+def test_missing_delegated_capability_disables_external_working_directory() -> None:
     settings = ToolSettings().select_trust(TrustLevel.PUBLIC)
     snapshot = permission_snapshot(settings, {"change_directory"})
     snapshot["actionDefaults"].pop("working_directory.external")

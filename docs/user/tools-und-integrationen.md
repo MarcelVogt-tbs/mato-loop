@@ -10,58 +10,62 @@ Das globale Freigabeverhalten und eingebaute Profil-Presets konfigurieren Admini
 
 Hostseitige Sicherheitsgrenzen gelten auch bei **Automatisch** weiterhin.
 
-Computerwechsel, das Löschen von Session-Dateien und E-Mail-Senden/-Löschen folgen den konfigurierten Aktionsrechten. Unter **Dateisystem** steuert **Vertrauliche Pfade und mögliche Secret-Ausgabe** zusätzlich Zugriffe auf erkannte geschützte Computerpfade sowie Shell-Befehle, die Zugangsdaten ausgeben könnten. Die Vorgabe ist für beide Modellklassen **Nachfragen**, mit Zustimmung für die konkrete Aktion. **Deaktiviert** blockiert solche Zugriffe; **Automatisch** hebt nur diese zusätzliche Nachfrage auf. Aktionsrechte, Außenordnerrechte und technische Grenzen gelten weiter.
+Computerwechsel, das Löschen von Session-Dateien und E-Mail-Senden/-Löschen folgen den konfigurierten Aktionsrechten. Unter **Dateisystem** steuert **Vertrauliche Pfade und mögliche Secret-Ausgabe** zusätzlich Zugriffe auf erkannte geschützte Computerpfade sowie Shell-Befehle, die Zugangsdaten ausgeben könnten. Das Verhalten folgt dem Freigabeverhalten beziehungsweise einer eigenen Aktionsregel. **Nachfragen** verlangt Zustimmung für die konkrete Aktion. **Deaktiviert** blockiert solche Zugriffe; **Automatisch** hebt nur diese zusätzliche Nachfrage auf. Aktionsrechte, Außenordnerrechte und technische Grenzen gelten weiter.
 
-**Allgemein**, **Plan**, **Build** und **Sysadmin** haben geschützte Arbeitsabläufe und editierbare Tool-Presets. Eigene Profile erben eine Basis. Mindestens ein globales Profil muss aktiv bleiben. Für eigene Tool-Overrides müssen gewöhnlichen Benutzern persönliche Profile und Tool-Anpassungen erlaubt sein; Administratoren behalten ihre Ausnahme. Deaktivierte Overrides bleiben gespeichert, werden aber ignoriert. Technische Grenzen gelten unabhängig von dieser Erlaubnis.
+**Allgemein**, **Plan**, **Build** und **Sysadmin** sind mitgelieferte Profile mit geschützten Namen und Arbeitsabläufen. Administratoren können deren Tool-Einstellungen, Aktionsrechte und Integrationsvorgabe instanzweit durch eigene Werte anpassen. Entfernen eines eigenen Wertes stellt die mitgelieferte Vorgabe wieder her. Normale Benutzer können Built-in-Profile nicht direkt anpassen; sie erstellen bei Bedarf ein persönliches Profil auf dieser Basis. Dafür müssen persönliche Profile und Tool-Anpassungen erlaubt sein; Administratoren behalten ihre Ausnahme. Bei abgeschalteter Erlaubnis bleiben persönliche Werte gespeichert, werden aber ignoriert. Mindestens ein globales Profil muss aktiv bleiben.
 
-Neue Chats verwenden den Startagenten ihrer Sessionvorlage. Plan blockiert erkannte Computer-Schreibaktionen, Build erlaubt sie automatisch, Sysadmin fragt. **Zugriff außerhalb des Arbeitsverzeichnisses** betrifft Dateien und erkannte Shell-Ziele: Plan/Build fragen, Sysadmin erlaubt gewöhnliche Lesezugriffe. Administratoren können Presets ändern oder über den Papierkorb **Alle Overrides löschen** links neben **Override hinzufügen** wiederherstellen. Nach Bestätigung werden die Berechtigungs- und Einstellungs-Overrides des Profils einschließlich öffentlicher Werte sofort gelöscht. Ohne vorhandene Overrides ist der Papierkorb deaktiviert. Historische Sessions bleiben bei deaktiviertem Profil lesbar, benötigen aber für neue Läufe ein aktives Profil. Abschaltungen, Remote-ACLs, Pfad-, Eigentümer- und Delegationsgrenzen bleiben bindend.
+Neue Chats verwenden den Startagenten ihrer Sessionvorlage. Plan blockiert erkannte Computer-Schreibaktionen, Build erlaubt sie automatisch, Sysadmin fragt. **Zugriff außerhalb des Arbeitsverzeichnisses** betrifft Dateien und erkannte Shell-Ziele: Plan/Build fragen, Sysadmin erlaubt gewöhnliche Lesezugriffe. Bei eigenen Profilen entfernt **Alle eigenen Regeln entfernen** nach Bestätigung die Aktionsregeln einschließlich öffentlicher Werte aus dem Formular. Tool-Einstellungen bleiben erhalten. Erst **Speichern** übernimmt die Änderung dauerhaft. Historische Sessions bleiben bei deaktiviertem Profil lesbar, benötigen aber für neue Läufe ein aktives Profil. Abschaltungen, Remote-ACLs, Pfad-, Eigentümer- und Delegationsgrenzen bleiben bindend.
 
-Unter **Administration > Tools > Einstellungen** steht die Freigabe persönlicher Tool-Rechte. **Verwaltung** zeigt beim **Globalen Standard** die bisherigen Berechtigungstabellen mit toolspezifischer Konfiguration oberhalb der zugehörigen Zeilen: Webfetch-Parameter beim Webabruf, Zeitlimits bei den Medien-Tools und Shell-Präfixe beim Shell-Tool. Die Verfügbarkeit steht weiterhin in der separaten Tool-Liste darunter. Bei einem gewählten Agentenprofil erscheinen dieselben Gruppen und Tabellen, beschränkt auf selbst konfigurierte Abweichungen. **Override hinzufügen** bietet die Auswahl **Berechtigung** oder **Einstellung**. Berechtigungen wählen Sie über die suchbare Aktionsauswahl mit geerbter Vorgabe; als Einstellungs-Override sind Shell-Präfixe verfügbar. Bearbeiten und Entfernen erfolgen an der jeweiligen Zeile. Ohne Override gilt beim eingebauten Profil die mitgelieferte Vorgabe, beim persönlichen Profil das Basisprofil. **Vorgabe übernehmen** oder Entfernen stellt diese Vererbung wieder her. Beim Bearbeiten einzelner Overrides bleiben ausgeblendete öffentliche Werte bei ausgeschalteter Modelltrennung erhalten. **Übernehmen** aktualisiert das Seitenformular; erst **Speichern** speichert dauerhaft. Persönliche Tools zeigen nur eigene Profile.
+**Administration > Tools** hat drei Tabs: **Einstellungen**, **Tool-Einstellungen** und **Berechtigungen**. Unter **Einstellungen** steht zuerst das Freigabeverhalten, danach die Freigabe persönlicher Tool-Anpassungen. Die beiden anderen Tabs verwenden dieselbe Profilauswahl; Auswahl und Formularentwurf bleiben beim Wechsel erhalten. **Berechtigungen** zeigt nur eigene Aktionsregeln, auch bei administrativen Anpassungen der mitgelieferten Profile, gegliedert nach **Toolgruppe > Tool > Aktion**. Gruppenweite Zusatzrechte stehen direkt unter der Gruppe. Gemeinsame Aktionen erscheinen bei allen zugehörigen Tools; Bearbeiten oder Entfernen ändert dieselbe Regel überall.
+
+**Eigene Regel hinzufügen** öffnet zuerst die suchbare Auswahl **Tool oder Bereich**, mit der Toolgruppe als Zusatzangabe. Danach wählen Sie eine Aktion dieses Tools; eine einzige verfügbare Aktion wird vorausgewählt. Gruppenweite Rechte finden Sie unter **Zusatzrechte** der jeweiligen Gruppe. Der Dialog weist auf gemeinsam verwendete Aktionen hin. Bei aktiver Modelltrennung wählen Sie den Modellbereich und anschließend einen konkreten Wert: **Automatisch**, **Nachfragen** oder **Deaktiviert**. Bearbeiten und Entfernen erfolgen je Modellbereich an der jeweiligen Zeile. Entfernen stellt die Vererbung vom Freigabeverhalten beziehungsweise Basisprofil wieder her. **Keine eigene Regel** kennzeichnet einen erbenden Modellbereich. Technische Sperren werden gesondert angezeigt. Ausgeblendete öffentliche Werte bleiben bei ausgeschalteter Modelltrennung erhalten. **Übernehmen** aktualisiert das Seitenformular; erst **Speichern** speichert dauerhaft. Persönliche Tools zeigen nur eigene Profile.
+
+**Tool-Einstellungen > Globaler Standard** zeigt alle Tools nach Toolgruppen mit Ein-/Aus-Schalter. Bei eingeschalteten Tools stehen darunter ihre technischen Einstellungen: Webfetch-Parameter, Medienzeitlimits und Shell-Präfixe. Ausschalten blendet die Einstellungen aus, erhält aber deren Werte und die Aktionsregeln.
+
+Bei einem **Agentenprofil** zeigt dieser Tab nur ausdrücklich konfigurierte Einstellungen. **Eigene Einstellung hinzufügen** bietet Tool-Verfügbarkeit und beim Shell-Tool eigene Shell-Präfixe. Ein Profil kann ein global verfügbares Tool ein- oder ausschalten, auch abweichend von seiner Vorgabe. **Global deaktiviert** bleibt bindend und kann nicht durch das Profil aufgehoben werden. Bearbeiten ändert den eigenen Wert; Entfernen stellt die Vererbung wieder her. Zeitlimits und Webfetch-Parameter bleiben global. Einschalten eines Tools erteilt keine zusätzlichen Aktionsrechte: Ein Plan-Profil mit gesperrten Schreibaktionen erhält dadurch keine Schreibrechte.
 
 Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte oder wegen Profilrechten, Modellwahl oder fehlender Integration nicht aufrufbare Fähigkeiten erscheinen für den Agenten lediglich als kompakter Hinweis. Dieser Hinweis kann weder eine Aktion noch eine Freigabe auslösen.
 
 ### Freigabeverhalten {#globale-tool-vorgaben-anwenden}
 
-**Administration > Tools > Einstellungen > Freigabeverhalten** legt fest, welche Aktionen der Agent standardmäßig automatisch ausführt und wann er um Erlaubnis fragt. Die Auswahl setzt vorhandene globale Tool-Berechtigungen gesammelt. **Grundeinstellungen** enthält einen gleich benannten direkten Link zu diesem Tab.
+**Administration > Tools > Einstellungen > Freigabeverhalten** legt fest, welche Aktionen der Agent standardmäßig automatisch ausführt und wann er um Erlaubnis fragt. Die Auswahl wird als Grundstandard gespeichert; eigene Aktionsregeln haben Vorrang. **Grundeinstellungen** enthält einen gleich benannten direkten Link zu diesem Tab.
 
 - **Privat / Öffentlich:** getrennte Dropdowns bei aktiver Modelltrennung.
 - **Alle Modelle:** bearbeitet bei ausgeschalteter Modelltrennung die privaten Werte. Öffentliche Werte bleiben gespeichert.
 - **Info-Symbol:** öffnet diesen Abschnitt in einem neuen Tab; der Formularentwurf bleibt erhalten.
-- **Individuell angepasst:** Die aktuellen globalen Einzelregeln entsprechen keiner Vorlage. Dieser Text ist eine Zustandsanzeige, keine zusätzliche Vorlage.
+- Der gewählte Grundstandard bleibt auch mit eigenen Regeln sichtbar.
 
 #### Welche Auswahl passt?
 
-| Vorlage | Lesen | Ändern | Löschen | Sensible Zugriffe |
+| Grundstandard | Normales Lesen | Sensibles Lesen | Schreiben | Löschen |
 | --- | --- | --- | --- | --- |
 | Alles bestätigen | Nachfragen | Nachfragen | Nachfragen | Nachfragen |
-| Änderungen bestätigen | Automatisch | Nachfragen | Nachfragen | Nachfragen |
-| Löschen und sensible Zugriffe bestätigen | Automatisch | Automatisch | Nachfragen | Nachfragen |
-| Nur sensible Zugriffe bestätigen | Automatisch | Automatisch | Automatisch | Nachfragen |
+| Änderungen und sensible Zugriffe bestätigen | Automatisch | Nachfragen | Nachfragen | Nachfragen |
+| Änderungen bestätigen | Automatisch | Automatisch | Nachfragen | Nachfragen |
+| Nur Löschen bestätigen | Automatisch | Automatisch | Automatisch | Nachfragen |
 | Alles automatisch ausführen | Automatisch | Automatisch | Automatisch | Automatisch |
 
 - **Vorgabe privat:** Änderungen bestätigen.
 - **Vorgabe öffentlich:** Alles bestätigen.
-- Diese Vorgaben gelten für neue Installationen. Bestehende Installationen werden nicht automatisch umgestellt.
+- **Änderungen bestätigen** erlaubt auch sensibles Lesen automatisch, fragt aber vor Schreiben und Löschen. Speziellere Kombinationen lassen sich über eigene Aktionsregeln festlegen.
+- Beim Update bleiben ausdrücklich gespeicherte globale Aktionsregeln erhalten. Frühere implizite Tool-Defaults werden nicht als eigene Regeln nachgebaut; ohne eigene Regel gilt das neue Freigabeverhalten.
 
 #### Was bedeuten die Kategorien?
 
 - **Lesen:** beispielsweise Dateien lesen oder Informationen suchen.
-- **Ändern:** beispielsweise Dateien schreiben oder Automationen bearbeiten.
+- **Ändern:** beispielsweise Dateien schreiben, Automationen bearbeiten oder Secrets speichern.
 - **Löschen:** ausdrücklich ausgewiesene Löschrechte für Dateien und Automationen.
-- **Sensible Zugriffe:** erkannte vertrauliche Dateien wie `.env`, mögliche Secret-Ausgaben sowie Variablen/Secrets verwenden oder speichern. Diese Kategorie gilt auch dann, wenn die Aktion nur liest oder etwas schreibt.
+- **Sensibles Lesen:** erkannte vertrauliche Dateien wie `.env`, mögliche Secret-Ausgaben sowie Variablen/Secrets abrufen oder verwenden. Das Speichern von Secrets zählt dagegen zu **Ändern**.
 
-#### Vorlage anwenden
+#### Grundstandard ändern
 
-1. Die gewünschte Vorlage im jeweiligen Dropdown auswählen. **Vorgabe** kennzeichnet die Ausgangseinstellung.
+1. Den gewünschten Grundstandard im jeweiligen Dropdown auswählen. **Vorgabe** kennzeichnet die Ausgangseinstellung.
 2. **Speichern** anklicken.
-3. Das Ersetzen der globalen Toolregeln bestätigen. **Abbrechen** speichert nichts.
 
-- Geändert werden nur ausdrücklich ausgewählte Modellbereiche.
-- Die Vorlage setzt auch Löschrechte und sensible Zugriffe gemäß Tabelle. Manuelle Anpassungen dieser globalen Regeln werden überschrieben.
-- Profil- und Integrations-Overrides, Shell-Präfixe und die technische Tool-Verfügbarkeit bleiben erhalten.
-- Speichern ohne erneute Auswahl wendet keine Vorlage an.
-- Beim Tabwechsel mit einer noch nicht angewendeten Vorlage können Sie den Entwurf ausdrücklich verwerfen oder abbrechen und zuerst speichern.
-- Es werden konkrete Berechtigungen gespeichert, kein zusätzlicher Automatikmodus.
+- Vorhandene eigene Aktionsregeln bleiben erhalten. Der neue Grundstandard gilt dort, wo keine eigene Regel gesetzt ist, auch für neu hinzukommende eingebaute Aktionen.
+- Zum Wiederherstellen der Vererbung entfernen Sie die jeweilige eigene Regel unter **Berechtigungen**.
+- Profil- und Integrationsregeln, Shell-Präfixe und technische Tool-Verfügbarkeit bleiben erhalten.
+- Beim Tabwechsel mit ungespeicherten Änderungen können Sie den Entwurf verwerfen oder abbrechen und zuerst speichern.
 
 #### Geltungsbereich und Grenzen
 
@@ -69,6 +73,7 @@ Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte od
 - Technische Sperren und die für eine Aktion zulässigen Berechtigungswerte gelten weiterhin.
 - Ein automatisch erlaubter Shell-Befehl kann löschen. Die Kategorie **Löschen** erfasst keine beliebigen Löschwirkungen innerhalb anderer Aktionen.
 - Die Erkennung sensibler Dateien und Ausgaben ist nicht vollständig; sie erkennt nicht jede vertrauliche Information.
+- Einzelne bestehende Aktionen bündeln noch mehrere Vorgänge: etwa Erinnerungen speichern/vergessen oder persönliche Einstellungen ändern/löschen. Das Leeren einer Datei gilt derzeit ebenfalls noch als Schreiben. Die Kategorien ersetzen diese aufrufabhängigen Prüfungen nicht; der Schutz vertraulicher Pfade greift weiterhin auch bei Dateiänderungen.
 
 Eigene direkte Oberflächeaktionen verwenden keine Modell-Freigabekarte, etwa in **Ablage**, **Computer-Dateien** oder bei einer Mikrofonaufnahme. Ihre Eigentümer- und technischen Grenzen gelten weiter.
 
@@ -124,7 +129,7 @@ Unter Linux können nur geprüfte statische Ausgaben auf das echte `/dev/null` u
 
 Aktualisieren Sie Backend und MatoLoop Agent gemeinsam, damit diese Shell-Semantik übereinstimmt. Protokollversion 1 erhält die zusätzlichen Zielarten und Fehler ohne Shell-bezogene Datenbankmigration. Ältere Agents bleiben konservativ; das Backend deutet deren Schreibeinstufung nicht als Lesen um. Historische Freigabetexte werden nicht umgeschrieben. Alte pauschale Bereichs- und computerweite Administratorrechte sind inaktiv; neue Datei- und Shell-Freigaben verwenden [exakte Ressourcen](freigaben-und-datenfreigabe.md).
 
-Shell-Präfixe konfigurieren Sie beim globalen Standard unter **Tools > Verwaltung** über **Shell-Präfixe konfigurieren**, getrennt für Lesen/Schreiben mit einem Tokenpräfix pro Zeile. Bei Agentenprofilen legen Sie sie über **Override hinzufügen > Einstellung** an. Nur eigene Präfixe erscheinen dort als Eintrag; ohne Eintrag gelten die geerbten Werte. Eine ausdrücklich leere eigene Liste bedeutet hingegen, keine Präfixe zu verwenden. **Abbrechen** oder Schließen verwirft den Dialogentwurf; **Übernehmen** aktualisiert das Formular. Erst **Speichern** auf der Seite speichert die Einstellungen dauerhaft. Jeder Teilbefehl muss passen. Präfixe können eine Aktionsrückfrage ersetzen, keine Abschaltung, Außenordner-, Shellzonen-, Deny- oder konfigurierte Rechte für vertrauliche Daten.
+Globale Shell-Präfixe konfigurieren Sie unter **Tools > Tool-Einstellungen > Globaler Standard** beim eingeschalteten Shell-Tool über **Shell-Präfixe konfigurieren**, getrennt für Lesen/Schreiben mit einem Tokenpräfix pro Zeile. Bei eigenen Agentenprofilen legen Sie sie im selben Tab über **Eigene Einstellung hinzufügen** an. Ohne eigenen Eintrag gelten die geerbten Werte. Eine ausdrücklich leere eigene Liste bedeutet hingegen, keine Präfixe zu verwenden. **Abbrechen** oder Schließen verwirft den Dialogentwurf; **Übernehmen** aktualisiert das Formular. Erst **Speichern** auf der Seite speichert die Einstellungen dauerhaft. Jeder Teilbefehl muss passen. Präfixe können eine Aktionsrückfrage ersetzen, keine Abschaltung, Außenordner-, Shellzonen-, Deny- oder konfigurierte Rechte für vertrauliche Daten.
 
 Git-Aktionen verwenden Shell-Befehle auf dem gewählten, verbundenen Computer mit installiertem Git. Es gibt keine eigene Git-Integration, Git-Konfigurationsseite oder Clone-Funktion im Backend. Git-Befehle des Modells folgen den Profilrechten, Präfixlisten, Session-Freigaben und harten Grenzen der Shell; automatisch erlaubte Befehle benötigen keine einzelne Freigabe. Konfigurieren Sie Git und die Anmeldung auf diesem Computer. Bestehende Installationen müssen die [Hinweise zur Bereinigung nach dem Upgrade](betrieb-und-datensicherung.md#removed-git-integration) beachten.
 
@@ -237,7 +242,7 @@ CAD-Rendering startet mit **Nachfragen**; die Verbindung kann automatisch erlaub
 
 ## Webfetch konfigurieren
 
-Unter **Administration > Tools > Verwaltung > Globaler Standard** konfigurieren Administratoren beim Webabruf User-Agent, Antwortgröße und **Nur öffentliche Adressen zulassen**, ohne Engineauswahl. **Websites mit automatischem JavaScript** enthält einen exakten DNS-Hostnamen pro Zeile, ohne URL, IP-Adresse, Port oder Platzhalter; Vorgabe sind `reddit.com` und `www.reddit.com`. Es sind höchstens 100 Einträge erlaubt. Großschreibung, abschließende Punkte und doppelte Einträge werden beim Speichern normalisiert. Subdomains müssen separat eingetragen werden. Eine leere Liste verwendet standardmäßig HTTP; bei aktiviertem JavaScript kann das Modell die Auswahl weiterhin ausdrücklich ändern. Die Liste wird nicht automatisch gelernt. Kein Modus braucht einen Computer. Der Standard-User-Agent ist `MatoLoop/1.0`; JavaScript-HTML lehnt Werte mit `Mozilla` ab. Die aktive Adressbeschränkung gilt auch für JavaScript-Unteranfragen; Abschalten erlaubt jedes vom Backend erreichbare HTTP(S)-Ziel. Große Ergebnisse bleiben hinter einem abrufbaren Ergebnisverweis vollständig gespeichert.
+Unter **Administration > Tools > Tool-Einstellungen > Globaler Standard** konfigurieren Administratoren beim eingeschalteten Webabruf User-Agent, Antwortgröße und **Nur öffentliche Adressen zulassen**, ohne Engineauswahl. **Websites mit automatischem JavaScript** enthält einen exakten DNS-Hostnamen pro Zeile, ohne URL, IP-Adresse, Port oder Platzhalter; Vorgabe sind `reddit.com` und `www.reddit.com`. Es sind höchstens 100 Einträge erlaubt. Großschreibung, abschließende Punkte und doppelte Einträge werden beim Speichern normalisiert. Subdomains müssen separat eingetragen werden. Eine leere Liste verwendet standardmäßig HTTP; bei aktiviertem JavaScript kann das Modell die Auswahl weiterhin ausdrücklich ändern. Die Liste wird nicht automatisch gelernt. Kein Modus braucht einen Computer. Der Standard-User-Agent ist `MatoLoop/1.0`; JavaScript-HTML lehnt Werte mit `Mozilla` ab. Die aktive Adressbeschränkung gilt auch für JavaScript-Unteranfragen; Abschalten erlaubt jedes vom Backend erreichbare HTTP(S)-Ziel. Große Ergebnisse bleiben hinter einem abrufbaren Ergebnisverweis vollständig gespeichert.
 
 **JavaScript-Konfiguration** neben **Nur öffentliche Adressen zulassen** öffnet den Dialog. **JavaScript aktivieren** ist standardmäßig eingeschaltet. Ausschalten sperrt JavaScript für Webfetch vollständig, auch bei einer ausdrücklichen Modellanforderung. Die Hostliste wird ausgeblendet, bleibt aber gespeichert. Einschalten zeigt das Formular wieder. Die Liste steuert die automatische Auswahl und beschränkt nicht die erlaubten Websites. **Abbrechen** oder Schließen verwirft den Dialogentwurf; **Übernehmen** aktualisiert das Formular. Erst **Speichern** auf der Seite speichert die Einstellungen dauerhaft.
 

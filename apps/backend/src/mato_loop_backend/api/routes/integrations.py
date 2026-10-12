@@ -117,7 +117,6 @@ from mato_loop_backend.settings.effective import (
 from mato_loop_backend.settings.models import (
     AgentProfileAccessOverrides,
     AgentProfileOverrides,
-    AgentProfilesSettings,
     IntegrationPermissions,
     TrustLevel,
 )
@@ -1753,7 +1752,7 @@ async def update_profile_integration_availability(
     values = overrides.model_dump(exclude_unset=True, exclude={"integrations_enabled_by_default"})
     if payload.integrations_enabled_by_default is not None:
         values["integrations_enabled_by_default"] = payload.integrations_enabled_by_default
-    if isinstance(settings, AgentProfilesSettings):
+    if isinstance(overrides, AgentProfileAccessOverrides):
         settings.builtin_access_overrides[profile_id] = AgentProfileAccessOverrides.model_validate(values)
     else:
         next(item for item in settings.profiles if item.id == profile_id).overrides = AgentProfileOverrides.model_validate(values)

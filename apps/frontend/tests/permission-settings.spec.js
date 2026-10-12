@@ -22,10 +22,11 @@ import { useExecutionAgentStore } from '../src/stores/execution-agents'
 
 let app, root
 const builtinId = '00000000-0000-4000-8000-000000000001'
+const ownId = '00000000-0000-4000-8000-000000000005'
 const branch = () => ({ policies: {}, integrationPolicies: {}, resourcePolicies: {} })
 const rights = () => ({ privatePermissions: branch(), publicPermissions: branch() })
 const action = (capability) => ({ capability, label: 'Schreiben', policy: 'ask', effectiveIntegrationPolicy: 'ask', configurable: true, allowedPolicies: ['disabled', 'ask', 'auto'] })
-const groups = (capability) => Object.fromEntries(['private', 'public'].map((trust) => [trust, [{ id: 'test', label: 'Rechte', actions: [action(capability)], tools: [] }]]))
+const groups = (capability, toolName) => Object.fromEntries(['private', 'public'].map((trust) => [trust, [{ id: 'test', label: 'Rechte', actions: toolName ? [] : [action(capability)], tools: toolName ? [{ name: toolName, label: 'Shell', actions: [action(capability)] }] : [] }]]))
 
 async function mount(Page, props, path, name, pinia = createPinia()) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/tools', name: 'settings-tools', component: Page }, { path: '/admin/tools', name: 'admin-tools', component: Page }, { path: '/admin/providers', name: 'admin-providers', component: { render: () => null } }, { path: '/integrations/:integrationId/resources', name: 'settings-integration-resources', component: Page }, { path: '/integrations', name: 'settings-integrations', component: { render: () => null } }] })
@@ -56,10 +57,11 @@ it('saves only the public address from basic settings and links to provider and 
   await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/general-settings', { publicBaseUrl: null }))
 })
 
-it.each([true, false])('confirms visible tool presets and does not reapply them on ordinary saves (model distinction: %s)', async (modelTrustEnabled) => {
+it.each([true, false])('saves the base behavior while retaining visible global overrides (model distinction: %s)', async (modelTrustEnabled) => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
-  let current = { ...rights(), personalSettingsEnabled: false, groups: [], privateGroups: [], publicGroups: [], shellPrefixes: { read: [], write: [] }, webFetch: { userAgent: 'MatoLoop/1.0' }, toolPermissionPresets: { private: null, public: 'ask_all' } }
-  const chosen = { private: 'ask_delete_sensitive', ...(modelTrustEnabled ? { public: 'ask_sensitive' } : {}) }
+  const catalog = [{ id: 'processes', label: 'Prozesse', tools: ['Shell', 'Terminal'].map(label => ({ name: label, label, actions: [action('shell.write')] })) }]
+  let current = { ...rights(), privatePermissions: { ...branch(), policies: { 'shell.write': 'disabled' } }, publicPermissions: { ...branch(), policies: { 'shell.write': 'auto' } }, personalSettingsEnabled: false, groups: [], privateGroups: catalog, publicGroups: catalog, shellPrefixes: { read: [], write: [] }, webFetch: { userAgent: 'MatoLoop/1.0' }, toolPermissionPresets: { private: 'ask_changes', public: 'ask_all' } }
+  const chosen = { private: 'ask_delete', ...(modelTrustEnabled ? { public: 'ask_changes_sensitive' } : {}) }
   api.get.mockImplementation(async url => ({ data: url === '/agent-profiles' ? { agents: [], effectiveAgents: [] } : current }))
   api.put.mockImplementation(async (_url, payload) => {
     current = { ...current, ...payload, toolPermissionPresets: { ...current.toolPermissionPresets, ...payload.toolPermissionPresets } }
@@ -67,7 +69,8 @@ it.each([true, false])('confirms visible tool presets and does not reapply them 
   })
   const pinia = createPinia()
   useAuthStore(pinia).modelTrustEnabled = modelTrustEnabled
-  await mount(ToolPage, { admin: true }, '/admin/tools?tab=general', 'admin-tools', pinia)
+  const { page } = await mount(ToolPage, { admin: true }, '/admin/tools?tab=general', 'admin-tools', pinia)
+  await vi.waitUntil(() => page().saved && !page().loading)
   const choose = async (label, option) => {
     const select = await vi.waitUntil(() => root.querySelector(`[aria-label="${label}: Freigabeverhalten"]:not([aria-disabled="true"])`))
     select.click()
@@ -75,15 +78,10 @@ it.each([true, false])('confirms visible tool presets and does not reapply them 
     item.click()
     await vi.waitUntil(() => !document.querySelector('[role="option"]'))
   }
-  await vi.waitFor(() => expect(root.textContent).toContain('Individuell angepasst'))
+  await vi.waitFor(() => expect(root.textContent).toContain('Änderungen bestätigen'))
   expect(root.querySelector('a[aria-label="Freigabeverhalten erklärt (öffnet neuen Tab)"]').getAttribute('href')).toBe('/docs/tools-und-integrationen/#globale-tool-vorgaben-anwenden')
-  await choose(modelTrustEnabled ? 'Privat' : 'Alle Modelle', 'Löschen und sensible Zugriffe bestätigen')
-  if (modelTrustEnabled) await choose('Öffentlich', 'Nur sensible Zugriffe bestätigen')
-  confirm.mockResolvedValueOnce(false)
-  root.querySelector('button').click()
-  await vi.waitFor(() => expect(confirm).toHaveBeenCalledOnce())
-  expect(api.put).not.toHaveBeenCalled()
-  await nextTick()
+  await choose(modelTrustEnabled ? 'Privat' : 'Alle Modelle', 'Nur Löschen bestätigen')
+  if (modelTrustEnabled) await choose('Öffentlich', 'Änderungen und sensible Zugriffe bestätigen')
   root.querySelector('button').click()
   await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/tools/configuration', expect.objectContaining({ toolPermissionPresets: chosen })))
   const gate = await vi.waitUntil(() => root.querySelector('[aria-label="Tool-Rechte für persönliche Agentenprofile anpassen erlauben"]:not(.disabled)'))
@@ -91,21 +89,33 @@ it.each([true, false])('confirms visible tool presets and does not reapply them 
   await vi.waitUntil(() => !root.querySelector('button').disabled)
   root.querySelector('button').click()
   await vi.waitFor(() => expect(api.put).toHaveBeenCalledTimes(2))
-  expect(api.put.mock.lastCall[1]).not.toHaveProperty('toolPermissionPresets')
+  expect(api.put.mock.lastCall[1].toolPermissionPresets).toEqual(chosen)
+  expect(api.put.mock.lastCall[1].privatePermissions.policies).toEqual({ 'shell.write': 'disabled' })
+  await vi.waitUntil(() => !root.querySelector('.q-btn--loading'))
+  ;[...root.querySelectorAll('[role="tab"]')].find(tab => tab.textContent.includes('Berechtigungen')).click()
+  await vi.waitFor(() => expect([...root.querySelectorAll('.text-subtitle2')].map(item => item.textContent)).toEqual(['Shell', 'Terminal']))
+  expect(root.textContent).not.toContain('Wirksam:')
+  root.querySelector(`[aria-label="Schreiben: ${modelTrustEnabled ? 'Private Modelle' : 'Alle Modelle'} entfernen"]`).click()
+  await vi.waitFor(() => expect(page().payload()).toEqual(expect.objectContaining({
+    privatePermissions: expect.objectContaining({ policies: {} }),
+    publicPermissions: expect.objectContaining({ policies: { 'shell.write': 'auto' } })
+  })))
+  expect(root.querySelectorAll('[aria-label$="entfernen"]')).toHaveLength(modelTrustEnabled ? 2 : 0)
 })
 
-it('edits only owned profile tool rights in settings, including for an admin', async () => {
+it.each([true, false])('selects a tool and its action for owned profile rules (single action: %s)', async (singleAction) => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+  const catalog = [{ id: 'processes', label: 'Prozesse', tools: [{ name: 'shell_run', label: 'Shell-Befehl ausführen', actions: [...(singleAction ? [] : [{ ...action('shell.read'), label: 'Lesen' }]), action('shell.write')] }] }]
   api.get.mockImplementation(async (url) => ({ data: url === '/agent-profiles' ? {
     personalAgentsEnabled: false, personalToolPermissionsEnabled: false,
     agents: [{ id: builtinId, name: 'Allgemein', scope: 'instance', protected: true }, { id: 'mine', name: 'Mein Agent', scope: 'personal' }],
     effectiveAgents: [],
-  } : { ...rights(), publicPermissions: { ...branch(), policies: { 'shell.write': 'disabled' } }, groupsByTrust: groups('shell.write'), shellPrefixes: null, inheritedShellPrefixes: { read: [], write: [] } } }))
+  } : { ...rights(), publicPermissions: { ...branch(), policies: { 'shell.write': 'disabled' } }, groupsByTrust: { private: catalog, public: catalog }, shellPrefixes: null, inheritedShellPrefixes: { read: [], write: [] } } }))
   api.put.mockResolvedValue({ data: {} })
   const pinia = createPinia()
   useAuthStore(pinia).isAdmin = true
   useAuthStore(pinia).modelTrustEnabled = false
-  const { page } = await mount(ToolPage, {}, '/tools', 'settings-tools', pinia)
+  const { page } = await mount(ToolPage, {}, '/tools?tab=management', 'settings-tools', pinia)
   await vi.waitFor(() => expect(page().saved).toBeTruthy())
   expect(page().profileOptions.map((item) => item.value)).toEqual(['mine'])
   expect(root.textContent).not.toContain('Öffentliche Modelle')
@@ -119,10 +129,11 @@ it('edits only owned profile tool rights in settings, including for an admin', a
     choice.click()
     await vi.waitUntil(() => !document.querySelector('[role="option"]'))
   }
-  button('Override hinzufügen').click()
+  button('Eigene Regel hinzufügen').click()
   await vi.waitUntil(() => document.querySelector('.q-dialog'))
-  await select('Aktion', 'Schreiben')
-  await select('Alle Modelle', 'Automatisch')
+  await select('Tool oder Bereich', 'Shell-Befehl ausführen')
+  if (!singleAction) await select('Aktion', 'Schreiben')
+  await select('Berechtigung', 'Automatisch')
   button('Übernehmen').click()
   await vi.waitUntil(() => !document.querySelector('.q-dialog'))
   root.querySelector('button').click()
@@ -132,24 +143,24 @@ it('edits only owned profile tool rights in settings, including for an admin', a
   }), { params: { scope: 'personal' } }))
 })
 
-it('resets a built-in preset through the administrative tool endpoint', async () => {
+it('lets administration remove built-in overrides and save inheritance', async () => {
   api.get.mockImplementation(async (url) => ({ data: url === '/agent-profiles' ? {
     agents: [{ id: builtinId, name: 'Allgemein', scope: 'instance', protected: true }], effectiveAgents: [],
-  } : { ...rights(), groupsByTrust: groups('shell.write'), shellPrefixes: null, inheritedShellPrefixes: { read: [], write: [] } } }))
+  } : { ...rights(), privatePermissions: { ...branch(), policies: { 'shell.write': 'disabled' } }, groupsByTrust: groups('shell.write'), shellPrefixes: null, inheritedShellPrefixes: { read: [], write: [] } } }))
   api.put.mockResolvedValue({ data: {} })
   const { page } = await mount(ToolPage, { admin: true }, `/tools?profileId=${builtinId}`, 'settings-tools')
   await vi.waitFor(() => expect(page().saved).toBeTruthy())
-  const reset = root.querySelector('[aria-label="Alle Overrides löschen"]')
-  expect(reset.disabled).toBe(true)
-  page().form.permissions.privatePermissions.policies['shell.write'] = 'auto'
-  await nextTick()
-  reset.click()
-  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith(`/tools/profiles/${builtinId}/permissions`, { ...rights(), shellPrefixes: null }, { params: { scope: 'instance' } }))
+  expect(root.textContent).toContain('Deaktiviert')
+  expect(root.textContent).toContain('Eigene Regel hinzufügen')
+  root.querySelector('[aria-label="Schreiben: Private Modelle entfernen"]').click()
+  await vi.waitFor(() => expect(page().payload().privatePermissions.policies).toEqual({}))
+  await page().save()
+  expect(api.put).toHaveBeenCalledWith(`/tools/profiles/${builtinId}/permissions`, expect.objectContaining({ privatePermissions: expect.objectContaining({ policies: {} }) }), { params: { scope: 'instance' } })
 })
 
 it('edits JavaScript hosts in a cancellable dialog before saving the settings', async () => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
-  const catalog = [{ id: 'web', label: 'Web', tools: [{ name: 'webfetch', label: 'Webseite abrufen', icon: 'language', actions: [action('network.fetch')] }] }]
+  const catalog = [{ id: 'web', label: 'Web', tools: [{ name: 'webfetch', label: 'Webseite abrufen', icon: 'language', available: true, actions: [action('network.fetch')] }] }]
   api.get.mockImplementation(async (url) => ({ data: url === '/agent-profiles' ? { agents: [] } : {
     ...rights(), privateGroups: catalog, publicGroups: catalog, shellPrefixes: { read: [], write: [] },
     groups: catalog,
@@ -166,12 +177,21 @@ it('edits JavaScript hosts in a cancellable dialog before saving the settings', 
   expect(root.textContent).not.toContain('JavaScript-Konfiguration')
   await page().selectSection('management')
   await nextTick()
+  expect(root.querySelector('[aria-label="Webseite abrufen: verfügbar"]')).toBeNull()
+  await page().selectSection('availability')
+  await nextTick()
+  root.querySelector('[aria-label="Webseite abrufen: verfügbar"]').click()
+  await nextTick()
+  expect(page().payload().toolAvailability.webfetch).toBe(false)
+  expect(root.textContent).not.toContain('JavaScript-Konfiguration')
+  root.querySelector('[aria-label="Webseite abrufen: verfügbar"]').click()
+  await nextTick()
   button('JavaScript-Konfiguration').click()
   await vi.waitFor(() => expect(document.querySelector('.q-dialog textarea')?.value).toBe('reddit.com\nwww.reddit.com'))
   input('discard.example')
   button('Abbrechen').click()
   await vi.waitFor(() => expect(document.querySelector('.q-dialog')).toBeNull())
-  expect(page().form.javascriptHostsText).toBe('reddit.com\nwww.reddit.com')
+  expect(page().form.configuration.webFetch.javascriptHosts).toEqual(['reddit.com', 'www.reddit.com'])
   button('JavaScript-Konfiguration').click()
   await vi.waitFor(() => expect(document.querySelector('.q-dialog textarea')?.value).toBe('reddit.com\nwww.reddit.com'))
   document.querySelector('.q-dialog [role="switch"]').click()
@@ -185,12 +205,14 @@ it('edits JavaScript hosts in a cancellable dialog before saving the settings', 
 it.each(['Abbrechen', 'Übernehmen'])('handles shell prefix drafts with %s', async (decision) => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   api.get.mockImplementation(async (url) => ({ data: url === '/agent-profiles' ? {
-    agents: [{ id: builtinId, name: 'Allgemein', scope: 'instance', protected: true }], effectiveAgents: []
-  } : { ...rights(), groupsByTrust: groups('shell.read'), shellPrefixes: { read: [['git', 'status']], write: [] } } }))
-  const { page } = await mount(ToolPage, { admin: true }, `/tools?profileId=${builtinId}`, 'settings-tools')
+    agents: [{ id: ownId, name: 'Eigener Agent', scope: 'instance', protected: false }], effectiveAgents: []
+  } : { ...rights(), groupsByTrust: groups('shell.read', 'shell_run'), shellPrefixes: { read: [['git', 'status']], write: [] } } }))
+  const { page } = await mount(ToolPage, { admin: true }, `/tools?profileId=${ownId}`, 'settings-tools')
   await vi.waitUntil(() => root.querySelector('button:not([disabled])') && page().saved)
   const button = (label) => [...document.querySelectorAll('button')].find((item) => item.textContent.includes(label))
-  root.querySelector('[aria-label="Shell-Präfixe bearbeiten"]').click()
+  await page().selectSection('availability')
+  await nextTick()
+  root.querySelector('[aria-label="Shell: Shell-Präfixe bearbeiten"]').click()
   const textarea = await vi.waitUntil(() => document.querySelector('.q-dialog textarea'))
   textarea.value = 'git diff'
   textarea.dispatchEvent(new Event('input', { bubbles: true }))
@@ -203,24 +225,47 @@ it.each(['Abbrechen', 'Übernehmen'])('handles shell prefix drafts with %s', asy
 it('adds an explicitly empty shell setting override and removes it back to inheritance', async () => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   api.get.mockImplementation(async (url) => ({ data: url === '/agent-profiles' ? {
-    agents: [{ id: builtinId, name: 'Allgemein', scope: 'instance', protected: true }], effectiveAgents: []
-  } : { ...rights(), groupsByTrust: groups('shell.read'), shellPrefixes: null, inheritedShellPrefixes: { read: [], write: [] } } }))
-  const { page } = await mount(ToolPage, { admin: true }, `/tools?profileId=${builtinId}`, 'settings-tools')
+    agents: [{ id: ownId, name: 'Eigener Agent', scope: 'instance', protected: false }], effectiveAgents: []
+  } : { ...rights(), groupsByTrust: groups('shell.read', 'shell_run'), shellPrefixes: null, inheritedShellPrefixes: { read: [], write: [] } } }))
+  const { page } = await mount(ToolPage, { admin: true }, `/tools?profileId=${ownId}`, 'settings-tools')
   await vi.waitUntil(() => page().saved)
   const button = (label) => [...document.querySelectorAll('button')].find((item) => item.textContent.includes(label))
-  expect(root.querySelector('[aria-label="Shell-Präfixe bearbeiten"]')).toBeNull()
-  button('Override hinzufügen').click()
-  const select = await vi.waitUntil(() => document.querySelector('.q-dialog [role="combobox"]'))
-  select.focus()
-  select.click()
-  const option = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find((item) => item.textContent.includes('Einstellung')))
-  option.click()
+  await page().selectSection('availability')
+  await nextTick()
+  expect(root.querySelector('[aria-label="Shell: Shell-Präfixe bearbeiten"]')).toBeNull()
+  button('Eigene Einstellung hinzufügen').click()
+  const choose = async (label, option) => {
+    const field = [...document.querySelectorAll('.q-dialog .q-field')].find(item => item.querySelector('.q-field__label')?.textContent === label)
+    field.querySelector('[role="combobox"]').focus()
+    field.querySelector('[role="combobox"]').click()
+    const choice = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find(item => item.querySelector('.q-item__label')?.textContent === option))
+    choice.click()
+    await vi.waitUntil(() => !document.querySelector('[role="option"]'))
+  }
+  await vi.waitUntil(() => document.querySelector('.q-dialog'))
+  await choose('Tool', 'Shell')
+  await choose('Einstellung', 'Shell-Präfixe')
   await vi.waitUntil(() => document.querySelector('.q-dialog textarea'))
   button('Übernehmen').click()
   await vi.waitUntil(() => !document.querySelector('.q-dialog'))
   expect(page().payload().shellPrefixes).toEqual({ read: [], write: [] })
-  root.querySelector('[aria-label="Shell-Präfixe entfernen"]').click()
+  root.querySelector('[aria-label="Shell: Shell-Präfixe entfernen"]').click()
   await vi.waitFor(() => expect(page().payload().shellPrefixes).toBeNull())
+})
+
+it('retains the profile across tabs and removes only its own availability override', async () => {
+  vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+  api.get.mockImplementation(async url => ({ data: url === '/agent-profiles'
+    ? { agents: [{ id: ownId, name: 'Eigener Agent', scope: 'instance', protected: false }] }
+    : { ...rights(), groupsByTrust: groups('shell.read', 'shell_run'), toolAvailability: { shell_run: false }, inheritedToolAvailability: { shell_run: true }, shellPrefixes: { read: [['git', 'status']], write: [] } } }))
+  const { page } = await mount(ToolPage, { admin: true }, `/tools?profileId=${ownId}`, 'settings-tools')
+  await vi.waitUntil(() => page().saved)
+  await page().selectSection('availability')
+  await nextTick()
+  root.querySelector('[aria-label="Shell: Verfügbarkeit entfernen"]').click()
+  await vi.waitFor(() => expect(page().payload().toolAvailability).toEqual({}))
+  await page().selectSection('management')
+  expect([page().selectedId, page().payload().shellPrefixes]).toEqual([ownId, { read: [['git', 'status']], write: [] }])
 })
 
 it('finds an MCP tool by technical name and shows its description in the permission dialog', async () => {

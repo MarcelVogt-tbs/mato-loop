@@ -12,12 +12,14 @@ from mato_loop_backend.api.routes.tool_settings import (
     tool_configuration_payload,
     update_tool_configuration,
 )
+from mato_loop_backend.permissions.resolution import tool_execution_policy
 from mato_loop_backend.public_url import resolve_public_base_url
 from mato_loop_backend.settings import (
     GeneralSettings,
     SettingsStore,
     ToolExecutionPolicy,
     ToolSettings,
+    TrustLevel,
 )
 
 
@@ -96,9 +98,9 @@ def tool_request(settings, **updates):
 @pytest.mark.parametrize("trust", ["private", "public"])
 @pytest.mark.parametrize("preset, read, write, delete, sensitive", [
     ("ask_all", "ask", "ask", "ask", "ask"),
-    ("ask_changes", "auto", "ask", "ask", "ask"),
-    ("ask_delete_sensitive", "auto", "auto", "ask", "ask"),
-    ("ask_sensitive", "auto", "auto", "auto", "ask"),
+    ("ask_changes_sensitive", "auto", "ask", "ask", "ask"),
+    ("ask_changes", "auto", "ask", "ask", "auto"),
+    ("ask_delete", "auto", "auto", "ask", "auto"),
     ("auto_all", "auto", "auto", "auto", "auto"),
 ])
 async def test_tool_presets_change_only_selected_global_policies(monkeypatch, trust, preset, read, write, delete, sensitive):
@@ -116,13 +118,14 @@ async def test_tool_presets_change_only_selected_global_policies(monkeypatch, tr
     result = await update_tool_configuration(
         tool_request(tools, toolPermissionPresets={trust: preset}), SimpleNamespace(is_admin=True), db
     )
+    tools.select_trust(TrustLevel(trust))
     policies = getattr(tools, f"{trust}_permissions").policies
-    assert tuple(policies[key] for key in (
+    assert tuple(tool_execution_policy(tools, key) for key in (
         "filesystem.read", "filesystem.write", "shell.write", "filesystem.delete", "automation.delete",
         "sensitive_data.access", "secrets.access", "secrets.write",
-    )) == (read, write, write, delete, delete, sensitive, sensitive, sensitive)
+    )) == (read, write, write, "disabled", delete, sensitive, sensitive, write)
     after = tools.model_dump()
-    after[f"{trust}_permissions"]["policies"] = before[f"{trust}_permissions"]["policies"]
+    after[f"{trust}_permission_preset"] = before[f"{trust}_permission_preset"]
     assert after == before
     assert result["toolPermissionPresets"][trust] == preset
     assert {type(call.args[1]) for call in save.await_args_list} == {ToolSettings}
@@ -130,16 +133,37 @@ async def test_tool_presets_change_only_selected_global_policies(monkeypatch, tr
 
     policies["filesystem.read"] = ToolExecutionPolicy.DISABLED
     result = await update_tool_configuration(tool_request(tools), SimpleNamespace(is_admin=True), db)
-    assert result["toolPermissionPresets"][trust] is None
+    assert result["toolPermissionPresets"][trust] == preset
+    getattr(tools, f"{trust}_permissions").policies.pop("filesystem.read")
+    assert tool_execution_policy(tools, "filesystem.read") == read
     assert len(save.await_args_list) == 2
 
 
 async def test_disabled_model_distinction_preserves_public_tool_permissions(monkeypatch):
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=GeneralSettings(modelTrustEnabled=False)))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_: GeneralSettings(modelTrustEnabled=False) if kind is GeneralSettings else ToolSettings()))
     with pytest.raises(ApiError, match="validation.invalidChoice"):
         await update_tool_configuration(
             tool_request(ToolSettings(), toolPermissionPresets={"public": "auto_all"}), SimpleNamespace(is_admin=True), AsyncMock()
         )
+
+
+@pytest.mark.parametrize("availability,invalid", [
+    ({"shell_run": False}, False),
+    ({"shell_run": False, "browser": False}, False),
+    ({"browser": True}, True),
+    ({"unknown": False}, True),
+])
+async def test_global_tool_saves_preserve_hidden_availability(monkeypatch, availability, invalid):
+    tools = ToolSettings(tool_availability={"browser": False})
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=tools))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    request = tool_request(tools, toolAvailability=availability)
+    if invalid:
+        with pytest.raises(ApiError, match="validation.invalidChoice"):
+            await update_tool_configuration(request, SimpleNamespace(is_admin=True), AsyncMock())
+    else:
+        result = await update_tool_configuration(request, SimpleNamespace(is_admin=True), AsyncMock())
+        assert result["toolAvailability"] == {"browser": False, "shell_run": False}
 
 
 @pytest.mark.parametrize("presets", [{"other": "auto_all"}, {"private": "unknown"}, {"private": None}])
@@ -156,3 +180,13 @@ def test_general_settings_are_admin_only():
         )
         for route in general_settings.router.routes
     )
+
+
+def test_changing_live_preset_cannot_widen_frozen_delegation():
+    from mato_loop_backend.agent.subagents import apply_delegation_ceiling, permission_snapshot
+
+    tools = ToolSettings(public_permission_preset="ask_all").select_trust(TrustLevel.PUBLIC)
+    snapshot = permission_snapshot(tools, {"read"})
+    tools.public_permission_preset = "auto_all"
+    apply_delegation_ceiling(tools, snapshot)
+    assert tool_execution_policy(tools, "filesystem.read") == ToolExecutionPolicy.ASK

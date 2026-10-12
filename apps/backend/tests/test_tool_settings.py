@@ -172,14 +172,16 @@ def test_external_working_directory_policy_does_not_hide_directory_tool() -> Non
         "media.generate.image",
     ],
 )
-def test_auto_defaults_and_saved_policies(
+def test_category_defaults_and_saved_policies(
     trust: TrustLevel, capability: str
 ) -> None:
     settings = ToolSettings().select_trust(trust)
     default = tool_registry.action_default(capability, trust)
 
     assert default == ToolExecutionPolicy.AUTO
-    assert resolve_tool_execution_policy(settings, capability, default).policy == default
+    assert resolve_tool_execution_policy(settings, capability, default).policy == (
+        ToolExecutionPolicy.ASK if trust == TrustLevel.PUBLIC or capability in {"session.files.write", "media.generate.image"} else ToolExecutionPolicy.AUTO
+    )
     for policy in ToolExecutionPolicy:
         settings.permissions.policies[capability] = policy
         assert resolve_tool_execution_policy(settings, capability, default).policy == policy
@@ -189,9 +191,9 @@ def test_auto_defaults_and_saved_policies(
 @pytest.mark.parametrize(
     ("global_policies", "profile_policies", "expected"),
     [
-        ({"filesystem.read": "ask"}, {}, "ask"),
-        ({"filesystem.read": "disabled"}, {}, "disabled"),
-        ({"filesystem.read": "auto"}, {}, "auto"),
+        ({"filesystem.read": "ask"}, {}, None),
+        ({"filesystem.read": "disabled"}, {}, None),
+        ({"filesystem.read": "auto"}, {}, None),
         ({"filesystem.read": "disabled", "session.files.read": "auto"}, {}, "auto"),
         ({"filesystem.read": "auto", "session.files.read": "disabled"}, {}, "disabled"),
         ({}, {"filesystem.read": "disabled"}, "disabled"),
@@ -201,11 +203,11 @@ def test_auto_defaults_and_saved_policies(
         ({}, {"filesystem.read": "auto", "session.files.read": "disabled"}, "disabled"),
     ],
 )
-def test_session_file_read_inherits_saved_filesystem_policy_per_level(
+def test_session_file_read_uses_own_global_override_and_profile_rules(
     trust: TrustLevel,
     global_policies: dict[str, str],
     profile_policies: dict[str, str],
-    expected: str,
+    expected: str | None,
 ) -> None:
     settings = ToolSettings(
         private_permissions={"policies": global_policies},
@@ -217,7 +219,7 @@ def test_session_file_read_inherits_saved_filesystem_policy_per_level(
         resolve_tool_execution_policy(
             settings, "session.files.read", ToolExecutionPolicy.AUTO
         ).policy
-        == expected
+        == (expected or ("auto" if trust == TrustLevel.PRIVATE else "ask"))
     )
 
 
@@ -539,7 +541,7 @@ async def test_get_tool_configuration_returns_defaults(monkeypatch) -> None:
         if action["capability"] == "sensitive_data.access"
     )
     assert (sensitive["policy"], sensitive["allowedPolicies"]) == (
-        "ask", [policy.value for policy in ToolExecutionPolicy],
+        "auto", [policy.value for policy in ToolExecutionPolicy],
     )
     webfetch = next(
         tool

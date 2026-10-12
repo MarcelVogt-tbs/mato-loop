@@ -18,8 +18,9 @@ from mato_loop_backend.integrations.mcp.adapter import (
 from mato_loop_backend.settings import ToolExecutionPolicy
 from mato_loop_backend.tools.actions import ToolAction
 
+# shortcut: remote operations share one write category; split them before per-tool category defaults.
 SONOBIN_ACTION = ToolAction(
-    "sonobin.call", "SonoBin-Funktion ausführen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK
+    "sonobin.call", "SonoBin-Funktion ausführen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="write"
 )
 
 

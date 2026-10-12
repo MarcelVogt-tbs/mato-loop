@@ -29,10 +29,10 @@ from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 ARCANE_CREDENTIAL_KIND = "arcane.api_key"
 
-_ACCOUNTS = ToolAction("arcane.accounts.read", "Arcane-Instanzen auflisten", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK)
-_READ = ToolAction("arcane.read", "Docker-Ressourcen lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK)
-_MANAGE = ToolAction("arcane.manage", "Docker-Ressourcen verwalten", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, mutates=True)
-_DELETE = ToolAction("arcane.delete", "Docker-Ressourcen löschen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, mutates=True)
+_ACCOUNTS = ToolAction("arcane.accounts.read", "Arcane-Instanzen auflisten", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, category="read")
+_READ = ToolAction("arcane.read", "Docker-Ressourcen lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, category="read")
+_MANAGE = ToolAction("arcane.manage", "Docker-Ressourcen verwalten", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="write", mutates=True)
+_DELETE = ToolAction("arcane.delete", "Docker-Ressourcen löschen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="delete", mutates=True)
 
 Kind = Literal["containers", "projects", "images", "volumes", "networks"]
 

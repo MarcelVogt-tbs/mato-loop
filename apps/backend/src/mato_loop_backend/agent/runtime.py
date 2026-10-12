@@ -116,6 +116,7 @@ from mato_loop_backend.tools.contracts import (
     ToolArgumentsEdited,
 )
 from mato_loop_backend.tools.display import tool_display
+from mato_loop_backend.tools.registry import _tool_available
 
 
 class AgentRuntime:
@@ -1562,6 +1563,8 @@ class AgentRuntime:
             )
         except AgentProfileUnavailable:
             return PermissionDecision.DENY
+        if not _tool_available(call.name, tool_settings):
+            return PermissionDecision.DENY
         integration_settings = await load_effective_integrations(
             db, chat_session.user_id
         )
@@ -1744,6 +1747,8 @@ class AgentRuntime:
                 TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
             )
         except AgentProfileUnavailable:
+            return PermissionDecision.DENY
+        if not _tool_available(call.name, tool_settings):
             return PermissionDecision.DENY
         integration_settings = await load_effective_integrations(
             db, chat_session.user_id

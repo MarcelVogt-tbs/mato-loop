@@ -117,17 +117,18 @@ async def test_integration_permission_page_lists_configured_rights_and_resources
 async def test_global_profile_permissions_override_default_availability(monkeypatch):
     user = UserAccount(id=uuid4(), is_admin=True)
     integration = IntegrationInstance(name="Shared", integration_type="calendar", adapter_type="caldav", config={"base_url": "https://calendar.test", "username": "owner"})
+    own = CustomAgentProfile(name="Own", description="", base_profile_id=GENERAL_PROFILE_ID, overrides={})
     documents = {
         (IntegrationSettings, None): IntegrationSettings(instances=[integration]),
-        (AgentProfilesSettings, None): AgentProfilesSettings(),
+        (AgentProfilesSettings, None): AgentProfilesSettings(profiles=[own]),
     }
     db = settings_db(monkeypatch, documents)
     monkeypatch.setattr("mato_loop_backend.api.integration_resources._integration_resources", AsyncMock(return_value=()))
-    await update_profile_integration_availability(GENERAL_PROFILE_ID, ProfileIntegrationAvailabilityRequest(integrationsEnabledByDefault=False), user, db, "instance")
-    page = await get_integration_permissions(integration.id, user, db, "instance", GENERAL_PROFILE_ID)
+    await update_profile_integration_availability(own.id, ProfileIntegrationAvailabilityRequest(integrationsEnabledByDefault=False), user, db, "instance")
+    page = await get_integration_permissions(integration.id, user, db, "instance", own.id)
     assert page["inheritedAvailable"] is False
-    await update_integration_permissions(integration.id, IntegrationPermissions(available=True, publicPermissions={"policies": {"calendar.write": "auto"}}), user, db, "instance", GENERAL_PROFILE_ID)
-    tools, profile = await load_agent_profile_tools(db, user.id, GENERAL_PROFILE_ID, TrustLevel.PUBLIC)
+    await update_integration_permissions(integration.id, IntegrationPermissions(available=True, publicPermissions={"policies": {"calendar.write": "auto"}}), user, db, "instance", own.id)
+    tools, profile = await load_agent_profile_tools(db, user.id, own.id, TrustLevel.PUBLIC)
     stored = documents[IntegrationSettings, None].instances[0]
     assert (integration_profile_available(stored, profile), tool_execution_policy(tools, "calendar.write", integration_id=stored.id)) == (True, "auto")
 
@@ -148,7 +149,7 @@ def test_resource_activation_retains_rules_and_delegated_denial():
         permissions=IntegrationPermissions(privatePermissions={"resourcePolicies": {"calendar:work": {"calendar.read": "auto"}}}, resourceAvailability={"calendar:work": False}))
     tools = ToolSettings()
     apply_integration_permissions(tools, IntegrationSettings(instances=[instance]))
-    snapshot = {"permissionVersion": 2, "permissions": tools.permissions.model_dump(mode="json"), "agentPermissions": None,
+    snapshot = {"permissions": tools.permissions.model_dump(mode="json"), "agentPermissions": None,
                 "shellPrefixes": {"read": [], "write": []}, "integrationDefaults": {str(instance.id): {"calendar.read": "ask"}}, "actionDefaults": {}}
     assert tool_execution_policy(tools, "calendar.read", integration_id=instance.id, resource_key="calendar:work") == "disabled"
     instance.permissions.resource_availability["calendar:work"] = True
@@ -181,16 +182,24 @@ async def test_sonobin_permissions_preserve_loaded_user(monkeypatch, save):
         assert result["inherited"]["public"]["resources"][0]["label"] == "Aufnahmen auflisten"
 
 
-async def test_reset_builtin_tool_permissions_preserves_integration_selection(monkeypatch):
+async def test_builtin_access_overrides_can_be_changed_and_removed(monkeypatch):
     user = UserAccount(id=uuid4(), username="admin", password_hash="hash", is_admin=True)
     documents = {(AgentProfilesSettings, None): AgentProfilesSettings(builtin_access_overrides={
         PLAN_PROFILE_ID: AgentProfileAccessOverrides(integrations_enabled_by_default=True,
                                                      public_permissions={"policies": {"shell.write": "auto"}}),
     })}
     db = settings_db(monkeypatch, documents)
-    await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(), user, db, "instance")
+    response = await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(
+        publicPermissions={"policies": {"shell.write": "ask"}}, toolAvailability={"read": False}, shellPrefixes={"read": [["git", "status"]]},
+    ), user, db, "instance")
+    actions = [action for group in response["groupsByTrust"]["public"] for tool in group["tools"] for action in tool["actions"]]
+    assert (response["publicPermissions"]["policies"]["shell.write"], next(action["policy"] for action in actions if action["capability"] == "shell.write"), response["inheritedToolAvailability"].get("read", True), response["inheritedShellPrefixes"]) == ("ask", "disabled", True, {"read": [], "write": []})
+    await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(
+        publicPermissions={}, toolAvailability={}, shellPrefixes=None,
+    ), user, db, "instance")
+    await update_profile_integration_availability(PLAN_PROFILE_ID, ProfileIntegrationAvailabilityRequest(integrationsEnabledByDefault=None), user, db, "instance")
     tools, profile = await load_agent_profile_tools(db, user.id, PLAN_PROFILE_ID, TrustLevel.PUBLIC)
-    assert (tool_execution_policy(tools, "shell.write"), profile.integrations_enabled_by_default) == ("disabled", True)
+    assert (tool_execution_policy(tools, "shell.write"), tools.tool_availability.get("read", True), tools.shell_prefixes.read, profile.integrations_enabled_by_default) == ("disabled", True, [], False)
 
 
 @pytest.mark.parametrize("scope", ["instance", "personal"])
@@ -203,12 +212,10 @@ async def test_profile_integration_default_preserves_tool_overrides(monkeypatch,
         (IntegrationSettings, None): IntegrationSettings(instances=[integration]),
         (ToolSettings, None): ToolSettings(personal_settings_enabled=True),
         (UserAgentProfilesSettings, user.id): UserAgentProfilesSettings(profiles=[profile]),
-        (AgentProfilesSettings, None): AgentProfilesSettings(builtin_access_overrides={
-            GENERAL_PROFILE_ID: AgentProfileAccessOverrides(public_permissions={"policies": {"shell.write": "auto"}}),
-        }),
+        (AgentProfilesSettings, None): AgentProfilesSettings(profiles=[profile]),
     }
     db = settings_db(monkeypatch, documents)
-    profile_id = GENERAL_PROFILE_ID if scope == "instance" else profile.id
+    profile_id = profile.id
     await update_profile_integration_availability(profile_id, ProfileIntegrationAvailabilityRequest(
         integrationsEnabledByDefault=False,
     ), user, db, scope)
@@ -222,12 +229,13 @@ def test_profile_integration_default_rejects_removed_connection_assignments():
         ProfileIntegrationAvailabilityRequest(integrationAvailability={str(uuid4()): True})
 
 
-async def test_profile_content_cannot_bypass_tool_permission_gate():
+@pytest.mark.parametrize("overrides", [{"publicPermissions": {"policies": {"shell.write": "auto"}}}, {"toolAvailability": {"read": True}}])
+async def test_profile_content_cannot_bypass_tool_permission_gate(overrides):
     user = UserAccount(id=uuid4(), username="owner", password_hash="hash", is_admin=False)
     with pytest.raises(ApiError, match="tools.usePermissionSettings"):
         await _profile_from_request(AsyncMock(), user, user.id, AgentProfileRequest(
             name="Own", description="", baseProfileId=GENERAL_PROFILE_ID,
-            overrides={"publicPermissions": {"policies": {"shell.write": "auto"}}},
+            overrides=overrides,
         ))
 
 
@@ -236,6 +244,42 @@ async def test_personal_tool_permission_gate_precedes_profile_lookup(monkeypatch
     db = settings_db(monkeypatch, {(ToolSettings, None): ToolSettings(personal_settings_enabled=False)})
     with pytest.raises(ApiError, match="tools.personalDisabled"):
         await update_profile_tool_permissions(uuid4(), ProfileToolPermissionsRequest(), user, db, "personal")
+
+
+@pytest.mark.parametrize("global_enabled,base_enabled,own,gate,expected", [
+    (True, True, {"read": False}, True, False),
+    (False, True, {"read": True}, True, False),
+    (True, False, {}, True, False),
+    (True, False, {"read": True}, True, True),
+    (True, True, {"read": False}, False, True),
+])
+async def test_profile_tool_availability_inherits_and_respects_global_caps(monkeypatch, global_enabled, base_enabled, own, gate, expected):
+    from mato_loop_backend.tools.catalog import tool_registry
+
+    user = UserAccount(id=uuid4(), is_admin=False)
+    profile = CustomAgentProfile(name="Own", description="", base_profile_id=GENERAL_PROFILE_ID, overrides={"toolAvailability": own})
+    db = settings_db(monkeypatch, {
+        (AgentProfilesSettings, None): AgentProfilesSettings(builtin_access_overrides={GENERAL_PROFILE_ID: AgentProfileAccessOverrides(tool_availability={"read": base_enabled})}),
+        (UserAgentProfilesSettings, user.id): UserAgentProfilesSettings(profiles=[profile]),
+        (ToolSettings, None): ToolSettings(personal_settings_enabled=gate, tool_availability={"read": global_enabled}),
+    })
+    db.get.return_value = user
+    tools, _ = await load_agent_profile_tools(db, user.id, profile.id, TrustLevel.PRIVATE)
+    available = tool_registry.effective(IntegrationSettings(), tool_settings=tools).tools
+    assert ("read" in available, "glob" in available) == (expected, True)
+
+
+async def test_profile_settings_survive_rule_updates_and_can_be_removed(monkeypatch):
+    user = UserAccount(id=uuid4(), is_admin=True)
+    own = CustomAgentProfile(name="Own", description="", base_profile_id=GENERAL_PROFILE_ID, overrides={})
+    db = settings_db(monkeypatch, {(AgentProfilesSettings, None): AgentProfilesSettings(profiles=[own])})
+    await update_profile_tool_permissions(own.id, ProfileToolPermissionsRequest(toolAvailability={"read": False}, shellPrefixes={"read": [], "write": []}), user, db, "instance")
+    response = await update_profile_tool_permissions(own.id, ProfileToolPermissionsRequest(privatePermissions={"policies": {"filesystem.read": "auto"}}), user, db, "instance")
+    assert (response["toolAvailability"], response["shellPrefixes"]) == ({"read": False}, {"read": [], "write": []})
+    response = await update_profile_tool_permissions(own.id, ProfileToolPermissionsRequest(toolAvailability={}, shellPrefixes=None), user, db, "instance")
+    assert (response["toolAvailability"], response["shellPrefixes"], response["privatePermissions"]["policies"]) == ({}, None, {"filesystem.read": "auto"})
+    with pytest.raises(ApiError, match="validation.invalidChoice"):
+        await update_profile_tool_permissions(own.id, ProfileToolPermissionsRequest(toolAvailability={"unknown": False}), user, db, "instance")
 
 
 @pytest.mark.parametrize(("admin", "expected"), [(False, "ask"), (True, "auto")])

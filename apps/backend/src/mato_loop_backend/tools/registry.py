@@ -278,6 +278,7 @@ class ToolRegistry:
         self._policy_resolver = policy_resolver
         self._capability_resolver = capability_resolver
         self._allow_handler = allow_handler
+        self.actions_by_capability = {action.capability: action for action in self.policy_actions() if action.configurable}
 
     async def allow(
         self, context: ToolContext, request: PermissionRequest
@@ -790,10 +791,16 @@ class ToolRegistry:
             if integration_settings is not None
             else {**self._definitions, **self._operation_definitions}
         )
-        return (
+        actions = (
             *(action for definition in definitions.values() for action in definition.actions),
             *(action for actions in self._group_actions.values() for action in actions),
         )
+        categories = {}
+        for action in actions:
+            previous = categories.setdefault(action.capability, action.category)
+            if previous != action.category:
+                raise ValueError(f"conflicting categories for capability: {action.capability}")
+        return actions
 
     def integration_resource_actions(
         self, instance: IntegrationInstance

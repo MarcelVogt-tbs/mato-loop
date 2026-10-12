@@ -35,12 +35,12 @@ def permission_snapshot(
     settings: ToolSettings, tool_names: set[str],
     integration_settings: IntegrationSettings | None = None,
 ) -> dict[str, Any]:
+    from mato_loop_backend.permissions.resolution import tool_default_policy
     from mato_loop_backend.tools.catalog import tool_registry
 
     integrations = integration_settings or IntegrationSettings()
     # Only permission data belongs here, never integration configuration or credentials.
     return {
-        "permissionVersion": 2,
         "permissions": settings.permissions.model_dump(mode="json"),
         "agentPermissions": (
             settings._agent_permissions.model_dump(mode="json")
@@ -57,7 +57,7 @@ def permission_snapshot(
         "toolNames": sorted(tool_names - {"task"}),
         "integrationIds": sorted(str(item.id) for item in integrations.instances if item.enabled),
         "actionDefaults": {
-            action.capability: action.default_policy_for(settings.trust_level).value
+            action.capability: tool_default_policy(settings, action.capability, action.default_policy_for(settings.trust_level)).value
             for action in tool_registry.policy_actions(integrations)
         },
         "integrationDefaults": {
@@ -73,9 +73,8 @@ def permission_snapshot(
 def integration_ceiling_ids(snapshot: dict[str, Any] | None) -> list[str] | None:
     if snapshot is None:
         return None
-    # Legacy children may only retain the concrete integrations bound at delegation.
-    ids = snapshot.get("integrationIds", snapshot.get("integrationDefaults", {}))
-    if not isinstance(ids, (list, dict)):
+    ids = snapshot.get("integrationIds", [])
+    if not isinstance(ids, list):
         return []
     return [value for value in ids if isinstance(value, str)]
 
@@ -97,8 +96,7 @@ def ceiling_settings(snapshot: dict[str, Any], trust: TrustLevel) -> ToolSetting
         public_permissions=permissions,
         shell_prefixes=snapshot["shellPrefixes"],
     ).select_trust(trust)
-    # Existing children retain their original cross-integration permission ceiling.
-    settings._legacy_integration_permissions = snapshot.get("permissionVersion", 1) < 2
+    settings._frozen_action_defaults = snapshot["actionDefaults"]
     if snapshot["agentPermissions"] is not None:
         settings._agent_permissions = AgentProfilePermissions.model_validate(
             snapshot["agentPermissions"]

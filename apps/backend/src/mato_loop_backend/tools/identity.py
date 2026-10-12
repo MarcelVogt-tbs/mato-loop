@@ -299,6 +299,7 @@ UPDATE_AGENT_IDENTITY = ToolDefinition(
                     "Persona ändern",
                     ToolExecutionPolicy.ASK,
                     ToolExecutionPolicy.ASK,
+                    category="write",
                     mutates=True,
                 ),
             ),

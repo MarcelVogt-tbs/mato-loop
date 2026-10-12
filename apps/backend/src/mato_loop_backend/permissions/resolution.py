@@ -7,6 +7,21 @@ from mato_loop_backend.settings import ToolExecutionPolicy, ToolSettings, cap_ag
 from mato_loop_backend.tools.actions import ToolPolicyResolution
 
 
+def tool_default_policy(settings: ToolSettings, capability: str, fallback: ToolExecutionPolicy) -> ToolExecutionPolicy:
+    if settings._frozen_action_defaults is not None:
+        return ToolExecutionPolicy(settings._frozen_action_defaults.get(capability, fallback))
+    from mato_loop_backend.settings.tool_presets import preset_policy
+    from mato_loop_backend.tools.catalog import tool_registry
+
+    action = tool_registry.actions_by_capability.get(capability)
+    if action is None:
+        return fallback
+    policy = preset_policy(getattr(settings, f"{settings.trust_level.value}_permission_preset"), action.category)
+    return policy if policy in action.allowed_policies else (
+        ToolExecutionPolicy.ASK if ToolExecutionPolicy.ASK in action.allowed_policies else fallback
+    )
+
+
 def resolve_tool_execution_policy(
     settings: ToolSettings,
     capability: str,
@@ -29,13 +44,12 @@ def resolve_tool_execution_policy(
     permissions = settings.permissions
     if integration_id is not None and resource_key is not None and permissions.resource_availability.get(str(integration_id), {}).get(resource_key) is False:
         return ToolPolicyResolution(ToolExecutionPolicy.DISABLED, "resource", "resource_disabled")
-    configured = permissions.policies.get(capability) if integration_id is None or settings._legacy_integration_permissions else None
-    # Preserve saved read rules until a session-specific rule replaces them.
-    if integration_id is None and configured is None and capability == "session.files.read":
-        configured = permissions.policies.get("filesystem.read")
+    configured = permissions.policies.get(capability) if integration_id is None else None
     if configured is not None:
         resolution = resolve_value(configured, "global")
     else:
+        if integration_id is None:
+            default = tool_default_policy(settings, capability, default)
         resolution = ToolPolicyResolution(default, "default", "trust_default")
     if integration_id is not None:
         integration_policy = permissions.integration_policies.get(

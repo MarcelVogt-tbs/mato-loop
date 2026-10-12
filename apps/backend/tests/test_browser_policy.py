@@ -176,8 +176,10 @@ def test_browser_catalog_defaults_survive_central_trust_resolution(browser_polic
         )
         assert action.private_default_policy == private_default
         assert action.public_default_policy == public_default
-        resolved_default = action.default_policy_for(case.settings.trust_level)
         for integration_id in (None, case.instance.id):
+            resolved_default = action.default_policy_for(case.settings.trust_level)
+            if integration_id is None and action.capability == "session.files.read" and case.settings.trust_level == TrustLevel.PUBLIC:
+                resolved_default = ToolExecutionPolicy.ASK
             resolution = mock_permissions_resolution.resolve_tool_execution_policy(
                 case.settings,
                 action.capability,

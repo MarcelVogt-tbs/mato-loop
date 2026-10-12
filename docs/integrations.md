@@ -6,6 +6,10 @@ The adapter registry is the availability catalog. Registered adapters default to
 
 ## Contribution Types
 
+Follow [Tool permission declarations](tool-permissions.md) when adding or changing
+actions. Every `ToolAction` requires an explicit category; shared capabilities must
+use the same category. Existing connection and resource policies remain authoritative.
+
 An adapter can:
 
 - contribute a new tool with a stable name, Pydantic input model, and host handler,
@@ -83,7 +87,7 @@ Built-in tool presets and permitted personal tool overrides belong to a separate
 
 Tools declare policy actions independently of tool names. Multiple tools may share one action when they have the same security meaning, for example calendar create and update both using `calendar.write`. A concrete permission request keeps its policy target, integration plus resource, separate from its exact session-grant scope.
 
-Resource discovery supplies controlled keys and labels to connection permission pages. Permission writes validate the current catalog, owner, and binding revision, including resource availability keys. Rebinding cleans obsolete permissions; deleting an instance removes its maps. The profile editor owns only default integration availability. Per-connection exceptions are edited on the connection. Data-only migration `9618efd925e3` transfers old assignments within the same owner scope without replacing existing connection availability overrides. It removes personal-profile assignments to shared connections and stale references. The old profile fields, API writes, and runtime fallback are removed; administrators still cannot target personal profiles through the global connection editor.
+Resource discovery supplies controlled keys and labels to connection permission pages. Permission writes validate the current catalog, owner, and binding revision, including resource availability keys. Rebinding cleans obsolete permissions; deleting an instance removes its maps. The profile editor owns only default integration availability. Per-connection exceptions are edited on the connection. Data-only migration `9cee124e2dfb` transfers old assignments within the same owner scope without replacing existing connection availability overrides. It removes personal-profile assignments to shared connections and stale references. The old profile fields, API writes, and runtime fallback are removed; administrators still cannot target personal profiles through the global connection editor.
 
 ## Effective Tool Set
 

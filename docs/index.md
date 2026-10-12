@@ -16,6 +16,7 @@ The German [user and administrator handbook](user/index.md) is published by Mato
 - [Architecture](architecture.md), [module ownership](modularity.md), and [harness](harness.md)
 - [Agent identity](agent-identity.md), [session templates](session-templates.md), and [run continuations](run-continuations.md)
 - [Questions](questions.md) and [protected tool text](protected-tool-text.md)
+- [Tool permission declarations and categories](tool-permissions.md)
 - [Integrations](integrations.md), [Webfetch](webfetch.md), and [browser](browser.md)
 - [Agent browser runtime](../apps/matoloop-agent/BROWSER.md)
 - [Skills](skills.md), [memory and Dreaming](memory.md), and [appearance](appearance.md)

@@ -441,6 +441,8 @@ async def load_agent_profile_tools(
             permission_profile = apply_profile_overrides(permission_profile, instance_profiles.builtin_access_overrides[permission_profile.id])
     if permission_profile._shell_prefixes_configured or permission_profile.shell_prefixes.read or permission_profile.shell_prefixes.write:
         tools.shell_prefixes = permission_profile.shell_prefixes
+    for name, available in permission_profile.tool_availability.items():
+        tools.tool_availability[name] = tools.tool_availability.get(name, True) and available
     tools._agent_permissions = AgentProfilePermissions(policies=dict(getattr(permission_profile, f"{trust_level.value}_permissions").policies))
     tools._agent_profile = profile
     apply_integration_permissions(tools, await load_effective_integrations(db, user_id), profile.id)

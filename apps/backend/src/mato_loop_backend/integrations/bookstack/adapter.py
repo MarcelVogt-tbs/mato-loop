@@ -78,12 +78,14 @@ _READ = ToolAction(
     "Wissensdatenbank lesen",
     ToolExecutionPolicy.AUTO,
     ToolExecutionPolicy.ASK,
+    category="read",
 )
 _WRITE = ToolAction(
     "knowledge.write",
     "Wissensdatenbank ändern",
     ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
+    category="write",
     mutates=True,
 )
 _DELETE = ToolAction(
@@ -91,6 +93,7 @@ _DELETE = ToolAction(
     "Wissenseinträge löschen",
     ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
+    category="delete",
     mutates=True,
 )
 

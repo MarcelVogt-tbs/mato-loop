@@ -389,7 +389,7 @@ async def test_cwd_changes_failed_call_preconditions(monkeypatch, call):
     assert _tool_messages(db)[-1].content == "OK"
 
 
-def test_child_integration_snapshot_is_concrete_and_legacy_fails_closed():
+def test_child_integration_snapshot_is_concrete_and_missing_ids_fail_closed():
     first = IntegrationInstance(name="First", integration_type="search", adapter_type="searxng")
     second = IntegrationInstance(name="Second", integration_type="search", adapter_type="searxng")
     settings = IntegrationSettings(instances=[first, second])
@@ -403,7 +403,7 @@ def test_child_integration_snapshot_is_concrete_and_legacy_fails_closed():
     scoped = filter_agent_profile_integrations(live, profile, allowed_ids=integration_ceiling_ids(snapshot))
     assert [item.id for item in scoped.instances] == [first.id]
     del snapshot["integrationIds"]
-    assert integration_ceiling_ids(snapshot) == [str(first.id)]
+    assert integration_ceiling_ids(snapshot) == []
     assert integration_ceiling_ids({}) == []
     assert integration_ceiling_ids({"integrationIds": None}) == []
     assert integration_ceiling_ids(None) is None

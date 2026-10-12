@@ -79,7 +79,7 @@ it('uses the administration route for global creation', async () => {
 it.each([
   ['/agents/agent', [], 'agent', '/personalization?tab=assistant&profileId=agent', ''],
   [`/admin/agents/${builtinId}`, [], builtinId, `/admin/personas?profileId=${builtinId}`, '/admin'],
-  ['/admin/agents/custom', [{ id: 'custom', scope: 'instance', name: 'Globaler Agent', protected: false, baseProfileId: builtinId, overrides: {} }], builtinId, '/admin/personas?profileId=custom', '/admin']
+  ['/admin/agents/custom', [{ id: 'custom', scope: 'instance', name: 'Globaler Agent', protected: false, baseProfileId: builtinId, overrides: {} }], 'custom', '/admin/personas?profileId=custom', '/admin']
 ])('bundles contextual persona and access links for %s', async (path, extra, accessId, personaLink, prefix) => {
   await mountEditor(path, extra)
   const tab = [...root.querySelectorAll('[role="tab"]')].find((item) => item.textContent.includes('Weitere Einstellungen'))

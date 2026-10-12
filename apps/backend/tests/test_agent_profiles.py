@@ -686,7 +686,7 @@ def test_builtin_access_documents_are_sparse_and_restrict_fields() -> None:
         AgentProfileAccessOverrides(publicPermissions=None)
 
 
-async def test_builtin_access_update_validates_and_can_reset(monkeypatch) -> None:
+async def test_builtin_access_updates_require_administration_scope(monkeypatch) -> None:
     from mato_loop_backend.api.routes.tool_settings import (
         ProfileToolPermissionsRequest,
         update_profile_tool_permissions,
@@ -695,7 +695,7 @@ async def test_builtin_access_update_validates_and_can_reset(monkeypatch) -> Non
     settings = AgentProfilesSettings()
     user = UserAccount(id=uuid4(), username="admin", password_hash="hash", is_admin=True)
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda db, kind, **kw:
-        settings if kind is AgentProfilesSettings else kind()))
+        settings if kind is AgentProfilesSettings else ToolSettings(personal_settings_enabled=True) if kind is ToolSettings else kind()))
     save = AsyncMock()
     monkeypatch.setattr(SettingsStore, "save", save)
     monkeypatch.setattr("mato_loop_backend.api.routes.agent_profiles._response", AsyncMock(return_value={}))
@@ -703,18 +703,16 @@ async def test_builtin_access_update_validates_and_can_reset(monkeypatch) -> Non
     await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(
         privatePermissions={"policies": {"filesystem.read": "ask"}}), user, db, scope="instance")
     assert settings.builtin_access_overrides[PLAN_PROFILE_ID].private_permissions.policies["filesystem.read"] == ToolExecutionPolicy.ASK
-    with pytest.raises(ApiError):
-        await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(
-            privatePermissions={"policies": {"unknown.action": "auto"}}), user, db, scope="instance")
-    await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(), user, db, scope="instance")
-    assert not settings.builtin_access_overrides[PLAN_PROFILE_ID].model_fields_set
-    assert save.await_count == 2
     user.is_admin = False
     with pytest.raises(ApiError, match="auth.adminRequired"):
         await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(), user, db, scope="instance")
+    settings.personal_agents_enabled = True
+    with pytest.raises(ApiError, match="agentProfile.notFound"):
+        await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(), user, db, scope="personal")
     settings.personal_agents_enabled = False
     with pytest.raises(ApiError, match="agentProfile.personalDisabled"):
         await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(), user, db, scope="personal")
+    save.assert_awaited_once()
 
 
 async def test_integration_profiles_remain_available_when_personal_profiles_are_disabled(

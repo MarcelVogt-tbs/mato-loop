@@ -31,15 +31,16 @@ from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 MAIL_CREDENTIAL_KIND = "mail.password"
 _HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|[0-9A-Fa-f:]+)$")
 _PART_RE = re.compile(r"^[1-9][0-9]*(?:\.[1-9][0-9]*)*$")
-_READ = ToolAction("mail.read", "E-Mails lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK)
+_READ = ToolAction("mail.read", "E-Mails lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, category="read")
 _DRAFTS = ToolAction(
-    "mail.drafts", "E-Mail-Entwürfe verwalten", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, mutates=True
+    "mail.drafts", "E-Mail-Entwürfe verwalten", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="write", mutates=True
 )
 _SEND = ToolAction(
     "mail.send",
     "E-Mails senden",
     ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
+    category="write",
     mutates=True,
 )
 _DELETE = ToolAction(
@@ -47,6 +48,7 @@ _DELETE = ToolAction(
     "E-Mails löschen",
     ToolExecutionPolicy.ASK,
     ToolExecutionPolicy.ASK,
+    category="delete",
     mutates=True,
 )
 

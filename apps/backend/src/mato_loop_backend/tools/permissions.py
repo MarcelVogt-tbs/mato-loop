@@ -146,5 +146,5 @@ REQUEST_SESSION_PERMISSIONS = ToolDefinition(
     RequestSessionPermissionsArguments, request_session_permissions,
     label="Session-Freigaben anfragen", icon="verified_user",
     actions=(ToolAction("permissions.request", "Freigaben anfragen", ToolExecutionPolicy.AUTO,
-                        ToolExecutionPolicy.AUTO, configurable=False, allowed_policies=(ToolExecutionPolicy.AUTO,)),),
+                        ToolExecutionPolicy.AUTO, category="write", configurable=False, allowed_policies=(ToolExecutionPolicy.AUTO,)),),
 )

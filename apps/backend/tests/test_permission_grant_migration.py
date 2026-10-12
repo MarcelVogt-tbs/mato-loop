@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 import sqlalchemy as sa
 
 
@@ -38,8 +39,8 @@ def test_unified_grant_migration_removes_only_approval_created_grants(monkeypatc
     engine.dispose()
 
 
-def test_connection_availability_migration_and_navigation_reset(monkeypatch):
-    path = Path(__file__).parents[1] / "alembic/versions/9618efd925e3_cleanup_permissions.py"
+def test_permission_migration_preserves_settings_and_resets_navigation(monkeypatch):
+    path = Path(__file__).parents[1] / "alembic/versions/9cee124e2dfb_simplify_permissions.py"
     spec = importlib.util.spec_from_file_location("connection_availability_migration", path)
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
@@ -47,6 +48,7 @@ def test_connection_availability_migration_and_navigation_reset(monkeypatch):
     shared, personal, foreign = (str(uuid4()) for _ in range(3))
     builtin, profile = "00000000-0000-4000-8000-000000000001", str(uuid4())
     documents = {
+        ("tools", None): {"private_permissions": {"policies": {"filesystem.read": "disabled"}}, "tool_availability": {"shell_run": False}},
         ("agent-profiles", None): {"builtin_access_overrides": {builtin: {"integration_availability": {shared: True}}}},
         ("agent-profiles", owner): {"profiles": [{"id": profile, "overrides": {
             "instructions": "Keep", "integrationAvailability": {shared: False, personal: True, foreign: True},
@@ -69,8 +71,10 @@ def test_connection_availability_migration_and_navigation_reset(monkeypatch):
             ])
             monkeypatch.setattr(migration.op, "get_bind", lambda: connection)
             migration.upgrade()
+            migration.downgrade()
             actual = {(row.key, row.user_id): row.data for row in connection.execute(sa.select(settings))}
             assert actual == {
+                ("tools", None): {**documents["tools", None], "private_permission_preset": "ask_changes", "public_permission_preset": "ask_all"},
                 ("agent-profiles", None): {"builtin_access_overrides": {builtin: {}}},
                 ("agent-profiles", owner): {"profiles": [{"id": profile, "overrides": {"instructions": "Keep"}}]},
                 ("integrations", None): documents["integrations", None],
@@ -80,3 +84,15 @@ def test_connection_availability_migration_and_navigation_reset(monkeypatch):
             assert connection.execute(sa.select(grants.c.capability)).scalars().all() == ["resource.read"]
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize("policies", [{}, {"filesystem.read": "disabled", "session.files.read": "auto", "shell.write": "auto"}])
+def test_tool_defaults_migration_keeps_only_explicit_overrides(policies):
+    path = Path(__file__).parents[1] / "alembic/versions/9cee124e2dfb_simplify_permissions.py"
+    spec = importlib.util.spec_from_file_location("tool_defaults_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    original = {"private_permissions": {"policies": policies}}
+    assert migration.migrate_documents({("tools", None): original}) == {
+        ("tools", None): {**original, "private_permission_preset": "ask_changes", "public_permission_preset": "ask_all"},
+    }
