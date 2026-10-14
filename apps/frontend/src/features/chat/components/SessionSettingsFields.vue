@@ -14,7 +14,10 @@
         <TemplateField v-if="has('template')" />
         <MessageSizeField v-if="has('messageSize')" />
         <AgentField v-if="has('agent')" />
-        <ComputerField v-if="has('computer')" />
+        <div v-if="has('computer')" class="session-settings-grid items-start" style="grid-column: 1 / -1">
+          <div><ComputerField /></div>
+          <DirectoryField />
+        </div>
         <MemoryField v-if="has('memory')" />
         <WebSearchField v-if="has('webSearch')" />
       </div>
@@ -37,16 +40,25 @@
       <ModelField v-if="has('model')" />
       <ReasoningField v-if="has('reasoning') && (!compact || reasoningEffortOptions.length)" />
       <ComputerField v-if="has('computer')" />
+      <DirectoryField v-if="has('computer') && !compact" />
       <MemoryField v-if="has('memory')" />
       <WebSearchField v-if="has('webSearch')" />
     </template>
+    <ExecutionAgentDirectoryPickerDialog
+      v-if="directoryPickerOpen"
+      v-model="directoryPickerOpen"
+      :execution-agent-id="session?.preferredExecutionAgentId"
+      :initial-path="session?.currentDirectory || selectedExecutionAgent?.homeDirectory || '/'"
+      @select="update({ current_directory: $event })"
+    />
   </div>
 </template>
 
 <script setup>
-import { computed, defineComponent, h } from 'vue'
-import { QBanner, QIcon, useQuasar } from 'quasar'
+import { computed, defineComponent, h, ref, watch } from 'vue'
+import { QBanner, QBtn, QIcon, QInput, useQuasar } from 'quasar'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
+import ExecutionAgentDirectoryPickerDialog from 'src/features/computers/ExecutionAgentDirectoryPickerDialog.vue'
 import { agentDisplayName } from 'src/features/computers/display'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useExecutionAgentStore } from 'stores/execution-agents'
@@ -118,6 +130,12 @@ const selectedAgentIcon = computed(() => (
 const selectedExecutionAgent = computed(() => (
   executionAgents.byId(props.session?.preferredExecutionAgentId)
 ))
+const directoryPickerOpen = ref(false)
+const directoryPickerAvailable = computed(() => !props.disabled && selectedExecutionAgent.value?.connected === true
+  && selectedExecutionAgent.value.operations?.includes('filesystem.list'))
+watch(() => [props.session?.id, props.session?.preferredExecutionAgentId, props.session?.currentDirectory, props.disabled], () => {
+  directoryPickerOpen.value = false
+})
 const executionAgentOptions = computed(() => {
   const options = [
     { label: 'Kein Computer', value: null, connected: null, icon: 'computer', caption: 'Nur Backend-Funktionen verwenden' },
@@ -385,6 +403,16 @@ const ComputerField = defineComponent(() => () => [
       })
     : null
 ])
+const DirectoryField = defineComponent(() => () => h(QInput, {
+  modelValue: props.session?.currentDirectory || '',
+  outlined: true, dense: true, readonly: true, label: 'Arbeitsverzeichnis', class: 'session-directory',
+  disable: props.disabled || !selectedExecutionAgent.value?.connected
+}, {
+  append: () => h(QBtn, {
+    flat: true, round: true, dense: true, icon: 'folder_open', 'aria-label': 'Arbeitsverzeichnis auswählen',
+    disable: !directoryPickerAvailable.value, onClick: () => { directoryPickerOpen.value = true }
+  })
+}))
 const MemoryField = defineComponent(() => () => h(AppSelect, selectProps({
   modelValue: props.session?.memoryMode,
   options: memoryModeOptions,

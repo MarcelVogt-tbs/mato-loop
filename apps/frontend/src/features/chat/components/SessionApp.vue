@@ -21,7 +21,7 @@
         </q-item>
         <q-separator />
         <section class="q-pa-md" aria-labelledby="session-permissions-title">
-          <div id="session-permissions-title" class="text-subtitle1 text-weight-bold q-mb-sm">Freigaben und Arbeitsverzeichnis</div>
+          <div id="session-permissions-title" class="text-subtitle1 text-weight-bold q-mb-sm">Freigaben</div>
           <div class="row items-center no-wrap q-mb-md">
             <div class="text-subtitle2">Session-Freigaben</div>
             <q-space />
@@ -112,8 +112,6 @@
               </q-item>
             </q-list>
           </q-card>
-          <div class="text-subtitle2 q-mt-md">Arbeitsverzeichnis</div>
-          <pre class="tool-call__details q-mt-xs">{{ chat.activeContext?.currentDirectory || 'Kein Arbeitsverzeichnis gewählt' }}</pre>
         </section>
       </template>
     </q-scroll-area>

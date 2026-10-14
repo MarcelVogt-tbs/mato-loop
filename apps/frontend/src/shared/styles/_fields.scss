@@ -1,3 +1,8 @@
+// Quasar 2.18 marks readonly fields with a dashed border; directory browsing uses the normal field outline.
+.session-directory.q-field--readonly .q-field__control:before {
+  border-style: solid;
+}
+
 // Quasar 2.18 has no field size between dense (40px) and the composer's 28px.
 // Keep the input/select/file/textarea internals together here; recheck on upgrades.
 // Only the composer's controls keep their own sizing.
