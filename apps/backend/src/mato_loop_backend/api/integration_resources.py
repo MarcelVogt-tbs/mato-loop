@@ -106,9 +106,6 @@ def _access_payload(
     adapter = integration_adapter(instance.integration_type, instance.adapter_type)
     if adapter is None:
         raise ApiError(409, "integration.resourcePoliciesUnsupported")
-    integration_policies = tools.permissions.integration_policies.get(
-        str(instance.id), {}
-    )
     resource_policies = tools.permissions.resource_policies.get(str(instance.id), {})
     resource_actions = tool_registry.integration_resource_actions(instance)
     if not resource_actions:
@@ -135,27 +132,12 @@ def _access_payload(
             "capability": action.capability,
             "label": action.label,
             "allowedPolicies": [policy.value for policy in action.allowed_policies],
-            "globalPolicy": supported_policy(
+            "policy": supported_policy(
                 action,
                 resolve_tool_execution_policy(
                     tools,
                     action.capability,
-                    action.default_policy_for(tools.trust_level),
-                ).policy,
-            ).value,
-            "integrationPolicy": (
-                supported_policy(
-                    action, integration_policies[action.capability]
-                ).value
-                if action.capability in integration_policies
-                else None
-            ),
-            "effectiveIntegrationPolicy": supported_policy(
-                action,
-                resolve_tool_execution_policy(
-                    tools,
-                    action.capability,
-                    action.default_policy_for(tools.trust_level),
+                    action.default_policy(tools),
                     integration_id=instance.id,
                 ).policy,
             ).value,
@@ -185,23 +167,6 @@ def _access_payload(
                         resource.key, {}
                     ).items()
                     if capability in applicable_capabilities(resource)
-                },
-                "effectivePolicies": {
-                    action.capability: supported_policy(
-                        action,
-                        resolve_tool_execution_policy(
-                            tools,
-                            action.capability,
-                            action.default_policy_for(tools.trust_level),
-                            integration_id=instance.id,
-                            resource_key=resource.key,
-                            hard_unavailable_capabilities=(
-                                resource.hard_unavailable_capabilities
-                            ),
-                        ).policy,
-                    ).value
-                    for action in resource_actions
-                    if action.capability in applicable_capabilities(resource)
                 },
             }
             for resource in resources

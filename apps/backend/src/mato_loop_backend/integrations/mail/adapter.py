@@ -24,30 +24,26 @@ from mato_loop_backend.integrations.mail.client import (
 from mato_loop_backend.integrations.mail.send import send_once, send_status
 from mato_loop_backend.models import Credential
 from mato_loop_backend.security import CredentialCipher, load_credential, read_credential
-from mato_loop_backend.settings import IntegrationInstance, ToolExecutionPolicy
+from mato_loop_backend.settings import IntegrationInstance
 from mato_loop_backend.tools.actions import ToolAction
 from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 MAIL_CREDENTIAL_KIND = "mail.password"
 _HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|[0-9A-Fa-f:]+)$")
 _PART_RE = re.compile(r"^[1-9][0-9]*(?:\.[1-9][0-9]*)*$")
-_READ = ToolAction("mail.read", "E-Mails lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, category="read")
+_READ = ToolAction("mail.read", "E-Mails lesen", category="read")
 _DRAFTS = ToolAction(
-    "mail.drafts", "E-Mail-Entwürfe verwalten", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="write", mutates=True
+    "mail.drafts", "E-Mail-Entwürfe verwalten", category="write", mutates=True
 )
 _SEND = ToolAction(
     "mail.send",
     "E-Mails senden",
-    ToolExecutionPolicy.ASK,
-    ToolExecutionPolicy.ASK,
     category="write",
     mutates=True,
 )
 _DELETE = ToolAction(
     "mail.delete",
     "E-Mails löschen",
-    ToolExecutionPolicy.ASK,
-    ToolExecutionPolicy.ASK,
     category="delete",
     mutates=True,
 )

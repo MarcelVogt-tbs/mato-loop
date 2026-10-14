@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import make_transient_to_detached
 
+from mato_loop_backend.agent.run_support import _tool_policy
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.agent_profiles import (
     AgentProfileRequest,
@@ -32,6 +33,7 @@ from mato_loop_backend.api.routes.tool_settings import (
 from mato_loop_backend.integrations.contracts import IntegrationResource
 from mato_loop_backend.integrations.tbs_desk.adapter import profile_id as integration_profile_id
 from mato_loop_backend.models import UserAccount
+from mato_loop_backend.permissions.policy import integration_operation_permission
 from mato_loop_backend.permissions.resolution import tool_execution_policy
 from mato_loop_backend.settings import (
     GENERAL_PROFILE_ID,
@@ -111,7 +113,34 @@ async def test_integration_permission_page_lists_configured_rights_and_resources
     monkeypatch.setattr("mato_loop_backend.api.integration_resources._integration_resources", AsyncMock(return_value=(IntegrationResource("calendar:work", "Arbeit"),)))
     response = await get_integration_permissions(integration.id, user, db, "personal")
     assert (response["permissions"]["privatePermissions"]["policies"],
-             {resource["key"] for resource in response["inherited"]["private"]["resources"]}) == ({"calendar.read": "ask"}, {"calendar:work"})
+              {resource["key"] for resource in response["inherited"]["private"]["resources"]}) == ({"calendar.read": "ask"}, {"calendar:work"})
+
+
+@pytest.mark.parametrize("trust", list(TrustLevel))
+@pytest.mark.parametrize("preset, expected", [
+    ("ask_all", ["ask", "ask", "ask"]),
+    ("ask_changes_sensitive", ["auto", "ask", "ask"]),
+    ("ask_changes", ["auto", "ask", "ask"]),
+    ("ask_delete", ["auto", "auto", "ask"]),
+    ("auto_all", ["auto", "auto", "auto"]),
+])
+async def test_integration_page_and_runtime_share_base_preset(monkeypatch, trust, preset, expected):
+    user = UserAccount(id=uuid4(), is_admin=False)
+    instance = IntegrationInstance(name="Calendar", integration_type="calendar", adapter_type="caldav",
+                                   config={"base_url": "https://calendar.test", "username": "owner"})
+    tools = ToolSettings(**{f"{trust.value}_permission_preset": preset}).select_trust(trust)
+    integrations = IntegrationSettings(instances=[instance])
+    db = settings_db(monkeypatch, {(ToolSettings, None): tools,
+                                  (UserIntegrationSettings, user.id): UserIntegrationSettings(instances=[instance])})
+    monkeypatch.setattr("mato_loop_backend.api.integration_resources._integration_resources", AsyncMock(return_value=(IntegrationResource("calendar:work", "Work"),)))
+    response = await get_integration_permissions(instance.id, user, db, "personal")
+    displayed = {action["capability"]: action["policy"] for action in response["inherited"][trust.value]["actions"]}
+    capabilities = ["calendar.read", "calendar.write", "calendar.delete"]
+    runtime = [_tool_policy(tools, integrations, integration_operation_permission(
+        capability=capability, integration_id=instance.id, resource_key="calendar:work", title="Calendar", summary="Calendar",
+        binding_revision="{}", operation_key="test",
+    )) for capability in capabilities]
+    assert ([displayed[key] for key in capabilities], runtime) == (expected, expected)
 
 
 async def test_global_profile_permissions_override_default_availability(monkeypatch):
@@ -172,6 +201,7 @@ async def test_sonobin_permissions_preserve_loaded_user(monkeypatch, save):
     settings = UserIntegrationSettings(instances=[integration])
     monkeypatch.setattr(routes, "_permission_instance", AsyncMock(return_value=(settings, user.id, integration)))
     monkeypatch.setattr(routes, "load_effective_agent_profiles", AsyncMock(return_value=AgentProfilesSettings()))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=ToolSettings()))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     async with AsyncSession(expire_on_commit=False) as db:
         db.add(user)

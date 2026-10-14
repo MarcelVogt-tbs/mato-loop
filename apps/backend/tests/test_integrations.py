@@ -505,8 +505,6 @@ def _resource_adapter(
     action = ToolAction(
         "network.search",
         "Suchen",
-        ToolExecutionPolicy.AUTO,
-        ToolExecutionPolicy.AUTO,
         category="read",
         allowed_policies=allowed_policies,
     )

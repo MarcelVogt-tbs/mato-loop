@@ -22,18 +22,8 @@
           <div v-if="action.available === false" class="text-caption text-warning">Technisch nicht verfügbar</div>
         </div>
         <div v-for="audience in audiences" :key="audience.value" class="col-12 col-sm-6 col-md-3">
-          <slot name="policy" :action="action" :audience="audience" :tool-name="section.name">
-          <AppSelect
-            :model-value="policyOverride(branch(audience.value).policies, [action.capability])"
-            outlined dense emit-value map-options :label="audience.label" :aria-label="`${action.label}: ${audience.label}`"
-            :options="options(action)" :disable="disabled || action.available === false"
-            :readonly="readonly"
-            :hint="`Wirksam: ${label(effective(audience.value, action))}`" persistent-hint
-            @update:model-value="setPolicyOverride(branch(audience.value).policies, [action.capability], $event)"
-          />
-          </slot>
+          <slot name="policy" :action="action" :audience="audience" :tool-name="section.name" />
         </div>
-        <slot name="action-controls" :action="action" />
       </q-card-section>
     </template>
     </template>
@@ -51,37 +41,27 @@
       <div v-if="resource.description" class="settings-list-name">{{ resource.description }}</div>
       <div v-if="resource.hints?.length" class="text-caption">{{ resource.hints.join(' · ') }}</div>
     </q-card-section>
-    <div v-if="resourceOverridesOnly && !resourceActions(resource).length" class="text-caption app-muted q-pa-md">Keine eigenen Berechtigungs-Overrides. Es gelten die geerbten Vorgaben.</div>
+    <div v-if="resourceOverridesOnly && !resourceActions(resource).length" class="text-caption app-muted q-pa-md">Keine eigenen Regeln. Es gelten die Vorgaben.</div>
     <q-card-section v-for="action in resourceActions(resource)" :key="action.capability" class="row q-col-gutter-md">
-      <div class="col-12 col-md text-weight-medium">{{ action.label }}</div>
-      <div v-for="audience in audiences" :key="audience.value" class="col-12 col-sm-6 col-md-3">
-        <AppSelect
-          :model-value="policyOverride(branch(audience.value).resourcePolicies, [resource.key, action.capability])"
-          outlined dense emit-value map-options :label="audience.label" :aria-label="`${resource.label}: ${action.label}, ${audience.label}`"
-          :options="options(action)"
-          :disable="disabled || resource.hardUnavailableCapabilities?.includes(action.capability)"
-          :readonly="readonly || resourceOverridesOnly"
-          :hint="`Wirksam: ${label(effective(audience.value, action, resource))}`" persistent-hint
-          @update:model-value="setPolicyOverride(branch(audience.value).resourcePolicies, [resource.key, action.capability], $event)"
-        />
+      <div class="col-12 col-md">
+        <div class="text-weight-medium">{{ action.label }}</div>
+        <div v-if="action.available === false || resource.available === false || resource.hardUnavailableCapabilities?.includes(action.capability)" class="text-caption text-warning">Technisch nicht verfügbar</div>
       </div>
-      <slot name="resource-action-controls" :resource="resource" :action="action" />
+      <div v-for="audience in audiences" :key="audience.value" class="col-12 col-sm-6 col-md-3">
+        <slot name="policy" :action="action" :audience="audience" :resource="resource" />
+      </div>
     </q-card-section>
   </q-expansion-item>
 </template>
 
 <script setup>
-import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed } from 'vue'
-import { policyOverride, setPolicyOverride } from 'src/utils/agent-permissions'
 
 const permissions = defineModel({ type: Object, required: true })
-const props = defineProps({ groupsByTrust: { type: Object, required: true }, resources: { type: Array, default: () => [] }, inheritedResources: { type: Object, default: () => ({}) }, modelTrustEnabled: { type: Boolean, default: true }, overridesOnly: Boolean, resourceOverridesOnly: Boolean, toolHierarchy: Boolean, readonly: Boolean, disabled: Boolean })
+const props = defineProps({ groupsByTrust: { type: Object, required: true }, resources: { type: Array, default: () => [] }, modelTrustEnabled: { type: Boolean, default: true }, overridesOnly: Boolean, resourceOverridesOnly: Boolean, toolHierarchy: Boolean })
 const audiences = computed(() => props.modelTrustEnabled
   ? [{ value: 'private', label: 'Private Modelle' }, { value: 'public', label: 'Öffentliche Modelle' }]
   : [{ value: 'private', label: 'Alle Modelle' }])
-const labels = { disabled: 'Deaktiviert', ask: 'Nachfragen', auto: 'Automatisch' }
-const label = (value) => labels[value] || value
 const branch = (trust) => permissions.value[`${trust}Permissions`]
 const catalogGroups = computed(() => {
   const seen = new Set()
@@ -100,20 +80,5 @@ const catalogGroups = computed(() => {
   })
 })
 const groups = computed(() => catalogGroups.value.map(group => ({ ...group, sections: group.sections.map(section => ({ ...section, actions: section.actions.filter(action => !props.overridesOnly || audiences.value.some(({ value }) => branch(value).policies[action.capability] != null)) })).filter(section => section.actions.length) })).filter(group => group.sections.length))
-const actions = (trust) => (props.groupsByTrust[trust] || []).flatMap((group) => [...(group.actions || []), ...(group.tools || []).flatMap((tool) => tool.actions || [])])
 const resourceActions = (resource) => catalogGroups.value.flatMap(group => group.sections.flatMap(section => section.actions)).filter((action) => (!resource.applicableCapabilities || resource.applicableCapabilities.includes(action.capability)) && (!props.resourceOverridesOnly || audiences.value.some(({ value }) => branch(value).resourcePolicies?.[resource.key]?.[action.capability] != null)))
-function inherited(trust, action, resource) {
-  if (resource) return props.inheritedResources[trust]?.find((item) => item.key === resource.key)?.policies?.[action.capability] || effective(trust, action)
-  const original = actions(trust).find((item) => item.capability === action.capability)
-  return original?.policy || original?.effectiveIntegrationPolicy || 'ask'
-}
-function effective(trust, action, resource) {
-  if (action.available === false || resource?.available === false || resource?.hardUnavailableCapabilities?.includes(action.capability)) return 'disabled'
-  const value = resource ? branch(trust).resourcePolicies?.[resource.key]?.[action.capability] : branch(trust).policies[action.capability]
-  const result = value || inherited(trust, action, resource)
-  return result === 'auto' && action.allowedPolicies && !action.allowedPolicies.includes('auto') ? 'ask' : result
-}
-function options(action) {
-  return [{ label: 'Vorgabe', value: 'inherit' }, ...(action.allowedPolicies || ['disabled', 'ask', 'auto']).map((value) => ({ label: label(value), value }))]
-}
 </script>

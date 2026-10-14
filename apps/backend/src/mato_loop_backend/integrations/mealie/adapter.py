@@ -36,35 +36,33 @@ from mato_loop_backend.integrations.mealie.client import (
 )
 from mato_loop_backend.models import Credential
 from mato_loop_backend.security import CredentialCipher, load_credential, read_credential
-from mato_loop_backend.settings import IntegrationInstance, ToolExecutionPolicy
+from mato_loop_backend.settings import IntegrationInstance
 from mato_loop_backend.tools.actions import ToolAction
 from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 MEALIE_CREDENTIAL_KIND = "mealie.api_token"
 
 _ACCOUNTS_READ = ToolAction(
-    "mealie.accounts.read", "Mealie-Konten auflisten", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, category="read"
+    "mealie.accounts.read", "Mealie-Konten auflisten", category="read"
 )
 _RECIPES_READ = ToolAction(
-    "recipes.read", "Rezepte lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, category="read"
+    "recipes.read", "Rezepte lesen", category="read"
 )
 _RECIPES_WRITE = ToolAction(
-    "recipes.write", "Rezepte ändern", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="write", mutates=True
+    "recipes.write", "Rezepte ändern", category="write", mutates=True
 )
 _RECIPES_DELETE = ToolAction(
-    "recipes.delete", "Rezepte löschen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="delete", mutates=True
+    "recipes.delete", "Rezepte löschen", category="delete", mutates=True
 )
 _MEAL_PLAN_READ = ToolAction(
-    "meal_plan.read", "Essensplan lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, category="read"
+    "meal_plan.read", "Essensplan lesen", category="read"
 )
 _MEAL_PLAN_WRITE = ToolAction(
-    "meal_plan.write", "Essensplan ändern", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="write", mutates=True
+    "meal_plan.write", "Essensplan ändern", category="write", mutates=True
 )
 _MEAL_PLAN_DELETE = ToolAction(
     "meal_plan.delete",
     "Essensplan-Einträge löschen",
-    ToolExecutionPolicy.ASK,
-    ToolExecutionPolicy.ASK,
     category="delete",
     mutates=True,
 )

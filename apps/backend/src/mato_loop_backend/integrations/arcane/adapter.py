@@ -23,16 +23,16 @@ from mato_loop_backend.integrations.contracts import (
 )
 from mato_loop_backend.models import Credential
 from mato_loop_backend.security import load_credential, read_credential
-from mato_loop_backend.settings import IntegrationInstance, ToolExecutionPolicy
+from mato_loop_backend.settings import IntegrationInstance
 from mato_loop_backend.tools.actions import ToolAction
 from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 ARCANE_CREDENTIAL_KIND = "arcane.api_key"
 
-_ACCOUNTS = ToolAction("arcane.accounts.read", "Arcane-Instanzen auflisten", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, category="read")
-_READ = ToolAction("arcane.read", "Docker-Ressourcen lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, category="read")
-_MANAGE = ToolAction("arcane.manage", "Docker-Ressourcen verwalten", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="write", mutates=True)
-_DELETE = ToolAction("arcane.delete", "Docker-Ressourcen löschen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="delete", mutates=True)
+_ACCOUNTS = ToolAction("arcane.accounts.read", "Arcane-Instanzen auflisten", category="read")
+_READ = ToolAction("arcane.read", "Docker-Ressourcen lesen", category="read")
+_MANAGE = ToolAction("arcane.manage", "Docker-Ressourcen verwalten", category="write", mutates=True)
+_DELETE = ToolAction("arcane.delete", "Docker-Ressourcen löschen", category="delete", mutates=True)
 
 Kind = Literal["containers", "projects", "images", "volumes", "networks"]
 

@@ -44,7 +44,6 @@ from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
-    ToolExecutionPolicy,
 )
 from mato_loop_backend.tools.catalog import ToolRegistry
 from mato_loop_backend.tools.context import ToolContext
@@ -291,14 +290,9 @@ async def test_mail_config_and_adapter_allow_only_encrypted_transports_and_accou
     actions = {action.capability: action for action in MAIL_ADAPTER.resource_actions}
     assert MAIL_ADAPTER.resource_loader is None
     assert set(actions) == {"mail.read", "mail.drafts", "mail.send", "mail.delete"}
-    assert actions["mail.read"].private_default_policy == ToolExecutionPolicy.AUTO
-    assert actions["mail.read"].public_default_policy == ToolExecutionPolicy.ASK
-    assert all(
-        action.private_default_policy == ToolExecutionPolicy.ASK
-        and action.public_default_policy == ToolExecutionPolicy.ASK
-        for action in actions.values()
-        if action.mutates
-    )
+    assert {key: action.category for key, action in actions.items()} == {
+        "mail.read": "read", "mail.drafts": "write", "mail.send": "write", "mail.delete": "delete",
+    }
     read_tools = {
         "mail_list_accounts",
         "mail_list_folders",

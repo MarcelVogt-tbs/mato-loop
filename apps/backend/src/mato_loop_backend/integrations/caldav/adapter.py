@@ -39,7 +39,6 @@ from mato_loop_backend.security import CredentialCipher, load_credential, read_c
 from mato_loop_backend.settings import (
     IntegrationInstance,
     SettingsStore,
-    ToolExecutionPolicy,
 )
 from mato_loop_backend.tools.actions import ApprovalEditField, ToolAction
 from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
@@ -58,46 +57,34 @@ _WEEKDAYS = (
 _READ = ToolAction(
     "calendar.read",
     "Kalender lesen",
-    ToolExecutionPolicy.AUTO,
-    ToolExecutionPolicy.ASK,
     category="read",
 )
 _WRITE = ToolAction(
     "calendar.write",
     "Kalender ändern",
-    ToolExecutionPolicy.ASK,
-    ToolExecutionPolicy.ASK,
     category="write",
     mutates=True,
 )
 _DELETE = ToolAction(
     "calendar.delete",
     "Kalendereinträge löschen",
-    ToolExecutionPolicy.ASK,
-    ToolExecutionPolicy.ASK,
     category="delete",
     mutates=True,
 )
 _TASKS_READ = ToolAction(
     "tasks.read",
     "Aufgaben lesen",
-    ToolExecutionPolicy.AUTO,
-    ToolExecutionPolicy.ASK,
     category="read",
 )
 _TASKS_WRITE = ToolAction(
     "tasks.write",
     "Aufgaben ändern",
-    ToolExecutionPolicy.ASK,
-    ToolExecutionPolicy.ASK,
     category="write",
     mutates=True,
 )
 _TASKS_DELETE = ToolAction(
     "tasks.delete",
     "Aufgaben löschen",
-    ToolExecutionPolicy.ASK,
-    ToolExecutionPolicy.ASK,
     category="delete",
     mutates=True,
 )

@@ -150,13 +150,13 @@ async def _successful_handler(_arguments, _context) -> ToolResult:
 @pytest.mark.parametrize("category", [{}, {"category": "unknown"}])
 def test_tool_action_requires_an_explicit_valid_category(category):
     with pytest.raises((TypeError, ValueError), match="category"):
-        ToolAction("example.read", "Lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, **category)
+        ToolAction("example.read", "Lesen", **category)
 
 
 @pytest.mark.parametrize("contributed", [False, True])
 def test_tool_registry_rejects_conflicting_categories(monkeypatch, contributed):
-    read = ToolAction("example.shared", "Aktion", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="read")
-    write = ToolAction("example.shared", "Aktion", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="write")
+    read = ToolAction("example.shared", "Aktion", category="read")
+    write = ToolAction("example.shared", "Aktion", category="write")
     if not contributed:
         with pytest.raises(ValueError, match="conflicting categories"):
             ToolRegistry([], group_actions={"example": (read, write)})
@@ -228,7 +228,7 @@ async def test_permission_preparation_never_executes_the_proposed_write(tmp_path
     assert result.is_error == (decision in (PermissionDecision.DENY, PermissionDecision.USER_DENIED))
     assert context.user_denied == (decision == PermissionDecision.USER_DENIED)
     assert not (context.root_files.session_storage.session_path(context.session.id) / "files" / "report.txt").exists()
-    assert tool_registry.action_default("permissions.request", trust) == ToolExecutionPolicy.AUTO
+    assert tool_execution_policy(ToolSettings().select_trust(trust), "permissions.request") == ToolExecutionPolicy.AUTO
     if decision == PermissionDecision.ASK:
         assert context.ask_handler.await_args.args[0].available_decisions == ("allow_session", "deny")
 
@@ -429,10 +429,10 @@ def _session_read_records(context: ToolContext, messages: list[Message], runs=()
 
 @pytest.mark.parametrize("alias", ["Server", ""])
 async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkeypatch, tmp_path, alias) -> None:
-    assert tool_registry.action_default("execution_agent.list", TrustLevel.PRIVATE) == ToolExecutionPolicy.AUTO
-    assert tool_registry.action_default("execution_agent.list", TrustLevel.PUBLIC) == ToolExecutionPolicy.ASK
+    assert tool_execution_policy(ToolSettings().select_trust(TrustLevel.PRIVATE), "execution_agent.list") == ToolExecutionPolicy.AUTO
+    assert tool_execution_policy(ToolSettings().select_trust(TrustLevel.PUBLIC), "execution_agent.list") == ToolExecutionPolicy.ASK
     assert all(
-        tool_registry.action_default("execution_agent.select", trust) == ToolExecutionPolicy.ASK
+        tool_execution_policy(ToolSettings().select_trust(trust), "execution_agent.select") == ToolExecutionPolicy.ASK
         for trust in (TrustLevel.PRIVATE, TrustLevel.PUBLIC)
     )
     first = ExecutionAgent(id=uuid4(), user_id=uuid4(), alias=alias, computer_name="host", platform="linux")
@@ -584,8 +584,6 @@ def _shared_adapter(
     action = ToolAction(
         "tasks.read",
         "Aufgaben lesen",
-        ToolExecutionPolicy.ASK,
-        ToolExecutionPolicy.ASK,
         category="read",
     )
 
@@ -951,8 +949,6 @@ async def test_bound_integration_tool_rechecks_source_after_approval(
             ToolAction(
                 "integration.example",
                 "Integration verwenden",
-                ToolExecutionPolicy.ASK,
-                ToolExecutionPolicy.ASK,
                 category="write",
             ),
         ),
@@ -1100,7 +1096,7 @@ async def test_aggregate_shared_tool_binds_all_current_instances(
     tmp_path, monkeypatch
 ) -> None:
     action = ToolAction(
-        "tasks.read", "Aufgaben lesen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="read"
+        "tasks.read", "Aufgaben lesen", category="read"
     )
 
     async def handler(_arguments, context):
@@ -1209,10 +1205,10 @@ async def test_contributed_authorization_must_cover_every_declared_action(
         handler=_successful_handler,
         actions=(
             ToolAction(
-                "integration.read", "Lesen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="read"
+                "integration.read", "Lesen", category="read"
             ),
             ToolAction(
-                "integration.write", "Schreiben", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="write"
+                "integration.write", "Schreiben", category="write"
             ),
         ),
         integration_id=str(integration.id),
@@ -1243,8 +1239,6 @@ async def test_resource_policy_disabled_blocks_contributed_tool_effect(
     action = ToolAction(
         "integration.resource.read",
         "Lesen",
-        ToolExecutionPolicy.ASK,
-        ToolExecutionPolicy.ASK,
         category="read",
     )
     request = PermissionRequest(
@@ -1284,7 +1278,7 @@ async def test_resource_policy_disabled_blocks_contributed_tool_effect(
         policy = tool_execution_policy(
             settings,
             permission.capability,
-            action.default_policy_for(settings.trust_level),
+            action.default_policy(settings),
             integration_id=permission.policy_integration_id,
             resource_key=permission.policy_resource_key,
         )
@@ -1518,25 +1512,24 @@ def test_automation_tools_have_bounded_schemas_catalog_and_policy_defaults() -> 
     ].description
     assert "cron+timezone or offset run_at" in definitions["create_automation"].description
     assert "cron+timezone or offset run_at" in definitions["edit_automation"].description
-    assert tool_registry.action_default(
-        "automation.read", TrustLevel.PRIVATE
+    assert tool_execution_policy(
+        ToolSettings().select_trust(TrustLevel.PRIVATE), "automation.read"
     ) == ToolExecutionPolicy.AUTO
-    assert tool_registry.action_default(
-        "automation.read", TrustLevel.PUBLIC
+    assert tool_execution_policy(
+        ToolSettings().select_trust(TrustLevel.PUBLIC), "automation.read"
     ) == ToolExecutionPolicy.ASK
-    for capability in ("automation.create", "session.read"):
-        for trust in (TrustLevel.PRIVATE, TrustLevel.PUBLIC):
-            assert tool_registry.action_default(capability, trust) == ToolExecutionPolicy.AUTO
+    assert tool_execution_policy(ToolSettings(), "session.read") == ToolExecutionPolicy.AUTO
     for capability in (
+        "automation.create",
         "automation.update",
         "automation.run",
         "automation.delete",
     ):
-        assert tool_registry.action_default(
-            capability, TrustLevel.PRIVATE
+        assert tool_execution_policy(
+            ToolSettings().select_trust(TrustLevel.PRIVATE), capability
         ) == ToolExecutionPolicy.ASK
-        assert tool_registry.action_default(
-            capability, TrustLevel.PUBLIC
+        assert tool_execution_policy(
+            ToolSettings().select_trust(TrustLevel.PUBLIC), capability
         ) == ToolExecutionPolicy.ASK
     for tool in catalog_tools.values():
         assert tool["actions"][0]["allowedPolicies"] == ["disabled", "ask", "auto"]

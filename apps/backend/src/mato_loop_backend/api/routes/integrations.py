@@ -1784,10 +1784,9 @@ async def get_integration_permissions(
         raise ApiError(404, "agentProfile.notFound")
     actions = tool_registry.integration_resource_actions(instance)
     resources = await api_integration_resources._integration_resources(db, instance) if actions else ()
-    tools = ToolSettings()
+    tools = await SettingsStore.load(db, ToolSettings)
     only = IntegrationSettings(instances=[instance])
-    if profile_id is not None:
-        apply_integration_permissions(tools, only)
+    apply_integration_permissions(tools, only if profile_id is not None else IntegrationSettings())
     inherited = {
         trust.value: api_integration_resources._access_payload(instance, resources, tools.model_copy(deep=True).select_trust(trust))
         for trust in TrustLevel

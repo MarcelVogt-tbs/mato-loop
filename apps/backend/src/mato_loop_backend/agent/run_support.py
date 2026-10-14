@@ -282,7 +282,7 @@ def _tool_policy(
             (
                 ToolExecutionPolicy(snapshot["integrationDefaults"].get(str(integration_id), {}).get(request.capability, "disabled"))
                 if snapshot is not None
-                else action.default_policy_for(tool_settings.trust_level)
+                else action.default_policy(tool_settings)
             ),
             integration_id=integration_id,
             resource_key=resource_key,
@@ -296,9 +296,8 @@ def _tool_policy(
         (
             ToolExecutionPolicy(snapshot["actionDefaults"].get(request.capability, "disabled"))
             if snapshot is not None
-            else tool_registry.action_default(
-                request.capability, tool_settings.trust_level, integration_settings
-            )
+            else next((action.default_policy(tool_settings) for action in tool_registry.policy_actions(integration_settings)
+                       if action.capability == request.capability), ToolExecutionPolicy.ASK)
         ),
         resource_key=resource_key,
     ).policy
@@ -332,7 +331,7 @@ def _external_working_directory_policy(
         (
             ToolExecutionPolicy(snapshot["actionDefaults"][capability])
             if snapshot is not None
-            else tool_registry.action_default(capability, tool_settings.trust_level)
+            else ToolExecutionPolicy.ASK
         ),
     ).policy
     if snapshot is not None and (offered := snapshot.get("offeredCeiling")) is not None:

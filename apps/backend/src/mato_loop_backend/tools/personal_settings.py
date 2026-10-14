@@ -95,7 +95,7 @@ def _policy(context: ToolContext, capability: str) -> ToolExecutionPolicy:
     default = (
         _PERSONAL_SETTINGS_READ if capability == "settings.personal.read"
         else _PERSONAL_SETTINGS_WRITE
-    ).default_policy_for(context.tool_settings.trust_level)
+    ).default_policy(context.tool_settings)
     return permissions_resolution.tool_execution_policy(context.tool_settings, capability, default)
 
 

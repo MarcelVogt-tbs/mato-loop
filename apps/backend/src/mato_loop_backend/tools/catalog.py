@@ -62,7 +62,6 @@ def effective_tool_capabilities(
         if permissions_resolution.tool_execution_policy(
             settings,
             capability,
-            tool_registry.action_default(capability, settings.trust_level),
         )
         != ToolExecutionPolicy.DISABLED
         and (
@@ -75,7 +74,7 @@ def effective_tool_capabilities(
     ):
         if (
             permissions_resolution.tool_execution_policy(
-                settings, capability, tool_registry.action_default(capability, settings.trust_level),
+                settings, capability,
             ) != ToolExecutionPolicy.DISABLED
             and (available is True or (available is None and media_capabilities is None))
         ):
@@ -85,9 +84,6 @@ def effective_tool_capabilities(
         and permissions_resolution.tool_execution_policy(
             settings,
             "settings.agent_identity.update",
-            tool_registry.action_default(
-                "settings.agent_identity.update", settings.trust_level
-            ),
         )
         != ToolExecutionPolicy.DISABLED
     ):

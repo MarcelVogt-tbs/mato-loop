@@ -44,7 +44,6 @@ from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
-    ToolExecutionPolicy,
     UserIntegrationSettings,
 )
 from mato_loop_backend.tools.actions import ToolAction
@@ -831,12 +830,12 @@ async def execute_browser(arguments: BrowserActionArguments | _BrowserArguments,
     )
 
 
-_READ = ToolAction("browser.read", "Browser lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO, category="read")
-_WRITE = ToolAction("browser.write", "Browser bedienen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO, category="write", mutates=True)
-_CODE = ToolAction("browser.code", "Browser-Code ausführen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO, category="write", mutates=True)
-_FILESYSTEM_WRITE = ToolAction("filesystem.write", "Workspace schreiben", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="write", mutates=True)
-_FILESYSTEM_READ = ToolAction("filesystem.read", "Computer-Dateien lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, category="read")
-_SESSION_FILES_READ = ToolAction("session.files.read", "Session-Dateien lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO, category="read")
+_READ = ToolAction("browser.read", "Browser lesen", category="read")
+_WRITE = ToolAction("browser.write", "Browser bedienen", category="write", mutates=True)
+_CODE = ToolAction("browser.code", "Browser-Code ausführen", category="write", mutates=True)
+_FILESYSTEM_WRITE = ToolAction("filesystem.write", "Workspace schreiben", category="write", mutates=True)
+_FILESYSTEM_READ = ToolAction("filesystem.read", "Computer-Dateien lesen", category="read")
+_SESSION_FILES_READ = ToolAction("session.files.read", "Session-Dateien lesen", category="read")
 BROWSER_TOOLS = tuple(
     ToolContribution(
         name=name, label=label, icon="language", arguments_model=model,
@@ -878,8 +877,8 @@ BROWSER_TOOLS = tuple(
 )
 BROWSER_TOOL_ACTIONS = {tool.name: tool.arguments_model.internal_action for tool in BROWSER_TOOLS}
 
-_CONTROL = ToolAction("browser.control", "Browser-Steuerung anfordern", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="write", mutates=True)
-_RELEASE = ToolAction("browser.release", "Browser-Steuerung freigeben", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.AUTO, category="write", mutates=True)
+_CONTROL = ToolAction("browser.control", "Browser-Steuerung anfordern", category="write", mutates=True)
+_RELEASE = ToolAction("browser.release", "Browser-Steuerung freigeben", category="write", mutates=True)
 BROWSER_REQUEST_CONTROL = ToolContribution(
     name="browser_request_control", label="Browser-Steuerung anfordern", icon="language",
     description=(

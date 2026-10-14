@@ -651,9 +651,7 @@ describe('integration store', () => {
           capability: 'calendar.read',
           label: 'Lesen',
           allowedPolicies: ['disabled', 'ask', 'auto'],
-          globalPolicy: 'ask',
-          integrationPolicy: 'auto',
-          effectiveIntegrationPolicy: 'auto'
+          policy: 'auto'
         }
       ],
       resources: [

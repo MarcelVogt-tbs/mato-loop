@@ -25,7 +25,6 @@ from mato_loop_backend.settings import (
     IntegrationSettings,
     ToolExecutionPolicy,
     ToolSettings,
-    TrustLevel,
 )
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
 from mato_loop_backend.tools.actions import ToolAction
@@ -94,7 +93,7 @@ def _actions_enabled(
         if policy_resolver(
             tool_settings,
             action.capability,
-            action.default_policy_for(tool_settings.trust_level),
+            action.default_policy(tool_settings),
             integration_id=integration_id,
             resource_key=definition.policy_resource_key,
             include_scoped=True,
@@ -278,7 +277,7 @@ class ToolRegistry:
         self._policy_resolver = policy_resolver
         self._capability_resolver = capability_resolver
         self._allow_handler = allow_handler
-        self.actions_by_capability = {action.capability: action for action in self.policy_actions() if action.configurable}
+        self.actions_by_capability = {action.capability: action for action in self.policy_actions()}
 
     async def allow(
         self, context: ToolContext, request: PermissionRequest
@@ -711,7 +710,7 @@ class ToolRegistry:
                 "policy": self._policy_resolver(
                     tool_settings,
                     action.capability,
-                    action.default_policy_for(tool_settings.trust_level),
+                    action.default_policy(tool_settings),
                 ).value,
                 "configurable": action.configurable,
                 "allowedPolicies": [policy.value for policy in action.allowed_policies],
@@ -760,25 +759,6 @@ class ToolRegistry:
             for group_id in group_ids
             if tools_by_group.get(group_id) or self._group_actions.get(group_id)
         ]
-
-    def action_default(
-        self,
-        capability: str,
-        trust_level: TrustLevel,
-        integration_settings: IntegrationSettings | None = None,
-    ) -> ToolExecutionPolicy:
-        default_pairs = {
-            (action.private_default_policy, action.public_default_policy)
-            for action in self.policy_actions(integration_settings)
-            if action.capability == capability
-        }
-        if len(default_pairs) > 1:
-            raise ValueError(f"conflicting defaults for capability: {capability}")
-        private, public = next(
-            iter(default_pairs),
-            (ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK),
-        )
-        return private if trust_level == TrustLevel.PRIVATE else public
 
     def policy_actions(
         self, integration_settings: IntegrationSettings | None = None

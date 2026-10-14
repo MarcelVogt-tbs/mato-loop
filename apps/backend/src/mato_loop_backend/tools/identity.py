@@ -46,15 +46,10 @@ def _personal_settings_still_available(context: ToolContext) -> bool:
 async def _update_agent_identity(
     arguments: UpdateAgentIdentityArguments, context: ToolContext
 ) -> ToolResult:
-    from mato_loop_backend.tools.catalog import tool_registry
-
     context.tool_settings = await tools_access.profile_tool_settings(context)
     policy = permissions_resolution.tool_execution_policy(
         context.tool_settings,
         "settings.agent_identity.update",
-        tool_registry.action_default(
-            "settings.agent_identity.update", context.tool_settings.trust_level
-        ),
     )
     if policy == ToolExecutionPolicy.DISABLED:
         return ToolResult.error("tool.unavailable")
@@ -105,9 +100,6 @@ async def _update_agent_identity(
     current_policy = permissions_resolution.tool_execution_policy(
         context.tool_settings,
         "settings.agent_identity.update",
-        tool_registry.action_default(
-            "settings.agent_identity.update", context.tool_settings.trust_level
-        ),
     )
     if not _personal_settings_still_available(context) or current_policy == ToolExecutionPolicy.DISABLED or (
         current_policy == ToolExecutionPolicy.ASK and not approval_received
@@ -297,8 +289,6 @@ UPDATE_AGENT_IDENTITY = ToolDefinition(
                 ToolAction(
                     "settings.agent_identity.update",
                     "Persona ändern",
-                    ToolExecutionPolicy.ASK,
-                    ToolExecutionPolicy.ASK,
                     category="write",
                     mutates=True,
                 ),

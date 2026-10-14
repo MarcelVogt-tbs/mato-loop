@@ -145,6 +145,5 @@ REQUEST_SESSION_PERMISSIONS = ToolDefinition(
     '"_reason":"Read the working directory."}}],"_reason":"Prepare access for the planned task."}',
     RequestSessionPermissionsArguments, request_session_permissions,
     label="Session-Freigaben anfragen", icon="verified_user",
-    actions=(ToolAction("permissions.request", "Freigaben anfragen", ToolExecutionPolicy.AUTO,
-                        ToolExecutionPolicy.AUTO, category="write", configurable=False, allowed_policies=(ToolExecutionPolicy.AUTO,)),),
+    actions=(ToolAction("permissions.request", "Freigaben anfragen", category="write", configurable=False, allowed_policies=(ToolExecutionPolicy.AUTO,)),),
 )

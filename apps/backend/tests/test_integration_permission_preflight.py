@@ -97,8 +97,6 @@ def preflight(monkeypatch):
     action = ToolAction(
         "tasks.write",
         "Schreiben",
-        ToolExecutionPolicy.ASK,
-        ToolExecutionPolicy.ASK,
         category="write",
         mutates=True,
     )
@@ -123,7 +121,7 @@ def preflight(monkeypatch):
             resource_actions=(
                 action,
                 ToolAction(
-                    "tasks.read", "Lesen", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK, category="read"
+                    "tasks.read", "Lesen", category="read"
                 ),
             ),
             resource_loader=loader,

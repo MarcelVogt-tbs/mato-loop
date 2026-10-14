@@ -33,7 +33,6 @@ from mato_loop_backend.integrations.registry import (
 from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
-    ToolExecutionPolicy,
     ToolSettings,
 )
 from mato_loop_backend.tools.catalog import tool_registry
@@ -249,8 +248,7 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
     assert discovery_permission.policy_integration_id == first.id
     assert json.loads(discovery_permission.resource_scope)["integrationId"] == str(first.id)
     actions = {action.capability: action for action in CALDAV_ADAPTER.resource_actions}
-    assert actions["calendar.read"].private_default_policy == ToolExecutionPolicy.AUTO
-    assert actions["calendar.read"].public_default_policy == ToolExecutionPolicy.ASK
+    assert actions["calendar.read"].category == "read"
     assert set(actions) == {
         "calendar.read",
         "calendar.write",
@@ -259,12 +257,9 @@ def test_adapter_declares_stable_shared_tools_and_policy_modes() -> None:
         "tasks.write",
         "tasks.delete",
     }
-    assert actions["tasks.read"].private_default_policy == ToolExecutionPolicy.AUTO
-    assert actions["tasks.read"].public_default_policy == ToolExecutionPolicy.ASK
-    assert actions["calendar.delete"].private_default_policy == ToolExecutionPolicy.ASK
-    assert actions["calendar.delete"].public_default_policy == ToolExecutionPolicy.ASK
-    assert actions["tasks.delete"].private_default_policy == ToolExecutionPolicy.ASK
-    assert actions["tasks.delete"].public_default_policy == ToolExecutionPolicy.ASK
+    assert actions["tasks.read"].category == "read"
+    assert actions["calendar.delete"].category == "delete"
+    assert actions["tasks.delete"].category == "delete"
     create_schema = tools["calendar_create_event"].arguments_model.model_json_schema()
     assert "idempotency_key" not in create_schema["properties"]
     assert create_schema["properties"]["timing"]["discriminator"]["propertyName"] == "type"

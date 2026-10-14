@@ -9,20 +9,19 @@ Extend the existing `ToolAction`, permission resolver, and grants. Do not add an
 - Categories: `read`, `read_sensitive`, `write`, `delete`.
 - Reading a secret is `read_sensitive`; storing or changing one is `write`.
 - Creating an empty file is `write`; explicitly removing or clearing existing content is `delete`.
-- Keep `allowed_policies`, `configurable`, and current integration fallback policies explicit.
+- Declare `allowed_policies` and `configurable` when an action restricts the standard policy choices.
 - `mutates` remains execution metadata for retry accounting, not a permission category.
 
 ```python
-ToolAction("example.write", "Eintrag erstellen", ToolExecutionPolicy.ASK,
-           ToolExecutionPolicy.ASK, category="write", mutates=True)
+ToolAction("example.write", "Eintrag erstellen", category="write", mutates=True)
 ```
 
 ## Defaults and overrides
 
-- Built-in actions inherit the saved private/public permission preset unless an action override exists.
+- Built-in and integration actions inherit the saved private/public permission preset by category unless an action override exists. `ToolAction.default_policy(settings)` applies the preset and allowed modes; adapters declare no separate trust defaults.
 - Profile rules and hard boundaries still apply. Changing a preset does not delete overrides.
 - Profile tool availability and shell prefixes use existing sparse overrides. Global tool disablement remains binding. Built-in access overrides require administration scope; ordinary users can override only their owned profiles when permitted.
-- Integration actions retain their own fallback and connection/resource policies for now.
+- Integration connection/resource policies and their scoped profile overrides remain authoritative over the shared default. Global built-in action overrides do not cap integration permissions. New connections must not materialize implicit defaults as saved rules.
 - Frozen delegation defaults must remain frozen when the live preset changes.
 
 ## Authorization

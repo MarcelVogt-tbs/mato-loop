@@ -31,7 +31,6 @@ from mato_loop_backend.settings import (
     AgentProfile,
     IntegrationInstance,
     SettingsStore,
-    ToolExecutionPolicy,
     UserIntegrationSettings,
 )
 from mato_loop_backend.tools.actions import ToolAction
@@ -41,7 +40,7 @@ if TYPE_CHECKING:
     from mato_loop_backend.tools.contracts import ToolResult
 
 TBS_DESK_CREDENTIAL_KIND = "tbs_desk.password"
-_READ = ToolAction("support.read", "Supportdaten lesen", ToolExecutionPolicy.AUTO, ToolExecutionPolicy.ASK, category="read")
+_READ = ToolAction("support.read", "Supportdaten lesen", category="read")
 
 
 def _camel(value: str) -> str:

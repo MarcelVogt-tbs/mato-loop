@@ -25,7 +25,7 @@ const builtinId = '00000000-0000-4000-8000-000000000001'
 const ownId = '00000000-0000-4000-8000-000000000005'
 const branch = () => ({ policies: {}, integrationPolicies: {}, resourcePolicies: {} })
 const rights = () => ({ privatePermissions: branch(), publicPermissions: branch() })
-const action = (capability) => ({ capability, label: 'Schreiben', policy: 'ask', effectiveIntegrationPolicy: 'ask', configurable: true, allowedPolicies: ['disabled', 'ask', 'auto'] })
+const action = (capability) => ({ capability, label: 'Schreiben', policy: 'ask', configurable: true, allowedPolicies: ['disabled', 'ask', 'auto'] })
 const groups = (capability, toolName) => Object.fromEntries(['private', 'public'].map((trust) => [trust, [{ id: 'test', label: 'Rechte', actions: toolName ? [] : [action(capability)], tools: toolName ? [{ name: toolName, label: 'Shell', actions: [action(capability)] }] : [] }]]))
 
 async function mount(Page, props, path, name, pinia = createPinia()) {
@@ -268,17 +268,19 @@ it('retains the profile across tabs and removes only its own availability overri
   expect([page().selectedId, page().payload().shellPrefixes]).toEqual([ownId, { read: [['git', 'status']], write: [] }])
 })
 
-it('finds an MCP tool by technical name and shows its description in the permission dialog', async () => {
+it('sets profile resource availability after finding an MCP tool by technical name', async () => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   const resources = [
     { key: 'tool:search', label: 'Tickets suchen', toolName: 'search_tickets', description: 'Search ticket contents.' },
     { key: 'tool:lookup', label: 'Ticket abrufen', toolName: 'get_ticket', description: 'Read a ticket and its entries.' }
   ]
+  const permissions = { ...rights(), resourceAvailability: {} }
   await mount(IntegrationPermissionEditor, {
-    modelValue: { ...rights(), resourceAvailability: {} },
+    modelValue: permissions, profileId: builtinId,
     data: { inherited: Object.fromEntries(['private', 'public'].map((trust) => [trust, { actions: [action('mcp.call')], resources }])) }
   }, '/tools', 'settings-tools')
-  root.querySelector('button').click()
+  const button = label => [...document.querySelectorAll('button')].find(item => item.textContent.includes(label))
+  button('Eigene Regel hinzufügen').click()
   const input = await vi.waitUntil(() => document.querySelector('.q-dialog input[role="combobox"]'))
   input.focus()
   input.value = 'get_ticket'
@@ -287,6 +289,15 @@ it('finds an MCP tool by technical name and shows its description in the permiss
   option.click()
   await nextTick()
   expect(document.querySelector('.q-dialog').textContent).toContain('Read a ticket and its entries.')
+  const actionField = [...document.querySelectorAll('.q-dialog .q-field')].find(item => item.querySelector('.q-field__label')?.textContent === 'Aktion')
+  actionField.querySelector('[role="combobox"]').click()
+  const availability = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find(item => item.querySelector('.q-item__label')?.textContent === 'Verfügbarkeit'))
+  availability.click()
+  await vi.waitUntil(() => !document.querySelector('[role="option"]'))
+  document.querySelector('.q-dialog [role="switch"]').click()
+  button('Übernehmen').click()
+  await vi.waitUntil(() => !document.querySelector('.q-dialog'))
+  expect([permissions.resourceAvailability, permissions.privatePermissions.resourcePolicies, permissions.publicPermissions.resourcePolicies]).toEqual([{ 'tool:lookup': false }, {}, {}])
 })
 
 it('saves a personal integration override for a global profile without a tool ceiling', async () => {
@@ -298,7 +309,7 @@ it('saves a personal integration override for a global profile without a tool ce
   vi.spyOn(integrations, 'fetchCatalog').mockResolvedValue()
   vi.spyOn(useExecutionAgentStore(pinia), 'fetchAll').mockResolvedValue()
   api.get.mockImplementation(async () => ({ data: {
-    integrationId: 'calendar', name: 'Mein Kalender', providerType: 'caldav', permissions: { ...rights(), available: null, privatePermissions: { ...branch(), resourcePolicies: { 'calendar:work': { 'calendar.write': 'ask' } } } },
+    integrationId: 'calendar', name: 'Mein Kalender', providerType: 'caldav', permissions: { ...rights(), available: null, privatePermissions: { ...branch(), resourcePolicies: { 'calendar:work': { 'calendar.write': 'ask' } } }, publicPermissions: { ...branch(), resourcePolicies: { 'calendar:work': { 'calendar.write': 'disabled' } } } },
     inheritedAvailable: true, profiles: [{ id: builtinId, name: 'Allgemein', scope: 'instance' }],
     inherited: Object.fromEntries(['private', 'public'].map((trust) => [trust, { actions: [action('calendar.write')], resources: [{ key: 'calendar:work', label: 'Arbeit', available: true, applicableCapabilities: ['calendar.write'] }] }]))
   } }))
@@ -313,7 +324,14 @@ it('saves a personal integration override for a global profile without a tool ce
   await page().selectProfile(builtinId)
   page().permissions.privatePermissions.policies['calendar.write'] = 'auto'
   await nextTick()
-  expect(root.textContent).toContain('Wirksam: Automatisch')
+  expect(root.textContent).toContain('Automatisch')
   await page().save()
   expect(api.put).toHaveBeenCalledWith('/integrations/calendar/permissions', expect.objectContaining({ privatePermissions: expect.objectContaining({ policies: { 'calendar.write': 'auto' } }) }), { params: { scope: 'personal', profile_id: builtinId } })
+  root.querySelector('.q-expansion-item .q-item').click()
+  await nextTick()
+  root.querySelector('[aria-label="Arbeit: Schreiben, Private Modelle entfernen"]').click()
+  await vi.waitUntil(() => !page().permissions.privatePermissions.resourcePolicies['calendar:work'])
+  await page().save()
+  const saved = api.put.mock.lastCall[1]
+  expect([saved.privatePermissions.resourcePolicies, saved.publicPermissions.resourcePolicies]).toEqual([{}, { 'calendar:work': { 'calendar.write': 'disabled' } }])
 })

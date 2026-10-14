@@ -38,35 +38,7 @@ class McpIntegrationService:
     integration_type = "mcp"
     adapter_type = "mcp_streamable_http"
     config_model = McpConfig
-    capability = "mcp.call"
-    defaults = None
     token_required = False
-
-    @classmethod
-    def _apply_defaults(cls, tools, instance: IntegrationInstance) -> None:
-        if cls.defaults is None:
-            return
-        config = cls.config_model.model_validate(instance.config)
-        integration_id = str(instance.id)
-        labels = {}
-        resource_policies = {}
-        for item in config.tools:
-            default = cls.defaults.tools.get(item.name)
-            if default is None:
-                continue
-            resource_key = mcp_resource_key(item.name)
-            labels[resource_key] = default.label
-            resource_policies[resource_key] = {cls.capability: default.policy}
-        for permissions in ((tools.private_permissions, tools.public_permissions) if isinstance(tools, ToolSettings) else ()):
-            permissions.integration_policies[integration_id] = {
-                cls.capability: cls.defaults.server_policy
-            }
-            if resource_policies:
-                permissions.resource_policies[integration_id] = {
-                    key: dict(value) for key, value in resource_policies.items()
-                }
-        if labels:
-            tools.resource_labels[integration_id] = labels
 
     @classmethod
     def _validate_connection(cls, endpoint: str, token: str | None) -> str:
@@ -186,10 +158,6 @@ class McpIntegrationService:
             )
             instance.credential_id = credential.id
         settings.instances.append(instance)
-        if cls.defaults is not None:
-            tool_settings = await _load_tools(db, owner_id, for_update=True)
-            cls._apply_defaults(tool_settings, instance)
-            await _save_settings(db, tool_settings, owner_id)
         await _save_settings(db, settings, owner_id)
         await db.commit()
         return instance

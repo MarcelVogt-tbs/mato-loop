@@ -6,7 +6,7 @@
   <q-card v-if="!overrides.length" flat class="app-surface q-mb-md">
     <q-card-section class="app-muted">Keine eigenen Regeln. Es gelten die Vorgaben.</q-card-section>
   </q-card>
-  <PermissionFields v-model="permissions" :groups-by-trust="groupsByTrust" :model-trust-enabled="modelTrustEnabled" tool-hierarchy overrides-only readonly :disabled="disabled">
+  <PermissionFields v-model="permissions" :groups-by-trust="groupsByTrust" :model-trust-enabled="modelTrustEnabled" tool-hierarchy overrides-only>
     <template #policy="{ action, audience, toolName }">
       <div class="text-caption app-muted">{{ audience.label }}</div>
       <div class="row items-center no-wrap">

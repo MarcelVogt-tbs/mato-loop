@@ -45,7 +45,7 @@ def browser_policy_case(request, monkeypatch):
     )
     instance._browser_attached = True
     integrations = IntegrationSettings(instances=[instance])
-    settings = ToolSettings().select_trust(trust)
+    settings = ToolSettings(private_permission_preset="auto_all", public_permission_preset="auto_all").select_trust(trust)
     session = ChatSession(id=uuid4(), user_id=instance.owner_id)
     run = AgentRun(
         id=uuid4(), session_id=session.id, trust_level=trust.value,
@@ -156,34 +156,22 @@ def browser_script_case(browser_policy_case, request):
     return case
 
 
-def test_browser_catalog_defaults_survive_central_trust_resolution(browser_policy_case):
+def test_browser_catalog_uses_the_selected_base_preset(browser_policy_case):
     case = browser_policy_case
+    case.settings.private_permission_preset = "ask_changes"
+    case.settings.public_permission_preset = "ask_changes"
     actions = mock_tools_catalog.tool_registry.integration_resource_actions(case.instance)
     assert {action.capability for action in actions} == {
         "browser.read", "browser.write", "browser.code", "browser.control", "browser.release",
         "filesystem.read", "session.files.read", "filesystem.write",
     }
     for action in actions:
-        private_default = (
-            ToolExecutionPolicy.ASK
-            if action.capability in {"browser.control", "filesystem.write"}
-            else ToolExecutionPolicy.AUTO
-        )
-        public_default = (
-            ToolExecutionPolicy.ASK
-            if action.capability in {"browser.control", "filesystem.read", "filesystem.write"}
-            else ToolExecutionPolicy.AUTO
-        )
-        assert action.private_default_policy == private_default
-        assert action.public_default_policy == public_default
         for integration_id in (None, case.instance.id):
-            resolved_default = action.default_policy_for(case.settings.trust_level)
-            if integration_id is None and action.capability == "session.files.read" and case.settings.trust_level == TrustLevel.PUBLIC:
-                resolved_default = ToolExecutionPolicy.ASK
+            resolved_default = ToolExecutionPolicy.AUTO if action.category == "read" else ToolExecutionPolicy.ASK
             resolution = mock_permissions_resolution.resolve_tool_execution_policy(
                 case.settings,
                 action.capability,
-                action.default_policy_for(case.settings.trust_level),
+                action.default_policy(case.settings),
                 integration_id=integration_id,
             )
             assert (resolution.policy, resolution.source, resolution.reason) == (
@@ -191,7 +179,7 @@ def test_browser_catalog_defaults_survive_central_trust_resolution(browser_polic
             )
 
 
-async def test_browser_release_is_auto_for_public_and_private(browser_policy_case):
+async def test_browser_release_uses_the_auto_preset(browser_policy_case):
     case = browser_policy_case
     case.call.name = "browser_release_control"
     case.call.arguments = {}

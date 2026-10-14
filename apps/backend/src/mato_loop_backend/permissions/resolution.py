@@ -7,19 +7,13 @@ from mato_loop_backend.settings import ToolExecutionPolicy, ToolSettings, cap_ag
 from mato_loop_backend.tools.actions import ToolPolicyResolution
 
 
-def tool_default_policy(settings: ToolSettings, capability: str, fallback: ToolExecutionPolicy) -> ToolExecutionPolicy:
+def tool_default_policy(settings: ToolSettings, capability: str, fallback: ToolExecutionPolicy = ToolExecutionPolicy.ASK) -> ToolExecutionPolicy:
     if settings._frozen_action_defaults is not None:
         return ToolExecutionPolicy(settings._frozen_action_defaults.get(capability, fallback))
-    from mato_loop_backend.settings.tool_presets import preset_policy
     from mato_loop_backend.tools.catalog import tool_registry
 
     action = tool_registry.actions_by_capability.get(capability)
-    if action is None:
-        return fallback
-    policy = preset_policy(getattr(settings, f"{settings.trust_level.value}_permission_preset"), action.category)
-    return policy if policy in action.allowed_policies else (
-        ToolExecutionPolicy.ASK if ToolExecutionPolicy.ASK in action.allowed_policies else fallback
-    )
+    return action.default_policy(settings) if action is not None else fallback
 
 
 def resolve_tool_execution_policy(

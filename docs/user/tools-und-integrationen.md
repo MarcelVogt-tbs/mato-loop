@@ -62,14 +62,14 @@ Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte od
 1. Den gewünschten Grundstandard im jeweiligen Dropdown auswählen. **Vorgabe** kennzeichnet die Ausgangseinstellung.
 2. **Speichern** anklicken.
 
-- Vorhandene eigene Aktionsregeln bleiben erhalten. Der neue Grundstandard gilt dort, wo keine eigene Regel gesetzt ist, auch für neu hinzukommende eingebaute Aktionen.
+- Vorhandene eigene Aktionsregeln bleiben erhalten. Der neue Grundstandard gilt dort, wo keine eigene Regel gesetzt ist, auch für Integrationen und neu hinzukommende Aktionen.
 - Zum Wiederherstellen der Vererbung entfernen Sie die jeweilige eigene Regel unter **Berechtigungen**.
 - Profil- und Integrationsregeln, Shell-Präfixe und technische Tool-Verfügbarkeit bleiben erhalten.
 - Beim Tabwechsel mit ungespeicherten Änderungen können Sie den Entwurf verwerfen oder abbrechen und zuerst speichern.
 
 #### Geltungsbereich und Grenzen
 
-- Die Tabelle beschreibt globale Tool-Vorgaben. Eigene Profilregeln können abweichen, beispielsweise automatische Schreibaktionen bei Build.
+- Die Tabelle beschreibt die gemeinsamen Vorgaben für Tools und Integrationen. Eigene Profil-, Verbindungs- und Ressourcenregeln können abweichen, beispielsweise automatische Schreibaktionen bei Build.
 - Technische Sperren und die für eine Aktion zulässigen Berechtigungswerte gelten weiterhin.
 - Ein automatisch erlaubter Shell-Befehl kann löschen. Die Kategorie **Löschen** erfasst keine beliebigen Löschwirkungen innerhalb anderer Aktionen.
 - Die Erkennung sensibler Dateien und Ausgaben ist nicht vollständig; sie erkennt nicht jede vertrauliche Information.
@@ -101,7 +101,7 @@ Verfügbare Tools hängen von Profil, Session, Modellfähigkeiten, Standardmodel
 
 ## Globale und persönliche Integrationen
 
-Gemeinsame Verbindungen und Rechte stehen unter **Administration > Integrationen**, persönliche unter **Einstellungen > Integrationen**. **Einstellungen > Profilzuordnungen** auf diesen Seiten steuert die Profil-Verfügbarkeit einzelner Verbindungen. Jede Verbindung hat unabhängige private/öffentliche Rechte, ohne globale Tool-Berechtigungsobergrenze. Persönliche Verbindungen können zusätzlich Rechte und Verfügbarkeit je zugänglichem Profil überschreiben, auch für globale Profile und bei gesperrten persönlichen Agenten. CalDAV bietet Standardressourcen. Adapterfreigaben bestimmen erlaubte Verbindungstypen; persönliche Zugangsdaten bleiben eigentümergebunden.
+Gemeinsame Verbindungen und Rechte stehen unter **Administration > Integrationen**, persönliche unter **Einstellungen > Integrationen**. **Einstellungen > Profilzuordnungen** auf diesen Seiten steuert die Profil-Verfügbarkeit einzelner Verbindungen. Ohne eigene Regel gilt das globale **Freigabeverhalten** anhand der Aktionskategorie. Jede Verbindung kann eigene private/öffentliche Regeln festlegen; globale Aktionsregeln für eingebaute Tools sind dabei keine zusätzliche Obergrenze. Persönliche Verbindungen können zusätzlich Rechte und Verfügbarkeit je zugänglichem Profil überschreiben, auch für globale Profile und bei gesperrten persönlichen Agenten. CalDAV bietet Standardressourcen. Adapterfreigaben bestimmen erlaubte Verbindungstypen; persönliche Zugangsdaten bleiben eigentümergebunden.
 
 Der aktuelle Einstellungsbereich bestimmt den Eigentümer neuer Verbindungen. Globale und persönliche Listen sind getrennt. Eigentümer können Verbindungen aktivieren/deaktivieren; technische Nichtverfügbarkeit wird gesondert gezeigt. Computergebundene Browser-/OpenSCAD-Verbindungen sind immer persönlich. MCP verwendet eigene Seiten mit demselben Eigentümer- und Berechtigungsmodell.
 
@@ -153,11 +153,13 @@ Der Stift in der Integrationsliste öffnet dieselbe Seite für bestehende Verbin
 
 **Verbindung testen** im Tab **Einstellungen** prüft die gespeicherte Konfiguration und zeigt das Ergebnis auf der Seite. Speichern Sie Änderungen deshalb vor dem Test. OpenSCAD-Erkennung, Browser-Einrichtung und **Browserprofil zurücksetzen** stehen in der jeweiligen Konfiguration. Die Liste bietet Aktivierung, Bearbeiten und Löschen mit Bestätigung. Bisherige Berechtigungslinks führen direkt zum Tab **Berechtigungen**.
 
-### Integrationsrechte und Profil-Overrides
+### Integrationsrechte und eigene Profilregeln
 
-Im Tab **Berechtigungen** wählen Sie **Standard für diese Integration** oder ein Agentenprofil. Der Standard zeigt alle verfügbaren Aktionsrechte; beim Profil erscheinen nur eigene Overrides. **Override hinzufügen** bietet die Integration oder eine Ressource als Bereich sowie die Aktion oder **Verfügbarkeit**. Entfernen stellt die Vererbung wieder her. Globale Verbindungen erlauben Administratoren Overrides für globale Profile; persönliche Verbindungen erlauben ihrem Eigentümer Overrides für zugängliche globale und eigene Profile. Die Regeln betreffen nur diese Verbindung.
+Im Tab **Berechtigungen** wählen Sie **Standard für diese Integration** oder ein Agentenprofil. Beide Ansichten zeigen nur eigene Berechtigungsregeln. **Eigene Regel hinzufügen** öffnet die Auswahl **Bereich** (Integration oder Ressource), danach **Aktion**, bei aktiver Modelltrennung **Modellbereich** und schließlich **Berechtigung**. Der Wert ist immer **Automatisch**, **Nachfragen** oder **Deaktiviert**, soweit die Aktion ihn unterstützt. Bearbeiten und Entfernen erfolgen je Modellbereich; Entfernen stellt die Vererbung wieder her und erhält den anderen Modellbereich. Globale Verbindungen erlauben Administratoren eigene Regeln für globale Profile; persönliche Verbindungen erlauben ihrem Eigentümer Regeln für zugängliche globale und eigene Profile. Die Regeln betreffen nur diese Verbindung. **Übernehmen** aktualisiert das Formular; erst **Speichern** speichert dauerhaft.
 
-Ressourcen erscheinen als aufklappbare Zeilen mit Verfügbarkeitsschalter. Beim Standard sind alle erkannten Ressourcen sichtbar, bei einem Profil nur Ressourcen mit eigenen Abweichungen. Im aufgeklappten Bereich stehen nur eigene Berechtigungs-Overrides. Ausschalten sperrt die Ressource im gewählten Bereich, ohne Regeln zu löschen. Beim Einschalten gelten die gespeicherten Regeln wieder. Profilabweichungen haben gegenüber dem Verbindungsstandard Vorrang; entfernte oder serverseitig gesperrte Ressourcen werden dadurch nicht zugänglich. Der Pfeil zum Zurücksetzen der Verfügbarkeit stellt die Vererbung wieder her. Der Instanzschalter für Public/Private gilt auch hier.
+Ressourcen erscheinen als aufklappbare Zeilen mit Verfügbarkeitsschalter. Beim Standard sind alle erkannten Ressourcen sichtbar, bei einem Profil nur Ressourcen mit eigenen Abweichungen. Im aufgeklappten Bereich stehen nur eigene Berechtigungsregeln. Ausschalten sperrt die Ressource im gewählten Bereich, ohne Regeln zu löschen. Beim Einschalten gelten die gespeicherten Regeln wieder. Profilabweichungen haben gegenüber dem gleichen Verbindungswert Vorrang; eine Ressourcenregel ist spezieller als ein allgemeines Aktionsrecht. Entfernte oder serverseitig gesperrte Ressourcen werden dadurch nicht zugänglich. Der Pfeil zum Zurücksetzen der Verfügbarkeit stellt die Vererbung wieder her. **Verfügbarkeit anpassen** legt beim Profil einen eigenen Wert für die ganze Verbindung fest. Der Instanzschalter für Public/Private gilt auch hier; ausgeblendete öffentliche Regeln bleiben erhalten.
+
+Um beim Profil eine bisher nur geerbte Ressource ein- oder auszuschalten, wählen Sie **Eigene Regel hinzufügen**, die Ressource unter **Bereich** und **Verfügbarkeit** unter **Aktion**. Dadurch entsteht nur eine eigene Verfügbarkeitseinstellung; die Aktionsrechte bleiben geerbt.
 
 Die allgemeine Vorgabe **Integrationen standardmäßig verfügbar** steht im Agentenprofil unter **Weitere Einstellungen**. Einzelne Verbindungen werden ausschließlich an der Verbindung konfiguriert.
 
@@ -184,7 +186,7 @@ Die **Berechtigungen** der Verbindung verwalten Konto-/Ressourcenrechte für **P
 - **Nachfragen** zeigt vor der Aktion eine Freigabe.
 - **Automatisch** führt zulässige Aktionen ohne einzelne Nachfrage aus.
 
-Lesen und Schreiben unterstützen alle drei Modi. Löschen unterstützt nur **Nicht erlaubt** und **Nachfragen**. Serverseitig schreibgeschützte Kalender und Aufgabenlisten bleiben unabhängig von der MatoLoop-Richtlinie schreibgeschützt.
+Lesen, Schreiben und Löschen folgen dem Freigabeverhalten oder den eigenen Regeln. Serverseitig schreibgeschützte Kalender und Aufgabenlisten bleiben unabhängig von der MatoLoop-Richtlinie schreibgeschützt.
 
 Im Bereich **Standardressourcen dieses Kontos** wählen Sie unabhängig von der Modellklasse einen **Standardkalender** und eine **Standard-Aufgabenliste**. Unspezifische Abfragen und neue Einträge verwenden die Auswahl des aktuellen Einstellungsbereichs automatisch. Wenn Sie ausdrücklich eine andere Ressource angeben, hat diese Vorrang. Pro Instanz- oder persönlichem Bereich kann jeweils nur ein Standard aktiv sein.
 
@@ -226,7 +228,7 @@ An der BookStack-Verbindung konfigurieren Sie private/öffentliche Installations
 - **Nachfragen** zeigt vor der Aktion eine Freigabe.
 - **Automatisch** führt zulässige Aktionen ohne einzelne Nachfrage aus.
 
-Lesen und Schreiben unterstützen alle drei Modi. Löschen unterstützt nur **Nicht erlaubt** und **Nachfragen**.
+Lesen, Schreiben und Löschen folgen dem Freigabeverhalten oder den eigenen Regeln.
 
 Suche, Bücherliste und Regale sind keine einzeln freigebbaren Ressourcen. Sperren Sie ein Buch jedoch über **Nicht erlaubt**, verschwindet es trotzdem aus der Suche und aus der Bücherliste, und der Agent kann es auch nicht mehr einem Regal zuordnen oder daraus entfernen. Ersetzt er die Bücher eines Regals vollständig, bleiben gesperrte Bücher unangetastet, statt stillschweigend herauszufallen. Ein gelöschtes Regal löscht die enthaltenen Bücher nicht. Kann das API-Token mehr als 500 Bücher sehen, wird die Ressourcenverwaltung abgelehnt, statt Richtlinien für nicht geladene Bücher zu übersehen. Anhänge folgen der Richtlinie des Buches, zu dem die Seite gehört; das Hochladen einer lokalen Datei verlangt zusätzlich dieselbe Freigabe wie ein direkter Dateizugriff. Berechtigungen des verwendeten API-Tokens in BookStack bleiben zusätzlich wirksam: Was das Token dort nicht darf, kann MatoLoop nicht freigeben.
 
@@ -238,7 +240,7 @@ Beschreiben Sie im Chat das gewünschte Modell mit seinen notwendigen Abmessunge
 
 Der Agent erzeugt Quelltext, rendert und prüft Diagnosen, Abmessungen, Topologie und sechs beschriftete Ansichten. Visuelle Prüfung verwendet das aktive bildfähige Modell oder **Standardmodelle > Bildanalyse**, mit bis zu sieben Referenzbildern. Ohne passenden Helfer bleibt der Render nutzbar, aber visuell ungeprüft. Vorschau-OFF und Ansichts-PNGs sind temporär; nur ausdrücklich exportierte STL-Dateien werden dauerhaft versioniert. Unter **Ablage** oder **Computer-Dateien** schalten Sie `.scad` zwischen Quelle und 3D-Ansicht um und exportieren explizit STL. Erfolgreicher Render und Sichtprüfung beweisen keine verdeckte Geometrie, Passung, Wandstärke, Festigkeit oder Druckbarkeit.
 
-CAD-Rendering startet mit **Nachfragen**; die Verbindung kann automatisch erlauben oder deaktivieren, persönliche Verbindungen auch je Profil. Dateirichtlinien gelten unabhängig. OpenSCAD arbeitet mit Agent-Betriebssystemrechten, nicht in einer OS-Sandbox. Größere Projekte oder STL-Dateien können abgelehnt bzw. nur heruntergeladen werden; stärkere Isolation gehört zur Agent-Deploymentumgebung.
+CAD-Rendering zählt als **Schreiben** und benötigt unter den ausgelieferten Grundstandards eine Freigabe. Das gewählte Freigabeverhalten oder eine eigene Verbindungs-/Profilregel kann es automatisch erlauben. Dateirichtlinien gelten unabhängig. OpenSCAD arbeitet mit Agent-Betriebssystemrechten, nicht in einer OS-Sandbox. Größere Projekte oder STL-Dateien können abgelehnt bzw. nur heruntergeladen werden; stärkere Isolation gehört zur Agent-Deploymentumgebung.
 
 ## Webfetch konfigurieren
 
@@ -270,7 +272,7 @@ Der Agent kann Umgebungen, Container, Projekte, Images, Volumes und Netzwerke un
 
 ## SonoBin integrieren
 
-Die Musikverbindung benötigt SonoBins HTTPS-Basis-URL und einen persönlichen Bearer-Token aus dessen Kontoeinstellungen; `/mcp/` wird abgeleitet. Testen/Speichern erkennt den Tool-Katalog, ohne gespeicherte Rechte pauschal zurückzusetzen. Neue Tools verwenden ihre Hostvorgabe. Lesen kann automatisch erlaubt sein, Änderungen benötigen standardmäßig Freigabe.
+Die Musikverbindung benötigt SonoBins HTTPS-Basis-URL und einen persönlichen Bearer-Token aus dessen Kontoeinstellungen; `/mcp/` wird abgeleitet. Testen/Speichern erkennt den Tool-Katalog, ohne gespeicherte Rechte pauschal zurückzusetzen. Alle SonoBin-Tools teilen derzeit die Kategorie **Schreiben** und erben das Freigabeverhalten. Auch reine Leseaufrufe benötigen unter den ausgelieferten Grundstandards eine Freigabe, sofern keine eigene Regel sie automatisch erlaubt.
 
 Suchen, Playlists, Likes und entfernte Imports folgen SonoBins Kontorechten. Administration, Diagnostik und Assetdownloads brauchen entsprechende SonoBin-Berechtigungen und Serverkonfiguration. Eine Playliständerung lädt keine Musik herunter. Bei einem Import verfolgen Sie den Auftragsstatus bis zum bestätigten Bibliotheksimport; fertiger Download allein beweist ihn nicht. Benötigte Rechte zeigt SonoBins Verbindungskontext.
 
@@ -280,6 +282,6 @@ Generische Server stehen unter **Einstellungen > MCP-Server** bzw. **Administrat
 
 Erstellen oder aktualisieren Sie die Verbindung und prüfen Sie die erkannten Tools. Server- und Toolrechte haben private/öffentliche Werte; persönliche Verbindungen können sie je Profil überschreiben. Externe Beschreibungen gewähren keine Rechte, und ein fehlgeschlagener Refresh erhält den vorherigen Katalog. Produktadapter wie SonoBin richten Sie in ihrem eigenen Bereich ein.
 
-Die erkannten Tools stehen direkt in der Berechtigungsübersicht mit Anzeigename und gegebenenfalls abweichendem technischen Namen. Aufgeklappte Toolzeilen und der Override-Dialog zeigen die Beschreibung und Serverhinweise. Die Bereichsauswahl im Dialog durchsucht beide Namen. In der Standardansicht sehen Sie alle Tools, bei einem Agentenprofil nur eigene Overrides. Tool-Metadaten sind nicht verifizierte Serverangaben und bestimmen keine Berechtigungen.
+Die erkannten Tools stehen direkt in der Berechtigungsübersicht mit Anzeigename und gegebenenfalls abweichendem technischen Namen. Aufgeklappte Toolzeilen und der Dialog **Eigene Regel hinzufügen** zeigen die Beschreibung und Serverhinweise. Die Bereichsauswahl im Dialog durchsucht beide Namen. In der Standardansicht sehen Sie alle Tools, bei einem Agentenprofil nur eigene Abweichungen. Die Berechtigungszeilen zeigen jeweils nur eigene Regeln. MCP-Aufrufe teilen derzeit die Kategorie **Schreiben** und erben das Freigabeverhalten. Tool-Metadaten sind nicht verifizierte Serverangaben und bestimmen keine Berechtigungen.
 
 Für OAuth muss der Server MCP-Authentifizierungsmetadaten und Bearer-Zugriff unterstützen; ein Browser-SSO allein reicht nicht. Prüfen Sie **Administration > Grundeinstellungen** auf den richtigen öffentlichen Ursprung ohne Pfad, öffnen Sie **Anmeldung öffnen**, bestätigen Sie beim Anbieter und beenden Sie die Anmeldung in MatoLoop. Ein vorregistrierter Client benötigt den Callback `<ursprung>/api/mcp/oauth/callback`. Bei abgelaufenem Versuch oder Backend-Neustart starten Sie erneut; gespeicherte Verbindungen bleiben erhalten. Nach abgelehnter Token-Erneuerung ist eine neue Anmeldung nötig, kein automatischer Aufruf-Replay.

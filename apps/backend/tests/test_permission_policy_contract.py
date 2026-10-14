@@ -1115,6 +1115,9 @@ async def test_runtime_uses_bound_integration_resource_policy(
         integration_type="search",
         adapter_type="searxng",
         config={"base_url": "https://search.example.com"},
+        permissions={"publicPermissions": {"resourcePolicies": {
+            "calendar:work": {"network.search": "auto"},
+        }}},
     )
     request = PermissionRequest(
         capability="network.search",
@@ -1127,16 +1130,7 @@ async def test_runtime_uses_bound_integration_resource_policy(
         policy_integration_id=integration_id,
         policy_resource_key="calendar:work",
     )
-    tools = _tool_settings(
-        {
-            "policies": {"network.search": "ask"},
-            "resourcePolicies": {
-                str(integration_id): {
-                    "calendar:work": {"network.search": "auto"}
-                }
-            },
-        }
-    )
+    tools = _tool_settings({"policies": {"network.search": "ask"}})
 
     async def load_settings(_db, settings_type, **_kwargs):
         return (
@@ -1154,8 +1148,6 @@ async def test_runtime_uses_bound_integration_resource_policy(
                 ToolAction(
                     "network.search",
                     "Suchen",
-                    ToolExecutionPolicy.AUTO,
-                    ToolExecutionPolicy.AUTO,
                     category="read",
                 ),
             )
@@ -1317,8 +1309,6 @@ def test_integration_policy_precedence_and_hard_limits() -> None:
     action = ToolAction(
         "tasks.read",
         "Aufgaben lesen",
-        ToolExecutionPolicy.AUTO,
-        ToolExecutionPolicy.ASK,
         category="read",
     )
     settings = _tool_settings(
@@ -1338,20 +1328,20 @@ def test_integration_policy_precedence_and_hard_limits() -> None:
     integration = resolve_tool_execution_policy(
         settings,
         action.capability,
-        action.default_policy_for(settings.trust_level),
+        action.default_policy(settings),
         integration_id=integration_id,
     )
     resource = resolve_tool_execution_policy(
         settings,
         action.capability,
-        action.default_policy_for(settings.trust_level),
+        action.default_policy(settings),
         integration_id=integration_id,
         resource_key="project:main",
     )
     hard_limit = resolve_tool_execution_policy(
         settings,
         action.capability,
-        action.default_policy_for(settings.trust_level),
+        action.default_policy(settings),
         integration_id=integration_id,
         resource_key="project:main",
         hard_unavailable_capabilities=frozenset({action.capability}),
@@ -1374,7 +1364,7 @@ def test_integration_policy_precedence_and_hard_limits() -> None:
     overridden_disabled = resolve_tool_execution_policy(
         settings,
         action.capability,
-        action.default_policy_for(settings.trust_level),
+        action.default_policy(settings),
         integration_id=integration_id,
         resource_key="project:main",
     )
@@ -1386,15 +1376,13 @@ def test_integration_policy_precedence_and_hard_limits() -> None:
     restricted = ToolAction(
         "tasks.delete",
         "Aufgaben löschen",
-        ToolExecutionPolicy.ASK,
-        ToolExecutionPolicy.ASK,
         category="delete",
     )
     settings.permissions.policies[restricted.capability] = ToolExecutionPolicy.AUTO
     automatic = resolve_tool_execution_policy(
         settings,
         restricted.capability,
-        restricted.default_policy_for(settings.trust_level),
+        restricted.default_policy(settings),
     )
     assert (automatic.policy, automatic.reason) == (
         ToolExecutionPolicy.AUTO,
@@ -1408,7 +1396,7 @@ def test_integration_policy_precedence_and_hard_limits() -> None:
     invalid = resolve_tool_execution_policy(
         settings,
         action.capability,
-        action.default_policy_for(settings.trust_level),
+        action.default_policy(settings),
         integration_id=integration_id,
         resource_key="project:main",
     )
@@ -1666,15 +1654,7 @@ async def test_child_integration_ceiling_cannot_widen_ask_to_auto(tmp_path, monk
         settings.permissions.resource_policies[str(integration.id)] = {"calendar:test": {capability: ToolExecutionPolicy.ASK}}
     elif layer == "profile":
         settings._agent_permissions = AgentProfilePermissions(integration_policies={str(integration.id): {capability: "ask"}})
-    default = (
-        ToolExecutionPolicy.ASK
-        if layer == "default"
-        else ToolExecutionPolicy.AUTO
-    )
-    actions = Mock(
-        return_value=(ToolAction(capability, "Read", default, default, category="read"),)
-    )
-    monkeypatch.setattr(tool_registry, "integration_resource_actions", actions)
+    settings.public_permission_preset = "ask_all" if layer == "default" else "auto_all"
     snapshot = permission_snapshot(settings, {"calendar_query_events"}, integrations)
     assert "private-user" not in str(snapshot) and str(integration.credential_id) not in str(snapshot)
     parent = _session(user_id=uuid4())
@@ -1683,16 +1663,7 @@ async def test_child_integration_ceiling_cannot_widen_ask_to_auto(tmp_path, monk
     message = Message(id=run.input_message_id, provider_data={"_matoloop": {"delegationCeiling": snapshot}})
     db = _db_with_grants()
     db.get.side_effect = lambda model, key, **kw: message if model is Message else parent
-    actions.return_value = (
-        ToolAction(
-            capability,
-            "Read",
-            ToolExecutionPolicy.AUTO,
-            ToolExecutionPolicy.AUTO,
-            category="read",
-        ),
-    )
-    _mock_value = AsyncMock(return_value=(ToolSettings().select_trust(TrustLevel.PUBLIC), None))
+    _mock_value = AsyncMock(return_value=(ToolSettings(public_permission_preset="auto_all").select_trust(TrustLevel.PUBLIC), None))
     for _mock_target in (mock_agent_runtime, mock_agent_loop,):
         monkeypatch.setattr(_mock_target, 'load_agent_profile_tools', _mock_value)
     _mock_value = AsyncMock(return_value=integrations)

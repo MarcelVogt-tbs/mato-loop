@@ -175,8 +175,8 @@ def test_shell_tool_cannot_select_execution_targets() -> None:
     assert {
         action.capability: (
             action.label,
-            action.private_default_policy,
-            action.public_default_policy,
+            action.default_policy(ToolSettings().select_trust(TrustLevel.PRIVATE)),
+            action.default_policy(ToolSettings().select_trust(TrustLevel.PUBLIC)),
         )
         for action in tool_registry._operation_definitions["shell_run"].actions
     } == {

@@ -176,15 +176,12 @@ def test_category_defaults_and_saved_policies(
     trust: TrustLevel, capability: str
 ) -> None:
     settings = ToolSettings().select_trust(trust)
-    default = tool_registry.action_default(capability, trust)
-
-    assert default == ToolExecutionPolicy.AUTO
-    assert resolve_tool_execution_policy(settings, capability, default).policy == (
+    assert resolve_tool_execution_policy(settings, capability).policy == (
         ToolExecutionPolicy.ASK if trust == TrustLevel.PUBLIC or capability in {"session.files.write", "media.generate.image"} else ToolExecutionPolicy.AUTO
     )
     for policy in ToolExecutionPolicy:
         settings.permissions.policies[capability] = policy
-        assert resolve_tool_execution_policy(settings, capability, default).policy == policy
+        assert resolve_tool_execution_policy(settings, capability).policy == policy
 
 
 @pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
@@ -302,11 +299,11 @@ def test_only_coding_profiles_default_to_automatic_public_computer_reads(trust) 
                 else ToolExecutionPolicy.AUTO
             )
             assert resolve_tool_execution_policy(
-                settings, capability, tool_registry.action_default(capability, trust)
+                settings, capability
             ).policy == expected
             settings._agent_permissions.policies[capability] = ToolExecutionPolicy.ASK
             assert resolve_tool_execution_policy(
-                settings, capability, tool_registry.action_default(capability, trust)
+                settings, capability
             ).policy == ToolExecutionPolicy.ASK
 
 

@@ -53,7 +53,6 @@ from mato_loop_backend.integrations.mealie.service import MealieIntegrationServi
 from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
-    ToolExecutionPolicy,
 )
 
 RECIPE_ID = "12345678-1234-5678-9234-567812345678"
@@ -217,19 +216,16 @@ def test_adapter_is_a_standalone_shared_tool_definition() -> None:
         "meal_plan.delete",
     }
     assert all(
-        action.private_default_policy == ToolExecutionPolicy.AUTO
-        and action.public_default_policy == ToolExecutionPolicy.ASK
+        action.category == "read"
         for action in actions.values()
         if not action.mutates
     )
     assert actions["meal_plan.write"].mutates is True
     assert actions["meal_plan.delete"].mutates is True
-    assert actions["meal_plan.delete"].private_default_policy == ToolExecutionPolicy.ASK
-    assert actions["meal_plan.delete"].public_default_policy == ToolExecutionPolicy.ASK
+    assert actions["meal_plan.delete"].category == "delete"
     for capability in ("recipes.write", "recipes.delete"):
         assert actions[capability].mutates is True
-        assert actions[capability].private_default_policy == ToolExecutionPolicy.ASK
-        assert actions[capability].public_default_policy == ToolExecutionPolicy.ASK
+        assert actions[capability].category == ("delete" if capability.endswith("delete") else "write")
 
 
 @pytest.mark.parametrize(

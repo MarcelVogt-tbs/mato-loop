@@ -342,9 +342,7 @@ async def execute_definition(
                         context.tool_settings,
                         request.capability,
                         next(
-                            action.default_policy_for(
-                                context.tool_settings.trust_level
-                            )
+                            action.default_policy(context.tool_settings)
                             for action in definition.actions
                             if action.capability == request.capability
                         ),

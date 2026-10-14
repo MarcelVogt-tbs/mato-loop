@@ -118,12 +118,9 @@ async def _authorize_media(
     source_attachment_ids: tuple[UUID, ...] = (),
     source_files: tuple[dict[str, str], ...] = (),
 ) -> ToolResult | None:
-    from mato_loop_backend.tools.catalog import tool_registry
-
     policy = permissions_resolution.tool_execution_policy(
         context.tool_settings,
         capability,
-        tool_registry.action_default(capability, context.tool_settings.trust_level),
     )
     if policy == ToolExecutionPolicy.DISABLED:
         return ToolResult.error("tool.unavailable")
@@ -153,9 +150,6 @@ async def _authorize_media(
             permissions_resolution.tool_execution_policy(
                 context.tool_settings,
                 capability,
-                tool_registry.action_default(
-                    capability, context.tool_settings.trust_level
-                ),
             )
             == ToolExecutionPolicy.DISABLED
         ):
@@ -656,8 +650,6 @@ GENERATE_IMAGE = ToolDefinition(
                 ToolAction(
                     "media.generate.image",
                     "Bilder erzeugen",
-                    ToolExecutionPolicy.AUTO,
-                    ToolExecutionPolicy.AUTO,
                     category="write",
                     mutates=True,
                 ),
@@ -681,8 +673,6 @@ EDIT_IMAGE = ToolDefinition(
                 ToolAction(
                     "media.edit.image",
                     "Bilder bearbeiten",
-                    ToolExecutionPolicy.ASK,
-                    ToolExecutionPolicy.ASK,
                     category="write",
                     mutates=True,
                 ),
@@ -702,8 +692,6 @@ GENERATE_SPEECH = ToolDefinition(
                 ToolAction(
                     "media.generate.speech",
                     "Sprache erzeugen",
-                    ToolExecutionPolicy.ASK,
-                    ToolExecutionPolicy.ASK,
                     category="write",
                     mutates=True,
                 ),
@@ -723,8 +711,6 @@ GENERATE_AUDIO = ToolDefinition(
                 ToolAction(
                     "media.generate.audio",
                     "Audio erzeugen",
-                    ToolExecutionPolicy.ASK,
-                    ToolExecutionPolicy.ASK,
                     category="write",
                     mutates=True,
                 ),
@@ -745,8 +731,6 @@ TRANSCRIBE_AUDIO = ToolDefinition(
                 ToolAction(
                     "media.transcribe.audio",
                     "Audio transkribieren",
-                    ToolExecutionPolicy.ASK,
-                    ToolExecutionPolicy.ASK,
                     category="read",
                 ),
             ),
@@ -770,8 +754,6 @@ ANALYZE_VIDEO = ToolDefinition(
                 ToolAction(
                     "media.analyze.video",
                     "Videos analysieren",
-                    ToolExecutionPolicy.ASK,
-                    ToolExecutionPolicy.ASK,
                     category="read",
                 ),
             ),
@@ -792,7 +774,7 @@ ANALYZE_AUDIO = ToolDefinition(
     label="Audio analysieren",
     icon="audio_file",
     actions=(ToolAction(
-        "media.analyze.audio", "Audio analysieren", ToolExecutionPolicy.ASK, ToolExecutionPolicy.ASK,
+        "media.analyze.audio", "Audio analysieren",
         category="read",
     ),),
 )

@@ -76,23 +76,17 @@ def _validate_shelf_keys(shelf_keys: list[str] | None) -> None:
 _READ = ToolAction(
     "knowledge.read",
     "Wissensdatenbank lesen",
-    ToolExecutionPolicy.AUTO,
-    ToolExecutionPolicy.ASK,
     category="read",
 )
 _WRITE = ToolAction(
     "knowledge.write",
     "Wissensdatenbank ändern",
-    ToolExecutionPolicy.ASK,
-    ToolExecutionPolicy.ASK,
     category="write",
     mutates=True,
 )
 _DELETE = ToolAction(
     "knowledge.delete",
     "Wissenseinträge löschen",
-    ToolExecutionPolicy.ASK,
-    ToolExecutionPolicy.ASK,
     category="delete",
     mutates=True,
 )
@@ -403,7 +397,7 @@ def _disabled_book_keys(context: Any, instance: IntegrationInstance) -> set[str]
         resolution = resolve_tool_execution_policy(
             tool_settings,
             "knowledge.read",
-            action.default_policy_for(tool_settings.trust_level),
+            action.default_policy(tool_settings),
             integration_id=instance.id,
             resource_key=resource_key,
         )

@@ -40,7 +40,7 @@ from mato_loop_backend.integrations.mcp.service import (
 )
 from mato_loop_backend.integrations.registry import integration_adapters
 from mato_loop_backend.integrations.service import IntegrationSettingsError
-from mato_loop_backend.integrations.sonobin.adapter import SONOBIN, SONOBIN_ADAPTER
+from mato_loop_backend.integrations.sonobin.adapter import SONOBIN_ADAPTER, SONOBIN_TOOL_LABELS
 from mato_loop_backend.integrations.sonobin.service import SonoBinIntegrationService
 from mato_loop_backend.permissions.resolution import resolve_tool_execution_policy
 from mato_loop_backend.security import require_admin, require_user
@@ -461,7 +461,7 @@ def test_mcp_config_rejects_endpoint_query() -> None:
 
 
 def test_sonobin_adapter_covers_the_complete_catalog() -> None:
-    automatic = {
+    expected = {
         "list_recordings",
         "list_recordings_without_tracks",
         "get_recording",
@@ -490,8 +490,6 @@ def test_sonobin_adapter_covers_the_complete_catalog() -> None:
         "get_playback_diagnostic_events",
         "list_generator_runs",
         "get_generator_run",
-    }
-    ask = {
         "create_playlist",
         "update_playlist",
         "delete_playlist",
@@ -518,12 +516,8 @@ def test_sonobin_adapter_covers_the_complete_catalog() -> None:
         "merge_recordings",
     }
 
-    assert set(SONOBIN.tools) == automatic | ask
-    assert {
-        name for name, tool in SONOBIN.tools.items()
-        if tool.policy == ToolExecutionPolicy.AUTO
-    } == automatic
-    assert all(tool.label for tool in SONOBIN.tools.values())
+    assert set(SONOBIN_TOOL_LABELS) == expected
+    assert all(SONOBIN_TOOL_LABELS.values())
 
 
 @pytest.mark.parametrize(
@@ -1105,7 +1099,7 @@ def test_sonobin_still_requires_https() -> None:
 
 @pytest.mark.parametrize("base_url", ["https://sonobin.example.test", "https://sonobin.example.test/",
                                       "https://sonobin.example.test/mcp", "https://sonobin.example.test/mcp/"])
-async def test_sonobin_create_initializes_both_trust_branches(monkeypatch, base_url) -> None:
+async def test_sonobin_create_inherits_permission_defaults(monkeypatch, base_url) -> None:
     integrations = IntegrationSettings()
     tools = ToolSettings()
 
@@ -1143,20 +1137,8 @@ async def test_sonobin_create_initializes_both_trust_branches(monkeypatch, base_
 
     assert (instance.integration_type, instance.adapter_type) == ("music", "sonobin")
     assert instance.config["endpoint"] == "https://sonobin.example.test/mcp/"
-    integration_id = str(instance.id)
-    for permissions in (tools.private_permissions, tools.public_permissions):
-        assert permissions.integration_policies[integration_id] == {
-            "sonobin.call": ToolExecutionPolicy.ASK
-        }
-        assert permissions.resource_policies[integration_id] == {
-            mcp_resource_key("list_recordings"): {
-                "sonobin.call": ToolExecutionPolicy.AUTO
-            },
-            mcp_resource_key("delete_recording"): {
-                "sonobin.call": ToolExecutionPolicy.ASK
-            },
-        }
-    assert mcp_resource_key("future_tool") not in tools.resource_labels[integration_id]
+    assert not any(branch.policies or branch.resource_policies for branch in (instance.permissions.private_permissions, instance.permissions.public_permissions))
+    assert tools == ToolSettings()
     contributions = SONOBIN_ADAPTER.contributions(instance).tools
     assert contributions[0].label == "Aufnahmen auflisten"
     assert contributions[2].label == "future_tool"

@@ -57,12 +57,12 @@ def permission_snapshot(
         "toolNames": sorted(tool_names - {"task"}),
         "integrationIds": sorted(str(item.id) for item in integrations.instances if item.enabled),
         "actionDefaults": {
-            action.capability: tool_default_policy(settings, action.capability, action.default_policy_for(settings.trust_level)).value
+            action.capability: tool_default_policy(settings, action.capability, action.default_policy(settings)).value
             for action in tool_registry.policy_actions(integrations)
         },
         "integrationDefaults": {
             str(instance.id): {
-                action.capability: action.default_policy_for(settings.trust_level).value
+                action.capability: action.default_policy(settings).value
                 for action in tool_registry.integration_resource_actions(instance)
             }
             for instance in integrations.instances if instance.enabled
