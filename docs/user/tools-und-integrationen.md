@@ -45,6 +45,8 @@ Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte od
 | Nur Löschen bestätigen | Automatisch | Automatisch | Automatisch | Nachfragen |
 | Alles automatisch ausführen | Automatisch | Automatisch | Automatisch | Automatisch |
 
+Die Tabelle gilt für Aktionen ohne eigene Tool-Vorgabe. Websuche, Webseitenabruf und veröffentlichte Untertitel bringen **Automatisch** als Vorgabe mit, auch für öffentliche Modelle. **Alles bestätigen** bedeutet daher: Alles außer lesenden Zugriffen auf öffentlich verfügbare Ressourcen bestätigen. Eigene Berechtigungsregeln haben Vorrang. Beim Herunterladen bleibt das Speichern eine getrennte Schreibaktion. Die Einstellung **Nur öffentliche Adressen zulassen** begrenzt weiterhin die erreichbaren Ziele; ausdrücklich zugelassene interne Adressen werden ebenfalls ohne zusätzliche Nachfrage abgerufen, sofern keine eigene Regel dies anders festlegt.
+
 - **Vorgabe privat:** Änderungen bestätigen.
 - **Vorgabe öffentlich:** Alles bestätigen.
 - **Änderungen bestätigen** erlaubt auch sensibles Lesen automatisch, fragt aber vor Schreiben und Löschen. Speziellere Kombinationen lassen sich über eigene Aktionsregeln festlegen.
@@ -62,7 +64,7 @@ Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte od
 1. Den gewünschten Grundstandard im jeweiligen Dropdown auswählen. **Vorgabe** kennzeichnet die Ausgangseinstellung.
 2. **Speichern** anklicken.
 
-- Vorhandene eigene Aktionsregeln bleiben erhalten. Der neue Grundstandard gilt dort, wo keine eigene Regel gesetzt ist, auch für Integrationen und neu hinzukommende Aktionen.
+- Vorhandene eigene Aktionsregeln bleiben erhalten. Ohne eigene Regel gilt zuerst eine ausdrückliche Vorgabe der Toolaktion, andernfalls der gewählte Grundstandard. Das gilt auch für Integrationen und neu hinzukommende Aktionen.
 - Zum Wiederherstellen der Vererbung entfernen Sie die jeweilige eigene Regel unter **Berechtigungen**.
 - Profil- und Integrationsregeln, Shell-Präfixe und technische Tool-Verfügbarkeit bleiben erhalten.
 - Beim Tabwechsel mit ungespeicherten Änderungen können Sie den Entwurf verwerfen oder abbrechen und zuerst speichern.

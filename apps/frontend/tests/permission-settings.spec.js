@@ -79,6 +79,7 @@ it.each([true, false])('saves the base behavior while retaining visible global o
     await vi.waitUntil(() => !document.querySelector('[role="option"]'))
   }
   await vi.waitFor(() => expect(root.textContent).toContain('Änderungen bestätigen'))
+  if (modelTrustEnabled) expect(root.textContent).toContain('Alles außer lesenden Zugriffen auf öffentlich verfügbare Ressourcen bestätigen. Eigene Berechtigungsregeln haben Vorrang.')
   expect(root.querySelector('a[aria-label="Freigabeverhalten erklärt (öffnet neuen Tab)"]').getAttribute('href')).toBe('/docs/tools-und-integrationen/#globale-tool-vorgaben-anwenden')
   await choose(modelTrustEnabled ? 'Privat' : 'Alle Modelle', 'Nur Löschen bestätigen')
   if (modelTrustEnabled) await choose('Öffentlich', 'Änderungen und sensible Zugriffe bestätigen')

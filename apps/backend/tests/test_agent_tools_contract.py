@@ -147,25 +147,28 @@ async def _successful_handler(_arguments, _context) -> ToolResult:
     return ToolResult.json({"ok": True})
 
 
-@pytest.mark.parametrize("category", [{}, {"category": "unknown"}])
-def test_tool_action_requires_an_explicit_valid_category(category):
-    with pytest.raises((TypeError, ValueError), match="category"):
-        ToolAction("example.read", "Lesen", **category)
+@pytest.mark.parametrize("declaration", [{}, {"category": "unknown"}, {
+    "category": "read", "default": ToolExecutionPolicy.AUTO, "allowed_policies": (ToolExecutionPolicy.ASK,),
+}])
+def test_tool_action_requires_a_valid_declaration(declaration):
+    with pytest.raises((TypeError, ValueError), match="category|default"):
+        ToolAction("example.read", "Lesen", **declaration)
 
 
 @pytest.mark.parametrize("contributed", [False, True])
-def test_tool_registry_rejects_conflicting_categories(monkeypatch, contributed):
+@pytest.mark.parametrize("override,error", [({"category": "write"}, "conflicting categories"), ({"default": ToolExecutionPolicy.AUTO}, "conflicting defaults")])
+def test_tool_registry_rejects_conflicting_action_defaults(monkeypatch, contributed, override, error):
     read = ToolAction("example.shared", "Aktion", category="read")
-    write = ToolAction("example.shared", "Aktion", category="write")
+    write = ToolAction("example.shared", "Aktion", **{"category": "read", **override})
     if not contributed:
-        with pytest.raises(ValueError, match="conflicting categories"):
+        with pytest.raises(ValueError, match=error):
             ToolRegistry([], group_actions={"example": (read, write)})
     else:
         registry = ToolRegistry([], group_actions={"example": (read,)})
         monkeypatch.setattr(mock_tools_catalog, "effective_integration_contributions", lambda _: IntegrationContributions(tools=(
             ToolContribution(name="example", description="Example", arguments_model=_EmptyArguments, handler=_successful_handler, actions=(write,)),
         )))
-        with pytest.raises(ValueError, match="conflicting categories"):
+        with pytest.raises(ValueError, match=error):
             registry.policy_actions(IntegrationSettings())
 
 
@@ -5259,6 +5262,7 @@ def test_tool_schemas_remove_annotative_titles_recursively() -> None:
 @pytest.mark.parametrize(
     ("policy", "public_addresses_only", "expected_asks"),
     [
+        (None, True, 0),
         (ToolExecutionPolicy.ASK, True, 1),
         (ToolExecutionPolicy.AUTO, True, 0),
         (ToolExecutionPolicy.AUTO, False, 0),
@@ -5291,10 +5295,15 @@ async def test_webfetch_applies_the_effective_policy(
     context = _context(
         tmp_path,
         call,
-        web_fetch_policy=policy,
+        web_fetch_policy=policy or ToolExecutionPolicy.AUTO,
         public_addresses_only=public_addresses_only,
     )
     context.tool_settings.web_fetch.user_agent = "ConfiguredBrowser/1.0"
+    if policy is None:
+        context.model_trust_level = TrustLevel.PUBLIC
+        context.tool_settings.select_trust(TrustLevel.PUBLIC)
+        for branch in (context.tool_settings.private_permissions, context.tool_settings.public_permissions):
+            branch.policies.pop("network.fetch")
     context.tool_settings.web_fetch.javascript_enabled = False
     context.tool_settings.web_fetch.javascript_hosts = ["example.com"]
     context.db.scalar.return_value.data = _settings_record(context.tool_settings)

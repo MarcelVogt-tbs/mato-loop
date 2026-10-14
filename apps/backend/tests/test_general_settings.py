@@ -124,6 +124,7 @@ async def test_tool_presets_change_only_selected_global_policies(monkeypatch, tr
         "filesystem.read", "filesystem.write", "shell.write", "filesystem.delete", "automation.delete",
         "sensitive_data.access", "secrets.access", "secrets.write",
     )) == (read, write, write, "disabled", delete, sensitive, sensitive, write)
+    assert tuple(tool_execution_policy(tools, key) for key in ("network.search", "network.fetch")) == ("auto", "auto")
     after = tools.model_dump()
     after[f"{trust}_permission_preset"] = before[f"{trust}_permission_preset"]
     assert after == before

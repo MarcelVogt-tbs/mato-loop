@@ -776,10 +776,13 @@ class ToolRegistry:
             *(action for actions in self._group_actions.values() for action in actions),
         )
         categories = {}
+        defaults = {}
         for action in actions:
             previous = categories.setdefault(action.capability, action.category)
             if previous != action.category:
                 raise ValueError(f"conflicting categories for capability: {action.capability}")
+            if defaults.setdefault(action.capability, action.default) != action.default:
+                raise ValueError(f"conflicting defaults for capability: {action.capability}")
         return actions
 
     def integration_resource_actions(

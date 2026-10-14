@@ -20,7 +20,6 @@ async def ensure_webfetch_capability_is_current(context: ToolContext) -> None:
     if permissions_resolution.tool_execution_policy(
         context.tool_settings,
         "network.fetch",
-        ToolExecutionPolicy.AUTO,
     ) == ToolExecutionPolicy.DISABLED:
         raise WebFetchError("tool.unavailable")
 
@@ -32,7 +31,6 @@ async def authorize_webfetch_target(
     policy = permissions_resolution.tool_execution_policy(
         context.tool_settings,
         "network.fetch",
-        ToolExecutionPolicy.AUTO,
     )
     if policy == ToolExecutionPolicy.ASK and not await tools_access.allow(
         context, webfetch_permission(url)
@@ -42,7 +40,6 @@ async def authorize_webfetch_target(
     if policy != ToolExecutionPolicy.ASK and permissions_resolution.tool_execution_policy(
         context.tool_settings,
         "network.fetch",
-        ToolExecutionPolicy.AUTO,
     ) == ToolExecutionPolicy.ASK:
         if not await tools_access.allow(context, webfetch_permission(url)):
             raise WebFetchError("permission.denied")
@@ -53,7 +50,7 @@ def webfetch_available(settings: ToolSettings) -> bool:
     return (
         settings.tool_availability.get("webfetch", True)
         and permissions_resolution.tool_execution_policy(
-            settings, "network.fetch", ToolExecutionPolicy.AUTO
+            settings, "network.fetch"
         )
         != ToolExecutionPolicy.DISABLED
     )

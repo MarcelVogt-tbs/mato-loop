@@ -285,7 +285,6 @@ async def _fetch_transcript(
             if not approved and permissions_resolution.tool_execution_policy(
                 context.tool_settings,
                 "network.fetch",
-                ToolExecutionPolicy.AUTO,
             ) == ToolExecutionPolicy.ASK:
                 if not await tools_access.allow(context, transcript_permission(source_url)):
                     raise WebFetchError("permission.denied")

@@ -5,7 +5,7 @@ Extend the existing `ToolAction`, permission resolver, and grants. Do not add an
 ## Action contract
 
 - Declare a stable `capability`, German `label`, and explicit `category` on every `ToolAction`.
-- Reuse existing capabilities. The same capability must always have the same category.
+- Reuse existing capabilities. The same capability must always have the same category and explicit default.
 - Categories: `read`, `read_sensitive`, `write`, `delete`.
 - Reading a secret is `read_sensitive`; storing or changing one is `write`.
 - Creating an empty file is `write`; explicitly removing or clearing existing content is `delete`.
@@ -18,7 +18,9 @@ ToolAction("example.write", "Eintrag erstellen", category="write", mutates=True)
 
 ## Defaults and overrides
 
-- Built-in and integration actions inherit the saved private/public permission preset by category unless an action override exists. `ToolAction.default_policy(settings)` applies the preset and allowed modes; adapters declare no separate trust defaults.
+- Resolution follows existing override precedence, then the action's optional `default`, then the saved private/public preset by category. `ToolAction.default_policy(settings)` handles the definition/preset fallback and allowed modes; adapters declare no separate trust defaults.
+- Public-information actions `network.search` and `network.fetch` declare `default=ToolExecutionPolicy.AUTO` for both model classes. They remain configurable: explicit `ask` and `disabled` rules still apply. The fetch default also covers published transcripts and the network part of downloads; writing a downloaded file retains its separate permission.
+- A single allowed policy does not imply a default. Declare the default explicitly, including for non-configurable actions such as `permissions.request`.
 - Profile rules and hard boundaries still apply. Changing a preset does not delete overrides.
 - Profile tool availability and shell prefixes use existing sparse overrides. Global tool disablement remains binding. Built-in access overrides require administration scope; ordinary users can override only their owned profiles when permitted.
 - Integration connection/resource policies and their scoped profile overrides remain authoritative over the shared default. Global built-in action overrides do not cap integration permissions. New connections must not materialize implicit defaults as saved rules.

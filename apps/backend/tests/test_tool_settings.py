@@ -176,9 +176,12 @@ def test_category_defaults_and_saved_policies(
     trust: TrustLevel, capability: str
 ) -> None:
     settings = ToolSettings().select_trust(trust)
-    assert resolve_tool_execution_policy(settings, capability).policy == (
+    expected = (
         ToolExecutionPolicy.ASK if trust == TrustLevel.PUBLIC or capability in {"session.files.write", "media.generate.image"} else ToolExecutionPolicy.AUTO
     )
+    if capability in {"network.fetch", "network.search"}:
+        expected = ToolExecutionPolicy.AUTO
+    assert resolve_tool_execution_policy(settings, capability).policy == expected
     for policy in ToolExecutionPolicy:
         settings.permissions.policies[capability] = policy
         assert resolve_tool_execution_policy(settings, capability).policy == policy
@@ -339,16 +342,16 @@ def test_build_profile_defaults_to_auto_writes_and_preserves_overrides(trust: Tr
 @pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
 def test_sysadmin_profile_reads_automatically_and_asks_for_changes(trust: TrustLevel) -> None:
     profile = sysadmin_profile()
-    settings = ToolSettings().select_trust(trust)
+    settings = ToolSettings(private_permission_preset="ask_all", public_permission_preset="ask_all").select_trust(trust)
     settings._agent_permissions = (
         profile.private_permissions
         if trust == TrustLevel.PRIVATE
         else profile.public_permissions
     )
 
-    for capability in ("filesystem.read", "shell.read"):
+    for capability in ("filesystem.read", "shell.read", "working_directory.external"):
         assert resolve_tool_execution_policy(settings, capability).policy == ToolExecutionPolicy.AUTO
-    for capability in ("filesystem.write", "filesystem.delete", "shell.write"):
+    for capability in ("filesystem.write", "filesystem.delete", "shell.write", "sensitive_data.access", "secrets.access"):
         assert resolve_tool_execution_policy(settings, capability).policy == ToolExecutionPolicy.ASK
 
 
@@ -469,17 +472,19 @@ def test_agent_profile_scoped_capability_is_offered_and_resolved_for_its_target(
     )
 
 
-def test_agent_profile_can_override_webfetch_capability() -> None:
+@pytest.mark.parametrize("capability", ["network.fetch", "network.search"])
+@pytest.mark.parametrize("policy", list(ToolExecutionPolicy))
+def test_agent_profile_can_override_web_capability(capability, policy) -> None:
     settings = ToolSettings(
-        public_permissions={"policies": {"network.fetch": "disabled"}}
+        public_permissions={"policies": {capability: "disabled"}}
     ).select_trust(TrustLevel.PUBLIC)
     settings._agent_permissions = AgentProfilePermissions(
-        policies={"network.fetch": "auto"}
+        policies={capability: policy}
     )
 
     assert (
-        resolve_tool_execution_policy(settings, "network.fetch").policy
-        == ToolExecutionPolicy.AUTO
+        resolve_tool_execution_policy(settings, capability).policy
+        == policy
     )
 
 

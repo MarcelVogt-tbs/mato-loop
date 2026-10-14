@@ -36,7 +36,7 @@
           <div class="col">
             <div class="row q-col-gutter-md">
               <div v-for="audience in audiences" :key="audience.value" :class="auth.modelTrustEnabled ? 'col-12 col-sm-6' : 'col-12'">
-                <AppSelect v-model="selectedPresets[audience.value]" outlined stack-label emit-value map-options :label="audience.label" :aria-label="`${audience.label}: Freigabeverhalten`" :options="presetOptions.map(option => ({ ...option, caption: option.value === audience.default ? 'Vorgabe' : undefined }))" :disable="loading || saving || loadFailed">
+                <AppSelect v-model="selectedPresets[audience.value]" outlined stack-label emit-value map-options :label="audience.label" :aria-label="`${audience.label}: Freigabeverhalten`" :options="presetOptions.map(option => ({ ...option, caption: option.value === audience.default ? 'Vorgabe' : undefined }))" :hint="presetOptions.find(option => option.value === selectedPresets[audience.value])?.description" persistent-hint :disable="loading || saving || loadFailed">
                   <template #selected><span class="ellipsis">{{ presetOptions.find(option => option.value === selectedPresets[audience.value])?.label }}</span></template>
                 </AppSelect>
               </div>
@@ -155,7 +155,7 @@ const audiences = computed(() => auth.modelTrustEnabled
   ? [{ value: 'private', label: 'Privat', default: 'ask_changes' }, { value: 'public', label: 'Öffentlich', default: 'ask_all' }]
   : [{ value: 'private', label: 'Alle Modelle', default: 'ask_changes' }])
 const presetOptions = [
-  { value: 'ask_all', label: 'Alles bestätigen' },
+  { value: 'ask_all', label: 'Alles bestätigen', description: 'Alles außer lesenden Zugriffen auf öffentlich verfügbare Ressourcen bestätigen. Eigene Berechtigungsregeln haben Vorrang.' },
   { value: 'ask_changes_sensitive', label: 'Änderungen und sensible Zugriffe bestätigen' },
   { value: 'ask_changes', label: 'Änderungen bestätigen' },
   { value: 'ask_delete', label: 'Nur Löschen bestätigen' },

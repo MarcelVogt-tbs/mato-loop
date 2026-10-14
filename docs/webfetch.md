@@ -61,6 +61,13 @@ still makes a fresh network request. There is no separate result cache or LLM su
 
 ## Authorization and networking
 
+`network.fetch` declares an overridable `auto` default for both model classes, as does
+`network.search`. This covers Webfetch, published transcripts, and the network part of
+downloads even under **Alles bestätigen**. Explicit action/profile rules retain their
+normal precedence; download writes are authorized separately. Tool availability and
+the configured address restriction remain enforced, including when internal targets
+have been explicitly enabled.
+
 With JavaScript enabled, `network.fetch` authorizes the initial canonical URL
 once. That page authorization includes its scripts, data requests, and redirects;
 there are no separate approvals for subresources. The initial transport still

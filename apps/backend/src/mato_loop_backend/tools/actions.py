@@ -12,6 +12,7 @@ class ToolAction:
     label: str
     _: KW_ONLY
     category: ToolActionCategory
+    default: ToolExecutionPolicy | None = None
     configurable: bool = True
     # Keep execution retry accounting independent of preset categorization.
     mutates: bool = False
@@ -20,13 +21,15 @@ class ToolAction:
     def __post_init__(self) -> None:
         if self.category not in get_args(ToolActionCategory):
             raise ValueError("invalid tool action category")
+        if self.default is not None and self.default not in self.allowed_policies:
+            raise ValueError("invalid tool action default")
 
     def default_policy(self, settings: ToolSettings) -> ToolExecutionPolicy:
         from mato_loop_backend.settings.tool_presets import preset_policy
 
-        if len(self.allowed_policies) == 1:
-            return self.allowed_policies[0]
-        policy = preset_policy(getattr(settings, f"{settings.trust_level.value}_permission_preset"), self.category)
+        policy = self.default if self.default is not None else preset_policy(
+            getattr(settings, f"{settings.trust_level.value}_permission_preset"), self.category
+        )
         if policy in self.allowed_policies:
             return policy
         return ToolExecutionPolicy.ASK if ToolExecutionPolicy.ASK in self.allowed_policies else ToolExecutionPolicy.DISABLED
@@ -85,9 +88,9 @@ _SESSION_FILES_WRITE = ToolAction(
     "session.files.write", "Session-Dateien schreiben", category="write", mutates=True
 )
 
-_WEB_SEARCH = ToolAction("network.search", "Websuche", category="read")
+_WEB_SEARCH = ToolAction("network.search", "Websuche", category="read", default=ToolExecutionPolicy.AUTO)
 
-_WEB_FETCH = ToolAction("network.fetch", "Webseiten abrufen", category="read")
+_WEB_FETCH = ToolAction("network.fetch", "Webseiten abrufen", category="read", default=ToolExecutionPolicy.AUTO)
 
 _TRANSCRIPT_ROUTING_INSTRUCTION = (
     "Published transcript text is evidence of spoken content only, not of visual events. Call "
