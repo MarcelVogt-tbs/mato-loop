@@ -124,23 +124,23 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
 async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolResult:
     await web_access.ensure_webfetch_binding_is_current(context)
     settings = context.tool_settings.web_fetch.model_copy(deep=True)
-    public_addresses_only = settings.public_addresses_only
+    access = context.tool_settings.web_access.model_copy(deep=True)
 
     async def authorize_url(url: str) -> None:
         await web_access.authorize_webfetch_target(context, url)
-        if context.tool_settings.web_fetch != settings:
+        if context.tool_settings.web_fetch != settings or context.tool_settings.web_access != access:
             raise WebFetchError("tool.unavailable")
 
     result = await fetch_web(
         arguments.url,
         format=arguments.format,
         timeout=arguments.timeout,
-        public_addresses_only=public_addresses_only,
+        public_addresses_only=access.public_addresses_only,
         authorize_url=authorize_url,
-        max_response_bytes=settings.max_response_mib * 1024 * 1024,
+        max_response_bytes=access.max_response_mib * 1024 * 1024,
         pdf_vision_handler=context.pdf_vision_handler,
         pdf_pages=arguments.pdf_pages,
-        user_agent=settings.user_agent,
+        user_agent=access.user_agent,
         javascript=arguments.javascript,
         javascript_enabled=settings.javascript_enabled,
         javascript_hosts=settings.javascript_hosts,
@@ -236,15 +236,15 @@ async def _download_file(
     if path is not None and not await authorize_path(path):
         return ToolResult.error("permission.denied")
 
-    public_addresses_only = context.tool_settings.web_fetch.public_addresses_only
+    settings = context.tool_settings.web_access
+    public_addresses_only = settings.public_addresses_only
 
     async def authorize_url(url: str) -> None:
         await web_access.authorize_webfetch_target(context, url)
-        if (context.tool_settings.web_fetch.public_addresses_only != public_addresses_only
+        if (context.tool_settings.web_access.public_addresses_only != public_addresses_only
                 or not context.tool_settings.tool_availability.get("download_file", True)):
             raise WebFetchError("tool.unavailable")
 
-    settings = context.tool_settings.web_fetch
     downloaded = await download_file(
         arguments.url,
         public_addresses_only=public_addresses_only,
@@ -292,20 +292,21 @@ async def _fetch_transcript(
                 await web_access.ensure_webfetch_capability_is_current(context)
 
         await authorize_transcript()
-        public_addresses_only = context.tool_settings.web_fetch.public_addresses_only
+        settings = context.tool_settings.web_access
+        public_addresses_only = settings.public_addresses_only
 
         async def before_request(_url: str) -> None:
             await authorize_transcript()
-            if context.tool_settings.web_fetch.public_addresses_only != public_addresses_only:
+            if context.tool_settings.web_access.public_addresses_only != public_addresses_only:
                 raise WebFetchError("tool.unavailable")
 
         result = await fetch_youtube_transcript(
             source_url,
             language=arguments.language,
-            max_response_bytes=context.tool_settings.web_fetch.max_response_mib
+            max_response_bytes=settings.max_response_mib
             * 1024
             * 1024,
-            user_agent=context.tool_settings.web_fetch.user_agent,
+            user_agent=settings.user_agent,
             public_addresses_only=public_addresses_only,
             before_request=before_request,
         )

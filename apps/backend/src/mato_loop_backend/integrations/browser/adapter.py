@@ -154,20 +154,14 @@ class BrowserIntegrationService:
     async def delete(
         db: AsyncSession, integration_id: UUID, *, owner_id: UUID,
     ) -> UserIntegrationSettings:
-        from mato_loop_backend.integrations.service import (
-            _clear_integration_policies,
-            _load_tools,
-            clear_profile_integration_policies,
-        )
+        from mato_loop_backend.integrations.service import _load_tools
 
         settings = await browser_settings(db, owner_id, for_update=True, require_available=False)
         instance = _find(settings, integration_id)
         settings.instances.remove(instance)
         tools = await _load_tools(db, owner_id, for_update=True)
-        _clear_integration_policies(tools, integration_id)
         tools.resource_labels.pop(str(integration_id), None)
         await SettingsStore.save(db, tools, user_id=owner_id)
-        await clear_profile_integration_policies(db, integration_id, owner_id=owner_id)
         await SettingsStore.save(db, settings, user_id=owner_id)
         await db.commit()
         return settings

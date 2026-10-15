@@ -5298,7 +5298,7 @@ async def test_webfetch_applies_the_effective_policy(
         web_fetch_policy=policy or ToolExecutionPolicy.AUTO,
         public_addresses_only=public_addresses_only,
     )
-    context.tool_settings.web_fetch.user_agent = "ConfiguredBrowser/1.0"
+    context.tool_settings.web_access.user_agent = "ConfiguredBrowser/1.0"
     if policy is None:
         context.model_trust_level = TrustLevel.PUBLIC
         context.tool_settings.select_trust(TrustLevel.PUBLIC)

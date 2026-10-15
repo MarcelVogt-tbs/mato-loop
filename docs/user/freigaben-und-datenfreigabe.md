@@ -1,8 +1,8 @@
 # Freigaben und Datenfreigabe
 
-## Freigaben und Arbeitsverzeichnis
+## Session-Freigaben
 
-Unter **Session > Freigaben und Arbeitsverzeichnis** sehen Sie die **Session-Freigaben** und darunter das aktuelle Arbeitsverzeichnis. Eine Ordnerwahl erlaubt Navigation, keine Datei- oder Shell-Aktionen. Automatische Regeln und konfigurierte Shell-Präfixe gelten auch bei leerer Freigabeliste. Eine Freigabe überstimmt keine deaktivierte Aktion oder harte Grenze.
+Unter **Session > Session-Freigaben** sehen Sie die erteilten Sessionrechte. Computer und Arbeitsverzeichnis wählen Sie in den eigenen Feldern des Sessionbereichs. Eine Ordnerwahl erlaubt Navigation, keine Datei- oder Shell-Aktionen. Automatische Regeln und konfigurierte Shell-Präfixe gelten auch bei leerer Freigabeliste. Eine Freigabe überstimmt keine deaktivierte Aktion oder harte Grenze.
 
 ## Freigabeanfragen
 
@@ -35,7 +35,7 @@ Eine wiederverwendbare Shell-Freigabe gilt für den exakten Befehl auf demselben
 - **Privat** bezeichnet einen von Ihnen als vertrauenswürdig eingestuften Provider.
 - **Öffentlich** behandelt ihn als externen Empfänger und verwendet die dafür konfigurierten Berechtigungen und Memory-Zielgruppen.
 
-Unter **Administration > Provider > Einstellungen > Erinnerungen und Profilangaben trennen** legen Sie getrennt fest, welche Erinnerungen und persönlichen Angaben lokale und Cloud-Modelle verwenden dürfen. **Grundeinstellungen** verlinkt unter demselben Namen direkt dorthin.
+Unter **Administration > Provider > Einstellungen > Modelltrennung** aktivieren Sie die Unterscheidung privater und öffentlicher Modelle. Die Einstufung legen Sie pro Provider fest. Bei aktiver Modelltrennung gelten dafür getrennte Tool-Rechte, Erinnerungen und persönliche Profilangaben. **Grundeinstellungen** verlinkt unter demselben Namen direkt dorthin.
 
 - Die Änderung wird sofort gespeichert.
 - Ohne Trennung gelten für alle Modelle dieselben Datenfreigaben. Auch Cloud-Modelle können dann privat freigegebene Erinnerungen und Profilangaben erhalten.

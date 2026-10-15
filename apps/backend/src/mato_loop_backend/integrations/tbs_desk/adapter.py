@@ -551,17 +551,12 @@ class TbsDeskIntegrationService:
             from mato_loop_backend.integrations.service import (
                 _clear_integration_policies,
                 _load_tools,
-                clear_profile_integration_policies,
             )
 
             tools = await _load_tools(db, owner_id, for_update=True)
-            changed = _clear_integration_policies(tools, integration_id)
-            changed = tools.resource_labels.pop(str(integration_id), None) is not None or changed
-            if changed:
+            _clear_integration_policies(instance)
+            if tools.resource_labels.pop(str(integration_id), None) is not None:
                 await SettingsStore.save(db, tools, user_id=owner_id)
-            await clear_profile_integration_policies(
-                db, integration_id, owner_id=owner_id
-            )
         await SettingsStore.save(db, settings, user_id=owner_id)
         await db.commit()
         return settings
@@ -577,18 +572,11 @@ class TbsDeskIntegrationService:
         settings.instances.remove(instance)
         if instance.credential_id is not None:
             await delete_credential(db, instance.credential_id, owner_id=owner_id)
-        from mato_loop_backend.integrations.service import (
-            _clear_integration_policies,
-            _load_tools,
-            clear_profile_integration_policies,
-        )
+        from mato_loop_backend.integrations.service import _load_tools
 
         tools = await _load_tools(db, owner_id, for_update=True)
-        changed = _clear_integration_policies(tools, integration_id)
-        changed = tools.resource_labels.pop(str(integration_id), None) is not None or changed
-        if changed:
+        if tools.resource_labels.pop(str(integration_id), None) is not None:
             await SettingsStore.save(db, tools, user_id=owner_id)
-        await clear_profile_integration_policies(db, integration_id, owner_id=owner_id)
         await SettingsStore.save(db, settings, user_id=owner_id)
         await db.commit()
         return settings

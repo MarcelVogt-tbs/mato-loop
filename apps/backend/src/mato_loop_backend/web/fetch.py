@@ -28,8 +28,8 @@ from mato_loop_backend.media.processing import (
     format_pdf_pages,
 )
 from mato_loop_backend.settings.models import (
+    DEFAULT_WEB_ACCESS_USER_AGENT,
     DEFAULT_WEBFETCH_JAVASCRIPT_HOSTS,
-    DEFAULT_WEBFETCH_USER_AGENT,
 )
 
 logger = logging.getLogger("mato_loop_backend.integrations.webfetch")
@@ -927,7 +927,7 @@ async def request_web_bytes(
     public_addresses_only: bool = True,
     authorize_url: Callable[[str], Awaitable[None]] | None = None,
     max_response_bytes: int = MAX_RESPONSE_BYTES,
-    user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
+    user_agent: str = DEFAULT_WEB_ACCESS_USER_AGENT,
 ) -> WebFetchBytesResult:
     """Return bounded raw bytes through the webfetch security pipeline."""
     _validate_fetch_limits(timeout, max_response_bytes)
@@ -1021,7 +1021,7 @@ async def download_file(
     public_addresses_only: bool = True,
     authorize_url: Callable[[str], Awaitable[None]] | None = None,
     max_response_bytes: int = MAX_RESPONSE_BYTES,
-    user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
+    user_agent: str = DEFAULT_WEB_ACCESS_USER_AGENT,
 ) -> DownloadedFile:
     """Fetch a document by URL and return its raw bytes.
 
@@ -1071,7 +1071,7 @@ async def fetch_web(
     max_response_bytes: int = MAX_RESPONSE_BYTES,
     pdf_vision_handler: PdfVisionHandler | None = None,
     pdf_pages: tuple[int, ...] | list[int] = (),
-    user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
+    user_agent: str = DEFAULT_WEB_ACCESS_USER_AGENT,
     javascript: bool | None = None,
     javascript_enabled: bool = True,
     javascript_hosts: list[str] | tuple[str, ...] = DEFAULT_WEBFETCH_JAVASCRIPT_HOSTS,

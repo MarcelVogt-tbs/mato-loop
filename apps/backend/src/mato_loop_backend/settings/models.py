@@ -43,11 +43,7 @@ _MODEL_RUNTIME_KEYS = {
     "pseudonymization_enabled": "pseudonymizationEnabled",
 }
 
-_LEGACY_WEBFETCH_USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
-)
-DEFAULT_WEBFETCH_USER_AGENT = "MatoLoop/1.0"
+DEFAULT_WEB_ACCESS_USER_AGENT = "MatoLoop/1.0"
 DEFAULT_WEBFETCH_JAVASCRIPT_HOSTS = ("reddit.com", "www.reddit.com")
 
 
@@ -860,43 +856,42 @@ class IntegrationInstance(BaseModel):
         return self.model_dump(mode="json", exclude={"permissions", "profile_permissions"})
 
 
-class WebFetchSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class WebAccessSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    javascript_enabled: StrictBool = Field(
-        default=True,
-        validation_alias=AliasChoices("javascript_enabled", "javascriptEnabled"),
-    )
-    javascript_hosts: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_WEBFETCH_JAVASCRIPT_HOSTS),
-        max_length=100,
-        validation_alias=AliasChoices("javascript_hosts", "javascriptHosts"),
-    )
     user_agent: str = Field(
-        default=DEFAULT_WEBFETCH_USER_AGENT,
+        default=DEFAULT_WEB_ACCESS_USER_AGENT,
         min_length=1,
         max_length=512,
-        validation_alias=AliasChoices("user_agent", "userAgent"),
+        alias="userAgent",
     )
     max_response_mib: int = Field(
         default=64,
         ge=1,
         le=256,
-        validation_alias=AliasChoices("max_response_mib", "maxResponseMiB"),
+        alias="maxResponseMiB",
     )
-    public_addresses_only: bool = Field(
-        default=True,
-        validation_alias=AliasChoices(
-            "public_addresses_only", "publicAddressesOnly"
-        ),
-    )
+    public_addresses_only: bool = Field(default=True, alias="publicAddressesOnly")
 
-    @model_validator(mode="before")
+    @field_validator("user_agent", mode="before")
     @classmethod
-    def remove_legacy_engine(cls, value: Any) -> Any:
-        if isinstance(value, dict):
-            return {key: item for key, item in value.items() if key != "engine"}
-        return value
+    def validate_user_agent(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if any(not 32 <= ord(character) <= 126 for character in value):
+            raise ValueError("user_agent must contain visible ASCII characters only")
+        return value.strip()
+
+
+class WebFetchSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    javascript_enabled: StrictBool = Field(default=True, alias="javascriptEnabled")
+    javascript_hosts: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_WEBFETCH_JAVASCRIPT_HOSTS),
+        max_length=100,
+        alias="javascriptHosts",
+    )
 
     @field_validator("javascript_hosts")
     @classmethod
@@ -919,16 +914,6 @@ class WebFetchSettings(BaseModel):
             else:
                 raise ValueError("JavaScript hosts must be DNS hostnames, not IP addresses")
         return list(dict.fromkeys(hosts))
-
-    @field_validator("user_agent", mode="before")
-    @classmethod
-    def validate_user_agent(cls, value: Any) -> Any:
-        if not isinstance(value, str):
-            return value
-        if any(not 32 <= ord(character) <= 126 for character in value):
-            raise ValueError("user_agent must contain visible ASCII characters only")
-        value = value.strip()
-        return DEFAULT_WEBFETCH_USER_AGENT if value == _LEGACY_WEBFETCH_USER_AGENT else value
 
 class WebSearchToolSettings(BaseModel):
     primary_provider: str = Field(
@@ -1033,6 +1018,10 @@ class ToolSettings(IntegrationToolSettings):
     shell_prefixes: ShellPrefixSettings = Field(
         default_factory=ShellPrefixSettings,
         validation_alias=AliasChoices("shell_prefixes", "shellPrefixes"),
+    )
+    web_access: WebAccessSettings = Field(
+        default_factory=WebAccessSettings,
+        validation_alias=AliasChoices("web_access", "webAccess"),
     )
     web_fetch: WebFetchSettings = Field(
         default_factory=WebFetchSettings,

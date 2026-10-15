@@ -20,7 +20,6 @@ import mato_loop_backend.integrations.caldav.service as caldav_service_module
 import mato_loop_backend.integrations.registry as integration_registry
 import mato_loop_backend.integrations.search as search_module
 import mato_loop_backend.integrations.searxng.client as searxng_client
-import mato_loop_backend.integrations.service as shared_integration_service
 import mato_loop_backend.security as security
 from mato_loop_backend.api.errors import ApiError, register_error_handlers
 from mato_loop_backend.api.routes.integrations import (
@@ -380,17 +379,10 @@ async def test_disabled_adapter_blocks_create_but_allows_delete(
 async def test_bookstack_policy_cleanup_removes_resource_labels(monkeypatch) -> None:
     integration_id = uuid4()
     tools = ToolSettings(
-        integration_policies={str(integration_id): {}},
-        resource_policies={str(integration_id): {}},
         resource_labels={str(integration_id): {"book:7": "Handbuch"}},
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=tools))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
-    monkeypatch.setattr(
-        shared_integration_service,
-        "clear_profile_integration_policies",
-        AsyncMock(),
-    )
     db = AsyncMock(spec=AsyncSession)
 
     await BookStackIntegrationService._save(
@@ -1279,13 +1271,6 @@ async def test_deleting_selected_fallback_removes_it_from_tool_settings(monkeypa
                 "primaryProvider": "no_key",
                 "fallbackProvider": f"searxng:{integration.id}",
             },
-            "publicPermissions": {
-                "resourcePolicies": {
-                    str(integration.id): {
-                        "calendar:work": {"network.search": "ask"}
-                    }
-                },
-            },
         }
     )
     db = AsyncMock(spec=AsyncSession)
@@ -1301,24 +1286,17 @@ async def test_deleting_selected_fallback_removes_it_from_tool_settings(monkeypa
 
     assert tools.web_search.primary_provider == "no_key"
     assert tools.web_search.fallback_provider is None
-    assert str(integration.id) not in tools.permissions.resource_policies
+    assert not settings.instances
     assert any(call.args[1] is tools for call in save.await_args_list)
 
 
 async def test_changing_connection_clears_its_resource_policies(monkeypatch) -> None:
     integration = _searxng()
     settings = IntegrationSettings(instances=[integration])
-    tools = ToolSettings.model_validate(
-        {
-            "publicPermissions": {
-                "resourcePolicies": {
-                    str(integration.id): {
-                        "calendar:work": {"network.search": "auto"}
-                    }
-                },
-            }
-        }
-    )
+    tools = ToolSettings()
+    integration.permissions.public_permissions.resource_policies = {
+        "calendar:work": {"network.search": "auto"}
+    }
 
     async def load_settings(_db, settings_type, **_kwargs):
         return settings if settings_type is IntegrationSettings else tools
@@ -1336,7 +1314,7 @@ async def test_changing_connection_clears_its_resource_policies(monkeypatch) -> 
         AsyncMock(spec=AsyncSession),
     )
 
-    assert str(integration.id) not in tools.permissions.resource_policies
+    assert not integration.permissions.public_permissions.resource_policies
 
 
 async def test_search_uses_fallback_only_for_temporary_errors(monkeypatch) -> None:
@@ -1436,11 +1414,6 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     monkeypatch.setattr(
-        caldav_service_module,
-        "clear_profile_integration_policies",
-        AsyncMock(),
-    )
-    monkeypatch.setattr(
         caldav_service_module, "store_credential", store_credential
     )
 
@@ -1456,17 +1429,13 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
         db,
     )
     second = settings.instances[1]
-    tools.permissions.integration_policies = {
-        str(first.id): {"calendar.read": ToolExecutionPolicy.AUTO},
-        str(second.id): {"calendar.read": ToolExecutionPolicy.ASK},
+    first.permissions.private_permissions.policies = {"calendar.read": ToolExecutionPolicy.AUTO}
+    second.permissions.private_permissions.policies = {"calendar.read": ToolExecutionPolicy.ASK}
+    first.permissions.private_permissions.resource_policies = {
+        f"calendar:{'a' * 32}": {"calendar.write": ToolExecutionPolicy.ASK}
     }
-    tools.permissions.resource_policies = {
-        str(first.id): {
-            f"calendar:{'a' * 32}": {"calendar.write": ToolExecutionPolicy.ASK}
-        },
-        str(second.id): {
-            f"calendar:{'b' * 32}": {"calendar.read": ToolExecutionPolicy.AUTO}
-        },
+    second.permissions.private_permissions.resource_policies = {
+        f"calendar:{'b' * 32}": {"calendar.read": ToolExecutionPolicy.AUTO}
     }
     tools.resource_labels = {
         str(first.id): {f"calendar:{'a' * 32}": "Privat"},
@@ -1497,12 +1466,12 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
     )
 
     assert first.credential_id == credential_ids[2]
-    assert str(first.id) in tools.permissions.integration_policies
-    assert str(first.id) in tools.permissions.resource_policies
+    assert first.permissions.private_permissions.policies
+    assert first.permissions.private_permissions.resource_policies
     assert tools.default_calendar.integration_id == first.id
     assert tools.default_task_list.integration_id == first.id
-    assert str(second.id) in tools.permissions.integration_policies
-    assert str(second.id) in tools.permissions.resource_policies
+    assert second.permissions.private_permissions.policies
+    assert second.permissions.private_permissions.resource_policies
     assert store_credential.await_args_list[-1].args == (db,)
     assert store_credential.await_args_list[-1].kwargs == {
         "owner_id": None,
@@ -1521,11 +1490,11 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
         db,
     )
 
-    assert str(first.id) not in tools.permissions.integration_policies
-    assert str(first.id) not in tools.permissions.resource_policies
+    assert not first.permissions.private_permissions.policies
+    assert not first.permissions.private_permissions.resource_policies
     assert str(first.id) not in tools.resource_labels
-    assert str(second.id) in tools.permissions.integration_policies
-    assert str(second.id) in tools.permissions.resource_policies
+    assert second.permissions.private_permissions.policies
+    assert second.permissions.private_permissions.resource_policies
     assert str(second.id) in tools.resource_labels
     assert tools.default_calendar is None
     assert tools.default_task_list is None

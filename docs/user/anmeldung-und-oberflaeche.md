@@ -40,7 +40,7 @@ Der globale Bereich **Benachrichtigungen** zeigt eine chronologische Liste. Sein
 
 Hinweise auf Freigaben und Rückfragen öffnen die Quell-Session; Dreaming-Vorschläge öffnen **Memory > Dreaming > Offene Vorschläge**. Normale Antworten und Laufzeitfehler erzeugen ebenfalls Hinweise, sofern ihre Session nicht sichtbar und fokussiert ist. Antwort- und Sessionanfrage-Hinweise verschwinden nach dem Lesen; andere Hinweise können einen gelesenen Verlauf behalten. Lesen oder Löschen entscheidet niemals die zugrunde liegende Anfrage.
 
-Session-Freigaben verwalten Sie unter **Session > Freigaben und Arbeitsverzeichnis**; darunter steht das aktuelle Arbeitsverzeichnis. Push aktivieren Sie pro Gerät im Benachrichtigungsbereich, nachdem die Instanz dafür eingerichtet wurde; siehe [Betrieb](betrieb-und-datensicherung.md#app-und-push-benachrichtigungen).
+Session-Freigaben verwalten Sie unter **Session > Session-Freigaben**. Computer und Arbeitsverzeichnis haben eigene Auswahlfelder im Sessionbereich. Push aktivieren Sie pro Gerät im Benachrichtigungsbereich, nachdem die Instanz dafür eingerichtet wurde; siehe [Betrieb](betrieb-und-datensicherung.md#app-und-push-benachrichtigungen).
 
 ## Desktop und Mobilgeräte
 

@@ -19,7 +19,7 @@ from mato_loop_backend.settings import (
     UserAiSettings,
     UserIntegrationSettings,
     UserToolSettings,
-    WebFetchSettings,
+    WebAccessSettings,
     load_effective_ai,
     load_effective_integrations,
     load_effective_tools,
@@ -251,12 +251,12 @@ async def test_effective_ai_ignores_legacy_personal_default(monkeypatch) -> None
     assert effective.default_model_id == model.id
 
 
-async def test_effective_tools_uses_personal_snapshot_with_instance_web_fetch_limits(
+async def test_effective_tools_uses_personal_snapshot_with_instance_web_access_limits(
     monkeypatch,
 ) -> None:
     instance = ToolSettings(
-        public_permissions={"policies": {"instance": "ask"}},
-        web_fetch=WebFetchSettings(
+        public_permissions={"policies": {"filesystem.read": "ask"}},
+        web_access=WebAccessSettings(
             user_agent="Instance Agent",
             max_response_mib=7,
             public_addresses_only=False,
@@ -270,7 +270,7 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_fetch_li
             "calendarKey": "calendar:" + "a" * 32,
         },
         resource_labels={"personal": {"calendar:test": "Privat"}},
-        web_fetch=WebFetchSettings(
+        web_access=WebAccessSettings(
             user_agent="Personal Agent",
             max_response_mib=99,
             public_addresses_only=True,
@@ -281,10 +281,10 @@ async def test_effective_tools_uses_personal_snapshot_with_instance_web_fetch_li
 
     effective = await load_effective_tools(AsyncMock(spec=AsyncSession), uuid4())
 
-    assert effective.permissions.policies == {"instance": "ask"}
-    assert effective.web_fetch.user_agent == "Instance Agent"
-    assert effective.web_fetch.max_response_mib == 7
-    assert effective.web_fetch.public_addresses_only is False
+    assert effective.permissions.policies == {"filesystem.read": "ask"}
+    assert effective.web_access.user_agent == "Instance Agent"
+    assert effective.web_access.max_response_mib == 7
+    assert effective.web_access.public_addresses_only is False
     assert effective.web_search.primary_provider == "searxng:personal"
     assert effective.default_calendar == personal.default_calendar
     assert effective.resource_labels == personal.resource_labels

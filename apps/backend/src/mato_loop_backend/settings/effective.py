@@ -288,6 +288,8 @@ def filter_agent_profile_integrations(
 async def load_effective_tools(
     db: AsyncSession, user_id: UUID, trust_level: TrustLevel = TrustLevel.PUBLIC
 ) -> ToolSettings:
+    from mato_loop_backend.tools.catalog import tool_registry
+
     instance = (await SettingsStore.load(db, ToolSettings)).model_copy(deep=True)
     if not await personal_skills_allowed(db, user_id):
         instance.tool_availability.update(dict.fromkeys(("save_skill", "edit_skill"), False))
@@ -300,6 +302,7 @@ async def load_effective_tools(
         for field in _INTEGRATION_TOOL_FIELDS:
             setattr(instance, field, getattr(personal, field))
     for branch in (instance.private_permissions, instance.public_permissions):
+        branch.policies = {key: value for key, value in branch.policies.items() if key in tool_registry.actions_by_capability}
         branch.integration_policies = {}
         branch.resource_policies = {}
         branch.resource_availability = {}
@@ -429,6 +432,8 @@ async def load_agent_profile_tools(
     profile_id: UUID | None,
     trust_level: TrustLevel,
 ) -> tuple[ToolSettings, AgentProfile]:
+    from mato_loop_backend.tools.catalog import tool_registry
+
     tools = await load_effective_tools(db, user_id, trust_level)
     profile = await load_agent_profile(db, user_id, profile_id)
     permission_profile = profile
@@ -443,7 +448,10 @@ async def load_agent_profile_tools(
         tools.shell_prefixes = permission_profile.shell_prefixes
     for name, available in permission_profile.tool_availability.items():
         tools.tool_availability[name] = tools.tool_availability.get(name, True) and available
-    tools._agent_permissions = AgentProfilePermissions(policies=dict(getattr(permission_profile, f"{trust_level.value}_permissions").policies))
+    tools._agent_permissions = AgentProfilePermissions(policies={
+        key: value for key, value in getattr(permission_profile, f"{trust_level.value}_permissions").policies.items()
+        if key in tool_registry.actions_by_capability
+    })
     tools._agent_profile = profile
     apply_integration_permissions(tools, await load_effective_integrations(db, user_id), profile.id)
     return tools, profile

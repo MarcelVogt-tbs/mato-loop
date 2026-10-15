@@ -310,7 +310,7 @@ async def execute_definition(
                         request,
                         policy_integration_id=(
                             UUID(selected_integration_id)
-                            if request.use_integration_policy
+                            if request.use_integration_policy or request.policy_integration_id is not None
                             else None
                         ),
                         policy_resource_key=(

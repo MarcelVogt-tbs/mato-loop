@@ -45,6 +45,17 @@
           <q-btn flat round dense icon="info_outline" aria-label="Freigabeverhalten erklärt (öffnet neuen Tab)" href="/docs/tools-und-integrationen/#globale-tool-vorgaben-anwenden" target="_blank" rel="noopener noreferrer" />
         </q-card-section>
       </q-card>
+      <q-card v-if="admin && section === 'general' && form.configuration.webAccess" flat class="app-surface q-mb-md">
+        <q-card-section>
+          <div class="text-subtitle1 text-weight-bold q-mb-sm">Webabrufe und Downloads</div>
+          <q-toggle v-model="form.configuration.webAccess.publicAddressesOnly" color="primary" label="Nur öffentliche Zieladressen zulassen" :disable="loading || saving" />
+          <div class="text-caption app-muted">Begrenzt Webseitenabrufe, Dateidownloads und Untertitelabrufe auf öffentliche Netzwerkadressen, auch beim URL-Import in Integrationen. Shell, Computer-Browser und Verbindungen zu konfigurierten Diensten haben eigene Zugriffsregeln.</div>
+          <div class="row q-col-gutter-md q-mt-sm">
+            <q-input v-model.trim="form.configuration.webAccess.userAgent" class="col-12 col-md-8" outlined maxlength="512" label="User-Agent" :rules="[userAgentRule]" :disable="loading || saving" />
+            <q-input v-model.number="form.configuration.webAccess.maxResponseMiB" class="col-12 col-md-4" outlined type="number" min="1" max="256" suffix="MiB" label="Maximale Antwortgröße" :rules="[responseLimitRule]" :disable="loading || saving" />
+          </div>
+        </q-card-section>
+      </q-card>
       <PersonalSettingsGate v-if="admin && section === 'general'" v-model="form.personalSettingsEnabled" title="Tool-Rechte für persönliche Agentenprofile anpassen erlauben" description="Benutzer können Tools, Shell-Präfixe und Aktionsrechte ihrer eigenen Profile anpassen." :disabled="saving || loading" />
       <ToolConfigurationRules v-if="section === 'availability' && selectedId" :key="selectedId" v-model="form.configuration" :groups="permissionGroups.private" :inherited-shell-prefixes="inheritedShellPrefixes" :inherited-availability="inheritedAvailability" :global-availability="globalAvailability" :disabled="loading || saving || loadFailed" />
       <template v-if="section === 'availability' && !selectedId">
@@ -64,12 +75,7 @@
                 <div class="col-auto"><q-toggle :model-value="form.configuration.toolAvailability[tool.name] !== false" color="primary" label="Verfügbar" :aria-label="`${tool.label}: verfügbar`" :disable="loading || saving || loadFailed" @update:model-value="form.configuration.toolAvailability[tool.name] = $event" /></div>
               </div>
               <template v-if="form.configuration.toolAvailability[tool.name] !== false">
-                <div v-if="tool.name === 'webfetch'" class="row q-col-gutter-md q-mt-sm">
-                  <div class="col-12 col-sm-6"><q-toggle v-model="form.configuration.webFetch.publicAddressesOnly" color="primary" label="Nur öffentliche Adressen zulassen" :disable="loading || saving" /></div>
-                  <div class="col-12 col-sm-6 row justify-end"><q-btn flat no-caps icon="edit" label="JavaScript-Konfiguration" :disable="loading || saving" @click="editJavascript" /></div>
-                  <q-input v-model.trim="form.configuration.webFetch.userAgent" class="col-12 col-md-8" outlined maxlength="512" label="User-Agent" :rules="[userAgentRule]" :disable="loading || saving" />
-                  <q-input v-model.number="form.configuration.webFetch.maxResponseMiB" class="col-12 col-md-4" outlined type="number" min="1" max="256" suffix="MiB" label="Maximale Antwortgröße" :rules="[responseLimitRule]" :disable="loading || saving" />
-                </div>
+                <div v-if="tool.name === 'webfetch'" class="row justify-end q-mt-sm"><q-btn flat no-caps icon="edit" label="JavaScript-Konfiguration" :disable="loading || saving" @click="editJavascript" /></div>
                 <q-input v-if="mediaByName[tool.name]" v-model.number="form.configuration[mediaByName[tool.name]].timeoutSeconds" class="q-mt-md" outlined type="number" min="10" max="3600" label="Zeitlimit" suffix="Sekunden" :rules="[timeoutRule]" :disable="loading || saving" />
                 <div v-if="tool.name === 'shell_run'" class="row justify-end q-mt-sm"><q-btn flat no-caps icon="edit" label="Shell-Präfixe konfigurieren" :disable="loading || saving" @click="editShellPrefixes" /></div>
               </template>
@@ -229,7 +235,7 @@ async function loadPermissions() {
     if (!selectedId.value) {
       form.personalSettingsEnabled = data.personalSettingsEnabled
       technicalGroups.value = tools.configurationGroups
-      Object.assign(form.configuration, { shellPrefixes: data.shellPrefixes || { read: [], write: [] }, webFetch: { ...tools.configurationWebFetch }, ...Object.fromEntries(mediaFields.map(field => [field, { ...tools[field] }])) })
+      Object.assign(form.configuration, { shellPrefixes: data.shellPrefixes || { read: [], write: [] }, webAccess: { ...tools.configurationWebAccess }, webFetch: { ...tools.configurationWebFetch }, ...Object.fromEntries(mediaFields.map(field => [field, { ...tools[field] }])) })
     }
     saved.value = JSON.stringify(payload())
   } catch { if (token === loadToken) loadFailed.value = true }

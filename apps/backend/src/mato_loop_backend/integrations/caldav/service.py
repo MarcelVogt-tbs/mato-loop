@@ -17,7 +17,6 @@ from mato_loop_backend.integrations.service import (
     _load_integrations,
     _load_tools,
     _save_settings,
-    clear_profile_integration_policies,
 )
 from mato_loop_backend.security import (
     delete_credential,
@@ -46,10 +45,12 @@ class CalDavIntegrationService:
         clear_policies: UUID | None = None,
     ) -> IntegrationSettings:
         if clear_policies is not None:
+            instance = next((item for item in settings.instances if item.id == clear_policies), None)
+            if instance is not None:
+                _clear_integration_policies(instance)
             tools = await _load_tools(db, owner_id, for_update=True)
             integration_id = str(clear_policies)
-            changed = _clear_integration_policies(tools, integration_id)
-            changed = tools.resource_labels.pop(integration_id, None) is not None or changed
+            changed = tools.resource_labels.pop(integration_id, None) is not None
             if (
                 tools.default_calendar is not None
                 and str(tools.default_calendar.integration_id) == integration_id
@@ -64,9 +65,6 @@ class CalDavIntegrationService:
                 changed = True
             if changed:
                 await _save_settings(db, tools, owner_id)
-            await clear_profile_integration_policies(
-                db, clear_policies, owner_id=owner_id
-            )
         await _save_settings(db, settings, owner_id)
         await db.commit()
         return settings

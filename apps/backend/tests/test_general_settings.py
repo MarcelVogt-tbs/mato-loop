@@ -154,17 +154,18 @@ async def test_disabled_model_distinction_preserves_public_tool_permissions(monk
     ({"browser": True}, True),
     ({"unknown": False}, True),
 ])
-async def test_global_tool_saves_preserve_hidden_availability(monkeypatch, availability, invalid):
-    tools = ToolSettings(tool_availability={"browser": False})
+async def test_global_tool_saves_preserve_unsubmitted_configuration(monkeypatch, availability, invalid):
+    tools = ToolSettings(tool_availability={"browser": False}, web_access={"userAgent": "Shared/2.0", "maxResponseMiB": 7, "publicAddressesOnly": False})
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=tools))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
-    request = tool_request(tools, toolAvailability=availability)
+    request = ToolConfigurationRequest.model_validate(tool_request(tools, toolAvailability=availability).model_dump(by_alias=True, exclude={"web_access"}))
     if invalid:
         with pytest.raises(ApiError, match="validation.invalidChoice"):
             await update_tool_configuration(request, SimpleNamespace(is_admin=True), AsyncMock())
     else:
         result = await update_tool_configuration(request, SimpleNamespace(is_admin=True), AsyncMock())
         assert result["toolAvailability"] == {"browser": False, "shell_run": False}
+        assert result["webAccess"] == {"userAgent": "Shared/2.0", "maxResponseMiB": 7, "publicAddressesOnly": False}
 
 
 @pytest.mark.parametrize("presets", [{"other": "auto_all"}, {"private": "unknown"}, {"private": None}])

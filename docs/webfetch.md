@@ -2,8 +2,8 @@
 
 `webfetch` has one optional `javascript` argument. Omitted or `null` uses the global
 `web_fetch.javascript_hosts` setting (`javascriptHosts` in the administration API).
-Administrators open **JavaScript-Konfiguration** next to **Nur öffentliche Adressen zulassen**
-under **Administration > Tools > Einstellungen**. The dialog's **JavaScript aktivieren**
+Administrators open **JavaScript-Konfiguration** on the enabled Webfetch tool
+under **Administration > Tools > Tool-Einstellungen > Globaler Standard**. The dialog's **JavaScript aktivieren**
 switch controls `web_fetch.javascript_enabled` (`javascriptEnabled` in the API),
 defaulting to true for existing settings. When disabled, omitted/null defaults use HTTP
 and an explicit `javascript=true` fails with `webfetch.javascriptDisabled` before
@@ -22,11 +22,22 @@ explicit `true` or `false` overrides this choice. The list is neither model-faci
 nor learned automatically.
 Selection happens once, before authorization, with no automatic retries or engine fallback.
 
-There is no administrator engine selection. Previously stored `engine` fields are
-ignored on load and removed on the next settings save; other unknown Webfetch settings
-remain invalid. Availability, User-Agent, response size, and address restrictions stay
-under **Administration > Tools > Einstellungen**. Neither fetch mode requires a
-computer or personal integration. The existing computer browser is independent.
+There is no administrator engine selection. Webfetch-specific settings contain only
+`javascript_enabled` and `javascript_hosts`. The shared `ToolSettings.web_access`
+group owns `public_addresses_only`, `user_agent`, and `max_response_mib`, exposed as
+`webAccess` in the configuration API. These settings are under
+**Administration > Tools > Einstellungen > Webabrufe und Downloads** and apply to
+Webfetch, downloads, transcripts, and integration URL imports through that pipeline.
+They are not a network-wide filter for shell, computer browser, search providers,
+or configured integration connections. Availability and JavaScript remain in
+**Tool-Einstellungen**. Neither fetch mode requires a computer or personal integration.
+The existing computer browser is independent.
+
+Migration `65ff25cc3202` deliberately resets the three shared values to their defaults:
+public addresses only, User-Agent `MatoLoop/1.0`, and 64 MiB per response. It removes
+the old fields and obsolete `engine` key while retaining JavaScript and other tool
+settings. Downgrade does not restore discarded values. Runtime models reject the
+removed fields; there is no legacy read fallback.
 
 An initial bounded HTTP request determines the content type. PDFs, images,
 structured data, plain text, and Markdown keep their existing processing.
@@ -74,7 +85,7 @@ there are no separate approvals for subresources. The initial transport still
 validates and pins addresses, including after approval. The browser uses its own
 native transport, not CDP interception or replacement HTTP responses.
 
-**Nur öffentliche Adressen zulassen** enables Lightpanda's native
+**Nur öffentliche Zieladressen zulassen** enables Lightpanda's native
 `--block-private-networks` plus explicit `--block-cidrs` enforcement after DNS
 resolution. The CIDR policy matches MatoLoop's public-address classification,
 including CGNAT/metadata, documentation, multicast, reserved IPv4/IPv6, and IPv6
@@ -112,8 +123,7 @@ alongside the native HTTP and termination deadlines; it does not use the
 engine's five-second page-wait default. Stylesheets and workers
 are enabled; images and iframes use the engine's disabled defaults.
 
-Both engines use the configured User-Agent, default `MatoLoop/1.0`. The exact old
-shipped Chrome default is normalized when loading settings; custom values remain.
+Both engines use the shared configured User-Agent, default `MatoLoop/1.0`.
 Lightpanda rejects User-Agents containing `Mozilla`; this is reported only when an
 HTML JavaScript fetch needs it. HTTP and non-HTML fetches accept those values. Web search
 is separate and its clients manage their own headers.

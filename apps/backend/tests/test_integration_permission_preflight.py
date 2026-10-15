@@ -394,6 +394,10 @@ async def test_preflight_does_not_bypass_handler_source_permission(preflight, so
 
 async def test_tools_without_resource_argument_skip_metadata_discovery(preflight):
     case = preflight
+    case.authorization_factory.return_value = (replace(
+        case.authorization_factory.return_value[0],
+        use_integration_policy=False, policy_integration_id=case.instance.id,
+    ),)
     tool = case.effective.tools[case.call.name]
     case.effective.tools[case.call.name] = replace(
         tool, definition=replace(tool.definition, resource_argument=None)
@@ -405,6 +409,7 @@ async def test_tools_without_resource_argument_skip_metadata_discovery(preflight
 
     assert not result.is_error
     case.context.ask_handler.assert_awaited_once()
+    assert case.context.ask_handler.await_args.args[0].policy_integration_id == case.instance.id
     case.handler.assert_awaited_once()
     case.loader.assert_not_awaited()
     case.credential.assert_not_awaited()

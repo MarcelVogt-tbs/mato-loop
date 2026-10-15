@@ -32,7 +32,7 @@ Kontextfenster, Auto-/manuelles Ausgabelimit, Streaming, Tool-, Paralleltool- un
 
 Reasoning-Stufen erscheinen nur für unterstützte Modelle. Verfügbare Stufen und Standards hängen vom Provider und dessen erkanntem Modellprofil ab; synchronisieren Sie nach Provideränderungen. Die Auswahl eines öffentlichen Modells gibt bereits autorisierte Inhalte an diesen Provider frei. [Datenfreigabe](freigaben-und-datenfreigabe.md) und Memory-Zielgruppen bleiben getrennte Themen.
 
-- **Administration > Provider > Einstellungen > Erinnerungen und Profilangaben trennen:** legt getrennt fest, welche Erinnerungen und persönlichen Angaben lokale und Cloud-Modelle verwenden dürfen. Änderungen am Schalter werden sofort gespeichert.
+- **Administration > Provider > Einstellungen > Modelltrennung:** Pro Provider legen Sie fest, ob seine Modelle als privat oder öffentlich gelten. Bei aktiver Modelltrennung gelten dafür getrennte Tool-Rechte, Erinnerungen und persönliche Profilangaben. Änderungen am Schalter werden sofort gespeichert.
 - **Ohne Trennung:** Für alle Modelle gelten dieselben Datenfreigaben. Gespeicherte Einstufungen bleiben erhalten.
 - **Kennungen und Secrets pseudonymisieren:** bleibt unabhängig einstellbar. Modelle können den Providerwert übernehmen oder überschreiben.
 - **Grundeinstellungen:** enthält weiterhin einen direkten Link zu diesem Bereich. Dort steht die öffentliche Adresse an erster Stelle.

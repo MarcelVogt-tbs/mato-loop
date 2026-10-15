@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from defusedxml import ElementTree
 from yarl import URL
 
-from mato_loop_backend.settings.models import DEFAULT_WEBFETCH_USER_AGENT
+from mato_loop_backend.settings.models import DEFAULT_WEB_ACCESS_USER_AGENT
 from mato_loop_backend.web.fetch import WebFetchBytesResult, WebFetchError, request_web_bytes
 
 _VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -286,7 +286,7 @@ async def fetch_youtube_transcript(
     language: str | None = None,
     timeout: float = 30,
     max_response_bytes: int = _CAPTION_MAX_BYTES,
-    user_agent: str = DEFAULT_WEBFETCH_USER_AGENT,
+    user_agent: str = DEFAULT_WEB_ACCESS_USER_AGENT,
     public_addresses_only: bool = True,
     before_request: Callable[[str], Awaitable[None]] | None = None,
 ) -> TranscriptResult:

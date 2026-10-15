@@ -43,11 +43,11 @@
         <div class="col-12 col-sm row items-center no-wrap q-gutter-md">
           <q-avatar color="primary" text-color="white" icon="security" />
           <div class="col">
-            <div class="text-subtitle1 text-weight-bold">Erinnerungen und Profilangaben trennen</div>
-            <div class="text-caption app-muted">Lege getrennt fest, welche Erinnerungen und persönlichen Angaben lokale und Cloud-Modelle verwenden dürfen. Ohne Trennung gelten für alle Modelle dieselben Datenfreigaben.</div>
+            <div class="text-subtitle1 text-weight-bold">Modelltrennung</div>
+            <div class="text-caption app-muted">Lege für jeden Provider fest, ob seine Modelle als privat oder öffentlich gelten. Bei aktiver Modelltrennung gelten dafür getrennte Tool-Rechte, Erinnerungen und persönliche Profilangaben.</div>
           </div>
         </div>
-        <q-toggle dense :model-value="generalSettings.modelTrustEnabled" class="col-12 col-sm-auto" color="primary" aria-label="Erinnerungen und Profilangaben trennen" :disable="pageLoading || generalSettings.saving || loadFailed" @update:model-value="toggleModelTrust" />
+        <q-toggle dense :model-value="generalSettings.modelTrustEnabled" class="col-12 col-sm-auto" color="primary" aria-label="Modelltrennung" :disable="pageLoading || generalSettings.saving || loadFailed" @update:model-value="toggleModelTrust" />
       </q-card-section>
     </q-card>
 

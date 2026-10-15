@@ -63,7 +63,7 @@ it('keeps global and personal lists and creation scopes separate when switching 
       expect(root.querySelector('.provider-card-list')).toBeNull()
       expect(root.textContent).not.toContain('Provider hinzufügen')
       api.put.mockResolvedValueOnce({ data: { modelTrustEnabled: false, publicBaseUrl: 'https://mato.test' } }).mockRejectedValueOnce(new Error('offline'))
-      const trustToggle = await vi.waitUntil(() => root.querySelector('[aria-label="Erinnerungen und Profilangaben trennen"]:not(.disabled)'))
+      const trustToggle = await vi.waitUntil(() => root.querySelector('[aria-label="Modelltrennung"]:not(.disabled)'))
       trustToggle.click()
       await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/general-settings', { modelTrustEnabled: false }))
       await vi.waitUntil(() => !trustToggle.classList.contains('disabled'))

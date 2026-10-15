@@ -57,7 +57,7 @@ def _context(
     tool_settings = ToolSettings()
     tool_settings.private_permissions.policies["network.fetch"] = web_fetch_policy
     tool_settings.public_permissions.policies["network.fetch"] = web_fetch_policy
-    tool_settings.web_fetch.public_addresses_only = public_addresses_only
+    tool_settings.web_access.public_addresses_only = public_addresses_only
     context = ToolContext(
         db=AsyncMock(spec=AsyncSession),
         run_id=uuid4(),

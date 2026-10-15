@@ -45,6 +45,7 @@ from mato_loop_backend.integrations.sonobin.service import SonoBinIntegrationSer
 from mato_loop_backend.permissions.resolution import resolve_tool_execution_policy
 from mato_loop_backend.security import require_admin, require_user
 from mato_loop_backend.settings import (
+    GENERAL_PROFILE_ID,
     AgentProfilePermissions,
     IntegrationAdapterAvailability,
     IntegrationInstance,
@@ -55,6 +56,7 @@ from mato_loop_backend.settings import (
     UserIntegrationSettings,
     load_effective_integrations,
 )
+from mato_loop_backend.settings.models import IntegrationPermissions
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.contracts import (
     PERMISSION_REASON_ARGUMENT,
@@ -893,11 +895,11 @@ async def test_endpoint_change_clears_server_and_tool_policy_state(monkeypatch) 
     )
     integrations = IntegrationSettings(instances=[instance])
     tools = ToolSettings()
-    for permissions in (tools.private_permissions, tools.public_permissions):
-        permissions.integration_policies[str(instance.id)] = {
+    for permissions in (instance.permissions.private_permissions, instance.permissions.public_permissions):
+        permissions.policies = {
             "mcp.call": ToolExecutionPolicy.AUTO
         }
-        permissions.resource_policies[str(instance.id)] = {
+        permissions.resource_policies = {
             mcp_resource_key("lookup"): {"mcp.call": ToolExecutionPolicy.ASK}
         }
     tools.resource_labels[str(instance.id)] = {mcp_resource_key("lookup"): "Lookup"}
@@ -907,9 +909,6 @@ async def test_endpoint_change_clears_server_and_tool_policy_state(monkeypatch) 
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
-    monkeypatch.setattr(
-        service_module, "clear_profile_integration_policies", AsyncMock()
-    )
     monkeypatch.setattr(
         McpClient,
         "discover_tools",
@@ -928,9 +927,7 @@ async def test_endpoint_change_clears_server_and_tool_policy_state(monkeypatch) 
         owner_id=None,
     )
 
-    for permissions in (tools.private_permissions, tools.public_permissions):
-        assert str(instance.id) not in permissions.integration_policies
-        assert str(instance.id) not in permissions.resource_policies
+    assert instance.permissions == IntegrationPermissions()
     assert str(instance.id) not in tools.resource_labels
     db.commit.assert_awaited_once()
 
@@ -956,14 +953,16 @@ async def test_same_endpoint_update_prunes_only_removed_tool_state(monkeypatch, 
     tools = ToolSettings()
     keep = mcp_resource_key("keep")
     remove = mcp_resource_key("remove")
-    tools.private_permissions.integration_policies[str(instance.id)] = {
+    instance.permissions.private_permissions.policies = {
         "mcp.call": ToolExecutionPolicy.AUTO
     }
-    tools.private_permissions.resource_policies[str(instance.id)] = {
+    instance.permissions.private_permissions.resource_policies = {
         keep: {"mcp.call": ToolExecutionPolicy.AUTO},
         remove: {"mcp.call": ToolExecutionPolicy.DISABLED},
     }
     tools.resource_labels[str(instance.id)] = {keep: "Keep", remove: "Remove"}
+    instance.permissions.resource_availability = {keep: True, remove: False}
+    instance.profile_permissions[GENERAL_PROFILE_ID] = instance.permissions.model_copy(deep=True)
 
     async def load(_db, settings_type, **_kwargs):
         return integrations if settings_type is IntegrationSettings else tools
@@ -987,12 +986,12 @@ async def test_same_endpoint_update_prunes_only_removed_tool_state(monkeypatch, 
         owner_id=None,
     )
 
-    assert tools.private_permissions.integration_policies[str(instance.id)] == {
-        "mcp.call": ToolExecutionPolicy.AUTO
-    }
-    assert tools.private_permissions.resource_policies[str(instance.id)] == {
-        keep: {"mcp.call": ToolExecutionPolicy.AUTO}
-    }
+    for permissions in (instance.permissions, instance.profile_permissions[GENERAL_PROFILE_ID]):
+        assert permissions.private_permissions.policies == {"mcp.call": ToolExecutionPolicy.AUTO}
+        assert permissions.private_permissions.resource_policies == {
+            keep: {"mcp.call": ToolExecutionPolicy.AUTO}
+        }
+        assert permissions.resource_availability == {keep: True}
     assert tools.resource_labels[str(instance.id)] == {keep: "Keep"}
     assert instance.config["oauth"] == oauth_config
 
@@ -1014,7 +1013,7 @@ async def test_refresh_prunes_removed_tool_state_only(monkeypatch) -> None:
     tools = ToolSettings()
     keep = mcp_resource_key("keep")
     remove = mcp_resource_key("remove")
-    tools.private_permissions.resource_policies[str(instance.id)] = {
+    instance.permissions.private_permissions.resource_policies = {
         keep: {"mcp.call": ToolExecutionPolicy.AUTO},
         remove: {"mcp.call": ToolExecutionPolicy.DISABLED},
     }
@@ -1033,7 +1032,7 @@ async def test_refresh_prunes_removed_tool_state_only(monkeypatch) -> None:
 
     await McpIntegrationService.refresh(AsyncMock(), instance.id, owner_id=None)
 
-    assert tools.private_permissions.resource_policies[str(instance.id)] == {
+    assert instance.permissions.private_permissions.resource_policies == {
         keep: {"mcp.call": ToolExecutionPolicy.AUTO}
     }
     assert tools.resource_labels[str(instance.id)] == {keep: "Keep"}

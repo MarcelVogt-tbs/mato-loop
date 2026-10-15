@@ -958,6 +958,7 @@ async def test_attachment_from_url_is_downloaded_and_uploaded(monkeypatch) -> No
 
     async def download_file(url, **_kwargs):
         assert url == "https://example.test/sheet.pdf"
+        assert (_kwargs["user_agent"], _kwargs["max_response_bytes"], _kwargs["public_addresses_only"]) == ("Shared/2.0", 7 * 1024 * 1024, False)
         await _kwargs["authorize_url"](url)
         return DownloadedFile(
             final_url=url,
@@ -976,9 +977,12 @@ async def test_attachment_from_url_is_downloaded_and_uploaded(monkeypatch) -> No
         url="https://example.test/sheet.pdf",
     )
 
-    result = await knowledge_create_attachment(
-        arguments, _download_context(instance, revision)
-    )
+    context = _download_context(instance, revision)
+    context.tool_settings.web_access.user_agent = "Shared/2.0"
+    context.tool_settings.web_access.max_response_mib = 7
+    context.tool_settings.web_access.public_addresses_only = False
+    context.db.scalar.return_value.data = context.tool_settings.model_dump(mode="json")
+    result = await knowledge_create_attachment(arguments, context)
 
     assert client.create_file_attachment.await_args.kwargs["filename"] == "sheet.pdf"
     assert client.create_file_attachment.await_args.kwargs["data"] == b"%PDF-1.4"

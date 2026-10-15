@@ -38,7 +38,8 @@ const configuration = {
     }]
   }],
   toolAvailability: { webfetch: true },
-  webFetch: { javascriptEnabled: false, javascriptHosts: ['example.com'], userAgent: 'MatoLoop/1.0', maxResponseMiB: 32, publicAddressesOnly: false },
+  webFetch: { javascriptEnabled: false, javascriptHosts: ['example.com'] },
+  webAccess: { userAgent: 'MatoLoop/1.0', maxResponseMiB: 32, publicAddressesOnly: false },
   transcribeAudio: { timeoutSeconds: 180 }
 }
 
@@ -54,7 +55,8 @@ describe('tool settings store', () => {
     const store = useToolSettingsStore()
     const payload = {
       toolAvailability: { webfetch: true },
-      webFetch: configuration.webFetch
+      webFetch: configuration.webFetch,
+      webAccess: configuration.webAccess
     }
 
     await store.fetchConfiguration()
@@ -64,17 +66,19 @@ describe('tool settings store', () => {
     expect(api.put).toHaveBeenCalledWith('/tools/configuration', payload)
     expect(store.configurationGroups).toEqual(configuration.groups)
     expect(store.configurationWebFetch).toEqual(configuration.webFetch)
+    expect(store.configurationWebAccess).toEqual(configuration.webAccess)
   })
 
-  it('defaults WebFetch to public addresses when the server omits the option', () => {
+  it('defaults shared web access to public addresses when the server omits the option', () => {
     const store = useToolSettingsStore()
 
     store.assignConfiguration({
       ...configuration,
-      webFetch: { userAgent: 'MatoLoop/1.0', maxResponseMiB: 32 }
+      webFetch: {},
+      webAccess: { userAgent: 'MatoLoop/1.0', maxResponseMiB: 32 }
     })
 
-    expect(store.configurationWebFetch.publicAddressesOnly).toBe(true)
+    expect(store.configurationWebAccess.publicAddressesOnly).toBe(true)
     expect(store.configurationWebFetch.javascriptEnabled).toBe(true)
     expect(store.configurationWebFetch.javascriptHosts).toEqual(['reddit.com', 'www.reddit.com'])
   })

@@ -357,9 +357,7 @@ async def test_shared_binding_guards_selection_before_and_after_approval(monkeyp
     result = await effective.execute(call, context)
     assert result.is_error is (revoke != "none")
     if revoke != "none":
-        assert result.metadata["errorCode"] == (
-            "permission.denied" if revoke == "approval" else "tool.unavailable"
-        )
+        assert result.metadata["errorCode"] == "tool.unavailable"
         handler.assert_not_awaited()
     else:
         assert [item.id for item in context.integration_settings.instances] == [first.id]

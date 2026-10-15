@@ -11,9 +11,7 @@ from mato_loop_backend.integrations.service import (
     IntegrationSettingsError,
     _clear_integration_policies,
     _load_integrations,
-    _load_tools,
     _save_settings,
-    clear_profile_integration_policies,
 )
 from mato_loop_backend.security import delete_credential, store_credential
 from mato_loop_backend.settings import IntegrationInstance, IntegrationSettings
@@ -70,13 +68,9 @@ class MailIntegrationService:
         clear_policies: UUID | None = None,
     ) -> IntegrationSettings:
         if clear_policies is not None:
-            tools = await _load_tools(db, owner_id, for_update=True)
-            key = str(clear_policies)
-            if _clear_integration_policies(tools, key, resources=False):
-                await _save_settings(db, tools, owner_id)
-            await clear_profile_integration_policies(
-                db, clear_policies, owner_id=owner_id
-            )
+            instance = MailIntegrationService._find(settings, clear_policies)
+            if instance is not None:
+                _clear_integration_policies(instance)
         await _save_settings(db, settings, owner_id)
         await db.commit()
         return settings

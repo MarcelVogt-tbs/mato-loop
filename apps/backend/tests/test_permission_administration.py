@@ -54,6 +54,7 @@ from mato_loop_backend.settings.effective import (
     integration_profile_available,
 )
 from mato_loop_backend.settings.models import AgentProfileAccessOverrides, IntegrationPermissions
+from mato_loop_backend.tools.catalog import tool_registry
 
 
 def settings_db(monkeypatch, documents):
@@ -79,7 +80,12 @@ async def test_personal_integration_profile_permissions_are_independent_of_globa
     own = IntegrationInstance(name="Own", integration_type="calendar", adapter_type="caldav", config={"base_url": "https://calendar.example.com", "username": "owner"})
     shared = IntegrationInstance(name="Shared", integration_type="calendar", adapter_type="caldav", config={"base_url": "https://calendar.example.com", "username": "shared"})
     documents = {
-        (AgentProfilesSettings, None): AgentProfilesSettings(personal_agents_enabled=False),
+        (AgentProfilesSettings, None): AgentProfilesSettings(
+            personal_agents_enabled=False,
+            builtin_access_overrides={GENERAL_PROFILE_ID: AgentProfileAccessOverrides(
+                publicPermissions={"policies": {"calendar.write": "disabled"}}
+            )},
+        ),
         (ToolSettings, None): ToolSettings(public_permissions={"policies": {"calendar.write": "disabled"}}),
         (IntegrationSettings, None): IntegrationSettings(instances=[shared]),
         (UserIntegrationSettings, user.id): UserIntegrationSettings(instances=[own]),
@@ -95,6 +101,9 @@ async def test_personal_integration_profile_permissions_are_independent_of_globa
         tool_execution_policy(tools, "calendar.write", integration_id=own.id),
         tool_execution_policy(tools, "calendar.write", integration_id=shared.id),
     ) == ("auto", "ask")
+    assert "calendar_create_event" in tool_registry.effective(
+        IntegrationSettings(instances=[own, shared]), tool_settings=tools,
+    ).tools
 
 
 async def test_integration_permissions_cannot_target_another_owners_connection(monkeypatch):

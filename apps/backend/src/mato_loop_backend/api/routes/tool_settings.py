@@ -20,6 +20,7 @@ from mato_loop_backend.settings import (
     IntegrationSettings,
     SettingsStore,
     ToolSettings,
+    WebAccessSettings,
     WebFetchSettings,
     load_effective_tools,
 )
@@ -38,10 +39,6 @@ MEDIA_FIELDS = {
     "generate_image": "generateImage", "edit_image": "editImage", "generate_speech": "generateSpeech",
     "generate_audio": "generateAudio", "transcribe_audio": "transcribeAudio",
     "analyze_video": "analyzeVideo", "analyze_audio": "analyzeAudio",
-}
-WEB_FIELDS = {
-    "javascript_enabled": "javascriptEnabled", "javascript_hosts": "javascriptHosts", "user_agent": "userAgent",
-    "max_response_mib": "maxResponseMiB", "public_addresses_only": "publicAddressesOnly",
 }
 
 
@@ -69,6 +66,10 @@ class ToolConfigurationRequest(BaseModel):
     )
     web_fetch: WebFetchSettings = Field(
         validation_alias=AliasChoices("webFetch", "web_fetch")
+    )
+    web_access: WebAccessSettings = Field(
+        default_factory=WebAccessSettings,
+        validation_alias=AliasChoices("webAccess", "web_access"),
     )
     generate_image: MediaTimeoutRequest = Field(
         validation_alias=AliasChoices("generateImage", "generate_image")
@@ -112,7 +113,8 @@ def tool_configuration_payload(settings: ToolSettings) -> dict:
         "privatePermissions": _tool_permissions_payload(settings.private_permissions, tool_registry.catalog(defaults, IntegrationSettings())),
         "publicPermissions": _tool_permissions_payload(settings.public_permissions, tool_registry.catalog(defaults, IntegrationSettings())),
         "shellPrefixes": settings.shell_prefixes.model_dump(),
-        "webFetch": {alias: getattr(settings.web_fetch, field) for field, alias in WEB_FIELDS.items()},
+        "webFetch": settings.web_fetch.model_dump(mode="json", by_alias=True),
+        "webAccess": settings.web_access.model_dump(mode="json", by_alias=True),
         **{alias: {"timeoutSeconds": getattr(settings, field).timeout_seconds} for field, alias in MEDIA_FIELDS.items()},
         "privateGroups": tool_registry.catalog(defaults.model_copy(deep=True).select_trust(TrustLevel.PRIVATE), IntegrationSettings()),
         "publicGroups": tool_registry.catalog(defaults.model_copy(deep=True).select_trust(TrustLevel.PUBLIC), IntegrationSettings()),
@@ -182,6 +184,8 @@ async def update_tool_configuration(
         if field in payload.model_fields_set:
             setattr(settings, field, getattr(payload, field))
     settings.web_fetch = payload.web_fetch
+    if "web_access" in payload.model_fields_set:
+        settings.web_access = payload.web_access
     for field in MEDIA_FIELDS:
         getattr(settings, field).timeout_seconds = getattr(payload, field).timeout_seconds
     for trust, preset in payload.tool_permission_presets.items():

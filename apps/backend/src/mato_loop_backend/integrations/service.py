@@ -5,16 +5,16 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.settings import (
-    AgentProfilesSettings,
+    IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
     ToolSettings,
-    UserAgentProfilesSettings,
     UserIntegrationSettings,
     UserToolSettings,
     WebSearchToolSettings,
 )
 from mato_loop_backend.settings.effective import personal_integration_tool_settings
+from mato_loop_backend.settings.models import IntegrationPermissions
 
 
 class IntegrationSettingsError(RuntimeError):
@@ -28,83 +28,13 @@ IntegrationSettingsDocument = IntegrationSettings | UserIntegrationSettings
 ToolSettingsDocument = ToolSettings | UserToolSettings
 
 
-def _clear_integration_policies(
-    tools: ToolSettingsDocument, integration_id: UUID | str, *, resources: bool = True
-) -> bool:
-    key = str(integration_id)
-    changed = False
-    if isinstance(tools, UserToolSettings):
-        return False
-    for permissions in (tools.private_permissions, tools.public_permissions):
-        changed = permissions.integration_policies.pop(key, None) is not None or changed
-        changed = permissions.resource_availability.pop(key, None) is not None or changed
-        if resources:
-            changed = permissions.resource_policies.pop(key, None) is not None or changed
-    return changed
-
-
-async def clear_profile_integration_policies(
-    db: AsyncSession, integration_id: UUID | str, *, owner_id: UUID | None
-) -> None:
-    key = str(integration_id)
-    documents: list[
-        tuple[AgentProfilesSettings | UserAgentProfilesSettings | None, UUID | None]
-    ]
-    if owner_id is None:
-        instance = await SettingsStore.load_optional(
-            db, AgentProfilesSettings, for_update=True
-        )
-        user_ids = await SettingsStore.list_user_scopes(db, UserAgentProfilesSettings)
-        documents = [(instance, None)]
-        for user_id in user_ids:
-            documents.append(
-                (
-                    await SettingsStore.load_optional(
-                        db,
-                        UserAgentProfilesSettings,
-                        user_id=user_id,
-                        for_update=True,
-                    ),
-                    user_id,
-                )
-            )
-    else:
-        documents = [
-            (
-                await SettingsStore.load_optional(
-                    db,
-                    UserAgentProfilesSettings,
-                    user_id=owner_id,
-                    for_update=True,
-                ),
-                owner_id,
-            )
-        ]
-
-    for settings, user_id in documents:
-        if settings is None:
-            continue
-        overrides = [profile.overrides for profile in settings.profiles]
-        if isinstance(settings, AgentProfilesSettings):
-            overrides.extend(settings.builtin_access_overrides.values())
-        changed = False
-        for override in overrides:
-            for permissions in (
-                override.private_permissions,
-                override.public_permissions,
-            ):
-                if permissions is None:
-                    continue
-                changed = (
-                    permissions.integration_policies.pop(key, None) is not None
-                    or changed
-                )
-                changed = (
-                    permissions.resource_policies.pop(key, None) is not None
-                    or changed
-                )
-        if changed:
-            await SettingsStore.save(db, settings, user_id=user_id)
+def _clear_integration_policies(instance: IntegrationInstance) -> None:
+    instance.permissions = IntegrationPermissions()
+    instance.profile_permissions = {
+        profile_id: IntegrationPermissions(available=permissions.available)
+        for profile_id, permissions in instance.profile_permissions.items()
+        if permissions.available is not None
+    }
 
 
 async def _load_integrations(
@@ -168,13 +98,13 @@ async def save_with_policy_cleanup(
     clear_policies: UUID | None = None,
 ) -> IntegrationSettingsDocument:
     if clear_policies is not None:
+        instance = next((item for item in settings.instances if item.id == clear_policies), None)
+        if instance is not None:
+            _clear_integration_policies(instance)
         tools = await _load_tools(db, owner_id, for_update=True)
         integration_id = str(clear_policies)
-        changed = _clear_integration_policies(tools, integration_id)
-        changed = tools.resource_labels.pop(integration_id, None) is not None or changed
-        if changed:
+        if tools.resource_labels.pop(integration_id, None) is not None:
             await _save_settings(db, tools, owner_id)
-        await clear_profile_integration_policies(db, clear_policies, owner_id=owner_id)
     await _save_settings(db, settings, owner_id)
     await db.commit()
     return settings

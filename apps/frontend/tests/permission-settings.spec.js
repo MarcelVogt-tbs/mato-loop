@@ -60,7 +60,7 @@ it('saves only the public address from basic settings and links to provider and 
 it.each([true, false])('saves the base behavior while retaining visible global overrides (model distinction: %s)', async (modelTrustEnabled) => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   const catalog = [{ id: 'processes', label: 'Prozesse', tools: ['Shell', 'Terminal'].map(label => ({ name: label, label, actions: [action('shell.write')] })) }]
-  let current = { ...rights(), privatePermissions: { ...branch(), policies: { 'shell.write': 'disabled' } }, publicPermissions: { ...branch(), policies: { 'shell.write': 'auto' } }, personalSettingsEnabled: false, groups: [], privateGroups: catalog, publicGroups: catalog, shellPrefixes: { read: [], write: [] }, webFetch: { userAgent: 'MatoLoop/1.0' }, toolPermissionPresets: { private: 'ask_changes', public: 'ask_all' } }
+  let current = { ...rights(), privatePermissions: { ...branch(), policies: { 'shell.write': 'disabled' } }, publicPermissions: { ...branch(), policies: { 'shell.write': 'auto' } }, personalSettingsEnabled: false, groups: [], privateGroups: catalog, publicGroups: catalog, shellPrefixes: { read: [], write: [] }, webAccess: { userAgent: 'MatoLoop/1.0', publicAddressesOnly: true }, toolPermissionPresets: { private: 'ask_changes', public: 'ask_all' } }
   const chosen = { private: 'ask_delete', ...(modelTrustEnabled ? { public: 'ask_changes_sensitive' } : {}) }
   api.get.mockImplementation(async url => ({ data: url === '/agent-profiles' ? { agents: [], effectiveAgents: [] } : current }))
   api.put.mockImplementation(async (_url, payload) => {
@@ -83,8 +83,14 @@ it.each([true, false])('saves the base behavior while retaining visible global o
   expect(root.querySelector('a[aria-label="Freigabeverhalten erklärt (öffnet neuen Tab)"]').getAttribute('href')).toBe('/docs/tools-und-integrationen/#globale-tool-vorgaben-anwenden')
   await choose(modelTrustEnabled ? 'Privat' : 'Alle Modelle', 'Nur Löschen bestätigen')
   if (modelTrustEnabled) await choose('Öffentlich', 'Änderungen und sensible Zugriffe bestätigen')
+  ;[...root.querySelectorAll('[role="switch"]')].find(item => item.textContent.includes('Nur öffentliche Zieladressen zulassen')).click()
+  for (const [label, value] of [['User-Agent', 'Shared/2.0'], ['Maximale Antwortgröße', '7']]) {
+    const input = [...root.querySelectorAll('.q-field')].find(field => field.querySelector('.q-field__label')?.textContent === label).querySelector('input')
+    input.value = value
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  }
   root.querySelector('button').click()
-  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/tools/configuration', expect.objectContaining({ toolPermissionPresets: chosen })))
+  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/tools/configuration', expect.objectContaining({ toolPermissionPresets: chosen, webAccess: { userAgent: 'Shared/2.0', maxResponseMiB: 7, publicAddressesOnly: false } })))
   const gate = await vi.waitUntil(() => root.querySelector('[aria-label="Tool-Rechte für persönliche Agentenprofile anpassen erlauben"]:not(.disabled)'))
   gate.click()
   await vi.waitUntil(() => !root.querySelector('button').disabled)
@@ -165,7 +171,8 @@ it('edits JavaScript hosts in a cancellable dialog before saving the settings', 
   api.get.mockImplementation(async (url) => ({ data: url === '/agent-profiles' ? { agents: [] } : {
     ...rights(), privateGroups: catalog, publicGroups: catalog, shellPrefixes: { read: [], write: [] },
     groups: catalog,
-    webFetch: { javascriptEnabled: true, javascriptHosts: ['reddit.com', 'www.reddit.com'], userAgent: 'MatoLoop/1.0', maxResponseMiB: 64 },
+    webFetch: { javascriptEnabled: true, javascriptHosts: ['reddit.com', 'www.reddit.com'] },
+    webAccess: { userAgent: 'MatoLoop/1.0', maxResponseMiB: 64 },
   } }))
   const { page } = await mount(ToolPage, { admin: true }, '/tools', 'settings-tools')
   await vi.waitFor(() => expect(page().saved).toBeTruthy())
@@ -181,6 +188,7 @@ it('edits JavaScript hosts in a cancellable dialog before saving the settings', 
   expect(root.querySelector('[aria-label="Webseite abrufen: verfügbar"]')).toBeNull()
   await page().selectSection('availability')
   await nextTick()
+  expect(root.textContent).not.toContain('Nur öffentliche Zieladressen zulassen')
   root.querySelector('[aria-label="Webseite abrufen: verfügbar"]').click()
   await nextTick()
   expect(page().payload().toolAvailability.webfetch).toBe(false)

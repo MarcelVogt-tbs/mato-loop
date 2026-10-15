@@ -37,8 +37,9 @@ Root agents start a subprocess as the dedicated `matoloop-browser` account, with
 supplementary groups and an allowlisted environment containing no agent credentials.
 The worker accepts typed JSON commands over inherited private pipes. Host-authorized
 `run_code` explicitly accepts unrestricted Python and `evaluate` accepts page JavaScript.
-Both require the backend's read/write/code permissions; all default to AUTO for public and
-private models. Python has the worker account's file/process/network/profile rights, not a
+Both require the backend's read/write/code permissions. Reading uses the `read` category;
+writing and code use `write`, with defaults from the saved trust preset and scoped overrides.
+Python has the worker account's file/process/network/profile rights, not a
 browser-only sandbox. A clean environment does not hide credentials accessible on disk.
 Model arguments cannot choose the parent-managed browser endpoint or installation.
 Chromium always uses `chromium_sandbox=True`. Sandbox launch failures are reported as

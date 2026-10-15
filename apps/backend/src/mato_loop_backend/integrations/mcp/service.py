@@ -25,13 +25,12 @@ from mato_loop_backend.integrations.service import (
     _load_integrations,
     _load_tools,
     _save_settings,
-    clear_profile_integration_policies,
 )
 from mato_loop_backend.security import (
     delete_credential,
     store_credential,
 )
-from mato_loop_backend.settings import IntegrationInstance, ToolSettings
+from mato_loop_backend.settings import IntegrationInstance
 
 
 class McpIntegrationService:
@@ -65,24 +64,16 @@ class McpIntegrationService:
         )
 
     @staticmethod
-    def _prune_tool_state(tools, integration_id: UUID, resource_keys: set[str]) -> bool:
-        key = str(integration_id)
-        changed = False
-        for permissions in ((tools.private_permissions, tools.public_permissions) if isinstance(tools, ToolSettings) else ()):
-            resources = permissions.resource_policies.get(key)
-            if resources is None:
-                continue
-            filtered = {
-                resource_key: policies
-                for resource_key, policies in resources.items()
-                if resource_key in resource_keys
+    def _prune_tool_state(tools, instance: IntegrationInstance, resource_keys: set[str]) -> bool:
+        for permissions in (instance.permissions, *instance.profile_permissions.values()):
+            permissions.resource_availability = {
+                key: value for key, value in permissions.resource_availability.items() if key in resource_keys
             }
-            if filtered != resources:
-                changed = True
-                if filtered:
-                    permissions.resource_policies[key] = filtered
-                else:
-                    permissions.resource_policies.pop(key, None)
+            for branch in (permissions.private_permissions, permissions.public_permissions):
+                branch.resource_policies = {
+                    key: value for key, value in branch.resource_policies.items() if key in resource_keys
+                }
+        key = str(instance.id)
         labels = tools.resource_labels.get(key)
         if labels is not None:
             filtered_labels = {
@@ -91,12 +82,12 @@ class McpIntegrationService:
                 if resource_key in resource_keys
             }
             if filtered_labels != labels:
-                changed = True
                 if filtered_labels:
                     tools.resource_labels[key] = filtered_labels
                 else:
                     tools.resource_labels.pop(key, None)
-        return changed
+                return True
+        return False
 
     @classmethod
     async def _discover(
@@ -233,18 +224,12 @@ class McpIntegrationService:
             instance.credential_id = None
         if old_credential_id is not None and old_credential_id != instance.credential_id:
             await delete_credential(db, old_credential_id, owner_id=owner_id)
-        tool_settings = await _load_tools(db, owner_id, for_update=True)
         if endpoint_changed or (remove_oauth and current_config.oauth is not None):
-            changed = _clear_integration_policies(tool_settings, integration_id)
-            changed = (
-                tool_settings.resource_labels.pop(str(integration_id), None) is not None or changed
-            )
-            if changed:
-                await _save_settings(db, tool_settings, owner_id)
-            await clear_profile_integration_policies(db, integration_id, owner_id=owner_id)
+            await cls._clear_binding_policies(db, instance)
         else:
+            tool_settings = await _load_tools(db, owner_id, for_update=True)
             resource_keys = {mcp_resource_key(tool["name"]) for tool in tools}
-            if cls._prune_tool_state(tool_settings, integration_id, resource_keys):
+            if cls._prune_tool_state(tool_settings, instance, resource_keys):
                 await _save_settings(db, tool_settings, owner_id)
         await _save_settings(db, settings, owner_id)
         await db.commit()
@@ -268,15 +253,19 @@ class McpIntegrationService:
             raise IntegrationSettingsError("mcp.notFound")
         if instance.model_dump(mode="json") != revision:
             raise IntegrationSettingsError("integration.changed")
-        if instance.config.get("oauth") is not None and instance.config["endpoint"] != endpoint:
+        endpoint_changed = instance.config["endpoint"] != endpoint
+        if instance.config.get("oauth") is not None and endpoint_changed:
             await rebind_oauth_endpoint(db, instance, endpoint)
         instance.config["endpoint"] = endpoint
         instance.config["tools"] = tools
         validate_integration(instance)
-        resource_keys = {mcp_resource_key(tool["name"]) for tool in tools}
-        tool_settings = await _load_tools(db, owner_id, for_update=True)
-        if cls._prune_tool_state(tool_settings, integration_id, resource_keys):
-            await _save_settings(db, tool_settings, owner_id)
+        if endpoint_changed:
+            await cls._clear_binding_policies(db, instance)
+        else:
+            resource_keys = {mcp_resource_key(tool["name"]) for tool in tools}
+            tool_settings = await _load_tools(db, owner_id, for_update=True)
+            if cls._prune_tool_state(tool_settings, instance, resource_keys):
+                await _save_settings(db, tool_settings, owner_id)
         await _save_settings(db, settings, owner_id)
         await db.commit()
         return instance
@@ -291,11 +280,8 @@ class McpIntegrationService:
         if instance.credential_id is not None:
             await delete_credential(db, instance.credential_id, owner_id=owner_id)
         tools = await _load_tools(db, owner_id, for_update=True)
-        changed = _clear_integration_policies(tools, integration_id)
-        changed = tools.resource_labels.pop(str(integration_id), None) is not None or changed
-        if changed:
+        if tools.resource_labels.pop(str(integration_id), None) is not None:
             await _save_settings(db, tools, owner_id)
-        await clear_profile_integration_policies(db, integration_id, owner_id=owner_id)
         await _save_settings(db, settings, owner_id)
         await db.commit()
 
@@ -354,11 +340,10 @@ class McpIntegrationService:
 
     @classmethod
     async def _clear_binding_policies(cls, db, instance):
+        _clear_integration_policies(instance)
         tools = await _load_tools(db, instance.owner_id, for_update=True)
-        _clear_integration_policies(tools, instance.id)
-        tools.resource_labels.pop(str(instance.id), None)
-        await _save_settings(db, tools, instance.owner_id)
-        await clear_profile_integration_policies(db, instance.id, owner_id=instance.owner_id)
+        if tools.resource_labels.pop(str(instance.id), None) is not None:
+            await _save_settings(db, tools, instance.owner_id)
 
     @classmethod
     async def disconnect_oauth(cls, db, integration_id, *, owner_id):

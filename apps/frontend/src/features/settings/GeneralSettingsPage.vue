@@ -30,13 +30,13 @@
     <q-list separator class="app-surface rounded-borders q-mt-md">
       <q-item clickable :to="{ name: 'admin-providers', query: { tab: 'general' } }">
         <q-item-section avatar><q-icon name="security" color="primary" /></q-item-section>
-        <q-item-section><q-item-label>Erinnerungen und Profilangaben trennen</q-item-label><q-item-label caption>Lege getrennt fest, welche Erinnerungen und persönlichen Angaben lokale und Cloud-Modelle verwenden dürfen. Ohne Trennung gelten für alle Modelle dieselben Datenfreigaben.</q-item-label></q-item-section>
-        <q-item-section side><q-icon name="link" /></q-item-section>
+        <q-item-section><q-item-label>Modelltrennung</q-item-label><q-item-label caption>Lege für jeden Provider fest, ob seine Modelle als privat oder öffentlich gelten. Bei aktiver Modelltrennung gelten dafür getrennte Tool-Rechte, Erinnerungen und persönliche Profilangaben.</q-item-label></q-item-section>
+        <q-item-section side><q-icon name="open_in_new" /></q-item-section>
       </q-item>
       <q-item clickable :to="{ name: 'admin-tools', query: { tab: 'general' } }">
         <q-item-section avatar><q-icon name="verified_user" color="primary" /></q-item-section>
         <q-item-section><q-item-label>Freigabeverhalten</q-item-label><q-item-label caption>Lege fest, welche Aktionen der Agent standardmäßig automatisch ausführt und wann er um Erlaubnis fragt.</q-item-label></q-item-section>
-        <q-item-section side><q-icon name="link" /></q-item-section>
+        <q-item-section side><q-icon name="open_in_new" /></q-item-section>
       </q-item>
     </q-list>
   </section>

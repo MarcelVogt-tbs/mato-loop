@@ -34,12 +34,9 @@ class SearchIntegrationService:
                 tool_settings, settings
             )
             if remove_resource_policies is not None:
-                changed = (
-                    _clear_integration_policies(
-                        tool_settings, remove_resource_policies, resources=True
-                    )
-                    or changed
-                )
+                instance = next((item for item in settings.instances if item.id == remove_resource_policies), None)
+                if instance is not None:
+                    _clear_integration_policies(instance)
                 changed = (
                     tool_settings.resource_labels.pop(
                         str(remove_resource_policies), None

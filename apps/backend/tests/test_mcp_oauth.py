@@ -357,7 +357,6 @@ async def test_slash_recovery_keeps_oauth_credential_usable(monkeypatch, transpo
     monkeypatch.setattr(service, "_load_integrations", AsyncMock(return_value=IntegrationSettings(instances=[instance])))
     monkeypatch.setattr(service, "_load_tools", AsyncMock(return_value=ToolSettings()))
     monkeypatch.setattr(service, "_save_settings", AsyncMock())
-    monkeypatch.setattr(service, "clear_profile_integration_policies", AsyncMock())
     if operation == "refresh":
         await service.McpIntegrationService.refresh(db, instance.id, owner_id=None)
     else:

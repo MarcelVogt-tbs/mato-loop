@@ -5,7 +5,9 @@ const defaultMediaSettings = () => ({ timeoutSeconds: 300 })
 const defaultAnalysisSettings = () => ({ timeoutSeconds: 1800 })
 const defaultConfigurationWebFetch = () => ({
   javascriptEnabled: true,
-  javascriptHosts: ['reddit.com', 'www.reddit.com'],
+  javascriptHosts: ['reddit.com', 'www.reddit.com']
+})
+const defaultConfigurationWebAccess = () => ({
   userAgent: '',
   maxResponseMiB: 64,
   publicAddressesOnly: true
@@ -30,6 +32,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
     loadVersion: 0,
     configurationGroups: [],
     configurationWebFetch: defaultConfigurationWebFetch(),
+    configurationWebAccess: defaultConfigurationWebAccess(),
     configurationLoaded: false,
     configurationLoadFailed: false,
     configurationLoading: false,
@@ -101,6 +104,10 @@ export const useToolSettingsStore = defineStore('tool-settings', {
       this.configurationWebFetch = {
         ...defaultConfigurationWebFetch(),
         ...data?.webFetch
+      }
+      this.configurationWebAccess = {
+        ...defaultConfigurationWebAccess(),
+        ...data?.webAccess
       }
       this.assignAvailability({
         tools: data?.toolAvailability

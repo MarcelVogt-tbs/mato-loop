@@ -1426,13 +1426,12 @@ async def _download_attachment_source(
         await ensure_webfetch_binding_is_current(context)
     except WebFetchError:
         return ToolResult.error("tool.unavailable")
-    settings = context.tool_settings.web_fetch
-
+    settings = context.tool_settings.web_access
     public_addresses_only = settings.public_addresses_only
 
     async def authorize_url(target: str) -> None:
         await authorize_webfetch_target(context, target)
-        if context.tool_settings.web_fetch.public_addresses_only != public_addresses_only:
+        if context.tool_settings.web_access.public_addresses_only != public_addresses_only:
             raise WebFetchError("tool.unavailable")
 
     try:

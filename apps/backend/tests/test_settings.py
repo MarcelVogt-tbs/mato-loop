@@ -41,7 +41,7 @@ def test_missing_settings_fields_use_defaults() -> None:
     assert settings.protected_recent_turns == 2
     assert settings.max_compaction_requests == 3
     assert settings.historical_tool_output_tokens == 2_000
-    assert ToolSettings().web_fetch.public_addresses_only is True
+    assert ToolSettings().web_access.public_addresses_only is True
     assert ToolSettings().default_calendar is None
     assert ToolSettings().default_task_list is None
     assert ToolSettings().resource_labels == {}

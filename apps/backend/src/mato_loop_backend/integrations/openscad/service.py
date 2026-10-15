@@ -10,9 +10,7 @@ from mato_loop_backend.integrations.service import (
     IntegrationSettingsError,
     _clear_integration_policies,
     _load_integrations,
-    _load_tools,
     _save_settings,
-    clear_profile_integration_policies,
 )
 from mato_loop_backend.models import ExecutionAgent
 from mato_loop_backend.settings import IntegrationInstance, IntegrationSettings
@@ -136,12 +134,7 @@ class OpenScadIntegrationService:
         instance.config = {"binary_path": binary_path}
         validate_integration(instance)
         if binding_changed:
-            tools = await _load_tools(db, settings_owner_id, for_update=True)
-            if _clear_integration_policies(tools, integration_id):
-                await _save_settings(db, tools, settings_owner_id)
-            await clear_profile_integration_policies(
-                db, integration_id, owner_id=settings_owner_id
-            )
+            _clear_integration_policies(instance)
         await _save_settings(db, settings, settings_owner_id)
         await db.commit()
         return settings
@@ -169,12 +162,6 @@ class OpenScadIntegrationService:
         if instance.execution_agent_id != current.execution_agent_id:
             raise IntegrationSettingsError("integration.changed")
         settings.instances = [item for item in settings.instances if item.id != integration_id]
-        tools = await _load_tools(db, settings_owner_id, for_update=True)
-        _clear_integration_policies(tools, integration_id)
-        await _save_settings(db, tools, settings_owner_id)
-        await clear_profile_integration_policies(
-            db, integration_id, owner_id=settings_owner_id
-        )
         await _save_settings(db, settings, settings_owner_id)
         await db.commit()
         return settings

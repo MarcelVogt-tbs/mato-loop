@@ -675,12 +675,7 @@ class ToolRegistry:
                         ),
                     }
                     if name == "web_search" and search_providers is not None
-                    else (
-                        {"settings_revision": _model_revision(tool_settings.web_fetch)}
-                        if name in {"webfetch", "download_file", "fetch_transcript"}
-                        and tool_settings is not None
-                        else {}
-                    )
+                    else {}
                 ),
                 default_arguments=default_arguments(name),
             )

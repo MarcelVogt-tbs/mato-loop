@@ -25,11 +25,13 @@ ToolAction("example.write", "Eintrag erstellen", category="write", mutates=True)
 - Profile tool availability and shell prefixes use existing sparse overrides. Global tool disablement remains binding. Built-in access overrides require administration scope; ordinary users can override only their owned profiles when permitted.
 - Integration connection/resource policies and their scoped profile overrides remain authoritative over the shared default. Global built-in action overrides do not cap integration permissions. New connections must not materialize implicit defaults as saved rules.
 - Frozen delegation defaults must remain frozen when the live preset changes.
+- Tool availability changes apply when the next tool offer is built. Already offered or started calls may still execute; there is no general immediate revocation of a model round. Keep existing execution and post-approval checks. Cancellation does not undo external effects.
 
 ## Authorization
 
 - Declare all supported actions, but authorize only those required by the concrete call, before effects.
 - Bind each request to its actual owner, computer, path, connection, and resource as applicable.
+- Connection discovery retains its integration policy target while omitting resource overrides. Additional file permissions remain independent of the connection.
 - Copying needs source-read and destination-write permission. Revalidate after approval.
 - Remote descriptions and MCP hints never define categories or grant authority.
 - Extend existing catalog/permission tests for new classifications and resource boundaries.
