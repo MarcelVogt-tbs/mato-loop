@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from pydantic import ValidationError
@@ -192,3 +192,16 @@ def test_changing_live_preset_cannot_widen_frozen_delegation():
     tools.public_permission_preset = "auto_all"
     apply_delegation_ceiling(tools, snapshot)
     assert tool_execution_policy(tools, "filesystem.read") == ToolExecutionPolicy.ASK
+
+
+async def test_auto_update_default_triggers_connected_agents_only_on_change(monkeypatch, http_request):
+    settings = GeneralSettings()
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    schedule = Mock()
+    monkeypatch.setattr(general_settings, "schedule_auto_updates", schedule)
+    db = AsyncMock()
+    result = await general_settings.update_general_settings(general_settings.GeneralSettingsUpdate(agentAutoUpdateEnabled=True), http_request, db)
+    await general_settings.update_general_settings(general_settings.GeneralSettingsUpdate(modelTrustEnabled=False), http_request, db)
+    assert result["agentAutoUpdateEnabled"] is True
+    schedule.assert_called_once_with()

@@ -55,6 +55,10 @@ class ExecutionAgent(Base):
     )
     operations: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     maintenance: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    auto_update_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    sudo_credential_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("credentials.id", ondelete="SET NULL"), nullable=True
+    )
     home_directory: Mapped[str | None] = mapped_column(String(4096), nullable=True)
     home_filesystem_policy: Mapped[str] = mapped_column(
         String(20), nullable=False, default="auto", server_default=text("'auto'")

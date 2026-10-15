@@ -63,6 +63,7 @@ from .protocol import (
 
 logger = logging.getLogger(__name__)
 MAX_WIRE_BYTES = 1024 * 1024
+MAINTENANCE_DRAIN_SECONDS = 60
 
 
 def serialize_message(message, max_bytes: int = MAX_WIRE_BYTES) -> str:
@@ -120,6 +121,7 @@ class MatoLoopAgent:
         self._access_key = access_key
         self.operations = list(self.runtime.operations)
         self._active_requests = 0
+        self._request_tasks: set[asyncio.Task] = set()
         self._maintenance_starting = False
 
     def hello(self) -> Hello:
@@ -148,12 +150,14 @@ class MatoLoopAgent:
     ) -> dict[str, Any]:
         if request.operation not in self.operations:
             raise AgentError("operation.unsupported", "Operation is not supported")
-        maintenance = request.operation in {"maintenance.start", "maintenance.update"}
+        interrupt = request.operation == "maintenance.update.interrupt"
+        maintenance = interrupt or request.operation in {"maintenance.start", "maintenance.update"}
         if (
             self._maintenance_starting
             or self.platform.maintenance_running(self.config)
             or (
                 maintenance
+                and not interrupt
                 and (
                     self._active_requests
                     or getattr(self.terminal, "maintenance_busy", False)
@@ -167,6 +171,9 @@ class MatoLoopAgent:
         self._active_requests += 1
         if maintenance:
             self._maintenance_starting = True
+        task = asyncio.current_task()
+        if not maintenance:
+            self._request_tasks.add(task)
         try:
             if not maintenance:
                 return await self._dispatch(request, stream, backend_id=backend_id)
@@ -180,8 +187,20 @@ class MatoLoopAgent:
             return worker.result()
         finally:
             self._active_requests -= 1
+            self._request_tasks.discard(task)
             if maintenance:
                 self._maintenance_starting = False
+
+    async def _interrupt_operations(self) -> None:
+        tasks = tuple(self._request_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=MAINTENANCE_DRAIN_SECONDS)
+            if pending:
+                raise AgentError("maintenance.busy", "Agent operations have not finished stopping")
+        await self.browser.close(stop_setup=True)
+        await self.terminal.close_all()
 
     async def _dispatch(
         self, request: Request, stream=None, *, backend_id: str | None = None
@@ -213,6 +232,11 @@ class MatoLoopAgent:
                 arguments.job_id,
                 arguments.sudo_password,
                 arguments.revision,
+                **(
+                    {"before_start": self._interrupt_operations}
+                    if request.operation == "maintenance.update.interrupt"
+                    else {}
+                ),
             )
         if isinstance(arguments, ResolveDirectoryArguments):
             return await asyncio.to_thread(self.filesystem.resolve_directory, arguments.path)

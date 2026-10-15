@@ -7,7 +7,14 @@
           Lokale Datei- und Shell-Funktionen mit MatoLoop verbinden.
         </p>
       </div>
-      <q-btn color="primary" unelevated no-caps icon="add" label="Computer hinzufügen" @click="openCreate" />
+      <div class="settings-scope-actions row items-center col-auto">
+        <q-btn
+          v-if="updateCandidates.length || maintenanceBusy" outline no-caps color="primary" icon="system_update"
+          :label="`Agents aktualisieren (${updateCandidates.length})`" :loading="maintenanceBusy"
+          :disable="agents.loading || actionBusy || maintenanceBusy" @click="updateAll"
+        />
+        <q-btn color="primary" unelevated no-caps icon="add" label="Computer hinzufügen" :disable="maintenanceBusy" @click="openCreate" />
+      </div>
     </header>
 
     <q-banner v-if="agents.loadFailed" rounded class="app-surface-tonal q-mb-md">
@@ -63,7 +70,7 @@
 
           </q-item-section>
           <q-item-section side top class="execution-agent-item__actions">
-            <q-btn flat no-caps icon="settings" label="Verwalten" :aria-label="`${agentDisplayName(agent)} verwalten`" @click="openManage(agent)" />
+            <q-btn flat no-caps icon="settings" label="Verwalten" :aria-label="`${agentDisplayName(agent)} verwalten`" :disable="maintenanceBusy" @click="openManage(agent)" />
           </q-item-section>
         </q-item>
       </q-list>
@@ -99,7 +106,7 @@
         </div>
         <div v-if="managedAgent.maintenance" class="text-body2" role="status">{{ maintenanceLabel(managedAgent.maintenance) }}</div>
         <q-list>
-          <q-item v-if="managedAgent.operations?.some(operation => ['maintenance.start', 'maintenance.update'].includes(operation))" clickable :disable="maintenanceDisabled || !agents.installationTarget" @click="maintain(managedAgent, 'update')">
+          <q-item v-if="supportsUpdate(managedAgent)" clickable :disable="maintenanceDisabled || !agents.installationTarget" @click="maintain(managedAgent, 'update')">
             <q-item-section avatar><q-icon name="update" /></q-item-section>
             <q-item-section>Agent aktualisieren</q-item-section>
           </q-item>
@@ -193,7 +200,7 @@ import { agentDisplayName } from 'src/features/computers/display'
 import { agentVersionLabel } from 'src/features/computers/version'
 import { useConfirm } from 'src/composables/confirm'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
-import { errorDescriptor } from 'src/utils/api-errors'
+import { apiErrorMessage, errorDescriptor } from 'src/utils/api-errors'
 import { notifyError } from 'src/utils/notifications'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 
@@ -224,10 +231,23 @@ const actionBusy = ref(false)
 const managedAgentId = ref(null)
 const managedAgent = computed(() => agents.byId(managedAgentId.value))
 const maintenanceDisabled = computed(() => (
-  actionBusy.value || maintenanceBusy.value || !managedAgent.value?.connected
-  || (['running', 'unknown'].includes(managedAgent.value?.maintenance?.status)
-    && Date.now() - Date.parse(managedAgent.value.maintenance.startedAt) <= 65 * 60_000)
+  actionBusy.value || maintenanceBusy.value || !canMaintain(managedAgent.value)
 ))
+const updateCandidates = computed(() => agents.items.filter(needsUpdate))
+
+function canMaintain(agent) {
+  return agent?.connected && !(['running', 'unknown'].includes(agent.maintenance?.status)
+    && Date.now() - Date.parse(agent.maintenance.startedAt) <= 65 * 60_000)
+}
+
+function supportsUpdate(agent) {
+  return agent?.operations?.some(operation => ['maintenance.start', 'maintenance.update'].includes(operation))
+}
+
+function needsUpdate(agent) {
+  return agents.installationTarget && canMaintain(agent) && supportsUpdate(agent)
+    && agent.agentVersion !== agents.installationTarget.version
+}
 const pairingDurationOptions = computed(() => pairingDurationChoices.filter((option) => (
   option.value <= (agents.pairingPolicy?.maximumDurationSeconds || 0)
 )))
@@ -308,50 +328,82 @@ function maintenanceLabel(job) {
   const result = {
     running: 'läuft', succeeded: 'abgeschlossen', failed: 'fehlgeschlagen', unknown: 'Ergebnis unbekannt'
   }[job.status] || 'Ergebnis unbekannt'
-  return `${action}: ${result}`
+  return `${action}: ${result}${job.errorCode ? ` – ${apiErrorMessage({ code: job.errorCode })}` : ''}`
 }
 
 async function maintain(agent, action) {
-  if (action === 'uninstall') {
-    const accepted = await confirm(
-      `Agent auf „${agentDisplayName(agent)}“ deinstallieren? Programm und Dienst werden entfernt. Kopplungsdaten und Workspaces bleiben erhalten. Den Computereintrag kannst du anschließend separat entfernen.`,
-      'Agent deinstallieren',
-      { okLabel: 'Deinstallieren', okColor: 'negative' }
-    )
-    if (!accepted) return
-  }
+  if (actionBusy.value || maintenanceBusy.value) return
   maintenanceBusy.value = true
   try {
-    let password = null
-    do {
-      try {
-        await agents.startMaintenance(agent.id, action, password, { suppressErrorToast: true })
-        $q.notify({ type: 'positive', message: 'Wartung gestartet' })
-        return
-      } catch (error) {
-        const code = errorDescriptor(error)?.code
-        if (code !== 'process.sudoAuthRequired' && code !== 'process.sudoAuthFailed') {
-          notifyError(error)
-          return
-        }
-        if (password) notifyError(error)
-        password = await new Promise((resolve) => {
-          $q.dialog({
-            color: 'primary',
-            title: 'sudo-Passwort benötigt',
-            message: `Gib das sudo-Passwort auf „${agentDisplayName(agent)}“ für diese Wartung ein. Es wird nur für diesen Auftrag verwendet.`,
-            prompt: { model: '', type: 'password', label: 'sudo-Passwort', outlined: true, dense: true, maxlength: 4096, autocomplete: 'new-password', isValid: Boolean },
-            cancel: { label: 'Abbrechen', color: undefined, class: 'app-muted', flat: true, noCaps: true },
-            ok: { label: 'Wartung starten', color: 'primary', unelevated: true, noCaps: true },
-            maximized: $q.screen.lt.sm
-          }).onOk(resolve).onDismiss(() => resolve(null))
-        })
-        if (password === null) return
-      }
-    } while (password !== null)
+    if (action === 'update' && !await confirmUpdates([agent])) return
+    if (action === 'uninstall' && !await confirm(
+      `Agent auf „${agentDisplayName(agent)}“ deinstallieren? Programm und Dienst werden entfernt. Kopplungsdaten und Workspaces bleiben erhalten. Den Computereintrag kannst du anschließend separat entfernen.`,
+      'Agent deinstallieren', { okLabel: 'Deinstallieren', okColor: 'negative' }
+    )) return
+    if (await requestMaintenance(agent, action)) $q.notify({ type: 'positive', message: 'Wartung gestartet' })
   } finally {
     maintenanceBusy.value = false
   }
+}
+
+function confirmUpdates(selected) {
+  const names = selected.map(agent => `„${agentDisplayName(agent)}“`).join(', ')
+  const interruption = selected.some(agent => agent.operations?.includes('maintenance.update.interrupt'))
+    ? 'Laufende MatoLoop-Aktionen werden abgebrochen. Offene MatoLoop-Terminals und Browser-Sitzungen werden geschlossen, auch aus anderen Chats. Nicht gespeicherte Eingaben können verloren gehen. '
+    : ''
+  const legacy = selected.some(agent => !agent.operations?.includes('maintenance.update.interrupt'))
+    ? 'Ältere Agent-Versionen benötigen noch geschlossene Terminals und Browser sowie abgeschlossene Vorgänge. '
+    : ''
+  return confirm(
+    `${names} auf den MatoLoop-Stand aktualisieren? Dieser kann auch älter sein. ${interruption}${legacy}Die Agents sind während des Updates vorübergehend nicht verfügbar.`,
+    selected.length === 1 ? 'Agent aktualisieren' : 'Agents aktualisieren', { okLabel: 'Aktualisieren' }
+  )
+}
+
+async function updateAll() {
+  if (actionBusy.value || maintenanceBusy.value || !updateCandidates.value.length) return
+  const selected = [...updateCandidates.value]
+  maintenanceBusy.value = true
+  try {
+    if (!await confirmUpdates(selected)) return
+    let started = 0
+    for (const selectedAgent of selected) {
+      const agent = agents.byId(selectedAgent.id)
+      if (needsUpdate(agent) && await requestMaintenance(agent, 'update')) started += 1
+    }
+    if (started) $q.notify({ type: 'positive', message: `Updates für ${started} ${started === 1 ? 'Agent' : 'Agents'} gestartet` })
+  } finally {
+    maintenanceBusy.value = false
+  }
+}
+
+async function requestMaintenance(agent, action) {
+  let password = null
+  do {
+    try {
+      await agents.startMaintenance(agent.id, action, password, { suppressErrorToast: true })
+      return true
+    } catch (error) {
+      const code = errorDescriptor(error)?.code
+      if (code !== 'process.sudoAuthRequired' && code !== 'process.sudoAuthFailed') {
+        $q.notify({ type: 'negative', message: `${agentDisplayName(agent)}: ${apiErrorMessage(error)}` })
+        return false
+      }
+      if (password) notifyError(error)
+      password = await new Promise((resolve) => {
+        $q.dialog({
+          color: 'primary',
+          title: 'sudo-Passwort benötigt',
+          message: `Gib das sudo-Passwort auf „${agentDisplayName(agent)}“ für diese Wartung ein. Es wird nur für diesen Auftrag verwendet.`,
+          prompt: { model: '', type: 'password', label: 'sudo-Passwort', outlined: true, dense: true, maxlength: 4096, autocomplete: 'new-password', isValid: Boolean },
+          cancel: { label: 'Abbrechen', color: undefined, class: 'app-muted', flat: true, noCaps: true },
+          ok: { label: 'Wartung starten', color: 'primary', unelevated: true, noCaps: true },
+          maximized: $q.screen.lt.sm
+        }).onOk(resolve).onDismiss(() => resolve(null))
+      })
+    }
+  } while (password !== null)
+  return false
 }
 
 async function copy(value, label) {

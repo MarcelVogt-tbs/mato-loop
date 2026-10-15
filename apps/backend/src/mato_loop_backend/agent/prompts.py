@@ -302,10 +302,10 @@ def general_system_prompt(
     if "secret_input" in offered_tool_names:
         parts.append(
             "Credential routing overrides the missing-information contract. Account usernames count as credentials even when they are visible. "
-            "Before authentication probes, integration setup, or commands, call secret_input, not question, once with all currently missing "
-            "credentials. Select an existing administrator password reference by variable name or description "
-            "and target computer; use variable_read for stored variables when needed. If none matches, "
-            "call secret_input with administrator=true on the masked password field for the selected computer. Use "
+            "For administrator actions, omit sudo_password_ref to try the computer's assigned secret under existing permissions. "
+            "Explicit or temporary references take precedence. If unavailable, select a matching stored variable or "
+            "call secret_input with administrator=true and masked=true. For other missing credentials, "
+            "call secret_input, not question, before authentication or commands. Group missing credentials in one call. Use "
             "masked=false for visible identifiers and masked=true for secrets. Pass only references to "
              "customize_matoloop; references remain reusable throughout the current run. For protected text, "
             "use literal and {value_ref: reference} parts; never interpolate values in model text. Reuse available references. "

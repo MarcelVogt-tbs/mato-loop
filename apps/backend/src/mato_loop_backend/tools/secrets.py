@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 import mato_loop_backend.permissions.resolution as permissions_resolution
 import mato_loop_backend.tools.access as tools_access
 from mato_loop_backend.agent.session_secrets import session_secrets
+from mato_loop_backend.models import ChatSession, ExecutionAgent
 from mato_loop_backend.permissions.policy import personal_variables_permission
 from mato_loop_backend.personal_variables import get_personal_variable, personal_variable_value
 from mato_loop_backend.settings import ToolExecutionPolicy
@@ -14,13 +17,13 @@ from mato_loop_backend.tools.contracts import ToolResult
 
 
 async def resolve_secret_refs(
-    context: ToolContext, references: dict[str, UUID | str]
+    context: ToolContext, references: dict[str, UUID | str], *, secret_only: bool = False
 ) -> dict[str, str] | ToolResult:
     """Resolve owned variables and protected-input references inside the backend."""
     variables = {}
     for reference in dict.fromkeys(ref for ref in references.values() if isinstance(ref, UUID)):
         variable = await get_personal_variable(context.db, context.session.user_id, reference)
-        if variable is None:
+        if variable is None or (secret_only and variable.metadata_json.get("secret") is not True):
             return ToolResult.error("personalVariable.notFound")
         variables[reference] = variable
     if variables and not await tools_access.allow(
@@ -43,7 +46,7 @@ async def resolve_secret_refs(
             variable = await get_personal_variable(
                 context.db, context.session.user_id, reference, populate_existing=True
             )
-            if variable is None:
+            if variable is None or (secret_only and variable.metadata_json.get("secret") is not True):
                 return ToolResult.error("personalVariable.notFound")
             values[key] = personal_variable_value(variable)
             continue
@@ -85,14 +88,20 @@ async def resolve_protected_text(
     ), True
 
 
-def effective_sudo_reference(
-    session_id: UUID, run_secret_refs: dict[str, str], agent_id: UUID,
+async def effective_sudo_reference(
+    db: AsyncSession, session: ChatSession, run_secret_refs: dict[str, str], agent_id: UUID,
     reference: UUID | str | None = None,
 ) -> UUID | str | None:
     if reference is not None:
         return reference
     name = f"SUDO_PASSWORD_{agent_id.hex.upper()}"
-    return session_secrets.references(session_id).get(name) or run_secret_refs.get(name)
+    temporary = session_secrets.references(session.id).get(name) or run_secret_refs.get(name)
+    if temporary is not None:
+        return temporary
+    agent = await db.get(ExecutionAgent, agent_id, populate_existing=True)
+    if agent is not None and agent.user_id == session.user_id and agent.revoked_at is None:
+        return agent.sudo_credential_id
+    return None
 
 
 def discard_sudo_reference(context: ToolContext, reference: UUID | str | None) -> None:
@@ -112,8 +121,13 @@ async def resolve_sudo_password(
     context: ToolContext, reference: UUID | str | None, agent_id: UUID
 ) -> str | None | ToolResult:
     name = f"SUDO_PASSWORD_{agent_id.hex.upper()}"
-    reference = effective_sudo_reference(context.session.id, context.run_secret_refs, agent_id, reference)
+    reference = await effective_sudo_reference(context.db, context.session, context.run_secret_refs, agent_id, reference)
     if reference is None:
         return None
-    values = await resolve_secret_refs(context, {name: reference})
-    return values if isinstance(values, ToolResult) else values[name]
+    values = await resolve_secret_refs(context, {name: reference}, secret_only=True)
+    if isinstance(values, ToolResult):
+        return values
+    password = values[name]
+    if not 1 <= len(password) <= 4096 or any(c in password for c in "\r\n\x00"):
+        return ToolResult.error("personalVariable.valueInvalid")
+    return password

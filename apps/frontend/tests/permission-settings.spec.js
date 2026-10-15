@@ -45,16 +45,16 @@ async function mount(Page, props, path, name, pinia = createPinia()) {
 }
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); vi.clearAllMocks() })
 
-it('saves only the public address from basic settings and links to provider and tool settings', async () => {
-  const current = { publicBaseUrl: null, effectivePublicBaseUrl: 'https://mato.test', publicUrlSource: 'automatic', modelTrustEnabled: true }
+it('saves the public address and agent updates and links to provider and tool settings', async () => {
+  const current = { publicBaseUrl: null, effectivePublicBaseUrl: 'https://mato.test', publicUrlSource: 'automatic', modelTrustEnabled: true, agentAutoUpdateEnabled: false }
   api.get.mockResolvedValue({ data: current })
   api.put.mockResolvedValue({ data: current })
   await mount(GeneralPage, {}, '/tools', 'settings-tools')
   await vi.waitUntil(() => root.querySelector('button:not([disabled])'))
-  expect(root.querySelector('.q-card').textContent).toContain('Öffentliche Adresse')
+  expect(root.textContent).toContain('Öffentliche Adresse')
   expect([...root.querySelectorAll('a')].map(link => link.getAttribute('href'))).toEqual(['/admin/providers?tab=general', '/admin/tools?tab=general'])
   root.querySelector('button').click()
-  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/general-settings', { publicBaseUrl: null }))
+  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/general-settings', { publicBaseUrl: null, agentAutoUpdateEnabled: false }))
 })
 
 it.each([true, false])('saves the base behavior while retaining visible global overrides (model distinction: %s)', async (modelTrustEnabled) => {

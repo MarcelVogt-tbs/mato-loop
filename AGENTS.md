@@ -59,6 +59,7 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Manage transactions in the service or application layer; settings objects do not commit themselves.
 - Every relational schema change requires an Alembic migration.
 - Generate every Alembic migration from the current SQLAlchemy metadata only with `./scripts/dev.sh db revision --autogenerate -m "<description>"`, then review the generated diff completely.
+- Keep migration descriptions and filename slugs short and concise; name only the essential change.
 - Adjust generated migrations manually for renames, data migrations, extensions, and other operations Alembic cannot detect safely; do not create fully handwritten revision files.
 - Additive settings fields require Pydantic defaults.
 - Do not bind the agent core to provider-specific SDK types.

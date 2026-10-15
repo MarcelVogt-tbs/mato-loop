@@ -29,7 +29,7 @@ async def authorize(context: ToolContext, request: PermissionRequest, reference=
     decision = await context.ask_handler(request, check_only=True)
     if decision in {PermissionDecision.DENY, PermissionDecision.USER_DENIED}:
         return False
-    reference = effective_sudo_reference(context.session.id, context.run_secret_refs, context.execution_client.agent_id, reference)
+    reference = await effective_sudo_reference(context.db, context.session, context.run_secret_refs, context.execution_client.agent_id, reference)
     if reference is None:
         authentication = await context.execution_client.request(
             "administrator.run", {"operation": "authenticate", "arguments": {}}, AdministratorAuthenticationResult,
@@ -53,7 +53,7 @@ async def authorize(context: ToolContext, request: PermissionRequest, reference=
 
 async def request_arguments(context: ToolContext, operation: str, arguments: dict, reference=None) -> dict | ToolResult:
     client = context.execution_client
-    reference = effective_sudo_reference(context.session.id, context.run_secret_refs, client.agent_id, reference)
+    reference = await effective_sudo_reference(context.db, context.session, context.run_secret_refs, client.agent_id, reference)
     password = await resolve_sudo_password(context, reference, client.agent_id)
     if isinstance(password, ToolResult):
         return password
@@ -68,6 +68,6 @@ async def invoke(context: ToolContext, operation: str, arguments: dict, result_t
         return await context.execution_client.request("administrator.run", payload, result_type)
     except ExecutionClientError as exc:
         if exc.code in {"process.sudoAuthFailed", "process.sudoAuthRequired"}:
-            reference = effective_sudo_reference(context.session.id, context.run_secret_refs, context.execution_client.agent_id, reference)
+            reference = await effective_sudo_reference(context.db, context.session, context.run_secret_refs, context.execution_client.agent_id, reference)
             discard_sudo_reference(context, reference)
         raise

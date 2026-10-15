@@ -3,7 +3,7 @@ import { api } from 'src/boot/axios'
 import { useAuthStore } from 'stores/auth'
 
 export const useGeneralSettingsStore = defineStore('general-settings', {
-  state: () => ({ publicBaseUrl: null, effectivePublicBaseUrl: '', publicUrlSource: 'automatic', modelTrustEnabled: true, loading: false, loaded: false, loadFailed: false, saving: false }),
+  state: () => ({ publicBaseUrl: null, effectivePublicBaseUrl: '', publicUrlSource: 'automatic', modelTrustEnabled: true, agentAutoUpdateEnabled: false, loading: false, loaded: false, loadFailed: false, saving: false }),
   actions: {
     async fetchSettings() {
       this.loading = true

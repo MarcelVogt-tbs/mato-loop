@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from matoloop_agent.config import AgentConfig
+from matoloop_agent.errors import AgentError
 from matoloop_agent.platform_linux import LinuxPlatform
 
 INSTALLER_PATH = Path(__file__).parents[3] / "scripts/matoloop-agent-installer.py"
@@ -680,6 +681,11 @@ class InstallerTests(unittest.TestCase):
                 calls = []
                 connections = []
                 handoffs = []
+                cleanups = []
+
+                async def before_start():
+                    self.assertIn("-v", calls[-1])
+                    cleanups.append(True)
 
                 class Child:
                     returncode = 0
@@ -713,8 +719,26 @@ class InstallerTests(unittest.TestCase):
                     ),
                 ):
                     result = await LinuxPlatform().start_maintenance(
-                        config, "update", "ce137f81-2b83-4e07-950d-c35306533e16", "secret", "a" * 40
+                        config,
+                        "update",
+                        "ce137f81-2b83-4e07-950d-c35306533e16",
+                        "secret",
+                        "a" * 40,
+                        before_start=before_start,
                     )
+                    self.assertEqual(cleanups, [True])
+                    cleanups.clear()
+                    Child.returncode = 1
+                    with self.assertRaises(AgentError):
+                        await LinuxPlatform().start_maintenance(
+                            config,
+                            "update",
+                            "ce137f81-2b83-4e07-950d-c35306533e16",
+                            "wrong",
+                            "a" * 40,
+                            before_start=before_start,
+                        )
+                    self.assertEqual(cleanups, [])
                 await asyncio.gather(*handoffs)
                 self.assertEqual(result, {"started": True})
                 self.assertEqual(connections, [b"secret"])

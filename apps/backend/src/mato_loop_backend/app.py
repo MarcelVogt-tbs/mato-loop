@@ -23,6 +23,7 @@ from mato_loop_backend.db.session import AsyncSessionFactory, engine
 from mato_loop_backend.diagnostics.logs import install_backend_log_handler
 from mato_loop_backend.diagnostics.mcp import create_debug_mcp, debug_mcp_mount
 from mato_loop_backend.diagnostics.service import diagnostic_retention_loop
+from mato_loop_backend.execution.maintenance import stop_auto_updates
 from mato_loop_backend.execution.terminals import terminal_coordinator
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.media.attachments import AttachmentService
@@ -186,6 +187,7 @@ async def _application_lifespan(_app: FastAPI):
         yield
     finally:
         debug_mcp_mount.app = None
+        await stop_auto_updates()
         diagnostic_retention_task.cancel()
         await asyncio.gather(diagnostic_retention_task, return_exceptions=True)
         try:

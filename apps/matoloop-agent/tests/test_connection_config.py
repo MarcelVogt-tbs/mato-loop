@@ -369,6 +369,88 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                 running.return_value = False
                 self.assertIn("agentVersion", await agent.dispatch(read))
 
+    async def test_confirmed_update_stops_requests_but_finishes_atomic_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            agent = MatoLoopAgent(configuration(Path(temporary)), "secret")
+            agent.operations.extend(["maintenance.update.interrupt", "terminal.read"])
+            started, release = threading.Event(), threading.Event()
+            interrupted = asyncio.Event()
+
+            def write(*args):
+                started.set()
+                release.wait(5)
+                return {"sha256": "a" * 64}
+
+            async def read(*args):
+                try:
+                    await asyncio.Future()
+                finally:
+                    interrupted.set()
+
+            async def launch(*args, before_start):
+                await before_start()
+                return {"started": True}
+
+            with (
+                patch.object(agent.filesystem, "write", side_effect=write),
+                patch.object(agent.terminal, "read", side_effect=read),
+                patch.object(
+                    agent.terminal, "close_all", new_callable=AsyncMock
+                ) as close_terminals,
+                patch.object(agent.browser, "close", new_callable=AsyncMock) as close_browser,
+                patch.object(agent.platform, "start_maintenance", side_effect=launch),
+                patch.object(agent.platform, "maintenance_running", return_value=False),
+            ):
+                writing = asyncio.create_task(
+                    agent.dispatch(
+                        Request(
+                            type="request",
+                            id=REQUEST_ID,
+                            operation="filesystem.write",
+                            arguments={"path": f"{temporary}/file", "content": "x"},
+                        )
+                    )
+                )
+                await asyncio.to_thread(started.wait, 2)
+                reading = asyncio.create_task(
+                    agent.dispatch(
+                        Request(
+                            type="request",
+                            id=AGENT_ID,
+                            operation="terminal.read",
+                            arguments={"terminalId": REQUEST_ID},
+                        )
+                    )
+                )
+                await asyncio.sleep(0)
+                update = asyncio.create_task(
+                    agent.dispatch(
+                        Request(
+                            type="request",
+                            id=AGENT_ID,
+                            operation="maintenance.update.interrupt",
+                            arguments={"action": "update", "jobId": AGENT_ID, "revision": "a" * 40},
+                        )
+                    )
+                )
+                try:
+                    await asyncio.wait_for(interrupted.wait(), 2)
+                    self.assertFalse(update.done())
+                    with self.assertRaises(AgentError) as busy:
+                        await agent.dispatch(
+                            Request(
+                                type="request", id=AGENT_ID, operation="system.info", arguments={}
+                            )
+                        )
+                    self.assertEqual(busy.exception.code, "maintenance.busy")
+                finally:
+                    release.set()
+                    await asyncio.gather(reading, return_exceptions=True)
+                self.assertEqual(await writing, {"sha256": "a" * 64})
+                self.assertEqual(await update, {"started": True})
+                close_browser.assert_awaited_once_with(stop_setup=True)
+                close_terminals.assert_awaited_once()
+
     async def test_dispatches_absolute_filesystem_operations(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

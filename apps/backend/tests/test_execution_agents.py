@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
-from fastapi import Response
+from fastapi import Response, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,10 +33,10 @@ from mato_loop_backend.api.routes.execution_agents import (
     unpair_execution_agent,
     update_execution_agent,
 )
-from mato_loop_backend.execution import ExecutionAgentError, HelloMessage
+from mato_loop_backend.execution import ExecutionAgentError, HelloMessage, maintenance
 from mato_loop_backend.models import ExecutionAgent, UserAccount
 from mato_loop_backend.security import hash_token
-from mato_loop_backend.settings import SettingsStore, UserPreferences
+from mato_loop_backend.settings import GeneralSettings, SettingsStore, UserPreferences
 
 
 def _user() -> UserAccount:
@@ -560,7 +560,8 @@ async def test_ws_snapshot_rejects_stale_authenticated_hash(monkeypatch) -> None
 @pytest.fixture
 def backend_build(monkeypatch):
     revision = "a" * 40
-    monkeypatch.setattr(execution_agents_route, "build_revision", lambda: revision)
+    monkeypatch.setattr(maintenance, "build_revision", lambda: revision)
+    monkeypatch.setattr(maintenance, "__version__", "2026-10-08-aaaaaaaa")
     monkeypatch.setattr(execution_agents_route, "__version__", "2026-10-08-aaaaaaaa")
     return revision
 
@@ -582,7 +583,8 @@ async def test_computer_list_includes_backend_reference_without_requiring_a_targ
     monkeypatch, backend_build, version, available,
 ) -> None:
     monkeypatch.setattr(execution_agents_route, "__version__", version)
-    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=UserPreferences()))
+    monkeypatch.setattr(maintenance, "__version__", version)
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda db, model, **kwargs: model()))
     db = AsyncMock(spec=AsyncSession)
     db.scalars.return_value = Mock(all=Mock(return_value=[]))
     result = await execution_agents_route.list_execution_agents(_user(), db)
@@ -597,8 +599,8 @@ async def test_computer_list_includes_backend_reference_without_requiring_a_targ
     ("a" * 40, "2026-10-08-bbbbbbbb"),
 ])
 def test_installation_target_rejects_unreproducible_builds(monkeypatch, revision, version) -> None:
-    monkeypatch.setattr(execution_agents_route, "build_revision", lambda: revision)
-    monkeypatch.setattr(execution_agents_route, "__version__", version)
+    monkeypatch.setattr(maintenance, "build_revision", lambda: revision)
+    monkeypatch.setattr(maintenance, "__version__", version)
     with pytest.raises(ApiError, match="maintenance.targetUnavailable"):
         execution_agents_route.installation_target()
 
@@ -698,3 +700,175 @@ async def test_disconnected_maintenance_is_unknown_not_success(monkeypatch, back
             agent.id, MaintenanceRequest(action="update"), user, db, Response()
         )
     assert second.value.code == "maintenance.busy"
+
+
+@pytest.fixture
+def auto_update_setup(monkeypatch, backend_build):
+    agent = _agent(token_hash="a" * 64, operations=["maintenance.update"], agent_version="older")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = [agent.id]
+    db.get.return_value = agent
+    monkeypatch.setattr(maintenance, "AsyncSessionFactory", lambda: nullcontext(db))
+    monkeypatch.setattr(maintenance.execution_agent_connections, "is_connected", lambda _: True)
+    request = AsyncMock(return_value=Mock(ok=True))
+    monkeypatch.setattr(maintenance.execution_agent_connections, "request", request)
+    return agent, db, request
+
+
+@pytest.mark.parametrize("default, override, expected", [
+    (False, None, False), (True, None, True), (False, True, True), (True, False, False),
+])
+async def test_auto_update_respects_instance_default_and_override(monkeypatch, auto_update_setup, default, override, expected):
+    agent, db, request = auto_update_setup
+    agent.auto_update_enabled = override
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=GeneralSettings(agentAutoUpdateEnabled=default)))
+    await maintenance.auto_update_agents(agent.id)
+    assert request.await_count == int(expected)
+
+
+@pytest.mark.parametrize("reason", ["current", "offline", "unsupported", "revoked", "unpaired", "running", "unknown", "global_override"])
+async def test_auto_update_skips_ineligible_agents(monkeypatch, auto_update_setup, reason):
+    agent, db, request = auto_update_setup
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=GeneralSettings(agentAutoUpdateEnabled=True)))
+    if reason == "current":
+        agent.agent_version = "2026-10-08-aaaaaaaa"
+    elif reason == "offline":
+        monkeypatch.setattr(maintenance.execution_agent_connections, "is_connected", lambda _: False)
+    elif reason == "unsupported":
+        agent.operations = []
+    elif reason == "revoked":
+        agent.revoked_at = datetime.now(UTC)
+    elif reason == "unpaired":
+        agent.token_hash = None
+    elif reason == "global_override":
+        agent.auto_update_enabled = True
+    else:
+        agent.maintenance = {"status": reason, "startedAt": datetime.now(UTC).isoformat()}
+    await maintenance.auto_update_agents(None if reason == "global_override" else agent.id)
+    request.assert_not_awaited()
+
+
+@pytest.mark.parametrize("code", ["process.sudoAuthRequired", "process.sudoAuthFailed", "maintenance.busy"])
+async def test_auto_update_records_auth_errors_but_defers_busy_agents(monkeypatch, auto_update_setup, code):
+    agent, db, request = auto_update_setup
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=GeneralSettings(agentAutoUpdateEnabled=True)))
+    request.return_value = Mock(ok=False, error=Mock(code=code))
+    await maintenance.auto_update_agents(agent.id)
+    assert (agent.maintenance or {}).get("errorCode") == (None if code == "maintenance.busy" else code)
+
+
+@pytest.mark.parametrize("override", [True, False, None])
+async def test_update_override_triggers_a_check_only_when_changed(monkeypatch, override):
+    agent = _agent(auto_update_enabled=not override if override is not None else True)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = agent
+    schedule = Mock()
+    monkeypatch.setattr(execution_agents_route, "schedule_auto_updates", schedule)
+    await update_execution_agent(agent.id, ExecutionAgentUpdateRequest(autoUpdateEnabled=override), _user(), db)
+    await update_execution_agent(agent.id, ExecutionAgentUpdateRequest(autoUpdateEnabled=override, alias="Changed"), _user(), db)
+    assert agent.auto_update_enabled is override
+    schedule.assert_called_once_with(agent.id)
+
+
+@pytest.mark.parametrize("platform, operation, uses_password", [
+    ("linux", "maintenance.start", True), ("win32", "maintenance.start", False),
+    ("linux", "maintenance.update", False),
+])
+async def test_assigned_secret_is_used_for_updates_and_can_be_unlinked(monkeypatch, backend_build, platform, operation, uses_password):
+    monkeypatch.setattr(execution_agents_route, "schedule_auto_updates", Mock())
+    agent = _agent(platform=platform, operations=[operation])
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = agent
+    credential = Mock(id=uuid4(), metadata_json={"secret": True})
+    monkeypatch.setattr(execution_agents_route, "get_personal_variable", AsyncMock(return_value=credential))
+    monkeypatch.setattr(maintenance, "get_personal_variable", AsyncMock(return_value=credential))
+    monkeypatch.setattr(maintenance, "personal_variable_value", lambda _: "private password")
+    payload = await update_execution_agent(agent.id, ExecutionAgentUpdateRequest(sudoCredentialId=credential.id), _user(), db)
+    assert payload["sudoCredentialId"] == str(credential.id) and "private password" not in str(payload)
+    monkeypatch.setattr(maintenance.execution_agent_connections, "is_connected", lambda _: True)
+    request = AsyncMock(return_value=Mock(ok=True))
+    monkeypatch.setattr(maintenance.execution_agent_connections, "request", request)
+    await maintenance.start_maintenance(db, agent, "update")
+    assert request.await_args.args[2].get("sudoPassword") == ("private password" if uses_password else None)
+    assert "private password" not in str(agent.maintenance)
+    await update_execution_agent(agent.id, ExecutionAgentUpdateRequest(alias="Keep password"), _user(), db)
+    assert agent.sudo_credential_id == credential.id
+    if uses_password:
+        agent.maintenance = None
+        await maintenance.start_maintenance(db, agent, "update", sudo_password="one-time override")
+        assert request.await_args.args[2]["sudoPassword"] == "one-time override"
+    await update_execution_agent(agent.id, ExecutionAgentUpdateRequest(sudoCredentialId=None), _user(), db)
+    db.delete.assert_not_awaited()
+    assert agent.sudo_credential_id is None
+
+
+@pytest.mark.parametrize("password", ["", "first\nsecond", "first\rsecond", "first\x00second", "x" * 4097])
+def test_one_time_sudo_password_rejects_invalid_values(password):
+    with pytest.raises(ValidationError):
+        MaintenanceRequest(action="update", sudoPassword=password)
+
+
+@pytest.mark.parametrize("action", [execution_agents_route.unpair_execution_agent, execution_agents_route.revoke_execution_agent])
+async def test_removing_pairing_unlinks_but_keeps_the_personal_secret(monkeypatch, action):
+    agent = _agent(sudo_credential_id=uuid4())
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = agent
+    credential = Mock(user_id=agent.user_id)
+    db.get.return_value = credential
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=UserPreferences()))
+    monkeypatch.setattr(execution_agents_route, "_commit_and_revoke_live_capabilities", AsyncMock())
+    await action(agent.id, _user(), db)
+    db.delete.assert_not_awaited()
+    assert agent.sudo_credential_id is None
+
+
+async def test_connection_schedules_update_after_registration(monkeypatch):
+    agent_id = uuid4()
+    hello = HelloMessage(
+        type="hello", protocolVersion=1,
+        agentId=agent_id, agentVersion="older", computerName="host", platform="linux",
+        operations=["maintenance.update"], homeDirectory="/home/user",
+    )
+    websocket = AsyncMock(spec=WebSocket)
+    websocket.headers = {"authorization": "Bearer access-key"}
+    websocket.receive_text.side_effect = [hello.model_dump_json(by_alias=True), WebSocketDisconnect()]
+    monkeypatch.setattr(execution_agents_route, "_authenticate", AsyncMock(return_value=(agent_id, "hash")))
+    monkeypatch.setattr(execution_agents_route, "_register_snapshot", AsyncMock(return_value=True))
+    register = AsyncMock()
+    monkeypatch.setattr(execution_agents_route.execution_agent_connections, "register", register)
+    monkeypatch.setattr(execution_agents_route.execution_agent_connections, "unregister", AsyncMock())
+    schedule = Mock(side_effect=lambda _: register.assert_awaited_once())
+    monkeypatch.setattr(execution_agents_route, "schedule_auto_updates", schedule)
+    await execution_agents_route.connect_execution_agent(websocket)
+    schedule.assert_called_once_with(agent_id)
+
+
+@pytest.mark.parametrize("variable", [None, Mock(metadata_json={"secret": False})])
+async def test_assignment_rejects_unowned_or_nonsecret_variables(monkeypatch, variable):
+    agent = _agent()
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [agent, variable]
+    with pytest.raises(ApiError, match="personalVariable.notFound"):
+        await update_execution_agent(agent.id, ExecutionAgentUpdateRequest(sudoCredentialId=uuid4()), _user(), db)
+    assert agent.sudo_credential_id is None
+
+
+async def test_update_never_uses_another_owners_credential(monkeypatch, backend_build):
+    agent = _agent(sudo_credential_id=uuid4(), platform="linux", operations=["maintenance.start"])
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    monkeypatch.setattr(maintenance.execution_agent_connections, "is_connected", lambda _: True)
+    request = AsyncMock(return_value=Mock(ok=True))
+    monkeypatch.setattr(maintenance.execution_agent_connections, "request", request)
+    with pytest.raises(ApiError, match="personalVariable.notFound"):
+        await maintenance.start_maintenance(db, agent, "update")
+    request.assert_not_awaited()
+    assert agent.user_id in db.scalar.await_args.args[0].compile().params.values()
+
+
+@pytest.mark.parametrize("automatic, expected", [(False, "maintenance.update.interrupt"), (True, "maintenance.update")])
+async def test_only_manual_updates_interrupt_work(auto_update_setup, automatic, expected):
+    agent, db, request = auto_update_setup
+    agent.operations.append("maintenance.update.interrupt")
+    await maintenance.start_maintenance(db, agent, "update", automatic=automatic)
+    assert request.await_args.args[1] == expected

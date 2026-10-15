@@ -20,7 +20,7 @@ from mato_loop_backend.agent.run_support import (
 )
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.subagents import integration_ceiling_ids, permission_snapshot
-from mato_loop_backend.models import Message, WebSearchPolicy
+from mato_loop_backend.models import ExecutionAgent, Message, WebSearchPolicy
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.sessions.serialization import message_payload
@@ -261,6 +261,10 @@ async def test_sudo_retry_requires_changed_authentication_for_the_selected_agent
         execution_operations=("shell.run", "shell.classify", "administrator.run"),
     )
     run.current_directory_snapshot = "/work"
+    session = db.get.return_value
+    db.get.side_effect = lambda model, *args, **kwargs: (
+        ExecutionAgent(id=agent_id, user_id=session.user_id) if model is ExecutionAgent else session
+    )
     question = AsyncMock(return_value=ProtectedQuestionResolution({name: ["private password"]}, frozenset()))
     monkeypatch.setattr(AgentRuntime, "_request_question", question)
     passwords = []

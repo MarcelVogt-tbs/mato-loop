@@ -314,7 +314,12 @@ class BrowserManager:
             await self.close()
             raise
 
-    async def close(self) -> None:
+    async def close(self, *, stop_setup: bool = False) -> None:
+        if stop_setup and self.setup is not None:
+            if self.setup.exit_code is None:
+                await self.terminal._terminate(self.setup)
+            if self.setup_task is not None:
+                await self.setup_task
         closing = getattr(self, "_close_task", None)
         if closing is None or closing.done():
             process, self.worker = self.worker, None

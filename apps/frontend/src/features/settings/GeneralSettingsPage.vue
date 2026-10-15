@@ -14,6 +14,15 @@
     </q-banner>
     <q-form ref="formRef" @submit.prevent="save">
       <q-card flat class="app-surface">
+        <q-card-section>
+          <q-toggle v-model="agentAutoUpdateEnabled" color="primary" label="Agents automatisch aktualisieren" :disable="settings.loading || settings.saving || !settings.loaded" />
+          <div class="text-body2 app-muted q-mt-sm">
+            Instanzstandard für alle Computer. Einzelne Computer können die Einstellung überschreiben.
+            Geprüft wird beim Verbinden und nach Änderungen der Update-Einstellungen. Beschäftigte Agents warten bis zur nächsten Prüfung oder einem manuellen Update.
+          </div>
+        </q-card-section>
+      </q-card>
+      <q-card flat class="app-surface q-mt-md">
         <q-card-section class="row items-center q-gutter-md">
           <q-avatar color="primary" text-color="white" icon="link" />
           <div class="col">
@@ -52,6 +61,7 @@ const settings = useGeneralSettingsStore()
 const $q = useQuasar()
 const formRef = ref(null)
 const publicBaseUrl = ref('')
+const agentAutoUpdateEnabled = ref(false)
 function originRule(value) {
   if (!value) return true
   try {
@@ -64,14 +74,16 @@ async function load() {
   try {
     const data = await settings.fetchSettings()
     publicBaseUrl.value = data.publicBaseUrl || ''
+    agentAutoUpdateEnabled.value = data.agentAutoUpdateEnabled
   } catch { /* Central API toast. */ }
 }
 async function save() {
   if (settings.loading || settings.saving || !settings.loaded) return
   if (!await formRef.value?.validate()) return
   try {
-    const data = await settings.saveSettings({ publicBaseUrl: publicBaseUrl.value })
+    const data = await settings.saveSettings({ publicBaseUrl: publicBaseUrl.value, agentAutoUpdateEnabled: agentAutoUpdateEnabled.value })
     publicBaseUrl.value = data.publicBaseUrl || ''
+    agentAutoUpdateEnabled.value = data.agentAutoUpdateEnabled
     $q.notify({ type: 'positive', message: 'Grundeinstellungen gespeichert.' })
   } catch { /* Central API toast. */ }
 }

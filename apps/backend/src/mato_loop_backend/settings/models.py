@@ -1115,6 +1115,7 @@ class GeneralSettings(SettingsDocument):
     default_timezone: str = "Europe/Berlin"
     public_base_url: str | None = Field(default=None, max_length=2083, alias="publicBaseUrl")
     model_trust_enabled: StrictBool = Field(default=True, alias="modelTrustEnabled")
+    agent_auto_update_enabled: StrictBool = Field(default=False, alias="agentAutoUpdateEnabled")
 
     model_config = ConfigDict(populate_by_name=True)
     _normalize_public_url = field_validator("public_base_url", mode="before")(normalize_public_base_url)

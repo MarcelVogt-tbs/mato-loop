@@ -541,6 +541,7 @@ class MaintenanceUpdateArguments(MaintenanceStartArguments):
 ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "maintenance.start": MaintenanceStartArguments,
     "maintenance.update": MaintenanceUpdateArguments,
+    "maintenance.update.interrupt": MaintenanceUpdateArguments,
     "system.info": SystemInfoArguments,
     "filesystem.resolve": ResolveDirectoryArguments,
     "filesystem.stat": StatArguments,

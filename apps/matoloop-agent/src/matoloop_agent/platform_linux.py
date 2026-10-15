@@ -11,7 +11,7 @@ import socket
 import sys
 import tempfile
 import threading
-from collections.abc import Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -109,6 +109,8 @@ class LinuxPlatform:
             or not shutil.which("systemd-run")
         ):
             operations.discard("maintenance.start")
+        if not {"maintenance.start", "maintenance.update"}.intersection(operations):
+            operations.discard("maintenance.update.interrupt")
         if os.environ.get("MATOLOOP_AGENT_CONTAINER") != "1":
             operations -= {
                 "integration.browser.view",
@@ -170,11 +172,15 @@ class LinuxPlatform:
         job_id: str,
         password: str | None,
         revision: str | None = None,
+        *,
+        before_start: Callable[[], Awaitable[None]] | None = None,
     ) -> dict:
         if os.environ.get("MATOLOOP_AGENT_CONTAINER") == "1":
             root = os.environ.get("MATOLOOP_AGENT_INSTALL_ROOT")
             if action != "update" or not root:
                 raise AgentError("maintenance.unavailable", "Container maintenance is unavailable")
+            if before_start is not None:
+                await before_start()
             process = await asyncio.create_subprocess_exec(
                 sys.executable,
                 str(Path(root) / "installer.py"),
@@ -227,6 +233,9 @@ class LinuxPlatform:
                 "process.sudoAuthFailed" if password else "process.sudoAuthRequired",
                 "Sudo authorization failed",
             )
+
+        if before_start is not None:
+            await before_start()
 
         with tempfile.TemporaryDirectory(prefix="matoloop-maintenance-") as directory:
             socket_path = str(Path(directory) / "handoff.sock")

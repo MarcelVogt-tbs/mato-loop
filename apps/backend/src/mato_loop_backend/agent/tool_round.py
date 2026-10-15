@@ -365,8 +365,8 @@ async def execute_tool_batch(
         current_memory_state = memory_state
         authentication_scope = ""
         if call.name == "shell_run" and call.arguments.get("elevated") is True and execution_client is not None:
-            reference = effective_sudo_reference(
-                session.id, run_secret_refs, execution_client.agent_id, call.arguments.get("sudo_password_ref"),
+            reference = await effective_sudo_reference(
+                db, session, run_secret_refs, execution_client.agent_id, call.arguments.get("sudo_password_ref"),
             )
             authentication_scope = f":agent={execution_client.agent_id}:sudo={reference}"
         call_signature = run_support._tool_call_signature(call)

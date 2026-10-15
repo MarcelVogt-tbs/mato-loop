@@ -154,7 +154,12 @@ async def _run_worker(config, request, sudo, options, request_path, timeout, str
     except asyncio.CancelledError:
         if request.operation in {"filesystem.write", "filesystem.edit"}:
             # Finish atomic mutations and report their real outcome, like ordinary file writes.
-            response = await task
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    pass
+            response = task.result()
         else:
             await _stop_worker(process)
             raise

@@ -7,12 +7,14 @@ import { useGeneralSettingsStore } from '../src/features/settings/general-settin
 
 it('loads the effective address and keeps server state after a failed save', async () => {
   setActivePinia(createPinia())
-  const current = { publicBaseUrl: null, effectivePublicBaseUrl: 'https://mato.example.test', publicUrlSource: 'automatic' }
+  const current = { publicBaseUrl: null, effectivePublicBaseUrl: 'https://mato.example.test', publicUrlSource: 'automatic', agentAutoUpdateEnabled: false }
   api.get.mockResolvedValue({ data: current })
-  api.put.mockResolvedValueOnce({ data: { ...current, publicBaseUrl: 'https://public.example.test', effectivePublicBaseUrl: 'https://public.example.test', publicUrlSource: 'settings' } }).mockRejectedValueOnce(new Error('failed'))
+  api.put.mockResolvedValueOnce({ data: { ...current, publicBaseUrl: 'https://public.example.test', effectivePublicBaseUrl: 'https://public.example.test', publicUrlSource: 'settings', agentAutoUpdateEnabled: true } }).mockRejectedValueOnce(new Error('failed'))
   const store = useGeneralSettingsStore()
   await store.fetchSettings()
-  await store.saveSettings({ publicBaseUrl: 'https://public.example.test', modelTrustEnabled: true })
-  await expect(store.saveSettings({ publicBaseUrl: 'https://other.example.test', modelTrustEnabled: false })).rejects.toThrow()
+  await store.saveSettings({ publicBaseUrl: 'https://public.example.test', modelTrustEnabled: true, agentAutoUpdateEnabled: true })
+  expect(api.put).toHaveBeenLastCalledWith('/general-settings', expect.objectContaining({ agentAutoUpdateEnabled: true }))
+  await expect(store.saveSettings({ publicBaseUrl: 'https://other.example.test', modelTrustEnabled: false, agentAutoUpdateEnabled: false })).rejects.toThrow()
   expect(store.publicBaseUrl).toBe('https://public.example.test')
+  expect(store.agentAutoUpdateEnabled).toBe(true)
 })

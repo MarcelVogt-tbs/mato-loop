@@ -880,6 +880,23 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         resize = BrowserSetupResizeArguments(setupId=entry.terminal_id, rows=30, columns=100)
         self.assertEqual(await self.manager.setup_io("setupresize", resize), {"ok": True})
 
+    async def test_maintenance_closes_independent_browser_setup(self):
+        entry = self.manager.terminal._spawn(
+            str(uuid4()),
+            [str(Path("/bin/bash").resolve()), "-c", "sleep 60"],
+            str(self.root),
+            24,
+            80,
+            {"PATH": "/usr/bin:/bin"},
+        )
+        self.manager.setup = entry
+        self.manager.setup_task = asyncio.create_task(self.manager.setup_output(entry))
+        await self.manager.close(stop_setup=True)
+        self.assertIsNotNone(entry.exit_code)
+        with patch.object(self.manager.terminal, "_signal") as signal:
+            await self.manager.close(stop_setup=True)
+            signal.assert_not_called()
+
     async def test_binary_relay_reconnects_without_closing_runtime(self):
         seen = []
 

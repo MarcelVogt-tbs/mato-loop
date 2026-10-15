@@ -118,6 +118,20 @@
                 :options="pairingDurationOptions"
                 label="Gültigkeitsdauer des Kopplungstokens"
               />
+              <q-separator />
+              <AppSelect
+                v-model="autoUpdateEnabled" dense outlined emit-value map-options stack-label
+                :display-value="autoUpdateEnabled === null ? autoUpdateOptions[0].label : undefined"
+                label="Automatische Agent-Updates" :options="autoUpdateOptions"
+              />
+              <AppSelect
+                v-model="sudoCredentialId" dense outlined emit-value map-options stack-label
+                label="sudo-Passwort" :options="sudoOptions" :loading="variables.loading"
+                :disable="blocked || variables.loading || variables.loadFailed"
+                :display-value="sudoOptions.find(option => option.value === sudoCredentialId)?.label || 'Secret nicht mehr verfügbar'"
+                hint="Vorhandenes Secret für Linux-Updates und berechtigte Admin-Ausführungen. Verwaltung unter Variablen & Secrets."
+              />
+              <q-btn v-if="variables.loadFailed" flat no-caps label="Secrets erneut laden" @click="loadSecrets" />
             </q-card-section>
           </q-tab-panel>
           <q-tab-panel v-if="isEditing" name="actions" class="q-pa-none">
@@ -154,6 +168,7 @@ import { agentDisplayName } from 'src/features/computers/display'
 import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useExecutionAgentStore } from 'stores/execution-agents'
+import { usePersonalVariableStore } from 'src/features/personal-variables/store'
 
 defineOptions({ name: 'ExecutionAgentConfigDialog' })
 
@@ -166,6 +181,7 @@ const emit = defineEmits(['update:modelValue', 'created', 'copy-command'])
 
 const $q = useQuasar()
 const agents = useExecutionAgentStore()
+const variables = usePersonalVariableStore()
 const formRef = ref(null)
 const saving = ref(false)
 const blocked = computed(() => saving.value || props.busy)
@@ -179,6 +195,17 @@ const installationCommand = computed(() => installationPlatform.value === 'windo
   ? `$installer = Join-Path $env:TEMP 'install-matoloop-agent.ps1'; Invoke-WebRequest -UseBasicParsing -Uri '${window.location.origin}/api/execution-agents/install.ps1' -OutFile $installer; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -InstanceUrl '${window.location.origin}'`
   : `curl -fsSL ${window.location.origin}/api/execution-agents/install.sh | sh -s -- --instance-url ${window.location.origin}`)
 const alias = ref('')
+const autoUpdateEnabled = ref(null)
+const sudoCredentialId = ref(null)
+const sudoOptions = computed(() => [
+  { label: 'Kein Secret zugeordnet', value: null },
+  ...variables.variables.filter(variable => variable.secret).map(variable => ({ label: variable.name, value: variable.id }))
+])
+const autoUpdateOptions = computed(() => [
+  { label: `Instanzstandard (aktuell ${agents.autoUpdateDefault ? 'an' : 'aus'})`, value: null },
+  { label: 'An', value: true },
+  { label: 'Aus', value: false }
+])
 const settings = reactive({
   homeFilesystemPolicy: 'auto',
   externalFilesystemPolicy: 'ask',
@@ -219,7 +246,8 @@ async function save() {
     || !await formRef.value?.validate()
   ) return
   const agent = props.agent
-  const values = { alias: alias.value.trim(), ...settings }
+  const values = { alias: alias.value.trim(), ...settings, autoUpdateEnabled: autoUpdateEnabled.value }
+  if (sudoCredentialId.value !== (agent?.sudoCredentialId ?? null)) values.sudoCredentialId = sudoCredentialId.value
   const submittedDefault = useAsDefault.value
   saving.value = true
   try {
@@ -229,7 +257,8 @@ async function save() {
       emit('created', result)
       return
     }
-    if ([...policyFields, ...shellFields].some(({ key }) => values[key] !== agent[key]) || values.alias !== agent.alias) {
+    if ([...policyFields, ...shellFields].some(({ key }) => values[key] !== agent[key]) || values.alias !== agent.alias
+      || values.autoUpdateEnabled !== (agent.autoUpdateEnabled ?? null) || Object.hasOwn(values, 'sudoCredentialId')) {
       await agents.update(agent.id, values)
     }
     if (submittedDefault !== initialDefault.value) {
@@ -247,6 +276,10 @@ function close() {
   emit('update:modelValue', false)
 }
 
+async function loadSecrets() {
+  try { await variables.fetchVariables() } catch { /* Central API toast. */ }
+}
+
 watch(() => props.modelValue, async (open) => {
   const currentInitialization = ++initialization
   if (!open) return
@@ -254,6 +287,9 @@ watch(() => props.modelValue, async (open) => {
   installationPlatform.value = 'linux'
   pairingDurationSeconds.value = null
   alias.value = props.agent?.alias || ''
+  autoUpdateEnabled.value = props.agent?.autoUpdateEnabled ?? null
+  sudoCredentialId.value = props.agent?.sudoCredentialId ?? null
+  void loadSecrets()
   for (const { key } of [...policyFields, ...shellFields]) {
     settings[key] = props.agent?.[key] ?? (key.endsWith('Enabled') ? true : key === 'homeFilesystemPolicy' ? 'auto' : 'ask')
   }

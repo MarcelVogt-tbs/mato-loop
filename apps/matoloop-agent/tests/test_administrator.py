@@ -3,9 +3,9 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
-from matoloop_agent.administrator import run_administrator, sudo_options
+from matoloop_agent.administrator import _run_worker, run_administrator, sudo_options
 from matoloop_agent.config import AgentConfig
 from matoloop_agent.errors import AgentError
 from matoloop_agent.filesystem import Filesystem
@@ -144,6 +144,42 @@ class AdministratorTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AgentError):
             await self.invoke("filesystem.read")
         self.assertEqual(target.read_text(), "batchSize: 9\n")
+
+    async def test_repeated_cancellation_waits_for_privileged_write_result(self):
+        reader = asyncio.StreamReader()
+        process = Mock(stdout=reader, wait=AsyncMock(), returncode=0)
+        started = asyncio.Event()
+
+        async def spawn(*args, **kwargs):
+            started.set()
+            return process
+
+        request = AdministratorArguments(
+            operation="filesystem.write",
+            arguments={"path": str(self.file), "content": "x"},
+        )
+        with patch(
+            "matoloop_agent.administrator.asyncio.create_subprocess_exec", side_effect=spawn
+        ):
+            running = asyncio.create_task(
+                _run_worker(
+                    self.config,
+                    request,
+                    "sudo",
+                    [],
+                    "request",
+                    30,
+                    None,
+                )
+            )
+            await started.wait()
+            for _ in range(2):
+                running.cancel()
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+            reader.feed_data(b'{"result":{"written":true}}\n')
+            reader.feed_eof()
+            self.assertEqual(await running, {"written": True})
 
     def test_elevated_classification_uses_the_same_parser_without_file_access(self):
         runner = ProcessRunner(self.config, Filesystem(self.config))

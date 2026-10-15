@@ -12,6 +12,15 @@ instructions, followed by the optional alias and access settings. Installation
 commands are not part of the overview.
 Open management dialogs resolve the computer by ID from the existing polled store.
 
+The overview offers **Agents aktualisieren (N)** to the left of **Computer hinzufügen**
+when connected, update-capable computers differ from the valid backend installation
+target and have no active or recently unconfirmed maintenance. One confirmation names
+the selected computers and explains interruption and version synchronization. The UI
+then starts each through the existing per-computer maintenance endpoint, rechecking
+eligibility before dispatch. The shared manual flow handles individual sudo prompts
+and named errors; a failed start does not stop the remaining computers. The summary
+counts confirmed starts, while the existing maintenance status tracks completion.
+
 An omitted or blank alias is stored as an empty string in the existing column.
 `displayName` resolves the custom alias, the last reported computer name, or
 `Computer <ID8>` before the first connection. Editing always uses the raw `alias`;
@@ -29,9 +38,39 @@ No additional version inventory, schema migration, or remote update probe is use
 
 ## Maintenance admission
 
-The Agent admits maintenance only when no requests, live terminals, browser
-sessions, or browser setup are active. Admission is reserved before launching the
-independent worker; cancellation waits for the actual launch outcome. Requests
+Automatic updates use the same maintenance service as manual updates. The global
+`GeneralSettings.agent_auto_update_enabled` default is false; the nullable
+`ExecutionAgent.auto_update_enabled` overrides it per computer. The computer list
+provides the current instance default so the editor can show the effective setting.
+Checks run after a connection has been registered, after changing the global default
+(inheriting computers only), and after changing a computer's override or sudo secret assignment.
+The WebSocket receive loop remains active while the background check dispatches its request.
+Backend restarts need no separate scan because Agents reconnect. There is no polling
+or automatic retry timer: busy or failed Agents wait for another event or a manual update.
+Matching versions, unpaired/revoked computers and unsupported Agents are skipped.
+Dirty or unknown backend builds cannot trigger an update. The same running-job lock
+and unknown-result window protect both manual and automatic starts.
+
+`sudo_credential_id` optionally references an existing owned personal variable marked
+as a secret. The API exposes the reference, never its value. Clearing the assignment,
+unpairing or revoking a computer does not delete the personal secret. Deleting the
+secret clears the foreign key. Native Linux updates use its current value; an explicit
+one-time password takes precedence. Saved passwords are not sent to Windows or
+managed container updates. Elevated model tools use the same reference as a fallback
+after explicit and temporary references, through the existing secret-access checks
+and independent administrator action permissions. The model never receives the value.
+
+Automatic updates and uninstallation require no active requests, terminals, browser
+sessions or setup. Manual updates require confirmation in the WebUI and use
+`maintenance.update.interrupt` when advertised. This operation reserves admission,
+validates platform prerequisites and sudo authentication through the existing launcher,
+then cancels active request tasks and closes terminals, browsers and browser setup.
+Atomic file mutations retain their cancellation protection and report their actual
+outcome. If draining exceeds 60 seconds the update does not start; protected writes
+are not killed. The backend allows 120 seconds for admission, draining and launch.
+Older Agents keep the previous busy guard until their first successful update.
+Admission is reserved before launching the independent worker; cancellation waits
+for the actual launch outcome. Requests
 are rejected with `maintenance.busy` while the launcher or installer is active,
 including after Agent restart or reconnect. A definite busy rejection restores
 the previous backend maintenance record instead of creating a failed update.
@@ -54,8 +93,9 @@ path.
 
 The Linux adapter starts a transient systemd unit as the installation user so the
 worker survives stopping its own service. When sudo requires a password, a masked
-one-time prompt passes it over a private Unix socket, then to sudo via stdin. No
-password is stored or placed in service arguments or the environment. Sudo rights
+one-time prompt or the saved update credential supplies it over a private Unix
+socket, then to sudo via stdin. The Agent does not store the password or place it
+in service arguments or the environment. Sudo rights
 must already exist; cached tickets are not shared across services.
 
 The worker uses the existing installer for commit-pinned updates with activation

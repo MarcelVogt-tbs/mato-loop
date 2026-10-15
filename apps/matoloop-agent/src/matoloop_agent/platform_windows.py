@@ -10,7 +10,7 @@ import os
 import platform
 import shutil
 import socket
-from collections.abc import Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -27,7 +27,7 @@ from .transfer import TransferClient
 
 
 class _Unavailable:
-    async def close(self) -> None:
+    async def close(self, *, stop_setup: bool = False) -> None:
         return None
 
     async def close_all(self) -> None:
@@ -106,6 +106,8 @@ class WindowsPlatform:
         job_id: str,
         password: str | None,
         revision: str | None = None,
+        *,
+        before_start: Callable[[], Awaitable[None]] | None = None,
     ) -> dict:
         if not self._maintenance_available(config):
             raise AgentError("maintenance.unavailable", "Native maintenance is unavailable")
@@ -115,6 +117,8 @@ class WindowsPlatform:
             or password is not None
         ):
             raise AgentError("request.invalid", "Invalid Windows maintenance request")
+        if before_start is not None:
+            await before_start()
         request = config.data_dir / "maintenance-request.json"
         try:
             with request.open("x", encoding="utf-8") as file:
@@ -199,7 +203,11 @@ class WindowsPlatform:
             openscad=unavailable,
             transfer=transfer,
             operations=operations
-            + (("maintenance.start",) if self._maintenance_available(config) else ()),
+            + (
+                ("maintenance.start", "maintenance.update.interrupt")
+                if self._maintenance_available(config)
+                else ()
+            ),
         )
 
     def system_info(self, current_directory: str | None, filesystem: FilesystemAdapter) -> dict:

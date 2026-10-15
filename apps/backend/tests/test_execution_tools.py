@@ -1106,6 +1106,45 @@ async def test_administrator_authentication_preserves_action_policy(tmp_path, mo
     )
 
 
+@pytest.mark.parametrize("mode", ["allowed", "secret_denied", "admin_denied", "explicit", "no_longer_secret"])
+async def test_computer_sudo_secret_uses_existing_secret_and_action_permissions(tmp_path, monkeypatch, mode):
+    client = FakeExecutionClient({"administrator.run": ProcessResult(
+        exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0, stderr_bytes=0,
+        stdout_truncated=False, stderr_truncated=False,
+    )}, {"administrator.run", "shell.classify"})
+    context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)
+    credential_id = uuid4()
+    context.db.get.return_value = ExecutionAgent(
+        id=client.agent_id, user_id=context.session.user_id, sudo_credential_id=credential_id,
+    )
+    variable = Mock(id=credential_id, label="COMPUTER_SUDO", metadata_json={"secret": mode != "no_longer_secret"})
+    monkeypatch.setattr("mato_loop_backend.tools.secrets.get_personal_variable", AsyncMock(return_value=variable))
+    decode = Mock(return_value="stored password")
+    monkeypatch.setattr("mato_loop_backend.tools.secrets.personal_variable_value", decode)
+    monkeypatch.setattr("mato_loop_backend.tools.access.profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+
+    async def authorize(request, **kwargs):
+        denied = (mode == "secret_denied" and request.capability == "secrets.access") or (
+            mode == "admin_denied" and request.resource_type == "execution_administrator"
+        )
+        return PermissionDecision.DENY if denied else PermissionDecision.ALLOW
+
+    context.ask_handler = AsyncMock(side_effect=authorize)
+    arguments = ShellRunArguments(command="id -u", elevated=True)
+    if mode == "explicit":
+        identifier = uuid4()
+        context.one_time_secrets[identifier] = "one-time password"
+        arguments.sudo_password_ref = f"run-secret:{identifier}"
+    result = await _shell_run(arguments, context)
+    executions = [args for op, args in client.requests if op == "administrator.run"]
+    if mode in {"secret_denied", "admin_denied", "no_longer_secret"}:
+        assert result.is_error and executions == []
+        decode.assert_not_called()
+    else:
+        assert executions[-1]["sudoPassword"] == ("one-time password" if mode == "explicit" else "stored password")
+        assert "stored password" not in result.content
+
+
 async def test_secret_input_reports_skipped_administrator_password_without_grant(tmp_path):
     client = FakeExecutionClient({}, {"administrator.run"})
     call = ToolCall("secret", "secret_input", {"inputs": [

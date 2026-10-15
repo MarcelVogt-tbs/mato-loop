@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,7 +69,7 @@ class SearchAdapter(Protocol):
 
 class BrowserAdapter(Protocol):
     async def dispatch(self, operation: str, arguments) -> dict: ...
-    async def close(self) -> None: ...
+    async def close(self, *, stop_setup: bool = False) -> None: ...
 
 
 class OpenScadAdapter(Protocol):
@@ -119,6 +119,8 @@ class PlatformAdapter(Protocol):
         job_id: str,
         password: str | None,
         revision: str | None = None,
+        *,
+        before_start: Callable[[], Awaitable[None]] | None = None,
     ) -> dict: ...
     def run_auxiliary(self, command: str, arguments: list[str]) -> bool: ...
     def run(self, coroutine: Coroutine[Any, Any, None]) -> None: ...

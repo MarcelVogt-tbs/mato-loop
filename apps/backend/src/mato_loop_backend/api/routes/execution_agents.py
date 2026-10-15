@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import (
     APIRouter,
@@ -19,13 +18,20 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend import __version__
 from mato_loop_backend.api.errors import ApiError
-from mato_loop_backend.build_info import build_revision
 from mato_loop_backend.config import PROJECT_ROOT
 from mato_loop_backend.db.session import AsyncSessionFactory, get_db_session
 from mato_loop_backend.execution import (
@@ -35,15 +41,22 @@ from mato_loop_backend.execution import (
     execution_agent_connections,
     transfer_tickets,
 )
+from mato_loop_backend.execution.maintenance import (
+    InstallationTarget,
+    installation_target,
+    maintenance_state,
+    schedule_auto_updates,
+    start_maintenance,
+)
 from mato_loop_backend.execution.protocol import MAX_MESSAGE_BYTES, SUPPORTED_OPERATIONS
 from mato_loop_backend.models import ExecutionAgent, UserAccount
+from mato_loop_backend.personal_variables import get_personal_variable
 from mato_loop_backend.security import hash_token, require_user
-from mato_loop_backend.settings import SettingsStore, UserPreferences
+from mato_loop_backend.settings import GeneralSettings, SettingsStore, UserPreferences
 
 router = APIRouter(prefix="/execution-agents")
 PAIRING_DURATION_DEFAULT_SECONDS = 1800
 PAIRING_DURATION_MAXIMUM_SECONDS = 86400
-MAINTENANCE_LIMIT = timedelta(minutes=65)
 
 
 @router.get("/install.sh", include_in_schema=False)
@@ -78,25 +91,22 @@ class ApiModel(BaseModel):
     )
 
 
-class InstallationTarget(ApiModel):
-    revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-    version: str
-
-
-def installation_target() -> InstallationTarget:
-    revision = build_revision()
-    if revision is None or not re.fullmatch(
-        rf"[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}-{revision[:8]}", __version__
-    ):
-        raise ApiError(409, "maintenance.targetUnavailable", headers={"Cache-Control": "no-store"})
-    return InstallationTarget(revision=revision, version=__version__)
-
-
 @router.get("/installation-target")
 async def get_installation_target(response: Response) -> InstallationTarget:
     # Public build metadata lets an unpaired installer select the exact source.
     response.headers["Cache-Control"] = "no-store"
     return installation_target()
+
+
+class SudoPasswordRequest(ApiModel):
+    sudo_password: str | None = Field(default=None, min_length=1, max_length=4096, repr=False)
+
+    @field_validator("sudo_password")
+    @classmethod
+    def valid_password(cls, value: str | None) -> str | None:
+        if value is not None and any(character in value for character in "\r\n\x00"):
+            raise ValueError("invalid sudo password")
+        return value
 
 
 class ExecutionAgentAliasRequest(ApiModel):
@@ -112,6 +122,7 @@ ExecutionPolicy = Literal["auto", "ask", "deny"]
 
 
 class ExecutionAgentRequest(ExecutionAgentAliasRequest):
+    sudo_credential_id: UUID | None = None
     pairing_token_duration_seconds: int = Field(
         default=PAIRING_DURATION_DEFAULT_SECONDS,
         ge=PAIRING_DURATION_DEFAULT_SECONDS,
@@ -121,6 +132,7 @@ class ExecutionAgentRequest(ExecutionAgentAliasRequest):
     external_filesystem_policy: ExecutionPolicy = "ask"
     home_shell_enabled: bool = True
     external_shell_enabled: bool = True
+    auto_update_enabled: StrictBool | None = None
 
 
 class PairingTokenRequest(ApiModel):
@@ -141,11 +153,13 @@ class DefaultExecutionAgentRequest(ApiModel):
 
 
 class ExecutionAgentUpdateRequest(ApiModel):
+    sudo_credential_id: UUID | None = None
     alias: str | None = Field(default=None, max_length=160)
     home_filesystem_policy: ExecutionPolicy | None = None
     external_filesystem_policy: ExecutionPolicy | None = None
     home_shell_enabled: bool | None = None
     external_shell_enabled: bool | None = None
+    auto_update_enabled: StrictBool | None = None
 
     _normalize_alias = field_validator("alias")(ExecutionAgentAliasRequest.normalize_alias.__func__)
 
@@ -156,29 +170,12 @@ class ExecutionAgentUpdateRequest(ApiModel):
         return self
 
 
-class MaintenanceRequest(ApiModel):
+class MaintenanceRequest(SudoPasswordRequest):
     action: Literal["update", "uninstall"]
-    sudo_password: str | None = Field(default=None, min_length=1, max_length=4096)
-
-    @field_validator("sudo_password")
-    @classmethod
-    def valid_password(cls, value: str | None) -> str | None:
-        if value is not None and any(character in value for character in "\r\n\x00"):
-            raise ValueError("invalid sudo password")
-        return value
 
 
 class MaintenanceCompletion(ApiModel):
     status: Literal["succeeded", "failed"]
-
-
-def _maintenance_state(agent: ExecutionAgent) -> dict | None:
-    state = agent.maintenance
-    if state and state["status"] == "running":
-        started = datetime.fromisoformat(state["startedAt"])
-        if datetime.now(UTC) - started > MAINTENANCE_LIMIT:
-            return {**state, "status": "unknown"}
-    return state
 
 
 def _valid_registration(agent: ExecutionAgent, now: datetime) -> bool:
@@ -204,7 +201,9 @@ def _agent_payload(agent: ExecutionAgent) -> dict:
         "platform": agent.platform,
         "revision": agent.revision,
         "operations": agent.operations,
-        "maintenance": _maintenance_state(agent),
+        "maintenance": maintenance_state(agent),
+        "autoUpdateEnabled": agent.auto_update_enabled,
+        "sudoCredentialId": str(agent.sudo_credential_id) if agent.sudo_credential_id else None,
         "homeDirectory": agent.home_directory,
         "homeFilesystemPolicy": agent.home_filesystem_policy,
         "externalFilesystemPolicy": agent.external_filesystem_policy,
@@ -281,6 +280,13 @@ async def _owned_agent(
     return agent
 
 
+async def _validate_sudo_credential(db: AsyncSession, owner_id: UUID, credential_id: UUID | None) -> None:
+    if credential_id is not None:
+        variable = await get_personal_variable(db, owner_id, credential_id)
+        if variable is None or variable.metadata_json.get("secret") is not True:
+            raise ApiError(422, "personalVariable.notFound", field="sudoCredentialId")
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_execution_agent(
     payload: ExecutionAgentRequest,
@@ -288,6 +294,7 @@ async def create_execution_agent(
     db: Annotated[AsyncSession, Depends(get_db_session)],
     response: Response,
 ) -> dict:
+    await _validate_sudo_credential(db, user.id, payload.sudo_credential_id)
     agent = ExecutionAgent(
         user_id=user.id,
         alias=payload.alias,
@@ -297,6 +304,8 @@ async def create_execution_agent(
         external_filesystem_policy=payload.external_filesystem_policy,
         home_shell_enabled=payload.home_shell_enabled,
         external_shell_enabled=payload.external_shell_enabled,
+        auto_update_enabled=payload.auto_update_enabled,
+        sudo_credential_id=payload.sudo_credential_id,
     )
     token = _issue_pairing_token(agent, payload.pairing_token_duration_seconds)
     db.add(agent)
@@ -381,6 +390,7 @@ async def list_execution_agents(
         ).all()
     )
     preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id)
+    general = await SettingsStore.load(db, GeneralSettings)
     try:
         target = installation_target().model_dump()
     except ApiError:
@@ -389,6 +399,7 @@ async def list_execution_agents(
         "items": [_agent_payload(agent) for agent in agents],
         "backendVersion": __version__,
         "installationTarget": target,
+        "autoUpdateDefault": general.agent_auto_update_enabled,
         "defaultExecutionAgentId": (
             str(preferences.default_execution_agent_id)
             if preferences.default_execution_agent_id
@@ -440,81 +451,8 @@ async def start_execution_agent_maintenance(
     response: Response,
 ) -> dict:
     agent = await _owned_agent(db, user.id, agent_id, for_update=True)
-    if agent.revoked_at is not None:
-        raise ApiError(409, "executionAgent.revoked")
-    if (
-        agent.maintenance
-        and agent.maintenance["status"] in {"running", "unknown"}
-        and datetime.now(UTC) - datetime.fromisoformat(agent.maintenance["startedAt"])
-        <= MAINTENANCE_LIMIT
-    ):
-        raise ApiError(409, "maintenance.busy")
-    if not execution_agent_connections.is_connected(agent_id):
-        raise ApiError(503, "executionAgent.unavailable")
-    operation = (
-        "maintenance.update"
-        if payload.action == "update" and "maintenance.update" in agent.operations
-        else "maintenance.start"
-    )
-    if operation not in agent.operations:
-        raise ApiError(409, "maintenance.unavailable")
-    revision = installation_target().revision if payload.action == "update" else None
-    previous = agent.maintenance
-    job_id = str(uuid4())
-    agent.maintenance = {
-        "jobId": job_id,
-        "action": payload.action,
-        "status": "running",
-        "startedAt": datetime.now(UTC).isoformat(),
-    }
-    await db.commit()
     response.headers["Cache-Control"] = "no-store"
-    try:
-        result = await execution_agent_connections.request(
-            agent_id,
-            operation,
-            {
-                "action": payload.action,
-                "jobId": job_id,
-                **({"revision": revision} if revision else {}),
-                **({"sudoPassword": payload.sudo_password} if payload.sudo_password else {}),
-            },
-            timeout=35,
-        )
-        if not result.ok:
-            code = result.error.code if result.error else "maintenance.failed"
-            if code not in {
-                "process.sudoAuthRequired", "process.sudoAuthFailed", "maintenance.unavailable",
-                "maintenance.busy",
-            }:
-                code = "maintenance.failed"
-            raise ApiError(409 if code != "maintenance.failed" else 502, code)
-    except (ExecutionAgentError, ApiError) as exc:
-        code = exc.code
-        unknown = code in {
-            "executionAgent.outcomeUnknown", "executionAgent.timeout", "executionAgent.replaced"
-        }
-        current = await db.get(
-            ExecutionAgent, agent_id, with_for_update=True, populate_existing=True
-        )
-        if current and current.maintenance and current.maintenance["jobId"] == job_id:
-            if code in {"process.sudoAuthRequired", "process.sudoAuthFailed", "maintenance.busy"}:
-                current.maintenance = previous
-            elif current.maintenance["status"] == "running":
-                current.maintenance = {
-                    **current.maintenance,
-                    "status": "unknown" if unknown else "failed",
-                    "errorCode": "maintenance.failed" if code.startswith("executionAgent.") else code,
-                }
-            await db.commit()
-        if isinstance(exc, ApiError):
-            raise
-        raise ApiError(
-            503,
-            code if unknown or code == "executionAgent.unavailable" else "maintenance.failed",
-        ) from exc
-    await db.refresh(agent)
-    return {"maintenance": _maintenance_state(agent)}
+    return await start_maintenance(db, agent, payload.action, sudo_password=payload.sudo_password)
 
 
 @router.post("/{agent_id}/maintenance/{job_id}/complete", status_code=204)
@@ -560,15 +498,21 @@ async def update_execution_agent(
     if agent.revoked_at is not None:
         raise ApiError(status.HTTP_409_CONFLICT, "executionAgent.revoked")
     changed = False
+    auto_update_changed = False
     for field in payload.model_fields_set:
+        if field == "sudo_credential_id":
+            await _validate_sudo_credential(db, user.id, payload.sudo_credential_id)
         value = getattr(payload, field)
-        if value is not None and getattr(agent, field) != value:
+        if (value is not None or field in {"auto_update_enabled", "sudo_credential_id"}) and getattr(agent, field) != value:
             setattr(agent, field, value)
             changed = True
+            auto_update_changed |= field in {"auto_update_enabled", "sudo_credential_id"}
     if changed:
         agent.revision += 1
         agent.updated_at = datetime.now(UTC)
     await db.commit()
+    if auto_update_changed:
+        schedule_auto_updates(agent.id)
     return _agent_payload(agent)
 
 
@@ -627,6 +571,7 @@ async def unpair_execution_agent(
     if preferences.default_execution_agent_id == agent.id:
         preferences.default_execution_agent_id = None
         await SettingsStore.save(db, preferences, user_id=user.id)
+    agent.sudo_credential_id = None
     await _commit_and_revoke_live_capabilities(db, agent.id)
     return _agent_payload(agent)
 
@@ -644,6 +589,7 @@ async def revoke_execution_agent(
     if agent.revoked_at is None:
         agent.revoked_at = datetime.now(UTC)
         agent.revision += 1
+    agent.sudo_credential_id = None
     if preferences.default_execution_agent_id == agent.id:
         preferences.default_execution_agent_id = None
         await SettingsStore.save(db, preferences, user_id=user.id)
@@ -728,6 +674,7 @@ async def connect_execution_agent(websocket: WebSocket) -> None:
         )
         await execution_agent_connections.register(hello, websocket)
         registered = True
+        schedule_auto_updates(authenticated_id)
         while True:
             await execution_agent_connections.receive(
                 authenticated_id, websocket, await websocket.receive_text()

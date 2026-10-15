@@ -25,6 +25,7 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
     items: [],
     backendVersion: null,
     installationTarget: null,
+    autoUpdateDefault: false,
     defaultExecutionAgentId: null,
     pairingPolicy: null,
     loading: false,
@@ -58,6 +59,7 @@ export const useExecutionAgentStore = defineStore('execution-agents', {
         this.items = data.items
         this.backendVersion = data.backendVersion || null
         this.installationTarget = data.installationTarget || null
+        this.autoUpdateDefault = data.autoUpdateDefault ?? false
         this.defaultExecutionAgentId = data.defaultExecutionAgentId || null
         this.loaded = true
       } catch (error) {

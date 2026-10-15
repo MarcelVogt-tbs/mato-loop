@@ -279,8 +279,8 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         resolved = await resolve_secret_refs(context, arguments.environment)
         if isinstance(resolved, ToolResult):
             return resolved
-        reference = effective_sudo_reference(
-            context.session.id, context.run_secret_refs, client.agent_id, arguments.sudo_password_ref,
+        reference = await effective_sudo_reference(
+            context.db, context.session, context.run_secret_refs, client.agent_id, arguments.sudo_password_ref,
         )
         requested = arguments.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
         payload = await administrator.request_arguments(context, "shell.run", {
