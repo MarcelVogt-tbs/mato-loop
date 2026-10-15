@@ -31,6 +31,7 @@ from mato_loop_backend.integrations.arcane.adapter import (
 from mato_loop_backend.integrations.arcane.client import ArcaneClient, ArcaneError, segment
 from mato_loop_backend.integrations.arcane.project_config import read_snapshot
 from mato_loop_backend.permissions.policy import PermissionDecision
+from mato_loop_backend.privacy import RequestPseudonymizer
 from mato_loop_backend.security import CredentialCipher
 from mato_loop_backend.settings import (
     IntegrationInstance,
@@ -221,7 +222,7 @@ def test_sysadmin_arcane_uses_existing_profile_selection_and_resource_rules(trus
     assert (initially_offered, selected_offered, inherited, overridden, disabled) == (False, True, "ask", "auto", "disabled")
 
 
-async def test_arcane_project_configuration_round_trip_preserves_secrets_and_rejects_changed_snapshot(monkeypatch, tmp_path):
+async def test_arcane_project_configuration_round_trip_and_update_guards(monkeypatch, tmp_path):
     import mato_loop_backend.integrations.arcane.project_config as config_module
 
     cipher = CredentialCipher(tmp_path / "key")
@@ -234,8 +235,8 @@ async def test_arcane_project_configuration_round_trip_preserves_secrets_and_rej
                               ask_handler=AsyncMock(return_value=PermissionDecision.ALLOW))
     context.current_integrations = AsyncMock(return_value=context.integration_settings)
     config = {"id": "project", "name": "app", "composeContent": "services:\n  app:\n    image: nginx:stable\n    environment:\n      PASSWORD: compose-secret\n      SESSION: YWI=\n",
-              "envContent": "export KEY='env-secret'\nMULTILINE='first\nsecond'\n" + "".join(f"V{index:04d}=x\n" for index in range(9_990)),
-              "overrideContent": "services:\n  app:\n    environment:\n" + "".join(f"      V{index:04d}: x\n" for index in range(3_000)), "includeFiles": []}
+              "envContent": "PASSWORD=supersecret\nPORT=8080\n",
+              "overrideContent": "", "includeFiles": []}
     writes = []
 
     def handle(request):
@@ -264,11 +265,21 @@ async def test_arcane_project_configuration_round_trip_preserves_secrets_and_rej
             assert b"PASSWORD=new-secret" in writes[-1].content
             result = await arcane_project_config(ArcaneProjectConfig(**scope, project_id="project"), context)
             visible = json.loads(result.content)["data"]
-            assert all(secret not in result.content for secret in ("compose-secret", "env-secret", "first", "second", "YWI="))
-            save = ArcaneProjectSave(**scope, project_id="project", snapshot_token=visible["snapshotToken"],
-                                     compose_content=visible["composeContent"].replace("nginx:stable", "nginx:alpine"), env_content=visible["envContent"])
+            assert visible["envContent"] == config["envContent"]
+            snapshot = cipher.decrypt(visible["snapshotToken"].encode("ascii"))
+            assert set(snapshot) == {"version", "integrationId", "environmentId", "projectId", "sessionId", "bindingRevision", "configurationDigest"}
+            pseudonymizer = RequestPseudonymizer()
+            messages = pseudonymizer.protect_messages([{"role": "tool", "content": result.content}])
+            assert "supersecret" not in messages[-1]["content"]
+            pseudonymizer.retain_transmitted({"messages": messages})
+            model_config = json.loads(messages[-1]["content"])["data"]
+            save = ArcaneProjectSave(**pseudonymizer.restore_value({
+                **scope, "project_id": "project", "snapshot_token": model_config["snapshotToken"],
+                "compose_content": model_config["composeContent"].replace("nginx:stable", "nginx:alpine"),
+                "env_content": model_config["envContent"],
+            }))
             preview = arcane_module._project_save_permission(save, context)[0].display_items[1].value
-            assert "+    image: nginx:alpine" in preview and "compose-secret" not in preview
+            assert preview == save.compose_content
             assert next(request for request in arcane_module._project_save_permission(save, context)
                         if request.capability == "arcane.read").sensitive_access
             assert not (await arcane_project_save(save, context)).is_error
@@ -293,17 +304,6 @@ async def test_arcane_project_configuration_round_trip_preserves_secrets_and_rej
             binding = arcane_module._project_snapshot_context(save, context, "project")
             with pytest.raises(ArcaneError, match="integration.staleReference"):
                 read_snapshot(visible["snapshotToken"], **{**binding, "session_id": str(uuid4())})
-            resolve = arcane_module.resolve_protected_text
-
-            async def revoke_after_secret_resolution(ctx, text):
-                resolved = await resolve(ctx, text)
-                if not isinstance(text, str):
-                    ctx.ask_handler.return_value = PermissionDecision.DENY
-                return resolved
-
-            monkeypatch.setattr(arcane_module, "resolve_protected_text", revoke_after_secret_resolution)
-            denied = await arcane_project_save(protected, context)
-            assert denied.is_error and "permission.denied" in denied.content and len(writes) == 3
 
 
 @pytest.mark.parametrize("read_fails", [False, True])

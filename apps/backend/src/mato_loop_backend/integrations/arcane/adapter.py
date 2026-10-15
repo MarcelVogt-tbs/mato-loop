@@ -4,7 +4,6 @@ import hashlib
 import json
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from difflib import unified_diff
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -19,14 +18,11 @@ from mato_loop_backend.integrations.arcane.client import (
 )
 from mato_loop_backend.integrations.arcane.project_config import (
     MAX_CONFIG_CHARACTERS,
-    MAX_CONFIG_INPUT_CHARACTERS,
     MAX_CONFIG_RESPONSE_BYTES,
-    MAX_CONFIG_SNAPSHOT_CHARACTERS,
     configuration,
     fingerprint,
     project_snapshot,
     read_snapshot,
-    restore_private_values,
 )
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
@@ -100,11 +96,11 @@ class ArcaneProjectConfig(ArcaneEnvironment):
 
 class ArcaneProjectSave(ArcaneEnvironment):
     project_id: str | None = Field(default=None, min_length=1, max_length=256)
-    snapshot_token: str | None = Field(default=None, min_length=1, max_length=MAX_CONFIG_SNAPSHOT_CHARACTERS)
+    snapshot_token: str | None = Field(default=None, min_length=1, max_length=4_096)
     name: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,79}$")
-    compose_content: Annotated[str, Field(min_length=1, max_length=MAX_CONFIG_INPUT_CHARACTERS)] | ProtectedText | None = None
-    env_content: Annotated[str, Field(max_length=MAX_CONFIG_INPUT_CHARACTERS)] | ProtectedText | None = None
-    override_content: Annotated[str, Field(max_length=MAX_CONFIG_INPUT_CHARACTERS)] | ProtectedText | None = None
+    compose_content: Annotated[str, Field(min_length=1, max_length=MAX_CONFIG_CHARACTERS)] | ProtectedText | None = None
+    env_content: Annotated[str, Field(max_length=MAX_CONFIG_CHARACTERS)] | ProtectedText | None = None
+    override_content: Annotated[str, Field(max_length=MAX_CONFIG_CHARACTERS)] | ProtectedText | None = None
 
     @model_validator(mode="after")
     def validate_project(self) -> ArcaneProjectSave:
@@ -338,7 +334,7 @@ async def arcane_project_save(args: ArcaneProjectSave, context: Any) -> Any:
             resolved = await resolve_protected_text(context, value)
             if isinstance(resolved, ToolResult):
                 return resolved
-            text = restore_private_values(resolved[0], snapshot)
+            text, _protected = resolved
             if len(text) > MAX_CONFIG_CHARACTERS or remote == "composeContent" and not text.strip():
                 return _error("tool.invalidArguments")
             if args.project_id and not text.strip() and isinstance(value, ProtectedText):
@@ -517,15 +513,14 @@ def _project_config_permission(args: ArcaneProjectConfig, context: Any) -> tuple
 def _project_save_permission(args: ArcaneProjectSave, context: Any) -> tuple[Any, ...]:
     from mato_loop_backend.permissions.policy import PermissionDisplayItem
 
-    snapshot = read_snapshot(args.snapshot_token, **_project_snapshot_context(args, context, args.project_id)) if args.project_id else None
+    if args.project_id:
+        read_snapshot(args.snapshot_token, **_project_snapshot_context(args, context, args.project_id))
     request = _permission(args, context, _MANAGE.capability, "Projektkonfiguration speichern", args.project_id or args.name)[0]
     previews = []
-    for field, remote, label in (("compose_content", "composeContent", "Compose"), ("env_content", "envContent", "Umgebung"), ("override_content", "overrideContent", "Compose-Override")):
+    for field, label in (("compose_content", "Compose"), ("env_content", "Umgebung"), ("override_content", "Compose-Override")):
         value = getattr(args, field)
         if value is not None:
             text = value if isinstance(value, str) else json.dumps(value.model_dump(mode="json"), ensure_ascii=False)
-            if snapshot:
-                text = "".join(unified_diff(snapshot["visible"][remote].splitlines(keepends=True), text.splitlines(keepends=True), fromfile="Bisher", tofile="Vorgeschlagen"))
             previews.append(PermissionDisplayItem(label, text, "code"))
     if args.name is not None:
         previews.append(PermissionDisplayItem("Projektname", args.name))
@@ -563,11 +558,11 @@ ARCANE_ADAPTER = IntegrationAdapterDefinition(
                          arguments_model=ArcaneGet, handler=arcane_get, label="Docker-Ressource lesen", icon="info",
                          actions=(_READ,), instance_argument="integration_id", resource_argument="environment_id",
                           authorization_factory=_read_permission, releases_private_data=True),
-        ToolContribution(name="arcane_project_config", description="Read Compose, environment and override content plus included Compose files. Private values are opaque placeholders. Keep placeholders unchanged when editing and pass snapshotToken to arcane_project_save.",
+        ToolContribution(name="arcane_project_config", description="Read Compose, environment and override content plus included Compose files. Requires sensitive read access. Pass snapshotToken to arcane_project_save for updates.",
                          arguments_model=ArcaneProjectConfig, handler=arcane_project_config, label="Compose-Projektkonfiguration lesen", icon="description",
                          actions=(_READ,), instance_argument="integration_id", resource_argument="environment_id",
                          authorization_factory=_project_config_permission, releases_private_data=True),
-        ToolContribution(name="arcane_project_save", description="Create or patch a Compose project; deploy separately with arcane_action up. Create: name and compose_content. Update: project_id and snapshot_token from arcane_project_config; omitted fields stay unchanged. Preserve private placeholders; use protected text value_ref from secret_input or variable_read for new secrets. Explicit empty env_content/override_content clears/removes the file and also requires delete permission for updates. Protected text cannot clear an existing file. Included files are read-only.",
+        ToolContribution(name="arcane_project_save", description="Create or patch a Compose project; deploy separately with arcane_action up. Create: name and compose_content. Update: project_id and snapshot_token from arcane_project_config; omitted fields stay unchanged. Use protected text value_ref from secret_input or variable_read for new secrets. Explicit empty env_content/override_content clears/removes the file and also requires delete permission for updates. Protected text cannot clear an existing file. Included files are read-only.",
                          arguments_model=ArcaneProjectSave, handler=arcane_project_save, label="Compose-Projektkonfiguration speichern", icon="save",
                          actions=(_MANAGE, _READ, _DELETE), alternative_action_groups=(frozenset({_MANAGE.capability, _READ.capability, _DELETE.capability}),),
                          instance_argument="integration_id", resource_argument="environment_id",

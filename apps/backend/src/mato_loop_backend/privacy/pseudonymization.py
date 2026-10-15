@@ -184,7 +184,16 @@ class RequestPseudonymizer:
             for message in protected:
                 content = message.get("content")
                 if isinstance(content, str):
-                    message["content"] = self.protect_text(content)
+                    if message.get("role") == "tool":
+                        try:
+                            value = json.loads(content)
+                        except ValueError:
+                            message["content"] = self.protect_text(content)
+                        else:
+                            # Store decoded originals so tool arguments restore real newlines, not JSON escapes.
+                            message["content"] = json.dumps(self.protect_value(value, protect_keys=True), ensure_ascii=False)
+                    else:
+                        message["content"] = self.protect_text(content)
                 if message.get("role") != "assistant":
                     # Only assistant messages can carry executable calls. Omitted arguments
                     # must not activate a raw marker supplied elsewhere in this request.
@@ -215,13 +224,15 @@ class RequestPseudonymizer:
         except Exception as exc:
             raise PseudonymizationError("privacy.pseudonymizationFailed") from exc
 
-    def protect_value(self, value: Any) -> Any:
+    def protect_value(self, value: Any, *, protect_keys: bool = False) -> Any:
         if isinstance(value, str):
             return self.protect_text(value)
         if isinstance(value, list):
-            return [self.protect_value(item) for item in value]
+            return [self.protect_value(item, protect_keys=protect_keys) for item in value]
         if isinstance(value, dict):
-            return {key: self.protect_value(item) for key, item in value.items()}
+            return {(self.protect_text(key) if protect_keys else key):
+                    self.protect_text(item, field_name=key) if isinstance(item, str)
+                    else self.protect_value(item, protect_keys=protect_keys) for key, item in value.items()}
         return value
 
     def restore_value(self, value: Any) -> Any:
@@ -233,11 +244,16 @@ class RequestPseudonymizer:
             return {key: self.restore_value(item) for key, item in value.items()}
         return value
 
-    def protect_text(self, text: str) -> str:
+    def protect_text(self, text: str, *, field_name: str | None = None) -> str:
         if not text:
             return text
         try:
             results = _analyze(text)
+            # Keep keyword-based protection for structured fields such as {"password": "value"}.
+            if field_name is not None and KeywordDetector().analyze_line(
+                filename="message.yaml", line=f'{json.dumps(field_name)}: "value"',
+            ):
+                results.append(RecognizerResult(entity_type="SECRET", start=0, end=len(text), score=1.0))
         except PseudonymizationError:
             raise
         except Exception as exc:

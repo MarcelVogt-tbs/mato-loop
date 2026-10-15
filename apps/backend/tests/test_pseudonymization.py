@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from mato_loop_backend.privacy import (
@@ -24,6 +26,17 @@ def test_pseudonymizer_reuses_markers_and_restores_nested_values() -> None:
         "recipient": "anna@example.com",
         "items": ["anna@example.com", "password=supersecret"],
     }
+
+
+@pytest.mark.parametrize("payload, secret", [
+    ({"password": "supersecret"}, "supersecret"),
+    ({"anna@example.com": "member"}, "anna@example.com"),
+])
+def test_json_tool_result_keeps_secret_field_detection(payload, secret):
+    messages = RequestPseudonymizer().protect_messages([
+        {"role": "tool", "content": json.dumps(payload)},
+    ])
+    assert secret not in messages[-1]["content"] and "[[MLP_" in messages[-1]["content"]
 
 
 def test_pseudonymizer_preserves_names_locations_and_technical_terms() -> None:
