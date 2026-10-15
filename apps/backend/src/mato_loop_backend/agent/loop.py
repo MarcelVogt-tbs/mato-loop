@@ -348,19 +348,23 @@ async def execute_loop_body(
         inactive_capability_groups = turn_tools.inactive_groups
         search_pending = turn_tools.search_pending
         repository_context_loader = None
+        repository_entries = None
+        repository_authorize = None
         if (_active_agent_profile is not None and _active_agent_profile.repository_instructions_enabled
                 and tool_settings.tool_availability.get("read", True)
                 and selected_execution_agent is not None and execution_client is not None
                 and execution_client.supports("filesystem.stat") and execution_client.supports("filesystem.read")):
+            repository_entries = {}
+            repository_authorize = partial(
+                cls._authorize, db, run, chat_session,
+                ToolCall(id=f"repository-instructions:{run.id}", name="read",
+                         arguments={"root": "computer", "path": "AGENTS.md"}),
+                root_files=root_files, check_only=True,
+            )
             repository_context_loader = partial(
                 repository_instructions_prompt,
-                execution_client, records,
-                partial(
-                    cls._authorize, db, run, chat_session,
-                    ToolCall(id=f"repository-instructions:{run.id}", name="read",
-                             arguments={"root": "computer", "path": "AGENTS.md"}),
-                    root_files=root_files, check_only=True,
-                ),
+                execution_client, records, repository_authorize,
+                checked_entries=repository_entries,
             )
         render_system_prompt = partial(
             general_system_prompt,
@@ -749,6 +753,8 @@ async def execute_loop_body(
                 openscad_render_retries=openscad_render_retries,
                 openscad_source_review_pending=openscad_source_review_pending,
                 openscad_source_review_retries=openscad_source_review_retries,
+                repository_entries=repository_entries,
+                repository_authorize=repository_authorize,
             )
         finally:
             cls._tool_active_runs.discard(run.id)

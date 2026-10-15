@@ -29,7 +29,10 @@ from mato_loop_backend.agent.projection import (
     model_browser_observations,
 )
 from mato_loop_backend.agent.prompts import general_system_prompt, memory_context_prompt
-from mato_loop_backend.agent.repository_instructions import repository_instructions_prompt
+from mato_loop_backend.agent.repository_instructions import (
+    check_repository_instruction_targets,
+    repository_instructions_prompt,
+)
 from mato_loop_backend.agent.turn_context import build_turn_context
 from mato_loop_backend.execution import (
     ExecutionClient,
@@ -44,7 +47,7 @@ from mato_loop_backend.models import (
     Message,
     MessageAttachment,
 )
-from mato_loop_backend.permissions.policy import PermissionDecision
+from mato_loop_backend.permissions.policy import PermissionDecision, execution_directory_permission
 from mato_loop_backend.providers import service as service_module
 from mato_loop_backend.providers.base import ProviderError, ProviderResult
 from mato_loop_backend.providers.output_budget import (
@@ -2537,7 +2540,8 @@ def _settings(**values) -> AgentRuntimeSettings:
     return AgentRuntimeSettings(**(defaults | values))
 
 
-async def test_repository_instructions_fit_small_model_request_budget(monkeypatch) -> None:
+@pytest.mark.parametrize("changed", [False, True])
+async def test_repository_instructions_fit_small_model_request_budget(monkeypatch, changed) -> None:
     session = _session()
     run = AgentRun(id=uuid4(), session_id=session.id)
     db = AsyncMock(spec=AsyncSession)
@@ -2551,6 +2555,9 @@ async def test_repository_instructions_fit_small_model_request_budget(monkeypatc
         WorkspaceReadResult(content=content, lines_read=1_200, has_more=False, truncated_lines=[], sha256="a" * 64),
     ]))
     records = [_message(session.id, "user", "Inspect the repository.")]
+    client = ExecutionClient(uuid4(), frozenset({"filesystem.stat", "filesystem.read"}), "/work")
+    authorize = AsyncMock(return_value=PermissionDecision.ALLOW)
+    checked_entries = {}
     projection, _, _ = await build_turn_context(
         None, db, run, session,
         ai_settings=AiSettings(providers=[provider], models=[model]), model=model,
@@ -2562,11 +2569,22 @@ async def test_repository_instructions_fit_small_model_request_budget(monkeypatc
         live_tool_calls={}, ephemeral_images={}, attachment_service=AttachmentService,
         repository_context_loader=partial(
             repository_instructions_prompt,
-            ExecutionClient(uuid4(), frozenset({"filesystem.stat", "filesystem.read"}), "/work"),
-            records, AsyncMock(return_value=PermissionDecision.ALLOW),
+            client, records, authorize, checked_entries=checked_entries,
         ),
     )
     assert json.loads(projection.messages[0]["content"].splitlines()[-2])["files"][0]["status"] == "context_budget_exceeded"
+    updated = "Use updated conventions." if changed else content
+    monkeypatch.setattr(ExecutionClient, "request", AsyncMock(side_effect=[
+        WorkspaceStatResult(path="/work/.git", kind="directory", size=0, modified_at=0.0),
+        WorkspaceStatResult(path="/work/main.py", kind="file", size=4, modified_at=0.0),
+        WorkspaceStatResult(path="/work/AGENTS.md", kind="file", size=len(updated), modified_at=0.0),
+        WorkspaceReadResult(content=updated, lines_read=1, has_more=False, truncated_lines=[], sha256="b" * 64),
+    ]))
+    _, deferred = await check_repository_instruction_targets(
+        execution_directory_permission(client.agent_id, "/work/main.py", capability="filesystem.write"),
+        client, records, authorize, checked_entries,
+    )
+    assert deferred == changed
 
 
 @pytest.mark.parametrize("count,task_length", [(3, 39_000), (300, 1)])

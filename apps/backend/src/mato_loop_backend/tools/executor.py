@@ -44,6 +44,7 @@ from mato_loop_backend.settings.effective import filter_agent_profile_integratio
 from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import (
     DynamicToolArgumentsError,
+    RepositoryInstructionsChanged,
     ToolArgumentsEdited,
     ToolCallSuperseded,
     ToolResult,
@@ -440,7 +441,7 @@ async def execute_definition(
                 observed_at=datetime.now(UTC),
             ).model_dump(mode="json")
         return result
-    except (ToolArgumentsEdited, ToolCallSuperseded):
+    except (ToolArgumentsEdited, ToolCallSuperseded, RepositoryInstructionsChanged):
         raise
     except (
         ArcaneError,

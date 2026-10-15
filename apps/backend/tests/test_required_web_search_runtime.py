@@ -117,13 +117,34 @@ def _clear_continuation_test_state(run_id) -> None:
 @pytest.mark.parametrize("profile_id,read_available", [
     (BUILD_PROFILE_ID, True), (BUILD_PROFILE_ID, False), (GENERAL_PROFILE_ID, True),
 ])
-async def test_repository_rules_arrive_before_model_and_follow_successful_reads(monkeypatch, profile_id, read_available) -> None:
+@pytest.mark.parametrize("operation", ["read", "write_file", "apply_patch", "move_path", "move_directory", "move_directory_exact_rules", "shell_run", "shell_creates_rules"])
+async def test_repository_rules_arrive_before_model_and_follow_successful_reads(monkeypatch, profile_id, read_available, operation) -> None:
     execute = tool_registry._execute_definition
-    call = ToolCall("source", "read", {"root": "computer", "path": "src/main.py"})
+    enabled = profile_id == BUILD_PROFILE_ID and read_available
+    mutation = operation != "read"
+    creates_rules = operation == "shell_creates_rules"
+    deferred = enabled and mutation and not creates_rules
+    arguments = {
+        "read": {"root": "computer", "path": "src/main.py"},
+        "write_file": {"root": "computer", "path": "src/new.py", "content": "pass"},
+        "apply_patch": {"patch": "*** Begin Patch\n*** Add File: src/new.py\n+pass\n*** Update File: src/main.py\n*** Move to: dst/main.py\n@@\n-pass\n+pass # moved\n*** End Patch\n",
+                        "expectedSha256": {"src/main.py": "a" * 64}},
+        "move_path": {"source_root": "computer", "source_path": "src/main.py", "destination_root": "computer", "destination_path": "dst/main.py"},
+        "move_directory": {"source_root": "computer", "source_path": "src", "destination_root": "computer", "destination_path": "dst/new"},
+        "move_directory_exact_rules": {"source_root": "computer", "source_path": "src", "destination_root": "computer", "destination_path": "dst/new"},
+        "shell_run": {"command": "touch src/new.py"},
+        "shell_creates_rules": {"command": "printf 'Use backend conventions.' > src/AGENTS.md"},
+    }[operation]
+    call = ToolCall("source", "move_path" if operation.startswith("move_directory") else "shell_run" if creates_rules else operation, arguments)
+    calls = [call, ToolCall("trailing", "write_file", {"root": "computer", "path": "src/other.py", "content": "pass"})] if mutation and not creates_rules else [call]
+    results = [ProviderResult(tool_calls=calls)]
+    if deferred:
+        results.append(ProviderResult(tool_calls=calls))
+    results.append(ProviderResult(content="Done"))
     db, run, requests, _projections, _events = await _runtime_setup(
-        monkeypatch, [ProviderResult(content="", tool_calls=[call]), ProviderResult(content="Done")],
+        monkeypatch, results,
         search_policy=WebSearchPolicy.DISABLED, execution_agent_id=uuid4(),
-        execution_operations=("filesystem.stat", "filesystem.read"),
+        execution_operations=("filesystem.stat", "filesystem.read", "filesystem.write", "filesystem.patch", "filesystem.move", "shell.inspect", "shell.run"),
         input_budget_tokens=100_000,
     )
     load_settings = SettingsStore.load
@@ -143,13 +164,41 @@ async def test_repository_rules_arrive_before_model_and_follow_successful_reads(
     db.get.side_effect = lambda model, _id: agent if model is ExecutionAgent else records[0] if model is Message else session
     db.add.side_effect = lambda record: records.append(record) if isinstance(record, Message) else None
     monkeypatch.setattr(tool_registry, "_execute_definition", execute)
-    authorize = AsyncMock(return_value=PermissionDecision.ALLOW)
+    async def authorize(_db, _run, _session, _call, request, **kwargs):
+        if (operation == "move_directory_exact_rules" and request.capability == "filesystem.read"
+                and json.loads(request.resource_scope).get("path") == "/work/src"):
+            return PermissionDecision.ASK
+        return PermissionDecision.ALLOW
     monkeypatch.setattr(AgentRuntime, "_authorize", authorize)
-    files = {"/work/AGENTS.md": "Use project conventions.", "/work/src/AGENTS.md": "Use backend conventions.", "/work/src/main.py": "pass"}
+    files = {"/work/AGENTS.md": "Use project conventions.", "/work/src/AGENTS.md": "Use backend conventions.",
+             "/work/dst/AGENTS.md": "Use destination conventions.", "/work/src/main.py": "pass"}
+    if creates_rules:
+        files.pop("/work/src/AGENTS.md")
 
     async def remote(_client, operation, arguments, result_model, **_kwargs):
+        if operation == "shell.inspect":
+            return result_model.model_validate({"targets": [{"path": "/work/src/AGENTS.md" if creates_rules else "/work/src/new.py", "kind": "output", "access": "write"}],
+                                                "classification": "write", "analysisComplete": True, "commands": [], "inspectionRevision": "b" * 64})
+        if operation not in {"filesystem.stat", "filesystem.read"}:
+            if enabled and not creates_rules:
+                assert "Use backend conventions." in requests[-1]["messages"][0]["content"]
+                if operation in {"filesystem.patch", "filesystem.move"}:
+                    assert "Use destination conventions." in requests[-1]["messages"][0]["content"]
+            if operation == "filesystem.patch":
+                return result_model.model_validate({"files": [
+                    {"operation": "add", "path": "/work/src/new.py", "sha256": "b" * 64, "size": 4},
+                    {"operation": "move", "path": "/work/src/main.py", "destination": "/work/dst/main.py", "sha256": "b" * 64, "size": 12},
+                ]})
+            if operation == "shell.run":
+                if creates_rules:
+                    files["/work/src/AGENTS.md"] = "Use backend conventions."
+                return result_model.model_validate({"exitCode": 0, "timedOut": False, "durationMs": 1, "stdoutBytes": 0, "stderrBytes": 0,
+                                                    "stdoutTruncated": False, "stderrTruncated": False})
+            return result_model.model_validate({"path": arguments.get("destination", arguments["path"]), "sha256": "b" * 64, "size": 4})
         path = arguments["path"]
         if operation == "filesystem.stat":
+            if path in {"/work/src", "/work/dst"}:
+                return WorkspaceStatResult(path=path, kind="directory", size=0, modified_at=0.0)
             if path not in files and path != "/work/.git":
                 raise ExecutionClientError("file.pathNotFound")
             return WorkspaceStatResult(path=path, kind="directory" if path.endswith(".git") else "file",
@@ -160,11 +209,12 @@ async def test_repository_rules_arrive_before_model_and_follow_successful_reads(
     monkeypatch.setattr(ExecutionClient, "request", remote)
     await AgentRuntime._execute_loop(db, run)
 
-    assert len(requests) == 2
-    enabled = profile_id == BUILD_PROFILE_ID and read_available
+    assert len(requests) == (3 if deferred else 2)
     assert ("Use project conventions." in requests[0]["messages"][0]["content"]) == enabled
     assert "Use backend conventions." not in requests[0]["messages"][0]["content"]
     assert requests[1]["messages"][0]["content"].count("Use backend conventions.") == int(enabled)
+    if deferred:
+        assert all(json.loads(message.content)["executed"] is False for message in _tool_messages(db)[:len(calls)])
 
 
 async def test_completed_response_persists_canonical_markdown(monkeypatch) -> None:

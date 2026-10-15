@@ -159,6 +159,10 @@ async def test_native_coding_replays_revision_errors_checks_and_diff(tmp_path, m
             previous = json.loads(messages[-1].content) if step > 1 else None
             assert messages[-1].tool_call_id == calls[step - 1].id
             if step == 1:
+                assert any(
+                    f"[File SHA-256: {revision}]" in message["content"]
+                    for message in kwargs["messages"] if message["role"] == "tool"
+                )
                 assert "# existing user change" in messages[-1].content
                 read_event = next(event for event in events if event.get("type") == "tool.completed")
                 assert read_event["metadata"]["sha256"] == revision

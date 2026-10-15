@@ -44,6 +44,13 @@ class ToolCallSuperseded(Exception):
     """A new user instruction supersedes an unapproved tool call."""
 
 
+class RepositoryInstructionsChanged(Exception):
+    """A tool must be reconsidered after its local repository rules enter context."""
+
+    def __init__(self, targets: dict[str, Any]) -> None:
+        self.targets = targets
+
+
 class ToolArgumentsEdited(Exception):
     def __init__(
         self,

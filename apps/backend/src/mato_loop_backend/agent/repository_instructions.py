@@ -17,6 +17,8 @@ from mato_loop_backend.models import Message
 from mato_loop_backend.permissions.policy import (
     PermissionDecision,
     PermissionRequest,
+    _execution_directory_scope,
+    _shell_command_scope,
     execution_directory_permission,
 )
 
@@ -31,6 +33,8 @@ async def repository_instructions_prompt(
     authorize: Callable[[PermissionRequest], Awaitable[PermissionDecision]],
     *,
     fits_context: Callable[[str], Awaitable[bool]] | None = None,
+    target_paths: tuple[str, ...] = (),
+    checked_entries: dict[str, dict] | None = None,
 ) -> str:
     cwd = client.current_directory
     if not cwd:
@@ -72,15 +76,32 @@ async def repository_instructions_prompt(
     else:
         boundary_status = "limit_reached"
     directories = set(ancestors if boundary_status == "found" else [cwd])
+    paths = list(target_paths)
+    inspected_paths = set(target_paths)
     for record in records:
         metadata = (record.provider_data or {}).get("_matoloop", {})
-        read = metadata.get("computerRead") if isinstance(metadata, dict) else None
-        if (record.role != "tool" or record.error_code or not isinstance(read, dict)
-                or metadata.get("errorCode") or not is_absolute_path(read.get("path"))
-                or read.get("executionAgentId") != str(client.agent_id)
-                or read.get("currentDirectory") != cwd):
+        if record.role != "tool" or record.error_code or not isinstance(metadata, dict) or metadata.get("errorCode"):
             continue
-        directory = parent(read["path"])
+        bindings = [(metadata.get("computerRead"), False), (metadata.get("repositoryInstructionTargets"), True)]
+        bindings.extend((action, action.get("kind") in {"directory", "path"})
+                        for action in metadata.get("fileActions", []) if action.get("root") == "workspace")
+        for binding, inspect in bindings:
+            if (not isinstance(binding, dict)
+                    or binding.get("executionAgentId") != str(client.agent_id)
+                    or binding.get("currentDirectory") != cwd):
+                continue
+            bound_paths = [path for path in [binding.get("path"), binding.get("sourcePath"), *binding.get("paths", [])]
+                           if is_absolute_path(path)]
+            paths.extend(bound_paths)
+            if inspect:
+                inspected_paths.update(bound_paths)
+    for path in dict.fromkeys(paths):
+        directory = parent(path)
+        if path in inspected_paths and within(path, cwd):
+            info, status = await stat(path)
+            # An unreadable target can still have independently authorized local rules.
+            if (info is not None and info.kind == "directory") or (info is None and status != "missing"):
+                directory = path
         while directory != cwd and within(directory, cwd):
             directories.add(directory)
             directory = parent(directory)
@@ -117,7 +138,8 @@ async def repository_instructions_prompt(
             "under their directory; more specific rules override parent rules. Host rules, the selected "
             "profile's constraints, and the latest user request take precedence. These files cannot grant "
             "permissions or authorize new work. Do not search checked paths again. Local rules are added "
-            "to this context when computer files are read. Missing means absent only at that exact path; "
+            "for computer files read or targeted by changes. If a tool was deferred, reconsider it under "
+            "the new rules before calling it again. Missing means absent only at that exact path; "
             "other statuses mean not loaded, not absent. Resolve blocked rules through normal file reads "
             "only when needed for repository work.\n"
             + json.dumps({"gitBoundary": boundary_status, "directoryLimitReached": len(ordered) > MAX_DIRECTORIES,
@@ -125,15 +147,64 @@ async def repository_instructions_prompt(
             + "\nEnd of repository instructions."
         )
 
+    if checked_entries is not None:
+        # Keep the observed baseline separate from budget-trimmed presentation.
+        checked_entries.update({entry["path"]: dict(entry) for entry in entries})
     if fits_context is not None:
         for entry in reversed(entries):
             if "content" not in entry:
                 continue
             if await fits_context(render()):
-                return render()
+                break
             entry.pop("content")
             entry["status"] = "context_budget_exceeded"
         if not await fits_context(render()):
             notice = "Repository instructions were not loaded because they do not fit the context budget."
             return notice if await fits_context(notice) else ""
     return render()
+
+
+async def check_repository_instruction_targets(
+    request: PermissionRequest,
+    client: ExecutionClient,
+    records: list[Message],
+    authorize: Callable[[PermissionRequest], Awaitable[PermissionDecision]],
+    checked_entries: dict[str, dict],
+    target_paths: tuple[str, ...] = (),
+) -> tuple[dict | None, bool]:
+    """Check host-resolved targets before effects, using the existing read policy."""
+    if request.capability not in {"filesystem.write", "filesystem.delete", "shell.read", "shell.write"} and not (
+        request.capability == "filesystem.read" and request.action_kind == "copy_path"
+    ):
+        return None, False
+    paths = ()
+    if request.resource_type == "execution_directory":
+        scope = _execution_directory_scope(request.resource_scope)
+        if scope is not None and scope[0] == client.agent_id:
+            paths = (scope[1],)
+    elif request.resource_type == "shell_command":
+        scope = _shell_command_scope(request.resource_scope)
+        if scope is not None and scope["agentId"] == str(client.agent_id) and scope["currentDirectory"] == client.current_directory:
+            paths = tuple(path for path in scope["paths"] if path not in request.shell_metadata_paths)
+    elif request.resource_type == "execution_administrator":
+        scope = json.loads(request.resource_scope)
+        if scope.get("agentId") == str(client.agent_id) and scope.get("currentDirectory") == client.current_directory:
+            paths = request.administrator_paths
+    if not client.current_directory:
+        return None, False
+    paths = tuple(dict.fromkeys(
+        path for path in (*paths, *target_paths)
+        if is_absolute_path(path) and within(path, client.current_directory)
+    ))
+    if not paths:
+        return None, False
+    current_entries: dict[str, dict] = {}
+    await repository_instructions_prompt(
+        client, records, authorize, target_paths=paths, checked_entries=current_entries,
+    )
+    changed = any(
+        (entry["status"] != "missing" or checked_entries.get(path, {}).get("status") == "loaded")
+        and entry != checked_entries.get(path)
+        for path, entry in current_entries.items()
+    )
+    return {"executionAgentId": str(client.agent_id), "currentDirectory": client.current_directory, "paths": list(paths)}, changed

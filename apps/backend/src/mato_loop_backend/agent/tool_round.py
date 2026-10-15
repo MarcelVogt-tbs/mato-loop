@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
@@ -16,6 +17,9 @@ from mato_loop_backend.agent.openscad_preview import verify_preview
 from mato_loop_backend.agent.projection import (
     ContextProjection,
     _tool_result_reference,
+)
+from mato_loop_backend.agent.repository_instructions import (
+    check_repository_instruction_targets,
 )
 from mato_loop_backend.agent.research import _add_research_sources
 from mato_loop_backend.agent.run_contracts import AgentRunError
@@ -32,6 +36,7 @@ from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.media.attachments import AttachmentError, AttachmentService
 from mato_loop_backend.memory import policy as memory_policy
 from mato_loop_backend.models import AgentRun, ChatSession, Message, WebSearchPolicy
+from mato_loop_backend.permissions.policy import PermissionDecision, PermissionRequest
 from mato_loop_backend.providers.base import (
     MAX_PROVIDER_IMAGE_BYTES,
     MAX_PROVIDER_IMAGES,
@@ -56,6 +61,7 @@ from mato_loop_backend.settings.models import (
 from mato_loop_backend.skills import RunSkillState
 from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import (
+    RepositoryInstructionsChanged,
     ToolAttachment,
     ToolCallSuperseded,
     ToolFileAction,
@@ -98,6 +104,8 @@ async def persist_tool_result(
                 **({"errorCode": metadata["errorCode"]} if isinstance(metadata.get("errorCode"), str) else {}),
                 **({"toolSnapshot": metadata["toolSnapshot"]} if isinstance(metadata.get("toolSnapshot"), dict) else {}),
                 **({"computerRead": metadata["computerRead"]} if isinstance(metadata.get("computerRead"), dict) else {}),
+                **({"repositoryInstructionTargets": metadata["repositoryInstructionTargets"]}
+                   if isinstance(metadata.get("repositoryInstructionTargets"), dict) else {}),
                 **({"preparedReply": metadata["preparedReply"]} if isinstance(metadata.get("preparedReply"), dict) else {}),
                 **({"suppressResponseNotification": True}
                    if call.name in {"notify", "silence"}
@@ -293,6 +301,8 @@ async def execute_tool_batch(
     openscad_render_retries: int,
     openscad_source_review_pending: tuple[str, str] | None,
     openscad_source_review_retries: int,
+    repository_entries: dict[str, dict] | None = None,
+    repository_authorize: Callable[[PermissionRequest], Awaitable[PermissionDecision]] | None = None,
 ) -> ToolBatchResult:
     state = ToolBatchResult(
         research_tool_calls_used=research_tool_calls_used,
@@ -303,6 +313,12 @@ async def execute_tool_batch(
         openscad_source_review_retries=openscad_source_review_retries,
     )
     superseded = False
+    repository_deferred = False
+    deferred_content = json.dumps({
+        "executed": False,
+        "repositoryInstructionsUpdated": True,
+        "message": "This call and the remaining batch were not executed. Review the repository instructions in the next context and call again if still appropriate.",
+    })
     invalid_question_batch = any(call.name in {"question", "secret_input"} for call in calls) and len(calls) != 1
     invalid_skill_batch = any(call.name == "load_skill" for call in calls) and len(calls) != 1
     invalid_agent_batch = any(call.name == "select_execution_agent" for call in calls) and len(calls) != 1
@@ -311,6 +327,27 @@ async def execute_tool_batch(
         "skill.loadMustBeExclusive" if invalid_skill_batch else
         "executionAgent.exclusiveCallRequired" if invalid_agent_batch else None
     )
+
+    async def ask(
+        context: ToolContext,
+        authorize: Callable[..., Awaitable[PermissionDecision]],
+        request: PermissionRequest,
+        *, check_only: bool = False,
+    ) -> PermissionDecision:
+        decision = await authorize(request, check_only=check_only)
+        if (decision not in {PermissionDecision.DENY, PermissionDecision.USER_DENIED}
+                and repository_entries is not None and repository_authorize is not None
+                and execution_client is not None):
+            targets, changed = await check_repository_instruction_targets(
+                request, execution_client, records, repository_authorize, repository_entries,
+                target_paths=context.repository_target_paths,
+            )
+            if targets is not None:
+                context.repository_target_paths = tuple(targets["paths"])
+            if changed:
+                raise RepositoryInstructionsChanged(targets)
+        return decision
+
     for index, call in enumerate(calls):
         bound_tool = toolset.tools.get(call.name) if toolset is not None else None
         tool_label = bound_tool.definition.label if bound_tool else None
@@ -355,7 +392,7 @@ async def execute_tool_batch(
         if exclusive_error_code is not None:
             content = json.dumps(error_payload(exclusive_error_code), ensure_ascii=False)
             metadata = {"errorCode": exclusive_error_code}
-        if not rejected_batch_code and is_research_call and not repeated_research_call and not state.user_denied_batch:
+        if not rejected_batch_code and not repository_deferred and is_research_call and not repeated_research_call and not state.user_denied_batch:
             state.research_tool_calls_used += 1
         tool_trust = trust_level
         if superseded:
@@ -375,6 +412,9 @@ async def execute_tool_batch(
             metadata = {"errorCode": "agent.repeatedToolCall"}
         elif exclusive_error_code is not None:
             pass
+        elif repository_deferred:
+            content = deferred_content
+            metadata = {"repositoryInstructionsDeferred": True}
         elif state.user_denied_batch:
             content = json.dumps(error_payload("tool.skippedAfterUserDenial"), ensure_ascii=False)
             metadata = {"errorCode": "tool.skippedAfterUserDenial"}
@@ -414,10 +454,11 @@ async def execute_tool_batch(
             if call_signature in failed_tool_call_signatures:
                 retried_transient_reads.add(call_signature)
             approval_resolution: dict[str, str] = {}
-            ask = partial(
+            authorize = partial(
                 runtime._authorize, db, run, session, call,
                 root_files=root_files, approval_resolution=approval_resolution,
             )
+
             question = partial(runtime._request_question, db, run, session, call)
             tool_phase = {
                 "tool": call.name, "toolLabel": tool_label, "toolDisplay": display,
@@ -438,7 +479,7 @@ async def execute_tool_batch(
             tool_context = ToolContext(
                 db=db, run_id=run.id, session=session, tool_call=call,
                 root_files=root_files, integration_settings=integration_settings,
-                ask_handler=ask, question_handler=question, tool_settings=tool_settings,
+                ask_handler=authorize, question_handler=question, tool_settings=tool_settings,
                 pdf_vision_handler=pdf_vision_handler,
                 video_analysis_handler=video_analysis_handler,
                 audio_analysis_handler=audio_analysis_handler,
@@ -467,6 +508,7 @@ async def execute_tool_batch(
                     index, call, bound_tool.definition if bound_tool else None,
                 ),
             )
+            tool_context.ask_handler = partial(ask, tool_context, authorize)
             assert toolset is not None
             started_at = time.monotonic()
             if diagnostics_active:
@@ -484,6 +526,12 @@ async def execute_tool_batch(
             except ToolCallSuperseded:
                 superseded = True
                 tool_result = ToolResult.error("tool.superseded")
+            except RepositoryInstructionsChanged as exc:
+                repository_deferred = True
+                tool_result = ToolResult(deferred_content, {
+                    "repositoryInstructionsDeferred": True,
+                    "repositoryInstructionTargets": exc.targets,
+                })
             except Exception as exc:
                 if diagnostics_active:
                     schedule_diagnostic_event(
@@ -495,6 +543,14 @@ async def execute_tool_batch(
                         },
                     )
                 raise
+            if (repository_entries is not None and execution_client is not None
+                    and tool_context.repository_target_paths
+                    and not isinstance(tool_result.metadata.get("errorCode"), str)):
+                tool_result.metadata["repositoryInstructionTargets"] = {
+                    "executionAgentId": str(execution_client.agent_id),
+                    "currentDirectory": execution_client.current_directory,
+                    "paths": list(tool_context.repository_target_paths),
+                }
             if tool_result.metadata.get("userEdited") is True:
                 call_signature = run_support._tool_call_signature(call)
                 call_signature += authentication_scope
@@ -585,6 +641,8 @@ async def execute_tool_batch(
             "output": content[:500], "metadata": metadata,
         })
         if error_code == "tool.superseded":
+            continue
+        if metadata.get("repositoryInstructionsDeferred") is True:
             continue
         if not isinstance(error_code, str):
             if call.name == "render_openscad" and call.arguments.get("output", "preview") == "preview":

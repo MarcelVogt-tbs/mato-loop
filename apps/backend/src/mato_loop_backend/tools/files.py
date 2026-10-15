@@ -90,9 +90,7 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
         }, WorkspaceReadResult, arguments.sudo_password_ref)
         if isinstance(result, ToolResult):
             return result
-        tool_result = _read_text_result(arguments, context.session.id, result)
-        tool_result.content += f"\n\n[File SHA-256: {result.sha256}]"
-        return tool_result
+        return _read_text_result(arguments, context.session.id, result)
     selected = await files_access.project_read_files(arguments, context)
     if selected is None:
         return ToolResult.error("permission.denied")
@@ -269,6 +267,7 @@ def _read_text_result(arguments: ReadArguments, target_session_id: UUID, result)
         )
     if notices:
         content += ("\n\n" if content else "") + "\n".join(notices)
+    content += f"\n\n[File SHA-256: {result.sha256}]"
     return ToolResult(
         content,
         {
@@ -713,6 +712,10 @@ async def _apply_patch(
     patch, revisions, operations = _workspace_patch(
         context, arguments.patch, arguments.expected_sha256
     )
+    context.repository_target_paths = tuple(
+        str(path) for operation in operations
+        for path in (operation["path"], operation["destination"]) if path is not None
+    )
     for operation in operations:
         source = str(operation["path"])
         if operation["operation"] != "add" and await files_access.active_file_is_dirty(
@@ -875,6 +878,12 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
         context, arguments.source_root, arguments.destination_root
     ):
         return ToolResult.error("tool.unavailable")
+    context.repository_target_paths = tuple(
+        files_access.execution_path(context, path)
+        for root, path in ((arguments.source_root, arguments.source_path),
+                           (arguments.destination_root, arguments.destination_path))
+        if root == "workspace"
+    )
     cross_root = arguments.source_root != arguments.destination_root
     if cross_root:
         client = files_access.workspace_client(context)
@@ -1002,6 +1011,11 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
         return ToolResult.error("tool.unavailable")
     if arguments.source_root != arguments.destination_root:
         return ToolResult.error("file.crossBoundaryMoveUnavailable")
+    if arguments.source_root == "workspace":
+        context.repository_target_paths = tuple(
+            files_access.execution_path(context, path)
+            for path in (arguments.source_path, arguments.destination_path)
+        )
     source_request = files_access.filesystem_permission(
         context,
         root=arguments.source_root,

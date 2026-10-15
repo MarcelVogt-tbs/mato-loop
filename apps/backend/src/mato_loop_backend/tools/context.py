@@ -106,6 +106,7 @@ class ToolContext:
     run_secret_refs: dict[str, str] = field(default_factory=dict)
     task_handler: TaskHandler | None = None
     arguments_edited_handler: ArgumentsEditedHandler | None = None
+    repository_target_paths: tuple[str, ...] = ()
 
     async def current_integrations(self) -> IntegrationSettings:
         from mato_loop_backend.agent.subagents import integration_ceiling_ids
