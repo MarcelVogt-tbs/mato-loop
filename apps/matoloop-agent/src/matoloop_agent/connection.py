@@ -120,7 +120,6 @@ class MatoLoopAgent:
         self.openscad = self.runtime.openscad
         self._access_key = access_key
         self.operations = list(self.runtime.operations)
-        self._active_requests = 0
         self._request_tasks: set[asyncio.Task] = set()
         self._maintenance_starting = False
 
@@ -159,7 +158,7 @@ class MatoLoopAgent:
                 maintenance
                 and not interrupt
                 and (
-                    self._active_requests
+                    self._request_tasks
                     or getattr(self.terminal, "maintenance_busy", False)
                     or getattr(self.browser, "maintenance_busy", False)
                 )
@@ -168,7 +167,6 @@ class MatoLoopAgent:
             raise AgentError(
                 "maintenance.busy", "Agent operations or maintenance are still running"
             )
-        self._active_requests += 1
         if maintenance:
             self._maintenance_starting = True
         task = asyncio.current_task()
@@ -186,7 +184,6 @@ class MatoLoopAgent:
                     pass
             return worker.result()
         finally:
-            self._active_requests -= 1
             self._request_tasks.discard(task)
             if maintenance:
                 self._maintenance_starting = False

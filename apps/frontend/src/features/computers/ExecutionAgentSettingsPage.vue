@@ -11,7 +11,7 @@
         <q-btn
           v-if="updateCandidates.length || maintenanceBusy" outline no-caps color="primary" icon="system_update"
           :label="`Agents aktualisieren (${updateCandidates.length})`" :loading="maintenanceBusy"
-          :disable="agents.loading || actionBusy || maintenanceBusy" @click="updateAll"
+          :disable="agents.loading || actionBusy || maintenanceBusy" @click="maintain(null, 'update')"
         />
         <q-btn color="primary" unelevated no-caps icon="add" label="Computer hinzufügen" :disable="maintenanceBusy" @click="openCreate" />
       </div>
@@ -333,14 +333,22 @@ function maintenanceLabel(job) {
 
 async function maintain(agent, action) {
   if (actionBusy.value || maintenanceBusy.value) return
+  const selected = agent ? [agent] : [...updateCandidates.value]
+  if (!selected.length) return
   maintenanceBusy.value = true
   try {
-    if (action === 'update' && !await confirmUpdates([agent])) return
+    if (action === 'update' && !await confirmUpdates(selected)) return
     if (action === 'uninstall' && !await confirm(
       `Agent auf „${agentDisplayName(agent)}“ deinstallieren? Programm und Dienst werden entfernt. Kopplungsdaten und Workspaces bleiben erhalten. Den Computereintrag kannst du anschließend separat entfernen.`,
       'Agent deinstallieren', { okLabel: 'Deinstallieren', okColor: 'negative' }
     )) return
-    if (await requestMaintenance(agent, action)) $q.notify({ type: 'positive', message: 'Wartung gestartet' })
+    let started = 0
+    for (const selectedAgent of selected) {
+      const current = agent || agents.byId(selectedAgent.id)
+      if (!agent && !needsUpdate(current)) continue
+      if (await requestMaintenance(current, action)) started += 1
+    }
+    if (started) $q.notify({ type: 'positive', message: agent ? 'Wartung gestartet' : `Updates für ${started} ${started === 1 ? 'Agent' : 'Agents'} gestartet` })
   } finally {
     maintenanceBusy.value = false
   }
@@ -358,23 +366,6 @@ function confirmUpdates(selected) {
     `${names} auf den MatoLoop-Stand aktualisieren? Dieser kann auch älter sein. ${interruption}${legacy}Die Agents sind während des Updates vorübergehend nicht verfügbar.`,
     selected.length === 1 ? 'Agent aktualisieren' : 'Agents aktualisieren', { okLabel: 'Aktualisieren' }
   )
-}
-
-async function updateAll() {
-  if (actionBusy.value || maintenanceBusy.value || !updateCandidates.value.length) return
-  const selected = [...updateCandidates.value]
-  maintenanceBusy.value = true
-  try {
-    if (!await confirmUpdates(selected)) return
-    let started = 0
-    for (const selectedAgent of selected) {
-      const agent = agents.byId(selectedAgent.id)
-      if (needsUpdate(agent) && await requestMaintenance(agent, 'update')) started += 1
-    }
-    if (started) $q.notify({ type: 'positive', message: `Updates für ${started} ${started === 1 ? 'Agent' : 'Agents'} gestartet` })
-  } finally {
-    maintenanceBusy.value = false
-  }
 }
 
 async function requestMaintenance(agent, action) {

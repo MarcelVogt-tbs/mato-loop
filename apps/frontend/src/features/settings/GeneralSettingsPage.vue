@@ -13,39 +13,46 @@
       <template #action><q-btn flat no-caps color="white" label="Erneut laden" @click="load" /></template>
     </q-banner>
     <q-form ref="formRef" @submit.prevent="save">
-      <q-card flat class="app-surface">
-        <q-card-section>
-          <q-toggle v-model="agentAutoUpdateEnabled" color="primary" label="Agents automatisch aktualisieren" :disable="settings.loading || settings.saving || !settings.loaded" />
-          <div class="text-body2 app-muted q-mt-sm">
-            Instanzstandard für alle Computer. Einzelne Computer können die Einstellung überschreiben.
-            Geprüft wird beim Verbinden und nach Änderungen der Update-Einstellungen. Beschäftigte Agents warten bis zur nächsten Prüfung oder einem manuellen Update.
-          </div>
-        </q-card-section>
-      </q-card>
-      <q-card flat class="app-surface q-mt-md">
-        <q-card-section class="row items-center q-gutter-md">
-          <q-avatar color="primary" text-color="white" icon="link" />
-          <div class="col">
-            <div class="text-subtitle1 text-weight-bold">Öffentliche Adresse</div>
-            <div class="text-caption app-muted">Öffentlichen Ursprung dieser Instanz für OAuth-Anmeldungen festlegen.</div>
-          </div>
-        </q-card-section>
-        <q-separator />
-        <q-card-section class="q-gutter-md">
-          <q-input dense v-model.trim="publicBaseUrl" outlined type="url" label="Öffentliche MatoLoop-URL (optional)" placeholder="https://matoloop.example.com" maxlength="2083" :disable="settings.loading || settings.saving || !settings.loaded" :rules="[originRule]" lazy-rules hide-bottom-space hint="Basisadresse ohne Pfad. Leer lassen für die Umgebungsvariable oder automatische Erkennung. Änderungen gelten sofort für neue OAuth-Anmeldungen." persistent-hint />
-        </q-card-section>
-      </q-card>
+      <q-list separator class="app-surface rounded-borders">
+        <q-item class="q-py-md">
+          <q-item-section avatar top><q-icon name="link" color="primary" /></q-item-section>
+          <q-item-section>
+            <q-item-label class="text-subtitle2">Öffentliche Adresse</q-item-label>
+            <q-item-label caption>Öffentlichen Ursprung dieser Instanz für OAuth-Anmeldungen festlegen.</q-item-label>
+            <q-input class="q-mt-md" dense v-model.trim="publicBaseUrl" outlined type="url" label="Öffentliche MatoLoop-URL (optional)" placeholder="https://matoloop.example.com" maxlength="2083" :disable="settings.loading || settings.saving || !settings.loaded" :rules="[originRule]" lazy-rules hide-bottom-space hint="Basisadresse ohne Pfad. Leer lassen für die Umgebungsvariable oder automatische Erkennung. Änderungen gelten sofort für neue OAuth-Anmeldungen." persistent-hint />
+          </q-item-section>
+        </q-item>
+        <q-item class="q-py-md">
+          <q-item-section avatar top><q-icon name="system_update" color="primary" /></q-item-section>
+          <q-item-section>
+            <q-item-label class="text-subtitle2">Agents automatisch aktualisieren</q-item-label>
+            <q-item-label caption>
+              Instanzstandard für alle Computer. Einzelne Computer können die Einstellung überschreiben.
+              Geprüft wird beim Verbinden und nach Änderungen der Update-Einstellungen. Beschäftigte Agents warten bis zur nächsten Prüfung oder einem manuellen Update.
+            </q-item-label>
+          </q-item-section>
+          <q-item-section side top>
+            <q-toggle v-model="agentAutoUpdateEnabled" color="primary" aria-label="Agents automatisch aktualisieren" :disable="settings.loading || settings.saving || !settings.loaded" />
+          </q-item-section>
+        </q-item>
+      </q-list>
     </q-form>
     <q-list separator class="app-surface rounded-borders q-mt-md">
-      <q-item clickable :to="{ name: 'admin-providers', query: { tab: 'general' } }">
-        <q-item-section avatar><q-icon name="security" color="primary" /></q-item-section>
-        <q-item-section><q-item-label>Modelltrennung</q-item-label><q-item-label caption>Lege für jeden Provider fest, ob seine Modelle als privat oder öffentlich gelten. Bei aktiver Modelltrennung gelten dafür getrennte Tool-Rechte, Erinnerungen und persönliche Profilangaben.</q-item-label></q-item-section>
-        <q-item-section side><q-icon name="open_in_new" /></q-item-section>
+      <q-item class="q-py-md" clickable :to="{ name: 'admin-providers', query: { tab: 'general' } }">
+        <q-item-section avatar top><q-icon name="security" color="primary" /></q-item-section>
+        <q-item-section>
+          <q-item-label class="text-subtitle2">Modelltrennung</q-item-label>
+          <q-item-label caption>Lege für jeden Provider fest, ob seine Modelle als privat oder öffentlich gelten. Bei aktiver Modelltrennung gelten dafür getrennte Tool-Rechte, Erinnerungen und persönliche Profilangaben.</q-item-label>
+        </q-item-section>
+        <q-item-section side><q-icon name="chevron_right" /></q-item-section>
       </q-item>
-      <q-item clickable :to="{ name: 'admin-tools', query: { tab: 'general' } }">
-        <q-item-section avatar><q-icon name="verified_user" color="primary" /></q-item-section>
-        <q-item-section><q-item-label>Freigabeverhalten</q-item-label><q-item-label caption>Lege fest, welche Aktionen der Agent standardmäßig automatisch ausführt und wann er um Erlaubnis fragt.</q-item-label></q-item-section>
-        <q-item-section side><q-icon name="open_in_new" /></q-item-section>
+      <q-item class="q-py-md" clickable :to="{ name: 'admin-tools', query: { tab: 'general' } }">
+        <q-item-section avatar top><q-icon name="verified_user" color="primary" /></q-item-section>
+        <q-item-section>
+          <q-item-label class="text-subtitle2">Freigabeverhalten</q-item-label>
+          <q-item-label caption>Lege fest, welche Aktionen der Agent standardmäßig automatisch ausführt und wann er um Erlaubnis fragt.</q-item-label>
+        </q-item-section>
+        <q-item-section side><q-icon name="chevron_right" /></q-item-section>
       </q-item>
     </q-list>
   </section>

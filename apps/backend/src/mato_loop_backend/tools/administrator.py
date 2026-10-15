@@ -53,7 +53,6 @@ async def authorize(context: ToolContext, request: PermissionRequest, reference=
 
 async def request_arguments(context: ToolContext, operation: str, arguments: dict, reference=None) -> dict | ToolResult:
     client = context.execution_client
-    reference = await effective_sudo_reference(context.db, context.session, context.run_secret_refs, client.agent_id, reference)
     password = await resolve_sudo_password(context, reference, client.agent_id)
     if isinstance(password, ToolResult):
         return password

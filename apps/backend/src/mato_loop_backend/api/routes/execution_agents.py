@@ -98,17 +98,6 @@ async def get_installation_target(response: Response) -> InstallationTarget:
     return installation_target()
 
 
-class SudoPasswordRequest(ApiModel):
-    sudo_password: str | None = Field(default=None, min_length=1, max_length=4096, repr=False)
-
-    @field_validator("sudo_password")
-    @classmethod
-    def valid_password(cls, value: str | None) -> str | None:
-        if value is not None and any(character in value for character in "\r\n\x00"):
-            raise ValueError("invalid sudo password")
-        return value
-
-
 class ExecutionAgentAliasRequest(ApiModel):
     alias: str = Field(default="", max_length=160)
 
@@ -170,8 +159,16 @@ class ExecutionAgentUpdateRequest(ApiModel):
         return self
 
 
-class MaintenanceRequest(SudoPasswordRequest):
+class MaintenanceRequest(ApiModel):
     action: Literal["update", "uninstall"]
+    sudo_password: str | None = Field(default=None, min_length=1, max_length=4096, repr=False)
+
+    @field_validator("sudo_password")
+    @classmethod
+    def valid_password(cls, value: str | None) -> str | None:
+        if value is not None and any(character in value for character in "\r\n\x00"):
+            raise ValueError("invalid sudo password")
+        return value
 
 
 class MaintenanceCompletion(ApiModel):
