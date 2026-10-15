@@ -83,7 +83,7 @@ class PatchOperation:
     path: str
     destination: str | None = None
     content: str | None = None
-    hunks: tuple[tuple[str | None, tuple[str, ...], tuple[str, ...]], ...] = ()
+    hunks: tuple[tuple[str | None, tuple[str, ...], tuple[str, ...], bool], ...] = ()
 
 
 def parse_patch(
@@ -126,7 +126,9 @@ def parse_patch(
                 raise AgentError("path.invalid", "Patch destination is too long")
             validate_path(destination)
         start = index
-        while index < len(lines) - 1 and not lines[index].startswith("*** "):
+        while index < len(lines) - 1 and (
+            not lines[index].startswith("*** ") or lines[index] == "*** End of File"
+        ):
             index += 1
         body = lines[start:index]
         if operation == "add":
@@ -143,15 +145,23 @@ def parse_patch(
             body_index = 0
             while body_index < len(body):
                 marker = body[body_index]
-                if marker != "@@" and not marker.startswith("@@ "):
+                locator = None
+                if marker == "@@" or marker.startswith("@@ "):
+                    locator = marker[3:] if marker.startswith("@@ ") else None
+                    body_index += 1
+                elif hunks or not marker or marker[0] not in " +-":
                     raise AgentError("request.invalid", "Update hunk marker is invalid")
-                locator = marker[3:] if marker.startswith("@@ ") else None
-                body_index += 1
                 old, new = [], []
                 changed = False
+                end_of_file = False
                 while body_index < len(body) and not body[body_index].startswith("@@"):
                     line = body[body_index]
                     body_index += 1
+                    if line == "*** End of File":
+                        if body_index != len(body):
+                            raise AgentError("request.invalid", "End of file must end the update")
+                        end_of_file = True
+                        break
                     if not line or line[0] not in " +-":
                         raise AgentError("request.invalid", "Update hunk line is invalid")
                     if line[0] in " -":
@@ -159,13 +169,11 @@ def parse_patch(
                     if line[0] in " +":
                         new.append(line[1:])
                     changed |= line[0] in "+-"
-                if not old or not changed or old == new:
+                if not changed or old == new:
                     raise AgentError("request.invalid", "Update hunk has no exact change")
-                hunks.append((locator, tuple(old), tuple(new)))
+                hunks.append((locator, tuple(old), tuple(new), end_of_file))
             if not hunks and destination is None:
                 raise AgentError("request.invalid", "Update requires a hunk or move")
-            if hunks and destination is not None:
-                raise AgentError("request.invalid", "Move cannot include update hunks")
             operations.append(
                 PatchOperation(
                     "move" if destination else operation,
@@ -182,26 +190,41 @@ def parse_patch(
 
 
 def apply_hunks(
-    content: str, hunks: tuple[tuple[str | None, tuple[str, ...], tuple[str, ...]], ...]
+    content: str, hunks: tuple[tuple[str | None, tuple[str, ...], tuple[str, ...], bool], ...]
 ) -> str:
     crlf = "\r\n" in content
-    lines = content.replace("\r\n", "\n").split("\n")
+    normalized = content.replace("\r\n", "\n")
+    trailing_newline = normalized.endswith("\n")
+    lines = normalized.split("\n") if normalized else []
+    if trailing_newline:
+        lines.pop()
     cursor = 0
-    for locator, old, new in hunks:
+    replacements = []
+    for locator, old, new, end_of_file in hunks:
         if locator is not None:
             locations = [i for i in range(cursor, len(lines)) if lines[i] == locator]
             if len(locations) != 1:
                 raise AgentError("file.patchContextMismatch", "Patch locator is not unique")
             cursor = locations[0] + 1
+        if not old:
+            replacements.append((len(lines), 0, new))
+            trailing_newline = True
+            continue
         matches = [
             i
             for i in range(cursor, len(lines) - len(old) + 1)
             if tuple(lines[i : i + len(old)]) == old
+            and (not end_of_file or i + len(old) == len(lines))
         ]
         if len(matches) != 1:
             raise AgentError("file.patchContextMismatch", "Patch context is not unique")
         position = matches[0]
-        lines[position : position + len(old)] = new
-        cursor = position + len(new)
+        replacements.append((position, len(old), new))
+        cursor = position + len(old)
+    # Match against the original file so appended chunks do not hide later edits.
+    for position, length, new in reversed(sorted(replacements, key=lambda item: item[0])):
+        lines[position : position + length] = new
     updated = "\n".join(lines)
+    if lines and trailing_newline:
+        updated += "\n"
     return updated.replace("\n", "\r\n") if crlf else updated

@@ -560,8 +560,9 @@ class FilesystemTests(unittest.TestCase):
         self.assertFalse((self.root / "must-not-exist.txt").exists())
         self.assertEqual(target.read_text(), "current\n")
 
-    def test_patch_rejects_move_with_hunks_before_mutating(self) -> None:
+    def test_patch_moves_with_hunks_and_preflights_destination(self) -> None:
         target = self.root / "target.txt"
+        destination = self.root / "moved.txt"
         target.write_text("current\n")
         patch_text = f"""*** Begin Patch
 *** Update File: {target}
@@ -573,11 +574,17 @@ class FilesystemTests(unittest.TestCase):
 """
         revision = hashlib.sha256(target.read_bytes()).hexdigest()
 
-        with self.assertRaisesRegex(AgentError, "Move cannot include update hunks"):
+        destination.write_text("existing\n")
+        with self.assertRaisesRegex(AgentError, "Destination already exists"):
             self.filesystem.patch(patch_text, {os.fspath(target): revision})
-
         self.assertEqual(target.read_text(), "current\n")
-        self.assertFalse((self.root / "moved.txt").exists())
+        self.assertEqual(destination.read_text(), "existing\n")
+
+        destination.unlink()
+        result = self.filesystem.patch(patch_text, {os.fspath(target): revision})
+        self.assertEqual(destination.read_text(), "changed\n")
+        self.assertFalse(target.exists())
+        self.assertEqual(result["files"][0]["sha256"], hashlib.sha256(b"changed\n").hexdigest())
 
     def test_patch_bounds_total_prepared_file_content(self) -> None:
         first = self.root / "first.txt"

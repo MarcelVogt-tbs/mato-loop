@@ -220,20 +220,54 @@ class WindowsFilesystem:
                             self.delete(path, False)
                             result = {"path": path, "sha256": digest, "size": len(data)}
                         elif destination is not None:
-                            self.rename(path, destination)
                             result = {"path": path, "sha256": digest, "size": len(data)}
+                            if item.hunks:
+                                if path[:2].casefold() != destination[:2].casefold():
+                                    raise AgentError(
+                                        "path.invalidDestination",
+                                        "Patch moves must stay on one drive",
+                                    )
+                                with handles.parent(destination, write=True) as (parent, name):
+                                    if any(
+                                        entry[0].casefold() == name.casefold()
+                                        for entry in handles.names(parent)
+                                    ):
+                                        raise AgentError(
+                                            "path.exists", "Destination already exists"
+                                        )
+                                content = apply_hunks(decode_text(data), item.hunks)
+                                result = self.write(path, content, digest)
+                            with (
+                                handles.parent(path) as (source_parent, source_name),
+                                handles.parent(destination, write=True) as (
+                                    target_parent,
+                                    target_name,
+                                ),
+                                handles.child(source_parent, source_name, delete=True) as source,
+                            ):
+                                with handles.stream(source) as reader:
+                                    if (
+                                        hashlib.file_digest(reader, "sha256").hexdigest()
+                                        != result["sha256"]
+                                    ):
+                                        raise AgentError(
+                                            "file.changed", "File changed before moving"
+                                        )
+                                handles.rename(source, target_parent, target_name)
                         else:
                             content = apply_hunks(decode_text(data), item.hunks)
                             result = self.write(path, content, digest)
                 except Exception as exc:
                     raise AgentError(
                         "file.patchIncomplete",
-                        "Patch did not complete",
+                        "Patch did not complete. Files may have changed, including in the failed "
+                        "operation. Reread the affected paths before retrying.",
                         {
                             "completedOperations": len(results),
                             "totalOperations": len(prepared),
                             "failedOperationIndex": len(results),
                             "path": path,
+                            **({"destination": destination} if destination else {}),
                         },
                     ) from exc
                 results.append(

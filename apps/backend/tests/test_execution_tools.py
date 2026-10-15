@@ -559,7 +559,8 @@ async def test_elevated_files_use_structured_worker_and_existing_permissions(tmp
     assert context.ask_handler.await_args.args[0].capability == ("filesystem.read" if tool == "read" else "filesystem.write")
 
 
-async def test_apply_patch_resolves_paths_and_checks_each_permission(tmp_path) -> None:
+@pytest.mark.parametrize("mode", ["update", "move", "move_denied"])
+async def test_apply_patch_resolves_paths_and_checks_each_permission(tmp_path, mode) -> None:
     patch = """*** Begin Patch
 *** Update File: README.md
 @@
@@ -569,6 +570,9 @@ async def test_apply_patch_resolves_paths_and_checks_each_permission(tmp_path) -
 +value = 1
 *** End Patch
 """
+    moving = mode != "update"
+    if moving:
+        patch = patch.replace("*** Update File: README.md\n@@", "*** Update File: README.md\n*** Move to: renamed.md")
     call = ToolCall(
         "patch",
         "apply_patch",
@@ -579,8 +583,9 @@ async def test_apply_patch_resolves_paths_and_checks_each_permission(tmp_path) -
             "filesystem.patch": WorkspacePatchResult(
                 files=[
                     {
-                        "operation": "update",
+                        "operation": "move" if moving else "update",
                         "path": "/home/user/project/README.md",
+                        **({"destination": "/home/user/project/renamed.md"} if moving else {}),
                         "sha256": "b" * 64,
                         "size": 4,
                     },
@@ -596,9 +601,19 @@ async def test_apply_patch_resolves_paths_and_checks_each_permission(tmp_path) -
         {"filesystem.patch"},
     )
     context = _context(tmp_path, call, client)
+    if mode == "move_denied":
+        async def authorize(request):
+            if (request.capability == "filesystem.write"
+                    and json.loads(request.resource_scope)["path"] == "/home/user/project/README.md"):
+                return PermissionDecision.DENY
+            return PermissionDecision.ALLOW
+        context.ask_handler.side_effect = authorize
 
     result = await _tools(client.operations).execute(call, context)
 
+    if mode == "move_denied":
+        assert result.is_error and not client.requests
+        return
     assert not result.is_error
     assert client.requests == [
         (
@@ -606,7 +621,8 @@ async def test_apply_patch_resolves_paths_and_checks_each_permission(tmp_path) -
             {
                 "patch": patch.replace(
                     "README.md", "/home/user/project/README.md"
-                ).replace("src/new.py", "/home/user/project/src/new.py"),
+                ).replace("src/new.py", "/home/user/project/src/new.py")
+                .replace("renamed.md", "/home/user/project/renamed.md"),
                 "expectedSha256": {
                     "/home/user/project/README.md": "a" * 64
                 },
@@ -615,7 +631,8 @@ async def test_apply_patch_resolves_paths_and_checks_each_permission(tmp_path) -
     ]
     assert [
         request.args[0].capability for request in context.ask_handler.await_args_list
-    ] == ["filesystem.write", "filesystem.write"]
+    ] == (["filesystem.delete", "filesystem.write", "filesystem.write", "filesystem.write"]
+          if moving else ["filesystem.write", "filesystem.write"])
 
 
 async def test_incomplete_patch_error_propagates_remote_params_through_registry(

@@ -61,6 +61,49 @@ class WindowsRuntimeTests(unittest.TestCase):
         with self.assertRaises(AgentError):
             self.filesystem.read(link.as_posix(), 1, 10, 2000)
 
+    def test_patch_move_with_changes_checks_destination(self) -> None:
+        from matoloop_agent.errors import AgentError
+
+        source, destination = self.wire + "/source.txt", self.wire + "/destination.txt"
+        revision = self.filesystem.write(source, "old\r\n", None)["sha256"]
+        self.filesystem.write(destination, "existing\r\n", None)
+        text = (
+            f"*** Begin Patch\n*** Update File: {source}\n*** Move to: {destination}\n"
+            "-old\n+new\n*** End of File\n*** End Patch"
+        )
+        with self.assertRaises(AgentError) as caught:
+            self.filesystem.patch(text, {source: revision})
+        self.assertEqual(caught.exception.params["destination"], destination)
+        self.assertEqual((self.home / "source.txt").read_bytes(), b"old\r\n")
+        self.assertEqual((self.home / "destination.txt").read_bytes(), b"existing\r\n")
+        self.filesystem.delete(destination, False)
+        result = self.filesystem.patch(text, {source: revision})
+        self.assertEqual((self.home / "destination.txt").read_bytes(), b"new\r\n")
+        self.assertFalse((self.home / "source.txt").exists())
+        self.assertEqual(
+            result["files"][0]["sha256"],
+            self.filesystem.read(destination, 1, 10, 2000)["sha256"],
+        )
+
+        self.filesystem.delete(destination, False)
+        self.filesystem.write(source, "old\r\n", None)
+        write = self.filesystem.write
+
+        def replace_after_write(*args):
+            result = write(*args)
+            replacement = self.home / "replacement.txt"
+            replacement.write_bytes(b"external\r\n")
+            replacement.replace(self.home / "source.txt")
+            return result
+
+        with patch.object(self.filesystem, "write", side_effect=replace_after_write):
+            with self.assertRaises(AgentError):
+                self.filesystem.patch(text, {source: revision})
+        self.assertEqual(
+            ((self.home / "source.txt").read_bytes(), (self.home / "destination.txt").exists()),
+            (b"external\r\n", False),
+        )
+
     def test_installer_mutex_blocks_agent_admission_and_script_parses(self) -> None:
         import hashlib
 

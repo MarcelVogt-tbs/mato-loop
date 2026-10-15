@@ -668,8 +668,9 @@ def _workspace_patch(
     context: ToolContext,
     patch: str,
     expected_sha256: dict[str, str],
-) -> tuple[str, dict[str, str], list[dict[str, str | None]]]:
+) -> tuple[str, dict[str, str], list[dict[str, str | None]], set[str]]:
     operations: list[dict[str, str | None]] = []
+    edited_sources: set[str] = set()
     rewritten = []
     prefixes = {
         "*** Add File: ": "add",
@@ -694,6 +695,9 @@ def _workspace_patch(
             operations[-1]["destination"] = destination
             rewritten.append(f"*** Move to: {destination}")
         else:
+            if (operations and operations[-1]["operation"] in {"update", "move"}
+                    and line.startswith(("@@", " ", "+", "-"))):
+                edited_sources.add(str(operations[-1]["path"]))
             rewritten.append(line)
     if not operations:
         raise ExecutionClientError("tool.invalidArguments")
@@ -703,13 +707,13 @@ def _workspace_patch(
         if absolute in revisions:
             raise ExecutionClientError("tool.invalidArguments")
         revisions[absolute] = digest
-    return "\n".join(rewritten), revisions, operations
+    return "\n".join(rewritten), revisions, operations, edited_sources
 
 
 async def _apply_patch(
     arguments: ApplyPatchArguments, context: ToolContext
 ) -> ToolResult:
-    patch, revisions, operations = _workspace_patch(
+    patch, revisions, operations, edited_sources = _workspace_patch(
         context, arguments.patch, arguments.expected_sha256
     )
     context.repository_target_paths = tuple(
@@ -734,7 +738,7 @@ async def _apply_patch(
                     action_label="Datei ändern",
                 )
             )
-        if operation["operation"] in {"add", "update"}:
+        if operation["operation"] in {"add", "update"} or source in edited_sources:
             requests.append(
                 files_access.filesystem_permission(
                     context,
@@ -1267,7 +1271,19 @@ APPLY_PATCH = ToolDefinition(
             "apply_patch",
             "Apply one bounded patch to computer files in the current directory. Paths may be relative "
             "or absolute. Include expectedSha256 for every updated, moved, or deleted source file; add "
-            "operations do not use a revision. Move operations cannot also edit content.",
+            "operations do not use a revision. Use LF patch text enclosed by *** Begin Patch and "
+            "*** End Patch. File headers are *** Add File: path (all lines prefixed +), "
+            "*** Delete File: path (no body), or *** Update File: path. An update may include "
+            "*** Move to: new-path immediately after its header, with or without content changes. "
+            "Add/move destinations must not exist; parent directories must exist. "
+            "In update hunks, prefix unchanged lines with a space, removals with -, additions with +. "
+            "Separate hunks with @@; the first @@ is optional. @@ exact-line searches after that "
+            "unique line. Context must match exactly and uniquely; hunks follow source order. "
+            "*** End of File anchors the last hunk at the file end. A hunk containing only + lines "
+            "appends to the file, including an empty file; use context for other insertions. "
+            "Example:\n*** Begin Patch\n*** Update File: app.py\n@@\n-old()\n+new()\n*** End Patch\n"
+            "On file.patchIncomplete, reread affected source and destination paths before retrying; "
+            "earlier changes may remain.",
             ApplyPatchArguments,
             _apply_patch,
             tool_type="computer",
