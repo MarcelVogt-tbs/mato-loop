@@ -25,7 +25,14 @@ class SessionCache:
         metadata = self.root.lstat()
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
             raise ValueError("session cache path must be a real directory")
-        os.chmod(self.root, 0o700, follow_symlinks=False)
+        descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            opened = os.fstat(descriptor)
+            if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):
+                raise ValueError("session cache directory changed")
+            os.fchmod(descriptor, 0o700)
+        finally:
+            os.close(descriptor)
         self._identity = (metadata.st_dev, metadata.st_ino)
         self.lock = threading.RLock()
         self.staging = data_dir / "transfers"
@@ -116,8 +123,12 @@ class SessionCache:
 
     def _publish(self, artifact: ArtifactDescriptor, temporary: Path) -> None:
         with self.lock, self._parent_fd(artifact, create=True) as (parent, name):
+            descriptor = os.open(temporary, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                os.fchmod(descriptor, 0o600)
+            finally:
+                os.close(descriptor)
             os.replace(temporary, name, dst_dir_fd=parent)
-            os.chmod(name, 0o600, dir_fd=parent, follow_symlinks=False)
             os.fsync(parent)
             self._evict_unlocked()
 

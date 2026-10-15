@@ -30,6 +30,15 @@ def client(handler) -> httpx.AsyncClient:
 
 
 class CredentialTests(unittest.IsolatedAsyncioTestCase):
+    def test_existing_credential_directory_with_unsafe_permissions_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            directory = base / "agent-state"
+            directory.mkdir()
+            directory.chmod(0o755)
+            with self.assertRaises(CredentialError), LinuxCredentialStore(base):
+                pass
+
     def test_pairing_input_precedence_and_url_derivation(self) -> None:
         self.assertEqual(
             select_pairing_token(

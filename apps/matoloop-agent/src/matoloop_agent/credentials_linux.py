@@ -39,13 +39,11 @@ class LinuxCredentialStore:
             created = True
         except FileExistsError:
             pass
-        if created:
-            self.path.chmod(0o700, follow_symlinks=False)
         metadata = self.path.lstat()
         if (
             not stat.S_ISDIR(metadata.st_mode)
             or metadata.st_uid != os.geteuid()
-            or stat.S_IMODE(metadata.st_mode) != 0o700
+            or (not created and stat.S_IMODE(metadata.st_mode) != 0o700)
         ):
             raise CredentialError("MatoLoop Agent credential directory is not secure")
         self._directory_fd = os.open(
@@ -56,6 +54,8 @@ class LinuxCredentialStore:
             self.close()
             raise CredentialError("MatoLoop Agent credential directory changed")
         try:
+            if created:
+                os.fchmod(self._directory_fd, 0o700)
             try:
                 self._lock_fd = os.open(
                     "credential.lock",

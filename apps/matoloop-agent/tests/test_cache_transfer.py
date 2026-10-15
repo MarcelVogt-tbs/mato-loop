@@ -5,6 +5,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 from pydantic import ValidationError
@@ -69,7 +70,10 @@ class CacheTransferTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request.headers["X-Mato-Transfer-Token"], "download-token")
             return httpx.Response(200, content=content)
 
-        with tempfile.TemporaryDirectory() as temporary:
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch("os.chmod", side_effect=NotImplementedError("chmod is unavailable")),
+        ):
             root = Path(temporary)
             cache = SessionCache(root, max_bytes=len(content))
             http = httpx.AsyncClient(transport=httpx.MockTransport(handler))

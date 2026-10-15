@@ -111,7 +111,7 @@ class TransferClient:
                     raise AgentError("transfer.failed", "Backend download failed")
                 with temporary.open("xb", buffering=0) as handle:
                     if os.name == "posix":
-                        os.chmod(temporary, 0o600, follow_symlinks=False)
+                        os.fchmod(handle.fileno(), 0o600)
                     async for chunk in response.aiter_bytes(1024 * 1024):
                         size += len(chunk)
                         if size > expected_size or size > self.max_bytes:
