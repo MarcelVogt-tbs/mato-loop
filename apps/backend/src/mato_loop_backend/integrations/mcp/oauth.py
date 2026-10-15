@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import secrets
 import time
@@ -14,7 +15,7 @@ from mcp.client.auth import OAuthClientProvider
 from mcp.client.auth.utils import issuers_match
 from mcp.shared.auth import OAuthClientInformationFull, OAuthMetadata, OAuthToken
 from mcp.shared.auth_utils import check_resource_allowed
-from pydantic import AnyUrl, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AnyUrl, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.integrations.mcp.client import McpClient, McpClientError, _BoundedTransport
@@ -265,13 +266,23 @@ class OAuthLoginManager:
     async def _login(self, attempt, secret, redirect_uri, client_info):
         from mato_loop_backend.integrations.mcp.adapter import McpConfig
 
+        phase = "configuration"
+
         async def redirect(url):
+            nonlocal phase
             validate_oauth_url(url)
             attempt.state = parse_qs(urlsplit(url).query).get("state", [None])[0]
             if not attempt.state:
                 raise McpClientError("mcp.oauthFailed")
             attempt.authorization_url = url
+            phase = "authorization"
             attempt.ready.set()
+
+        async def receive_callback():
+            nonlocal phase
+            result = await attempt.callback
+            phase = "token_exchange"
+            return result
 
         try:
             async with asyncio.timeout(LOGIN_TTL):
@@ -294,7 +305,7 @@ class OAuthLoginManager:
                     metadata,
                     attempt,
                     redirect,
-                    lambda: attempt.callback,
+                    receive_callback,
                     client_metadata_url=(
                         redirect_uri.removesuffix(CALLBACK_PATH) + "/api/mcp/oauth/client-metadata"
                     )
@@ -302,6 +313,7 @@ class OAuthLoginManager:
                     else None,
                 )
                 provider.expected_client_id = config.client_id
+                phase = "discovery"
 
                 async def metadata_response(response):
                     if response.request.method != "GET" or response.status_code != 200:
@@ -350,6 +362,7 @@ class OAuthLoginManager:
                     raise McpClientError("mcp.oauthFailed")
                 metadata = provider.context.oauth_metadata
                 resource = provider.context.get_resource_url()
+                phase = "catalog_validation"
                 attempt.tools = McpConfig(endpoint=endpoint, tools=tools).model_dump(mode="json")[
                     "tools"
                 ]
@@ -366,7 +379,33 @@ class OAuthLoginManager:
             raise
         except Exception as exc:
             attempt.error_code = exc.code if isinstance(exc, McpClientError) else "mcp.oauthFailed"
-            logger.warning("MCP OAuth login failed with %s", type(exc).__name__)
+            validation = []
+            exceptions = []
+            pending = [exc]
+            for _ in range(20):
+                if not pending:
+                    break
+                error = pending.pop()
+                exceptions.append(type(error).__name__)
+                if isinstance(error, ValidationError):
+                    validation.extend(
+                        {"loc": item["loc"], "type": item["type"]}
+                        for item in error.errors(
+                            include_input=False, include_context=False, include_url=False
+                        )[:20 - len(validation)]
+                    )
+                if isinstance(error, BaseExceptionGroup):
+                    pending.extend(error.exceptions[:20])
+                cause = error.__cause__ or error.__context__
+                if cause:
+                    pending.append(cause)
+            logger.warning(
+                "MCP OAuth login failed (phase=%s, code=%s, exceptions=%s, validation=%s)",
+                phase,
+                attempt.error_code,
+                json.dumps(exceptions),
+                json.dumps(validation),
+            )
         finally:
             attempt.ready.set()
 

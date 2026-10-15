@@ -2,7 +2,7 @@
 
 Administratoren können unter **Einstellungen → Debug-Zugang** einen persönlichen Diagnosezugang aktivieren.
 
-Der Zugang ist schreibgeschützt und fest an das eigene Benutzerkonto gebunden. Er erlaubt das Lesen der eigenen Sessions, Nachrichten, Tool-Ergebnisse, Agent-Läufe, wirksamen Einstellungen und Diagnosedaten. Daten anderer Benutzer, Zugangsdaten, beliebige Datenbankabfragen und Dateizugriffe sind nicht verfügbar.
+Der Zugang ist schreibgeschützt und fest an das eigene Benutzerkonto gebunden. Er erlaubt das Lesen der eigenen Sessions, Nachrichten, Tool-Ergebnisse, Agent-Läufe, wirksamen Einstellungen und Diagnosedaten. Zusätzlich sind instanzweite Backend-Logs lesbar, auch mit Einträgen zu anderen Benutzern. Zugangsdaten, beliebige Datenbankabfragen und Dateizugriffe sind nicht verfügbar.
 
 ## MCP-Client verbinden
 
@@ -14,13 +14,19 @@ Der Zugang ist schreibgeschützt und fest an das eigene Benutzerkonto gebunden. 
 Der Token wird nur als Hash gespeichert. Nach dem Schließen des Dialogs kann er nicht erneut angezeigt werden. **Token erneuern** ersetzt ihn sofort.
 
 !!! warning
-    Der Token erlaubt das Lesen potenziell vertraulicher eigener Chat-, Kontext- und Tool-Inhalte. Speichere ihn nur im Secret-Speicher des verwendeten MCP-Clients.
+    Der Token erlaubt das Lesen potenziell vertraulicher eigener Chat-, Kontext- und Tool-Inhalte sowie instanzweiter Backend-Logs. Speichere ihn nur im Secret-Speicher des verwendeten MCP-Clients.
 
 ## Diagnoseaufzeichnung
 
 Solange der Debug-Zugang aktiv ist, zeichnet MatoLoop strukturierte Ereignisse für Runs, Modellanfragen und Tool-Ausführungen des Kontos auf. Dazu gehören der tatsächlich vorbereitete Modellkontext, angebotene Tool-Schemas, Laufzeiten, Tokenverbrauch, Wiederholungen und kontrollierte Fehlerdaten. Zugangsdaten und rohe Provider-Antworten werden nicht aufgezeichnet.
 
 Die Aufzeichnungen sind auf 1 MB pro Ereignis begrenzt und werden nach 14 Tagen automatisch entfernt. Ältere oder gekürzte Daten werden nicht nachträglich rekonstruiert.
+
+## Backend-Logs lesen
+
+Das MCP-Tool `get_backend_logs` liefert die letzten 100 Backend-Logeinträge. Mit `limit` sind bis zu 500 Einträge abrufbar; `logger_name` filtert einen Logger samt Unterloggern und `level` die Mindestschwere (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`). Die Ausgabe ist auf 50.000 Zeichen begrenzt; `truncated` zeigt eine Kürzung durch dieses Limit an. Die Einträge stehen in zeitlicher Reihenfolge.
+
+MatoLoop speichert die Backend-Anwendungslogs unabhängig vom Debug-Zugang unter `<Datenverzeichnis>/logs/backend.log` mit einer rotierenden Sicherung, jeweils maximal 1 MiB. Ältere Einträge werden bei der Rotation ersetzt. HTTP-Zugriffslogs und externe SDK-Logs gehören nicht dazu. MCP-Anmeldefehler enthalten die betroffene Phase, Fehlerklassen und Validierungsfelder ohne Eingabewerte.
 
 ## Zugriff beenden
 

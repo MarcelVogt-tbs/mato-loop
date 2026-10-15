@@ -84,9 +84,11 @@ def payload():
         "cimd",
         "ha_http",
         "lan_dynamic",
+        "invalid_catalog",
+        "invalid_token_response",
     ],
 )
-async def test_sdk_login_and_discovery(transport, mode):
+async def test_sdk_login_and_discovery(transport, mode, caplog):
     requests, authorization = [], {}
     endpoint = "http://192.168.1.5:8123/mcp" if mode == "lan_dynamic" else ENDPOINT
     issuer = "http://192.168.1.5:8123/auth/v1" if mode == "lan_dynamic" else ISSUER
@@ -130,6 +132,8 @@ async def test_sdk_login_and_discovery(transport, mode):
             )
             assert form["resource"] == [endpoint]
             data = dict(access_token="access", token_type="Bearer", expires_in=120)
+            if mode == "invalid_token_response":
+                data["token_type"] = {"private-value": "private-token"}
         elif str(request.url) == endpoint:
             if request.headers.get("authorization") != "Bearer access":
                 return httpx.Response(401)
@@ -138,6 +142,9 @@ async def test_sdk_login_and_discovery(transport, mode):
             message = json.loads(request.content)
             if "id" not in message:
                 return httpx.Response(202)
+            tool = {"name": "lookup", "inputSchema": {"type": "object"}}
+            if mode == "invalid_catalog":
+                tool["description"] = "private-value" * 400
             result = (
                 dict(
                     protocolVersion=LATEST_PROTOCOL_VERSION,
@@ -145,7 +152,7 @@ async def test_sdk_login_and_discovery(transport, mode):
                     serverInfo={"name": "test", "version": "1"},
                 )
                 if message["method"] == "initialize"
-                else {"tools": [{"name": "lookup", "inputSchema": {"type": "object"}}]}
+                else {"tools": [tool]}
             )
             data = dict(jsonrpc="2.0", id=message["id"], result=result)
             if mode == "streaming" and message["method"] == "initialize":
@@ -159,7 +166,7 @@ async def test_sdk_login_and_discovery(transport, mode):
         return httpx.Response(200, json=data)
 
     transport(handle)
-    dynamic = mode in {"dynamic", "streaming", "redirected", "cimd", "lan_dynamic"}
+    dynamic = mode in {"dynamic", "streaming", "redirected", "cimd", "lan_dynamic", "invalid_catalog", "invalid_token_response"}
     config = oauth.OAuthConfig(
         client_id=None
         if dynamic
@@ -203,7 +210,22 @@ async def test_sdk_login_and_discovery(transport, mode):
         ]
         manager.receive_callback(authorization["state"][0], "code", None)
         await asyncio.wait_for(attempt.task, 3)
-        assert attempt.error_code is None and attempt.tools[0]["name"] == "lookup"
+        if mode == "invalid_catalog":
+            assert (
+                "phase=catalog_validation" in caplog.text
+                and '"loc": ["tools", 0, "description"]' in caplog.text
+                and "string_too_long" in caplog.text
+                and "private-value" not in caplog.text
+            )
+        elif mode == "invalid_token_response":
+            assert (
+                '"loc": ["token_type"]' in caplog.text
+                and "literal_error" in caplog.text
+                and "private-value" not in caplog.text
+                and "private-token" not in caplog.text
+            )
+        else:
+            assert attempt.error_code is None and attempt.tools[0]["name"] == "lookup"
         token_request = next(request for request in requests if request.url.path.endswith("/token"))
         if mode == "client_secret_basic":
             assert (

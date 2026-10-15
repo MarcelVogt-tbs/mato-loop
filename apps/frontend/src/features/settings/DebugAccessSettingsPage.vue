@@ -4,7 +4,7 @@
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Debug-Zugang</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          Ermöglicht einem MCP-Client die Diagnose deiner eigenen Chats und Agent-Läufe.
+          Ermöglicht einem MCP-Client die Diagnose deiner eigenen Chats, Agent-Läufe und der Backend-Logs.
         </p>
       </div>
     </header>
@@ -21,7 +21,8 @@
 
         <q-banner rounded class="app-surface-tonal">
           Solange der Zugang aktiv ist, zeichnet MatoLoop zusätzliche Diagnosedaten für dein Konto
-          auf. Andere Benutzerkonten und Zugangsdaten bleiben unzugänglich.
+          auf. Der Zugang erlaubt auch das Lesen instanzweiter Backend-Logs, die Einträge zu anderen
+          Benutzern enthalten können. Zugangsdaten bleiben unzugänglich.
         </q-banner>
 
         <q-input dense :model-value="endpoint" readonly outlined label="MCP-Adresse">
@@ -54,7 +55,7 @@
           <div class="text-h6">Debug-Token</div>
           <q-banner rounded class="app-surface-tonal q-mt-md">
             Dieser Token wird nur einmal angezeigt. Jeder Besitzer kann damit deine eigenen
-            Diagnose-, Chat- und Tool-Inhalte lesen.
+            Diagnose-, Chat- und Tool-Inhalte sowie instanzweite Backend-Logs lesen.
           </q-banner>
         </q-card-section>
         <q-card-section class="q-pt-none">

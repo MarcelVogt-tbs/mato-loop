@@ -20,6 +20,7 @@ from mato_loop_backend.api.router import api_router
 from mato_loop_backend.automations import AutomationScheduler, AutomationService
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory, engine
+from mato_loop_backend.diagnostics.logs import install_backend_log_handler
 from mato_loop_backend.diagnostics.mcp import create_debug_mcp, debug_mcp_mount
 from mato_loop_backend.diagnostics.service import diagnostic_retention_loop
 from mato_loop_backend.execution.terminals import terminal_coordinator
@@ -85,6 +86,17 @@ def _mount_documentation(target: FastAPI, docs_dir: Path) -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    log_handler = install_backend_log_handler()
+    try:
+        async with _application_lifespan(_app):
+            yield
+    finally:
+        logging.getLogger("mato_loop_backend").removeHandler(log_handler)
+        log_handler.close()
+
+
+@asynccontextmanager
+async def _application_lifespan(_app: FastAPI):
     runtime_config.secrets_dir.mkdir(parents=True, exist_ok=True)
     # Migration failures must prevent serving a partially converted library.
     async with AsyncSessionFactory() as db:

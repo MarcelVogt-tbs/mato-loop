@@ -1,5 +1,9 @@
+import json
+import logging
+import sys
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -15,6 +19,7 @@ from starlette.routing import Mount
 
 import mato_loop_backend.diagnostics.mcp as diagnostics_mcp
 from mato_loop_backend.db.session import AsyncSessionFactory
+from mato_loop_backend.diagnostics import logs
 from mato_loop_backend.diagnostics.service import record_diagnostic_event
 from mato_loop_backend.models import (
     ApprovalRequest,
@@ -135,7 +140,7 @@ async def test_unavailable_debug_mount_returns_controlled_error() -> None:
     }
 
 
-async def test_debug_mcp_http_authenticates_and_filters_sessions(monkeypatch) -> None:
+async def test_debug_mcp_http_authenticates_and_filters_sessions(monkeypatch, tmp_path) -> None:
     user = UserAccount(id=uuid4(), username="admin", is_active=True, is_admin=True)
     session = ChatSession(
         id=uuid4(),
@@ -156,6 +161,15 @@ async def test_debug_mcp_http_authenticates_and_filters_sessions(monkeypatch) ->
         yield db
 
     monkeypatch.setattr(diagnostics_mcp, "AsyncSessionFactory", session_factory)
+    monkeypatch.setattr(logs, "get_runtime_config", lambda: SimpleNamespace(data_dir=tmp_path))
+    (tmp_path / "logs").mkdir()
+    log_record = {
+        "timestamp": "2026-10-06T14:58:13+00:00",
+        "level": "WARNING",
+        "logger": "mato_loop_backend.integrations.mcp.oauth",
+        "message": "Login failed",
+    }
+    (tmp_path / "logs" / "backend.log").write_text(json.dumps(log_record) + "\n")
     server, mcp_app = diagnostics_mcp.create_debug_mcp()
     app = Starlette(routes=[Mount("/api/debug", app=mcp_app)])
     transport = httpx.ASGITransport(app=app)
@@ -172,6 +186,9 @@ async def test_debug_mcp_http_authenticates_and_filters_sessions(monkeypatch) ->
                 async with ClientSession(read, write) as mcp_session:
                     await mcp_session.initialize()
                     result = await mcp_session.call_tool("list_sessions", {"limit": 1})
+                    log_result = await mcp_session.call_tool(
+                        "get_backend_logs", {"limit": 1, "level": "WARNING"}
+                    )
 
     assert result.isError is False
     assert result.structuredContent == {
@@ -190,6 +207,46 @@ async def test_debug_mcp_http_authenticates_and_filters_sessions(monkeypatch) ->
     }
     statement = db.scalars.await_args.args[0].compile(dialect=postgresql.dialect())
     assert user.id in statement.params.values()
+    assert log_result.structuredContent == {"items": [log_record], "truncated": False}
+
+
+def test_backend_logs_rotate_filter_and_bound(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        logs, "get_runtime_config", lambda: SimpleNamespace(data_dir=tmp_path, log_level="INFO")
+    )
+    logger = logging.getLogger("mato_loop_backend")
+    previous_level = logger.level
+    handler = logs.install_backend_log_handler()
+    try:
+        logger.info("Skip below minimum severity")
+        logger.warning("Before rotation")
+        handler.doRollover()
+        child = logging.getLogger("mato_loop_backend.integrations.mcp.oauth")
+        child.warning("After rotation")
+        assert [record["message"] for record in logs.read_backend_logs(2, level="WARNING")["items"]] == [
+            "Before rotation", "After rotation",
+        ]
+        assert [record["message"] for record in logs.read_backend_logs(2, child.name)["items"]] == [
+            "After rotation",
+        ]
+        for _ in range(140):
+            child.warning("x" * 8_000)
+        result = logs.read_backend_logs(500)
+        assert result["truncated"] and len(json.dumps(result)) <= logs.MAX_REPLY_CHARACTERS
+        assert all(file.stat().st_size <= logs.MAX_LOG_BYTES for file in (tmp_path / "logs").iterdir())
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+        logger.setLevel(previous_level)
+
+
+def test_backend_log_tracebacks_exclude_exception_values() -> None:
+    try:
+        raise RuntimeError("private-token")
+    except RuntimeError:
+        record = logging.LogRecord("mato_loop_backend", logging.ERROR, "", 0, "Operation failed", (), sys.exc_info())
+    text = logs.BackendLogFormatter().format(record)
+    assert "private-token" not in text and json.loads(text)["exceptionType"] == "RuntimeError"
 
 
 async def test_debug_mcp_loads_owner_model_defaults(monkeypatch) -> None:
