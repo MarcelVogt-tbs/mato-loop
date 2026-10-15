@@ -893,6 +893,10 @@ class MemoryRetrieveArguments(ToolArguments):
 
 class UpdateAgentIdentityArguments(ToolArguments):
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
+    set_as_default: bool | None = Field(
+        default=None, strict=True,
+        description="True makes the active or newly created personal persona the account default. False clears the personal default. Omit to keep it unchanged.",
+    )
     instructions: str | None = Field(
         default=None,
         max_length=16_000,
@@ -918,7 +922,7 @@ class UpdateAgentIdentityArguments(ToolArguments):
 
     @model_validator(mode="after")
     def require_change(self) -> UpdateAgentIdentityArguments:
-        if self.display_name is None and self.instructions is None:
+        if self.display_name is None and self.instructions is None and self.set_as_default is None:
             raise ValueError("at least one identity field is required")
         return self
 

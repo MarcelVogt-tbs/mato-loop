@@ -1447,6 +1447,7 @@ class UserAgentIdentitySettings(SettingsDocument):
 
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
     personas: list[PersonaProfile] = Field(default_factory=list)
+    default_persona_id: UUID | None = None
     profile_personas: dict[UUID, UUID] = Field(default_factory=dict)
 
     _validate_catalog = field_validator("personas")(validate_persona_catalog)

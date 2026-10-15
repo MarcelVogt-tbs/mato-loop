@@ -2162,10 +2162,17 @@ async def test_missing_workspace_returns_structured_error_without_approval(tmp_p
 
 
 @pytest.mark.usefixtures("mock_db_settings")
-async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize(("changes", "is_default"), [
+    ({"instructions": "Antworte direkt."}, False),
+    ({"instructions": "Antworte direkt."}, True),
+    ({"set_as_default": True}, False),
+    ({"set_as_default": False}, True),
+])
+async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path, changes, is_default) -> None:
     tool_settings = _tool_settings({})
     persona = PersonaProfile(name="Direkt", instructions="Alt")
-    identity = UserAgentIdentitySettings(personas=[persona])
+    identity = UserAgentIdentitySettings(personas=[persona], default_persona_id=persona.id if is_default else None,
+                                         profile_personas={} if is_default else {GENERAL_PROFILE_ID: persona.id})
 
     async def load_settings(_db, settings_type, **_kwargs):
         return {
@@ -2179,10 +2186,10 @@ async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> N
     monkeypatch.setattr(SettingsStore, "save", save)
     call = ToolCall(
         id="identity",
-        name="update_agent_identity",
+        name="customize_matoloop",
         arguments={
-            "display_name": "Ada",
-            "instructions": "Antworte direkt.",
+            "action": "update", "area": "agent_identity",
+            "changes": {"display_name": "Ada", **changes},
         },
     )
     context = _context(tmp_path, call)
@@ -2204,7 +2211,9 @@ async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> N
     assert json.loads(result.content) == {
         "displayName": "Ada",
         "personaName": "Direkt",
-        "instructionsUpdated": True,
+        "instructionsUpdated": "instructions" in changes,
+        "instructionsScope": "all_agents_using_persona" if "instructions" in changes else None,
+        "personalDefaultPersonaId": str(persona.id) if changes.get("set_as_default", is_default) else None,
         "effectiveFrom": "next_run",
     }
     assert result.metadata["agentIdentity"]["displayName"] == "Ada"
@@ -2214,11 +2223,14 @@ async def test_update_agent_identity_uses_ask_policy(monkeypatch, tmp_path) -> N
     assert request.resource_scope == str(context.session.user_id)
     save.assert_awaited_once()
     assert identity.display_name == "Ada"
-    assert (identity.profile_personas[GENERAL_PROFILE_ID], identity.personas[0].instructions) == (persona.id, "Antworte direkt.")
+    assert (identity.profile_personas, identity.personas[0].instructions) == (
+        {} if is_default else {GENERAL_PROFILE_ID: persona.id}, changes.get("instructions", "Alt"),
+    )
 
 
 @pytest.mark.usefixtures("mock_db_settings")
-async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("changes", [{"instructions": "Sei freundlich."}, {"instructions": "Sei freundlich.", "set_as_default": True}, {"set_as_default": True}])
+async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path, changes) -> None:
     tool_settings = _tool_settings(
         {"policies": {"settings.agent_identity.update": "auto"}}
     )
@@ -2237,7 +2249,7 @@ async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) 
     call = ToolCall(
         id="identity-auto",
         name="update_agent_identity",
-        arguments={"instructions": "Sei freundlich."},
+        arguments=changes,
     )
     context = _context(tmp_path, call, decision=PermissionDecision.DENY)
     _set_profile_settings(context, tool_settings)
@@ -2258,11 +2270,20 @@ async def test_update_agent_identity_auto_skips_approval(monkeypatch, tmp_path) 
 
     assert not result.is_error
     context.ask_handler.assert_not_awaited()
+    created = identity.personas[0]
+    assert (created.instructions, identity.default_persona_id, identity.profile_personas) == (
+        changes.get("instructions", "Alt"), created.id if changes.get("set_as_default") else None,
+        {} if changes.get("set_as_default") else {GENERAL_PROFILE_ID: created.id},
+    )
 
 
 @pytest.mark.usefixtures("mock_db_settings")
+@pytest.mark.parametrize(("changes", "revoked"), [
+    ({"instructions": "Neu"}, False), ({"set_as_default": True}, False),
+    ({"set_as_default": True}, True), ({"set_as_default": False}, True),
+])
 async def test_update_agent_identity_rejects_changed_approved_persona(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, changes, revoked
 ) -> None:
     tool_settings = _tool_settings({})
     first = PersonaProfile(name="Erste", instructions="Alt")
@@ -2284,7 +2305,7 @@ async def test_update_agent_identity_rejects_changed_approved_persona(
         ToolCall(
             id="identity-race",
             name="update_agent_identity",
-            arguments={"instructions": "Neu"},
+            arguments=changes,
         ),
     )
     _mock_value = AsyncMock(return_value=object())
@@ -2296,7 +2317,7 @@ async def test_update_agent_identity_rejects_changed_approved_persona(
                     display_name="MatoLoop", persona=first, persona_editable=True
                 ),
                 EffectiveAgentIdentity(
-                    display_name="MatoLoop", persona=second, persona_editable=True
+                    display_name="MatoLoop", persona=first if revoked else second, persona_editable=not revoked
                 ),
             ]
         )

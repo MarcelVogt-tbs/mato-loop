@@ -46,6 +46,8 @@ def _personal_settings_still_available(context: ToolContext) -> bool:
 async def _update_agent_identity(
     arguments: UpdateAgentIdentityArguments, context: ToolContext
 ) -> ToolResult:
+    targets_persona = arguments.instructions is not None or arguments.set_as_default is True
+    changes_persona = targets_persona or arguments.set_as_default is False
     context.tool_settings = await tools_access.profile_tool_settings(context)
     policy = permissions_resolution.tool_execution_policy(
         context.tool_settings,
@@ -66,16 +68,16 @@ async def _update_agent_identity(
         context.db, context.session.user_id, profile
     )
     if (
-        arguments.instructions is not None
+        targets_persona
         and context.agent_persona_id is not None
         and effective_identity.persona.id != context.agent_persona_id
     ):
         return ToolResult.error("tool.unavailable")
-    approved_persona = effective_identity.persona.model_dump() if arguments.instructions is not None else None
+    approved_persona = effective_identity.persona.model_dump() if targets_persona else None
     if (
         arguments.display_name is not None
         and not effective_identity.personal_display_name_enabled
-    ) or (arguments.instructions is not None and not effective_identity.persona_editable):
+    ) or (changes_persona and not effective_identity.persona_editable):
         return ToolResult.error("tool.unavailable")
     approval_received = False
     if policy == ToolExecutionPolicy.ASK:
@@ -87,9 +89,10 @@ async def _update_agent_identity(
                 changes_instructions=arguments.instructions is not None,
                 persona_name=(
                     effective_identity.persona.name
-                    if arguments.instructions is not None
+                    if targets_persona
                     else None
                 ),
+                set_as_default=arguments.set_as_default,
             ),
         )
         if not allowed:
@@ -124,7 +127,7 @@ async def _update_agent_identity(
     if (
         arguments.display_name is not None
         and not effective_identity.personal_display_name_enabled
-    ) or (arguments.instructions is not None and not effective_identity.persona_editable):
+    ) or (changes_persona and not effective_identity.persona_editable):
         return ToolResult.error("tool.unavailable")
     if (
         approved_persona is not None
@@ -140,7 +143,7 @@ async def _update_agent_identity(
     )
     if arguments.display_name is not None:
         current.display_name = arguments.display_name
-    if arguments.instructions is not None:
+    if targets_persona:
         persona = next((item for item in current.personas if item.id == effective_identity.persona.id), None)
         if persona is None:
             name = f"Persona für {profile.name}"[:80]
@@ -149,12 +152,17 @@ async def _update_agent_identity(
             while candidate.casefold() in used:
                 candidate = f"{name[:70]} ({suffix})"
                 suffix += 1
-            persona = PersonaProfile(name=candidate, instructions=arguments.instructions)
+            persona = PersonaProfile(name=candidate, instructions=arguments.instructions if arguments.instructions is not None else effective_identity.persona.instructions)
             current.personas.append(persona)
-        else:
+            if arguments.set_as_default is not True:
+                current.profile_personas[profile.id] = persona.id
+        elif arguments.instructions is not None:
             persona.instructions = arguments.instructions
-        current.profile_personas[profile.id] = persona.id
+        if arguments.set_as_default is True:
+            current.default_persona_id = persona.id
         effective_identity.persona = persona
+    if arguments.set_as_default is False:
+        current.default_persona_id = None
     await SettingsStore.save(context.db, current, user_id=context.session.user_id)
     display_name = arguments.display_name or effective_identity.display_name
     identity_payload = {
@@ -165,6 +173,8 @@ async def _update_agent_identity(
             "displayName": display_name,
             "personaName": effective_identity.persona.name,
             "instructionsUpdated": arguments.instructions is not None,
+            "instructionsScope": "all_agents_using_persona" if arguments.instructions is not None else None,
+            "personalDefaultPersonaId": str(current.default_persona_id) if current.default_persona_id else None,
             "effectiveFrom": "next_run",
         },
         metadata={"agentIdentity": identity_payload},
@@ -277,7 +287,9 @@ async def _update_user_profile(
 UPDATE_AGENT_IDENTITY = ToolDefinition(
             "update_agent_identity",
             "Update the permitted personal agent name or the active personal persona after an explicit user request. "
-            "Editing a personal persona affects all agents assigned to it. If a global persona is active, create a personal persona and assign it only to the current agent. "
+            "Editing a personal persona affects all agents using it and preserves assignments. "
+            "set_as_default=true sets the active personal persona as the account default; false clears the default. "
+            "If a global persona is active, create a personal copy. Assign the copy only to the current agent unless setting it as the default. "
             "Changes apply reliably from the next run.",
             UpdateAgentIdentityArguments,
             _update_agent_identity,

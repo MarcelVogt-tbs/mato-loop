@@ -19,7 +19,7 @@
     <template v-if="ready">
       <PersonalSettingsGate v-if="admin && section === 'general'" :model-value="identity.personalPersonasEnabled" title="Persönliche Personas erlauben" description="Benutzer können eigene Personas, persönliche Profilzuordnungen und ihren Agentennamen anpassen." :disabled="identity.settingsSaving" @update:model-value="setPersonalEnabled" />
       <template v-if="showManagement">
-        <q-banner v-if="personalBlocked" rounded class="app-surface-tonal q-mb-md">Persönliche Anpassungen sind deaktiviert. Personas, Zuordnungen und Agentenname bleiben gespeichert, werden aber nicht verwendet oder bearbeitet.</q-banner>
+        <q-banner v-if="personalBlocked" rounded class="app-surface-tonal q-mb-md">Persönliche Anpassungen sind deaktiviert. Personas, persönlicher Standard, Zuordnungen und Agentenname bleiben gespeichert, werden aber nicht verwendet oder bearbeitet.</q-banner>
         <q-banner v-if="route.query.profileId && !identity.profiles.some((profile) => profile.id === route.query.profileId)" rounded class="app-surface-tonal q-mb-md">Der angefragte Agent ist in diesem Bereich nicht verfügbar.</q-banner>
         <q-card flat class="app-surface q-mb-md">
           <q-card-section>
@@ -37,7 +37,8 @@
         <q-card flat class="app-surface q-mb-md">
           <q-card-section>
             <div class="text-subtitle1 text-weight-bold">{{ admin ? 'Globale Personas' : 'Meine Personas' }}</div>
-            <div class="text-caption app-muted">Eine Persona kann mehreren Agenten dienen. Änderungen gelten für alle ihre Zuordnungen.</div>
+            <div class="text-caption app-muted">Eine Persona kann mehreren Agenten dienen. Änderungen gelten für alle Agenten, die sie verwenden.</div>
+            <div v-if="!admin" class="text-caption app-muted q-mt-xs">Dein Standard gilt für alle Agenten ohne persönliche Zuordnung. Ohne persönlichen Standard gelten die globalen Vorgaben.</div>
             <AppSelect dense v-if="admin" class="q-mt-md" :model-value="identity.defaultPersonaId" outlined emit-value map-options label="Globale Standard-Persona" :options="personaOptions" :disable="mutationBlocked" @update:model-value="setDefaultPersona" />
           </q-card-section>
           <q-separator />
@@ -45,7 +46,7 @@
             <q-item v-if="!managedPersonas.length"><q-item-section>Noch keine eigenen Personas angelegt.</q-item-section></q-item>
             <q-item v-for="persona in managedPersonas" :key="persona.id" class="q-py-md">
               <q-item-section>
-                <q-item-label class="text-weight-medium">{{ persona.name }} <q-badge v-if="persona.id === identity.defaultPersonaId" color="primary" label="Standard" /></q-item-label>
+                <q-item-label class="text-weight-medium">{{ persona.name }} <q-badge v-if="persona.id === identity.defaultPersonaId" color="primary" label="Standard" /><q-badge v-if="!admin && persona.id === identity.personalDefaultPersonaId" color="primary" label="Mein Standard" /></q-item-label>
                 <q-item-label caption lines="2">{{ persona.instructions || 'Keine zusätzlichen Persona-Anweisungen.' }}</q-item-label>
               </q-item-section>
               <q-item-section side><div class="row no-wrap">
@@ -58,19 +59,19 @@
         <q-card flat class="app-surface">
           <q-card-section class="row items-center q-col-gutter-md">
             <div class="col-12 col-sm">
-              <div class="text-subtitle1 text-weight-bold">{{ admin ? 'Profil-Overrides' : 'Meine Profil-Overrides' }}</div>
+              <div class="text-subtitle1 text-weight-bold">Abweichende Persona je Agent</div>
               <div class="text-caption app-muted">{{ admin ? 'Abweichende Persona für globale Agentenprofile auswählen.' : 'Globale oder eigene Persona für einen zugänglichen Agenten auswählen. Gilt nur für dich.' }}</div>
             </div>
-            <q-btn class="col-12 col-sm-auto" flat no-caps color="primary" icon="add" label="Override hinzufügen" :disable="mutationBlocked || !availableProfiles.length" @click="openOverride()" />
+            <q-btn class="col-12 col-sm-auto" flat no-caps color="primary" icon="add" label="Zuordnung hinzufügen" :disable="mutationBlocked || !availableProfiles.length" @click="openOverride()" />
           </q-card-section>
           <q-separator />
           <q-list separator>
-            <q-item v-if="!Object.keys(identity.profilePersonas).length"><q-item-section>Ohne Override gilt die Vorgabe, zuletzt die globale Standard-Persona.</q-item-section></q-item>
+            <q-item v-if="!Object.keys(identity.profilePersonas).length"><q-item-section>{{ admin ? 'Ohne Zuordnung gilt die globale Standard-Persona.' : 'Ohne persönliche Zuordnung gilt dein Standard, ansonsten die globale Vorgabe für den Agenten.' }}</q-item-section></q-item>
             <q-item v-for="(personaId, id) in identity.profilePersonas" :key="id" class="q-py-md">
               <q-item-section><q-item-label class="text-weight-medium">{{ profileName(id) }}</q-item-label><q-item-label caption>{{ personaName(personaId) }}</q-item-label></q-item-section>
               <q-item-section side><div class="row no-wrap">
                 <q-btn flat round dense :icon="personalBlocked ? 'visibility' : 'edit'" :aria-label="`${profileName(id)}: Zuordnung öffnen`" :disable="identity.settingsSaving || !identity.profiles.some((profile) => profile.id === id)" @click="openOverride(id)" />
-                <q-btn flat round dense icon="delete_outline" color="negative" :aria-label="`${profileName(id)}: Override löschen`" :disable="mutationBlocked" @click="removeOverride(id)" />
+                <q-btn flat round dense icon="delete_outline" color="negative" :aria-label="`${profileName(id)}: Zuordnung löschen`" :disable="mutationBlocked" @click="removeOverride(id)" />
               </div></q-item-section>
             </q-item>
           </q-list>
@@ -89,13 +90,14 @@
             <q-banner v-if="personalBlocked" rounded class="app-surface-tonal">Persönliche Anpassungen sind deaktiviert.</q-banner>
             <template v-if="assignmentDialog">
               <AppSelect dense :model-value="profileId" outlined emit-value map-options label="Agentenprofil" :options="identity.profiles.filter((profile) => profile.id === profileId || !Object.hasOwn(identity.profilePersonas, profile.id)).map((profile) => ({ label: profile.name, value: profile.id }))" :disable="mutationBlocked" :rules="[requiredRule]" @update:model-value="selectProfile" />
-              <div v-if="selectedProfile" class="text-caption app-muted">Vorgabe ohne Override: {{ personaName(selectedProfile.inheritedPersonaId) }}</div>
+              <div v-if="selectedProfile" class="text-caption app-muted">Vorgabe ohne Zuordnung: {{ personaName(selectedProfile.inheritedPersonaId) }}</div>
               <AppSelect dense v-model="selectedPersonaId" outlined emit-value map-options label="Persona" :options="personaOptions" :disable="mutationBlocked" :rules="[requiredRule]" />
               <q-input dense :model-value="selectedPersona?.instructions || ''" outlined type="textarea" rows="8" label="Persona-Anweisungen" readonly />
             </template>
             <template v-else>
               <q-input dense v-model="form.name" outlined label="Name" maxlength="80" :readonly="personalBlocked" :rules="[requiredRule]" />
               <q-input dense v-model="form.instructions" outlined type="textarea" rows="12" label="Verhalten und Ton" maxlength="32002" :readonly="personalBlocked" hint="Diese Anweisungen werden an das ausgewählte Modell übertragen." />
+              <q-checkbox v-if="!admin" v-model="form.setAsDefault" label="Als meinen Standard verwenden" :disable="mutationBlocked" />
             </template>
           </q-card-section>
           <q-card-actions align="right">
@@ -132,7 +134,7 @@ const assignmentDialog = ref(false)
 const editingPersonaId = ref(null)
 const profileId = ref(null)
 const selectedPersonaId = ref(null)
-const form = reactive({ name: '', instructions: '' })
+const form = reactive({ name: '', instructions: '', setAsDefault: false })
 const scope = computed(() => admin ? 'instance' : 'personal')
 const ready = computed(() => identity.settingsLoaded && !identity.settingsLoading && identity.scope === scope.value)
 const showManagement = computed(() => !admin || section.value === 'management')
@@ -186,7 +188,7 @@ async function setDefaultPersona(id) {
 function openPersona(persona = null) {
   assignmentDialog.value = false
   editingPersonaId.value = persona?.id || null
-  Object.assign(form, { name: persona?.name || '', instructions: persona?.instructions || '' })
+  Object.assign(form, { name: persona?.name || '', instructions: persona?.instructions || '', setAsDefault: Boolean(persona && persona.id === identity.personalDefaultPersonaId) })
   dialogOpen.value = true
 }
 function selectProfile(id) {
@@ -203,18 +205,22 @@ async function saveDialog() {
   if (mutationBlocked.value) return
   try {
     if (assignmentDialog.value) await identity.savePersonaOverride(profileId.value, selectedPersonaId.value)
-    else await identity.savePersona(editingPersonaId.value, { name: form.name.trim(), instructions: form.instructions.trim() })
+    else await identity.savePersona(editingPersonaId.value, {
+      name: form.name.trim(), instructions: form.instructions.trim(),
+      ...(!admin ? { setAsDefault: form.setAsDefault } : {})
+    })
     dialogOpen.value = false
     $q.notify({ type: 'positive', message: assignmentDialog.value ? 'Persona-Zuordnung gespeichert' : 'Persona gespeichert' })
   } catch { /* Central API toast. */ }
 }
 async function removePersona(persona) {
-  if (!await confirm(`Persona „${persona.name}“ löschen? Ihre Zuordnungen fallen auf die Vorgabe zurück.`, 'Persona löschen?', { okLabel: 'Löschen', okColor: 'negative' })) return
+  const defaultNotice = persona.id === identity.personalDefaultPersonaId ? ' Dein persönlicher Standard wird ebenfalls aufgehoben.' : ''
+  if (!await confirm(`Persona „${persona.name}“ löschen? Ihre Zuordnungen fallen auf die Vorgabe zurück.${defaultNotice}`, 'Persona löschen?', { okLabel: 'Löschen', okColor: 'negative' })) return
   try { await identity.deletePersona(persona.id); $q.notify({ type: 'positive', message: 'Persona gelöscht' }) } catch { /* Central API toast. */ }
 }
 async function removeOverride(id) {
-  if (!await confirm(`Persona-Override für „${profileName(id)}“ löschen? Danach gilt wieder die Vorgabe.`, 'Override löschen?', { okLabel: 'Löschen', okColor: 'negative' })) return
-  try { await identity.deletePersonaOverride(id); $q.notify({ type: 'positive', message: 'Persona-Override gelöscht' }) } catch { /* Central API toast. */ }
+  if (!await confirm(`Persona-Zuordnung für „${profileName(id)}“ löschen? Danach gilt wieder die Vorgabe.`, 'Zuordnung löschen?', { okLabel: 'Löschen', okColor: 'negative' })) return
+  try { await identity.deletePersonaOverride(id); $q.notify({ type: 'positive', message: 'Persona-Zuordnung gelöscht' }) } catch { /* Central API toast. */ }
 }
 const confirmDiscard = () => !identity.settingsSaving && (!nameDirty.value || confirm('Ungespeicherte Änderungen verwerfen?'))
 watch(() => [admin, route.query.profileId], load, { immediate: true })

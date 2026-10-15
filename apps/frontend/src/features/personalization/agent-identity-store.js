@@ -9,6 +9,7 @@ const defaultSettings = () => ({
   personalPersonasEnabled: true,
   personas: [],
   defaultPersonaId: null,
+  personalDefaultPersonaId: null,
   profilePersonas: {},
   profiles: []
 })
@@ -56,6 +57,7 @@ export const useAgentIdentityStore = defineStore('agent-identity', {
       this.personalPersonasEnabled = settings?.personalPersonasEnabled !== false
       this.personas = settings?.personas || []
       this.defaultPersonaId = settings?.defaultPersonaId || null
+      this.personalDefaultPersonaId = settings?.personalDefaultPersonaId || null
       this.profilePersonas = settings?.profilePersonas || {}
       this.profiles = settings?.profiles || []
       this.settingsLoaded = true

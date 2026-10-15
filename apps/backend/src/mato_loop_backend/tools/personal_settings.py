@@ -33,6 +33,7 @@ from mato_loop_backend.settings import (
     MemorySettings,
     SettingsStore,
     ToolExecutionPolicy,
+    UserAgentIdentitySettings,
     UserProfileSettings,
     load_agent_profile,
     load_effective_agent_identity,
@@ -168,12 +169,22 @@ async def _personal_settings(
         areas = {
             **{key: list(fields) for key, (_type, fields) in _SCALAR_SETTINGS.items()},
             "user_profile": sorted(_PROFILE_FIELDS),
-            "agent_identity": ["display_name", "instructions"],
+            "agent_identity": ["display_name", "instructions", "set_as_default"],
             "variables": ["name", "secret", "description", "value_ref"],
             "integrations": adapters,
             "integrationOptions": ["search_selection", "caldav_defaults"],
         }
-        return ToolResult.json({"areas": {area: areas[area]} if area else areas})
+        result = {"areas": {area: areas[area]} if area else areas}
+        if area in {None, "agent_identity"}:
+            result["agentIdentityUsage"] = (
+                "Use action=update. changes.instructions edits the active persona for all agents using it, preserving assignments. "
+                "Copy user-supplied instructions exactly. changes.set_as_default=true makes it your personal default; "
+                "false clears the personal default; omit to keep it unchanged. "
+                "Editing or selecting a global persona as the default creates a personal copy. "
+                "The copy is assigned only to the current agent unless setting it as the default. "
+                "Existing personal profile assignments take precedence over the default."
+            )
+        return ToolResult.json(result)
 
     assert area is not None
     if area == "integrations":
@@ -295,11 +306,13 @@ async def _personal_settings(
             identity = await load_effective_agent_identity(
                 context.db, context.session.user_id, profile,
             )
+            personal = await SettingsStore.load(context.db, UserAgentIdentitySettings, user_id=context.session.user_id)
             return ToolResult.json({
                 "displayName": identity.display_name,
                 "personaName": identity.persona.name,
                 "personaEditable": identity.persona_editable,
                 "personalDisplayNameEnabled": identity.personal_display_name_enabled,
+                "personalDefaultPersonaId": str(personal.default_persona_id) if personal.default_persona_id else None,
             })
         try:
             changes = UpdateAgentIdentityArguments.model_validate(arguments.changes)

@@ -22,6 +22,7 @@ const settings = (values = {}) => ({
   personalPersonasEnabled: true,
   personas: [{ id: 'global', name: 'Standard', instructions: 'Freundlich.', scope: 'instance' }],
   defaultPersonaId: 'global',
+  personalDefaultPersonaId: null,
   profilePersonas: {},
   profiles: [],
   ...values
@@ -50,6 +51,7 @@ describe('agent identity store', () => {
       data: settings({
         configuredDisplayName: 'Ada',
         effectiveDisplayName: 'Ada',
+        personalDefaultPersonaId: 'own',
         profilePersonas: { 'global-agent': 'global' }
       })
     })
@@ -63,6 +65,7 @@ describe('agent identity store', () => {
     expect(identity.configuredDisplayName).toBe('Ada')
     expect(identity.displayName).toBe('Ada')
     expect(identity.profilePersonas).toEqual({ 'global-agent': 'global' })
+    expect(identity.personalDefaultPersonaId).toBe('own')
   })
 
   it('persists scoped names and persona overrides with exact payloads', async () => {
@@ -107,4 +110,5 @@ describe('agent identity store', () => {
 
     expect(identity.displayName).toBe('Neu')
   })
+
 })

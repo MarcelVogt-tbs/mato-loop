@@ -879,13 +879,22 @@ def agent_identity_permission(
     changes_name: bool,
     changes_instructions: bool,
     persona_name: str | None = None,
+    set_as_default: bool | None = None,
 ) -> PermissionRequest:
     if changes_name and changes_instructions:
         summary = f"Der Agent möchte seinen Namen und die Persona „{persona_name}“ ändern."
     elif changes_name:
         summary = "Der Agent möchte seinen Namen ändern."
-    else:
+    elif changes_instructions:
         summary = f"Der Agent möchte die Persona „{persona_name}“ ändern."
+    else:
+        summary = ""
+    if set_as_default is not None:
+        default_summary = (
+            f"Die Persona „{persona_name}“ soll als persönlicher Standard verwendet werden."
+            if set_as_default else "Der persönliche Persona-Standard soll aufgehoben werden."
+        )
+        summary = f"{summary} {default_summary}".strip()
     return PermissionRequest(
         capability="settings.agent_identity.update",
         resource_type="agent_identity",

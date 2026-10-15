@@ -40,6 +40,7 @@ class PersonaRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     name: str = Field(min_length=1, max_length=80)
     instructions: str = Field(max_length=32_002)
+    set_as_default: bool | None = Field(default=None, alias="setAsDefault", strict=True)
 
 
 class PersonaAssignmentRequest(BaseModel):
@@ -65,6 +66,8 @@ async def _load_scoped(
 async def _settings_payload(db, user, scope, scoped) -> dict:
     instance = await SettingsStore.load(db, AgentIdentitySettings)
     effective = await load_effective_agent_identity(db, user.id)
+    inherited_instance = instance.model_copy(update={"personal_personas_enabled": effective.personal_display_name_enabled})
+    inherited = scoped.model_copy(update={"profile_personas": {}}) if scope == "personal" else None
     profiles = await load_effective_agent_profiles(db, user.id, include_personal=scope == "personal", include_integrations=scope == "personal")
     return {
         "scope": scope,
@@ -72,6 +75,7 @@ async def _settings_payload(db, user, scope, scoped) -> dict:
         "effectiveDisplayName": effective.display_name,
         "personalPersonasEnabled": instance.personal_personas_enabled,
         "defaultPersonaId": str(instance.default_persona_id),
+        "personalDefaultPersonaId": str(scoped.default_persona_id) if scope == "personal" and scoped.default_persona_id else None,
         "personas": [
             {**persona.model_dump(mode="json"), "scope": owner_scope}
             for owner_scope, personas in [("instance", instance.personas), ("personal", scoped.personas if scope == "personal" else [])]
@@ -81,7 +85,7 @@ async def _settings_payload(db, user, scope, scoped) -> dict:
         "profiles": [{
             "id": str(profile.id), "name": profile.name,
             "scope": "personal" if profile.owner_id == user.id else "instance",
-            "inheritedPersonaId": str(resolve_agent_persona(instance, None, profile).id) if scope == "personal" else str(instance.default_persona_id),
+            "inheritedPersonaId": str(resolve_agent_persona(inherited_instance, inherited, profile).id) if scope == "personal" else str(instance.default_persona_id),
         } for profile in profiles.profiles],
     }
 
@@ -185,8 +189,13 @@ async def create_persona(
     scope: SettingsApiScope = "personal",
 ) -> dict:
     settings, owner_id = await _load_override_settings(db, user, scope)
+    if scope == "instance" and payload.set_as_default is not None:
+        raise ApiError(422, "validation.invalidChoice", field="setAsDefault")
     _ensure_unique_name(settings, payload.name)
-    settings.personas.append(PersonaProfile(id=uuid4(), **payload.model_dump()))
+    persona = PersonaProfile(id=uuid4(), name=payload.name, instructions=payload.instructions)
+    settings.personas.append(persona)
+    if payload.set_as_default is True:
+        settings.default_persona_id = persona.id
     await SettingsStore.save(db, settings, user_id=owner_id)
     await db.commit()
     return await _settings_payload(db, user, scope, settings)
@@ -201,11 +210,17 @@ async def update_persona(
     scope: SettingsApiScope = "personal",
 ) -> dict:
     settings, owner_id = await _load_override_settings(db, user, scope)
+    if scope == "instance" and payload.set_as_default is not None:
+        raise ApiError(422, "validation.invalidChoice", field="setAsDefault")
     index = next((index for index, persona in enumerate(settings.personas) if persona.id == persona_id), None)
     if index is None:
         raise ApiError(404, "personaProfile.notFound")
     _ensure_unique_name(settings, payload.name, persona_id)
-    settings.personas[index] = PersonaProfile(id=persona_id, **payload.model_dump())
+    settings.personas[index] = PersonaProfile(id=persona_id, name=payload.name, instructions=payload.instructions)
+    if payload.set_as_default is True:
+        settings.default_persona_id = persona_id
+    elif payload.set_as_default is False and settings.default_persona_id == persona_id:
+        settings.default_persona_id = None
     await SettingsStore.save(db, settings, user_id=owner_id)
     await db.commit()
     return await _settings_payload(db, user, scope, settings)
@@ -224,6 +239,8 @@ async def delete_persona(
     if not any(persona.id == persona_id for persona in settings.personas):
         raise ApiError(404, "personaProfile.notFound")
     settings.personas = [persona for persona in settings.personas if persona.id != persona_id]
+    if settings.default_persona_id == persona_id:
+        settings.default_persona_id = None
     settings.profile_personas = {key: value for key, value in settings.profile_personas.items() if value != persona_id}
     await SettingsStore.save(db, settings, user_id=owner_id)
     await db.commit()

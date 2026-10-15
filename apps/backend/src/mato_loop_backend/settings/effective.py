@@ -109,11 +109,15 @@ def resolve_agent_persona(
     if agent_profile is not None:
         if agent_profile.owner_id is None:
             selected = instance.profile_personas.get(agent_profile.id, selected)
-        if instance.personal_personas_enabled and personal is not None:
-            available = {**catalog, **{persona.id: persona for persona in personal.personas}}
+    if instance.personal_personas_enabled and personal is not None:
+        own = {persona.id: persona for persona in personal.personas}
+        available = {**catalog, **own}
+        if agent_profile is not None:
             personal_id = personal.profile_personas.get(agent_profile.id)
             if personal_id in available:
                 return available[personal_id].model_copy(deep=True)
+        if personal.default_persona_id in own:
+            return own[personal.default_persona_id].model_copy(deep=True)
     return catalog.get(selected, catalog[instance.default_persona_id]).model_copy(deep=True)
 
 
