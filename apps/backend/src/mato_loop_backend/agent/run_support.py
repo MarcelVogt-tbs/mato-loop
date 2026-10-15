@@ -419,6 +419,10 @@ def _model_for_id(ai_settings: AiSettings, model_id: UUID | None) -> ModelConfig
 
 def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     safe = dict(arguments)
+    if tool_name == "arcane_project_save":
+        for field in ("compose_content", "env_content", "override_content"):
+            if field in safe:
+                safe[field] = {"redacted": True}
     for key in safe:
         if key.lower().endswith(("token", "password", "secret", "credential", "api_key")):
             safe[key] = "[Redacted]"

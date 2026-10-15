@@ -23,6 +23,7 @@ from mato_loop_backend.agent.video_analysis import video_analysis_available
 from mato_loop_backend.diagnostics.service import schedule_diagnostic_event
 from mato_loop_backend.execution import ExecutionClientError
 from mato_loop_backend.files.service import RootFileError
+from mato_loop_backend.integrations.arcane.client import ArcaneError
 from mato_loop_backend.integrations.contracts import IntegrationResource
 from mato_loop_backend.integrations.mail.client import MailError
 from mato_loop_backend.integrations.registry import integration_adapter
@@ -442,6 +443,7 @@ async def execute_definition(
     except (ToolArgumentsEdited, ToolCallSuperseded):
         raise
     except (
+        ArcaneError,
         AttachmentError,
         ExecutionClientError,
         MailError,

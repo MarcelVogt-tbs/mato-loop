@@ -1,5 +1,7 @@
 import json
+from contextlib import asynccontextmanager
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -11,6 +13,7 @@ from sqlalchemy.orm import Session
 import mato_loop_backend.agent.loop as mock_agent_loop
 import mato_loop_backend.agent.run_support as mock_agent_run_support
 import mato_loop_backend.agent.runtime as mock_agent_runtime
+import mato_loop_backend.integrations.arcane.adapter as arcane_module
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.subagents import permission_snapshot
 from mato_loop_backend.execution import ShellInspectResult
@@ -67,7 +70,11 @@ from mato_loop_backend.settings import (
     ToolSettings,
     TrustLevel,
 )
-from mato_loop_backend.settings.models import AgentProfilePermissions, sysadmin_profile
+from mato_loop_backend.settings.models import (
+    AgentProfilePermissions,
+    IntegrationPermissions,
+    sysadmin_profile,
+)
 from mato_loop_backend.tools.actions import ToolAction
 from mato_loop_backend.tools.catalog import tool_registry
 
@@ -2107,3 +2114,86 @@ async def test_webfetch_grant_matches_only_the_exact_url_hash(tmp_path) -> None:
         webfetch_permission("https://example.com/page?lang=en"),
         root_files,
     ) == PermissionDecision.ASK
+
+
+async def test_sysadmin_arcane_save_rechecks_real_grants_after_secret_resolution(tmp_path, monkeypatch):
+    profile = sysadmin_profile()
+    instance = IntegrationInstance(name="Host", integration_type="infrastructure", adapter_type="arcane",
+                                   config={"base_url": "https://arcane.example.test"},
+                                   profile_permissions={profile.id: IntegrationPermissions(available=True)})
+    integrations = IntegrationSettings(instances=[instance])
+    settings = ToolSettings().select_trust(TrustLevel.PUBLIC)
+    session = _session(user_id=uuid4(), agent_profile_id=profile.id)
+    run = AgentRun(id=uuid4(), session_id=session.id, agent_profile_id=profile.id, trust_level="public")
+    secret_id = uuid4()
+    arguments = arcane_module.ArcaneProjectSave(integration_id=instance.id, environment_id="0", name="app",
+        compose_content="services: {}", env_content={"parts": ["VALUE=", {"value_ref": f"run-secret:{secret_id}"}]})
+    call = ToolCall("save", "arcane_project_save", arguments.model_dump(mode="json"))
+    context = SimpleNamespace(session=session, integration_settings=integrations, one_time_secrets={secret_id: "private"},
+        current_integrations=AsyncMock(return_value=integrations), bound_options={"integration_id": str(instance.id),
+            "binding_revision": json.dumps(instance.binding_data(), ensure_ascii=True, separators=(",", ":"), sort_keys=True)})
+    request = arcane_module._project_save_permission(arguments, context)[0]
+    grant = _grant(request, session.id, run_id=run.id, agent_profile_id=profile.id, trust_level="public")
+    db = _db_with_grants(grant)
+    db.scalar.return_value = None
+    roots = _root_files(tmp_path, session)
+    monkeypatch.setattr(mock_agent_runtime, "permission_origin", AsyncMock(return_value=session))
+    monkeypatch.setattr(mock_agent_runtime, "delegation_snapshot", AsyncMock(return_value=None))
+    monkeypatch.setattr(mock_agent_runtime, "load_agent_profile_tools", AsyncMock(return_value=(settings, profile)))
+    monkeypatch.setattr(mock_agent_runtime, "load_effective_integrations", AsyncMock(return_value=integrations))
+
+    async def authorize(request, *, check_only=False):
+        assert check_only
+        return await AgentRuntime._authorize(db, run, session, call, request, roots, check_only=True)
+
+    context.ask_handler = authorize
+    remote = AsyncMock(return_value=({"id": "created"}, None))
+
+    @asynccontextmanager
+    async def client(_arguments, _context):
+        yield SimpleNamespace(request=remote)
+
+    monkeypatch.setattr(arcane_module, "_client", client)
+    assert not (await arcane_module.arcane_project_save(arguments, context)).is_error
+    resolve = arcane_module.resolve_protected_text
+
+    async def revoke(context, text):
+        value = await resolve(context, text)
+        if not isinstance(text, str):
+            db.scalars.return_value.all.return_value = []
+        return value
+
+    monkeypatch.setattr(arcane_module, "resolve_protected_text", revoke)
+    result = await arcane_module.arcane_project_save(arguments, context)
+    assert result.is_error and "permission.denied" in result.content and remote.await_count == 1
+
+
+@pytest.mark.parametrize("trust", list(TrustLevel))
+async def test_sysadmin_arcane_config_uses_sensitive_read_guard(tmp_path, monkeypatch, trust):
+    profile = sysadmin_profile()
+    instance = IntegrationInstance(name="Host", integration_type="infrastructure", adapter_type="arcane",
+        config={"base_url": "https://arcane.example.test"}, profile_permissions={profile.id: IntegrationPermissions(available=True)})
+    integrations = IntegrationSettings(instances=[instance])
+    settings = ToolSettings(private_permission_preset="ask_changes_sensitive", public_permission_preset="ask_changes_sensitive").select_trust(trust)
+    settings._agent_permissions = getattr(profile, f"{trust.value}_permissions")
+    session = _session(user_id=uuid4(), agent_profile_id=profile.id)
+    run = AgentRun(id=uuid4(), session_id=session.id, agent_profile_id=profile.id, trust_level=trust.value)
+    db = _db_with_grants()
+    db.scalar.return_value = None
+    roots = _root_files(tmp_path, session)
+    monkeypatch.setattr(mock_agent_runtime, "permission_origin", AsyncMock(return_value=session))
+    monkeypatch.setattr(mock_agent_runtime, "delegation_snapshot", AsyncMock(return_value=None))
+    monkeypatch.setattr(mock_agent_runtime, "load_agent_profile_tools", AsyncMock(return_value=(settings, profile)))
+    monkeypatch.setattr(mock_agent_runtime, "load_effective_integrations", AsyncMock(return_value=integrations))
+    context = SimpleNamespace(integration_settings=integrations, bound_options={"integration_id": str(instance.id),
+        "binding_revision": json.dumps(instance.binding_data(), ensure_ascii=True, separators=(",", ":"), sort_keys=True)})
+    summary = arcane_module.ArcaneGet(integration_id=instance.id, environment_id="0", kind="projects", resource_id="app")
+    config = arcane_module.ArcaneProjectConfig(integration_id=instance.id, environment_id="0", project_id="app")
+    decisions = []
+    for name, arguments, request in (
+        ("arcane_get", summary, arcane_module._read_permission(summary, context)[0]),
+        ("arcane_project_config", config, arcane_module._project_config_permission(config, context)[0]),
+    ):
+        decisions.append(await AgentRuntime._authorize(db, run, session,
+            ToolCall(name, name, arguments.model_dump(mode="json")), request, roots, check_only=True))
+    assert decisions == [PermissionDecision.ALLOW, PermissionDecision.ASK]

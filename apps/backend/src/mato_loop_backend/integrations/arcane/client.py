@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+from collections import deque
 from typing import Any
 from urllib.parse import quote
 
+import aiohttp
 import httpx
 from pydantic import BaseModel, ConfigDict, HttpUrl, model_validator
+
+LOG_CAPTURE_SECONDS = 30
+LOG_CAPTURE_BYTES = 256 * 1024
 
 
 class ArcaneConfig(BaseModel):
@@ -57,19 +63,86 @@ class ArcaneClient:
         if self._owned:
             await self._client.aclose()
 
-    async def request(
-        self, method: str, path: str, *, params: dict[str, Any] | None = None,
-        body: dict[str, Any] | None = None, streamed: bool = False, text: bool = False,
-    ) -> Any:
+    def _url(self, path: str, params: dict[str, Any] | None = None) -> httpx.URL:
         # Paths are assembled only from host-known fragments and encoded identifiers.
         if not path.startswith("/") or ".." in path or "?" in path or "#" in path:
             raise ValueError("invalid Arcane API path")
         url = self._base.copy_with(raw_path=self._base.raw_path.rstrip(b"/") + b"/api" + path.encode())
-        if params:
-            url = url.copy_with(params=params)
+        return url.copy_with(params=params) if params else url
+
+    async def logs(self, environment: str, container: str, tail: int) -> dict[str, Any]:
+        url = self._url(f"/environments/{environment_id(environment)}/ws/containers/{segment(container)}/logs",
+                        {"tail": tail, "follow": "false", "format": "json", "timestamps": "true"})
+        trace = aiohttp.TraceConfig()
+
+        async def reject_redirect(*_args: Any) -> None:
+            raise ArcaneError("integration.unavailable")
+
+        trace.on_request_redirect.append(reject_redirect)
+        lines: deque[bytes] = deque(maxlen=tail)
+        size = 0
+        received = 0
+        truncated = False
+        complete = False
+        try:
+            async with aiohttp.ClientSession(trust_env=False, timeout=aiohttp.ClientTimeout(total=30), trace_configs=[trace]) as session:
+                async with session.ws_connect(str(url), headers={"X-Api-Key": self._key}, max_msg_size=LOG_CAPTURE_BYTES) as socket:
+                    async with asyncio.timeout(LOG_CAPTURE_SECONDS):
+                        while received < LOG_CAPTURE_BYTES:
+                            try:
+                                # Arcane does not close a finished log hub or emit an end marker.
+                                message = await socket.receive(timeout=2 if lines else 10)
+                            except TimeoutError:
+                                break
+                            if message.type == aiohttp.WSMsgType.CLOSE:
+                                complete = message.data == 1000
+                                truncated |= message.data == aiohttp.WSCloseCode.MESSAGE_TOO_BIG
+                                break
+                            if message.type == aiohttp.WSMsgType.ERROR and socket.close_code == aiohttp.WSCloseCode.MESSAGE_TOO_BIG:
+                                truncated = True
+                                break
+                            if message.type != aiohttp.WSMsgType.TEXT:
+                                raise ArcaneError("integration.invalidResponse")
+                            received += len(message.data.encode("utf-8"))
+                            event = json.loads(message.data)
+                            if not isinstance(event, dict) or not isinstance(event.get("message"), str):
+                                raise ArcaneError("integration.invalidResponse")
+                            if event.get("service") == "arcane" and event.get("level") == "error":
+                                raise ArcaneError("integration.unavailable")
+                            for line in event["message"].splitlines() or [""]:
+                                entry = (line + "\n").encode("utf-8")
+                                truncated |= len(entry) > 32 * 1024 or len(lines) == tail
+                                if len(lines) == tail:
+                                    size -= len(lines[0])
+                                entry = entry[-32 * 1024:]
+                                lines.append(entry)
+                                size += len(entry)
+                                while size > 32 * 1024:
+                                    size -= len(lines.popleft())
+                                    truncated = True
+                        else:
+                            truncated = True
+        except aiohttp.WSServerHandshakeError as exc:
+            code = {401: "integration.authenticationFailed", 403: "integration.permissionDenied",
+                    404: "integration.remoteNotFound", 429: "integration.rateLimited"}.get(exc.status, "integration.unavailable")
+            raise ArcaneError(code) from exc
+        except TimeoutError as exc:
+            if not lines:
+                raise ArcaneError("integration.unavailable") from exc
+        except (aiohttp.ClientError, ValueError) as exc:
+            raise ArcaneError("integration.unavailable") from exc
+        return {"logs": b"".join(lines).decode("utf-8", errors="replace"), "truncated": truncated, "captureComplete": complete}
+
+    async def request(
+        self, method: str, path: str, *, params: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None, streamed: bool = False,
+        multipart: dict[str, Any] | None = None, max_bytes: int = 256 * 1024,
+    ) -> Any:
+        url = self._url(path, params)
         request = self._client.build_request(
-            method, url, headers={"X-Api-Key": self._key, "Accept": "text/plain" if text else "application/json"},
-            json=body,
+            method, url, headers={"X-Api-Key": self._key, "Accept": "application/json"},
+            **({"files": {key: (None, json.dumps(value), "application/json") for key, value in multipart.items()}}
+               if multipart is not None else {"json": body}),
         )
         mutation = method != "GET"
         try:
@@ -86,11 +159,13 @@ class ArcaneClient:
                 raise ArcaneError("integration.permissionDenied")
             if status == 404:
                 raise ArcaneError("integration.remoteNotFound")
+            if status == 409:
+                raise ArcaneError("integration.changed")
             if status == 429:
                 raise ArcaneError("integration.rateLimited")
             if status < 200 or status >= 300:
                 raise ArcaneError("integration.outcomeUnknown" if mutation else "integration.unavailable")
-            limit = 2 * 1024 * 1024 if streamed else 32 * 1024 if text else 256 * 1024
+            limit = 2 * 1024 * 1024 if streamed else max_bytes
             if streamed:
                 size = 0
                 activity_id = None
@@ -119,8 +194,6 @@ class ArcaneClient:
                     raise ArcaneError("integration.outcomeUnknown" if mutation else "integration.responseTooLarge")
                 chunks.append(chunk)
             content = b"".join(chunks)
-            if text:
-                return content.decode("utf-8", errors="replace")
             try:
                 payload = json.loads(content) if content else None
             except (ValueError, UnicodeDecodeError) as exc:

@@ -115,4 +115,5 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     # Includes task continuation, progress updates, grounding, media, permission failures, automation scope, and computer provenance.
     assert prompt_tokens <= 9_300, prompt_tokens
     assert schema_tokens <= 13_300, schema_tokens
-    assert prompt_tokens + schema_tokens <= 22_400, prompt_tokens + schema_tokens
+    # Includes both Arcane project tool names in inactive integration guidance.
+    assert prompt_tokens + schema_tokens <= 22_420, prompt_tokens + schema_tokens

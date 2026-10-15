@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import asynccontextmanager
-from typing import Any, Literal
+from dataclasses import replace
+from difflib import unified_diff
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -15,6 +17,17 @@ from mato_loop_backend.integrations.arcane.client import (
     environment_id,
     segment,
 )
+from mato_loop_backend.integrations.arcane.project_config import (
+    MAX_CONFIG_CHARACTERS,
+    MAX_CONFIG_INPUT_CHARACTERS,
+    MAX_CONFIG_RESPONSE_BYTES,
+    MAX_CONFIG_SNAPSHOT_CHARACTERS,
+    configuration,
+    fingerprint,
+    project_snapshot,
+    read_snapshot,
+    restore_private_values,
+)
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
     IntegrationContributions,
@@ -22,9 +35,13 @@ from mato_loop_backend.integrations.contracts import (
     ToolContribution,
 )
 from mato_loop_backend.models import Credential
+from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings import IntegrationInstance
 from mato_loop_backend.tools.actions import ToolAction
+from mato_loop_backend.tools.arguments import ProtectedText
+from mato_loop_backend.tools.contracts import ToolResult
+from mato_loop_backend.tools.secrets import resolve_protected_text
 from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 ARCANE_CREDENTIAL_KIND = "arcane.api_key"
@@ -74,6 +91,29 @@ class ArcaneGet(ArcaneEnvironment):
 
 class ArcaneLogs(ArcaneEnvironment):
     container_id: str = Field(min_length=1, max_length=256)
+    tail: int = Field(default=200, ge=1, le=500)
+
+
+class ArcaneProjectConfig(ArcaneEnvironment):
+    project_id: str = Field(min_length=1, max_length=256)
+
+
+class ArcaneProjectSave(ArcaneEnvironment):
+    project_id: str | None = Field(default=None, min_length=1, max_length=256)
+    snapshot_token: str | None = Field(default=None, min_length=1, max_length=MAX_CONFIG_SNAPSHOT_CHARACTERS)
+    name: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,79}$")
+    compose_content: Annotated[str, Field(min_length=1, max_length=MAX_CONFIG_INPUT_CHARACTERS)] | ProtectedText | None = None
+    env_content: Annotated[str, Field(max_length=MAX_CONFIG_INPUT_CHARACTERS)] | ProtectedText | None = None
+    override_content: Annotated[str, Field(max_length=MAX_CONFIG_INPUT_CHARACTERS)] | ProtectedText | None = None
+
+    @model_validator(mode="after")
+    def validate_project(self) -> ArcaneProjectSave:
+        if self.project_id is None:
+            if not self.name or self.compose_content is None or self.snapshot_token is not None or self.override_content is not None:
+                raise ValueError("a new Arcane project requires name and compose_content, without snapshot or override")
+        elif self.snapshot_token is None or all(value is None for value in (self.name, self.compose_content, self.env_content, self.override_content)):
+            raise ValueError("an Arcane project update requires snapshot_token and at least one changed field")
+        return self
 
 
 class ArcaneAction(ArcaneEnvironment):
@@ -261,8 +301,72 @@ async def arcane_get(args: ArcaneGet, context: Any) -> Any:
 async def arcane_logs(args: ArcaneLogs, context: Any) -> Any:
     try:
         async with _client(args, context) as client:
-            logs = await client.request("GET", f"/environments/{args.environment_id}/containers/{segment(args.container_id)}/logs/download", text=True)
-        return _result({"containerId": args.container_id, "logs": logs})
+            logs = await client.logs(args.environment_id, args.container_id, args.tail)
+        return _result({"containerId": args.container_id, **logs})
+    except ValueError:
+        return _error("integration.staleReference")
+    except ArcaneError as exc:
+        return _error(exc.code)
+
+
+def _project_snapshot_context(args: ArcaneEnvironment, context: Any, project_id: str) -> dict[str, str]:
+    _instance, revision = _binding(context, args.integration_id)
+    return {"integration_id": str(args.integration_id), "environment_id": args.environment_id,
+            "project_id": project_id, "session_id": str(context.session.id), "binding_revision": revision}
+
+
+async def arcane_project_config(args: ArcaneProjectConfig, context: Any) -> Any:
+    try:
+        binding = _project_snapshot_context(args, context, args.project_id)
+        async with _client(args, context) as client:
+            data, _ = await client.request("GET", f"/environments/{args.environment_id}/projects/{segment(args.project_id)}/compose", max_bytes=MAX_CONFIG_RESPONSE_BYTES)
+        return _result(project_snapshot(configuration(data), **binding))
+    except ValueError:
+        return _error("integration.staleReference")
+    except ArcaneError as exc:
+        return _error(exc.code)
+
+
+async def arcane_project_save(args: ArcaneProjectSave, context: Any) -> Any:
+    try:
+        snapshot = read_snapshot(args.snapshot_token, **_project_snapshot_context(args, context, args.project_id)) if args.project_id else None
+        body = {"name": args.name} if args.name is not None else {}
+        for field, remote in (("compose_content", "composeContent"), ("env_content", "envContent"), ("override_content", "overrideContent")):
+            value = getattr(args, field)
+            if value is None:
+                continue
+            resolved = await resolve_protected_text(context, value)
+            if isinstance(resolved, ToolResult):
+                return resolved
+            text = restore_private_values(resolved[0], snapshot)
+            if len(text) > MAX_CONFIG_CHARACTERS or remote == "composeContent" and not text.strip():
+                return _error("tool.invalidArguments")
+            if args.project_id and not text.strip() and isinstance(value, ProtectedText):
+                return _error("tool.invalidArguments")
+            body[remote] = text
+        context.integration_settings = await context.current_integrations()
+        for request in _project_save_permission(args, context):
+            if await context.ask_handler(request, check_only=True) != PermissionDecision.ALLOW:
+                return _error("permission.denied")
+        path = f"/environments/{args.environment_id}/projects"
+        async with _client(args, context) as client:
+            current_config = {}
+            if args.project_id:
+                path += f"/{segment(args.project_id)}"
+                current, _ = await client.request("GET", path + "/compose", max_bytes=MAX_CONFIG_RESPONSE_BYTES)
+                current_config = configuration(current)
+                # ponytail: Arcane has no conditional config write; a remote edit between GET and PUT can still race.
+                if fingerprint(current_config) != snapshot["configurationDigest"]:
+                    return _error("integration.changed")
+            try:
+                configuration({**current_config, **body})
+            except ArcaneError:
+                return _error("tool.invalidArguments")
+            if args.project_id:
+                data, _ = await client.request("PUT", path, body=body, max_bytes=MAX_CONFIG_RESPONSE_BYTES)
+            else:
+                data, _ = await client.request("POST", path, multipart={"project": body, "manifest": {"fileChanges": []}})
+        return _result({"saved": True, "project": _public(data, "projects"), "deploymentRequired": True})
     except ValueError:
         return _error("integration.staleReference")
     except ArcaneError as exc:
@@ -278,6 +382,8 @@ _ACTION_ROUTES = {
     "pull": ("projects", "pull", True), "build": ("projects", "build", True),
     "update_services": ("projects", "update-services", False),
 }
+
+_VERIFY_PROJECT_ACTIONS = frozenset({"up", "update_services"})
 
 
 async def arcane_action(args: ArcaneAction, context: Any) -> Any:
@@ -308,7 +414,15 @@ async def arcane_action(args: ArcaneAction, context: Any) -> Any:
             path, body = f"{env}/images/{segment(args.resource_id or '')}/tag", {"repository": args.name, "tag": args.tag}
         async with _client(args, context) as client:
             response = await client.request("PUT" if args.action == "auto_update" else "POST", path, body=body, streamed=streamed)
-        return _result(response if streamed else {"completed": True, "activityId": (response[0] or {}).get("activityId") if isinstance(response[0], dict) else None})
+            result = response if streamed else {"completed": True, "activityId": (response[0] or {}).get("activityId") if isinstance(response[0], dict) else None}
+            if args.action in _VERIFY_PROJECT_ACTIONS:
+                try:
+                    runtime, _ = await client.request("GET", f"{env}/projects/{segment(args.resource_id or '')}/runtime")
+                    result["runtime"] = _public(runtime, "projects")
+                except ArcaneError as exc:
+                    # A failed read must not turn a confirmed deployment into a retryable mutation failure.
+                    result["runtimeError"] = exc.code
+        return _result(result)
     except ValueError:
         return _error("integration.staleReference")
     except ArcaneError as exc:
@@ -337,7 +451,7 @@ def _accounts_permission(_args: ArcaneAccounts, _context: Any) -> tuple[Any, ...
                               summary="Der Agent möchte die Arcane-Instanzen lesen.", resource_display="Arcane-Instanzen"),)
 
 
-def _permission(args: ArcaneInstance, context: Any, capability: str, operation: str, target: str) -> tuple[Any, ...]:
+def _permission(args: ArcaneInstance, context: Any, capability: str, operation: str, target: str, *, sensitive_access: bool = False) -> tuple[Any, ...]:
     from mato_loop_backend.permissions.policy import (
         PermissionDisplayItem,
         integration_operation_permission,
@@ -357,7 +471,7 @@ def _permission(args: ArcaneInstance, context: Any, capability: str, operation: 
         "connect_network": "Container mit Netzwerk verbinden", "disconnect_network": "Container vom Netzwerk trennen",
         "auto_update": "Automatische Containerupdates ändern",
     }.get(operation, operation)
-    return (integration_operation_permission(
+    return (replace(integration_operation_permission(
         capability=capability, integration_id=args.integration_id, binding_revision=revision,
         operation_key=f"arcane:{hashlib.sha256(material.encode()).hexdigest()}",
         resource_key=getattr(args, "environment_id", None),
@@ -365,7 +479,7 @@ def _permission(args: ArcaneInstance, context: Any, capability: str, operation: 
         resource_display=f'Arcane "{instance.name[:100]}" · {getattr(args, "environment_id", "Instanz")}',
         title=f"Arcane: {label}?", summary=f"Der Agent möchte {label.lower()}: {target[:160]}.",
         display_items=(PermissionDisplayItem("Ziel", target[:160]),),
-    ),)
+    ), sensitive_access=sensitive_access),)
 
 
 def _environments_permission(args: ArcaneInstance, context: Any) -> tuple[Any, ...]:
@@ -390,7 +504,37 @@ def _manage_permission(args: ArcaneAction, context: Any) -> tuple[Any, ...]:
         target += f":{args.tag}"
     if args.enabled is not None:
         target += f" · {'einschalten' if args.enabled else 'ausschalten'}"
-    return _permission(args, context, _MANAGE.capability, args.action, target)
+    requests = _permission(args, context, _MANAGE.capability, args.action, target)
+    if args.action in _VERIFY_PROJECT_ACTIONS:
+        requests += _permission(args, context, _READ.capability, "Projektzustand prüfen", target)
+    return requests
+
+
+def _project_config_permission(args: ArcaneProjectConfig, context: Any) -> tuple[Any, ...]:
+    return _permission(args, context, _READ.capability, "Projektkonfiguration lesen", args.project_id, sensitive_access=True)
+
+
+def _project_save_permission(args: ArcaneProjectSave, context: Any) -> tuple[Any, ...]:
+    from mato_loop_backend.permissions.policy import PermissionDisplayItem
+
+    snapshot = read_snapshot(args.snapshot_token, **_project_snapshot_context(args, context, args.project_id)) if args.project_id else None
+    request = _permission(args, context, _MANAGE.capability, "Projektkonfiguration speichern", args.project_id or args.name)[0]
+    previews = []
+    for field, remote, label in (("compose_content", "composeContent", "Compose"), ("env_content", "envContent", "Umgebung"), ("override_content", "overrideContent", "Compose-Override")):
+        value = getattr(args, field)
+        if value is not None:
+            text = value if isinstance(value, str) else json.dumps(value.model_dump(mode="json"), ensure_ascii=False)
+            if snapshot:
+                text = "".join(unified_diff(snapshot["visible"][remote].splitlines(keepends=True), text.splitlines(keepends=True), fromfile="Bisher", tofile="Vorgeschlagen"))
+            previews.append(PermissionDisplayItem(label, text, "code"))
+    if args.name is not None:
+        previews.append(PermissionDisplayItem("Projektname", args.name))
+    requests = (replace(request, display_items=(*request.display_items, *previews)),)
+    if args.project_id:
+        requests += _permission(args, context, _READ.capability, "Projektkonfiguration prüfen", args.project_id, sensitive_access=True)
+        if any(isinstance(value, str) and not value.strip() for value in (args.env_content, args.override_content)):
+            requests += _permission(args, context, _DELETE.capability, "Projektkonfiguration leeren", args.project_id)
+    return requests
 
 
 def _delete_permission(args: ArcaneDelete, context: Any) -> tuple[Any, ...]:
@@ -418,14 +562,23 @@ ARCANE_ADAPTER = IntegrationAdapterDefinition(
         ToolContribution(name="arcane_get", description="Read one Docker resource. Projects also support runtime and image-update views.",
                          arguments_model=ArcaneGet, handler=arcane_get, label="Docker-Ressource lesen", icon="info",
                          actions=(_READ,), instance_argument="integration_id", resource_argument="environment_id",
-                         authorization_factory=_read_permission, releases_private_data=True),
-        ToolContribution(name="arcane_logs", description="Read up to 32 KiB of retained container logs. Larger logs fail without truncation.",
+                          authorization_factory=_read_permission, releases_private_data=True),
+        ToolContribution(name="arcane_project_config", description="Read Compose, environment and override content plus included Compose files. Private values are opaque placeholders. Keep placeholders unchanged when editing and pass snapshotToken to arcane_project_save.",
+                         arguments_model=ArcaneProjectConfig, handler=arcane_project_config, label="Compose-Projektkonfiguration lesen", icon="description",
+                         actions=(_READ,), instance_argument="integration_id", resource_argument="environment_id",
+                         authorization_factory=_project_config_permission, releases_private_data=True),
+        ToolContribution(name="arcane_project_save", description="Create or patch a Compose project; deploy separately with arcane_action up. Create: name and compose_content. Update: project_id and snapshot_token from arcane_project_config; omitted fields stay unchanged. Preserve private placeholders; use protected text value_ref from secret_input or variable_read for new secrets. Explicit empty env_content/override_content clears/removes the file and also requires delete permission for updates. Protected text cannot clear an existing file. Included files are read-only.",
+                         arguments_model=ArcaneProjectSave, handler=arcane_project_save, label="Compose-Projektkonfiguration speichern", icon="save",
+                         actions=(_MANAGE, _READ, _DELETE), alternative_action_groups=(frozenset({_MANAGE.capability, _READ.capability, _DELETE.capability}),),
+                         instance_argument="integration_id", resource_argument="environment_id",
+                         authorization_factory=_project_save_permission, releases_private_data=True),
+        ToolContribution(name="arcane_logs", description="Read a snapshot of the last tail container log lines, bounded to 32 KiB. A finished Arcane stream has no end marker; captureComplete=false means capture stopped after an idle or time bound, not proof of complete logs.",
                          arguments_model=ArcaneLogs, handler=arcane_logs, label="Containerprotokoll lesen", icon="article",
                          actions=(_READ,), instance_argument="integration_id", resource_argument="environment_id",
                          authorization_factory=_logs_permission, releases_private_data=True),
-        ToolContribution(name="arcane_action", description="Run one named Docker lifecycle action or create a basic container, volume, or network.",
+        ToolContribution(name="arcane_action", description="Run one named Docker lifecycle action or create a basic container, volume, or network. Project up and update_services include an authorized runtime status/health snapshot. Completed deployment does not imply healthy services; reread arcane_get runtime when health is still starting or runtimeError is present. Never repeat a confirmed mutation just because its status check failed.",
                          arguments_model=ArcaneAction, handler=arcane_action, label="Docker-Ressource verwalten", icon="settings",
-                         actions=(_MANAGE,), instance_argument="integration_id", resource_argument="environment_id",
+                         actions=(_MANAGE, _READ), alternative_action_groups=(frozenset({_MANAGE.capability, _READ.capability}),), instance_argument="integration_id", resource_argument="environment_id",
                          authorization_factory=_manage_permission, releases_private_data=True),
         ToolContribution(name="arcane_delete", description="Delete a container, project, image, volume, or network.",
                          arguments_model=ArcaneDelete, handler=arcane_delete, label="Docker-Ressource löschen", icon="delete",
