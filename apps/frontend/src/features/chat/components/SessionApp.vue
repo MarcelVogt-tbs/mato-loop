@@ -3,13 +3,17 @@
     <q-scroll-area class="col">
       <SessionSettingsFields
         :session="chat.activeContext"
-        :disabled="settingsDisabled"
+        :agent-profile-id="chat.activeAgentProfileId"
+        :disabled="chat.historyActionPending || chat.outboxSaving"
         :fields="['template', 'messageSize', 'agent', 'computer', 'memory', 'webSearch', 'model', 'reasoning']"
         grouped
         show-warning
         class="q-pa-md"
         @update="chat.updateActive"
       />
+      <div v-if="chat.running || chat.runId || chat.current?.activeRun" class="text-caption app-muted q-px-md q-pb-md">
+        Änderungen gelten für die nächste Anfrage. Die laufende Anfrage behält ihre Einstellungen.
+      </div>
       <template v-if="chat.current">
         <q-separator />
         <q-item class="q-px-md q-py-sm">
@@ -30,7 +34,7 @@
               dense
               icon="refresh"
               aria-label="Session-Freigaben aktualisieren"
-              :loading="approvals.grantsLoading"
+              :loading="approvals.grantsLoading && loadedGrantContext !== grantContext"
               :disable="Boolean(revokingId)"
               @click="loadGrants"
             >
@@ -126,7 +130,7 @@ const revokingId = ref(null)
 const sessionGrants = computed(() => approvals.grantsForSession(chat.current?.id))
 const grantContext = computed(() => JSON.stringify([
   chat.current?.id, chat.current?.agentProfileId, chat.current?.modelId, chat.current?.sessionProfile,
-  chat.current?.preferredExecutionAgentId, chat.current?.currentDirectory, chat.runId, chat.current?.activeRun?.id
+  chat.current?.preferredExecutionAgentId, chat.current?.currentDirectory
 ]))
 const loadedGrantContext = ref(null)
 const defaultChannel = computed(() => {
@@ -136,13 +140,6 @@ const defaultChannel = computed(() => {
   }
   return { icon: 'devices', label: 'MatoLoop-App' }
 })
-const settingsDisabled = computed(() => Boolean(
-  chat.running
-  || chat.runId
-  || chat.current?.activeRun
-  || chat.sessionSettingsPending > 0
-  || (chat.current && approvals.forSession(chat.current.id).length)
-))
 const grantDisplay = (grant) => permissionGrantDisplay(grant, chat.cachedSessions)
 
 async function loadGrants() {
@@ -192,9 +189,9 @@ async function revokeAll() {
 }
 
 watch(
-  grantContext,
-  () => {
-    loadedGrantContext.value = null
+  [grantContext, () => chat.runId, () => chat.current?.activeRun?.id],
+  ([context], previous = []) => {
+    if (context !== previous[0]) loadedGrantContext.value = null
     void loadGrants()
   },
   { immediate: true }

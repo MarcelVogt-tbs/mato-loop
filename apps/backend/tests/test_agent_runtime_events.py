@@ -27,6 +27,7 @@ from mato_loop_backend.agent.run_support import (
 )
 from mato_loop_backend.agent.run_timing import run_timing_payload, transition_run_status
 from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.agent.session_settings import RunSessionSettings
 from mato_loop_backend.events import RunEventBroker, run_events
 from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.files.storage import SessionStorage
@@ -490,6 +491,9 @@ async def test_delegation_limit_and_recursion_are_host_enforced(delegated_runtim
 async def test_cancel_before_scheduled_run_starts_persists_terminal_state(monkeypatch, delegated_runtime, shutdown):
     _session, parent, _objects, _databases, _delegate = delegated_runtime
     parent.status = "queued"
+    monkeypatch.setattr(AgentRuntime, "_session_settings", {parent.id: RunSessionSettings(
+        session_profile={}, memory_mode="disabled", web_search_policy="required",
+    )})
     execute = AsyncMock(side_effect=AssertionError("Cancelled work must never execute"))
     monkeypatch.setattr(AgentRuntime, "_execute_loop", execute)
     task = AgentRuntime._schedule_run(parent)
@@ -502,6 +506,7 @@ async def test_cancel_before_scheduled_run_starts_persists_terminal_state(monkey
         await asyncio.gather(task, return_exceptions=True)
         assert parent.status == "cancelled"
     assert parent.result_message_id is not None
+    assert parent.id not in AgentRuntime._session_settings
     execute.assert_not_awaited()
 
 

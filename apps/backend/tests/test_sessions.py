@@ -11,10 +11,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.agent.session_settings import apply_run_session_settings
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.sessions import (
     ActiveFileRequest,
@@ -3265,8 +3267,7 @@ async def test_control_center_update_is_owner_scoped() -> None:
     db.flush.assert_not_awaited()
 
 
-@pytest.mark.parametrize("patch", [{"model_id": uuid4()}, {"session_template_id": None}])
-async def test_runtime_policy_cannot_change_during_active_run(patch) -> None:
+async def test_project_cannot_change_during_active_run() -> None:
     user = _user()
     session_id = uuid4()
     session = ChatSession(
@@ -3283,7 +3284,7 @@ async def test_runtime_policy_cannot_change_during_active_run(patch) -> None:
     with pytest.raises(ApiError) as exc_info:
         await update_session(
             session_id,
-            SessionUpdateRequest(**patch),
+            SessionUpdateRequest(project_id=uuid4()),
             user,
             db,
         )
@@ -3291,27 +3292,34 @@ async def test_runtime_policy_cannot_change_during_active_run(patch) -> None:
     assert exc_info.value.code == "session.runAlreadyActive"
 
 
-async def test_model_cannot_change_during_active_run() -> None:
+async def test_model_change_preserves_active_run_settings(monkeypatch) -> None:
+    from mato_loop_backend.api.routes import sessions as routes
+    from mato_loop_backend.sessions import service
+
     user = _user()
     session_id = uuid4()
+    provider = LlmProviderConfig(name="Cloud", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="chat")
     session = ChatSession(
         id=session_id,
         user_id=user.id,
         title="Test",
         memory_mode="disabled",
         web_search_policy="available",
+        session_profile={},
     )
+    run = AgentRun(id=uuid4(), session_id=session_id, status="running")
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
-    db.scalar.return_value = uuid4()
+    db.scalar.return_value = run.id
+    monkeypatch.setattr(AgentRuntime, "_session_settings", {})
+    monkeypatch.setattr(AgentRuntime, "_tasks", {run.id: SimpleNamespace(done=lambda: False)})
+    monkeypatch.setattr(service, "load_effective_ai", AsyncMock(return_value=AiSettings(providers=[provider], models=[model])))
+    monkeypatch.setattr(routes, "_session_payload", AsyncMock(return_value={}))
 
-    with pytest.raises(ApiError) as exc_info:
-        await update_session(
-            session_id,
-            SessionUpdateRequest(model_id=uuid4()),
-            user,
-            db,
-        )
+    await update_session(session_id, SessionUpdateRequest(model_id=model.id), user, db)
+    await update_session(session_id, SessionUpdateRequest(reasoning_effort="high"), user, db)
+    saved_model = session.model_config_id
+    apply_run_session_settings(session, run)
 
-    assert exc_info.value.code == "session.runAlreadyActive"
-    assert session.model_config_id is None
+    assert (saved_model, session.model_config_id, session.reasoning_effort, inspect(session).attrs.model_config_id.history.has_changes()) == (model.id, None, None, False)

@@ -28,6 +28,7 @@ from mato_loop_backend.agent.run_support import (
     logger,
 )
 from mato_loop_backend.agent.run_timing import run_timing_payload, transition_run_status
+from mato_loop_backend.agent.session_settings import RunSessionSettings, apply_run_session_settings
 from mato_loop_backend.agent.subagents import (
     ceiling_settings,
     delegation_snapshot,
@@ -121,6 +122,7 @@ from mato_loop_backend.tools.registry import _tool_available
 
 class AgentRuntime:
     _tasks: dict[UUID, asyncio.Task[None]] = {}
+    _session_settings: dict[UUID, RunSessionSettings] = {}
     _title_tasks: dict[asyncio.Task[None], UUID] = {}
     _cancellable_runs: set[UUID] = set()
     _user_cancelled_runs: set[UUID] = set()
@@ -151,7 +153,12 @@ class AgentRuntime:
             return existing
         task = asyncio.create_task(cls._run(run_id))
         cls._tasks[run_id] = task
-        task.add_done_callback(lambda _task: cls._tasks.pop(run_id, None))
+
+        def forget_run(_task: asyncio.Task[None]) -> None:
+            cls._tasks.pop(run_id, None)
+            cls._session_settings.pop(run_id, None)
+
+        task.add_done_callback(forget_run)
         return task
 
     @classmethod
@@ -798,6 +805,7 @@ class AgentRuntime:
         session = await db.get(ChatSession, run.session_id)
         if session is None:
             raise AgentRunError("session.notFound")
+        apply_run_session_settings(session, run)
         try:
             profile = await load_agent_profile(db, session.user_id, run.agent_profile_id or session.agent_profile_id)
         except AgentProfileUnavailable as exc:
@@ -1182,6 +1190,7 @@ class AgentRuntime:
                         await NotificationService.deliver_message_after_commit(failed_run.result_message_id)
         finally:
             cls._cancellable_runs.discard(run_id)
+            cls._session_settings.pop(run_id, None)
             cls._user_cancelled_runs.discard(run_id)
             cls._redirected_runs.discard(run_id)
             cls._interrupted_runs.discard(run_id)
@@ -1546,6 +1555,7 @@ class AgentRuntime:
         *,
         check_only: bool = False,
     ) -> PermissionDecision:
+        apply_run_session_settings(chat_session, run)
         origin = await permission_origin(db, chat_session)
         ceiling = await delegation_snapshot(db, run, chat_session)
         if ceiling is not None and (call.name == "task" or call.name not in ceiling["toolNames"]):
@@ -1739,6 +1749,7 @@ class AgentRuntime:
         ):
             approval_resolution["expected_revision"] = resolution.expected_revision
         await db.refresh(chat_session)
+        apply_run_session_settings(chat_session, run)
         try:
             tool_settings, _profile = await load_agent_profile_tools(
                 db,

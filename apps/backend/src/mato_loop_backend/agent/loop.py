@@ -27,6 +27,7 @@ from mato_loop_backend.agent.run_support import (
     logger,
 )
 from mato_loop_backend.agent.session_secrets import session_secrets
+from mato_loop_backend.agent.session_settings import apply_run_session_settings
 from mato_loop_backend.agent.subagents import (
     apply_delegation_ceiling,
     delegation_snapshot,
@@ -92,6 +93,7 @@ async def execute_loop_body(
     chat_session = await db.get(ChatSession, run.session_id)
     if chat_session is None:
         raise AgentRunError("session.notFound")
+    apply_run_session_settings(chat_session, run)
     diagnostics_active = getattr(run, "_diagnostics_active", False) is True
     delegated = chat_session.parent_session_id is not None
     ceiling = await delegation_snapshot(db, run, chat_session)
@@ -257,6 +259,7 @@ async def execute_loop_body(
             modelRequest=model_requests + 1,
         )
         await db.refresh(chat_session)
+        apply_run_session_settings(chat_session, run)
         if run.execution_agent_id != (
             selected_execution_agent.id if selected_execution_agent is not None else None
         ):

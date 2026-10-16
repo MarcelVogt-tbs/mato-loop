@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { createApp, h, nextTick } from 'vue'
+import { createApp, h, nextTick, ref } from 'vue'
 import { createPinia } from 'pinia'
 import { afterEach, expect, it, vi } from 'vitest'
 import { Quasar, QSelect, QIcon, QItem, QItemLabel, QItemSection } from 'quasar'
@@ -31,7 +31,7 @@ it('changes message size while retaining configuration and shows an unselected c
   const option = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find((item) => item.querySelector('.q-item__label')?.textContent === 'Klein'))
   option.click()
   await nextTick()
-  expect(update).toHaveBeenCalledWith({ session_profile: { ...sessionProfile, messageSize: 'small' } })
+  expect(update.mock.calls[0][0].session_profile(sessionProfile)).toEqual({ ...sessionProfile, messageSize: 'small' })
 })
 
 it.each(['override', 'removed'])('lets the compact model menu return to the inherited model from %s', async (modelId) => {
@@ -56,7 +56,8 @@ it.each(['override', 'removed'])('lets the compact model menu return to the inhe
     .find((item) => item.textContent.includes('Standardmodell verwenden')))
   option.click()
   await nextTick()
-  expect(update).toHaveBeenCalledWith({ session_profile: { agentModels: { agent: { modelId: null, reasoningEffort: null } } } })
+  expect(update.mock.calls[0][0].session_profile({ agentModels: { agent: { modelId, reasoningEffort: 'high' } } }))
+    .toEqual({ agentModels: { agent: { modelId: null, reasoningEffort: null } } })
 })
 
 it('browses the selected computer from the session directory field', async () => {
@@ -68,10 +69,11 @@ it('browses the selected computer from the session directory field', async () =>
   const pinia = createPinia()
   useExecutionAgentStore(pinia).items = [{ id: 'computer', alias: 'Server', connected: true, homeDirectory: '/home/user', operations: ['filesystem.list'] }]
   const update = vi.fn()
+  const session = ref({ id: 'session', preferredExecutionAgentId: 'computer', currentDirectory: '/workspace/project' })
   root = document.createElement('div')
   document.body.append(root)
   app = createApp({ render: () => h(SessionSettingsFields, {
-    session: { id: 'session', preferredExecutionAgentId: 'computer', currentDirectory: '/workspace/project' },
+    session: session.value,
     fields: ['computer'], grouped: true, onUpdate: update
   }) }).use(pinia).use(Quasar, quasarOptions)
   app.mount(root)
@@ -79,6 +81,8 @@ it('browses the selected computer from the session directory field', async () =>
   const folder = await vi.waitUntil(() => [...document.querySelectorAll('.q-dialog .q-item')].find(item => item.textContent.includes('/workspace/project/src')))
   folder.click()
   await vi.waitUntil(() => document.querySelector('.q-dialog')?.textContent.includes('Keine Unterordner vorhanden.'))
+  session.value = { ...session.value }
+  await nextTick()
   ;[...document.querySelectorAll('.q-dialog button')].find(button => button.textContent.includes('Diesen Ordner auswählen')).click()
   expect(update).toHaveBeenCalledWith({ current_directory: '/workspace/project/src' })
 })

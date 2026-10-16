@@ -20,6 +20,7 @@ from mato_loop_backend.agent.runtime_memory import (
     _memory_rag_query,
     _recent_episode_overview_requested,
 )
+from mato_loop_backend.agent.session_settings import RunSessionSettings
 from mato_loop_backend.events import run_events
 from mato_loop_backend.memory.embeddings import EmbeddingError, embedding_client
 from mato_loop_backend.memory.episode_retrieval import (
@@ -1026,6 +1027,10 @@ async def test_memory_write_workflow_discards_drafts_until_write_resolves(
         results,
         records=[user],
     )
+    monkeypatch.setattr(AgentRuntime, "_session_settings", {run.id: RunSessionSettings(
+        model_config_id=run.model_config_id, session_profile={}, memory_mode="full", web_search_policy="available",
+    )})
+    db.refresh.side_effect = lambda item: setattr(item, "memory_mode", "disabled") if isinstance(item, ChatSession) else None
     refreshed_pin = MemoryRecord(
         id=uuid4(),
         content="Der Nutzer kommt aus Ascholding.",

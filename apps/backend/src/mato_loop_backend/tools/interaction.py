@@ -7,8 +7,9 @@ from sqlalchemy import select
 import mato_loop_backend.permissions.resolution as permissions_resolution
 import mato_loop_backend.tools.access as tools_access
 from mato_loop_backend.agent.session_secrets import session_secrets
+from mato_loop_backend.agent.session_settings import apply_run_session_settings
 from mato_loop_backend.agent.subagents import permission_origin
-from mato_loop_backend.models import ExecutionAgent
+from mato_loop_backend.models import AgentRun, ExecutionAgent
 from mato_loop_backend.notifications import NotificationDraft, NotificationService
 from mato_loop_backend.permissions.policy import personal_variables_permission
 from mato_loop_backend.personal_variables import (
@@ -149,6 +150,10 @@ async def _secret_input(
     provided = [item for item in missing if answers.answers[item.name]]
     if administrator is not None and any(item.administrator for item in provided):
         await context.db.refresh(context.session)
+        run = await context.db.get(AgentRun, context.run_id)
+        if run is None:
+            return ToolResult.error("permission.denied")
+        apply_run_session_settings(context.session, run)
         if context.session.preferred_execution_agent_id != administrator.agent_id:
             return ToolResult.error("permission.denied")
     remembered = {

@@ -458,6 +458,9 @@ export const sessionsActions = {
         current_directory: 'currentDirectory'
       }
       const normalizedPatch = { ...patch }
+      if (typeof normalizedPatch.session_profile === 'function') {
+        normalizedPatch.session_profile = normalizedPatch.session_profile(options.sessionProfile)
+      }
       if (
         Object.hasOwn(patch, 'preferred_execution_agent_id')
         && patch.preferred_execution_agent_id !== options.preferredExecutionAgentId
@@ -482,14 +485,24 @@ export const sessionsActions = {
         if (!Object.hasOwn(patch, 'current_directory')) normalizedPatch.current_directory = null
       }
       this.sessionSettingsPending += 1
+      const request = (this.sessionSettingsPromise || Promise.resolve()).catch(() => {}).then((previous) => {
+        const latest = previous?.data?.id === session.id ? previous.data : this.current?.id === session.id ? this.current : session
+        const resolvedPatch = { ...normalizedPatch }
+        if (typeof resolvedPatch.session_profile === 'function') {
+          resolvedPatch.session_profile = resolvedPatch.session_profile(latest.sessionProfile)
+        }
+        return api.patch(`/sessions/${session.id}`, resolvedPatch)
+      })
+      this.sessionSettingsPromise = markRaw(request)
       try {
-        const { data } = await api.patch(`/sessions/${session.id}`, normalizedPatch)
+        const { data } = await request
         if (this.current?.id === session.id && this.selectedSessionId === session.id) {
-          this.current = { ...session, ...data }
+          this.current = { ...this.current, ...data }
         }
         this.updateCachedSession(data.id, (item) => ({ ...item, ...data }))
         return data
       } finally {
+        if (this.sessionSettingsPromise === request) this.sessionSettingsPromise = null
         this.sessionSettingsPending = Math.max(0, this.sessionSettingsPending - 1)
       }
     },

@@ -15,11 +15,12 @@ import mato_loop_backend.tools.access as tools_module
 import mato_loop_backend.tools.catalog as mock_tools_catalog
 import mato_loop_backend.tools.context as registry_module
 from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.agent.session_settings import RunSessionSettings
 from mato_loop_backend.execution import browser_control as control
 from mato_loop_backend.execution import browsers as execution
 from mato_loop_backend.execution.client import ExecutionClient
 from mato_loop_backend.integrations.registry import effective_execution_integration_settings
-from mato_loop_backend.models import AgentRun
+from mato_loop_backend.models import AgentRun, ChatSession
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import IntegrationSettings, ToolSettings, TrustLevel
 from mato_loop_backend.settings.models import IntegrationPermissions
@@ -178,6 +179,30 @@ def test_request_starts_and_attaches_without_frontend(request_case, existing):
             for operation, arguments in case.calls
             if operation == "integration.browser.control"
         ] == [False, True, False]
+
+
+def test_model_browser_keeps_run_computer_after_future_settings_change(request_case, monkeypatch):
+    case = request_case
+    next_agent_id = uuid4()
+    factory = control.AsyncSessionFactory
+
+    class Db(factory):
+        async def get(self, model, key):
+            if model is ChatSession and key == case.session.id:
+                return ChatSession(id=key, user_id=case.user.id, session_type="chat",
+                                   preferred_execution_agent_id=next_agent_id,
+                                   control_center=case.session.control_center)
+            return await super().get(model, key)
+
+    monkeypatch.setattr(execution, "AsyncSessionFactory", Db)
+    monkeypatch.setattr(control, "AsyncSessionFactory", Db)
+    monkeypatch.setattr(AgentRuntime, "_session_settings", {case.run.id: RunSessionSettings(
+        session_profile={}, memory_mode="disabled", web_search_policy="available",
+    )})
+    result = case.start().result(timeout=3)
+    if not result.is_error:
+        case.client.portal.call(case.coordinator.connections[case.agent.id].check_access)
+    assert not result.is_error
 
 
 def test_optional_viewer_connects_after_model_attachment(request_case):

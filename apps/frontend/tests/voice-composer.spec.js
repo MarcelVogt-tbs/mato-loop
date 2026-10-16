@@ -98,7 +98,6 @@ beforeEach(async () => {
     render: () => showPage.value ? h(ChatPage) : h(ChatComposer, {
       session: session.value,
       draft: chat.activeDraft,
-      disabled: chat.sessionSettingsPending > 0,
       running: chat.running,
       queueMode: chat.messageQueueActive,
       attachments: chat.activeAttachmentDraft,
@@ -301,7 +300,7 @@ describe('voice attachment composer', () => {
     expect(chat.activeAttachmentDraft[0].file.name).toBe('mitnehmen.wav')
   })
 
-  it('cycles agents, keeps the composer focused and sends with Enter after an idle switch', async () => {
+  it('keeps focus through running, idle and new-session agent switches and sends with Enter', async () => {
     chat.selectedSessionId = 'session-1'
     chat.current.agentProfileId = 'agent-a'
     chat.running = true
@@ -354,6 +353,17 @@ describe('voice attachment composer', () => {
     expect(chat.activeAgentProfileId).toBe('agent-b')
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     expect(sentMessages).toEqual([{ content: 'Folgenachricht', options: { interrupt: false } }])
+
+    chat.current = null
+    session.value = chat.activeContext
+    chat.setDraft('Erste Nachricht')
+    mocks.api.post.mockReturnValueOnce(new Promise(() => {}))
+    await nextTick()
+    shortcut(false, { metaKey: true, ctrlKey: false })
+    await nextTick()
+    expect([chat.sessionSettingsPending, input.disabled, document.activeElement,
+      root.querySelector('button[aria-label="Nachricht senden"]').disabled])
+      .toEqual([1, false, input, false])
   })
 
   it('returns focus to the composer after selecting an agent or send mode', async () => {

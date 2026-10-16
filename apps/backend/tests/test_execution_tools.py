@@ -1050,10 +1050,11 @@ async def test_administrator_input_authenticates_without_granting_access(tmp_pat
     )
     context.db.scalar.side_effect = [agent, None, None] if remember else [agent]
     context.db.add = Mock()
-    context.db.get.side_effect = [AgentRun(
+    run = AgentRun(
         id=context.run_id, session_id=context.session.id,
         execution_agent_id=client.agent_id, agent_profile_id=context.agent_profile_id, trust_level="public",
-    ), context.session]
+    )
+    context.db.get.side_effect = lambda model, _id: run if model is AgentRun else context.session
     resolved = Mock(return_value=True)
     monkeypatch.setattr(AgentRuntime, "claim_question_resolution", Mock(return_value=True))
     monkeypatch.setattr(AgentRuntime, "resolve_question", resolved)

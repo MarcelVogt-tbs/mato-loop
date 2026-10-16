@@ -123,19 +123,23 @@ async def _select_execution_agent(
     snapshot = execution_agent_connections.snapshot(arguments.agent_id)
     if agent is None or snapshot is None:
         return ToolResult.error("executionAgent.unavailable")
+    await context.db.refresh(context.session, with_for_update=True)
     run = await context.db.get(AgentRun, context.run_id)
     if run is None:
         return ToolResult.error("tool.unavailable")
-    context.session.preferred_execution_agent_id = agent.id
-    context.session.control_center = {
-        key: value for key, value in (context.session.control_center or {}).items()
-        if key != "terminal_auto_attach"
-    }
-    context.session.current_directory = directory
     run.execution_agent_id = agent.id
     run.execution_agent_revision = agent.revision
     run.current_directory_snapshot = directory
     run.execution_operations = sorted(snapshot)
+    from mato_loop_backend.agent.session_settings import apply_run_session_settings
+
+    if not apply_run_session_settings(context.session, run):
+        context.session.preferred_execution_agent_id = agent.id
+        context.session.control_center = {
+            key: value for key, value in (context.session.control_center or {}).items()
+            if key != "terminal_auto_attach"
+        }
+        context.session.current_directory = directory
     await context.db.flush()
     return ToolResult.json({
         "id": str(agent.id), "alias": agent.display_name, "currentDirectory": directory,
@@ -161,11 +165,15 @@ async def _change_directory(
         changes_directory=True,
     ):
         return ToolResult.error("permission.denied")
-    context.session.current_directory = result.path
+    await context.db.refresh(context.session, with_for_update=True)
     run = await context.db.get(AgentRun, context.run_id)
     if run is None:
         return ToolResult.error("tool.unavailable")
     run.current_directory_snapshot = result.path
+    from mato_loop_backend.agent.session_settings import apply_run_session_settings
+
+    if not apply_run_session_settings(context.session, run):
+        context.session.current_directory = result.path
     client.current_directory = result.path
     await context.db.flush()
     return ToolResult.json({"currentDirectory": result.path})

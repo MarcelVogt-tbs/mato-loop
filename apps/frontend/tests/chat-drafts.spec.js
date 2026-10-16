@@ -671,22 +671,43 @@ describe('chat drafts', () => {
     ])
   })
 
-  it('does not start a run while a persisted session setting is being saved', async () => {
+  it('waits for saved session settings before sending', async () => {
     let resolvePatch
     api.patch.mockReturnValue(new Promise((resolve) => { resolvePatch = resolve }))
     const chat = useChatStore()
     chat.current = { id: 'session-1', messages: [], currentDirectory: null }
     chat.selectedSessionId = 'session-1'
+    api.post.mockResolvedValue({ data: { session: { ...chat.current, currentDirectory: '/projekt' }, message: { id: 'message', role: 'user' }, runId: 'run' } })
+    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
 
     const updating = chat.updateActive({ current_directory: '/projekt' })
 
     expect(chat.sessionSettingsPending).toBe(1)
-    await expect(chat.send('Nicht mit altem Kontext senden')).resolves.toBeNull()
+    const sending = chat.send('Nicht mit altem Kontext senden')
+    expect(chat.outboxSaving).toBe(true)
     expect(api.post).not.toHaveBeenCalled()
 
     resolvePatch({ data: { id: 'session-1', currentDirectory: '/projekt' } })
-    await updating
+    await Promise.all([updating, sending])
     expect(chat.sessionSettingsPending).toBe(0)
+    expect(api.post.mock.calls[0]?.[0]).toBe('/sessions/session-1/messages')
+  })
+
+  it('applies queued model and reasoning edits to the latest saved profile', async () => {
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', sessionProfile: { agentModels: { agent: { modelId: 'old' } } } }
+    chat.selectedSessionId = 'session-1'
+    let resolveModel
+    api.patch.mockImplementationOnce(() => new Promise(resolve => { resolveModel = resolve }))
+      .mockImplementation(async (_url, patch) => ({ data: { id: 'session-1', sessionProfile: patch.session_profile } }))
+    const model = chat.updateActive({ session_profile: profile => ({ ...profile, agentModels: { agent: { modelId: 'new' } } }) })
+    const reasoning = chat.updateActive({ session_profile: profile => ({ ...profile, agentModels: {
+      ...profile.agentModels, agent: { ...profile.agentModels.agent, reasoningEffort: 'high' }
+    } }) })
+    await vi.waitFor(() => expect(resolveModel).toBeTypeOf('function'))
+    resolveModel({ data: { id: 'session-1', sessionProfile: { agentModels: { agent: { modelId: 'new' } } } } })
+    await Promise.all([model, reasoning])
+    expect(chat.current.sessionProfile.agentModels.agent).toEqual({ modelId: 'new', reasoningEffort: 'high' })
   })
 
   it('keeps attachments out of local storage and uses the general multipart route', async () => {

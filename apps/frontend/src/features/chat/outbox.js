@@ -12,28 +12,35 @@ import { OUTBOX_RETRY_MS } from 'src/features/chat/model'
 
 export const outboxActions = {
     async send(content, { preserveDraft = false, interrupt = false } = {}) {
-      if (!this.current && this.draftPreviewRequests[sessionScopeKey(this.sessionsProjectId)]) {
-        const draft = this.drafts.newSession
-        await this.waitForDraftDefaults()
-        if (this.current || this.drafts.newSession !== draft) return null
-      }
-      if (this.outboxSaving || this.historyActionPending || this.sessionSettingsPending) return null
+      if (this.outboxSaving || this.historyActionPending) return null
+      const sessionId = this.current?.id
+      const ownerUserId = this.draftOwnerUserId
+      const draft = this.drafts.newSession
       this.outboxSaving = true
-      const interruptRun = interrupt && this.running && Boolean(this.current)
-        && (!this.runSessionId || this.runSessionId === this.current.id)
-      const submitImmediately = !this.running
-        && !this.stopping
-        && !this.runId
-        && !this.activeQueuedMessages.length
-        && !this.queueDrainPromise
-        && !this.messageQueueActive
-      if (submitImmediately) {
-        this.running = true
-        this.setActivity('submitting', { startedAt: new Date().toISOString() })
-      }
-      if (this.outboxLoadPromise) await this.outboxLoadPromise
       let entry
+      let submitImmediately = false
       try {
+        while (this.sessionSettingsPromise) await this.sessionSettingsPromise
+        if (this.draftOwnerUserId !== ownerUserId || this.current?.id !== sessionId
+          || (!sessionId && this.drafts.newSession !== draft)) return null
+        if (!this.current && this.draftPreviewRequests[sessionScopeKey(this.sessionsProjectId)]) {
+          await this.waitForDraftDefaults()
+          if (this.current || this.drafts.newSession !== draft) return null
+        }
+        if (this.historyActionPending || this.sessionSettingsPending) return null
+        const interruptRun = interrupt && this.running && Boolean(this.current)
+          && (!this.runSessionId || this.runSessionId === this.current.id)
+        submitImmediately = !this.running
+          && !this.stopping
+          && !this.runId
+          && !this.activeQueuedMessages.length
+          && !this.queueDrainPromise
+          && !this.messageQueueActive
+        if (submitImmediately) {
+          this.running = true
+          this.setActivity('submitting', { startedAt: new Date().toISOString() })
+        }
+        if (this.outboxLoadPromise) await this.outboxLoadPromise
         entry = await this.queueMessage(content, { preserveDraft, interrupt: interruptRun })
       } finally {
         this.outboxSaving = false

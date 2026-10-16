@@ -76,7 +76,6 @@ const LLM_FIELDS = ['model', 'reasoning']
 const props = defineProps({
   session: { type: Object, default: null },
   disabled: Boolean,
-  agentSelectable: Boolean,
   agentProfileId: { type: String, default: null },
   compact: Boolean,
   equalFields: Boolean,
@@ -133,7 +132,7 @@ const selectedExecutionAgent = computed(() => (
 const directoryPickerOpen = ref(false)
 const directoryPickerAvailable = computed(() => !props.disabled && selectedExecutionAgent.value?.connected === true
   && selectedExecutionAgent.value.operations?.includes('filesystem.list'))
-watch(() => [props.session?.id, props.session?.preferredExecutionAgentId, props.session?.currentDirectory, props.disabled], () => {
+watch([() => props.session?.id, () => props.session?.preferredExecutionAgentId], () => {
   directoryPickerOpen.value = false
 })
 const executionAgentOptions = computed(() => {
@@ -264,18 +263,28 @@ const warning = computed(() => {
 })
 
 function update(patch) {
-  if (props.session && (!props.disabled || (props.agentSelectable && Object.hasOwn(patch, 'agent_profile_id')))) {
+  if (props.session && !props.disabled) {
     emit('update', patch)
   }
 }
 
 function selectModel(modelId) {
   const model = providers.models.find((item) => item.id === modelId)
-  const effort = props.session?.sessionProfile?.agentModels?.[displayedAgentProfileId.value]?.reasoningEffort
-    || props.session?.reasoningEffort || providers.modelDefaults?.reasoningEffort
-  const agentModels = { ...props.session?.sessionProfile?.agentModels }
-  agentModels[displayedAgentProfileId.value] = { ...agentModels[displayedAgentProfileId.value], modelId, ...(effort && !model?.reasoningEfforts?.includes(effort) ? { reasoningEffort: null } : {}) }
-  update({ session_profile: { ...props.session?.sessionProfile, agentModels } })
+  const agentId = displayedAgentProfileId.value
+  const defaultEffort = props.session?.reasoningEffort || providers.modelDefaults?.reasoningEffort
+  update({ session_profile: (profile) => {
+    const effort = profile?.agentModels?.[agentId]?.reasoningEffort || defaultEffort
+    const agentModels = { ...profile?.agentModels }
+    agentModels[agentId] = { ...agentModels[agentId], modelId, ...(effort && !model?.reasoningEfforts?.includes(effort) ? { reasoningEffort: null } : {}) }
+    return { ...profile, agentModels }
+  } })
+}
+
+function selectReasoning(reasoningEffort) {
+  const agentId = displayedAgentProfileId.value
+  update({ session_profile: (profile) => ({ ...profile, agentModels: {
+    ...profile?.agentModels, [agentId]: { ...profile?.agentModels?.[agentId], reasoningEffort }
+  } }) })
 }
 
 function selectExecutionAgent(value) {
@@ -313,7 +322,7 @@ const MessageSizeField = defineComponent(() => () => h(AppSelect, selectProps({
   label: 'Nachrichtengröße',
   hint: 'Klein reduziert die Schriftgröße und die Abstände der Nachrichten sowie die Schriftgröße im Eingabefeld am Desktop.',
   persistentHint: true,
-  'onUpdate:modelValue': (messageSize) => update({ session_profile: { ...props.session?.sessionProfile, messageSize } })
+  'onUpdate:modelValue': (messageSize) => update({ session_profile: (profile) => ({ ...profile, messageSize }) })
 }), { prepend: () => h(QIcon, { name: 'format_size' }) }))
 const AgentField = defineComponent(() => () => h(AppSelect, selectProps({
   modelValue: displayedAgentProfileId.value,
@@ -326,7 +335,7 @@ const AgentField = defineComponent(() => () => h(AppSelect, selectProps({
   class: props.compact ? 'composer-select composer-agent-mode col-auto rounded-borders q-px-sm' : undefined,
   hint: props.compact ? undefined : 'Agent-Profil für diese Session.',
   persistentHint: !props.compact,
-  disable: (props.disabled && !props.agentSelectable) || agentProfiles.loading,
+  disable: props.disabled || agentProfiles.loading,
   onPopupHide: () => emit('agent-popup-hide'),
   'onUpdate:modelValue': (value) => update({ agent_profile_id: value })
 }), {
@@ -370,7 +379,7 @@ const ReasoningField = defineComponent(() => () => h(AppSelect, selectProps({
     : 'Das ausgewählte Modell bietet keine Reasoning-Stufen an.',
   persistentHint: !props.compact,
   disable: props.disabled || !reasoningEffortOptions.value.length,
-  'onUpdate:modelValue': (value) => update({ session_profile: { ...props.session?.sessionProfile, agentModels: { ...props.session?.sessionProfile?.agentModels, [displayedAgentProfileId.value]: { ...props.session?.sessionProfile?.agentModels?.[displayedAgentProfileId.value], reasoningEffort: value } } } })
+  'onUpdate:modelValue': selectReasoning
 })))
 const ComputerField = defineComponent(() => () => [
   h(AppSelect, selectProps({

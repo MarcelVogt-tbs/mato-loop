@@ -49,9 +49,8 @@
             ref="settingsFields"
             class="chat-composer__fields"
             :session="session"
-            :disabled="interactionDisabled"
+            :disabled="inputDisabled"
             :agent-profile-id="chat.activeAgentProfileId"
-            :agent-selectable="!inputDisabled && (running || queueMode)"
             :fields="['agent', 'model', 'reasoning']"
             compact
             @update="$emit('update', $event)"
@@ -207,7 +206,6 @@ const props = defineProps({
   disabled: Boolean,
   running: Boolean,
   stopping: Boolean,
-  pendingCount: { type: Number, default: 0 },
   queueMode: Boolean,
   attachments: { type: Array, default: () => [] }
 })
@@ -273,9 +271,6 @@ const transcriptionUnavailableReason = computed(() => {
   }
   return ''
 })
-const interactionDisabled = computed(() => (
-  !props.session || props.disabled || props.running || props.pendingCount > 0
-))
 const inputDisabled = computed(() => !props.session || props.disabled)
 const draftHasContent = computed(() => Boolean(props.draft.trim() || props.attachments.length))
 const inputPlaceholder = computed(() => `Eine Nachricht an ${identity.displayName} senden`)

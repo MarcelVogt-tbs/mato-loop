@@ -41,6 +41,7 @@ export const useChatStore = defineStore('chat', {
     sessionLoadVersion: 0,
     historyActionPending: false,
     sessionSettingsPending: 0,
+    sessionSettingsPromise: null,
     sessionRequestController: null,
     sessionRefreshPromise: null,
     olderMessagesLoading: false,

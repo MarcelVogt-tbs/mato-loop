@@ -26,6 +26,7 @@ from mato_loop_backend.agent.run_contracts import AgentRunError
 from mato_loop_backend.agent.run_timing import run_timing_payload
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.session_secrets import session_secrets
+from mato_loop_backend.agent.session_settings import RunSessionSettings
 from mato_loop_backend.agent.todos import session_todos
 from mato_loop_backend.automations import automation_impact_token
 from mato_loop_backend.chat_history import ChatHistoryService
@@ -1393,20 +1394,25 @@ async def update_session(
         if "agent_profile_id" in fields
         else item.agent_profile_id
     )
+    original_settings = None
+    active_run_id = None
     if fields & policy_fields:
         from mato_loop_backend.sessions.archive import is_session_archived
 
         if await is_session_archived(db, item):
             raise SessionServiceError(409, "session.archived")
-        active = await db.scalar(
+        active_run_id = await db.scalar(
             select(AgentRun.id).where(
                 AgentRun.session_id == session_id,
                 AgentRun.parent_run_id.is_(None),
                 AgentRun.status.in_(ACTIVE_RUN_STATUSES),
             )
         )
-        if active is not None:
-            raise SessionServiceError(409, "session.runAlreadyActive")
+        if active_run_id is not None:
+            if "project_id" in fields:
+                raise SessionServiceError(409, "session.runAlreadyActive")
+            if active_run_id not in AgentRuntime._session_settings:
+                original_settings = RunSessionSettings.model_validate(item)
     source_project_id = item.project_id
     target_project_id = (
         payload.project_id if "project_id" in fields else source_project_id
@@ -1443,7 +1449,10 @@ async def update_session(
         != SessionProfileSnapshot.model_validate(item.session_profile or {}).model_dump(exclude={"message_size"})
     ):
         await db.execute(
-            delete(PermissionGrant).where(PermissionGrant.session_id == session_id)
+            delete(PermissionGrant).where(
+                PermissionGrant.session_id == session_id,
+                PermissionGrant.run_id.is_(None),
+            )
         )
     if "title" in fields and payload.title is not None:
         item.title = payload.title
@@ -1631,6 +1640,9 @@ async def update_session(
             item.project_id = target_project_id
         await db.flush()
         await db.refresh(item)
+        active_task = AgentRuntime._tasks.get(active_run_id)
+        if original_settings is not None and active_task is not None and not active_task.done():
+            AgentRuntime._session_settings.setdefault(active_run_id, original_settings)
         commit_task = asyncio.create_task(db.commit())
         await asyncio.shield(commit_task)
         await finalize_storage()

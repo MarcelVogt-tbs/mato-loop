@@ -27,6 +27,7 @@ from mato_loop_backend.agent.run_support import (
     _RESEARCH_TOOL_NAMES,
     MEMORY_WRITE_OUTCOME_PRIORITY,
 )
+from mato_loop_backend.agent.session_settings import apply_run_session_settings
 from mato_loop_backend.agent.subagents import run_tasks
 from mato_loop_backend.diagnostics.service import schedule_diagnostic_event
 from mato_loop_backend.error_contract import error_payload
@@ -357,6 +358,7 @@ async def execute_tool_batch(
             toolDisplay=display, toolCallId=call.id, index=index, total=len(calls),
         )
         await db.refresh(session)
+        apply_run_session_settings(session, run)
         attachments = ()
         file_actions = ()
         ephemeral_output = False

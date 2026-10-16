@@ -99,6 +99,10 @@ async def answer_question(
                 continue
             run = await db.get(AgentRun, request.run_id)
             session = await db.get(ChatSession, run.session_id) if run else None
+            if session is not None:
+                from mato_loop_backend.agent.session_settings import apply_run_session_settings
+
+                apply_run_session_settings(session, run)
             if (
                 session is None or run.execution_agent_id != question.administrator.agent_id
                 or session.preferred_execution_agent_id != question.administrator.agent_id

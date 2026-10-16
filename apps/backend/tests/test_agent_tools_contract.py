@@ -12,6 +12,7 @@ import zxingcpp
 from PIL import Image
 from pydantic import BaseModel, ValidationError
 from skill_helpers import store_skill
+from sqlalchemy import inspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import make_transient_to_detached
@@ -431,7 +432,8 @@ def _session_read_records(context: ToolContext, messages: list[Message], runs=()
 
 
 @pytest.mark.parametrize("alias", ["Server", ""])
-async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkeypatch, tmp_path, alias) -> None:
+@pytest.mark.parametrize("saved_settings", [False, True])
+async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkeypatch, tmp_path, alias, saved_settings) -> None:
     assert tool_execution_policy(ToolSettings().select_trust(TrustLevel.PRIVATE), "execution_agent.list") == ToolExecutionPolicy.AUTO
     assert tool_execution_policy(ToolSettings().select_trust(TrustLevel.PUBLIC), "execution_agent.list") == ToolExecutionPolicy.ASK
     assert all(
@@ -460,6 +462,19 @@ async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkey
     context.session.control_center = {"terminal_auto_attach": True, "tabs": [{"app_id": "terminal"}]}
     context.db.scalar.return_value = first
     run = AgentRun(id=context.run_id, session_id=context.session.id)
+    if saved_settings:
+        from mato_loop_backend.agent.runtime import AgentRuntime
+        from mato_loop_backend.agent.session_settings import RunSessionSettings
+
+        monkeypatch.setattr(AgentRuntime, "_session_settings", {})
+
+        def saved_while_waiting(_session, **kwargs):
+            if kwargs.get("with_for_update"):
+                AgentRuntime._session_settings[run.id] = RunSessionSettings(
+                    session_profile={}, memory_mode="disabled", web_search_policy="available",
+                )
+
+        context.db.refresh.side_effect = saved_while_waiting
     context.db.get.return_value = run
     monkeypatch.setattr(mock_tools_computer.execution_agent_connections, "snapshot", lambda _id: frozenset({"filesystem.resolve", "shell.run"}))
     monkeypatch.setattr(
@@ -471,7 +486,9 @@ async def test_execution_agent_tools_list_and_switch_with_scoped_approval(monkey
 
     assert switched.metadata["executionAgentChanged"] is True
     assert context.session.preferred_execution_agent_id == first.id
-    assert context.session.control_center == {"tabs": [{"app_id": "terminal"}]}
+    assert context.session.control_center == {"tabs": [{"app_id": "terminal"}], **({"terminal_auto_attach": True} if saved_settings else {})}
+    if saved_settings:
+        assert not inspect(context.session).attrs.current_directory.history.has_changes()
     assert context.session.current_directory == "/srv/new"
     assert run.execution_agent_id == first.id
     assert run.current_directory_snapshot == "/srv/new"

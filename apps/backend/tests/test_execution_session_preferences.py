@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent.run_contracts import AgentRunError
 from mato_loop_backend.agent.run_support import _effective_execution_operations
 from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.sessions import (
     SessionUpdateRequest,
     _session_payload,
@@ -240,7 +239,11 @@ def test_effective_operations_filter_directory_dependent_tools() -> None:
     assert _effective_execution_operations(run) == set(run.execution_operations)
 
 
-async def test_executor_preferences_cannot_change_during_active_run() -> None:
+async def test_executor_preferences_can_change_without_moving_the_active_run(monkeypatch) -> None:
+    from mato_loop_backend.agent.session_settings import apply_run_session_settings
+    from mato_loop_backend.api.routes import sessions as routes
+    from mato_loop_backend.sessions import service
+
     user_id = uuid4()
     agent = _agent(user_id)
     session = ChatSession(
@@ -248,20 +251,25 @@ async def test_executor_preferences_cannot_change_during_active_run() -> None:
         user_id=user_id,
         title="Test",
         memory_mode="disabled",
+        web_search_policy="available",
+        session_profile={},
         preferred_execution_agent_id=agent.id,
         current_directory="/home/user",
     )
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
-    db.scalar.side_effect = [session.id, uuid4()]
-    with pytest.raises(ApiError) as error:
-        await update_session(
-            session.id,
-            SessionUpdateRequest(current_directory="/home/user/project"),
-            SimpleNamespace(id=user_id),
-            db,
-        )
-    assert error.value.code == "session.runAlreadyActive"
+    run = AgentRun(id=uuid4(), session_id=session.id, execution_agent_id=agent.id, current_directory_snapshot="/home/user")
+    db.scalar.side_effect = [session.id, run.id]
+    monkeypatch.setattr(AgentRuntime, "_session_settings", {})
+    monkeypatch.setattr(AgentRuntime, "_tasks", {run.id: SimpleNamespace(done=lambda: False)})
+    monkeypatch.setattr(service, "load_effective_ai", AsyncMock(return_value=AiSettings()))
+    monkeypatch.setattr(service, "validate_execution_preferences", AsyncMock(return_value=("/home/user/project", "ask")))
+    monkeypatch.setattr(service, "add_directory_grant", AsyncMock())
+    monkeypatch.setattr(routes, "_session_payload", AsyncMock(return_value={}))
+    await update_session(session.id, SessionUpdateRequest(current_directory="/home/user/project"), SimpleNamespace(id=user_id), db)
+    saved_directory = session.current_directory
+    apply_run_session_settings(session, run)
+    assert (saved_directory, session.current_directory) == ("/home/user/project", "/home/user")
 
 
 async def test_session_payload_reports_connected_operations(monkeypatch) -> None:

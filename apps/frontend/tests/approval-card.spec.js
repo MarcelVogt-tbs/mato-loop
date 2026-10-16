@@ -90,7 +90,9 @@ async function selectOption(card, label, option) {
 
 describe('approval card', () => {
   it('shows session grants with their exact shell context', async () => {
-    useChatStore().current = { id: 'session-1' }
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', activeRun: { id: 'run' } }
+    chat.running = true
     responses['/approvals/permissions'] = [{
       id: 'grant-1', sessionId: 'session-1', applicable: false,
       capability: 'resource.write', resourceType: 'shell_action', resourceDisplay: '/opt/project',
@@ -98,6 +100,7 @@ describe('approval card', () => {
       command: 'printf reviewed > output.txt', elevated: true
     }]
     await mountView(() => h(SessionApp))
+    expect(root.querySelector('[aria-label="Memory-Modus auswählen"]').classList.contains('q-field--disabled')).toBe(false)
     await vi.waitFor(() => expect(root.querySelector('[aria-labelledby="session-permissions-title"]')?.textContent).toMatch(
       /Exakter Shell-Befehl · Schreiben.*Notebook.*\/opt\/project.*printf reviewed > output.txt.*Mit Administratorrechten.*Inaktiv/s
     ))
@@ -118,22 +121,23 @@ describe('approval card', () => {
     expect(section.textContent).not.toContain('/work/file')
   })
 
-  it('keeps loaded grants mounted during background refresh of an unchanged session', async () => {
+  it.each(['run', null])('keeps loaded grants visible when the active run changes to %s', async (nextRunId) => {
     const chat = useChatStore()
-    chat.current = { id: 'session-1', sessionProfile: { agentIds: ['plan'] } }
+    chat.runId = nextRunId ? null : 'run'
+    chat.current = { id: 'session-1', sessionProfile: { agentIds: ['plan'] }, activeRun: chat.runId ? { id: chat.runId } : null }
     responses['/approvals/permissions'] = [{ id: 'grant-1', sessionId: 'session-1', resourceDisplay: '/work/file' }]
     await mountView(() => h(SessionApp))
     const section = root.querySelector('[aria-labelledby="session-permissions-title"]')
     const list = await vi.waitUntil(() => section.querySelector('.q-list'))
     let finishRefresh
     api.get.mockImplementation(() => new Promise((resolve) => { finishRefresh = resolve }))
-    chat.current = JSON.parse(JSON.stringify(chat.current))
+    chat.runId = nextRunId
+    chat.current = { ...JSON.parse(JSON.stringify(chat.current)), activeRun: nextRunId ? { id: nextRunId } : null }
     await nextTick()
-    const refresh = useApprovalStore().fetchGrants()
-    await nextTick()
-    expect(section.querySelector('.q-list')).toBe(list)
+    expect([section.querySelector('.q-list'), section.querySelector('[aria-label="Session-Freigaben aktualisieren"]').disabled])
+      .toEqual([list, false])
     finishRefresh({ data: responses['/approvals/permissions'] })
-    await refresh
+    await vi.waitFor(() => expect(useApprovalStore().grantsLoading).toBe(false))
   })
 
   it('submits administrator session approval without collecting a password', async () => {

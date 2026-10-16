@@ -107,6 +107,9 @@ class ControlRequest:
                     or run.session_id != session.id or run.parent_run_id is not None
                     or run.status != "running" or run.completed_at is not None):
                 raise ExecutionClientError("browser.notConnected")
+            from mato_loop_backend.agent.session_settings import apply_run_session_settings
+
+            apply_run_session_settings(session, run)
             if (session.preferred_execution_agent_id != self.info.agent_id
                     or run.execution_agent_id != self.info.agent_id
                     or (run.agent_profile_id or session.agent_profile_id) != self.profile_id

@@ -449,11 +449,9 @@
           :disabled="changingDraftProject || !chat.outboxLoaded
             || chat.outboxSaving
             || chat.historyActionPending
-            || chat.sessionSettingsPending > 0
             || (!chat.current && chat.activeQueuedMessages.length > 0)"
           :running="chat.running"
           :stopping="chat.stopping"
-          :pending-count="sessionApprovals.length"
           :queue-mode="chat.messageQueueActive"
           :attachments="chat.activeAttachmentDraft"
           @add-attachments="addAttachmentFiles"
@@ -685,7 +683,7 @@ const draftProjectOptions = computed(() => [
 ])
 const draftProjectDisabled = computed(() => changingDraftProject.value || !isNewConversation.value
   || routeProjectId.value !== chat.sessionsProjectId || !chat.outboxLoaded
-  || chat.running || chat.outboxSaving || chat.sessionSettingsPending > 0
+  || chat.running || chat.outboxSaving
   || chat.activeQueuedMessages.length > 0 || Boolean(chat.emptySessionPromise || chat.queueDrainPromise))
 const routeMessageId = computed(() => (
   typeof route.query.message === 'string' ? route.query.message : null

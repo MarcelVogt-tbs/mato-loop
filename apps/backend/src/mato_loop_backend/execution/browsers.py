@@ -134,7 +134,7 @@ def _browser_latency(operation: str, session_id: UUID):
 
 async def validate_browser_access(
     owner_id: UUID, integration_id: UUID, *, login_id: UUID | None = None,
-    session_id: UUID | None = None, require_enabled: bool = True,
+    session_id: UUID | None = None, require_enabled: bool = True, run_id: UUID | None = None,
 ):
     """Resolve live authorization, never trust a client-supplied agent/profile handle."""
     async with asyncio.timeout(5), AsyncSessionFactory() as db:
@@ -154,6 +154,14 @@ async def validate_browser_access(
             if (session is None or session.user_id != owner_id or session.session_type != "chat"
                     or session.parent_session_id is not None):
                 raise ExecutionClientError("session.notFound")
+            if run_id is not None:
+                from mato_loop_backend.agent.session_settings import apply_run_session_settings
+
+                run = await db.get(AgentRun, run_id)
+                if run is None or run.session_id != session.id or run.parent_run_id is not None:
+                    raise ExecutionClientError("browser.bindingChanged")
+                if run.status in {"queued", "running", "waiting_approval", "waiting_input"}:
+                    apply_run_session_settings(session, run)
             if session.preferred_execution_agent_id != instance.execution_agent_id:
                 raise ExecutionClientError("browser.bindingChanged")
             if not any(tab.get("app_id") == "browser" and tab.get("kind", "app") == "app"
@@ -176,6 +184,7 @@ class BrowserConnection:
     login_id: UUID | None
     client: ExecutionClient
     generation: int
+    run_id: UUID | None = None
     browser_id: UUID = field(default_factory=uuid4)
     view_id: UUID = field(default_factory=uuid4)
     websocket: WebSocket | None = None
@@ -213,6 +222,7 @@ class BrowserConnection:
     def detach(self, reason: str = "manualTakeover", *, error_code: str | None = None) -> None:
         was_attached = self.attached
         self.attached = False
+        self.run_id = None
         self.attachment_revision += 1
         if was_attached:
             self.diagnostic("detached", reason, error_code=error_code)
@@ -249,6 +259,7 @@ class BrowserConnection:
             raise ExecutionClientError("browser.notConnected")
         instance, self.can_attach = await validate_browser_access(
             self.owner_id, self.integration_id, login_id=self.login_id, session_id=self.session_id,
+            run_id=self.run_id,
         )
         if self.closed or instance.execution_agent_id != self.agent_id:
             raise ExecutionClientError("browser.bindingChanged")
@@ -259,7 +270,7 @@ class BrowserConnection:
         await self.check_access()
         if not self.ready or self.websocket is None:
             raise ExecutionClientError("browser.notConnected")
-        if self.attached or self.busy or not self.manual_enabled:
+        if self.attached or self.run_id is not None or self.busy or not self.manual_enabled:
             raise ExecutionClientError("browser.busy")
 
     async def request(self, *args, **kwargs):
@@ -306,6 +317,7 @@ class BrowserCoordinator:
                    color_scheme: str = "light") -> BrowserConnection:
         instance, can_attach = await validate_browser_access(
             owner_id, integration_id, login_id=login_id, session_id=session_id,
+            run_id=control_request.info.run_id if control_request is not None else None,
         )
         agent_id = instance.execution_agent_id
         async with self.lock:
@@ -321,6 +333,8 @@ class BrowserCoordinator:
                     previous.login_id = login_id
                     previous.websocket = websocket
                     previous.can_attach = can_attach
+                    if control_request is not None:
+                        previous.run_id = control_request.info.run_id
                     if previous.idle_task is not None:
                         previous.idle_task.cancel()
                         previous.idle_task = None
@@ -337,6 +351,7 @@ class BrowserCoordinator:
             connection = BrowserConnection(
                 owner_id, integration_id, agent_id, session_id, login_id, browser_client(agent_id),
                 execution_agent_connections.generation(agent_id), websocket=websocket,
+                run_id=control_request.info.run_id if control_request is not None else None,
                 can_attach=can_attach,
             )
             if previous is not None:
@@ -556,6 +571,9 @@ class BrowserCoordinator:
     async def attachment(self, connection: BrowserConnection, attached: bool,
                          *, control_request: ControlRequest | None = None,
                          reason: str | None = None) -> None:
+        if control_request is not None:
+            await control_request.validate()
+            connection.run_id = control_request.info.run_id
         await connection.check_access()
         if attached:
             if not connection.can_attach:
@@ -590,6 +608,7 @@ class BrowserCoordinator:
                     control_request.binding_ready()
                 connection.detach("attachmentReplaced")
                 connection.attached = True
+                connection.run_id = control_request.info.run_id if control_request is not None else None
                 connection.diagnostic("attached", "modelRequest" if control_request is not None else "manualAttach")
                 if control_request is not None:
                     from mato_loop_backend.execution.browser_control import browser_control_requests
