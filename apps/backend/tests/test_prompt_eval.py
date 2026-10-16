@@ -321,7 +321,7 @@ def test_agent_web_routing_production_prompt_is_conditional() -> None:
         "Tool routing: For direct HTTP/API requests, use shell_run with an established HTTP client "
         "such as curl. Use custom scripts only when available command-line tools cannot reasonably "
         "handle the required processing. Simple GET or POST requests do not need a script. "
-        "Prefer shell_run for pagination, multiple requests, local processing, or computer downloads. "
+        "Use shell_run for API pagination, processing API responses, and computer downloads. "
         "Use webfetch when available for web pages and static "
         "documents. Verify unknown API paths and fields in official docs or schemas; "
         "use HTTP status and error details before retrying. "
@@ -1723,6 +1723,8 @@ def test_evaluate_checks_expected_tool_arguments_and_paths() -> None:
 
     assert evaluate(case, valid) == []
     assert "read.root expected 'computer', got 'files'" in evaluate(case, invalid)
+    with_shell = ProviderResult(tool_calls=[*valid.tool_calls, ToolCall("2", "shell_run", {"command": "cat README.md"})])
+    assert "forbidden tool called: shell_run" in evaluate(case, with_shell)
     assert not any("invalid relative path" in failure for failure in evaluate(case, absolute))
     absolute.tool_calls[0].arguments["root"] = "files"
     assert any("invalid relative path" in failure for failure in evaluate(case, absolute))
@@ -2350,10 +2352,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 138
-    assert payload["contractCount"] == 382
-    assert "Cases: 244" in report
+    assert payload["contractCount"] == 384
+    assert "Cases: 246" in report
     assert "Semantic contracts: 138" in report
-    assert "All inventory rows: 382" in report
+    assert "All inventory rows: 384" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

@@ -494,6 +494,62 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                     "write",
                 )
 
+    def test_shell_reports_all_required_categories(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runner = ProcessRunner(configuration(root), Filesystem(configuration(root)))
+            for command, categories in (
+                ("cat missing.txt", ["read"]),
+                ("touch new.txt", ["write"]),
+                ("rm old.txt", ["delete"]),
+                ("rmdir empty", ["delete"]),
+                ("unlink old.txt", ["delete"]),
+                ("truncate -s 0 old.txt", ["delete"]),
+                ("find . -delete", ["delete"]),
+                ("git clean -fd", ["delete"]),
+                ("git clean -nfd", ["read"]),
+                ("git clean -- -n", ["delete"]),
+                ("git reset --hard", ["write", "delete"]),
+                ("git branch -D old", ["delete"]),
+                ("git branch -qD old", ["delete"]),
+                ("git branch -u -D old", ["write"]),
+                ("git branch -- -D", ["write"]),
+                ("git push --delete origin old", ["write", "delete"]),
+                ("git push -qd origin old", ["write", "delete"]),
+                ("git push origin :refs/heads/old", ["write", "delete"]),
+                ("git push origin +:refs/heads/old", ["write", "delete"]),
+                ("git push --repo=origin :refs/heads/old", ["write", "delete"]),
+                ("git push -o :refs/heads/old origin main", ["write"]),
+                ("git push -- origin --delete", ["write"]),
+                ("git tag -d old", ["delete"]),
+                ("git stash drop", ["delete"]),
+                ("docker compose down", ["delete"]),
+                ("docker image prune -f", ["delete"]),
+                ("curl -X DELETE https://example.invalid -o output", ["write", "delete"]),
+                ("touch new.txt; rm old.txt", ["write", "delete"]),
+                ("cat input; touch new.txt; rm old.txt", ["read", "write", "delete"]),
+                ("sh -c 'touch new.txt; rm old.txt'", ["write", "delete"]),
+                ("docker exec app sh -c 'touch /new; rm /old'", ["write", "delete"]),
+                ("xargs rm", ["delete"]),
+                ("find . -exec rm '{}' ';'", ["delete"]),
+                ("find . -maxdepth 0 -exec xargs -E + rm victim ';'", ["delete"]),
+                ("printf content > file", ["read", "write"]),
+                ("> file printf content", ["read", "write"]),
+                (": > file", ["read", "write", "delete"]),
+                ("printf '' > file", ["read", "write", "delete"]),
+                ("> file", ["write", "delete"]),
+                ("printf '' >> file", ["read", "write"]),
+                ("true; " * 65 + "rm old.txt", ["read", "delete"]),
+                (
+                    "docker exec app sh -c '" + "true; " * 65 + "rm /old'",
+                    ["read", "write", "delete"],
+                ),
+            ):
+                with self.subTest(command=command):
+                    self.assertEqual(
+                        runner.inspect_shell(command, str(root))["requiredCategories"], categories
+                    )
+
     def test_xargs_classifies_targets_not_option_values_or_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

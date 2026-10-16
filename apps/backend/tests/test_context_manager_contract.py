@@ -2204,8 +2204,8 @@ def test_system_prompt_describes_managed_file_roots() -> None:
     assert "'.' for root" in prompt
     assert "no absolute path or root prefix" in prompt
     assert "unused destination" in prompt
-    assert "root=files uses relative POSIX paths" in prompt
-    assert "root=computer accepts absolute paths" in prompt
+    assert "root=files is backend session storage: relative POSIX paths" in prompt
+    assert "Working-directory tasks use root=computer with absolute or directory-relative paths" in prompt
     assert "file.accessDenied is not permission.userDenied" not in prompt
     assert "revisioned" not in prompt
     assert "No computer directory selected. Use root=files." in prompt
@@ -3289,7 +3289,7 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     assert "Read AGENTS.md" not in main
     assert "Read AGENTS.md" not in work
     assert "Read AGENTS.md" not in general
-    assert "Use file tools for supported file changes" in general
+    assert "Otherwise prefer offered file tools: read for contents/listings" in general
     assert "file.accessDenied is not permission.userDenied" not in general
     assert "file.accessDenied is not permission.userDenied" in general_system_prompt(
         session, agent_profile=general_profile(), offered_tool_names=tools | {"shell_run"},

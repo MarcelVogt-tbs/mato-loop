@@ -121,6 +121,7 @@ _MESSAGES = {
     "executionAgent.alreadyPaired": "The MatoLoop Agent is already paired.",
     "executionAgent.homeDirectoryInvalid": "The home directory is invalid or unavailable.",
     "executionAgent.operationUnavailable": "The MatoLoop Agent does not support this operation.",
+    "executionAgent.updateRequired": "The MatoLoop Agent does not support the required protocol feature. Update the agent.",
     "executionAgent.outcomeUnknown": "The MatoLoop Agent disconnected after the operation was sent. Its outcome is unknown.",
     "executionAgent.protocolError": "The MatoLoop Agent sent an invalid protocol message.",
     "executionAgent.pairingTokenExpired": "The MatoLoop Agent pairing token has expired.",

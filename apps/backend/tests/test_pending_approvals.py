@@ -172,7 +172,7 @@ async def test_all_permissions_include_owned_session_context(monkeypatch) -> Non
     assert user.id in statement.compile().params.values()
 
 
-@pytest.mark.parametrize("kind", ["execution_directory", "execution_path", "administrator_path", "shell_action", "run_action"])
+@pytest.mark.parametrize("kind", ["execution_directory", "execution_path", "administrator_path", "shell_action", "shell_computer", "run_action"])
 @pytest.mark.parametrize("same_computer", [True, False])
 async def test_permission_target_display_does_not_require_source_approval(kind, same_computer):
     user = UserAccount(id=uuid4())
@@ -184,6 +184,9 @@ async def test_permission_target_display_does_not_require_source_approval(kind, 
         capability="execution.directory" if kind == "execution_directory" else "resource.read",
         trust_level="public", created_at=datetime.now(UTC))
     source = None
+    if kind == "shell_computer":
+        grant.resource_scope, grant.capability = str(computer.id), "category.read"
+        session.current_directory = "/other"
     if kind == "run_action":
         request = administrator_permission(computer.id, "/work", capability="shell.read", command="cat /root/.ssh/config")
         source = _approval(user.id, session.id, grant.created_at)
@@ -193,7 +196,7 @@ async def test_permission_target_display_does_not_require_source_approval(kind, 
     db.get.return_value = computer
     payload = await _permission_payload(db, user, grant, source, session, (None, TrustLevel.PUBLIC))
     assert (payload["resourceDisplay"], payload["executionAgentName"], payload["applicable"], payload.get("command"), payload.get("elevated", False)) == (
-        "/work", "Server", same_computer, "cat /root/.ssh/config" if kind == "run_action" else "pwd" if kind == "shell_action" else None,
+        "Shell" if kind == "shell_computer" else "/work", "Server", same_computer, "cat /root/.ssh/config" if kind == "run_action" else "pwd" if kind == "shell_action" else None,
         kind in {"administrator_path", "run_action"},
     )
 

@@ -70,6 +70,7 @@ def test_builtin_agent_profile_defaults() -> None:
         "session.files.write": ToolExecutionPolicy.DISABLED,
         "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.DISABLED,
+        "shell.delete": ToolExecutionPolicy.DISABLED,
     }
     assert build.private_permissions == build.public_permissions
     assert build.private_permissions.policies == {
@@ -79,6 +80,7 @@ def test_builtin_agent_profile_defaults() -> None:
         "working_directory.external": ToolExecutionPolicy.ASK,
         "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.AUTO,
+        "shell.delete": ToolExecutionPolicy.AUTO,
     }
     assert sysadmin.private_permissions == sysadmin.public_permissions
     assert sysadmin.private_permissions.policies == {
@@ -88,6 +90,7 @@ def test_builtin_agent_profile_defaults() -> None:
         "working_directory.external": ToolExecutionPolicy.AUTO,
         "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.ASK,
+        "shell.delete": ToolExecutionPolicy.ASK,
     }
     assert not plan.private_permissions.integration_policies
     assert not build.private_permissions.integration_policies

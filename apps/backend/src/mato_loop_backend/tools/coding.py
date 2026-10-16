@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import json
-
 from sqlalchemy import select
 
 import mato_loop_backend.tools.access as tools_access
 from mato_loop_backend.models import Project
-from mato_loop_backend.permissions.policy import PermissionRequest, SessionGrantScope
+from mato_loop_backend.permissions.policy import PermissionRequest
 from mato_loop_backend.projects.coding import ProjectCodingError, ProjectCodingService
 from mato_loop_backend.settings import load_agent_profile, load_effective_agent_identity
 from mato_loop_backend.tools.actions import (
@@ -69,21 +67,6 @@ async def _authorize_coding(
             title=title,
             summary=summary,
             resource_display=project.name,
-            session_grants=(SessionGrantScope(
-                (
-                    "read"
-                    if capability in {"coding.analyze", "coding.plan.read"}
-                    else "write"
-                ),
-                "project",
-                json.dumps(
-                    {"capability": capability, "projectId": str(project.id)},
-                    ensure_ascii=True,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                ),
-                project.name,
-            ),),
         ),
     )
     if not allowed:

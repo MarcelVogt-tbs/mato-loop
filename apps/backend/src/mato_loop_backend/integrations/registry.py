@@ -26,6 +26,7 @@ from mato_loop_backend.settings.models import (
     IntegrationSettings,
     ToolSettings,
 )
+from mato_loop_backend.tools.actions import ToolAction
 
 
 def agent_profile_search_available(
@@ -62,6 +63,15 @@ def integration_adapters() -> tuple[IntegrationAdapterDefinition, ...]:
     return tuple(
         _ADAPTERS[key] for key in sorted(_ADAPTERS) if _ADAPTERS[key].catalog_visible
     )
+
+
+def integration_action(capability: str) -> ToolAction | None:
+    for adapter in _ADAPTERS.values():
+        actions = (*adapter.resource_actions, *(action for tool in (*adapter.shared_tools, *adapter.execution_tools) for action in tool.actions))
+        for action in actions:
+            if action.capability == capability:
+                return action
+    return None
 
 
 def integration_adapter_type_registered(adapter_type: str) -> bool:

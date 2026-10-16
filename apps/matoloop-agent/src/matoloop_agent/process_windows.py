@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable
 from .config import AgentConfig
 from .errors import AgentError
 from .filesystem_windows import WindowsFilesystem
+from .process import _command_categories
 from .windows_paths import absolute, native
 
 # Parse with the same installed PowerShell engine that executes the command.
@@ -69,11 +70,6 @@ $result = @{commands=$commands; complete=$complete;
 """
 
 _WRITES = {
-    "rm",
-    "del",
-    "erase",
-    "remove-item",
-    "ri",
     "cp",
     "copy-item",
     "mv",
@@ -86,8 +82,6 @@ _WRITES = {
     "sc",
     "add-content",
     "ac",
-    "clear-content",
-    "clc",
     "out-file",
     "tee-object",
     "rename-item",
@@ -97,6 +91,7 @@ _WRITES = {
     "stop-process",
     "invoke-webrequest",
 }
+_DELETES = {"rm", "rmdir", "rd", "del", "erase", "remove-item", "ri", "clear-content", "clc"}
 _READ_FILES = {
     "get-content",
     "gc",
@@ -108,27 +103,6 @@ _READ_FILES = {
     "gci",
     "ls",
     "dir",
-}
-_GIT_WRITES = {
-    "add",
-    "apply",
-    "checkout",
-    "cherry-pick",
-    "clean",
-    "clone",
-    "commit",
-    "fetch",
-    "init",
-    "merge",
-    "mv",
-    "pull",
-    "push",
-    "rebase",
-    "reset",
-    "restore",
-    "revert",
-    "rm",
-    "switch",
 }
 
 
@@ -184,12 +158,13 @@ class WindowsProcess:
         targets = []
         commands = []
         writes = structure.get("redirect") is True
+        required_categories = {"write"} if writes else set()
         for unit in units:
             if not unit or not all(isinstance(token, str) for token in unit):
                 complete = False
                 continue
             name = ntpath.basename(unit[0]).lower().removesuffix(".exe")
-            if name not in _READ_FILES | _WRITES | {
+            if name not in _READ_FILES | _WRITES | _DELETES | {
                 "git",
                 "get-location",
                 "pwd",
@@ -197,30 +172,37 @@ class WindowsProcess:
                 "echo",
             }:
                 complete = False
-            mutates = name in _WRITES or name.startswith(
-                (
-                    "set-",
-                    "new-",
-                    "remove-",
-                    "clear-",
-                    "add-",
-                    "copy-",
-                    "move-",
-                    "rename-",
-                    "disable-",
-                    "enable-",
-                    "install-",
-                    "uninstall-",
-                    "update-",
-                    "restart-",
-                    "stop-",
+            deletes = name in _DELETES or name.startswith(("remove-", "clear-", "uninstall-"))
+            mutates = (
+                deletes
+                or name in _WRITES
+                or name.startswith(
+                    (
+                        "set-",
+                        "new-",
+                        "remove-",
+                        "clear-",
+                        "add-",
+                        "copy-",
+                        "move-",
+                        "rename-",
+                        "disable-",
+                        "enable-",
+                        "install-",
+                        "uninstall-",
+                        "update-",
+                        "restart-",
+                        "stop-",
+                    )
                 )
             )
-            if name == "git":
-                index = 1
-                while index < len(unit) and unit[index].startswith("-"):
-                    index += 2 if unit[index] in {"-C", "--git-dir", "--work-tree"} else 1
-                mutates |= index < len(unit) and unit[index].lower() in _GIT_WRITES
+            categories = (
+                _command_categories([name, *unit[1:]])
+                if name == "git"
+                else {"delete" if deletes else "write" if mutates else "read"}
+            )
+            mutates = bool(categories & {"write", "delete"})
+            required_categories.update(categories)
             writes |= mutates
             commands.append(
                 {
@@ -245,7 +227,7 @@ class WindowsProcess:
                     token.startswith("./")
                     or token.startswith("../")
                     or (len(token) > 2 and token[1:3] in {":/", ":\\"})
-                    or (name in _READ_FILES | _WRITES and not token.startswith("-"))
+                    or (name in _READ_FILES | _WRITES | _DELETES and not token.startswith("-"))
                 ):
                     continue
                 candidate = os.path.abspath(os.path.join(native(current_directory), token))
@@ -293,6 +275,11 @@ class WindowsProcess:
             "readOnly": not writes,
             "classification": "write" if writes else "read",
             "commands": commands,
+            "requiredCategories": [
+                category
+                for category in ("read", "write", "delete")
+                if category in (required_categories or {"read"})
+            ],
         }
         result["inspectionRevision"] = hashlib.sha256(
             json.dumps(

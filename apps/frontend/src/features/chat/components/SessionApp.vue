@@ -21,9 +21,8 @@
         </q-item>
         <q-separator />
         <section class="q-pa-md" aria-labelledby="session-permissions-title">
-          <div id="session-permissions-title" class="text-subtitle1 text-weight-bold q-mb-sm">Freigaben</div>
           <div class="row items-center no-wrap q-mb-md">
-            <div class="text-subtitle2">Session-Freigaben</div>
+            <div id="session-permissions-title" class="text-subtitle2">Session-Freigaben</div>
             <q-space />
             <q-btn
               flat
@@ -68,28 +67,17 @@
           <q-card v-else flat class="app-surface">
             <q-list separator>
               <q-item v-for="grant in sessionGrants" :key="grant.id">
-                <q-item-section avatar>
-                  <q-icon :name="grantDisplay(grant).icon" :color="grant.applicable === false ? 'grey' : 'primary'" />
-                </q-item-section>
                 <q-item-section>
-                  <q-item-label>{{ grantDisplay(grant).label }}</q-item-label>
-                  <q-item-label v-if="grant.command" caption>Arbeitsverzeichnis</q-item-label>
-                  <pre class="tool-call__details q-my-xs">{{ grantDisplay(grant).value }}</pre>
-                  <q-item-label v-if="grant.executionAgentName || grant.executionAgentId" caption>
-                    Computer: {{ grant.executionAgentName || grant.executionAgentId }}
+                  <q-item-label>
+                    {{ grantDisplay(grant).label }}
+                    <span v-if="grant.executionAgentName || grant.executionAgentId"> · {{ grant.executionAgentName || grant.executionAgentId }}</span>
                   </q-item-label>
+                  <pre v-if="grant.resourceType !== 'shell_computer'" class="tool-call__details q-py-none">{{ grantDisplay(grant).value }}</pre>
                   <template v-if="grant.command">
-                    <q-item-label caption>Exakter Befehl · gleiche Umgebung und Konfiguration</q-item-label>
-                    <pre class="tool-call__details q-my-xs">{{ grant.command || 'Befehl nicht verfügbar' }}</pre>
+                    <pre class="tool-call__details q-py-none">{{ grant.command }}</pre>
                   </template>
                   <q-item-label v-if="grant.elevated || grant.resourceType === 'administrator_path'" caption>Mit Administratorrechten</q-item-label>
-                  <q-item-label v-else-if="grant.command" caption>Ohne Administratorrechte</q-item-label>
-                  <q-item-label caption>Für diese Session · bis zum Widerruf</q-item-label>
-                  <q-item-label v-if="grant.applicable === false" caption class="text-warning">
-                    Inaktiv · passt nicht zur aktuellen Bindung oder wird nicht mehr unterstützt
-                  </q-item-label>
-                  <q-item-label v-else-if="grant.applicable === true" caption>Bindung passt · Regeln und Grenzen werden bei der Aktion geprüft</q-item-label>
-                  <q-item-label v-if="grant.createdAt" caption>{{ formatRelativeDateTime(grant.createdAt) }}</q-item-label>
+                  <q-item-label v-if="grant.applicable === false" caption class="text-warning">Inaktiv</q-item-label>
                 </q-item-section>
                 <q-item-section side>
                   <q-btn
@@ -112,6 +100,7 @@
               </q-item>
             </q-list>
           </q-card>
+          <div v-if="sessionGrants.some(grant => grant.recursive) && !approvals.grantsLoadFailed" class="text-caption app-muted q-mt-xs">/** schließt Unterpfade ein.</div>
         </section>
       </template>
     </q-scroll-area>
@@ -124,7 +113,6 @@ import { useQuasar } from 'quasar'
 import SessionSettingsFields from 'src/features/chat/components/SessionSettingsFields.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { permissionGrantDisplay } from 'src/utils/approval-display'
-import { formatRelativeDateTime } from 'src/utils/date-time'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'stores/chat'
 

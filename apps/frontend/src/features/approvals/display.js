@@ -192,6 +192,15 @@ export function approvalResource(approval, sessions = []) {
 }
 
 export function shellClassificationDisplay(approval) {
+  const labels = { read: 'Lesen', write: 'Schreiben', delete: 'Löschen' }
+  const categories = approval?.payload?.shellCategories
+  if (Array.isArray(categories) && categories.length && categories.every(category => Object.hasOwn(labels, category))) {
+    return {
+      color: categories.includes('delete') ? 'negative' : categories.includes('write') ? 'warning' : 'primary',
+      label: `Einstufung: ${categories.map(category => labels[category]).join(', ')}`,
+      incomplete: approval.payload.shellAnalysisComplete === false
+    }
+  }
   const classification = approval?.payload?.shellClassification
   if (!['read', 'write'].includes(classification)) return null
   return {
@@ -240,6 +249,20 @@ export function permissionGrantDisplay(grant, sessions = []) {
     }
   }
   const resource = approvalResource(grant, sessions)
+  const category = {
+    'category.read': { label: 'Lesen', icon: 'visibility' },
+    'category.read_sensitive': { label: 'Vertrauliche Daten lesen', icon: 'key' },
+    'category.write': { label: 'Schreiben', icon: 'edit' },
+    'category.delete': { label: 'Löschen', icon: 'delete_outline' }
+  }[grant?.capability]
+  if (category) {
+    return {
+      ...category,
+      label: grant.resourceType === 'shell_action' ? `Exakter Shell-Befehl · ${category.label}`
+        : grant.resourceType === 'shell_computer' ? `Shell · ${category.label}` : category.label,
+      value: grant.recursive ? `${resource.value.replace(/\/$/, '')}/**` : resource.value
+    }
+  }
   if (grant?.resourceType === 'shell_action') {
     return {
       label: grant.capability === 'resource.write' ? 'Exakter Shell-Befehl · Schreiben' : 'Exakter Shell-Befehl · Lesen',

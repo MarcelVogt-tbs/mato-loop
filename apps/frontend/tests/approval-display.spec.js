@@ -151,11 +151,31 @@ describe('approval display', () => {
     })
   })
 
+  it.each([
+    ['read', 'Lesen'], ['read_sensitive', 'Vertrauliche Daten lesen'],
+    ['write', 'Schreiben'], ['delete', 'Löschen']
+  ])('shows the %s category and its recursive resource', (category, label) => {
+    expect(permissionGrantDisplay({
+      capability: `category.${category}`, resourceType: 'execution_path',
+      resourceDisplay: '/srv/project', recursive: true
+    })).toMatchObject({ label, value: '/srv/project/**' })
+  })
+
   it('labels shell-action grants independently of file access and uses their bound directory', () => {
     expect(permissionGrantDisplay({
       capability: 'resource.read', resourceType: 'shell_action',
       currentDirectory: '/opt/project', command: 'git status'
     })).toEqual({ label: 'Exakter Shell-Befehl · Lesen', value: '/opt/project', icon: 'terminal' })
+  })
+
+  it('shows mixed shell categories instead of hiding deletion behind write', () => {
+    expect(shellClassificationDisplay({ payload: { shellCategories: ['write', 'delete'] } }))
+      .toEqual({ color: 'negative', label: 'Einstufung: Schreiben, Löschen', incomplete: false })
+  })
+
+  it('labels computer-bound shell grants separately from file grants', () => {
+    expect(permissionGrantDisplay({ capability: 'category.delete', resourceType: 'shell_computer', resourceDisplay: 'Shell' }))
+      .toMatchObject({ label: 'Shell · Löschen' })
   })
 
   it.each([

@@ -93,7 +93,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 41
+INVENTORY_VERSION = 42
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -835,10 +835,27 @@ CASES = (
         id="workspace_read_uses_exact_root",
         kind="general",
         user="Lies bitte die Datei README.md im aktuellen Arbeitsverzeichnis.",
-        tools=("read", "glob", "grep"),
+        tools=("read", "glob", "grep", "shell_run"),
         working_directory="/data/home/project",
         expected_tool="read",
         expected_arguments={"root": "computer", "path": "README.md"},
+        forbidden_tools=("shell_run",),
+    ),
+    PromptCase(
+        id="workspace_glob_prefers_file_tool", kind="general",
+        user="Finde alle Markdown-Dateien im aktuellen Arbeitsverzeichnis.",
+        tools=("read", "glob", "grep", "shell_run"), working_directory="/data/home/project",
+        expected_tool="glob", expected_arguments={"root": "computer"},
+        argument_options={"path": (".", "/data/home/project"), "pattern": ("*.md", "**/*.md")},
+        forbidden_tools=("shell_run",),
+    ),
+    PromptCase(
+        id="workspace_grep_prefers_file_tool", kind="general",
+        user="Suche im aktuellen Arbeitsverzeichnis in Markdown-Dateien nach dem Wort Aurora.",
+        tools=("read", "glob", "grep", "shell_run"), working_directory="/data/home/project",
+        expected_tool="grep", expected_arguments={"root": "computer", "pattern": "Aurora", "include": "*.md"},
+        argument_options={"path": (".", "/data/home/project")},
+        forbidden_tools=("shell_run",),
     ),
     PromptCase(
         id="codebase_investigation_uses_delegated_task",
@@ -4523,8 +4540,8 @@ _SEMANTIC_CONTRACTS = (
         "budget",
         ("duplicate_successful_research_is_not_repeated",),
     ),
-    ContractCoverage("file.glob", "file", ("glob_uses_session_root_and_path",)),
-    ContractCoverage("file.grep", "file", ("grep_uses_session_root_path_and_include",)),
+    ContractCoverage("file.glob", "file", ("glob_uses_session_root_and_path", "workspace_glob_prefers_file_tool")),
+    ContractCoverage("file.grep", "file", ("grep_uses_session_root_path_and_include", "workspace_grep_prefers_file_tool")),
     ContractCoverage("file.read", "file", ("workspace_read_uses_exact_root",)),
     ContractCoverage(
         "agent.delegated_task",

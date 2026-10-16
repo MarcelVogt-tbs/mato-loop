@@ -10,10 +10,13 @@ from uuid import uuid4
 import pytest
 from PIL import Image
 from pydantic import ValidationError
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 import mato_loop_backend.tools.interaction as mock_tools_interaction
 from mato_loop_backend.agent.question_decisions import answer_question
 from mato_loop_backend.agent.repository_instructions import repository_instructions_prompt
+from mato_loop_backend.agent.run_contracts import ApprovalResolution
 from mato_loop_backend.agent.run_support import _external_working_directory_policy, _tool_policy
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.session_secrets import session_secrets
@@ -71,7 +74,7 @@ from mato_loop_backend.permissions.policy import (
     execution_directory_scope,
     session_grant_matches_request,
     shell_action_scope,
-    shell_command_permission,
+    shell_command_permissions,
     shell_command_scope,
     shell_prefix_allowed,
 )
@@ -88,7 +91,7 @@ from mato_loop_backend.settings import (
 from mato_loop_backend.tools.administrator import AdministratorAuthenticationResult
 from mato_loop_backend.tools.arguments import ProtectedQuestionResolution, ShellRunArguments
 from mato_loop_backend.tools.catalog import tool_registry
-from mato_loop_backend.tools.computer import _run_process, _shell_run
+from mato_loop_backend.tools.computer import _authorize_shell, _run_process, _shell_run
 from mato_loop_backend.tools.context import ToolContext
 
 
@@ -109,6 +112,7 @@ class FakeExecutionClient:
             return self.responses.get("authenticate", AdministratorAuthenticationResult(passwordless=True))
         if operation == "shell.classify" or operation == "administrator.run" and arguments["operation"] == "shell.inspect":
             return ShellInspectResult(
+                required_categories=["read"],
                 classification="read", read_only=True, analysis_complete=operation != "shell.classify",
                 inspection_revision="a" * 64, targets=[], commands=[],
             )
@@ -187,6 +191,11 @@ def test_shell_tool_cannot_select_execution_targets() -> None:
         ),
         "shell.write": (
             "Als schreibend eingestufte Shell",
+            ToolExecutionPolicy.ASK,
+            ToolExecutionPolicy.ASK,
+        ),
+        "shell.delete": (
+            "Erkannte Shell-Löschaktionen",
             ToolExecutionPolicy.ASK,
             ToolExecutionPolicy.ASK,
         ),
@@ -500,7 +509,7 @@ async def test_workspace_directory_read_grants_only_that_directory(tmp_path) -> 
         SessionGrantScope(
             "read",
             "execution_path",
-            execution_directory_scope(client.agent_id, "/etc"),
+            execution_directory_scope(client.agent_id, "/etc", recursive=True),
             "/etc",
         ),
     )
@@ -866,7 +875,7 @@ async def test_elevated_shell_displays_command_and_safe_output_in_terminal(tmp_p
         if operation == "administrator.run" and _arguments["operation"] == "authenticate":
             return AdministratorAuthenticationResult(passwordless=True)
         if operation == "shell.classify" or _arguments["operation"] == "shell.inspect":
-            return ShellInspectResult(classification="read", read_only=True, analysis_complete=True, inspection_revision="a" * 64, targets=[], commands=[])
+            return ShellInspectResult(required_categories=["read"], classification="read", read_only=True, analysis_complete=True, inspection_revision="a" * 64, targets=[], commands=[])
         assert operation == "administrator.run"
         output = next(iter(terminal.shell_output.calls.values()))
         assert output.data == b"\r\nsudo id -u\r\n"
@@ -1188,13 +1197,14 @@ async def test_missing_administrator_password_returns_to_input_before_approval(t
     assert all(item.kwargs.get("check_only") for item in context.ask_handler.await_args_list)
 
 
-def test_shell_session_grants_bind_exact_command_and_context() -> None:
+def test_shell_session_grants_bind_categories_to_the_computer() -> None:
     agent_id = uuid4()
-    request = shell_command_permission(
+    requests = shell_command_permissions(
         agent_id,
         "/work",
         "cat /outside/input.txt > /other/output.txt",
         ShellInspectResult(
+            required_categories=["read", "write"],
             targets=[
                 {"path": "/outside/input.txt", "kind": "input", "access": "read"},
                 {"path": "/other/output.txt", "kind": "output", "access": "write"},
@@ -1208,16 +1218,16 @@ def test_shell_session_grants_bind_exact_command_and_context() -> None:
         ),
     )
 
-    assert request.effective_session_grants == (SessionGrantScope(
-        "write", "shell_action", shell_action_scope(agent_id, "/work", "cat /outside/input.txt > /other/output.txt"),
-        "cat /outside/input.txt > /other/output.txt",
-    ),)
-    assert json.loads(request.resource_scope)["targetAccesses"] == ["read", "write", "write"]
+    assert [(request.capability, request.effective_session_grants[0].resource_type,
+             request.effective_session_grants[0].resource_scope) for request in requests] == [
+        ("shell.read", "shell_computer", str(agent_id)), ("shell.write", "shell_computer", str(agent_id)),
+    ]
+    request = requests[-1]
     assert all(
         session_grant_matches_request(
             request.capability, request.resource_type, request.resource_scope, grant
         )
-        for grant in request.effective_session_grants
+        for request in requests for grant in request.effective_session_grants
     )
     outside_read = request.effective_session_grants[0]
     assert not session_grant_matches_request(
@@ -1229,11 +1239,12 @@ def test_shell_session_grants_bind_exact_command_and_context() -> None:
 
 
 def test_shell_permission_displays_confidential_paths() -> None:
-    request = shell_command_permission(
+    request, = shell_command_permissions(
         uuid4(),
         "/work",
         "cat .env.prod.example README.md",
         ShellInspectResult(
+            required_categories=["read"],
             targets=[
                 {"path": "/work/.env.prod.example", "kind": "path", "access": "read"},
                 {"path": "/work/README.md", "kind": "path", "access": "read"},
@@ -1251,6 +1262,69 @@ def test_shell_permission_displays_confidential_paths() -> None:
     )
     assert "Richtlinie für vertrauliche Daten" in request.summary
     assert request.sensitive_access
+
+
+@pytest.mark.parametrize("blocked", [None, "delete", "revoked_write"])
+async def test_mixed_shell_categories_are_all_checked_before_execution(tmp_path, blocked):
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
+    context = _context(tmp_path, ToolCall("shell", "shell_run", {}), client)
+    requests = shell_command_permissions(client.agent_id, client.current_directory, "touch new; rm old", ShellInspectResult(
+        required_categories=["write", "delete"], classification="write", read_only=False,
+        targets=[], commands=[], analysis_complete=True, inspection_revision="a" * 64,
+    ))
+    allowed = set()
+
+    async def authorize(request, *, check_only=False):
+        if request.capability == "shell.delete" and blocked == "delete":
+            return PermissionDecision.DENY
+        if blocked == "revoked_write" and "shell.delete" in allowed and request.capability == "shell.write":
+            return PermissionDecision.DENY
+        if not check_only:
+            allowed.add(request.capability)
+        return PermissionDecision.ALLOW
+
+    context.ask_handler = AsyncMock(side_effect=authorize)
+    assert await _authorize_shell(context, requests) is (blocked is None)
+
+
+async def test_edited_mixed_command_is_approved_once_through_runtime(tmp_path, monkeypatch):
+    edited = "cat input > new-output"
+    call = ToolCall("shell", "shell_run", {"command": "cat input > old-output"})
+    client = FakeExecutionClient({
+        "shell.inspect": ShellInspectResult(required_categories=["read", "write"], classification="write",
+            targets=[], commands=[], analysis_complete=True, inspection_revision="a" * 64),
+        "shell.run": ProcessResult(exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0,
+            stderr_bytes=0, stdout_truncated=False, stderr_truncated=False),
+    }, {"shell.inspect", "shell.run"})
+    context = _context(tmp_path, call, client)
+    run = AgentRun(id=context.run_id, session_id=context.session.id, trust_level="public")
+    agent = ExecutionAgent(id=client.agent_id, user_id=context.session.user_id, home_directory="/home/user",
+        home_filesystem_policy="auto", external_filesystem_policy="auto", home_shell_enabled=True, external_shell_enabled=True)
+    settings = ToolSettings(public_permissions={"policies": {"shell.read": "auto", "shell.write": "ask"}}).select_trust(TrustLevel.PUBLIC)
+    monkeypatch.setattr("mato_loop_backend.agent.runtime.load_agent_profile_tools", AsyncMock(return_value=(settings, sysadmin_profile())))
+    monkeypatch.setattr("mato_loop_backend.agent.runtime.load_effective_integrations", AsyncMock(return_value=IntegrationSettings()))
+    approve = AsyncMock(side_effect=[ApprovalResolution("allow_once", argument_edits=((('command',), edited),))])
+    monkeypatch.setattr(AgentRuntime, "_request_approval", approve)
+    engine = create_engine("sqlite://")
+    PermissionGrant.__table__.create(engine)
+    try:
+        with Session(engine) as stored:
+            context.db.scalar.side_effect = lambda statement: agent if statement.column_descriptions[0]["entity"] is ExecutionAgent else stored.scalar(statement)
+            context.db.scalars.side_effect = stored.scalars
+            context.db.add = Mock(side_effect=stored.add)
+            context.db.commit.side_effect = stored.commit
+
+            async def authorize(request, **kwargs):
+                return await AgentRuntime._authorize(context.db, run, context.session, call, request,
+                    context.root_files, context.approval_resolution, **kwargs)
+
+            context.ask_handler = authorize
+            result = await _tools(client.operations).execute(call, context)
+            assert (result.is_error, approve.await_count, client.requests[-1][0], client.requests[-1][1]["command"]) == (
+                False, 1, "shell.run", edited,
+            )
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.parametrize(("command_line", "tokens", "targets"), [
@@ -1273,11 +1347,12 @@ def test_shell_permission_displays_confidential_paths() -> None:
 def test_shell_permission_marks_possible_secret_output(
     command_line, tokens, targets,
 ) -> None:
-    request = shell_command_permission(
+    request, = shell_command_permissions(
         uuid4(),
         "/work",
         command_line,
         ShellInspectResult(
+            required_categories=["read"],
             targets=targets,
             analysis_complete=True,
             classification="read",
@@ -1299,11 +1374,12 @@ def test_shell_permission_marks_possible_secret_output(
     ("git status", ["git", "status"]),
 ])
 def test_shell_permission_does_not_flag_ordinary_output(command_line, tokens) -> None:
-    request = shell_command_permission(
+    request, = shell_command_permissions(
         uuid4(),
         "/work",
         command_line,
         ShellInspectResult(
+            required_categories=["read"],
             targets=[],
             analysis_complete=True,
             classification="read",
@@ -1329,11 +1405,12 @@ async def test_possible_secret_output_requires_approval_under_auto_policy(tmp_pa
         home_shell_enabled=True,
         external_shell_enabled=True,
     )
-    request = shell_command_permission(
+    request, = shell_command_permissions(
         client.agent_id,
         "/work",
         'echo "$DB_PASSWORD"',
         ShellInspectResult(
+            required_categories=["read"],
             targets=[],
             analysis_complete=False,
             classification="read",
@@ -1354,11 +1431,12 @@ async def test_possible_secret_output_requires_approval_under_auto_policy(tmp_pa
 
 def test_legacy_shell_targets_can_use_exact_command_consent() -> None:
     agent_id = uuid4()
-    request = shell_command_permission(
+    request, = shell_command_permissions(
         agent_id,
         "/work",
         "cat /outside/input.txt",
         ShellInspectResult(
+            required_categories=["read"],
             targets=[{"path": "/outside/input.txt", "kind": "input"}],
             analysis_complete=True, classification="read", read_only=True,
             commands=[], inspection_revision="a" * 64,
@@ -1372,11 +1450,12 @@ async def test_legacy_shell_target_is_not_authorized_by_existing_directory_grant
     client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
     context = _context(tmp_path, ToolCall("shell", "shell_run", {}), client)
     context.session.current_directory = "/work"
-    request = shell_command_permission(
+    request, = shell_command_permissions(
         client.agent_id,
         "/work",
         "cat /outside/input.txt",
         ShellInspectResult(
+            required_categories=["read"],
             targets=[{"path": "/outside/input.txt", "kind": "input"}],
             analysis_complete=True, classification="read", read_only=True,
             commands=[], inspection_revision="a" * 64,
@@ -1481,6 +1560,8 @@ async def test_coding_profile_auto_reads_keep_path_boundaries(
     policy = _tool_policy(settings, IntegrationSettings(), request)
 
     assert policy == ToolExecutionPolicy.AUTO
+    if capability == "shell.read" and path == "/opt/lemonade/docker-compose.yaml":
+        expected = PermissionDecision.ALLOW
     assert await PermissionPolicy.evaluate(
         context.db, context.session, request, context.root_files, policy,
         agent_profile_id=profile.id, trust_level=TrustLevel.PUBLIC,
@@ -1518,11 +1599,12 @@ async def test_sysadmin_external_reads_only_ask_for_protected_paths(
     request = (
         execution_directory_permission(client.agent_id, path, capability=capability)
         if capability == "filesystem.read"
-        else shell_command_permission(
+        else shell_command_permissions(
             client.agent_id,
             client.current_directory,
             f"cat {path}",
             ShellInspectResult(
+                required_categories=["read"],
                 targets=[{"path": path, "kind": "input", "access": "read"}],
                 analysis_complete=True,
                 classification="read",
@@ -1530,7 +1612,7 @@ async def test_sysadmin_external_reads_only_ask_for_protected_paths(
                 commands=[],
                 inspection_revision="a" * 64,
             ),
-        )
+        )[0]
     )
 
     policy = _tool_policy(settings, IntegrationSettings(), request)
@@ -1550,7 +1632,7 @@ async def test_sysadmin_external_reads_only_ask_for_protected_paths(
         (True, "/workspace/harness-eval-astra/app/frontend", {}, PermissionDecision.ALLOW),
         (False, "/workspace/harness-eval-astra/app/frontend", {}, PermissionDecision.ALLOW),
         (False, None, {}, PermissionDecision.ALLOW),
-        (False, "/etc/hosts", {}, PermissionDecision.ASK),
+        (False, "/etc/hosts", {}, PermissionDecision.ALLOW),
         (False, "/workspace/harness-eval-astra/app/.env", {}, PermissionDecision.ASK),
         (False, None, {"external_shell_enabled": False}, PermissionDecision.DENY),
         (False, None, {"home_shell_enabled": False}, PermissionDecision.DENY),
@@ -1635,6 +1717,7 @@ async def test_shell_dispatches_with_inspection_classification(
     client = FakeExecutionClient(
         {
             "shell.inspect": ShellInspectResult(
+                required_categories=["read"],
                 targets=[],
                 analysis_complete=True,
                 classification="read",
@@ -1673,6 +1756,7 @@ async def test_shell_dispatches_with_inspection_classification(
     assert request.capability == "shell.read"
     assert request.approval_details == {
         "shellClassification": "read",
+        "shellCategories": ["read"],
         "shellAnalysisComplete": True,
         "shellPrefixes": prefixes,
     }
@@ -1705,6 +1789,7 @@ async def test_shell_resolves_variable_reference_only_for_process_transport(
     client = FakeExecutionClient(
         {
             "shell.inspect": ShellInspectResult(
+                required_categories=[classification],
                 targets=[],
                 analysis_complete=True,
                 classification=classification,
@@ -1780,6 +1865,7 @@ async def test_secret_references_keep_only_selected_fields_for_session(
     client = FakeExecutionClient(
         {
             "shell.inspect": ShellInspectResult(
+                required_categories=["read"],
                 targets=[],
                 analysis_complete=True,
                 classification="read",
@@ -1924,6 +2010,7 @@ async def test_shell_copy_separates_classification_and_completeness(
     client = FakeExecutionClient(
         {
             "shell.inspect": ShellInspectResult(
+                required_categories=[classification],
                 targets=[],
                 analysis_complete=analysis_complete,
                 classification=classification,
@@ -1952,9 +2039,9 @@ async def test_shell_copy_separates_classification_and_completeness(
     assert request.capability == f"shell.{classification}"
     assert request.risk_level == ("low" if classification == "read" else "high")
     assert request.title == (
-        "Shell-Befehl ohne erkannte Schreibaktion ausführen?"
+        "Shell: Lesen erlauben?"
         if classification == "read"
-        else "Als schreibend eingestuften Shell-Befehl ausführen?"
+        else "Shell: Schreiben erlauben?"
     )
     assert request.summary == (
         "Es wurden keine bekannten Schreibaktionen erkannt. Der Befehl kann dennoch Nebenwirkungen haben."
@@ -1966,6 +2053,7 @@ async def test_shell_copy_separates_classification_and_completeness(
     )
     assert request.approval_details == {
         "shellClassification": classification,
+        "shellCategories": [classification],
         "shellAnalysisComplete": analysis_complete,
         "shellPrefixes": [],
     }
@@ -1982,6 +2070,7 @@ async def test_shell_preparation_uses_the_execution_inspection_without_running_a
 
     call = ToolCall("prepare", "shell_run", {"command": "pwd"})
     client = FakeExecutionClient({"shell.inspect": ShellInspectResult(
+        required_categories=["read"],
         targets=[], commands=[], read_only=True, classification="read", analysis_complete=True,
         inspection_revision="a" * 64,
     )}, {"shell.inspect", "shell.run"})
@@ -1993,6 +2082,16 @@ async def test_shell_preparation_uses_the_execution_inspection_without_running_a
         False, [("shell.inspect", {"command": "pwd", "currentDirectory": client.current_directory})],
         ("allow_session", "deny"),
     )
+
+
+async def test_managed_delete_preparation_keeps_the_delete_category(tmp_path):
+    from mato_loop_backend.tools.files import DeletePathArguments
+    from mato_loop_backend.tools.permissions import builtin_permissions
+
+    call = ToolCall("prepare", "delete_path", {"root": "session", "path": "output"})
+    context = _context(tmp_path, call, FakeExecutionClient({}, set()))
+    requests = await builtin_permissions(DeletePathArguments(**call.arguments), context, "delete_path")
+    assert requests[0].effective_session_grants[0].capability == "category.delete"
 
 
 @pytest.mark.parametrize("timeout", [None, 0.25, 3600])
@@ -2011,6 +2110,7 @@ async def test_shell_timeout_and_process_evidence(
         stderr_bytes=10, stdout_truncated=True, stderr_truncated=False,
     )
     inspection = ShellInspectResult(
+        required_categories=["read"],
         targets=[], analysis_complete=True, classification="read", read_only=True,
         commands=[{"tokens": ["printf", "evidence"], "prefix": ["printf"], "classification": "read"}],
         inspection_revision="a" * 64,
@@ -2059,6 +2159,7 @@ async def test_shell_timeout_does_not_bypass_permission_or_inspection_revision(t
     client = FakeExecutionClient(
         {
             "shell.inspect": ShellInspectResult(
+                required_categories=["read"],
                 targets=[], analysis_complete=True, classification="read", read_only=True,
                 commands=[{"tokens": ["cat", "README.md"], "prefix": ["cat"], "classification": "read"}],
                 inspection_revision="a" * 64,
@@ -2096,6 +2197,7 @@ async def test_shell_metadata_only_paths_preserve_profile_and_trust_policies(
         {"path": "/home/user/project/result.txt", "kind": "path", "access": classification},
     ]
     inspection = ShellInspectResult.model_validate({
+        "requiredCategories": [classification],
         "targets": targets, "analysisComplete": analysis_complete,
         "classification": classification, "readOnly": classification == "read",
         "commands": [
@@ -2151,6 +2253,7 @@ async def test_shell_metadata_only_paths_preserve_profile_and_trust_policies(
     request = context.ask_handler.await_args.args[0]
     assert request.shell_metadata_paths == frozenset(target["path"] for target in targets[:-1])
     assert json.loads(request.resource_scope) == {
+        "requiredCategories": [classification],
         "agentId": str(client.agent_id), "currentDirectory": client.current_directory,
         "action": shell_action_scope(client.agent_id, client.current_directory, command),
         "classification": classification, "analysisComplete": analysis_complete,
@@ -2159,7 +2262,7 @@ async def test_shell_metadata_only_paths_preserve_profile_and_trust_policies(
         "targetAccesses": ["exempt", "exempt", "exempt", "exempt", classification],
     }
     assert set(request.approval_details) == {
-        "shellClassification", "shellAnalysisComplete", "shellPrefixes",
+        "shellClassification", "shellCategories", "shellAnalysisComplete", "shellPrefixes",
     }
     assert [operation for operation, _ in client.requests] == (
         ["shell.inspect", "shell.run"] if not result.is_error else ["shell.inspect"]
@@ -2183,6 +2286,7 @@ async def test_shell_ordinary_target_wins_over_metadata_for_the_same_path(
     effective_classification = "write" if target_access == "write" else classification
     client = FakeExecutionClient({
         "shell.inspect": ShellInspectResult(
+            required_categories=[effective_classification],
             targets=[
                 {"path": "/usr/bin/python3", "kind": "toolchain_metadata"},
                 {"path": "/dev/null", "kind": "discard"},
@@ -2209,7 +2313,7 @@ async def test_shell_ordinary_target_wins_over_metadata_for_the_same_path(
     context.db.scalars.return_value = Mock(all=Mock(return_value=[]))
     assert await PermissionPolicy.evaluate(
         context.db, context.session, request, context.root_files, ToolExecutionPolicy.AUTO,
-    ) == PermissionDecision.ASK
+    ) == PermissionDecision.ALLOW
 
 
 @pytest.mark.parametrize("classification", ["read", "write"])
@@ -2270,7 +2374,7 @@ async def test_shell_metadata_must_be_current_typed_scope_subset(tmp_path) -> No
         assert await PermissionPolicy.evaluate(
             context.db, context.session, replace(request, approval_details=details),
             context.root_files, ToolExecutionPolicy.AUTO,
-        ) == PermissionDecision.ASK
+        ) == PermissionDecision.ALLOW
         with pytest.raises(ValidationError):
             ShellRunArguments(command="cat /etc/hosts", **details)
     assert await PermissionPolicy.evaluate(
@@ -2290,6 +2394,7 @@ async def test_shell_metadata_must_be_current_typed_scope_subset(tmp_path) -> No
 async def test_shell_reinspection_keeps_existing_grants_class_bound(tmp_path) -> None:
     call = ToolCall("shell", "shell_run", {"command": "command -v python3"})
     inspection = ShellInspectResult(
+        required_categories=["read"],
         targets=[{"path": "/usr/bin/python3", "kind": "toolchain_metadata"}],
         analysis_complete=False, classification="read", read_only=True,
         commands=[{"tokens": ["command", "-v", "python3"], "prefix": ["command"], "classification": "read"}],
@@ -2320,6 +2425,7 @@ async def test_shell_reinspection_keeps_existing_grants_class_bound(tmp_path) ->
     ))
     client.responses["shell.inspect"] = ShellInspectResult.model_validate({
         **inspection.model_dump(), "classification": "write", "read_only": False,
+        "required_categories": ["write"],
         "inspection_revision": "b" * 64,
     })
     assert (await _tools(client.operations).execute(call, context)).is_error

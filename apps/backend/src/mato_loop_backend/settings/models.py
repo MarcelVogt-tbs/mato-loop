@@ -413,12 +413,14 @@ def plan_profile() -> AgentProfile:
         "session.files.write": ToolExecutionPolicy.DISABLED,
         "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.DISABLED,
+        "shell.delete": ToolExecutionPolicy.DISABLED,
     }
     return AgentProfile(
         id=PLAN_PROFILE_ID,
         name=CORE_PROFILE_NAMES[PLAN_PROFILE_ID],
         description=(
-            "Plant ohne erkannte Schreibaktionen. Liest im Arbeitsverzeichnis automatisch, "
+            "Plant ohne erkannte Änderungen. Liest Dateien im Arbeitsverzeichnis und führt als lesend "
+            "eingestufte Shell-Befehle computerweit automatisch aus, "
             "auch mit öffentlichen Modellen; gelesene Inhalte werden an das Modell übermittelt."
         ),
         instructions=(
@@ -472,12 +474,14 @@ def build_profile() -> AgentProfile:
         "working_directory.external": ToolExecutionPolicy.ASK,
         "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.AUTO,
+        "shell.delete": ToolExecutionPolicy.AUTO,
     }
     return AgentProfile(
         id=BUILD_PROFILE_ID,
         name=CORE_PROFILE_NAMES[BUILD_PROFILE_ID],
         description=(
-            "Liest, ändert und löscht im Arbeitsverzeichnis automatisch und führt Shell-Befehle aus, "
+            "Liest, ändert und löscht Dateien im Arbeitsverzeichnis automatisch. Führt Shell-Aktionen "
+            "computerweit automatisch aus, "
             "auch mit öffentlichen Modellen; gelesene Inhalte werden an das Modell übermittelt."
         ),
         instructions=(
@@ -511,6 +515,7 @@ def sysadmin_profile() -> AgentProfile:
         "working_directory.external": ToolExecutionPolicy.AUTO,
         "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.ASK,
+        "shell.delete": ToolExecutionPolicy.ASK,
     }
     return AgentProfile(
         id=SYSADMIN_PROFILE_ID,

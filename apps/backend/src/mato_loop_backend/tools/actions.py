@@ -192,6 +192,10 @@ _SHELL_WRITE = ToolAction(
     "shell.write", "Als schreibend eingestufte Shell", category="write", mutates=True
 )
 
+_SHELL_DELETE = ToolAction(
+    "shell.delete", "Erkannte Shell-Löschaktionen", category="delete", mutates=True
+)
+
 _SYSTEM_INFO = ToolAction(
     "system.info", "Systeminformationen", category="read"
 )

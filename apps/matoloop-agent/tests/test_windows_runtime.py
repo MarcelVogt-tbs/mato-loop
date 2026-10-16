@@ -146,6 +146,22 @@ class WindowsRuntimeTests(unittest.TestCase):
         self.assertIn(self.wire + "/note.txt", [target["path"] for target in read["targets"]])
         write = self.process.inspect_shell("Set-Content ./note.txt two", self.wire)
         self.assertEqual(write["classification"], "write")
+        for command, categories in (
+            ("Get-Content ./note.txt", ["read"]),
+            ("Set-Content ./note.txt two", ["write"]),
+            ("Remove-Item ./note.txt", ["delete"]),
+            ("Clear-Content ./note.txt", ["delete"]),
+            ("rmdir ./old", ["delete"]),
+            ("Set-Content ./new.txt two; Remove-Item ./note.txt", ["write", "delete"]),
+            ("git clean -n", ["read"]),
+            ("git clean -- -n", ["delete"]),
+            ("git branch -qD old", ["delete"]),
+            ("git push --delete origin old", ["write", "delete"]),
+        ):
+            with self.subTest(command=command):
+                self.assertEqual(
+                    self.process.inspect_shell(command, self.wire)["requiredCategories"], categories
+                )
 
         async def execute():
             chunks = []

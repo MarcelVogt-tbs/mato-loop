@@ -23,6 +23,7 @@ from mato_loop_backend.models import (
     UserAccount,
 )
 from mato_loop_backend.permissions.decisions import ApprovalDecisionError, decide_agent_action
+from mato_loop_backend.permissions.policy import SessionGrantScope
 from mato_loop_backend.security import require_user
 from mato_loop_backend.sessions.service import (
     ACTIVE_RUN_STATUSES,
@@ -78,7 +79,9 @@ async def _permission_payload(
                     if isinstance(item, dict)
                     and item.get("resourceType") == grant.resource_type
                     and item.get("resourceScope") == grant.resource_scope
-                    and ("execution.directory" if item.get("access") == "navigate" else f"resource.{item.get('access')}") == grant.capability
+                    and SessionGrantScope(
+                        item.get("category", item.get("access")), item.get("resourceType"), item.get("resourceScope"), legacy="category" not in item,
+                    ).capability == grant.capability
                 ),
                 None,
             )
@@ -109,11 +112,14 @@ async def _permission_payload(
                 scope = {}
     except (ValueError, TypeError):
         scope = {}
+    if target.resource_type == "shell_computer":
+        scope = {"agentId": target.resource_scope}
+        resource_display = "Shell"
     if grant.resource_type in {"root_path", "execution_directory"} and grant.capability in {"resource.read", "resource.write"}:
         applicable = False
     if grant.resource_type == "shell_command":
         applicable = False
-    if target.resource_type in {"execution_directory", "execution_path", "administrator_path", "shell_action", "shell_command", "execution_administrator"}:
+    if target.resource_type in {"execution_directory", "execution_path", "administrator_path", "shell_action", "shell_command", "execution_administrator", "shell_computer"}:
         try:
             computer_id = UUID(scope["agentId"])
             computer = await db.get(ExecutionAgent, computer_id)
@@ -125,7 +131,7 @@ async def _permission_payload(
         else:
             applicable = False
         resource_display = scope.get("path") or scope.get("currentDirectory") or resource_display
-        if target.capability in {"shell.read", "shell.write"} or target.resource_type == "shell_action":
+        if target.capability in {"shell.read", "shell.write", "shell.delete"} or target.resource_type == "shell_action":
             shell_details.update(command=scope.get("command"), currentDirectory=scope.get("currentDirectory"), elevated=scope.get("elevated", target.resource_type == "execution_administrator"))
             applicable = applicable and scope.get("currentDirectory") == session.current_directory
     elif target.resource_type in {"root_path", "session_path"}:
@@ -139,6 +145,7 @@ async def _permission_payload(
         "resourceType": grant.resource_type,
         "resourceScope": grant.resource_scope,
         "resourceDisplay": resource_display,
+        "recursive": grant.capability.startswith("category.") and scope.get("recursive") is True,
         "agentProfileId": (
             str(grant.agent_profile_id)
             if grant.agent_profile_id is not None

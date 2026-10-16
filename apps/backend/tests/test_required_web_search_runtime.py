@@ -177,7 +177,7 @@ async def test_repository_rules_arrive_before_model_and_follow_successful_reads(
 
     async def remote(_client, operation, arguments, result_model, **_kwargs):
         if operation == "shell.inspect":
-            return result_model.model_validate({"targets": [{"path": "/work/src/AGENTS.md" if creates_rules else "/work/src/new.py", "kind": "output", "access": "write"}],
+            return result_model.model_validate({"requiredCategories": ["write"], "targets": [{"path": "/work/src/AGENTS.md" if creates_rules else "/work/src/new.py", "kind": "output", "access": "write"}],
                                                 "classification": "write", "analysisComplete": True, "commands": [], "inspectionRevision": "b" * 64})
         if operation not in {"filesystem.stat", "filesystem.read"}:
             if enabled and not creates_rules:

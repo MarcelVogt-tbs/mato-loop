@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -6,12 +7,14 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.permissions.requests as mock_permissions_requests
+import mato_loop_backend.tools.coding as tools_coding
 from mato_loop_backend.agent.run_contracts import ApprovalResolution
 from mato_loop_backend.agent.run_support import _run_action_scope
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.approvals import ApprovalDecisionRequest, decide_approval
 from mato_loop_backend.events import run_events
+from mato_loop_backend.execution import ShellInspectResult
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
@@ -22,6 +25,7 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.permissions.decisions import ApprovalDecisionError, decide_agent_action
 from mato_loop_backend.permissions.policy import (
+    PermissionDecision,
     PermissionRequest,
     administrator_permission,
     execution_directory_permission,
@@ -30,6 +34,7 @@ from mato_loop_backend.permissions.policy import (
     session_grants_fingerprint,
     session_grants_payload,
     shell_action_scope,
+    shell_command_permissions,
     shell_command_scope,
 )
 from mato_loop_backend.providers.base import ToolCall
@@ -65,8 +70,8 @@ def _fingerprint(approval: ApprovalRequest) -> None:
 
 
 @pytest.mark.parametrize("decision", ["allow_once", "allow_session"])
-@pytest.mark.parametrize("navigation", [False, True])
-async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision, navigation) -> None:
+@pytest.mark.parametrize("kind", ["legacy_shell", "navigation", "resources", "coding"])
+async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision, kind) -> None:
     approval = _approval()
     profile_id = uuid4()
     agent_id = uuid4()
@@ -88,11 +93,32 @@ async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision
             },
         ],
     }
-    if navigation:
+    expected = [("resource.write", "shell_action", action)]
+    if kind == "navigation":
         request = execution_directory_permission(agent_id, "/source")
         approval.capability, approval.resource_type, approval.resource_scope = request.capability, request.resource_type, request.resource_scope
         approval.payload["sessionGrants"] = session_grants_payload(request)
         action = request.resource_scope
+        expected = [("execution.directory", "execution_directory", action)]
+    elif kind == "resources":
+        requests = shell_command_permissions(agent_id, "/source", "cat /input/file > /target/file", ShellInspectResult(
+            required_categories=["read", "write"],
+            targets=[{"path": "/input/file", "kind": "input", "access": "read"}, {"path": "/target/file", "kind": "output", "access": "write"}],
+            classification="write", read_only=False, analysis_complete=True, commands=[], inspection_revision="a" * 64,
+        ))
+        request = requests[-1]
+        approval.resource_scope = request.resource_scope
+        approval.payload["sessionGrants"] = session_grants_payload(request)
+        expected = [("category.write", "shell_computer", str(agent_id))]
+    elif kind == "coding":
+        project = SimpleNamespace(id=uuid4(), name="Project", coding_integration_id=uuid4())
+        monkeypatch.setattr(tools_coding, "_coding_project", AsyncMock(return_value=project))
+        context = SimpleNamespace(ask=AsyncMock(return_value=PermissionDecision.ALLOW))
+        await tools_coding._authorize_coding(context, project, "coding.analyze", "Analyze?", "Analyze project.")
+        request = context.ask.await_args.args[0]
+        approval.capability, approval.resource_type, approval.resource_scope = request.capability, request.resource_type, request.resource_scope
+        approval.payload["sessionGrants"] = session_grants_payload(request)
+        expected = [("category.read", "project", str(project.id))]
     _fingerprint(approval)
     user = UserAccount(id=approval.user_id, username="test", password_hash="hash")
     db = AsyncMock(spec=AsyncSession)
@@ -111,10 +137,7 @@ async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision
 
     grants = [call.args[0] for call in db.add.call_args_list]
     assert all(isinstance(grant, PermissionGrant) for grant in grants)
-    assert [(grant.capability, grant.resource_type) for grant in grants] == [
-        ("execution.directory", "execution_directory") if navigation else ("resource.write", "shell_action")
-    ]
-    assert [grant.resource_scope for grant in grants] == [action]
+    assert [(grant.capability, grant.resource_type, grant.resource_scope) for grant in grants] == expected
     assert all(grant.session_id == approval.session_id for grant in grants)
     assert all(grant.run_id == (approval.run_id if decision == "allow_once" else None) for grant in grants)
     assert all(grant.agent_profile_id == profile_id for grant in grants)
@@ -188,7 +211,7 @@ async def test_mcp_allow_session_persists_tool_grant(monkeypatch) -> None:
 
     assert result == {"status": "approved", "decision": "allow_session"}
     grant = db.add.call_args.args[0]
-    assert grant.capability == "resource.write"
+    assert grant.capability == "category.write"
     assert grant.resource_type == "integration_resource"
     assert grant.resource_scope == request.effective_session_grants[0].resource_scope
 

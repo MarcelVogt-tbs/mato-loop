@@ -2,16 +2,33 @@ import importlib.util
 from pathlib import Path
 
 
-def _migration_module():
+def _migration_module(filename="601278fe1db7_unify_tool_policy_defaults.py"):
     path = (
         Path(__file__).parents[1]
-        / "alembic/versions/601278fe1db7_unify_tool_policy_defaults.py"
+        / "alembic/versions" / filename
     )
     spec = importlib.util.spec_from_file_location("tool_policy_migration", path)
     assert spec is not None and spec.loader is not None
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
     return migration
+
+
+def test_shell_delete_split_preserves_explicit_overrides_only():
+    migration = _migration_module("fae8e3fac872_split_shell_delete.py")
+    assert migration._copy_shell_delete_policy({
+        "profiles": [{"privatePermissions": {"policies": {"shell.write": "disabled"}}}],
+        "builtin_access_overrides": {"build": {"public_permissions": {
+            "policies": {"shell.write": "ask", "shell.delete": "auto"},
+        }}},
+        "private_permissions": {"policies": {}},
+    }) == {
+        "profiles": [{"privatePermissions": {"policies": {"shell.write": "disabled", "shell.delete": "disabled"}}}],
+        "builtin_access_overrides": {"build": {"public_permissions": {
+            "policies": {"shell.write": "ask", "shell.delete": "auto"},
+        }}},
+        "private_permissions": {"policies": {}},
+    }
 
 
 def test_migration_applies_new_defaults_and_preserves_custom_overrides() -> None:

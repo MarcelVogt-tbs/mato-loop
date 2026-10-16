@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any, Literal
@@ -43,54 +43,32 @@ class PermissionDisplayItem:
 
 @dataclass(frozen=True, slots=True)
 class SessionGrantScope:
-    access: Literal["read", "write", "navigate"]
+    access: Literal["read", "read_sensitive", "write", "delete", "navigate"]
     resource_type: str
     resource_scope: str
     resource_display: str | None = None
+    legacy: bool = False
 
     @property
     def capability(self) -> str:
-        return "execution.directory" if self.access == "navigate" else f"resource.{self.access}"
+        return "execution.directory" if self.access == "navigate" else f"{'resource' if self.legacy else 'category'}.{self.access}"
 
 
-_READ_CAPABILITIES = frozenset({
-    "arcane.accounts.read", "arcane.read",
-    "automation.read", "browser.read", "coding.analyze", "coding.plan.read", "file.provide",
-    "filesystem.read", "knowledge.read", "mail.read", "meal_plan.read",
-    "media.analyze.video", "media.transcribe.audio",
-    "mealie.accounts.read", "memory.read", "network.fetch", "network.search",
-    "recipes.read", "session.files.read", "session.read", "session.search",
-    "session.tool_result.read", "secrets.access",
-    "skills.load", "support.read", "system.info", "tasks.read", "calendar.read", "execution_agent.list",
-    "settings.personal.read",
-})
-_WRITE_CAPABILITIES = frozenset({
-    "arcane.manage", "arcane.delete",
-    "automation.create", "automation.delete", "automation.run", "automation.update",
-    "browser.code", "browser.control", "browser.release", "browser.write",
-    "cad.render", "calendar.delete", "calendar.write", "coding.execute.enqueue",
-    "coding.plan.create", "filesystem.delete", "filesystem.write",
-    "knowledge.delete", "knowledge.write", "mail.delete", "mail.drafts",
-    "mail.send", "meal_plan.delete", "meal_plan.write", "memory.write",
-    "mcp.call", "sonobin.call",
-    "recipes.write", "recipes.delete",
-    "media.edit.image", "media.generate.audio", "media.generate.image",
-    "media.generate.speech",
-    "session.files.write", "settings.agent_identity.update",
-    "settings.user_profile.update", "skills.write", "tasks.delete", "tasks.write",
-    "settings.personal.update",
-    "secrets.write", "execution_agent.select",
-})
-
-
-def _access_for_capability(capability: str) -> Literal["read", "write", "navigate"] | None:
+def _access_for_capability(capability: str) -> Literal["read", "read_sensitive", "write", "delete", "navigate"] | None:
     if capability == "execution.directory":
         return "navigate"
-    if capability in _READ_CAPABILITIES or capability == "shell.read":
-        return "read"
-    if capability in _WRITE_CAPABILITIES or capability == "shell.write":
-        return "write"
-    return None
+    from mato_loop_backend.integrations.registry import integration_action
+    from mato_loop_backend.tools.catalog import tool_registry
+
+    action = tool_registry.actions_by_capability.get(capability) or integration_action(capability)
+    return action.category if action is not None else None
+
+
+def _legacy_access(access: str | None) -> str | None:
+    return {"delete": "write", "read_sensitive": "read"}.get(access, access)
+
+
+_CATEGORY_LABELS = {"read": "Lesen", "read_sensitive": "Vertrauliche Daten lesen", "write": "Schreiben", "delete": "Löschen"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,10 +102,15 @@ class PermissionRequest:
     @property
     def grant_capabilities(self) -> tuple[str, ...]:
         grants = self.effective_session_grants
-        return (
-            tuple(dict.fromkeys(grant.capability for grant in grants))
+        capabilities = (
+            tuple(dict.fromkeys(capability for grant in grants for capability in (
+                grant.capability, f"resource.{_legacy_access(grant.access)}",
+            )))
             if grants else (self.capability,)
         )
+        if self.capability == "shell.read" and self.resource_type in {"shell_command", "execution_administrator"}:
+            capabilities += ("resource.write",)
+        return capabilities
 
     @property
     def effective_session_grants(self) -> tuple[SessionGrantScope, ...]:
@@ -147,7 +130,7 @@ class PermissionRequest:
 def session_grants_payload(request: PermissionRequest) -> list[dict[str, str | None]]:
     return [
         {
-            "access": grant.access,
+            "access" if grant.legacy else "category": grant.access,
             "resourceType": grant.resource_type,
             "resourceScope": grant.resource_scope,
             "resourceDisplay": grant.resource_display,
@@ -183,13 +166,14 @@ def session_grants_display(request: PermissionRequest) -> list[str]:
             continue
         if grant.resource_type == "shell_action":
             scope = json.loads(grant.resource_scope)
-            result.append(f"Diesen Shell-Befehl{' als Administrator' if scope['elevated'] else ''} ausführen: {scope['command']} · Arbeitsverzeichnis: {scope['currentDirectory']}")
+            result.append(f"{_CATEGORY_LABELS[grant.access]} · Diesen Shell-Befehl{' als Administrator' if scope['elevated'] else ''} ausführen: {scope['command']} · Arbeitsverzeichnis: {scope['currentDirectory']}")
             continue
-        if grant.resource_type in {"execution_path", "session_path", "administrator_path"}:
-            target = "Dateiaktionen an genau diesem Pfad"
-        else:
-            target = "Aktionen"
-        action = f"Alle passenden {'lesenden' if grant.access == 'read' else 'schreibenden'} {target}"
+        action = _CATEGORY_LABELS[grant.access]
+        if grant.resource_type == "shell_computer":
+            result.append(f"{action} · Shell auf diesem Computer")
+            continue
+        if grant.resource_type in {"execution_path", "session_path"}:
+            action += " · einschließlich Unterpfaden" if json.loads(grant.resource_scope).get("recursive") else " · exakter Pfad"
         if grant.resource_type == "administrator_path":
             action += " als Administrator"
         area = grant.resource_display or "Angezeigter Bereich"
@@ -368,7 +352,6 @@ def integration_operation_permission(
                     integration_id,
                     binding_revision,
                     grant_resource_key or resource_key or "account",
-                    capability,
                 ),
                 resource_display,
             ),
@@ -408,16 +391,17 @@ def _integration_operation_scope(resource_scope: str) -> dict[str, str] | None:
 def _integration_resource_scope(resource_scope: str) -> dict[str, str] | None:
     try:
         value = json.loads(resource_scope)
-        if not isinstance(value, dict) or set(value) != {
-            "bindingRevision", "capability", "integrationId", "resourceKey"
-        }:
+        if not isinstance(value, dict) or set(value) not in (
+            {"bindingRevision", "integrationId", "resourceKey"},
+            {"bindingRevision", "capability", "integrationId", "resourceKey"},
+        ):
             return None
         integration_id = UUID(value["integrationId"])
         if (
             str(integration_id) != value["integrationId"]
             or re.fullmatch(r"[0-9a-f]{64}", value["bindingRevision"]) is None
             or _INTEGRATION_RESOURCE_KEY.fullmatch(value["resourceKey"]) is None
-            or _access_for_capability(value["capability"]) is None
+            or "capability" in value and _access_for_capability(value["capability"]) is None
         ):
             return None
         canonical = json.dumps(
@@ -470,7 +454,7 @@ def path_permission(
             SessionGrantScope(
                 access,
                 "session_path",
-                scope,
+                json.dumps({**json.loads(scope), "recursive": True}, ensure_ascii=True, separators=(",", ":"), sort_keys=True),
                 f"{selected_root.value}:{normalized_path}",
             ),
         ) if access is not None else (),
@@ -540,12 +524,13 @@ def _project_session_path_scope(
         return None
 
 
-def execution_directory_scope(agent_id: UUID, path: str) -> str:
+def execution_directory_scope(agent_id: UUID, path: str, *, recursive: bool = False) -> str:
     absolute_path(path)
     return json.dumps(
         {
             "agentId": str(agent_id),
             "path": path,
+            **({"recursive": True} if recursive else {}),
         },
         ensure_ascii=True,
         separators=(",", ":"),
@@ -587,7 +572,7 @@ def execution_directory_permission(
             SessionGrantScope(
                 access,
                 "execution_directory" if access == "navigate" else "execution_path",
-                execution_directory_scope(agent_id, path),
+                execution_directory_scope(agent_id, path, recursive=access != "navigate"),
                 path,
             ),
         ) if access is not None else (),
@@ -1063,7 +1048,9 @@ def skill_edit_permission(
 def _root_path_scope(resource_scope: str) -> tuple[FileRoot, str, PurePosixPath] | None:
     try:
         value = json.loads(resource_scope)
-        if not isinstance(value, dict) or set(value) != {"identity", "path", "root"}:
+        if not isinstance(value, dict) or set(value) not in (
+            {"identity", "path", "root"}, {"identity", "path", "root", "recursive"},
+        ) or "recursive" in value and value["recursive"] is not True:
             return None
         root = FileRoot(value["root"])
         if root is not FileRoot.SESSION:
@@ -1090,11 +1077,13 @@ def _root_path_scope(resource_scope: str) -> tuple[FileRoot, str, PurePosixPath]
 def _execution_directory_scope(resource_scope: str) -> tuple[UUID, str] | None:
     try:
         value = json.loads(resource_scope)
-        if set(value) != {"agentId", "path"}:
+        if not isinstance(value, dict) or set(value) not in (
+            {"agentId", "path"}, {"agentId", "path", "recursive"},
+        ) or "recursive" in value and value["recursive"] is not True:
             return None
         agent_id = UUID(value["agentId"])
         path = value["path"]
-        canonical = execution_directory_scope(agent_id, path)
+        canonical = execution_directory_scope(agent_id, path, recursive=value.get("recursive", False))
         return (
             agent_id,
             path,
@@ -1124,6 +1113,7 @@ def shell_command_scope(
     analysis_complete: bool,
     target_accesses: list[Literal["read", "write", "exempt"] | None] | None = None,
     action: str | None = None,
+    required_categories: list[str] | None = None,
 ) -> str:
     return json.dumps(
         {
@@ -1135,6 +1125,7 @@ def shell_command_scope(
             "prefixes": prefixes,
             "targetAccesses": target_accesses if target_accesses is not None else [None] * len(paths),
             **({"action": action} if action is not None else {}),
+            **({"requiredCategories": required_categories} if required_categories is not None else {}),
         },
         ensure_ascii=True,
         separators=(",", ":"),
@@ -1156,10 +1147,10 @@ def shell_action_scope(
     }, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
 
 
-def shell_command_permission(
+def shell_command_permissions(
     agent_id: UUID, current_directory: str, command_line: str, inspection: ShellInspectResult,
     *, environment: dict | None = None,
-) -> PermissionRequest:
+) -> tuple[PermissionRequest, ...]:
     prefixes = (
         [command.prefix for command in inspection.commands if command.prefix is not None]
         if inspection.commands
@@ -1174,6 +1165,12 @@ def shell_command_permission(
     }
     action = shell_action_scope(
         agent_id, current_directory, command_line, environment=environment,
+    )
+    scope = shell_command_scope(
+        agent_id, current_directory, inspection.classification, prefixes,
+        [target.path for target in inspection.targets], inspection.analysis_complete,
+        ["exempt" if target.kind in metadata_kinds else target.access for target in inspection.targets],
+        action, inspection.required_categories,
     )
     confidential_paths = tuple(dict.fromkeys(
         path
@@ -1194,18 +1191,10 @@ def shell_command_permission(
             "Der Befehl könnte Zugangsdaten ausgeben oder an einen Prozess übergeben. Die Prüfung kann sichtbare "
             "Ausgabe und eine direkte Authentifizierungsübergabe nicht sicher unterscheiden. Prüfe das Ausgabeziel.",
         ),)
-    return PermissionRequest(
+    request = PermissionRequest(
         capability=f"shell.{inspection.classification}",
         resource_type="shell_command",
-        resource_scope=shell_command_scope(
-            agent_id, current_directory, inspection.classification, prefixes,
-            [target.path for target in inspection.targets], inspection.analysis_complete,
-            [
-                "exempt" if target.kind in metadata_kinds else target.access
-                for target in inspection.targets
-            ],
-            action,
-        ),
+        resource_scope=scope,
         action_kind="shell_run",
         risk_level="low" if inspection.classification == "read" else "high",
         title=(
@@ -1229,15 +1218,23 @@ def shell_command_permission(
         ),
         resource_display=current_directory,
         shell_metadata_paths=metadata_paths,
-        session_grants=(SessionGrantScope(inspection.classification, "shell_action", action, command_line),),
         approval_details={
             "shellClassification": inspection.classification,
+            "shellCategories": inspection.required_categories,
             "shellAnalysisComplete": inspection.analysis_complete,
             "shellPrefixes": prefixes,
         },
         display_items=display_items,
         sensitive_access=bool(confidential_paths) or may_expose_secret,
     )
+    return tuple(replace(
+        request, capability=f"shell.{category}",
+        title=f"Shell: {_CATEGORY_LABELS[category]} erlauben?",
+        risk_level="low" if category == "read" else "high",
+        summary=("Der Befehl enthält erkannte Löschaktionen. " if category == "delete" else "") + request.summary,
+        session_grants=(SessionGrantScope(category, "shell_action", action, command_line),)
+        if environment else (SessionGrantScope(category, "shell_computer", str(agent_id), "Shell"),),
+    ) for category in inspection.required_categories)
 
 
 def administrator_permission(
@@ -1251,7 +1248,8 @@ def administrator_permission(
     ) if command is not None else None
     scope = json.dumps(
         {"agentId": str(agent_id), "currentDirectory": current_directory,
-         **({"command": command, "action": action} if command is not None else {"path": path})},
+         **({"command": command, "action": action} if command is not None else {"path": path}),
+         **({"requiredCategories": inspection.required_categories} if command is not None and inspection else {})},
         sort_keys=True, separators=(",", ":"),
     )
     paths = tuple(target.path for target in inspection.targets) if inspection else (path,)
@@ -1269,6 +1267,7 @@ def administrator_permission(
         approval_details={
             "administratorAgentId": str(agent_id),
             **({"shellClassification": inspection.classification,
+                "shellCategories": inspection.required_categories,
                 "shellAnalysisComplete": inspection.analysis_complete} if inspection else {}),
         },
         administrator_paths=tuple(value for value in paths if value),
@@ -1285,7 +1284,7 @@ def administrator_permission(
 def _shell_command_scope(resource_scope: str) -> dict[str, Any] | None:
     try:
         value = json.loads(resource_scope)
-        if set(value) - {"action"} != {
+        if set(value) - {"action", "requiredCategories"} != {
             "agentId",
             "analysisComplete",
             "classification",
@@ -1302,6 +1301,14 @@ def _shell_command_scope(resource_scope: str) -> dict[str, Any] | None:
         paths = value["paths"]
         target_accesses = value["targetAccesses"]
         analysis_complete = value["analysisComplete"]
+        categories = value.get("requiredCategories")
+        if categories is not None and (
+            not isinstance(categories, list) or not 1 <= len(categories) <= 3
+            or any(category not in ("read", "write", "delete") for category in categories)
+            or len(set(categories)) != len(categories)
+            or bool(set(categories) & {"write", "delete"}) != (classification == "write")
+        ):
+            return None
         if (
             not isinstance(current_directory, str)
             or not is_absolute_path(current_directory)
@@ -1345,6 +1352,7 @@ def _shell_command_scope(resource_scope: str) -> dict[str, Any] | None:
             analysis_complete,
             target_accesses,
             value.get("action"),
+            categories,
         )
         return value if canonical == resource_scope else None
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
@@ -1356,7 +1364,10 @@ def shell_prefix_allowed(settings: ToolSettings, request: PermissionRequest) -> 
     if scope is None:
         return False
     prefixes = scope["prefixes"]
-    allowed = getattr(settings.shell_prefixes, scope["classification"])
+    category = request.capability.removeprefix("shell.")
+    if category not in {"read", "write"}:
+        return False
+    allowed = getattr(settings.shell_prefixes, category)
     return bool(prefixes) and all(
         any(prefix[: len(candidate)] == candidate for candidate in allowed)
         for prefix in prefixes
@@ -1368,8 +1379,21 @@ def session_grant_matches_request(
     resource_type: str,
     resource_scope: str,
     grant: SessionGrantScope,
+    *, legacy: bool = False,
 ) -> bool:
-    if grant.access != _access_for_capability(capability):
+    access = _access_for_capability(capability)
+    if resource_type == "shell_command" and not legacy and grant.resource_type == "shell_computer":
+        scope = _shell_command_scope(resource_scope)
+        if scope is None or grant.access != access or capability != f"shell.{grant.access}" or grant.access not in scope.get("requiredCategories", []):
+            return False
+        try:
+            action = json.loads(scope["action"])
+            if action["elevated"] or action["environment"] != hashlib.sha256(b"{}").hexdigest():
+                return False
+        except (KeyError, TypeError, ValueError):
+            return False
+        return grant.resource_scope == scope["agentId"]
+    if grant.access != (_legacy_access(access) if legacy else access):
         return False
     if grant.access == "navigate":
         return (
@@ -1381,7 +1405,7 @@ def session_grant_matches_request(
     if resource_type in {"execution_administrator", "shell_command"}:
         try:
             scope = json.loads(resource_scope)
-            if capability in {"shell.read", "shell.write"}:
+            if capability in {"shell.read", "shell.write", "shell.delete"}:
                 return grant.resource_type == "shell_action" and grant.resource_scope == scope.get("action")
             return (
                 capability in {"filesystem.read", "filesystem.write"}
@@ -1399,6 +1423,7 @@ def session_grant_matches_request(
             and granted
             and requested[:2] == granted[:2]
             and requested[2] == granted[2]
+            and (not legacy or not json.loads(grant.resource_scope).get("recursive"))
         )
     if resource_type == "execution_directory":
         requested = _execution_directory_scope(resource_scope)
@@ -1409,6 +1434,7 @@ def session_grant_matches_request(
             and granted
             and requested[0] == granted[0]
             and _path_key(requested[1]) == _path_key(granted[1])
+            and (not legacy or not json.loads(grant.resource_scope).get("recursive"))
         )
     if resource_type == "integration_operation":
         requested = _integration_operation_scope(resource_scope)
@@ -1419,12 +1445,15 @@ def session_grant_matches_request(
             and granted
             and requested["integrationId"] == granted["integrationId"]
             and requested["bindingRevision"] == granted["bindingRevision"]
-            and capability == granted["capability"]
+            and (capability == granted.get("capability") if legacy else "capability" not in granted)
         )
     if resource_type == "project":
         try:
+            project_id = UUID(resource_scope)
+            if not legacy:
+                return grant.resource_type == "project" and grant.resource_scope == str(project_id)
             expected = json.dumps(
-                {"capability": capability, "projectId": str(UUID(resource_scope))},
+                {"capability": capability, "projectId": str(project_id)},
                 ensure_ascii=True,
                 separators=(",", ":"),
                 sort_keys=True,
@@ -1644,9 +1673,9 @@ class PermissionPolicy:
                 agent_id = UUID(scope["agentId"])
                 shell = "command" in scope
                 if (
-                    set(scope) != ({"agentId", "currentDirectory", "command", "action"} if shell else {"agentId", "currentDirectory", "path"})
+                    set(scope) - ({"requiredCategories"} if shell else set()) != ({"agentId", "currentDirectory", "command", "action"} if shell else {"agentId", "currentDirectory", "path"})
                     or scope["currentDirectory"] != chat_session.current_directory
-                    or request.capability not in ({"shell.read", "shell.write"} if shell else {"filesystem.read", "filesystem.write"})
+                    or request.capability not in ({f"shell.{category}" for category in scope.get("requiredCategories", ["read", "write"])} if shell else {"filesystem.read", "filesystem.write"})
                     or not isinstance(scope["command" if shell else "path"], str)
                     or not scope["command" if shell else "path"]
                     or PurePosixPath(scope["currentDirectory"]).as_posix() != scope["currentDirectory"]
@@ -1673,23 +1702,21 @@ class PermissionPolicy:
                 if (
                     any(getattr(agent, f"{zone}_filesystem_policy") == "deny" for zone in zones)
                     or shell and any(not getattr(agent, f"{zone}_shell_enabled") for zone in zones)
-                    or outside and external_working_directory_policy == ToolExecutionPolicy.DISABLED
+                    or not shell and outside and external_working_directory_policy == ToolExecutionPolicy.DISABLED
                 ):
                     return PermissionDecision.DENY
                 if (decision := sensitive_decision(request.sensitive_access)) is not None:
                     return decision
-                if policy == ToolExecutionPolicy.AUTO and (not outside or external_working_directory_policy == ToolExecutionPolicy.AUTO):
+                if policy == ToolExecutionPolicy.AUTO and (shell or not outside or external_working_directory_policy == ToolExecutionPolicy.AUTO):
                     return PermissionDecision.ALLOW
-                access = _access_for_capability(request.capability)
                 grants = (await db.scalars(select(PermissionGrant).where(
                     PermissionGrant.session_id == grant_session_id,
-                    PermissionGrant.capability == f"resource.{access}",
+                    PermissionGrant.capability.in_(request.grant_capabilities),
                     PermissionGrant.resource_type == request.effective_session_grants[0].resource_type,
                     PermissionGrant.resource_scope == request.effective_session_grants[0].resource_scope,
                     *grant_binding_conditions(),
                 ))).all()
-                granted_scope = request.effective_session_grants[0]
-                return PermissionDecision.ALLOW if any(PermissionPolicy.scope_matches(grant, granted_scope, root_files) for grant in grants) else PermissionDecision.ASK
+                return PermissionDecision.ALLOW if any(PermissionPolicy.grant_matches(grant, request, root_files) for grant in grants) else PermissionDecision.ASK
             except (KeyError, ValueError, TypeError):
                 return PermissionDecision.DENY
 
@@ -1757,7 +1784,7 @@ class PermissionPolicy:
             scope = _shell_command_scope(request.resource_scope)
             if (
                 scope is None
-                or request.capability != f"shell.{scope['classification']}"
+                or request.capability not in {f"shell.{category}" for category in scope.get("requiredCategories", [scope["classification"]])}
                 or not request.shell_metadata_paths.issubset(scope["paths"])
             ):
                 return PermissionDecision.DENY
@@ -1789,30 +1816,13 @@ class PermissionPolicy:
             ]
             if policy == ToolExecutionPolicy.DISABLED or "deny" in filesystem_policies:
                 return PermissionDecision.DENY
-            workspace = (
-                chat_session.current_directory
-                if chat_session.current_directory is not None else None
-            )
             target_paths = paths
-            # Verified metadata-only targets still participate in every hard path check.
-            inside_workspace = workspace is not None and all(
-                _path_is_within(path, workspace)
-                for path in target_paths
-                if str(path) not in request.shell_metadata_paths
-            )
-            if not inside_workspace and external_working_directory_policy == ToolExecutionPolicy.DISABLED:
-                return PermissionDecision.DENY
             confidential = any(
                 confidential_execution_path(str(path)) for path in target_paths
             )
             if (decision := sensitive_decision(confidential or request.sensitive_access)) is not None:
                 return decision
-            if policy == ToolExecutionPolicy.AUTO and inside_workspace:
-                return PermissionDecision.ALLOW
-            if (
-                policy == ToolExecutionPolicy.AUTO
-                and external_working_directory_policy == ToolExecutionPolicy.AUTO
-            ):
+            if policy == ToolExecutionPolicy.AUTO:
                 return PermissionDecision.ALLOW
             grants = list(
                 (
@@ -1825,10 +1835,8 @@ class PermissionPolicy:
                     )
                 ).all()
             )
-            required = [item for item in request.effective_session_grants if item.resource_type == "shell_action"]
-            return PermissionDecision.ALLOW if required and all(
-                any(PermissionPolicy.scope_matches(grant, item, root_files) for grant in grants)
-                for item in required
+            return PermissionDecision.ALLOW if any(
+                PermissionPolicy.grant_matches(grant, request, root_files) for grant in grants
             ) else PermissionDecision.ASK
 
         if request.resource_type == "root_path":
@@ -1904,11 +1912,47 @@ class PermissionPolicy:
         request: PermissionRequest,
         root_files: RootFileService,
     ) -> bool:
-        if request.resource_type == "execution_administrator" and grant.capability != f"resource.{_access_for_capability(request.capability)}":
-            return False
         if grant.capability not in request.grant_capabilities:
             return False
-        if grant.capability in {"resource.read", "resource.write"}:
+        if grant.capability.startswith("resource."):
+            if request.resource_type in {"shell_command", "execution_administrator"} and request.capability in {"shell.read", "shell.write", "shell.delete"}:
+                try:
+                    scope = _shell_command_scope(request.resource_scope) if request.resource_type == "shell_command" else json.loads(request.resource_scope)
+                except (TypeError, ValueError):
+                    return False
+                return bool(isinstance(scope, dict) and isinstance(scope.get("action"), str)
+                            and grant.resource_type == "shell_action" and grant.resource_scope == scope["action"])
+            access = _legacy_access(_access_for_capability(request.capability))
+            if grant.capability != f"resource.{access}":
+                return False
+            scopes = request.effective_session_grants
+            if request.resource_type in {"root_path", "execution_directory"}:
+                scope = json.loads(request.resource_scope)
+                scopes = (SessionGrantScope(
+                    access, "session_path" if request.resource_type == "root_path" else "execution_path",
+                    json.dumps(scope, ensure_ascii=True, separators=(",", ":"), sort_keys=True), legacy=True,
+                ),)
+            else:
+                scopes = tuple(replace(item, access=access, legacy=True) for item in scopes)
+                if request.resource_type == "integration_operation":
+                    scopes = tuple(replace(item, resource_scope=json.dumps(
+                        {**json.loads(item.resource_scope), "capability": request.capability},
+                        ensure_ascii=True, separators=(",", ":"), sort_keys=True,
+                    )) for item in scopes)
+                elif request.resource_type == "project":
+                    scopes = tuple(replace(item, resource_scope=json.dumps(
+                        {"capability": request.capability, "projectId": request.resource_scope},
+                        ensure_ascii=True, separators=(",", ":"), sort_keys=True,
+                    )) for item in scopes)
+            return any(
+                PermissionPolicy.scope_matches(grant, scope, root_files)
+                and session_grant_matches_request(request.capability, request.resource_type, request.resource_scope, scope, legacy=True)
+                for scope in scopes
+            )
+        if grant.capability.startswith("category."):
+            if request.resource_type == "shell_command" and grant.resource_type == "shell_action":
+                scope = _shell_command_scope(request.resource_scope)
+                return bool(scope and grant.resource_scope == scope.get("action"))
             return any(
                 PermissionPolicy.scope_matches(grant, scope, root_files)
                 and session_grant_matches_request(request.capability, request.resource_type, request.resource_scope, scope)
@@ -2018,8 +2062,9 @@ class PermissionPolicy:
         requested: SessionGrantScope,
         root_files: RootFileService,
     ) -> bool:
+        legacy = grant.capability.startswith("resource.")
         if (
-            grant.capability != requested.capability
+            grant.capability != (f"resource.{_legacy_access(requested.access)}" if legacy else requested.capability)
             or grant.resource_type != requested.resource_type
         ):
             return False
@@ -2037,14 +2082,16 @@ class PermissionPolicy:
             return (
                 resource_root is grant_root
                 and resource_identity == grant_identity == current_identity
-                and resource_path == grant_path
+                and (resource_path.is_relative_to(grant_path) if not legacy and json.loads(grant.resource_scope).get("recursive") else resource_path == grant_path)
             )
         if requested.resource_type in {"execution_path", "administrator_path"}:
             resource = _execution_directory_scope(requested.resource_scope)
             granted = _execution_directory_scope(grant.resource_scope)
             return bool(
                 resource and granted and resource[0] == granted[0]
-                and _path_key(resource[1]) == _path_key(granted[1])
+                and (_path_is_within(resource[1], granted[1])
+                     if not legacy and requested.resource_type == "execution_path" and json.loads(grant.resource_scope).get("recursive")
+                     else _path_key(resource[1]) == _path_key(granted[1]))
             )
         if requested.resource_type == "integration_resource":
             return (

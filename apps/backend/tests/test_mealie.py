@@ -681,7 +681,7 @@ def test_permissions_name_the_account_and_offer_scoped_writes() -> None:
     ):
         permission = tools[name].authorization_factory(arguments, context)[0]
         assert permission.capability == capability
-        assert permission.effective_session_grants[0].access == "write"
+        assert permission.effective_session_grants[0].access == ("delete" if capability == "recipes.delete" else "write")
         assert json.loads(permission.effective_session_grants[0].resource_scope)["resourceKey"] == "recipes"
         assert permission.available_decisions == ("allow_once", "allow_session", "deny")
 

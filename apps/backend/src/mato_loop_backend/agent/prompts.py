@@ -184,6 +184,7 @@ def general_system_prompt(
         "provide_file",
         "write_file",
         "edit_file",
+        "apply_patch",
         "create_directory",
         "delete_path",
         "copy_path",
@@ -419,7 +420,7 @@ def general_system_prompt(
             "Tool routing: For direct HTTP/API requests, use shell_run with an established HTTP client "
             "such as curl. Use custom scripts only when available command-line tools cannot reasonably "
             "handle the required processing. Simple GET or POST requests do not need a script. "
-            "Prefer shell_run for pagination, multiple requests, local processing, or computer downloads. "
+            "Use shell_run for API pagination, processing API responses, and computer downloads. "
             "Use webfetch when available for web pages and static "
             "documents. Verify unknown API paths and fields in official docs or schemas; "
             "use HTTP status and error details before retrying. "
@@ -505,17 +506,20 @@ def general_system_prompt(
         )
     if file_tools_available:
         parts.append(
-            "Use file tools for supported file changes, not shell/Python/Node.js scripts. "
-            "shell.read does not authorize write effects requiring approval. "
+            "Use shell_run for explicit shell requests. Otherwise prefer offered file tools: "
+            "read for contents/listings, glob for filenames, grep for content search, "
+            "and file-change tools for edits. Use shell_run for builds, tests, Git, processes, unsupported "
+            "operations. Never switch tools to bypass a denied action. "
+            "Shell read permission does not authorize write or delete effects. "
             + (
-                "file.accessDenied is not permission.userDenied. Try ordinary access first; "
-                "retry protected UTF-8 computer files with elevated=true on read/write_file/edit_file. "
+                "file.accessDenied is not permission.userDenied. Retry protected UTF-8 computer files "
+                "with elevated=true on read/write_file/edit_file unless shell was explicitly requested. "
                 "Never bypass denied approval, disabled capabilities, or hard path boundaries. "
                 if "shell_run" in offered_tool_names else ""
             )
             + "Batch independent calls. Scope reads/searches. Use explicit root. "
-            "root=files uses relative POSIX paths ('.' for root; no absolute path or root prefix). "
-            "root=computer accepts absolute paths or directory-relative paths. "
+            "Working-directory tasks use root=computer with absolute or directory-relative paths. "
+            "root=files is backend session storage: relative POSIX paths ('.' for root; no absolute path or root prefix). "
             "Copy and move need an unused destination."
         )
     if "write_file" in offered_tool_names:

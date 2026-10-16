@@ -4,7 +4,7 @@ import base64
 import binascii
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, BinaryIO, Literal, Self
+from typing import Any, BinaryIO, ClassVar, Literal, Self
 from uuid import UUID
 
 from pydantic import (
@@ -33,6 +33,8 @@ from mato_loop_backend.execution.transfers import (
 
 
 class ExecutionResult(BaseModel):
+    # Missing newly required wire fields identify an older operation contract.
+    upgrade_fields: ClassVar[frozenset[str]] = frozenset()
     model_config = ConfigDict(
         alias_generator=lambda value: value.split("_")[0]
         + "".join(part.capitalize() for part in value.split("_")[1:]),
@@ -256,6 +258,8 @@ class ShellCommand(ExecutionResult):
 
 
 class ShellInspectResult(ExecutionResult):
+    upgrade_fields = frozenset({"requiredCategories"})
+    required_categories: list[Literal["read", "write", "delete"]] = Field(min_length=1, max_length=3)
     targets: list[ShellTarget]
     analysis_complete: bool
     classification: Literal["read", "write"]
@@ -265,6 +269,10 @@ class ShellInspectResult(ExecutionResult):
 
     @model_validator(mode="after")
     def validate_classification(self) -> Self:
+        if len(set(self.required_categories)) != len(self.required_categories) or (
+            bool(set(self.required_categories) & {"write", "delete"}) != (self.classification == "write")
+        ):
+            raise ValueError("inconsistent shell categories")
         if self.read_only != (self.classification == "read") or (
             self.classification == "read"
             and (
@@ -537,6 +545,9 @@ class ExecutionClient:
         try:
             return result_model.model_validate(response.result)
         except ValidationError as exc:
+            if all(error["type"] == "missing" and len(error["loc"]) == 1
+                   and error["loc"][0] in getattr(result_model, "upgrade_fields", ()) for error in exc.errors()):
+                raise ExecutionClientError("executionAgent.updateRequired") from exc
             raise ExecutionClientError("executionAgent.protocolError") from exc
 
 

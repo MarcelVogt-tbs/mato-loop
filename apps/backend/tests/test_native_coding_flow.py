@@ -125,7 +125,7 @@ async def test_native_coding_replays_revision_errors_checks_and_diff(tmp_path, m
             assert arguments["currentDirectory"] == directory
             result = {
                 "targets": [], "analysisComplete": False, "classification": "write",
-                "readOnly": False, "commands": [], "inspectionRevision": "c" * 64,
+                "readOnly": False, "requiredCategories": ["write"], "commands": [], "inspectionRevision": "c" * 64,
             }
         else:
             assert operation == "shell.run"

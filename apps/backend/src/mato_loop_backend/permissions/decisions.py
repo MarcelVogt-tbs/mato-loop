@@ -244,10 +244,13 @@ async def _decide_agent_action(
         )
         or any(
             not isinstance(scope, dict)
-            or set(scope) != {
-                "access", "resourceType", "resourceScope", "resourceDisplay"
-            }
-            or scope["access"] not in {"read", "write", "navigate"}
+            or set(scope) not in (
+                {"access", "resourceType", "resourceScope", "resourceDisplay"},
+                {"category", "resourceType", "resourceScope", "resourceDisplay"},
+            )
+            or scope.get("category", scope.get("access")) not in (
+                {"read", "read_sensitive", "write", "delete", "navigate"} if "category" in scope else {"read", "write", "navigate"}
+            )
             or not isinstance(scope["resourceType"], str)
             or not 1 <= len(scope["resourceType"]) <= 80
             or not isinstance(scope["resourceScope"], str)
@@ -259,11 +262,13 @@ async def _decide_agent_action(
                 approval.resource_type,
                 approval.resource_scope,
                 SessionGrantScope(
-                    scope["access"],
+                    scope.get("category", scope.get("access")),
                     scope["resourceType"],
                     scope["resourceScope"],
                     scope["resourceDisplay"],
+                    legacy="category" not in scope,
                 ),
+                legacy="category" not in scope,
             )
             for scope in scopes
         )
@@ -293,7 +298,9 @@ async def _decide_agent_action(
     if reusable:
         grant_run_id = approval.run_id if decision == "allow_once" else None
         for scope in scopes:
-            capability = SessionGrantScope(scope["access"], scope["resourceType"], scope["resourceScope"]).capability
+            capability = SessionGrantScope(
+                scope.get("category", scope.get("access")), scope["resourceType"], scope["resourceScope"], legacy="category" not in scope,
+            ).capability
             existing_grant = await db.scalar(
                 select(PermissionGrant).where(
                     PermissionGrant.session_id == approval.session_id,

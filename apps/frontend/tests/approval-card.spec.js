@@ -99,7 +99,7 @@ describe('approval card', () => {
     }]
     await mountView(() => h(SessionApp))
     await vi.waitFor(() => expect(root.querySelector('[aria-labelledby="session-permissions-title"]')?.textContent).toMatch(
-      /Arbeitsverzeichnis.*\/opt\/project.*Computer: Notebook.*printf reviewed > output.txt.*Mit Administratorrechten.*Für diese Session.*Inaktiv/s
+      /Exakter Shell-Befehl · Schreiben.*Notebook.*\/opt\/project.*printf reviewed > output.txt.*Mit Administratorrechten.*Inaktiv/s
     ))
   })
 
@@ -111,11 +111,11 @@ describe('approval card', () => {
     }]
     await mountView(() => h(SessionApp))
     const section = root.querySelector('[aria-labelledby="session-permissions-title"]')
-    await vi.waitFor(() => expect(section.textContent).toContain('Bindung passt'))
+    await vi.waitFor(() => expect(section.textContent).toContain('/work/file'))
     api.get.mockRejectedValue(new Error('offline'))
     useChatStore().current.preferredExecutionAgentId = 'new'
     await vi.waitFor(() => expect(section.textContent).toContain('Session-Freigaben konnten nicht geladen werden.'))
-    expect(section.textContent).not.toContain('Bindung passt')
+    expect(section.textContent).not.toContain('/work/file')
   })
 
   it('keeps loaded grants mounted during background refresh of an unchanged session', async () => {

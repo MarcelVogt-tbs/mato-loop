@@ -759,7 +759,7 @@ def test_task_permissions_use_task_capabilities_and_exact_task_list_scope() -> N
         assert json.loads(permission.resource_scope)["resourceKey"] == key
         assert permission.policy_resource_key == key
         assert permission.available_decisions == ("allow_once", "allow_session", "deny")
-        assert permission.effective_session_grants[0].access == "write"
+        assert permission.effective_session_grants[0].access == ("delete" if permission is delete else "write")
     assert [(item.label, item.value) for item in create.display_items] == [
         ("Aktion", "Aufgabe erstellen"),
         ("Aufgabe", "Bericht abgeben"),

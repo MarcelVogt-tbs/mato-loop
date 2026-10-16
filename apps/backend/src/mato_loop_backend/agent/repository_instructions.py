@@ -173,7 +173,7 @@ async def check_repository_instruction_targets(
     target_paths: tuple[str, ...] = (),
 ) -> tuple[dict | None, bool]:
     """Check host-resolved targets before effects, using the existing read policy."""
-    if request.capability not in {"filesystem.write", "filesystem.delete", "shell.read", "shell.write"} and not (
+    if request.capability not in {"filesystem.write", "filesystem.delete", "shell.read", "shell.write", "shell.delete"} and not (
         request.capability == "filesystem.read" and request.action_kind == "copy_path"
     ):
         return None, False

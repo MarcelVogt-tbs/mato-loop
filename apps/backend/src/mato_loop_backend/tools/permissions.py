@@ -11,7 +11,7 @@ from mato_loop_backend.permissions.policy import (
     session_browse_permission,
     session_permission,
     session_search_permission,
-    shell_command_permission,
+    shell_command_permissions,
 )
 from mato_loop_backend.permissions.resolution import tool_execution_policy
 from mato_loop_backend.providers.base import ToolCall
@@ -54,7 +54,7 @@ async def builtin_permissions(arguments, context: ToolContext, name: str):
     }
     if name in capabilities and not getattr(arguments, "elevated", False) and not getattr(arguments, "session_id", None):
         capability = capabilities[name]
-        if arguments.root == "session" and capability != "filesystem.read":
+        if arguments.root == "session" and capability == "filesystem.write":
             capability = "session.files.write"
         return (filesystem_permission(
             context, root=arguments.root, path=arguments.path, capability=capability,
@@ -69,7 +69,7 @@ async def builtin_permissions(arguments, context: ToolContext, name: str):
         inspection = await client.request("shell.inspect", {
             "command": arguments.command, "currentDirectory": client.current_directory,
         }, ShellInspectResult)
-        return (shell_command_permission(client.agent_id, client.current_directory, arguments.command, inspection),)
+        return shell_command_permissions(client.agent_id, client.current_directory, arguments.command, inspection)
     if name == "session_search":
         return (session_search_permission(),)
     if name == "session_browse":
@@ -134,15 +134,13 @@ async def request_session_permissions(arguments: RequestSessionPermissionsArgume
 
 REQUEST_SESSION_PERMISSIONS = ToolDefinition(
     "request_session_permissions",
-    "Prepare session permissions for proposed tool calls without executing them. Pass tool names and their "
-    "normal arguments. Supports non-elevated file access in the current session or workspace, "
-    "shell inspection without elevation or environment overrides, session reading/search/browsing, "
-    "and integrations with declared permissions. Automation management, notify and silence are not supported targets. "
-    "Already allowed access needs no prompt. Disabled actions remain blocked. Action-specific or one-time-only "
-    "approvals must be requested during actual execution. Use for known required or recommended automation access. "
-    "Wait for a result with permissionsReady=true before treating the requested access as prepared. "
-    'Example: {"requests":[{"tool":"shell_run","arguments":{"command":"pwd",'
-    '"_reason":"Read the working directory."}}],"_reason":"Prepare access for the planned task."}',
+    "Prepare session permissions without execution. Use offered names and arguments. "
+    "Supports current-session/workspace files, shell, session read/search/browse and declared "
+    "integrations. No elevation, environment overrides, automation management, notify or silence. "
+    "For directory read/write/delete, propose read/create_directory/delete_path at that directory. "
+    "File scopes include descendants, never parents; normal shell scopes bind category/computer. "
+    "Allowed access needs no prompt; disabled stays blocked. Action-bound consent requires execution. "
+    "Prepare known automation access. Wait for permissionsReady=true.",
     RequestSessionPermissionsArguments, request_session_permissions,
     label="Session-Freigaben anfragen", icon="verified_user",
     actions=(ToolAction("permissions.request", "Freigaben anfragen", category="write", default=ToolExecutionPolicy.AUTO, configurable=False, allowed_policies=(ToolExecutionPolicy.AUTO,)),),

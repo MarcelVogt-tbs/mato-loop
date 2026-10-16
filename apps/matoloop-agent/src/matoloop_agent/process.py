@@ -41,16 +41,12 @@ _ALWAYS_WRITES = {
     "mount",
     "mv",
     "reboot",
-    "rm",
-    "rmdir",
     "shutdown",
-    "shred",
     "tee",
     "touch",
-    "truncate",
     "umount",
-    "unlink",
 }
+_ALWAYS_DELETES = {"rm", "rmdir", "shred", "truncate", "unlink"}
 _WRITE_SUBCOMMANDS = {
     "apt": {"autoremove", "full-upgrade", "install", "purge", "remove", "upgrade"},
     "apt-get": {"autoremove", "dist-upgrade", "install", "purge", "remove", "upgrade"},
@@ -375,6 +371,51 @@ def _git_clean_dry_run(arguments: list[str]) -> bool:
     )
 
 
+def _git_deletion_requested(subcommand: str, arguments: list[str]) -> bool:
+    value_options = (
+        {"--repo", "--receive-pack", "--exec", "--push-option", "--recurse-submodules"}
+        if subcommand == "push"
+        else {
+            "--set-upstream-to",
+            "--contains",
+            "--no-contains",
+            "--merged",
+            "--no-merged",
+            "--sort",
+            "--points-at",
+            "--format",
+        }
+    )
+    operands = []
+    repository_option = False
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--":
+            operands.extend(arguments[index + 1 :])
+            break
+        if argument.startswith("--"):
+            option, separator, _value = argument.partition("=")
+            if option == "--delete" or subcommand == "push" and option in {"--prune", "--mirror"}:
+                return True
+            repository_option |= subcommand == "push" and option == "--repo"
+            if option in value_options and not separator:
+                index += 1
+        elif argument.startswith("-") and argument != "-":
+            for offset, option in enumerate(argument[1:], start=1):
+                if option == "d" or subcommand == "branch" and option == "D":
+                    return True
+                if option == ("o" if subcommand == "push" else "u"):
+                    if offset == len(argument) - 1:
+                        index += 1
+                    break
+        else:
+            operands.append(argument)
+        index += 1
+    refspecs = operands if repository_option else operands[1:]
+    return subcommand == "push" and any(re.fullmatch(r"\+?:.+", value) for value in refspecs)
+
+
 def _xargs_payload(
     arguments: list[str], depth: int = 0
 ) -> tuple[list[str], list[tuple[str, int, str]]] | None:
@@ -602,36 +643,40 @@ def _docker_run_host_paths(arguments: list[str]) -> list[str] | None:
     return None
 
 
-def _container_command_writes(tokens: list[str], depth: int) -> bool:
+def _container_command_categories(tokens: list[str], depth: int) -> set[str]:
     # ponytail: bound wrapper nesting; unfamiliar shell forms keep the former write class.
     if depth > 8 or not tokens or any(c in tokens[0] for c in "$`*?[]{}~"):
-        return True
+        return {"write"}
     executable = Path(tokens[0]).name
     if executable == "xargs":
         payload = _xargs_payload(tokens[1:])
-        return payload is None or _container_command_writes(payload[0], depth + 1)
+        return (
+            {"write"} if payload is None else _container_command_categories(payload[0], depth + 1)
+        )
     if executable not in {"sh", "bash", "dash"}:
         if tokens[0] == "." or executable in {"env", "sudo", "eval", "exec", "command", "source"}:
-            return True
-        return _definitely_writes(tokens, depth=depth)
+            return {"write"}
+        return _command_categories(tokens, depth=depth)
     if len(tokens) < 3 or not re.fullmatch(r"-[elux]*c[elux]*", tokens[1]) or "\\\n" in tokens[2]:
-        return True
+        return {"write"}
     source = tokens[2].encode("utf-8")
     try:
         root = _parse_shell(tokens[2])
     except AgentError as exc:
         if exc.code != "process.invalidSyntax":
             raise
-        return True
+        return {"write"}
+    categories: set[str] = set()
     if any(
         _nodes(root, kind)
         for kind in {"expansion", "simple_expansion", "variable_assignment", "ansi_c_string"}
     ):
-        return True
+        categories.add("write")
     for redirect in _nodes(root, "file_redirect"):
         match = _OUTPUT_REDIRECT.match(_node_text(source, redirect))
         if match is None:
-            return True
+            categories.add("write")
+            continue
         operator = match.group(1)
         if ">" in operator:
             destination = redirect.child_by_field_name("destination")
@@ -641,22 +686,41 @@ def _container_command_writes(tokens: list[str], depth: int) -> bool:
                 or not re.fullmatch(r"\d+-?|-", _node_text(source, destination))
             ):
                 # Container /dev/null cannot use the host's verified discard exemption.
-                return True
+                categories.add("write")
+                if _clearing_redirect(source, redirect, operator):
+                    categories.add("delete")
     commands = _nodes(root, "command")
     if len(commands) > 64:
-        return True
+        categories.add("write")
     for command in commands:
         words = _command_words(command)
         inner = _command_tokens(source, words)
         if inner is None or len(inner) != len(words):
-            return True
+            categories.add("write")
+            continue
         if Path(inner[0]).name in {"docker", "sh", "bash", "dash"} and _unresolved_wrapper_words(
             source, words
         ):
-            return True
-        if _container_command_writes(inner, depth + 1):
-            return True
-    return False
+            categories.add("write")
+        categories.update(_container_command_categories(inner, depth + 1))
+    return categories or {"read"}
+
+
+def _clearing_redirect(source: bytes, redirect: Node, operator: str) -> bool:
+    if operator not in {">", ">|", "&>", ">&"}:
+        return False
+    parent = redirect.parent
+    body = (
+        parent
+        if parent is not None and parent.type == "command"
+        else parent.child_by_field_name("body")
+        if parent is not None
+        else None
+    )
+    if body is None:
+        return True
+    tokens = _command_tokens(source, _command_words(body)) if body.type == "command" else None
+    return tokens in ([":"], ["true"], ["printf", ""])
 
 
 def _python_command(arguments: list[str]) -> tuple[str, list[str]] | None:
@@ -744,43 +808,55 @@ def _curl_options(arguments: list[str]) -> Iterator[tuple[str, str, int]]:
                     break
 
 
-def _definitely_writes(
+def _command_categories(
     tokens: list[str], *, depth: int = 0, curl_discard_outputs: frozenset[int] = frozenset()
-) -> bool:
+) -> set[str]:
     executable = Path(tokens[0]).name
     arguments = tokens[1:]
     if executable == "xargs":
         # Bound executor nesting; stdin-derived argv remains incomplete in inspection.
         if depth > 8:
-            return True
+            return {"write"}
         payload = _xargs_payload(arguments)
-        return payload is not None and _definitely_writes(payload[0], depth=depth + 1)
+        return {"read"} if payload is None else _command_categories(payload[0], depth=depth + 1)
+    if executable in {"sh", "bash", "dash"}:
+        return (
+            _container_command_categories(tokens, depth + 1)
+            if len(tokens) >= 3 and re.fullmatch(r"-[elux]*c[elux]*", tokens[1])
+            else {"read"}
+        )
     if executable.startswith("python"):
         python = _python_command(arguments)
         if python is not None and python[0] == "m" and python[1][:1] == ["pip"]:
-            return _definitely_writes(python[1], depth=depth)
+            return _command_categories(python[1], depth=depth)
+    if executable in _ALWAYS_DELETES:
+        return {"delete"}
     if executable in _ALWAYS_WRITES:
-        return True
+        return {"write"}
     if executable == "docker":
         command = _docker_command(arguments)
         if command is None:
-            return False
+            return {"read"}
         semantic, remaining = command
         if len(semantic) == 1:
-            return False
+            return {"read"}
         if semantic in _DOCKER_EXEC_COMMANDS:
             payload = _docker_exec_payload(remaining, compose=semantic[1] == "compose")
-            return payload is None or _container_command_writes(payload[0], depth + 1)
+            return (
+                {"write"}
+                if payload is None
+                else _container_command_categories(payload[0], depth + 1)
+            )
         group = semantic[1]
         if semantic[1:] in (["save"], ["export"], ["image", "save"], ["container", "export"]) and (
             _option_present(remaining, {"--output", "-o"})
             or _short_option_present(remaining, {"-o"})
         ):
-            return True
+            return {"write"}
         if group in _DOCKER_READ_SUBCOMMANDS:
             if semantic[2] in _DOCKER_WRITE_SUBCOMMANDS[group]:
-                return True
-            return (
+                return {"delete"} if semantic[2] in {"rm", "prune", "down"} else {"write"}
+            writes = (
                 group == "compose"
                 and semantic[2] == "config"
                 and (
@@ -788,7 +864,10 @@ def _definitely_writes(
                     or _short_option_present(remaining, {"-o"})
                 )
             )
-        return group in _WRITE_SUBCOMMANDS["docker"]
+            return {"write"} if writes else {"read"}
+        if group in {"rm", "rmi"}:
+            return {"delete"}
+        return {"write"} if group in _WRITE_SUBCOMMANDS["docker"] else {"read"}
     if executable in _WRITE_SUBCOMMANDS:
         value_options = (
             {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
@@ -799,9 +878,33 @@ def _definitely_writes(
         )
         subcommand = _subcommand(arguments, value_options)
         if executable == "git" and subcommand == "clean":
-            return not _git_clean_dry_run(arguments)
+            return {"read"} if _git_clean_dry_run(arguments) else {"delete"}
         if subcommand in _WRITE_SUBCOMMANDS[executable]:
-            return True
+            if executable == "git" and subcommand == "reset" and "--hard" in arguments:
+                return {"write", "delete"}
+            if (
+                executable == "git"
+                and subcommand == "push"
+                and _git_deletion_requested(
+                    subcommand, arguments[arguments.index(subcommand) + 1 :]
+                )
+            ):
+                return {"write", "delete"}
+            return (
+                {"delete"}
+                if subcommand
+                in {
+                    "rm",
+                    "clean",
+                    "delete",
+                    "remove",
+                    "uninstall",
+                    "autoremove",
+                    "purge",
+                    "unlink",
+                }
+                else {"write"}
+            )
         if executable == "git":
             if subcommand == "branch":
                 remaining = arguments[arguments.index(subcommand) + 1 :]
@@ -817,8 +920,10 @@ def _definitely_writes(
                         "--show-current",
                     }
                 ):
-                    return False
-                return any(
+                    return {"read"}
+                if _git_deletion_requested(subcommand, remaining):
+                    return {"delete"}
+                writes = any(
                     option in remaining
                     for option in {
                         "-c",
@@ -835,85 +940,137 @@ def _definitely_writes(
                         "--unset-upstream",
                     }
                 ) or any(not argument.startswith("-") for argument in remaining)
+                return {"write"} if writes else {"read"}
             if subcommand == "tag":
                 remaining = arguments[arguments.index(subcommand) + 1 :]
                 if any(option in remaining for option in {"-l", "--list"}):
-                    return False
-                return any(
+                    return {"read"}
+                if _option_present(remaining, {"-d", "--delete"}):
+                    return {"delete"}
+                writes = any(
                     option in remaining
                     for option in {"-a", "-d", "-f", "-s", "--delete", "--force", "--sign"}
                 ) or any(not argument.startswith("-") for argument in remaining)
+                return {"write"} if writes else {"read"}
             if subcommand == "config":
                 if any(
                     option in arguments
                     for option in {"--unset", "--unset-all", "--rename-section", "--remove-section"}
                 ):
-                    return True
+                    return {"write"} if "--rename-section" in arguments else {"delete"}
                 if any(
                     option in arguments
                     for option in {"--get", "--get-all", "--get-regexp", "--list", "-l"}
                 ):
-                    return False
+                    return {"read"}
                 values = [
                     argument
                     for argument in arguments[arguments.index(subcommand) + 1 :]
                     if not argument.startswith("-")
                 ]
-                return len(values) > 1
+                return {"write"} if len(values) > 1 else {"read"}
             if subcommand == "remote":
                 nested = _subcommand(arguments[arguments.index(subcommand) + 1 :], set())
-                return nested in {
-                    "add",
-                    "prune",
-                    "remove",
-                    "rename",
-                    "rm",
-                    "set-branches",
-                    "set-head",
-                    "set-url",
-                    "update",
-                }
+                if nested in {"prune", "remove", "rm"}:
+                    return {"delete"}
+                return (
+                    {"write"}
+                    if nested
+                    in {
+                        "add",
+                        "prune",
+                        "remove",
+                        "rename",
+                        "rm",
+                        "set-branches",
+                        "set-head",
+                        "set-url",
+                        "update",
+                    }
+                    else {"read"}
+                )
             if subcommand == "stash":
                 nested = _subcommand(arguments[arguments.index(subcommand) + 1 :], set())
-                return nested in {
-                    None,
-                    "apply",
-                    "branch",
-                    "clear",
-                    "create",
-                    "drop",
-                    "pop",
-                    "push",
-                    "save",
-                    "store",
-                    "export",
-                    "import",
-                }
+                if nested in {"clear", "drop"}:
+                    return {"delete"}
+                if nested == "pop":
+                    return {"write", "delete"}
+                return (
+                    {"write"}
+                    if nested
+                    in {
+                        None,
+                        "apply",
+                        "branch",
+                        "clear",
+                        "create",
+                        "drop",
+                        "pop",
+                        "push",
+                        "save",
+                        "store",
+                        "export",
+                        "import",
+                    }
+                    else {"read"}
+                )
             if subcommand == "worktree":
                 nested = _subcommand(arguments[arguments.index(subcommand) + 1 :], set())
-                return nested in {"add", "lock", "move", "prune", "remove", "repair", "unlock"}
+                if nested in {"prune", "remove"}:
+                    return {"delete"}
+                return (
+                    {"write"} if nested in {"add", "lock", "move", "repair", "unlock"} else {"read"}
+                )
     if executable == "curl":
+        categories = set()
         for option, value, index in _curl_options(arguments):
             if option in {"-o", "--output"}:
                 if value != "-" and index not in curl_discard_outputs:
-                    return True
+                    categories.add("write")
             elif option in _CURL_WRITE_OPTIONS:
-                return True
+                categories.add("write")
             elif option in {"-X", "--request"} and value.upper() in _MUTATING_HTTP_METHODS:
-                return True
+                categories.add("delete" if value.upper() == "DELETE" else "write")
+        return categories or {"read"}
     if executable == "dd" and any(argument.startswith("of=") for argument in arguments):
-        return True
+        return {"write"}
     if executable == "find" and any(argument in _FIND_WRITE_ACTIONS for argument in arguments):
-        return True
+        categories = {"delete"} if "-delete" in arguments else set()
+        if any(argument in {"-fls", "-fprint", "-fprint0", "-fprintf"} for argument in arguments):
+            categories.add("write")
+        for index, argument in enumerate(arguments):
+            if argument in {"-exec", "-execdir", "-ok", "-okdir"}:
+                end = next(
+                    (
+                        end
+                        for end in range(index + 1, len(arguments))
+                        if arguments[end] == ";"
+                        or (
+                            arguments[end] == "+"
+                            and argument in {"-exec", "-execdir"}
+                            and end > index + 1
+                            and arguments[end - 1] == "{}"
+                        )
+                    ),
+                    len(arguments),
+                )
+                payload = arguments[index + 1 : end]
+                nested = (
+                    _command_categories(payload, depth=depth + 1)
+                    if payload and depth < 8
+                    else {"write"}
+                )
+                categories.update(nested if nested != {"read"} else {"write"})
+        return categories or {"write"}
     if executable in {"perl", "sed"} and any(
         argument == "-i"
         or (argument.startswith("-i") and not argument.startswith("--"))
         or argument.startswith("--in-place")
         for argument in arguments
     ):
-        return True
+        return {"write"}
     if executable == "sort" and _option_present(arguments, {"-o", "--output"}):
-        return True
+        return {"write"}
     if executable == "printf" and (
         _option_present(arguments, {"-v"})
         or _short_option_present(arguments, {"-v"})
@@ -926,15 +1083,16 @@ def _definitely_writes(
             for argument in arguments
         )
     ):
-        return True
+        return {"write"}
     if executable == "wget":
-        return "--spider" not in arguments and not any(
+        writes = "--spider" not in arguments and not any(
             argument in {"-O", "--output-document"}
             and index + 1 < len(arguments)
             and arguments[index + 1] == "-"
             for index, argument in enumerate(arguments)
         )
-    return False
+        return {"write"} if writes else {"read"}
+    return {"read"}
 
 
 def _path_operands(tokens: list[str], depth: int = 0) -> list[tuple[str, str, bool]]:
@@ -1205,8 +1363,7 @@ class ProcessRunner:
         commands: list[dict] = []
         analysis_complete = resolve_paths
         extraction_complete = True
-        redirect_writes = False
-        command_writes = False
+        required_categories: set[str] = set()
         unsupported_target_quoting = False
 
         def result() -> dict:
@@ -1217,13 +1374,18 @@ class ProcessRunner:
             if not extraction_complete:
                 for unit in commands:
                     unit.pop("prefix", None)
-            writes = redirect_writes or command_writes
+            writes = bool(required_categories & {"write", "delete"})
             result = {
                 "targets": targets,
                 "analysisComplete": analysis_complete and extraction_complete,
                 "readOnly": not writes,
                 "classification": "write" if writes else "read",
                 "commands": commands,
+                "requiredCategories": [
+                    category
+                    for category in ("read", "write", "delete")
+                    if category in (required_categories or {"read"})
+                ],
             }
             result["inspectionRevision"] = self._inspection_revision(
                 {"command": command, "currentDirectory": current, **result}
@@ -1372,8 +1534,10 @@ class ProcessRunner:
                             must_exist=False,
                             literal=static and word.type in {"raw_string", "string"},
                         )
-            unit_writes = bool(tokens) and _definitely_writes(
-                tokens, curl_discard_outputs=frozenset(discard_indices)
+            categories = (
+                _command_categories(tokens, curl_discard_outputs=frozenset(discard_indices))
+                if tokens
+                else {"read"}
             )
             docker = (
                 _docker_command(tokens[1:]) if tokens and Path(tokens[0]).name == "docker" else None
@@ -1387,8 +1551,9 @@ class ProcessRunner:
                     or _unresolved_wrapper_words(source, words)
                 )
             ):
-                unit_writes = True
-            command_writes |= unit_writes
+                categories.add("write")
+            required_categories.update(categories)
+            unit_writes = bool(categories & {"write", "delete"})
             if not tokens:
                 continue
             if Path(tokens[0]).name.startswith("python") and _python_command(tokens[1:]) is None:
@@ -1502,12 +1667,15 @@ class ProcessRunner:
                 continue
             if not writes:
                 if operator in {"<", "<&"} and not descriptor_only:
+                    required_categories.add("read")
                     if static:
                         add(destination, "input", access="read", must_exist=True)
                     else:
                         analysis_complete = False
                 continue
-            redirect_writes = True
+            required_categories.add("write")
+            if _clearing_redirect(source, redirect, operator):
+                required_categories.add("delete")
             if commands:
                 commands[0]["classification"] = "write"
             if static and not descriptor_only:

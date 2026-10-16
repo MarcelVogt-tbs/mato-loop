@@ -22,15 +22,17 @@ from mato_loop_backend.execution.protocol import MAX_REQUEST_BYTES, RequestMessa
 from mato_loop_backend.execution.terminals import ShellOutput, terminal_coordinator
 from mato_loop_backend.models import AgentRun, ExecutionAgent
 from mato_loop_backend.permissions.policy import (
+    PermissionDecision,
     administrator_permission,
     execution_agent_select_permission,
     execution_agents_list_permission,
-    shell_command_permission,
+    shell_command_permissions,
     system_info_permission,
 )
 from mato_loop_backend.tools.actions import (
     _EXECUTION_AGENT_SELECT,
     _EXECUTION_AGENTS_LIST,
+    _SHELL_DELETE,
     _SHELL_READ,
     _SHELL_WRITE,
     _SYSTEM_INFO,
@@ -248,6 +250,34 @@ async def _run_process(
     return tool_result
 
 
+async def _authorize_shell(context: ToolContext, requests, reference=None) -> bool:
+    edited_approval = context.approval_resolution.get("argument_edit_approved")
+    try:
+        if len(requests) > 1:
+            for request in requests:
+                if await context.ask_handler(request, check_only=True) in {PermissionDecision.DENY, PermissionDecision.USER_DENIED}:
+                    return False
+        for request in requests:
+            # The user's edit consent covers the whole revalidated command, not only its first category.
+            if edited_approval is not None:
+                context.approval_resolution["argument_edit_approved"] = edited_approval
+            allowed = (
+                await administrator.authorize(context, request, reference)
+                if request.resource_type == "execution_administrator"
+                else await tools_access.allow(context, request)
+            )
+            if not allowed:
+                return False
+        if len(requests) > 1:
+            for request in requests:
+                if await context.ask_handler(request, check_only=True) != PermissionDecision.ALLOW:
+                    return False
+        return True
+    finally:
+        if edited_approval is not None:
+            context.approval_resolution.pop("argument_edit_approved", None)
+
+
 async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> ToolResult:
     client = files_access.workspace_client(context)
     if client.current_directory is None:
@@ -257,24 +287,24 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
             return ToolResult.error("executionAgent.operationUnavailable")
         shell_arguments = {"command": arguments.command, "currentDirectory": client.current_directory}
         inspection = await client.request("shell.classify", shell_arguments, ShellInspectResult)
-        permission = administrator_permission(
-            client.agent_id, client.current_directory, capability=f"shell.{inspection.classification}",
+        permissions = tuple(administrator_permission(
+            client.agent_id, client.current_directory, capability=f"shell.{category}",
             command=arguments.command, inspection=inspection,
             environment=arguments.model_dump(mode="json").get("environment"),
-        )
-        if not await administrator.authorize(context, permission, arguments.sudo_password_ref):
+        ) for category in inspection.required_categories)
+        if not await _authorize_shell(context, permissions, arguments.sudo_password_ref):
             return ToolResult.error("permission.denied")
         inspection = await administrator.invoke(context, "shell.inspect", shell_arguments, ShellInspectResult, arguments.sudo_password_ref)
         if isinstance(inspection, ToolResult):
             return inspection
         if arguments.environment:
             inspection = inspection.model_copy(update={"analysis_complete": False})
-        permission = administrator_permission(
-            client.agent_id, client.current_directory, capability=f"shell.{inspection.classification}",
+        permissions = tuple(administrator_permission(
+            client.agent_id, client.current_directory, capability=f"shell.{category}",
             command=arguments.command, inspection=inspection,
             environment=arguments.model_dump(mode="json").get("environment"),
-        )
-        if not await administrator.authorize(context, permission, arguments.sudo_password_ref):
+        ) for category in inspection.required_categories)
+        if not await _authorize_shell(context, permissions, arguments.sudo_password_ref):
             return ToolResult.error("permission.denied")
         resolved = await resolve_secret_refs(context, arguments.environment)
         if isinstance(resolved, ToolResult):
@@ -313,11 +343,11 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
     assert isinstance(inspection, ShellInspectResult)
     if arguments.environment:
         inspection = inspection.model_copy(update={"analysis_complete": False})
-    permission = shell_command_permission(
+    permissions = shell_command_permissions(
         client.agent_id, client.current_directory, executed["command"], inspection,
         environment=arguments.model_dump(mode="json").get("environment"),
     )
-    if not await tools_access.allow(context, permission):
+    if not await _authorize_shell(context, permissions):
         return ToolResult.error("permission.denied")
     resolved = await resolve_secret_refs(context, arguments.environment)
     if isinstance(resolved, ToolResult):
@@ -390,26 +420,18 @@ CHANGE_DIRECTORY = ToolDefinition(
 
 SHELL_RUN = ToolDefinition(
             "shell_run",
-            "Run one command with the host-configured shell in the session directory. "
-            "On Windows, use PowerShell syntax. Each call starts a fresh shell. "
-            "Shell state and cd apply only to this call; use change_directory for a persistent directory change. "
-            "The host inspects the command and its file targets before authorization. "
-            "The user can edit a staged command; results report the requested and executed arguments. "
-            "Read classification means no known write action was detected, not absence of side effects. "
-            "Analysis completeness is separate from classification. This is not an "
-            "operating-system sandbox. "
-            "Optional timeout is in seconds (0 < timeout <= 3600); null uses the agent default, "
-            "subject to its local maximum. Nonzero exits and timeouts are errors with bounded "
-            "output retained; interpret the exit code and output for the command's meaning. "
-            "elevated=true runs this command as administrator. "
-             "It uses the same shell.read/shell.write classification as ordinary execution. "
-            "Use environment references for explicit variables; elevated commands preserve only "
-            "those named variables through sudo. "
-             "Select an existing password reference by its name or description and target computer, "
-             "or call secret_input with administrator=true on the masked password field. "
-              "Pass the reference as sudo_password_ref. Password input authenticates only; "
-              "each command requires its own authorization. Run or session consent covers the same command and execution context. "
-            "Do not put sudo, password pipes, or a password in the command.",
+             "Run a command in a fresh host-configured shell in the session directory; use PowerShell on Windows. "
+             "State and cd do not persist; use change_directory to change the session directory. "
+             "Inspection checks required read/write/delete categories before execution. Read means no known "
+             "mutation, not absence of side effects; incomplete analysis is separate. This is not an OS sandbox. "
+             "Normal consent is computer/category-bound. The user can edit staged commands; results report "
+             "requested and executed arguments. Optional timeout: seconds, 0 < timeout <= 3600; null uses the "
+             "agent default, capped locally. Nonzero exits/timeouts return errors with bounded output. "
+             "elevated=true runs as administrator with the same category checks. Use environment references; "
+             "sudo preserves only explicitly named variables. Choose a password reference for this computer "
+             "or call secret_input with administrator=true on the masked field; pass sudo_password_ref. "
+             "Passwords authenticate only. Elevated/explicit-environment consent binds exact command/context. "
+             "Never put sudo, password pipes, or passwords in the command.",
             ShellRunArguments,
             _shell_run,
             tool_type="computer",
@@ -417,8 +439,8 @@ SHELL_RUN = ToolDefinition(
             group="process",
             label="Shell-Befehl ausführen",
             icon="terminal",
-            actions=(_SHELL_READ, _SHELL_WRITE),
-            alternative_action_groups=(frozenset({"shell.read", "shell.write"}),),
+             actions=(_SHELL_READ, _SHELL_WRITE, _SHELL_DELETE),
+             alternative_action_groups=(frozenset({"shell.read", "shell.write", "shell.delete"}),),
             permission_reason_instruction=(
                 "Explain the command's purpose and relevant effects in plain language. Keep it short and do not merely repeat the command."
             ),

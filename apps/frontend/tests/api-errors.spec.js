@@ -189,6 +189,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'file.workspaceNotSelected' } })).toBe(
       'Für diese Session ist kein aktueller Ordner auf dem Computer ausgewählt.'
     )
+    expect(apiErrorMessage({ error: { code: 'executionAgent.updateRequired' } })).toBe(
+      'Der Computer-Agent unterstützt die benötigte Protokollfunktion nicht. Bitte aktualisiere den Agenten.'
+    )
     expect(apiErrorMessage({ error: { code: 'file.pathAlreadyExists' } })).toBe(
       'Der exakte Zielpfad existiert bereits. Dateien werden nicht überschrieben.'
     )

@@ -1,10 +1,11 @@
 import asyncio
 import base64
 import json
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from mato_loop_backend.execution.client import (
     ExecutionClient,
@@ -457,6 +458,7 @@ async def test_execution_client_maps_remote_errors(monkeypatch, operation, code,
 @pytest.mark.parametrize("suffix", ["", "/python3"])
 def test_shell_inspection_accepts_only_fixed_toolchain_metadata_locations(directory, suffix) -> None:
     result = ShellInspectResult.model_validate({
+        "requiredCategories": ["read"],
         "targets": [
             {"path": directory + suffix, "kind": "toolchain_metadata"},
             {"path": "/dev/null", "kind": "discard"},
@@ -477,6 +479,7 @@ def test_shell_inspection_accepts_only_fixed_toolchain_metadata_locations(direct
 ])
 def test_shell_inspection_preserves_legacy_target_kinds_and_incomplete_writes(kind) -> None:
     result = ShellInspectResult.model_validate({
+        "requiredCategories": ["write"],
         "targets": [{"path": "/outside/target", "kind": kind}],
         "analysisComplete": False,
         "classification": "write",
@@ -492,6 +495,7 @@ def test_shell_inspection_preserves_legacy_target_kinds_and_incomplete_writes(ki
 @pytest.mark.parametrize("access", ["read", "write"])
 def test_shell_inspection_preserves_authoritative_target_access(access) -> None:
     result = ShellInspectResult.model_validate({
+        "requiredCategories": ["write"],
         "targets": [{"path": "/outside/target", "kind": "path", "access": access}],
         "analysisComplete": True, "classification": "write", "commands": [],
         "inspectionRevision": "a" * 64,
@@ -506,6 +510,7 @@ def test_shell_inspection_preserves_authoritative_target_access(access) -> None:
 def test_shell_inspection_rejects_access_inconsistent_with_target_kind(target) -> None:
     with pytest.raises(ValidationError):
         ShellInspectResult.model_validate({
+            "requiredCategories": ["write"],
             "targets": [target], "analysisComplete": True, "classification": "write",
             "commands": [], "inspectionRevision": "a" * 64,
         })
@@ -532,6 +537,7 @@ async def test_shell_client_rejects_invalid_special_targets(monkeypatch, target)
         return ResponseMessage.model_validate({
             "type": "response", "id": uuid4(), "ok": True,
             "result": {
+                "requiredCategories": ["read"],
                 "targets": [target], "analysisComplete": False,
                 "classification": "read", "readOnly": True, "commands": [],
                 "inspectionRevision": "a" * 64,
@@ -550,9 +556,14 @@ async def test_shell_client_rejects_invalid_special_targets(monkeypatch, target)
     {"readOnly": False},
     {"classification": "write"},
     {"commands": [{"tokens": ["touch", "file"], "classification": "write"}]},
+    {"requiredCategories": ["read", "delete"]},
+    {"requiredCategories": []},
+    {"requiredCategories": ["read", "read"]},
+    {"requiredCategories": ["unknown"]},
 ])
 def test_shell_inspection_rejects_inconsistent_classification(overrides) -> None:
     payload = {
+        "requiredCategories": ["read"],
         "targets": [], "analysisComplete": False, "classification": "read",
         "readOnly": True, "commands": [], "inspectionRevision": "a" * 64,
     }
@@ -563,8 +574,29 @@ def test_shell_inspection_rejects_inconsistent_classification(overrides) -> None
         ShellInspectResult.model_validate(payload)
 
 
+@pytest.mark.parametrize("operation", ["shell.inspect", "administrator.run", "integration.example.run"])
+async def test_missing_result_fields_distinguish_updates_from_invalid_results(monkeypatch, operation):
+    class IntegrationResult(BaseModel):
+        answer: int
+
+    client = ExecutionClient(uuid4(), frozenset({operation}))
+    response = ResponseMessage.model_validate({
+        "type": "response", "id": uuid4(), "ok": True,
+        "result": {"targets": [], "analysisComplete": True, "classification": "read",
+                   "readOnly": True, "commands": [], "inspectionRevision": "a" * 64},
+    })
+    monkeypatch.setattr(
+        "mato_loop_backend.execution.client.execution_agent_connections.request",
+        AsyncMock(return_value=response),
+    )
+    with pytest.raises(ExecutionClientError) as error:
+        await client.request(operation, {}, IntegrationResult if operation.startswith("integration.") else ShellInspectResult)
+    assert error.value.code == ("executionAgent.protocolError" if operation.startswith("integration.") else "executionAgent.updateRequired")
+
+
 def test_shell_inspection_accepts_redirect_only_writes() -> None:
     result = ShellInspectResult.model_validate({
+        "requiredCategories": ["write"],
         "targets": [{"path": "/work/output", "kind": "output"}],
         "analysisComplete": True, "classification": "write", "commands": [],
         "inspectionRevision": "a" * 64,
