@@ -357,10 +357,11 @@ def general_system_prompt(
         )
     elif "task" in offered_tool_names:
         parts.append(
-            "Do small or coupled work directly. Delegate independent tasks. In English, give the "
+            "Do small or coupled work directly. Delegate independent tasks only if parallelism or separate "
+            "context justifies handoff. In English, give "
             "exact question, scope, stopping condition, result format and length, acceptance criteria, "
-            "paths/IDs and skills; children lack your transcript. "
-            "Preserve quotes and IDs. Avoid overlapping writes and duplicate work; verify results."
+            "paths/IDs and skills; no parent transcript. "
+            "Preserve quotes/IDs. Avoid overlapping writes or duplicate work; verify results."
         )
     research_instructions: list[str] = []
     if "web_search" in offered_tool_names:
@@ -506,21 +507,21 @@ def general_system_prompt(
         )
     if file_tools_available:
         parts.append(
-            "Use shell_run for explicit shell requests. Otherwise prefer offered file tools: "
+            "Explicit shell request: use shell_run. Otherwise prefer offered file tools: "
             "read for contents/listings, glob for filenames, grep for content search, "
-            "and file-change tools for edits. Use shell_run for builds, tests, Git, processes, unsupported "
-            "operations. Never switch tools to bypass a denied action. "
-            "Shell read permission does not authorize write or delete effects. "
+            "file tools for edits. Shell: builds, tests, Git, processes, unsupported "
+            "operations. Never bypass denials by switching tools. "
+            "Shell read does not authorize writes or deletes. "
             + (
                 "file.accessDenied is not permission.userDenied. Retry protected UTF-8 computer files "
                 "with elevated=true on read/write_file/edit_file unless shell was explicitly requested. "
                 "Never bypass denied approval, disabled capabilities, or hard path boundaries. "
                 if "shell_run" in offered_tool_names else ""
             )
-            + "Batch independent calls. Scope reads/searches. Use explicit root. "
+            + "Batch read calls, not shell concatenations. Scope reads/searches; set root. "
             "Working-directory tasks use root=computer with absolute or directory-relative paths. "
             "root=files is backend session storage: relative POSIX paths ('.' for root; no absolute path or root prefix). "
-            "Copy and move need an unused destination."
+            "Copy/move need unused destinations."
         )
     if "write_file" in offered_tool_names:
         parts.append(

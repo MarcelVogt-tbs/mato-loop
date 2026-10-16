@@ -2200,7 +2200,7 @@ def test_system_prompt_describes_managed_file_roots() -> None:
         offered_tool_names=frozenset({"read", "glob", "grep", "provide_file"}),
     )
 
-    assert "Use explicit root" in prompt
+    assert "set root" in prompt
     assert "'.' for root" in prompt
     assert "no absolute path or root prefix" in prompt
     assert "unused destination" in prompt
