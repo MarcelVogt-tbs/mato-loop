@@ -3,6 +3,7 @@
     <q-card flat class="app-surface chat-composer__card">
       <q-form @submit.prevent="submit">
         <q-input
+          :key="session?.sessionProfile?.messageSize || 'standard'"
           ref="input"
           :model-value="draft"
           borderless
@@ -11,6 +12,7 @@
           type="textarea"
           rows="1"
           class="chat-composer__input"
+          :class="{ 'chat-composer__input--small': session?.sessionProfile?.messageSize === 'small' }"
           :placeholder="inputPlaceholder"
           :disable="inputDisabled"
           @update:model-value="$emit('update:draft', $event)"

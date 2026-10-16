@@ -28,7 +28,7 @@
               <AppSelect :model-value="form.agentIds" outlined dense multiple use-chips emit-value map-options label="Verfügbare Agenten" :options="agentOptions" :disable="store.saving" :rules="[(value) => value?.length > 0 || 'Mindestens einen Agenten auswählen.']" @update:model-value="setAgents" />
               <AppSelect v-model="form.startAgentId" outlined dense emit-value map-options label="Startagent" :options="agentOptions.filter((item) => form.agentIds?.includes(item.value))" :disable="store.saving" />
               <AppSelect v-model="form.memoryMode" outlined dense emit-value map-options label="Memory" :options="memoryOptions" :disable="store.saving" />
-              <AppSelect v-model="form.messageSize" outlined dense emit-value map-options label="Nachrichtengröße" :options="[{ label: 'Standard', value: 'standard' }, { label: 'Klein', value: 'small' }]" hint="Klein reduziert die Schriftgröße und die Abstände der Nachrichten." persistent-hint :disable="store.saving" />
+              <AppSelect v-model="form.messageSize" outlined dense emit-value map-options label="Nachrichtengröße" :options="[{ label: 'Standard', value: 'standard' }, { label: 'Klein', value: 'small' }]" hint="Klein reduziert die Schriftgröße und die Abstände der Nachrichten sowie die Schriftgröße im Eingabefeld am Desktop." persistent-hint :disable="store.saving" />
               <div class="text-subtitle2">Modell für die gesamte Session</div>
               <ChatModelFields :model-value="form" :inherited="defaults" :disabled="store.saving" @update:model-value="Object.assign(form, $event)" />
               <q-expansion-item label="Modell-Overrides je Agent" icon="smart_toy">

@@ -165,7 +165,7 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
-  it('invalidates cached message heights when the session message size changes', async () => {
+  it('invalidates message heights and remounts the composer input when the session message size changes', async () => {
     mocks.api.get.mockResolvedValue({ data: {} })
     await router.push('/')
     showPage.value = true
@@ -173,10 +173,13 @@ describe('voice attachment composer', () => {
     chat.current = { id: 'session-1', sessionProfile: { messageSize: 'standard' }, messages: [{ id: 'message', role: 'user', content: 'Text' }] }
     await nextTick()
     mocks.resetMessageSizes.mockClear()
+    const previousInput = root.querySelector('.chat-composer__input')
 
     chat.current.sessionProfile.messageSize = 'small'
 
     await vi.waitFor(() => expect(mocks.resetMessageSizes).toHaveBeenCalled())
+    expect(root.querySelector('.chat-composer__input--small')).not.toBeNull()
+    expect(previousInput.isConnected).toBe(false)
   })
 
   it('shows the first outgoing message in the transcript with its delivery state', async () => {

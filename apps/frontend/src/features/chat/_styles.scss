@@ -372,6 +372,12 @@
   overflow-y: auto;
 }
 
+@media not (any-pointer: coarse) {
+  .chat-composer__input--small {
+    font-size: 12px;
+  }
+}
+
 @media (hover: none) and (pointer: coarse) {
   .q-field__native,
   .q-field__input {
@@ -564,12 +570,12 @@
 }
 
 .chat-messages--small {
-  --chat-message-font-size: 13px;
-  --chat-message-gap: 12px;
-  --chat-message-padding: 8px 12px;
+  --chat-message-font-size: 12px;
+  --chat-message-gap: 10px;
+  --chat-message-padding: 6px 10px;
   --chat-message-line-height: 1.5;
-  --chat-paragraph-gap: 0.6em;
-  --chat-heading-gap: 0.9em;
+  --chat-paragraph-gap: 0.7em;
+  --chat-heading-gap: 0.8em;
 
   .chat-message__content,
   .chat-markdown {

@@ -311,7 +311,7 @@ const MessageSizeField = defineComponent(() => () => h(AppSelect, selectProps({
   modelValue: props.session?.sessionProfile?.messageSize || 'standard',
   options: [{ label: 'Standard', value: 'standard' }, { label: 'Klein', value: 'small' }],
   label: 'Nachrichtengröße',
-  hint: 'Klein reduziert die Schriftgröße und die Abstände der Nachrichten.',
+  hint: 'Klein reduziert die Schriftgröße und die Abstände der Nachrichten sowie die Schriftgröße im Eingabefeld am Desktop.',
   persistentHint: true,
   'onUpdate:modelValue': (messageSize) => update({ session_profile: { ...props.session?.sessionProfile, messageSize } })
 }), { prepend: () => h(QIcon, { name: 'format_size' }) }))
