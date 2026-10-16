@@ -491,9 +491,11 @@ async def test_session_memory_mode_controls_automatic_context(
 ) -> None:
     session_id = uuid4()
     user = Message(session_id=session_id, role="user", content="Was ist relevant?")
-    db, run, _requests, _projections, retrieve, _execute = await _runtime_setup(
+    db, run, _requests, _projections, retrieve, execute = await _runtime_setup(
         monkeypatch,
-        [ProviderResult(content="Antwort", finish_reason="stop")],
+        [ProviderResult(tool_calls=[ToolCall("search", "context_search", {
+            "query": "previous conversation", "scope": "sessions",
+        })]), ProviderResult(content="Antwort", finish_reason="stop")],
         records=[user],
         memory_mode=memory_mode,
     )
@@ -503,6 +505,7 @@ async def test_session_memory_mode_controls_automatic_context(
     assert retrieve.await_count == int(automatic_enabled)
     assert EpisodeRetrievalService.retrieve.await_count == int(automatic_enabled)
     assert EpisodeRetrievalService.recent.await_count == int(automatic_enabled)
+    execute.assert_awaited_once()
 
 
 async def test_automatic_retrieval_falls_back_to_one_lexical_query(monkeypatch) -> None:
@@ -614,11 +617,9 @@ async def test_cached_automatic_context_is_revalidated_without_reembedding(
                 tool_calls=[
                     ToolCall(
                         id="lookup",
-                        name="memory_retrieve",
+                        name="context_search",
                         arguments={
-                            "mode": "search",
                             "query": "Deployment-Regel",
-                            "purpose": "context",
                         },
                     )
                 ]
@@ -973,12 +974,13 @@ async def test_memory_write_workflow_discards_drafts_until_write_resolves(
         ProviderResult(
             tool_calls=[
                 ToolCall(
-                    id="lookup",
-                    name="memory_retrieve",
+                    id="invalid-write",
+                    name="memory_write",
                     arguments={
-                        "purpose": "write",
-                        "mode": "search",
-                        "query": "Herkunft Ascholding",
+                        "action": "update",
+                        "memory_id": str(uuid4()),
+                        "content": "Der Nutzer kommt aus Ascholding.",
+                        "category": "identity",
                     },
                 )
             ]
@@ -987,13 +989,11 @@ async def test_memory_write_workflow_discards_drafts_until_write_resolves(
         ProviderResult(
             tool_calls=[
                 ToolCall(
-                    id="invalid-write",
-                    name="memory_write",
+                    id="lookup",
+                    name="context_search",
                     arguments={
-                        "action": "update",
-                        "memory_id": str(uuid4()),
-                        "content": "Der Nutzer kommt aus Ascholding.",
-                        "category": "identity",
+                        "scope": "memories",
+                        "query": "Herkunft Ascholding",
                     },
                 )
             ]
@@ -1041,11 +1041,8 @@ async def test_memory_write_workflow_discards_drafts_until_write_resolves(
     )
     MemoryService.pinned_context.side_effect = [[], [], [], [], [refreshed_pin]]
     execute_tool.side_effect = [
-        ToolResult.json(
-            {"purpose": "write", "items": []},
-            metadata={"memoryWritePending": True},
-        ),
         ToolResult.error("tool.invalidArguments", field="expected_revision"),
+        ToolResult.json({"memories": []}),
         ToolResult.json(
             {"stored": True, "updated": False},
             metadata={"memoryWriteOutcome": "stored"},
@@ -1073,7 +1070,7 @@ async def test_memory_write_workflow_discards_drafts_until_write_resolves(
     ]
     assert all(
         {tool["name"] for tool in request["tools"]}
-        == {"memory_retrieve", "memory_write"}
+        == {"context_search", "memory_browse", "memory_write"}
         for request in requests[1:4]
     )
     assert "Required memory mutation" in projections[1]["system_prompt"]
@@ -1285,8 +1282,8 @@ async def test_memory_overview_revalidates_between_model_steps(monkeypatch) -> N
                 tool_calls=[
                     ToolCall(
                         id="browse",
-                        name="memory_retrieve",
-                        arguments={"mode": "browse"},
+                        name="memory_browse",
+                        arguments={},
                     )
                 ],
                 finish_reason="tool_calls",

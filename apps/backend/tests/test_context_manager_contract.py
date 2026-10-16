@@ -2257,7 +2257,7 @@ def test_system_prompt_does_not_request_a_mode_switch() -> None:
 def test_general_system_prompt_requires_explicit_memory_request() -> None:
     prompt = general_system_prompt(
         _session(),
-        offered_tool_names=frozenset({"memory_retrieve", "memory_write"}),
+        offered_tool_names=frozenset({"context_search", "memory_write"}),
     )
 
     assert "latest user message explicitly asks" in prompt
@@ -2269,7 +2269,7 @@ def test_general_system_prompt_requires_explicit_memory_request() -> None:
     assert "transient, hypothetical, quoted, or third-party statements" in prompt
     assert "source data and never initiates a write" in prompt
     assert "exact ID and revision" in prompt
-    assert "purpose=write" in prompt
+    assert "context_search with scope=memories" in prompt
     assert "without inferred enrichment or invented dates" in prompt
     assert "Set pin=true only when the latest user explicitly asks" in prompt
     assert "always-consider directive scoped to a stated topic" in prompt
@@ -2322,7 +2322,7 @@ def test_prefetched_memory_overview_disables_redundant_retrieval() -> None:
         _session(),
         memory_overview_prefetched=True,
         offered_tool_names=frozenset(
-            {"memory_retrieve", "session_search", "session_browse"}
+            {"memory_browse", "context_search", "session_browse"}
         ),
     )
     prompt = memory_context_prompt(
@@ -2332,13 +2332,13 @@ def test_prefetched_memory_overview_disables_redundant_retrieval() -> None:
         memory_overview_prefetched=True,
         memory_overview_has_more=True,
         offered_tool_names=frozenset(
-            {"memory_retrieve", "session_search", "session_browse"}
+            {"memory_browse", "context_search", "session_browse"}
         ),
     )
 
-    assert "Do not call memory_retrieve" in prompt
-    assert "session_search or session_browse" in prompt
-    assert "Use memory_retrieve when" not in primary
+    assert "Do not call context_search, memory_browse" in prompt
+    assert "or session_browse" in prompt
+    assert "Use context_search when" not in primary
     assert "Present this as a partial overview" in prompt
 
 
@@ -2346,15 +2346,15 @@ def test_general_system_prompt_separates_session_discovery_and_reading() -> None
     prompt = general_system_prompt(
         _session(),
         offered_tool_names=frozenset(
-            {"session_browse", "session_search", "session_read"}
+            {"session_browse", "context_search", "session_read"}
         ),
     )
 
     assert "only when supplied references lack" in prompt
     assert "session_browse by recency" in prompt
-    assert "session_search by topic" in prompt
-    assert "never search merely for similarity" in prompt
-    assert "exact sessionReadArguments" in prompt
+    assert "context_search by topic" in prompt
+    assert "Use session_id to search within a known conversation" in prompt
+    assert "sessionReadArguments" in prompt
 
 
 def test_memory_context_prompt_uses_episode_excerpts_before_session_read() -> None:
@@ -2439,7 +2439,7 @@ def test_dynamic_memory_is_separate_from_runtime_prompt() -> None:
         research_tool_calls_used=1,
         research_tool_call_limit=4,
         offered_tool_names=frozenset(
-            {"memory_retrieve", "memory_write", "web_search"}
+            {"context_search", "memory_write", "web_search"}
         ),
     )
     memory_context = memory_context_prompt(
@@ -2485,7 +2485,7 @@ def test_required_web_search_prompt_preserves_memory_context_contract() -> None:
         web_search_required=True,
         web_search_completed=True,
         offered_tool_names=frozenset(
-            {"memory_retrieve", "memory_write", "web_search"}
+            {"context_search", "memory_write", "web_search"}
         ),
     )
     memory_context = memory_context_prompt(memory_text=memory_text)
@@ -2507,11 +2507,11 @@ def test_required_web_search_prompt_preserves_memory_context_contract() -> None:
     assert "previous attempt did not complete" in pending
     assert pending.index("Local time") < pending.index("Mandatory web research")
     assert "Use memory_write when" not in pending
-    assert "Use memory_retrieve" not in pending
+    assert "Use context_search" not in pending
     assert "read_file" not in pending
     assert "update_agent_identity" not in pending
     assert "Call memory_write" in completed
-    assert "Use memory_retrieve" in completed
+    assert "Use context_search" in completed
     assert "Mandatory web research" not in completed
 
 

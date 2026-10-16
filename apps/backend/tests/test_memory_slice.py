@@ -901,13 +901,13 @@ def test_memory_tools_are_gated_independently_from_workspace_write_mode() -> Non
         IntegrationSettings(), memory_enabled=True, memory_write_enabled=True
     )
 
-    assert not {"memory_write", "memory_retrieve"} & {
+    assert not {"memory_write", "memory_browse"} & {
         item["name"] for item in without_memory
     }
     assert {item["name"] for item in with_read_memory} & {
-        "memory_write", "memory_retrieve"
-    } == {"memory_retrieve"}
-    assert {"memory_write", "memory_retrieve"}.issubset(
+        "memory_write", "memory_browse"
+    } == {"memory_browse"}
+    assert {"memory_write", "memory_browse", "context_search"}.issubset(
         {item["name"] for item in with_full_memory}
     )
 

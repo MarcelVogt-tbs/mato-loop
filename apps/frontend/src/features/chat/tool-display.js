@@ -69,6 +69,8 @@ const TOOL_DISPLAY = {
   session_browse: { label: 'Letzte Sessions anzeigen', icon: 'view_list' },
   session_search: { label: 'Sessions durchsuchen', icon: 'manage_search' },
   memory_retrieve: { label: 'Memory abrufen', icon: 'psychology' },
+  context_search: { label: 'Kontext durchsuchen', icon: 'manage_search' },
+  memory_browse: { label: 'Memories auflisten', icon: 'psychology' },
   memory_write: { label: 'Memory speichern', icon: 'save' },
   update_agent_identity: { label: 'Persona ändern', icon: 'face' },
   update_user_profile: { label: 'Persönliches Profil ändern', icon: 'manage_accounts' },
@@ -366,7 +368,7 @@ export function toolSummary(tool) {
   if (tool?.name === 'question') {
     return truncate(argumentsValue.questions?.find((item) => typeof item?.question === 'string')?.question)
   }
-  if (tool?.name === 'memory_retrieve' && argumentsValue.mode === 'browse') {
+  if (tool?.name === 'memory_browse' || (tool?.name === 'memory_retrieve' && argumentsValue.mode === 'browse')) {
     return argumentsValue.cursor_id ? 'Memory-Übersicht fortsetzen' : 'Memory-Übersicht'
   }
   if (tool?.name === 'session_browse') return 'Letzte Sessions'
@@ -533,7 +535,7 @@ export function parseToolResult(content, toolName = null) {
     const processMetadataDisplay = processMetadata && Object.keys(processMetadata).length
       ? technicalDetailsDisplay(processMetadata)
       : null
-    const memoryValue = toolName === 'memory_retrieve' && Array.isArray(value?.items)
+    const memoryValue = ['memory_retrieve', 'memory_browse'].includes(toolName) && Array.isArray(value?.items)
       ? {
           mode: value.mode,
           strategy: value.strategy,

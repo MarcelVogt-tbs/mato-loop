@@ -1408,8 +1408,26 @@ def _target_tool_result(
         tool_name = _inferred_tool_name(content)
     if tool_name == "secret_input" and available_secret_references is not None:
         return model_secret_references(content, available_secret_references)
-    if tool_name == "memory_retrieve":
+    if tool_name in {"memory_retrieve", "memory_browse"}:
         return _target_memory_result(content, readable_by)
+    if tool_name == "context_search":
+        try:
+            payload = json.loads(content)
+        except (TypeError, json.JSONDecodeError):
+            return json.dumps({"memories": [], "sessions": []})
+        if not isinstance(payload, dict):
+            return json.dumps({"memories": [], "sessions": []})
+        if isinstance(payload.get("error"), dict):
+            return content
+        filtered = json.loads(_target_memory_result(
+            json.dumps({"items": payload.get("memories")}), readable_by,
+        ))
+        payload["memories"] = filtered["items"]
+        payload["readableBy"] = readable_by.value
+        for key in ("redactedPrivateItems", "redactedPublicItems"):
+            if key in filtered:
+                payload[key] = filtered[key]
+        return json.dumps(payload, ensure_ascii=False)
     if tool_name == "shell_run":
         try:
             payload = json.loads(content)
@@ -1439,7 +1457,7 @@ def _target_tool_result(
             nested_tool_name = _inferred_tool_name(nested_content)
         # Sensitive fragments cannot be revalidated, especially after a trust change.
         if nested_tool_name is None or (
-            nested_tool_name in {"memory_retrieve", "secret_input", "session_read", "session_tool_result_read"}
+            nested_tool_name in {"memory_retrieve", "memory_browse", "context_search", "secret_input", "session_read", "session_tool_result_read"}
             and (payload.get("offset", 0) != 0 or payload.get("hasMore", False))
         ):
             payload["content"] = ""
@@ -1503,6 +1521,8 @@ def _inferred_tool_name(content: str) -> str | None:
         return None
     if not isinstance(payload, dict):
         return None
+    if isinstance(payload.get("memories"), list):
+        return "context_search"
     items = payload.get("items")
     scope = payload.get("scope")
     memory_envelope = (

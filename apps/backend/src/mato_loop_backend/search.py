@@ -47,6 +47,28 @@ def _excerpt(content: str, limit: int = 500) -> str:
 
 class GlobalSearchService:
     @staticmethod
+    async def session_titles(
+        db: AsyncSession, *, owner_id: UUID, query: str, limit: int = 10,
+        exclude_session_id: UUID | None = None,
+    ) -> list[tuple[ChatSession, str | None]]:
+        filters = [
+            ChatSession.user_id == owner_id,
+            ChatSession.session_type == "chat",
+            ChatSession.parent_session_id.is_(None),
+            ChatSession.title.icontains(query.strip(), autoescape=True),
+        ]
+        if exclude_session_id is not None:
+            filters.append(ChatSession.id != exclude_session_id)
+        rows = (await db.execute(
+            select(ChatSession, Project.name)
+            .outerjoin(Project, (Project.id == ChatSession.project_id) & (Project.user_id == ChatSession.user_id))
+            .where(*filters)
+            .order_by(ChatSession.updated_at.desc(), ChatSession.id.desc())
+            .limit(limit)
+        )).all()
+        return [(session, project_name) for session, project_name in rows]
+
+    @staticmethod
     async def search(
         db: AsyncSession,
         *,
@@ -81,24 +103,9 @@ class GlobalSearchService:
             for project, session_count in project_rows
         ]
 
-        title_rows = (
-            await db.execute(
-                select(ChatSession, Project.name)
-                .outerjoin(
-                    Project,
-                    (Project.id == ChatSession.project_id)
-                    & (Project.user_id == ChatSession.user_id),
-                )
-                .where(
-                    ChatSession.user_id == owner_id,
-                    ChatSession.session_type == "chat",
-                    ChatSession.parent_session_id.is_(None),
-                    ChatSession.title.icontains(cleaned_query, autoescape=True),
-                )
-                .order_by(ChatSession.updated_at.desc(), ChatSession.id.desc())
-                .limit(limit)
-            )
-        ).all()
+        title_rows = await GlobalSearchService.session_titles(
+            db, owner_id=owner_id, query=cleaned_query, limit=limit,
+        )
 
         episodes = await EpisodeRetrievalService.retrieve(
             db,

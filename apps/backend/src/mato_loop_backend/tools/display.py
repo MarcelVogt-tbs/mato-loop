@@ -68,6 +68,7 @@ TOOL_ACTIVITY_LABELS = {
     "knowledge_update_shelf": "Regal bearbeiten", "knowledge_delete_shelf": "Regal löschen",
     "session_tool_result_read": "Tool-Ergebnis lesen", "session_browse": "Letzte Sessions anzeigen",
     "session_search": "Sessions durchsuchen", "memory_retrieve": "Memory abrufen",
+    "context_search": "Kontext durchsuchen", "memory_browse": "Memories auflisten",
     "memory_write": "Memory speichern", "update_agent_identity": "Persona ändern",
     "update_user_profile": "Persönliches Profil ändern", "variable_read": "Variable lesen",
     "customize_matoloop": "MatoLoop persönlich anpassen",
@@ -161,7 +162,7 @@ def _summary(tool_name: str, arguments: dict[str, Any]) -> str | None:
                 value = canonicalize_url(url, preserve_fragment=tool_name == "webfetch")
             except (ValueError, WebFetchError):
                 pass
-    elif tool_name in {"web_search", "session_search", "mail_search", "recipes_search"}:
+    elif tool_name in {"web_search", "session_search", "context_search", "mail_search", "recipes_search"}:
         value = arguments.get("query")
     elif tool_name in {"read", "read_file", "write_file", "edit_file", "create_directory", "delete_path", "provide_file"}:
         value = arguments.get("path")

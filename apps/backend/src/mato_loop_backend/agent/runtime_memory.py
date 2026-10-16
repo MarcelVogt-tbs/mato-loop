@@ -146,8 +146,10 @@ def _memory_overview_requested(records: list[Message]) -> bool:
         -1,
     )
     return any(
-        call.get("name") == "memory_retrieve"
-        and (call.get("arguments") or {}).get("mode") == "browse"
+        (call.get("name") == "memory_browse" or (
+            call.get("name") == "memory_retrieve"
+            and (call.get("arguments") or {}).get("mode") == "browse"
+        ))
         for item in records[previous_user_index + 1 : current_index]
         if item.role == "assistant"
         for call in (item.tool_calls or [])

@@ -118,6 +118,10 @@ describe('tool display', () => {
       .toEqual({ label: 'Tool-Ergebnis lesen', icon: 'history' })
     expect(toolIdentity('session_browse'))
       .toEqual({ label: 'Letzte Sessions anzeigen', icon: 'view_list' })
+    expect(toolIdentity('context_search'))
+      .toEqual({ label: 'Kontext durchsuchen', icon: 'manage_search' })
+    expect(toolIdentity('memory_browse'))
+      .toEqual({ label: 'Memories auflisten', icon: 'psychology' })
     expect(toolIdentity('calendar_query_events'))
       .toEqual({ label: 'Termine lesen', icon: 'event' })
     expect([

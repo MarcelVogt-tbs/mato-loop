@@ -382,7 +382,7 @@ async def execute_tool_batch(
             and call.name in _RESEARCH_TOOL_NAMES
         )
         repeated_research_call = is_research_call and call_signature in successful_research_calls
-        if call.name in {"memory_write", "memory_retrieve"}:
+        if call.name in {"memory_write", "memory_retrieve", "memory_browse", "context_search"}:
             current_settings = await SettingsStore.load(db, MemorySettings, user_id=session.user_id)
             current_memory_state = memory_policy.effective_memory(
                 session, current_settings, provider, model,
@@ -447,7 +447,7 @@ async def execute_tool_batch(
                 state.repeated_tool_call_limit_reached = True
             content = json.dumps(error_payload("agent.repeatedToolCall"), ensure_ascii=False)
             metadata = {"errorCode": "agent.repeatedToolCall"}
-        elif call.name not in offered_names or not memory_available_now or (
+        elif call.name not in offered_names or (not memory_available_now and call.name != "context_search") or (
             call.name == "memory_write" and not memory_write_available_now
         ):
             content = json.dumps(error_payload("tool.unavailable"), ensure_ascii=False)

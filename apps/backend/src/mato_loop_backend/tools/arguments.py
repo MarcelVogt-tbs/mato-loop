@@ -794,6 +794,36 @@ class SessionSearchArguments(ToolArguments):
     limit: int = Field(default=10, ge=1, le=20)
 
 
+class ContextSearchArguments(ToolArguments):
+    query: str = Field(min_length=1, max_length=2_000)
+    scope: Literal["all", "memories", "sessions"] = "all"
+    session_id: UUID | None = Field(
+        default=None, description="Restrict search to this known conversation; searches sessions only.",
+    )
+    limit: int = Field(default=3, ge=1, le=10, description="Maximum results per source.")
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> ContextSearchArguments:
+        if self.session_id is not None and self.scope == "memories":
+            raise ValueError("session_id cannot restrict memory search")
+        if not self.query.strip():
+            raise ValueError("query must not be blank")
+        return self
+
+
+class MemoryBrowseArguments(ToolArguments):
+    category: MemoryCategory | None = None
+    cursor_updated_at: datetime | None = None
+    cursor_id: UUID | None = None
+    limit: int = Field(default=10, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def validate_cursor(self) -> MemoryBrowseArguments:
+        if (self.cursor_updated_at is None) != (self.cursor_id is None):
+            raise ValueError("both cursor fields are required together")
+        return self
+
+
 class SessionBrowseArguments(ToolArguments):
     limit: int = Field(default=10, ge=1, le=20)
 

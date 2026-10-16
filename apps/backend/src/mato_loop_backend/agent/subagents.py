@@ -37,6 +37,7 @@ def permission_snapshot(
 ) -> dict[str, Any]:
     from mato_loop_backend.permissions.resolution import tool_default_policy
     from mato_loop_backend.tools.catalog import tool_registry
+    from mato_loop_backend.tools.context_search import source_available
 
     integrations = integration_settings or IntegrationSettings()
     # Only permission data belongs here, never integration configuration or credentials.
@@ -55,6 +56,7 @@ def permission_snapshot(
         ),
         "shellPrefixes": settings.shell_prefixes.model_dump(mode="json"),
         "toolNames": sorted(tool_names - {"task"}),
+        "contextSources": [source for source in ("memories", "sessions") if source_available(settings, source)],
         "integrationIds": sorted(str(item.id) for item in integrations.instances if item.enabled),
         "actionDefaults": {
             action.capability: tool_default_policy(settings, action.capability, action.default_policy(settings)).value

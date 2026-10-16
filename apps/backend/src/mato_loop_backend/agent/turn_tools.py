@@ -148,7 +148,7 @@ def select_turn_tools(
     if search_pending and toolset is not None:
         toolset = toolset.only("web_search") if skill_state.active else toolset.only("load_skill", "edit_skill", "web_search")
     elif memory_write_pending and toolset is not None:
-        toolset = toolset.only("memory_retrieve", "memory_write")
+        toolset = toolset.only("context_search", "memory_browse", "memory_write")
     elif source_review_pending is not None and toolset is not None:
         toolset = toolset.only("read")
     effective_count = len(toolset.tools) if toolset else 0

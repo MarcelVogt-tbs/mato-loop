@@ -1869,7 +1869,7 @@ def test_inactive_capability_catalog_includes_installed_tools_without_schemas() 
     assert "write_file" in effective.tools
     assert "write_file" not in catalog
     assert "generate_image" not in catalog
-    assert "memory_retrieve" in catalog
+    assert "memory_browse" in catalog
     assert "webfetch" in catalog
     assert "calendar_create_event" not in catalog
     assert "configure under Integrationen or the agent profile" in catalog

@@ -65,6 +65,8 @@ def _provider_revision(value: str | None, settings: IntegrationSettings) -> str 
 
 
 def _tool_available(name: str, settings: ToolSettings) -> bool:
+    if name == "memory_browse" and not settings.tool_availability.get("memory_retrieve", True):
+        return False
     if name == "todo_write" and not (
         settings._agent_profile and settings._agent_profile.todo_enabled
     ):
@@ -421,6 +423,8 @@ class ToolRegistry:
             "temporary": [],
         }
         for name, definition in installed_definitions.items():
+            if name in {"memory_retrieve", "session_search"}:
+                continue
             if name in offered_names:
                 continue
             if name == "todo_write" and not _tool_available(name, tool_settings):
@@ -598,6 +602,9 @@ class ToolRegistry:
             definitions.pop("update_agent_identity", None)
             definitions.pop("update_user_profile", None)
             definitions.pop("variable_write", None)
+        if "context_search" in definitions:
+            definitions.pop("memory_retrieve", None)
+            definitions.pop("session_search", None)
         for name, definition in self._operation_definitions.items():
             if definition.required_operation in execution_operations:
                 definitions[name] = definition
@@ -624,6 +631,12 @@ class ToolRegistry:
                 or agent_profile_search_available(integration_settings, tool_settings)
             )
         }
+        if "context_search" in available_names and tool_settings is not None:
+            from mato_loop_backend.tools.context_search import source_available
+
+            if not any(source_available(tool_settings, source, memory_enabled=memory_enabled)
+                       for source in ("memories", "sessions")):
+                available_names.remove("context_search")
         search_providers = (
             effective_search_providers(tool_settings, integration_settings)
             if tool_settings is not None

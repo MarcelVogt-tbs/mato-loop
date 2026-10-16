@@ -245,6 +245,7 @@ def test_episode_ranking_deduplicates_sessions_without_destination_trust_filter(
     assert ranked[0] is shared
     assert len(ranked) == 2
     assert len({item.session.id for item in ranked}) == 2
+    assert len(_rank_candidates([same_session, shared, other], [shared], limit=3, distinct_sessions=False)) == 3
 
     public_sql = " ".join(
         str(item)

@@ -617,7 +617,7 @@ async def execute_loop_body(
         if memory_write_pending and not rejected_batch_code and (
             not normalized_calls
             or any(
-                call.name not in {"memory_retrieve", "memory_write"}
+                call.name not in {"context_search", "memory_browse", "memory_write"}
                 for call in normalized_calls
             )
         ):

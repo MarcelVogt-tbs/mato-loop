@@ -169,6 +169,7 @@ def test_every_builtin_tool_is_expected_by_a_live_case() -> None:
     separately_evaluated = {
         "todo_write", "variable_read", "variable_write",
         "update_agent_identity", "update_user_profile",  # Legacy direct calls, no longer offered.
+        "memory_retrieve", "session_search",  # Historical contracts; models use context_search.
     }
     assert set(tool_registry._definitions) - set(PROJECT_CODING_TOOL_NAMES) - separately_evaluated <= covered
 
@@ -484,7 +485,7 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     video_messages, video_tools = build_case(video_case)
     video_names = {tool["name"] for tool in video_tools}
     assert video_case.tool_choice == "auto"
-    assert {"analyze_video", "web_search", "session_search"} <= video_names
+    assert {"analyze_video", "web_search", "context_search"} <= video_names
     assert "duration 00:04:00.000" in video_messages[-1]["content"]
     mode = next(tool for tool in video_tools if tool["name"] == "analyze_video")[
         "parameters"
@@ -1430,10 +1431,8 @@ def test_memory_tool_result_layout_moves_all_dynamic_memory_after_user() -> None
     call = candidate[3]["tool_calls"][0]
     assert call == {
         "id": "eval-memory-prefetch-1",
-        "name": "memory_retrieve",
+        "name": "context_search",
         "arguments": {
-            "purpose": "context",
-            "mode": "search",
             "query": case.user,
         },
     }
@@ -1524,7 +1523,7 @@ def test_memory_system_message_layout_keeps_overview_prefix_stable() -> None:
     assert partial_tools == exhausted_tools
     assert partial[0] == exhausted[0]
     assert partial[1] != exhausted[1]
-    assert "Do not call memory_retrieve" in partial[1]["content"]
+    assert "Do not call context_search, memory_browse" in partial[1]["content"]
     assert "Present this as a partial overview" in partial[1]["content"]
     assert "exhausts the currently visible" in exhausted[1]["content"]
 
@@ -1552,7 +1551,8 @@ def test_memory_tool_result_layout_has_stable_overview_prefix() -> None:
         "tool",
     ]
     call = candidate_partial[2]["tool_calls"][0]
-    assert call["arguments"] == {"purpose": "context", "mode": "browse"}
+    assert call["name"] == "memory_browse"
+    assert call["arguments"] == {}
     partial_result = json.loads(candidate_partial[3]["content"])
     exhausted_result = json.loads(candidate_exhausted[3]["content"])
     assert len(partial_result["untrustedMemoryData"]["memoryOverview"]) == 10
@@ -1571,7 +1571,7 @@ def test_memory_tool_driven_layout_starts_without_prefetched_memory() -> None:
     assert case.memory_text in current[1]["content"]
     assert case.memory_text not in candidate[0]["content"]
     assert "Persistent memory status:" not in candidate[0]["content"]
-    assert "Use memory_retrieve" in candidate[0]["content"]
+    assert "Use memory_browse" in candidate[0]["content"]
     assert "Never answer a memory overview from general knowledge" in candidate[0]["content"]
     assert [message["role"] for message in candidate] == ["system", "user"]
 
@@ -1587,8 +1587,8 @@ async def test_memory_tool_driven_layout_runs_canonical_retrieval_round(
                 tool_calls=[
                     ToolCall(
                         "eval-model-memory-1",
-                        "memory_retrieve",
-                        {"purpose": "context", "mode": "browse", "_reason": "Die gespeicherten Informationen prüfen."},
+                        "memory_browse",
+                        {"_reason": "Die gespeicherten Informationen prüfen."},
                     )
                 ],
                 usage={"input_tokens": 100, "cached_input_tokens": 60},
@@ -1803,24 +1803,24 @@ def test_session_search_accepts_any_schema_valid_query_containing_aurora() -> No
 
     assert evaluate(
         case,
-        ProviderResult(tool_calls=[ToolCall("1", "session_search", {"query": "Aurora", "_reason": "Den früheren Chat finden."})]),
+        ProviderResult(tool_calls=[ToolCall("1", "context_search", {"query": "Aurora", "_reason": "Den früheren Chat finden."})]),
     ) == []
     assert evaluate(
         case,
         ProviderResult(
-            tool_calls=[ToolCall("1", "session_search", {"query": "frühere Aurora Chats", "_reason": "Den früheren Chat finden."})]
+            tool_calls=[ToolCall("1", "context_search", {"query": "frühere Aurora Chats", "_reason": "Den früheren Chat finden."})]
         ),
     ) == []
-    assert "session_search returned invalid arguments" in evaluate(
+    assert "context_search returned invalid arguments" in evaluate(
         case,
-        ProviderResult(tool_calls=[ToolCall("1", "session_search", {"query": 42, "_reason": "Den früheren Chat finden."})]),
+        ProviderResult(tool_calls=[ToolCall("1", "context_search", {"query": 42, "_reason": "Den früheren Chat finden."})]),
     )
     assert any(
         "does not contain 'Aurora'" in failure
         for failure in evaluate(
             case,
             ProviderResult(
-                tool_calls=[ToolCall("1", "session_search", {"query": "Projekt Borealis", "_reason": "Den früheren Chat finden."})]
+                tool_calls=[ToolCall("1", "context_search", {"query": "Projekt Borealis", "_reason": "Den früheren Chat finden."})]
             ),
         )
     )

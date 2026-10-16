@@ -5,6 +5,7 @@ import mato_loop_backend.tools.access as tools_access
 import mato_loop_backend.tools.automations as tools_automations
 import mato_loop_backend.tools.coding as tools_coding
 import mato_loop_backend.tools.computer as tools_computer
+import mato_loop_backend.tools.context_search as tools_context_search
 import mato_loop_backend.tools.files as tools_files
 import mato_loop_backend.tools.identity as tools_identity
 import mato_loop_backend.tools.interaction as tools_interaction
@@ -173,6 +174,8 @@ tool_registry = ToolRegistry(
         tools_automations.DELETE_AUTOMATION,
         tools_memory.MEMORY_WRITE,
         tools_memory.MEMORY_RETRIEVE,
+        tools_memory.MEMORY_BROWSE,
+        tools_context_search.CONTEXT_SEARCH,
         tools_skills.LOAD_SKILL,
         tools_skills.SAVE_SKILL,
         tools_skills.EDIT_SKILL,

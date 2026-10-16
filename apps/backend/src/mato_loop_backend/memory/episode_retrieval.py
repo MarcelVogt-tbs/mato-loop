@@ -133,12 +133,13 @@ def _ranked_candidates(
 
 
 def _rank_candidates(
-    lexical: list[_Candidate], semantic: list[_Candidate], limit: int
+    lexical: list[_Candidate], semantic: list[_Candidate], limit: int,
+    *, distinct_sessions: bool = True,
 ) -> list[_Candidate]:
     result: list[_Candidate] = []
     seen_sessions: set[UUID] = set()
     for candidate in _ranked_candidates(lexical, semantic):
-        if candidate.session.id in seen_sessions:
+        if distinct_sessions and candidate.session.id in seen_sessions:
             continue
         seen_sessions.add(candidate.session.id)
         result.append(candidate)
@@ -352,6 +353,8 @@ class EpisodeRetrievalService:
         max_excerpt_characters: int = 6_000,
         anchor_only: bool = False,
         full_sessions_only: bool = False,
+        session_id: UUID | None = None,
+        distinct_sessions: bool = True,
     ) -> EpisodeRetrieval:
         cleaned_query = query.strip()
         if not cleaned_query:
@@ -370,10 +373,14 @@ class EpisodeRetrievalService:
             readable_by=readable_by,
             full_sessions_only=full_sessions_only,
         )
+        if session_id is not None:
+            filters.append(ChatSession.id == session_id)
         title_trust = _title_trust().label("title_trust")
-        tsquery = func.plainto_tsquery(
-            "simple", " ".join(memory_lexical_terms(cleaned_query))
+        tsquery = (
+            func.plainto_tsquery("simple", " ".join(memory_lexical_terms(cleaned_query)))
+            if distinct_sessions else func.websearch_to_tsquery("simple", cleaned_query)
         )
+        per_session_limit = 2 if distinct_sessions else limit
         lexical_rank = func.ts_rank_cd(MessageSearchChunk.search_vector, tsquery)
         lexical_candidates = (
             select(
@@ -404,7 +411,7 @@ class EpisodeRetrievalService:
                 )
                 .join(Message, Message.id == MessageSearchChunk.message_id)
                 .join(ChatSession, ChatSession.id == Message.session_id)
-                .where(lexical_candidates.c.session_position <= 2)
+                .where(lexical_candidates.c.session_position <= per_session_limit)
                 .order_by(
                     lexical_candidates.c.score.desc(),
                     Message.created_at.desc(),
@@ -464,7 +471,7 @@ class EpisodeRetrievalService:
                             )
                             .join(Message, Message.id == MessageSearchChunk.message_id)
                             .join(ChatSession, ChatSession.id == Message.session_id)
-                            .where(semantic_candidates.c.session_position <= 2)
+                            .where(semantic_candidates.c.session_position <= per_session_limit)
                             .order_by(
                                 semantic_candidates.c.distance,
                                 Message.created_at.desc(),
@@ -481,7 +488,7 @@ class EpisodeRetrievalService:
                 logger.warning("Semantic episode query failed; using lexical fallback")
                 semantic = []
 
-        anchors = _rank_candidates(lexical, semantic, limit)
+        anchors = _rank_candidates(lexical, semantic, limit, distinct_sessions=distinct_sessions)
         references = (
             [
                 EpisodeReference(

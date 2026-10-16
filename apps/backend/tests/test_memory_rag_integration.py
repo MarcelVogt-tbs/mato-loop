@@ -1,11 +1,15 @@
 import asyncio
+import json
 import os
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
+from tool_helpers import _context
 
 from mato_loop_backend.agent.projection import message_dict
 from mato_loop_backend.db.session import AsyncSessionFactory, engine
@@ -35,7 +39,10 @@ from mato_loop_backend.models import (
     Project,
     UserAccount,
 )
+from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import TrustLevel
+from mato_loop_backend.tools import context_search
+from mato_loop_backend.tools.catalog import tool_registry
 
 pytestmark = pytest.mark.skipif(
     os.getenv("MATO_LOOP_RAG_INTEGRATION") != "1",
@@ -225,6 +232,56 @@ async def test_episode_rag_is_immediate_without_embedding_or_dreaming() -> None:
         assert chunk.status == MemoryEmbeddingStatus.QUEUED.value
         assert result.references[0].session_id == prior_session.id
         assert marker in result.references[0].anchor_content
+        another = ChatSession(user_id=user.id, title="Other conversation")
+        db.add(another)
+        await db.flush()
+        detail = Message(session_id=prior_session.id, role="user", content=f"{marker}: http://192.0.2.73:5080")
+        distraction = Message(session_id=another.id, role="user", content=marker)
+        db.add_all([detail, distraction])
+        await db.flush()
+        for item in (detail, distraction):
+            await EpisodeIndexService.enqueue(db, item)
+        scoped = await EpisodeRetrievalService.retrieve(
+            db, owner_id=user.id, current_session_id=current_session.id, readable_by=TrustLevel.PUBLIC,
+            query=marker, limit=10, semantic_enabled=False, anchor_only=True,
+            session_id=prior_session.id, distinct_sessions=False,
+        )
+        assert {item.anchor_message_id for item in scoped.references} == {message.id, detail.id}
+        exact_ip = await EpisodeRetrievalService.retrieve(
+            db, owner_id=user.id, current_session_id=current_session.id, readable_by=TrustLevel.PUBLIC,
+            query="192.0.2.73", semantic_enabled=False, anchor_only=True, distinct_sessions=False,
+        )
+        assert [item.anchor_message_id for item in exact_ip.references] == [detail.id]
+        await db.rollback()
+
+
+async def test_context_search_finds_an_owned_title_without_a_message_match(tmp_path, monkeypatch) -> None:
+    call = ToolCall("search", "context_search", {"query": "Aurora", "scope": "sessions"})
+    context = _context(tmp_path, call)
+    monkeypatch.setattr(context_search.access, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr(context_search, "get_runtime_config", lambda: SimpleNamespace(embedding_enabled=False))
+    async with AsyncSessionFactory() as db:
+        owner = UserAccount(username=f"title-{uuid4().hex}", password_hash="test")
+        foreign = UserAccount(username=f"foreign-title-{uuid4().hex}", password_hash="test")
+        db.add_all([owner, foreign])
+        await db.flush()
+        context.db = db
+        context.session.user_id = owner.id
+        owned = ChatSession(user_id=owner.id, title="Project Aurora")
+        other = ChatSession(user_id=foreign.id, title="Project Aurora")
+        db.add_all([context.session, owned, other])
+        await db.flush()
+        message = Message(session_id=owned.id, role="user", content="The database endpoint is configured.")
+        db.add(message)
+        await db.flush()
+        await EpisodeIndexService.enqueue(db, message)
+
+        result = json.loads((await tool_registry.execute(call, context)).content)
+
+        assert result["sessions"] == [{
+            "sessionId": str(owned.id), "title": owned.title,
+            "sessionReadArguments": {"session_id": str(owned.id)},
+        }]
         await db.rollback()
 
 

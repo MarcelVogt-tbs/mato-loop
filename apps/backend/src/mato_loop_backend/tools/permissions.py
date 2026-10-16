@@ -8,6 +8,7 @@ from mato_loop_backend.execution import ShellInspectResult
 from mato_loop_backend.files.access import filesystem_permission
 from mato_loop_backend.permissions.policy import (
     PermissionDecision,
+    memory_read_permission,
     session_browse_permission,
     session_permission,
     session_search_permission,
@@ -72,6 +73,15 @@ async def builtin_permissions(arguments, context: ToolContext, name: str):
         return shell_command_permissions(client.agent_id, client.current_directory, arguments.command, inspection)
     if name == "session_search":
         return (session_search_permission(),)
+    if name == "context_search":
+        from mato_loop_backend.tools.context_search import requested_sources, source_available
+
+        settings = await profile_tool_settings(context)
+        return tuple(
+            memory_read_permission(context.session.user_id) if source == "memories" else session_search_permission()
+            for source in requested_sources(arguments)
+            if source_available(settings, source, memory_enabled=context.memory_read_enabled)
+        )
     if name == "session_browse":
         return (session_browse_permission(),)
     return ()
@@ -135,7 +145,7 @@ async def request_session_permissions(arguments: RequestSessionPermissionsArgume
 REQUEST_SESSION_PERMISSIONS = ToolDefinition(
     "request_session_permissions",
     "Prepare session permissions without execution. Use offered names and arguments. "
-    "Supports current-session/workspace files, shell, session read/search/browse and declared "
+    "Supports current-session/workspace files, shell, context search, session read/browse and declared "
     "integrations. No elevation, environment overrides, automation management, notify or silence. "
     "For directory read/write/delete, propose read/create_directory/delete_path at that directory. "
     "File scopes include descendants, never parents; normal shell scopes bind category/computer. "
