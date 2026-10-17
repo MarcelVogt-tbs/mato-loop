@@ -434,7 +434,7 @@ def _multipart_payload(value: str, model: type[BaseModel]) -> BaseModel:
 
 def _attachment_api_error(exc: AttachmentError) -> ApiError:
     status_code = 413 if exc.code in {
-        "attachment.sessionQuotaExceeded",
+        "attachment.userQuotaExceeded",
         "attachment.textTooLarge",
         "attachment.tooLarge",
     } else 400

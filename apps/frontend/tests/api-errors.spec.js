@@ -213,7 +213,13 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'file.omittedContent' } })).toBe(
       'Der Dateiinhalt fehlt in der Tool-Anfrage.'
     )
+    expect(apiErrorMessage({ error: { code: 'file.userQuotaExceeded' } })).toBe(
+      'Das Speicherlimit für Dateien dieses Benutzers ist erreicht.'
+    )
     expect(apiErrorMessage({ error: { code: 'file.sessionQuotaExceeded' } })).toBe(
+      'Das Speicherlimit für Dateien dieser Session ist erreicht.'
+    )
+    expect(apiErrorMessage({ error: { code: 'attachment.sessionQuotaExceeded' } })).toBe(
       'Das Speicherlimit für Dateien dieser Session ist erreicht.'
     )
     expect(apiErrorMessage({ error: { code: 'file.operationTooLarge' } })).toBe(

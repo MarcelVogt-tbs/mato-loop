@@ -2,9 +2,11 @@ import hashlib
 import json
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
+from threading import Barrier
 from uuid import UUID, uuid4
 
 import pytest
@@ -23,8 +25,9 @@ from mato_loop_backend.files.storage import SessionStorage
 def make_service(tmp_path: Path) -> tuple[RootFileService, Path]:
     storage = SessionStorage(tmp_path / "sessions")
     session_id = uuid4()
-    root = storage.provision(session_id)
-    return RootFileService(session_id, session_storage=storage), root
+    user_id = uuid4()
+    root = storage.provision(session_id, user_id=user_id)
+    return RootFileService(session_id, session_storage=storage, user_id=user_id), root
 
 
 def revision_preconditions(service: RootFileService, path: str) -> dict:
@@ -457,10 +460,10 @@ def test_revision_limit_and_quota_fail_without_partial_publication(tmp_path: Pat
         )
     assert too_large.value.code == "file.tooLarge"
 
-    service.SESSION_QUOTA_BYTES = service.session_usage()
+    service.user_quota_bytes = service.user_usage()
     with pytest.raises(RootFileError) as quota:
         service.write_file(FileRoot.SESSION, "new.txt", "x")
-    assert quota.value.code == "file.sessionQuotaExceeded"
+    assert quota.value.code == "file.userQuotaExceeded"
     assert target.read_bytes() == b"old"
     assert not (root / "files" / "new.txt").exists()
     assert not list((root / "files").glob(".*.tmp"))
@@ -507,6 +510,7 @@ def run_service(service: RootFileService, run_id: UUID) -> RootFileService:
     return RootFileService(
         service.session_id, project_id=service.project_id, run_id=run_id,
         session_storage=service.session_storage,
+        user_id=service.user_id, user_quota_bytes=service.user_quota_bytes,
     )
 
 
@@ -666,13 +670,13 @@ def test_first_run_edit_preserves_unindexed_baseline_and_reserves_quota(tmp_path
     target = root / "files" / "manual.txt"
     target.write_bytes(b"original" * 1000)
     working = run_service(public, uuid4())
-    working.SESSION_QUOTA_BYTES = 17000  # Fits live + final, but not the baseline too.
+    working.user_quota_bytes = 17000  # Fits live + final, but not the baseline too.
     with pytest.raises(RootFileError) as quota:
         working.upsert_text_file(FileRoot.SESSION, "manual.txt", "edited" * 1000)
-    assert quota.value.code == "file.sessionQuotaExceeded"
+    assert quota.value.code == "file.userQuotaExceeded"
     assert target.read_bytes() == b"original" * 1000
     assert list((root / "revisions").iterdir()) == []
-    working.SESSION_QUOTA_BYTES = RootFileService.SESSION_QUOTA_BYTES
+    working.user_quota_bytes = None
     working.upsert_text_file(FileRoot.SESSION, "manual.txt", "edited" * 1000)
     original = public.list_revisions("manual.txt")[0]
     assert original.revision == 1
@@ -756,12 +760,53 @@ def test_quota_reserves_final_snapshot_against_other_writers(tmp_path: Path) -> 
     working = run_service(published, uuid4())
     working.write_file(FileRoot.SESSION, "file.txt", "x" * 2000)
     reserve = working._history_for_path("file.txt")[1]["run"]["reserveBytes"]
-    published.SESSION_QUOTA_BYTES = published.session_usage() + reserve
+    sibling_id = uuid4()
+    published.session_storage.provision(sibling_id, uuid4(), user_id=published.user_id)
+    sibling = RootFileService(
+        sibling_id, session_storage=published.session_storage,
+        project_id=published.session_storage.session_project_id(sibling_id),
+        user_id=published.user_id, user_quota_bytes=published.user_usage() + reserve,
+    )
     with pytest.raises(RootFileError) as quota:
-        published.write_file(FileRoot.SESSION, "other.txt", "x")
-    assert quota.value.code == "file.sessionQuotaExceeded"
+        sibling.write_file(FileRoot.SESSION, "other.txt", "x")
+    assert quota.value.code == "file.userQuotaExceeded"
     assert published.finalize_run(working.run_id)[0].revision == 1
-    assert published.session_usage() <= published.SESSION_QUOTA_BYTES
+    assert published.user_usage() <= sibling.user_quota_bytes
+
+
+def test_parallel_sessions_cannot_overdraw_the_user_quota(tmp_path: Path) -> None:
+    first, _ = make_service(tmp_path)
+    second_id = uuid4()
+    first.session_storage.provision(second_id, user_id=first.user_id)
+    first.user_quota_bytes = 25_000
+    second = RootFileService(
+        second_id, session_storage=SessionStorage(first.session_storage.sessions_dir),
+        user_id=first.user_id, user_quota_bytes=first.user_quota_bytes,
+    )
+    ready = Barrier(2)
+
+    def write(service):
+        ready.wait(timeout=5)
+        try:
+            service.write_file(FileRoot.SESSION, "file.txt", "x" * 8_000)
+            return "ok"
+        except RootFileError as exc:
+            return exc.code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(write, [first, second]))
+    assert sorted(results) == ["file.userQuotaExceeded", "ok"]
+
+
+def test_lowered_user_quota_still_allows_reading_and_deletion(tmp_path: Path) -> None:
+    service, _ = make_service(tmp_path)
+    service.write_file(FileRoot.SESSION, "file.txt", "retained")
+    service.user_quota_bytes = 1
+    assert service.read_bytes(FileRoot.SESSION, "file.txt", limit=100) == b"retained"
+    with pytest.raises(RootFileError, match="User storage limit"):
+        service.write_file(FileRoot.SESSION, "new.txt", "x")
+    service.delete_path(FileRoot.SESSION, "file.txt", recursive=False)
+    assert service.user_usage() == 0
 
 
 def test_manual_host_writes_remain_live_and_are_not_overwritten_at_finalization(tmp_path: Path) -> None:
@@ -783,11 +828,11 @@ def test_run_quota_and_failed_index_write_keep_previous_state(tmp_path: Path, mo
     working = run_service(published, uuid4())
     working.write_file(FileRoot.SESSION, "file.txt", "retained")
     draft = working.working_revision("file.txt")
-    working.SESSION_QUOTA_BYTES = working.session_usage()
+    working.user_quota_bytes = working.user_usage()
     with pytest.raises(RootFileError) as quota:
         working.replace_text_file(FileRoot.SESSION, "file.txt", "x" * 1000, draft.sha256)
-    assert quota.value.code == "file.sessionQuotaExceeded"
-    working.SESSION_QUOTA_BYTES = RootFileService.SESSION_QUOTA_BYTES
+    assert quota.value.code == "file.userQuotaExceeded"
+    working.user_quota_bytes = None
 
     def interrupted(path, data):
         path.write_bytes(data[:20])
@@ -1200,12 +1245,12 @@ def test_verified_backfill_revision_pairs_are_idempotent_and_quota_checked(tmp_p
         service.write_file(FileRoot.SESSION, path, "one")
         service.upsert_text_file(FileRoot.SESSION, path, "two")
     source, child = (service.working_revision(path).file_id for path in ("source", "child"))
-    service.SESSION_QUOTA_BYTES = service.session_usage()
+    service.user_quota_bytes = service.user_usage()
     with pytest.raises(RootFileError) as quota:
         service.register_derived_file(source, child, source_revision=1, derived_revision=1)
-    assert quota.value.code == "file.sessionQuotaExceeded"
+    assert quota.value.code == "file.userQuotaExceeded"
     assert service._derived_links() == {}
-    service.SESSION_QUOTA_BYTES = RootFileService.SESSION_QUOTA_BYTES
+    service.user_quota_bytes = None
     for _ in range(2):
         service.register_derived_file(source, child, source_revision=1, derived_revision=1)
     assert service._derived_links()[str(child)]["bindings"] == [{"source": 1, "derived": 1}]

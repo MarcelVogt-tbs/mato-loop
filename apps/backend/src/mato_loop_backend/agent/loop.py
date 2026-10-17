@@ -308,7 +308,8 @@ async def execute_loop_body(
             chat_session.id,
             run_id=run.id,
             project_id=chat_session.project_id,
-            session_quota_bytes=instance_limits.session_quota_bytes,
+            user_id=chat_session.user_id,
+            user_quota_bytes=instance_limits.user_quota_bytes,
             max_editable_text_bytes=instance_limits.max_editable_text_bytes,
         )
         memory_turn = await prepare_memory_context(

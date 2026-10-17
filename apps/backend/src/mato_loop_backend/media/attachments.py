@@ -54,7 +54,6 @@ ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES = 256 * 1024 * 1024
 MAX_IMAGE_ATTACHMENT_BYTES = MAX_FILE_ATTACHMENT_BYTES
 MAX_AUDIO_ATTACHMENT_BYTES = MAX_FILE_ATTACHMENT_BYTES
 MAX_ATTACHMENTS_PER_MESSAGE = 8
-SESSION_ATTACHMENT_QUOTA_BYTES = 5 * 1024 * 1024 * 1024
 
 _FORMAT_MIME_TYPES = {
     "PNG": "image/png",
@@ -494,9 +493,6 @@ class AttachmentService:
                 project_id=project_id,
                 session_storage=self.sessions,
                 run_id=run_id,
-                session_quota_bytes=(
-                    self.settings.session_quota_bytes if self.settings else None
-                ),
             )
             if UUID(service.root_identity(FileRoot.SESSION)) != file_root_id:
                 raise RootFileError("file.rootChanged", "File root changed")
@@ -622,13 +618,15 @@ class AttachmentService:
             project_id=root_session.project_id,
             session_storage=self.sessions,
             run_id=self.run_id,
+            user_id=root_session.user_id,
+            user_quota_bytes=self.settings.user_quota_bytes if self.settings else None,
         )
         try:
             revision = await asyncio.to_thread(root_files.working_revision, file_path) if file_revision is None else await asyncio.to_thread(
                 root_files.file_revision, file_id, file_revision
             )
             if file_revision is None:
-                with root_files.open_working_file(file_id, expected_sha256=revision.sha256):
+                with await asyncio.to_thread(root_files.open_working_file, file_id, expected_sha256=revision.sha256):
                     pass
         except RootFileError as exc:
             raise AttachmentError("attachment.notFound") from exc
@@ -640,9 +638,9 @@ class AttachmentService:
         if revision.size_bytes <= image_limit:
             try:
                 handle = (
-                    root_files.open_working_file(file_id, expected_sha256=revision.sha256)
+                    await asyncio.to_thread(root_files.open_working_file, file_id, expected_sha256=revision.sha256)
                     if file_revision is None
-                    else root_files.open_revision_by_id(file_id, file_revision)
+                    else await asyncio.to_thread(root_files.open_revision_by_id, file_id, file_revision)
                 )
                 with handle:
                     detected_mime = image_mime_type(handle.read(12))
@@ -708,11 +706,6 @@ class AttachmentService:
             processing_limits(self.settings)
             if self.settings is not None and purpose == "attachment"
             else None
-        )
-        session_quota_bytes = (
-            self.settings.session_quota_bytes
-            if self.settings is not None
-            else SESSION_ATTACHMENT_QUOTA_BYTES
         )
         if len(data) > max_bytes:
             raise AttachmentError("attachment.tooLarge")
@@ -793,16 +786,10 @@ class AttachmentService:
             message.session_id,
             project_id=locked_session.project_id,
             session_storage=self.sessions,
-            session_quota_bytes=session_quota_bytes,
+            user_id=locked_session.user_id,
+            user_quota_bytes=self.settings.user_quota_bytes if self.settings else None,
             run_id=self.run_id,
         )
-        try:
-            used_bytes = await asyncio.to_thread(root_files.session_usage)
-        except RootFileError as exc:
-            raise AttachmentError("attachment.storageInvalid") from exc
-        companion_bytes = 0 if kind == "text" else sum(map(len, derived_files.values()))
-        if int(used_bytes or 0) + 2 * (len(data) + companion_bytes) > session_quota_bytes:
-            raise AttachmentError("attachment.sessionQuotaExceeded")
         if position is None:
             maximum_position = await db.scalar(
                 select(func.max(MessageAttachment.position)).where(
@@ -882,8 +869,8 @@ class AttachmentService:
                 await asyncio.to_thread(self._discard_write, root_files, written)
             raise
         except RootFileError as exc:
-            if exc.code == "file.sessionQuotaExceeded":
-                raise AttachmentError("attachment.sessionQuotaExceeded") from exc
+            if exc.code == "file.userQuotaExceeded":
+                raise AttachmentError("attachment.userQuotaExceeded") from exc
             raise AttachmentError("attachment.storageInvalid") from exc
 
         root_id = UUID(root_files.root_identity(FileRoot.SESSION))
@@ -1088,7 +1075,8 @@ class AttachmentService:
     async def finalize_run(self, db: AsyncSession, session: ChatSession, run_id: UUID) -> None:
         root_files = RootFileService(
             session.id, project_id=session.project_id, session_storage=self.sessions,
-            session_quota_bytes=self.settings.session_quota_bytes if self.settings else None,
+            user_id=session.user_id,
+            user_quota_bytes=self.settings.user_quota_bytes if self.settings else None,
         )
         revisions = {
             item.file_id: item for item in await asyncio.to_thread(root_files.finalize_run, run_id)
@@ -1141,7 +1129,7 @@ class AttachmentService:
                     if item["file_revision"] is None:
                         continue
                     try:
-                        revision = root_files.file_revision(file_id, item["file_revision"])
+                        revision = await asyncio.to_thread(root_files.file_revision, file_id, item["file_revision"])
                     except RootFileError:
                         continue
                 if revision.revision is None or revision.file_id != file_id or revision.size_bytes <= 0:
@@ -1208,7 +1196,7 @@ class AttachmentService:
                             current = next(
                                 (item for item in revisions.values() if item.path == action["path"]),
                                 None,
-                            ) or root_files.working_revision(action["path"])
+                            ) or await asyncio.to_thread(root_files.working_revision, action["path"])
                         except RootFileError:
                             continue
                         if current.revision is None or current.file_id in seen_files:
@@ -1228,7 +1216,8 @@ class AttachmentService:
     async def verified_path(
         self, attachment: MessageAttachment, session_id: UUID, *, current_only: bool = False
     ) -> Path:
-        path = self.revision_path(
+        path = await asyncio.to_thread(
+            self.revision_path,
             session_id,
             attachment.file_root_id,
             attachment.file_id,

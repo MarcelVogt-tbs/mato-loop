@@ -42,6 +42,8 @@ def test_unknown_error_code_and_provider_code_fall_back_without_raw_text() -> No
 
 
 def test_chat_history_errors_have_controlled_fallbacks() -> None:
+    assert describe_error("file.sessionQuotaExceeded").message == "The session storage limit has been reached."
+    assert describe_error("attachment.sessionQuotaExceeded").message == "The session storage limit has been reached."
     assert describe_error("session.messageNotFound").message == "The chat message was not found."
     assert (
         describe_error("session.retryUnavailable").message

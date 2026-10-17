@@ -6,7 +6,9 @@ import json
 import os
 import shutil
 import stat
+import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from uuid import UUID, uuid4
@@ -46,6 +48,10 @@ class SessionMoveReceipt:
 class SessionStorage:
     """Manage the filesystem lifecycle of session directories."""
 
+    # shortcut: quota coordination is process-local; revisit before adding backend workers.
+    lock = threading.RLock()
+    _owners_by_root: dict[tuple[Path, Path], dict[UUID, UUID]] = {}
+
     def __init__(
         self,
         sessions_dir: Path | None = None,
@@ -59,6 +65,7 @@ class SessionStorage:
         ).absolute()
         self.staging_dir = self.sessions_dir / ".staging"
         self.trash_dir = self.sessions_dir / ".trash"
+        self._owners = self._owners_by_root.setdefault((self.sessions_dir, self.projects_dir), {})
 
     @staticmethod
     def normalize_session_id(session_id: UUID | str) -> UUID:
@@ -110,6 +117,34 @@ class SessionStorage:
         self._prepare_directory(self.projects_dir)
         self._prepare_directory(self.staging_dir)
         self._prepare_directory(self.trash_dir)
+
+    def register_owner(self, session_id: UUID, user_id: UUID) -> None:
+        if not isinstance(user_id, UUID):
+            raise TypeError("user_id must be supplied by the host as a UUID")
+        with self.lock:
+            self._owners[self.normalize_session_id(session_id)] = user_id
+
+    def register_owners(self, owners: list[tuple[UUID, UUID]]) -> None:
+        with self.lock:
+            self._owners.clear()
+            self._owners.update(owners)
+
+    def forget_sessions(self, session_ids: Iterable[UUID]) -> None:
+        with self.lock:
+            for session_id in session_ids:
+                self._owners.pop(session_id, None)
+
+    def user_session_roots(self, user_id: UUID) -> tuple[Path, ...]:
+        roots = []
+        with self.lock:
+            for session_id, owner_id in self._owners.items():
+                if owner_id != user_id:
+                    continue
+                path = self.session_path(session_id)
+                if path.exists() or path.is_symlink():
+                    self._validate_tree(path)
+                    roots.append(path)
+        return tuple(roots)
 
     @staticmethod
     def _validate_directory(directory: Path) -> None:
@@ -262,9 +297,12 @@ class SessionStorage:
             directory.chmod(0o700)
 
     def provision(
-        self, session_id: UUID | str, project_id: UUID | str | None = None
+        self, session_id: UUID | str, project_id: UUID | str | None = None,
+        *, user_id: UUID | None = None,
     ) -> Path:
         normalized = self.normalize_session_id(session_id)
+        if user_id is not None:
+            self.register_owner(normalized, user_id)
         self.prepare()
         if project_id is not None:
             self._project_sessions_dir(project_id, prepare=True)
@@ -339,11 +377,13 @@ class SessionStorage:
         session_id: UUID | str,
         project_id: UUID | str | None | object = _AUTO_LOCATION,
     ) -> bool:
-        target = self.session_path(session_id, project_id=project_id)
-        if not target.exists() and not target.is_symlink():
-            return False
-        self._remove_path(target)
-        return True
+        with self.lock:
+            target = self.session_path(session_id, project_id=project_id)
+            existed = target.exists() or target.is_symlink()
+            if existed:
+                self._remove_path(target)
+            self._owners.pop(self.normalize_session_id(session_id), None)
+            return existed
 
     def trash_session(
         self,
@@ -357,7 +397,8 @@ class SessionStorage:
             return None
         self._validate_tree(target)
         trashed = self.trash_dir / f"{normalized}.{uuid4().hex}"
-        target.rename(trashed)
+        with self.lock:
+            target.rename(trashed)
         return trashed
 
     def restore_session(
@@ -378,7 +419,8 @@ class SessionStorage:
             raise SessionStorageError(
                 "sessionStorage.sessionAlreadyExists", "Session storage already exists"
             )
-        trashed.rename(target)
+        with self.lock:
+            trashed.rename(target)
         return target
 
     @staticmethod
@@ -408,105 +450,6 @@ class SessionStorage:
         return tuple(descriptors)
 
     @staticmethod
-    def _managed_entries(source: Path, target: Path) -> tuple[list[str], list[str]]:
-        files: list[str] = []
-        created_directories: list[str] = []
-        pending = [(source, target, "")]
-        while pending:
-            source_directory, target_directory, prefix = pending.pop()
-            for entry in source_directory.iterdir():
-                relative = f"{prefix}/{entry.name}" if prefix else entry.name
-                metadata = entry.lstat()
-                destination = target_directory / entry.name
-                if stat.S_ISLNK(metadata.st_mode):
-                    raise SessionStorageError(
-                        "file.symlinkForbidden", "Symlinks are not followed"
-                    )
-                if stat.S_ISREG(metadata.st_mode):
-                    if destination.exists() or destination.is_symlink():
-                        raise SessionStorageError(
-                            "file.pathAlreadyExists", "Destination path already exists"
-                        )
-                    files.append(relative)
-                    continue
-                if not stat.S_ISDIR(metadata.st_mode):
-                    raise SessionStorageError(
-                        "file.unsupportedType", "Unsupported file type"
-                    )
-                if destination.exists() or destination.is_symlink():
-                    destination_metadata = destination.lstat()
-                    if stat.S_ISLNK(destination_metadata.st_mode) or not stat.S_ISDIR(
-                        destination_metadata.st_mode
-                    ):
-                        raise SessionStorageError(
-                            "file.pathAlreadyExists", "Destination path already exists"
-                        )
-                else:
-                    created_directories.append(relative)
-                pending.append((entry, destination, relative))
-        return sorted(files), sorted(created_directories)
-
-    @staticmethod
-    def _tree_size(root: Path) -> int:
-        size = 0
-        pending = [root]
-        while pending:
-            path = pending.pop()
-            metadata = path.lstat()
-            if stat.S_ISLNK(metadata.st_mode):
-                raise SessionStorageError(
-                    "file.symlinkForbidden", "Symlinks are not followed"
-                )
-            if stat.S_ISREG(metadata.st_mode):
-                size += metadata.st_size
-            elif stat.S_ISDIR(metadata.st_mode):
-                pending.extend(path.iterdir())
-            else:
-                raise SessionStorageError(
-                    "file.unsupportedType", "Unsupported file type"
-                )
-        return size
-
-    @staticmethod
-    def _copy_file_no_replace(source: Path, target: Path) -> None:
-        created_identity: tuple[int, int] | None = None
-        try:
-            with source.open("rb") as source_file, target.open("xb") as target_file:
-                metadata = os.fstat(target_file.fileno())
-                created_identity = (metadata.st_dev, metadata.st_ino)
-                shutil.copyfileobj(source_file, target_file)
-                target_file.flush()
-                os.fsync(target_file.fileno())
-            shutil.copystat(source, target, follow_symlinks=False)
-        except BaseException:
-            if created_identity is not None:
-                try:
-                    metadata = target.lstat()
-                    if (metadata.st_dev, metadata.st_ino) == created_identity:
-                        target.unlink()
-                except FileNotFoundError:
-                    pass
-            raise
-
-    @staticmethod
-    def _write_move_journal(journal: Path, payload: dict[str, object]) -> None:
-        try:
-            journal.mkdir(mode=0o700)
-            manifest = journal / "move.json"
-            staged = journal / "move.json.tmp"
-            with staged.open("w", encoding="utf-8") as target:
-                target.write(json.dumps(payload, separators=(",", ":")))
-                target.flush()
-                os.fsync(target.fileno())
-            staged.replace(manifest)
-            SessionStorage._fsync_directory(journal)
-            SessionStorage._fsync_directory(journal.parent)
-        except BaseException:
-            SessionStorage._remove_path(journal)
-            SessionStorage._fsync_directory(journal.parent)
-            raise
-
-    @staticmethod
     def _fsync_directory(directory: Path) -> None:
         descriptor = os.open(
             directory,
@@ -516,25 +459,6 @@ class SessionStorage:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
-
-    @classmethod
-    def _fsync_imported_tree(
-        cls,
-        root: Path,
-        entries: list[str],
-        created_directories: list[str],
-    ) -> None:
-        directories = {root}
-        for relative in entries:
-            current = (root / relative).parent
-            while current != root:
-                directories.add(current)
-                current = current.parent
-        directories.update(root / relative for relative in created_directories)
-        for directory in sorted(
-            directories, key=lambda item: (len(item.parts), str(item)), reverse=True
-        ):
-            cls._fsync_directory(directory)
 
     @classmethod
     def _fsync_existing_directories(cls, directories: set[Path]) -> None:
@@ -582,93 +506,11 @@ class SessionStorage:
             raise SessionStorageError("sessionStorage.invalidMoveJournal", "Invalid move journal")
         return value
 
-    def _stage_standalone_import(
-        self,
-        session_id: UUID,
-        target_project_id: UUID,
-        *,
-        quota_bytes: int | None,
-    ) -> SessionMoveReceipt:
-        source = self._exact_path(session_id, None)
-        self._validate_tree(source)
-        self._project_sessions_dir(target_project_id, prepare=True)
-        project_root = self.logical_root_path(session_id, target_project_id, require_exists=True)
-        target = self._exact_path(session_id, target_project_id)
-        descriptors = self._acquire_locks(source, project_root)
-        receipt: SessionMoveReceipt | None = None
-        try:
-            if self.pending_run_ids(session_id):
-                raise SessionStorageError("file.changed", "Session has pending run files")
-            if target.exists() or target.is_symlink():
-                raise SessionStorageError(
-                    "sessionStorage.sessionAlreadyExists", "Session storage already exists"
-                )
-            files, file_directories = self._managed_entries(
-                source / "files", project_root / "files"
-            )
-            revisions, revision_directories = self._managed_entries(
-                source / "revisions", project_root / "revisions"
-            )
-            if quota_bytes is not None:
-                used = self._tree_size(project_root / "files") + self._tree_size(
-                    project_root / "revisions"
-                )
-                imported = self._tree_size(source / "files") + self._tree_size(
-                    source / "revisions"
-                )
-                if used + imported > quota_bytes:
-                    raise SessionStorageError(
-                        "file.sessionQuotaExceeded", "Session storage limit has been reached"
-                    )
-            journal = self.staging_dir / f"move-{session_id}.{uuid4().hex}"
-            payload: dict[str, object] = {
-                "sessionId": str(session_id),
-                "sourceProjectId": None,
-                "targetProjectId": str(target_project_id),
-                "files": files,
-                "fileDirectories": file_directories,
-                "revisions": revisions,
-                "revisionDirectories": revision_directories,
-            }
-            self._write_move_journal(journal, payload)
-            receipt = SessionMoveReceipt(
-                session_id=session_id,
-                source_project_id=None,
-                target_project_id=target_project_id,
-                target=target,
-                journal=journal,
-                lock_descriptors=descriptors,
-            )
-            for root_name, directories, entries in (
-                ("files", file_directories, files),
-                ("revisions", revision_directories, revisions),
-            ):
-                source_root = source / root_name
-                target_root = project_root / root_name
-                for relative in sorted(directories, key=lambda item: (item.count("/"), item)):
-                    (target_root / relative).mkdir(mode=0o700)
-                for relative in entries:
-                    self._copy_file_no_replace(source_root / relative, target_root / relative)
-                self._fsync_imported_tree(target_root, entries, directories)
-            self.provision(session_id, target_project_id)
-            self._fsync_directory(target)
-            self._fsync_directory(target.parent)
-            self._fsync_directory(source)
-            return receipt
-        except BaseException:
-            if receipt is not None:
-                self.rollback_session_move(receipt)
-            else:
-                self._release_locks(descriptors)
-            raise
-
     def stage_session_move(
         self,
         session_id: UUID | str,
         source_project_id: UUID | str | None,
         target_project_id: UUID | str | None,
-        *,
-        quota_bytes: int | None = None,
     ) -> SessionMoveReceipt:
         normalized = self.normalize_session_id(session_id)
         normalized_source = (
@@ -694,8 +536,6 @@ class SessionStorage:
                 changed=False,
             )
         self._validate_tree(source)
-        if self.pending_run_ids(normalized, normalized_source):
-            raise SessionStorageError("file.changed", "Session has pending run files")
         if target.exists() or target.is_symlink():
             raise SessionStorageError(
                 "sessionStorage.sessionAlreadyExists", "Session storage already exists"
@@ -704,15 +544,18 @@ class SessionStorage:
             self._prepare_directory(self.sessions_dir)
         else:
             self._project_sessions_dir(normalized_target, prepare=True)
-        try:
-            source.rename(target)
-            self._fsync_directory(target)
-            self._fsync_directory(target.parent)
-            self._fsync_directory(source.parent)
-        except BaseException:
-            if target.exists() and not source.exists():
-                target.rename(source)
-            raise
+        with self.lock:
+            if self.pending_run_ids(normalized, normalized_source):
+                raise SessionStorageError("file.changed", "Session has pending run files")
+            try:
+                source.rename(target)
+                self._fsync_directory(target)
+                self._fsync_directory(target.parent)
+                self._fsync_directory(source.parent)
+            except BaseException:
+                if target.exists() and not source.exists():
+                    target.rename(source)
+                raise
         return SessionMoveReceipt(
             normalized,
             normalized_source,
@@ -740,10 +583,11 @@ class SessionStorage:
                 raise SessionStorageError(
                     "sessionStorage.sessionAlreadyExists", "Session storage already exists"
                 )
-            receipt.target.rename(source)
-            self._fsync_directory(source)
-            self._fsync_directory(source.parent)
-            self._fsync_directory(receipt.target.parent)
+            with self.lock:
+                receipt.target.rename(source)
+                self._fsync_directory(source)
+                self._fsync_directory(source.parent)
+                self._fsync_directory(receipt.target.parent)
             self._release_locks(receipt.lock_descriptors)
             return source
         try:
@@ -819,14 +663,11 @@ class SessionStorage:
         session_id: UUID | str,
         source_project_id: UUID | str | None,
         target_project_id: UUID | str | None,
-        *,
-        quota_bytes: int | None = None,
     ) -> Path:
         receipt = self.stage_session_move(
             session_id,
             source_project_id,
             target_project_id,
-            quota_bytes=quota_bytes,
         )
         return self.finalize_session_move(receipt)
 
@@ -869,7 +710,8 @@ class SessionStorage:
                     ) from exc
                 self._validate_tree(session)
         trashed = self.trash_dir / f"project-{normalized}.{uuid4().hex}"
-        project_root.rename(trashed)
+        with self.lock:
+            project_root.rename(trashed)
         return trashed
 
     def restore_project(self, project_id: UUID | str, trashed: Path) -> Path:
@@ -889,7 +731,8 @@ class SessionStorage:
             raise SessionStorageError(
                 "sessionStorage.projectAlreadyExists", "Project storage already exists"
             )
-        trashed.rename(target)
+        with self.lock:
+            trashed.rename(target)
         return target
 
     def purge_trashed(self, trashed: Path | None) -> bool:

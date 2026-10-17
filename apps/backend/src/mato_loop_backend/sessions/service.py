@@ -1070,7 +1070,7 @@ async def create_session(
     await db.flush()
     session_storage = storage_factory()
     try:
-        await asyncio.to_thread(session_storage.provision, item_id, item_project_id)
+        await asyncio.to_thread(session_storage.provision, item_id, item_project_id, user_id=user.id)
         if content is None:
             await ChatHistoryService._commit(db)
         else:
@@ -1629,7 +1629,6 @@ async def update_session(
                     item.id,
                     source_project_id,
                     target_project_id,
-                    quota_bytes=None,
                 )
             )
             try:
@@ -1663,7 +1662,7 @@ async def update_session(
         await restore_storage()
         if exc.code == "file.pathAlreadyExists":
             raise SessionServiceError(409, exc.code) from exc
-        if exc.code == "file.sessionQuotaExceeded":
+        if exc.code == "file.userQuotaExceeded":
             raise SessionServiceError(507, exc.code) from exc
         raise SessionServiceError(500, "session.storageUnavailable") from exc
     except OSError as exc:
@@ -1989,6 +1988,7 @@ async def delete_session(
                 logger.exception("Session storage could not be restored after database failure")
 
     async def purge_tree() -> None:
+        await asyncio.to_thread(session_storage.forget_sessions, storage_session_ids)
         for trashed in trashed_trees:
             try:
                 await asyncio.to_thread(session_storage.purge_trashed, trashed)

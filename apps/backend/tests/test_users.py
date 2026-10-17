@@ -250,6 +250,7 @@ async def test_delete_removes_database_and_storage(monkeypatch, tmp_path: Path) 
     db.commit.assert_awaited_once()
     quiesce.assert_awaited_once_with(db, target.id)
     session_storage.purge_trashed.assert_called_once()
+    session_storage.forget_sessions.assert_called_once_with([session_result.all.return_value[0][0]])
 
 
 async def test_delete_restores_earlier_storage_when_later_trash_fails(

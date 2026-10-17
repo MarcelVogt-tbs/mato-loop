@@ -38,7 +38,8 @@ def session_files(context: ToolContext) -> RootFileService:
     return RootFileService(
         context.root_files.session_id, project_id=context.root_files.project_id,
         session_storage=context.root_files.session_storage,
-        session_quota_bytes=context.root_files.SESSION_QUOTA_BYTES,
+        user_id=context.root_files.user_id,
+        user_quota_bytes=context.root_files.user_quota_bytes,
         max_editable_text_bytes=context.root_files.max_editable_text_bytes,
     )
 

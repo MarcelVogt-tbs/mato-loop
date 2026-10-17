@@ -16,7 +16,6 @@ from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.media.attachments import (
     MAX_FILE_ATTACHMENT_BYTES,
     MAX_IMAGE_ATTACHMENT_BYTES,
-    SESSION_ATTACHMENT_QUOTA_BYTES,
     AttachmentError,
     AttachmentService,
     classify_attachment,
@@ -25,6 +24,7 @@ from mato_loop_backend.media.attachments import (
 )
 from mato_loop_backend.media.video_processing import MediaInfo
 from mato_loop_backend.models import ChatSession, Message
+from mato_loop_backend.settings import InstanceLimits
 
 
 def image_bytes(image_format: str) -> bytes:
@@ -588,24 +588,28 @@ async def test_audio_read_rejects_integrity_mismatch(tmp_path: Path) -> None:
         await service.read_audio(attachment, session_id)
 
 
-async def test_service_enforces_session_quota_before_writing(tmp_path: Path) -> None:
+async def test_service_enforces_user_quota_before_writing(tmp_path: Path) -> None:
     session_id = uuid4()
     sessions = provisioned_storage(tmp_path, session_id)
     message = Message(id=uuid4(), session_id=session_id, role="assistant", content="Bild")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [chat_session(session_id)]
+    session = chat_session(session_id)
+    sessions.register_owner(session_id, session.user_id)
+    db.scalar.side_effect = [session]
     quota_directory = sessions.session_path(session_id) / "files" / str(uuid4())
     quota_directory.mkdir()
     quota_file = quota_directory / "quota.bin"
     with quota_file.open("wb") as handle:
-        handle.truncate(SESSION_ATTACHMENT_QUOTA_BYTES)
+        handle.truncate(1024 * 1024)
 
-    with pytest.raises(AttachmentError, match="attachment.sessionQuotaExceeded"):
-        await AttachmentService(sessions).create_image(db, message, image_bytes("PNG"), "image/png")
+    with pytest.raises(AttachmentError, match="attachment.userQuotaExceeded"):
+        await AttachmentService(sessions, settings=InstanceLimits(user_quota_mib=1)).create_image(
+            db, message, image_bytes("PNG"), "image/png", position=0,
+        )
     assert list((sessions.session_path(session_id) / "files").iterdir()) == [quota_directory]
 
 
-async def test_project_attachment_quota_is_per_session(tmp_path: Path) -> None:
+async def test_attachments_have_no_implicit_session_quota(tmp_path: Path) -> None:
     session_id = uuid4()
     project_id = uuid4()
     sessions = SessionStorage(tmp_path / "sessions")
@@ -617,7 +621,7 @@ async def test_project_attachment_quota_is_per_session(tmp_path: Path) -> None:
     db.scalar.side_effect = [chat_session(session_id, project_id=project_id), None]
     sibling_file = sessions.logical_root_path(sibling_id, project_id) / "files" / "large.bin"
     with sibling_file.open("wb") as handle:
-        handle.truncate(SESSION_ATTACHMENT_QUOTA_BYTES)
+        handle.truncate(6 * 1024 ** 3)
 
     attachment = await AttachmentService(sessions).create_image(
         db, message, image_bytes("PNG"), "image/png"

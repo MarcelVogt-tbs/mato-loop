@@ -1165,7 +1165,7 @@ class InstanceLimits(SettingsDocument):
     max_upload_mib: int = Field(default=64, ge=1, le=256)
     max_attachments_per_message: int = Field(default=8, ge=1, le=16)
     max_message_upload_mib: int = Field(default=512, ge=1, le=512)
-    session_quota_mib: int = Field(default=5_120, ge=1, le=102_400)
+    user_quota_mib: int | None = Field(default=None, ge=1, le=102_400)
     max_image_preview_mib: int = Field(default=5, ge=1, le=64)
     max_editable_text_mib: int = Field(default=10, ge=1, le=16)
     max_audio_duration_seconds: int = Field(default=3_600, ge=1, le=3_600)
@@ -1180,12 +1180,17 @@ class InstanceLimits(SettingsDocument):
     max_archive_entry_mib: int = Field(default=64, ge=1, le=256)
     max_archive_compression_ratio: int = Field(default=200, ge=1, le=500)
 
+    @model_validator(mode="before")
+    @classmethod
+    def remove_session_quota(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        return {key: item for key, item in value.items() if key not in {"session_quota_mib", "sessionQuotaMib"}}
+
     @model_validator(mode="after")
     def validate_related_limits(self) -> Self:
         if self.max_upload_mib > self.max_message_upload_mib:
             raise ValueError("max_upload_mib must not exceed max_message_upload_mib")
-        if self.max_upload_mib > self.session_quota_mib:
-            raise ValueError("max_upload_mib must not exceed session_quota_mib")
         if self.max_archive_entry_mib > self.max_archive_uncompressed_mib:
             raise ValueError(
                 "max_archive_entry_mib must not exceed max_archive_uncompressed_mib"
@@ -1205,8 +1210,8 @@ class InstanceLimits(SettingsDocument):
         return self._mib(self.max_message_upload_mib)
 
     @property
-    def session_quota_bytes(self) -> int:
-        return self._mib(self.session_quota_mib)
+    def user_quota_bytes(self) -> int | None:
+        return self._mib(self.user_quota_mib) if self.user_quota_mib is not None else None
 
     @property
     def max_image_preview_bytes(self) -> int:

@@ -29,14 +29,14 @@
       <q-card flat class="app-surface q-mb-md">
         <q-card-section>
           <div class="text-subtitle1 text-weight-bold">Uploads und Speicher</div>
-          <div class="text-caption app-muted">Die Session-Quote gilt für den vollständigen Dateibaum jeder Session.</div>
+          <div class="text-caption app-muted">Das optionale Benutzerlimit gilt pro Benutzer für Dateien und Versionen aller eigenen Sessions, einschließlich Projekt-Sessions.</div>
         </q-card-section>
         <q-separator />
         <q-card-section class="row q-col-gutter-md">
           <q-input dense v-model.number="form.maxUploadMib" class="col-12 col-sm-6" outlined type="number" label="Maximale Uploadgröße (MiB)" :rules="[range(1, 256)]" />
           <q-input dense v-model.number="form.maxAttachmentsPerMessage" class="col-12 col-sm-6" outlined type="number" label="Anhänge pro Nachricht" :rules="[range(1, 16)]" />
           <q-input dense v-model.number="form.maxMessageUploadMib" class="col-12 col-sm-6" outlined type="number" label="Gesamtgröße pro Nachricht (MiB)" :rules="[range(1, 512)]" />
-          <q-input dense v-model.number="form.sessionQuotaMib" class="col-12 col-sm-6" outlined type="number" label="Session-Speicherquote (MiB)" :rules="[range(1, 102400)]" />
+          <q-input dense v-model.number="form.userQuotaMib" class="col-12 col-sm-6" outlined clearable type="number" label="Benutzer-Speicherlimit (MiB)" hint="Leer lassen für unbegrenzten Speicher." :rules="[optionalQuota]" />
         </q-card-section>
       </q-card>
 
@@ -91,9 +91,12 @@ const form = reactive({ ...INSTANCE_LIMIT_DEFAULTS })
 const range = (minimum, maximum) => (value) => (
   Number.isInteger(Number(value)) && Number(value) >= minimum && Number(value) <= maximum
 ) || `Wert zwischen ${minimum.toLocaleString('de')} und ${maximum.toLocaleString('de')} erforderlich.`
+const optionalQuota = (value) => value === null || value === '' || range(1, 102400)(value)
 
 function assignForm(data) {
-  for (const key of Object.keys(INSTANCE_LIMIT_DEFAULTS)) form[key] = Number(data[key])
+  for (const key of Object.keys(INSTANCE_LIMIT_DEFAULTS)) {
+    form[key] = data[key] === null ? null : Number(data[key])
+  }
 }
 
 async function load() {
@@ -107,7 +110,10 @@ async function load() {
 async function save() {
   if (!await formRef.value?.validate()) return
   try {
-    assignForm(await settings.saveSettings({ ...form }))
+    assignForm(await settings.saveSettings({
+      ...form,
+      userQuotaMib: form.userQuotaMib === '' ? null : form.userQuotaMib
+    }))
     $q.notify({ type: 'positive', message: 'Instanzlimits gespeichert.' })
   } catch {
     // The central API interceptor displays the error.

@@ -24,6 +24,12 @@ describe('resource metrics', () => {
     expect(storageUsageProgress({ usedBytes: 0, quotaBytes: 0 })).toBeNull()
   })
 
+  it('shows unlimited storage without an utilization bar', () => {
+    const usage = { usedBytes: 12 * 1024 ** 2, quotaBytes: null }
+    expect([formatStorageUsage(usage), storageUsageProgress(usage)])
+      .toEqual(['12 MB belegt · unbegrenzt', null])
+  })
+
   it('calculates the latest estimated model input utilization', () => {
     expect(modelContextPercentage({ estimatedInputTokens: 333, inputBudgetTokens: 1000 })).toBe(33)
     expect(modelContextPercentage({ estimatedInputTokens: 1200, inputBudgetTokens: 1000 })).toBe(120)

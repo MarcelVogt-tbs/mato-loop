@@ -16,17 +16,18 @@ describe('instance limits store', () => {
   })
 
   it('loads effective limits for every user and persists admin updates', async () => {
-    api.get.mockResolvedValue({ data: { maxUploadMib: 32, maxAttachmentsPerMessage: 4 } })
-    api.put.mockResolvedValue({ data: { maxUploadMib: 48, maxAttachmentsPerMessage: 6 } })
+    api.get.mockResolvedValue({ data: { maxUploadMib: 32, maxAttachmentsPerMessage: 4, userQuotaMib: 128 } })
+    api.put.mockResolvedValue({ data: { maxUploadMib: 48, maxAttachmentsPerMessage: 6, userQuotaMib: null } })
     const settings = useInstanceLimitsStore()
 
     await settings.fetchSettings()
     expect(settings.maxUploadBytes).toBe(32 * 1024 * 1024)
 
-    await settings.saveSettings({ maxUploadMib: 48 })
+    await settings.saveSettings({ maxUploadMib: 48, userQuotaMib: null })
     expect(settings.maxUploadMib).toBe(48)
     expect(settings.maxAttachmentsPerMessage).toBe(6)
+    expect(settings.userQuotaMib).toBeNull()
     expect(api.get).toHaveBeenCalledWith('/instance-limits')
-    expect(api.put).toHaveBeenCalledWith('/instance-limits', { maxUploadMib: 48 })
+    expect(api.put).toHaveBeenCalledWith('/instance-limits', { maxUploadMib: 48, userQuotaMib: null })
   })
 })

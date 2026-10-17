@@ -560,16 +560,16 @@ async def test_provided_reference_retains_final_revision_without_creating_attach
     assert (action["fileId"], action["fileRevision"], action["sizeBytes"]) == (str(source.file_id), 1, 6)
 
 
-@pytest.mark.parametrize("quota_mib,used_mib,allowed", [(1, 2, False), (1000, 600, True)])
+@pytest.mark.parametrize("quota_mib,used_mib", [(1, 2), (1000, 600)])
 @pytest.mark.parametrize("recovery", [False, True])
-async def test_runtime_finalization_uses_effective_nondefault_quota(
-    tmp_path, monkeypatch, quota_mib, used_mib, allowed, recovery
+async def test_runtime_finalization_preserves_reserved_outputs_after_quota_reduction(
+    tmp_path, monkeypatch, quota_mib, used_mib, recovery
 ):
     session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
     run = AgentRun(id=uuid4(), session_id=session.id, status="failed")
-    limits = InstanceLimits(session_quota_mib=quota_mib, max_upload_mib=1)
+    limits = InstanceLimits(user_quota_mib=quota_mib, max_upload_mib=1)
     storage = SessionStorage(tmp_path / "sessions")
-    storage.provision(session.id)
+    storage.provision(session.id, user_id=session.user_id)
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = session
     message = tool_message(session, run.id)
@@ -602,18 +602,12 @@ async def test_runtime_finalization_uses_effective_nondefault_quota(
     monkeypatch.setattr(RootFileService, "_session_usage", lambda _self: used_mib * 1024 * 1024)
     if recovery:
         await AgentRuntime.recover(db)
-        assert message.provider_data["_matoloop"]["fileOutputsPending"] is not allowed
-        assert db.add.call_count == int(allowed)
-    elif allowed:
+        assert message.provider_data["_matoloop"]["fileOutputsPending"] is False
+        assert db.add.call_count == 1
+    else:
         await AgentRuntime._finalize_run_files(db, run)
         assert db.add.call_args.args[0].file_revision == 1
         assert message.provider_data["_matoloop"]["fileOutputsPending"] is False
-    else:
-        with pytest.raises(RootFileError) as error:
-            await AgentRuntime._finalize_run_files(db, run)
-        assert error.value.code == "file.sessionQuotaExceeded"
-        db.add.assert_not_called()
-        assert message.provider_data["_matoloop"]["fileOutputsPending"] is True
 
 
 @pytest.mark.parametrize("bound", [False, True])

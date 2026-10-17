@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ctypes
 import errno
-import fcntl
 import hashlib
 import json
 import logging
@@ -345,7 +344,6 @@ class RootFileService:
     """Access the backend-local root of one persisted session."""
 
     MAX_LIST_LIMIT = 1_000
-    SESSION_QUOTA_BYTES = 5 * 1024 * 1024 * 1024
     MAX_OPERATION_ENTRIES = 10_000
     MAX_OPERATION_BYTES = 256 * 1024 * 1024
 
@@ -356,7 +354,8 @@ class RootFileService:
         session_storage: SessionStorage | None = None,
         project_id: UUID | None = None,
         run_id: UUID | None = None,
-        session_quota_bytes: int | None = None,
+        user_id: UUID | None = None,
+        user_quota_bytes: int | None = None,
         max_editable_text_bytes: int = MAX_EDITABLE_TEXT_BYTES,
     ) -> None:
         if not isinstance(session_id, UUID):
@@ -370,8 +369,12 @@ class RootFileService:
         self.run_id = run_id
         self._operation_state = threading.local()
         self.session_storage = session_storage or SessionStorage()
-        if session_quota_bytes is not None:
-            self.SESSION_QUOTA_BYTES = session_quota_bytes
+        if user_id is not None and not isinstance(user_id, UUID):
+            raise TypeError("user_id must be supplied by the host as a UUID")
+        if user_quota_bytes is not None and user_id is None:
+            raise ValueError("A user quota requires an owner")
+        self.user_id = user_id
+        self.user_quota_bytes = user_quota_bytes
         self.max_editable_text_bytes = max_editable_text_bytes
 
     @staticmethod
@@ -519,7 +522,7 @@ class RootFileService:
             raise TypeError("File IDs must be supplied by the host as UUIDs")
         if (source_revision is None) != (derived_revision is None):
             raise RootFileError("file.revisionNotFound", "Both derivation revisions are required")
-        with self._session_operation_lock(FileRoot.SESSION):
+        with self._session_operation_lock(FileRoot.SESSION, quota_check=True):
             links = self._derived_links()
             source_id, child_id = str(source_file_id), str(derived_file_id)
             link = links.get(child_id, {"sourceFileId": source_id, "bindings": []})
@@ -563,7 +566,7 @@ class RootFileService:
             self._ensure_directory(directory)
             target = directory / f"{child_id}.json"
             content = self._index_bytes({**link, "bindings": [*link["bindings"], binding]})
-            self._assert_session_quota(len(content), replaced_bytes=target.stat().st_size if target.exists() else 0)
+            self._assert_user_quota(len(content), replaced_bytes=target.stat().st_size if target.exists() else 0)
             self._replace_private_file(target, content)
             self._fsync_directory(directory)
             self._fsync_directory(directory.parent)
@@ -621,7 +624,7 @@ class RootFileService:
         self._assert_mutable(FileRoot.SESSION, self._parts(path))
         if len(data) > self.MAX_OPERATION_BYTES:
             raise RootFileError("file.tooLarge", "File is too large")
-        with self._session_operation_lock(FileRoot.SESSION):
+        with self._session_operation_lock(FileRoot.SESSION, quota_check=True):
             self._assert_available(path)
             target = self._ensure_no_symlinks(self._files_path(), self._parts(path), allow_missing_final=True)
             current = self._read_private_file(target) if target.exists() else None
@@ -659,7 +662,7 @@ class RootFileService:
                 updated = {**index, "run": owner}
                 old_index = self._read_private_file(staged / "index.json")
                 old_reserve = index.get("run", {}).get("reserveBytes", 0) if history else 0
-                self._assert_session_quota(
+                self._assert_user_quota(
                     len(data) + len(self._index_bytes(updated)) + owner["reserveBytes"],
                     replaced_bytes=len(current or b"") + len(old_index) + old_reserve,
                 )
@@ -739,7 +742,7 @@ class RootFileService:
         if not isinstance(run_id, UUID):
             raise TypeError("run_id must be supplied by the host as a UUID")
         results = []
-        with self._session_operation_lock(FileRoot.SESSION):
+        with self._session_operation_lock(FileRoot.SESSION, quota_check=True):
             for directory, index in self._revision_indexes():
                 owner = index.get("run", {})
                 if owner.get("runId") == str(run_id) and owner.get("sessionId") == str(self.session_id):
@@ -762,7 +765,7 @@ class RootFileService:
                                 if not unchanged:
                                     item = {**self._revision_metadata(index["maxRevision"] + 1, metadata.st_size, digest),
                                             "runId": str(run_id), "sessionId": str(self.session_id)}
-                                    self._assert_session_quota(
+                                    self._assert_user_quota(
                                         metadata.st_size + 1024, replaced_bytes=owner["reserveBytes"],
                                     )
                                     owner = {**owner, "state": "publishing", "publication": item}
@@ -833,47 +836,26 @@ class RootFileService:
 
     @contextmanager
     def _session_operation_lock(
-        self, *roots: FileRoot
+        self, *roots: FileRoot, quota_check: bool = False,
     ) -> Iterator[None]:
         if getattr(self._operation_state, "locked", False):
             yield
             return
-        flags = (
-            os.O_RDONLY
-            | getattr(os, "O_DIRECTORY", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
-        )
-        lock_paths = {self._root_path(root) for root in roots}
-        descriptors: list[int] = []
-        try:
-            for path in sorted(lock_paths, key=str):
-                descriptor = os.open(path, flags)
-                metadata = os.fstat(descriptor)
-                if not stat.S_ISDIR(metadata.st_mode):
-                    os.close(descriptor)
-                    raise OSError(errno.ENOTDIR, "File root is not a directory")
-                fcntl.flock(descriptor, fcntl.LOCK_EX)
-                descriptors.append(descriptor)
-        except OSError as exc:
-            for descriptor in reversed(descriptors):
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
-                os.close(descriptor)
-            raise RootFileError(
-                "file.sessionNotProvisioned", "File root is unavailable"
-            ) from exc
-        try:
+        with self.session_storage.lock:
+            for root in roots:
+                self._root_path(root)
             self._operation_state.locked = True
-            for trash in self._revisions_path().glob(".delete-owned-*"):
-                try:
-                    SessionStorage._remove_path(trash)
-                except OSError:
-                    logger.warning("File trash cleanup deferred", exc_info=True)
-            yield
-        finally:
-            self._operation_state.locked = False
-            for descriptor in reversed(descriptors):
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
-                os.close(descriptor)
+            try:
+                for trash in self._revisions_path().glob(".delete-owned-*"):
+                    try:
+                        SessionStorage._remove_path(trash)
+                    except OSError:
+                        logger.warning("File trash cleanup deferred", exc_info=True)
+                if quota_check and self.user_quota_bytes is not None:
+                    self._operation_state.initial_usage = self._user_usage(include_reservations=True)
+                yield
+            finally:
+                self._operation_state.locked = False
 
     @staticmethod
     def _tree_usage(root: Path, *, operation_limits: bool) -> TreeUsage:
@@ -926,14 +908,35 @@ class RootFileService:
         with self._session_operation_lock(FileRoot.SESSION):
             return self._session_usage()
 
-    def _assert_session_quota(
+    def _user_usage(self, *, include_reservations: bool = False) -> int:
+        if self.user_id is None:
+            raise ValueError("User storage usage requires an owner")
+        total = 0
+        for path in self.session_storage.user_session_roots(self.user_id):
+            service = RootFileService(
+                UUID(path.name), session_storage=self.session_storage,
+                project_id=None if path.parent == self.session_storage.sessions_dir else UUID(path.parents[1].name),
+            )
+            total += service._session_usage()
+            if include_reservations:
+                total += sum(index.get("run", {}).get("reserveBytes", 0) for _, index in service._revision_indexes())
+        return total
+
+    def user_usage(self) -> int:
+        """Return managed file and revision usage across all owned sessions."""
+        with self._session_operation_lock(FileRoot.SESSION):
+            return self._user_usage()
+
+    def _assert_user_quota(
         self, additional_bytes: int, *, replaced_bytes: int = 0
     ) -> None:
-        used_bytes = self._session_usage()
-        used_bytes += sum(index.get("run", {}).get("reserveBytes", 0) for _, index in self._revision_indexes())
-        if used_bytes - replaced_bytes + additional_bytes > self.SESSION_QUOTA_BYTES:
+        if self.user_quota_bytes is None:
+            return
+        used_bytes = self._user_usage(include_reservations=True)
+        ceiling = max(self.user_quota_bytes, self._operation_state.initial_usage)
+        if used_bytes - replaced_bytes + additional_bytes > ceiling:
             raise RootFileError(
-                "file.sessionQuotaExceeded", "Session storage limit has been reached"
+                "file.userQuotaExceeded", "User storage limit has been reached"
             )
 
     def resolve(self, root: FileRoot | str, relative_path: str) -> Path:
@@ -1169,7 +1172,7 @@ class RootFileService:
         if self.run_id is not None:
             self._write_run_file(self._relative_path(parts), encoded_content)
             return self._relative_path(parts)
-        with self._session_operation_lock(selected_root):
+        with self._session_operation_lock(selected_root, quota_check=True):
             self._assert_available(self._relative_path(parts))
             root_path = self._files_path(selected_root)
             parent = self._ensure_no_symlinks(root_path, parts[:-1])
@@ -1189,7 +1192,7 @@ class RootFileService:
                 staged_history, history, _index = self._stage_initial_history(
                     self._relative_path(parts), encoded_content
                 )
-                self._assert_session_quota(0)
+                self._assert_user_quota(0)
                 staged_history.rename(history)
                 try:
                     temporary.rename(target)
@@ -1496,7 +1499,7 @@ class RootFileService:
     def _publish_initial_history(self, path: str, data: bytes) -> tuple[Path, dict]:
         staged, target, index = self._stage_initial_history(path, data)
         try:
-            self._assert_session_quota(index.get("run", {}).get("reserveBytes", 0))
+            self._assert_user_quota(index.get("run", {}).get("reserveBytes", 0))
             staged.rename(target)
             self._fsync_directory(target.parent)
         except BaseException:
@@ -1571,7 +1574,7 @@ class RootFileService:
     ) -> dict[str, str]:
         if not files:
             return {}
-        with self._session_operation_lock(FileRoot.SESSION):
+        with self._session_operation_lock(FileRoot.SESSION, quota_check=True):
             history = self._history_for_id(file_id)
             if history is None or not any(
                 item["revision"] == revision for item in history[1]["revisions"]
@@ -1585,7 +1588,7 @@ class RootFileService:
                 for name, data in files.items():
                     validate_upload_filename(name)
                     self._write_private_file(root / name, data)
-                self._assert_session_quota(0)
+                self._assert_user_quota(0)
             except BaseException:
                 shutil.rmtree(root, ignore_errors=True)
                 raise
@@ -1678,7 +1681,7 @@ class RootFileService:
         self, path: str, source: BinaryIO, *, max_bytes: int
     ) -> RootFileEntry:
         parts = self._parts(path)
-        with self._session_operation_lock(FileRoot.SESSION):
+        with self._session_operation_lock(FileRoot.SESSION, quota_check=True):
             self._assert_available(path)
             target = self._resolve_destination(FileRoot.SESSION, path)
             with _directory_descriptor(
@@ -1720,7 +1723,7 @@ class RootFileService:
                     self._write_private_file(
                         staged_history / "index.json", self._index_bytes(index)
                     )
-                    self._assert_session_quota(size + 1024)
+                    self._assert_user_quota(size + 1024)
                     staged_history.rename(history)
                     self._fsync_directory(revisions)
                     metadata = _publish_upload(descriptor, temporary, target.name)
@@ -1739,7 +1742,7 @@ class RootFileService:
     def append_output_revision(self, file_id: UUID, data: bytes) -> FileRevision | WorkingFileRevision:
         if not data or len(data) > self.MAX_OPERATION_BYTES:
             raise RootFileError("file.tooLarge", "File is too large")
-        with self._session_operation_lock(FileRoot.SESSION):
+        with self._session_operation_lock(FileRoot.SESSION, quota_check=True):
             history = self._history_for_id(file_id)
             if history is None or history[1].get("deleted", False):
                 raise RootFileError("file.revisionNotFound", "Revision not found")
@@ -1775,7 +1778,7 @@ class RootFileService:
                         }
                     ),
                 )
-                self._assert_session_quota(
+                self._assert_user_quota(
                     0, replaced_bytes=len(current) + len(old_index)
                 )
                 os.replace(index_temporary, directory / "index.json")
@@ -1865,7 +1868,7 @@ class RootFileService:
             raise RootFileError("file.revisionNotFound", "Revision not found")
         path = self.normalize_relative_path(relative_path)
         self._assert_mutable(FileRoot.SESSION, self._parts(path))
-        with self._session_operation_lock(FileRoot.SESSION):
+        with self._session_operation_lock(FileRoot.SESSION, quota_check=True):
             self._assert_available(path, allow_own=False)
             history = self._history_for_path(path)
             if history is None:
@@ -1901,7 +1904,7 @@ class RootFileService:
             try:
                 self._write_private_file(temporary, selected_data)
                 self._write_private_file(index_temporary, updated)
-                self._assert_session_quota(
+                self._assert_user_quota(
                     0, replaced_bytes=len(current_data) + len(old_index)
                 )
                 os.replace(index_temporary, directory / "index.json")
@@ -2062,7 +2065,7 @@ class RootFileService:
             return self._write_run_file(
                 self._relative_path(parts), encoded, expected_sha256=expected_revision,
             ).sha256
-        with self._session_operation_lock(selected_root):
+        with self._session_operation_lock(selected_root, quota_check=True):
             self._assert_available(self._relative_path(parts))
             target = self._ensure_no_symlinks(self._files_path(selected_root), parts)
             metadata = self._metadata(target)
@@ -2120,7 +2123,7 @@ class RootFileService:
                 self._write_private_file(temporary, encoded)
                 if staged_history is None:
                     self._write_private_file(index_temporary, self._index_bytes(next_index))
-                self._assert_session_quota(
+                self._assert_user_quota(
                     0,
                     replaced_bytes=len(current) + (len(old_index) if old_index else 0),
                 )
@@ -2178,7 +2181,7 @@ class RootFileService:
                 parts[-1], working.path, "file", len(data),
                 datetime.fromisoformat(working.created_at).timestamp(),
             )
-        with self._session_operation_lock(selected_root):
+        with self._session_operation_lock(selected_root, quota_check=True):
             self._assert_available(self._relative_path(parts))
             try:
                 anchor, anchored_parts = self._anchored_parts(
@@ -2203,7 +2206,7 @@ class RootFileService:
                         staged_history, history, _index = self._stage_initial_history(
                             self._relative_path(parts), content
                         )
-                        self._assert_session_quota(0)
+                        self._assert_user_quota(0)
                         staged_history.rename(history)
                         metadata = _publish_upload(
                             descriptor, temporary, parts[-1]
@@ -2264,7 +2267,7 @@ class RootFileService:
         self._assert_mutable(selected_root, parts)
         if not parts:
             raise RootFileError("file.rootMutationForbidden", "A file root is immutable")
-        with self._session_operation_lock(selected_root):
+        with self._session_operation_lock(selected_root, quota_check=True):
             self._resolve_destination(selected_root, relative_path)
             anchor, anchored_parts = self._root_path(selected_root) / "files", parts[:-1]
             created = False
@@ -2275,7 +2278,7 @@ class RootFileService:
                     os.mkdir(parts[-1], mode=0o700, dir_fd=descriptor)
                     created = True
                     try:
-                        self._assert_session_quota(0)
+                        self._assert_user_quota(0)
                         os.fsync(descriptor)
                     except BaseException:
                         if created:
@@ -2298,7 +2301,7 @@ class RootFileService:
 
     def _rewrite_history_paths(self, source: str, destination: str) -> None:
         histories = self._histories_under(source)
-        self._assert_session_quota(sum(
+        self._assert_user_quota(sum(
             len(self._index_bytes({**index, "path": destination + index["path"][len(source):]}))
             - len(self._index_bytes(index)) for _, index in histories
         ))
@@ -2328,7 +2331,7 @@ class RootFileService:
         name = validate_upload_filename(filename)
         destination_parts = (*parts[:-1], name)
         self._assert_mutable(selected_root, destination_parts)
-        with self._session_operation_lock(selected_root):
+        with self._session_operation_lock(selected_root, quota_check=True):
             source_path = self._relative_path(parts)
             destination_path = self._relative_path(destination_parts)
             self._assert_available(source_path)
@@ -2455,7 +2458,7 @@ class RootFileService:
             self._operation_usage(temporary)
             if destination_root is FileRoot.SESSION:
                 # The temporary copy is already part of session usage at this point.
-                self._assert_session_quota(0, replaced_bytes=released_session_bytes)
+                self._assert_user_quota(0, replaced_bytes=released_session_bytes)
             if destination.exists() or destination.is_symlink():
                 raise RootFileError("file.pathAlreadyExists", "Destination path already exists")
             temporary.rename(destination)
@@ -2478,7 +2481,7 @@ class RootFileService:
         selected_destination_root = self._selected_root(destination_root)
         source_parts = self._parts(source_path)
         destination_parts = self._parts(destination_path)
-        with self._session_operation_lock(selected_source_root, selected_destination_root):
+        with self._session_operation_lock(selected_source_root, selected_destination_root, quota_check=True):
             source = self._ensure_no_symlinks(
                 self._files_path(selected_source_root), source_parts
             )
@@ -2495,7 +2498,7 @@ class RootFileService:
                     "file.invalidDestination", "Destination is inside the source"
                 )
             if selected_destination_root is FileRoot.SESSION:
-                self._assert_session_quota(source_usage.bytes)
+                self._assert_user_quota(source_usage.bytes)
             self._copy_to_destination(source, destination, selected_destination_root)
             created_histories: list[Path] = []
             try:
@@ -2538,7 +2541,7 @@ class RootFileService:
         destination_path = self._relative_path(destination_parts)
         if destination_parts[:len(source_parts)] == source_parts:
             raise RootFileError("file.invalidDestination", "Destination is inside the source")
-        with self._session_operation_lock(selected_source_root, selected_destination_root):
+        with self._session_operation_lock(selected_source_root, selected_destination_root, quota_check=True):
             self._assert_available(source_path)
             self._operation_usage(self.resolve(selected_source_root, source_path))
             destination = self._resolve_destination(

@@ -49,7 +49,7 @@ def test_missing_settings_fields_use_defaults() -> None:
     assert InstanceLimits.settings_key == "instance-limits"
     assert GeneralSettings().public_base_url is None
     assert InstanceLimits().max_upload_mib == 64
-    assert InstanceLimits().session_quota_mib == 5_120
+    assert InstanceLimits().user_quota_mib is None
 
 
 def test_web_push_settings_validate_contact_email() -> None:
@@ -73,7 +73,7 @@ def test_instance_limits_validate_related_limits_and_aliases() -> None:
         {
             "maxUploadMib": 128,
             "maxMessageUploadMib": 256,
-            "sessionQuotaMib": 1_024,
+            "userQuotaMib": 1_024,
             "maxArchiveEntryMib": 128,
             "maxArchiveUncompressedMib": 256,
         }
@@ -82,7 +82,13 @@ def test_instance_limits_validate_related_limits_and_aliases() -> None:
     assert settings.max_upload_bytes == 128 * 1024 * 1024
     assert settings.model_dump(by_alias=True)["maxUploadMib"] == 128
     with pytest.raises(ValidationError):
-        InstanceLimits(max_upload_mib=65, session_quota_mib=64)
+        InstanceLimits(user_quota_mib=0)
+
+
+@pytest.mark.parametrize("key", ["sessionQuotaMib", "session_quota_mib"])
+def test_legacy_session_quota_becomes_unlimited_without_resetting_other_limits(key) -> None:
+    settings = InstanceLimits.model_validate({key: 512, "maxUploadMib": 128})
+    assert (settings.user_quota_bytes, settings.max_upload_mib) == (None, 128)
 
 
 def test_default_calendar_requires_a_stable_calendar_target() -> None:

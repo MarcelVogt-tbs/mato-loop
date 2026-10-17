@@ -112,6 +112,9 @@ async def _application_lifespan(_app: FastAPI):
         await debug_mcp_stack.aclose()
     try:
         async with AsyncSessionFactory() as db:
+            session_storage = SessionStorage()
+            owners = (await db.execute(select(ChatSession.id, ChatSession.user_id))).all()
+            await asyncio.to_thread(session_storage.register_owners, owners)
             attachments = AttachmentService(settings=await SettingsStore.load(db, InstanceLimits))
             await attachments.backfill_derived_files(db)
             await AgentRuntime.recover(db)
@@ -144,7 +147,6 @@ async def _application_lifespan(_app: FastAPI):
                 (await db.execute(select(ChatSession.id, ChatSession.project_id))).all()
             )
             project_ids = set((await db.scalars(select(Project.id))).all())
-            session_storage = SessionStorage()
             reconciliation = await asyncio.to_thread(
                 session_storage.reconcile,
                 session_locations,

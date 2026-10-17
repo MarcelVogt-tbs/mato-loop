@@ -217,7 +217,7 @@ async def test_parent_delete_cancels_descendants_before_trashing_all_storage(tmp
     child = _child(user.id)
     child.parent_session_id = parent.id
     storage = SessionStorage(tmp_path / "sessions")
-    paths = [storage.provision(item.id) for item in (parent, child)]
+    paths = [storage.provision(item.id, user_id=user.id) for item in (parent, child)]
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = parent
     db.scalar.side_effect = [parent, 0, parent, 0]
@@ -235,6 +235,7 @@ async def test_parent_delete_cancels_descendants_before_trashing_all_storage(tmp
     await routes.delete_session(parent.id, user, db)
     cancel.assert_awaited_once_with(parent.id)
     assert all(not path.exists() for path in paths)
+    assert storage._owners == {}
     db.commit.assert_awaited_once()
 
 

@@ -701,14 +701,14 @@ async def test_snapshot_storage_failure_preserves_completed_actions(browser_case
     case.coordinator.execute.side_effect = None
     case.coordinator.execute.return_value = wire
     case.context.root_files.create_output_stream.side_effect = RootFileError(
-        "file.sessionQuotaExceeded", "quota"
+        "file.userQuotaExceeded", "quota"
     )
 
     result = await case.effective.execute(case.call, case.context)
 
     if action == "inspect":
         assert result.is_error
-        assert result.metadata["errorCode"] == "file.sessionQuotaExceeded"
+        assert result.metadata["errorCode"] == "file.userQuotaExceeded"
     else:
         assert not result.is_error
         payload = json.loads(result.content)

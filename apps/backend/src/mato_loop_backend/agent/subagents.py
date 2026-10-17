@@ -271,7 +271,8 @@ async def run_tasks(
                     await child_db.flush()
                     prepared.append((child_session, child))
                     await asyncio.to_thread(
-                        storage.provision, child_session.id, child_session.project_id
+                        storage.provision, child_session.id, child_session.project_id,
+                        user_id=child_session.user_id,
                     )
                     child_db.add(message)
                     await child_db.flush()

@@ -167,7 +167,7 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
         return ToolResult.error("file.unsupportedType")
     if arguments.root == "session" and target_session_id == context.session.id:
         try:
-            selected_revision = root_files.working_revision(normalized_path)
+            selected_revision = await asyncio.to_thread(root_files.working_revision, normalized_path)
         except RootFileError as exc:
             if exc.code != "file.revisionNotFound":
                 raise

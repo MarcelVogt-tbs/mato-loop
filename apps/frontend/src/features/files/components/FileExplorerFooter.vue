@@ -48,15 +48,13 @@ const storage = computed(() => (
 ))
 const storageLabel = computed(() => formatStorageUsage(storage.value))
 const storageProgress = computed(() => storageUsageProgress(storage.value))
-const storageScopeLabel = computed(() => (
-  storage.value?.scope === 'project' ? 'Projekt-Speicher' : 'Session-Speicher'
-))
+const storageScopeLabel = 'Benutzer-Speicher'
 const storageDescription = computed(() => {
-  if (workspace.storageUsageLoading && !storage.value) return `${storageScopeLabel.value}: Speichernutzung wird geladen.`
-  if (!storage.value) return `${storageScopeLabel.value}: Speichernutzung nicht verfügbar.`
-  const sharing = storage.value.scope === 'project' ? ', projektweit geteilt' : ''
+  if (workspace.storageUsageLoading && !storage.value) return `${storageScopeLabel}: Speichernutzung wird geladen.`
+  if (!storage.value) return `${storageScopeLabel}: Speichernutzung nicht verfügbar.`
+  const limit = storage.value.quotaBytes === null ? 'unbegrenzt' : `Limit ${formatByteSize(storage.value.quotaBytes)}`
   const stale = workspace.storageUsageFailed ? ' Letzter Stand.' : ''
-  return `${storageScopeLabel.value}: ${formatByteSize(storage.value.usedBytes)} von ${formatByteSize(storage.value.quotaBytes)} belegt${sharing}.${stale}`
+  return `${storageScopeLabel}: ${formatByteSize(storage.value.usedBytes)} belegt, ${limit}, über alle eigenen Sessions.${stale}`
 })
 
 watch(

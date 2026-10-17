@@ -347,6 +347,7 @@ async def delete_user(
                     logger.exception("User session storage could not be restored")
 
     async def purge_storage() -> None:
+        await asyncio.to_thread(storage.forget_sessions, [session_id for session_id, _ in sessions])
         for _session_id, path in trashed_sessions:
             try:
                 await asyncio.to_thread(storage.purge_trashed, path)

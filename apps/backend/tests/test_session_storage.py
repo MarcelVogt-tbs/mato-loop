@@ -69,7 +69,7 @@ def test_session_storage_can_trash_purge_and_remove_complete_trees(tmp_path: Pat
     (storage.provision(trashed_id) / "files" / "notes.txt").write_text(
         "Inhalt", encoding="utf-8"
     )
-    storage.provision(removed_id)
+    storage.provision(removed_id, user_id=uuid4())
 
     trashed = storage.trash_session(trashed_id)
 
@@ -81,6 +81,7 @@ def test_session_storage_can_trash_purge_and_remove_complete_trees(tmp_path: Pat
 
     assert storage.remove_session(removed_id) is True
     assert storage.remove_session(removed_id) is False
+    assert storage._owners == {}
 
 
 def test_cleanup_removes_legacy_attachments_and_deleted_histories(tmp_path: Path) -> None:
@@ -157,23 +158,12 @@ def test_session_move_preserves_the_complete_managed_tree(tmp_path: Path) -> Non
     assert not source.exists()
 
 
-def test_no_replace_copy_does_not_delete_existing_destination(tmp_path: Path) -> None:
-    source = tmp_path / "source.txt"
-    target = tmp_path / "target.txt"
-    source.write_text("session", encoding="utf-8")
-    target.write_text("project", encoding="utf-8")
-
-    with pytest.raises(FileExistsError):
-        SessionStorage._copy_file_no_replace(source, target)
-
-    assert target.read_text(encoding="utf-8") == "project"
-
-
 def test_session_move_rollback_restores_the_complete_tree(tmp_path: Path) -> None:
     storage = SessionStorage(tmp_path / "sessions")
     session_id = uuid4()
     project_id = uuid4()
-    source = storage.provision(session_id)
+    user_id = uuid4()
+    source = storage.provision(session_id, user_id=user_id)
     (source / "files" / "nested").mkdir()
     (source / "files" / "nested" / "note.txt").write_text("session", encoding="utf-8")
 
@@ -197,7 +187,7 @@ def test_session_move_does_not_combine_sibling_quota(tmp_path: Path) -> None:
     )
     (project_root / "files" / "project.bin").write_bytes(b"5678")
 
-    target = storage.move_session(session_id, None, project_id, quota_bytes=7)
+    target = storage.move_session(session_id, None, project_id)
 
     assert (target / "files" / "session.bin").read_bytes() == b"1234"
     assert (project_root / "files" / "project.bin").read_bytes() == b"5678"

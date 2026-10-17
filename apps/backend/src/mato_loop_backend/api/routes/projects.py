@@ -568,6 +568,7 @@ async def delete_project(
             await db.rollback()
 
     async def purge_storage() -> None:
+        await asyncio.to_thread(storage.forget_sessions, storage_session_ids)
         for _execution_session_id, _storage_project_id, trashed in execution_trashed:
             try:
                 await asyncio.to_thread(storage.purge_trashed, trashed)

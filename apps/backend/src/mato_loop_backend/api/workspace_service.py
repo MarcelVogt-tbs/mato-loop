@@ -166,7 +166,8 @@ async def _file_context(
             root_files=RootFileService(
                 root_session.id,
                 project_id=root_session.project_id,
-                session_quota_bytes=instance_limits.session_quota_bytes,
+                user_id=user.id,
+                user_quota_bytes=instance_limits.user_quota_bytes,
                 max_editable_text_bytes=instance_limits.max_editable_text_bytes,
             ),
             root=FileRoot.SESSION,
@@ -226,7 +227,7 @@ def _context_error(exc: RootFileError) -> ApiError:
         "file.tooLarge",
     }:
         return ApiError(413, exc.code)
-    if exc.code == "file.sessionQuotaExceeded":
+    if exc.code == "file.userQuotaExceeded":
         return ApiError(507, exc.code)
     return ApiError(400, exc.code)
 

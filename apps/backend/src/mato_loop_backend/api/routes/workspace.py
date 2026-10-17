@@ -219,9 +219,9 @@ class RevisionActivationResponse(BaseModel):
 class WorkspaceUsageResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
 
-    scope: Literal["session", "project"]
+    scope: Literal["user"]
     used_bytes: int = Field(alias="usedBytes", ge=0)
-    quota_bytes: int = Field(alias="quotaBytes", gt=0)
+    quota_bytes: int | None = Field(alias="quotaBytes", gt=0)
 
 
 class OpenScadFileRenderRequest(BaseModel):
@@ -274,13 +274,13 @@ async def get_workspace_usage(
     context = await _file_context(FileScope.SESSION, session_id, user, db)
     assert context.root_files is not None
     try:
-        used_bytes = await asyncio.to_thread(context.root_files.session_usage)
+        used_bytes = await asyncio.to_thread(context.root_files.user_usage)
     except RootFileError as exc:
         raise _context_error(exc) from exc
     return WorkspaceUsageResponse(
-        scope="session",
+        scope="user",
         used_bytes=used_bytes,
-        quota_bytes=context.root_files.SESSION_QUOTA_BYTES,
+        quota_bytes=context.root_files.user_quota_bytes,
     )
 
 

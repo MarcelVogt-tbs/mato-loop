@@ -27,7 +27,9 @@ export function formatByteSize(value) {
 }
 
 export function formatStorageUsage(usage) {
-  if (!validAmount(usage?.usedBytes) || !validAmount(usage?.quotaBytes)) return null
+  if (!validAmount(usage?.usedBytes)) return null
+  if (usage.quotaBytes === null) return `${formatByteSize(usage.usedBytes)} belegt · unbegrenzt`
+  if (!validAmount(usage.quotaBytes)) return null
   return `${formatByteSize(usage.usedBytes)} / ${formatByteSize(usage.quotaBytes)}`
 }
 

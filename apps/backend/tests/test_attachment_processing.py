@@ -24,6 +24,7 @@ from mato_loop_backend.media.attachments import (
     classify_attachment,
 )
 from mato_loop_backend.models import ChatSession, Message
+from mato_loop_backend.settings import InstanceLimits
 
 
 def wav_bytes(*, frames: int = 80, sample_rate: int = 8_000) -> bytes:
@@ -325,26 +326,26 @@ async def test_invalid_compressed_audio_is_rejected_without_persisted_files(
     assert list((sessions.session_path(session_id) / "files").iterdir()) == []
 
 
-async def test_session_quota_includes_new_derived_content(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_user_quota_includes_revision_storage(tmp_path: Path) -> None:
     session_id = uuid4()
     sessions = SessionStorage(tmp_path / "sessions")
     sessions.provision(session_id)
-    service = AttachmentService(sessions)
+    service = AttachmentService(sessions, settings=InstanceLimits(user_quota_mib=1))
     message = Message(id=uuid4(), session_id=session_id, role="user", content="Text")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [ChatSession(id=session_id, user_id=uuid4(), title="Test")]
-    monkeypatch.setattr(media_attachments, "SESSION_ATTACHMENT_QUOTA_BYTES", 150)
+    session = ChatSession(id=session_id, user_id=uuid4(), title="Test")
+    sessions.register_owner(session_id, session.user_id)
+    db.scalar.side_effect = [session]
 
-    with pytest.raises(AttachmentError, match="attachment.sessionQuotaExceeded"):
+    with pytest.raises(AttachmentError, match="attachment.userQuotaExceeded"):
         await service.create_attachment(
             db,
             message,
-            b"x" * 100,
+            b"x" * 600_000,
             "text/plain",
             kind="text",
             filename="lang.txt",
+            position=0,
         )
     assert list((sessions.session_path(session_id) / "files").iterdir()) == []
 

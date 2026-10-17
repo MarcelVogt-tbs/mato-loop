@@ -156,39 +156,46 @@ def test_workspace_maps_file_access_errors(
     assert error.code == api_code
 
 
-async def test_usage_reports_session_root_and_effective_quota(
-    tmp_path: Path, monkeypatch
+@pytest.mark.parametrize("quota_bytes", [None, 8 * 1024 * 1024])
+async def test_usage_reports_all_owned_sessions_and_effective_quota(
+    tmp_path: Path, monkeypatch, quota_bytes
 ) -> None:
     storage = SessionStorage(tmp_path / "sessions")
     project_id = uuid4()
     first_id = uuid4()
     second_id = uuid4()
-    storage.provision(first_id, project_id)
-    storage.provision(second_id, project_id)
-    first = RootFileService(first_id, session_storage=storage, project_id=project_id)
+    user = _user()
+    storage.provision(first_id)
+    storage.register_owners([(first_id, user.id)])
+    storage.provision(second_id, project_id, user_id=user.id)
+    foreign_id = uuid4()
+    foreign = storage.provision(foreign_id, user_id=uuid4())
+    (foreign / "files" / "private.bin").write_bytes(b"x" * 1000)
+    first = RootFileService(first_id, session_storage=storage, user_id=user.id)
     second = RootFileService(
         second_id,
-        session_storage=storage,
+        session_storage=SessionStorage(storage.sessions_dir, storage.projects_dir),
         project_id=project_id,
-        session_quota_bytes=8 * 1024 * 1024,
+        user_id=user.id,
+        user_quota_bytes=quota_bytes,
     )
     first.write_file(FileRoot.SESSION, "shared.txt", "shared project data")
-    expected_usage = second.session_usage()
+    expected_usage = first.session_usage() + second.session_usage()
     context = workspace_route._FileContext(root_files=second, root=FileRoot.SESSION)
     monkeypatch.setattr(workspace_route, "_file_context", AsyncMock(return_value=context))
     to_thread = AsyncMock(side_effect=lambda function, *args: function(*args))
     monkeypatch.setattr(workspace_route.asyncio, "to_thread", to_thread)
 
     response = await workspace_route.get_workspace_usage(
-        _user(), AsyncMock(spec=AsyncSession), second_id
+        user, AsyncMock(spec=AsyncSession), second_id
     )
 
     assert response.model_dump(by_alias=True) == {
-        "scope": "session",
+        "scope": "user",
         "usedBytes": expected_usage,
-        "quotaBytes": 8 * 1024 * 1024,
+        "quotaBytes": quota_bytes,
     }
-    to_thread.assert_awaited_once_with(second.session_usage)
+    to_thread.assert_awaited_once_with(second.user_usage)
 
 
 async def test_usage_hides_foreign_session(monkeypatch) -> None:

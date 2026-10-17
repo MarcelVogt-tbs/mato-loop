@@ -584,7 +584,7 @@ async def _new_session(
     await db.flush()
     storage = SessionStorage()
     try:
-        await asyncio.to_thread(storage.provision, item.id)
+        await asyncio.to_thread(storage.provision, item.id, user_id=item.user_id)
         return await AgentRuntime.start(
             db,
             item,

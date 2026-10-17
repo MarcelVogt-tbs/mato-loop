@@ -452,7 +452,7 @@ async def test_failed_project_move_restores_the_session_tree(monkeypatch) -> Non
         )
 
     storage.stage_session_move.assert_called_once_with(
-        session.id, source_project_id, None, quota_bytes=None
+        session.id, source_project_id, None
     )
     storage.rollback_session_move.assert_called_once_with(receipt)
     storage.finalize_session_move.assert_not_called()
@@ -491,7 +491,6 @@ async def test_standalone_project_move_preserves_managed_file_identity(monkeypat
         session.id,
         None,
         project_id,
-        quota_bytes=None,
     )
     storage.finalize_session_move.assert_called_once_with(receipt)
     storage.rollback_session_move.assert_not_called()
@@ -701,7 +700,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     validate_execution.assert_awaited_once_with(
         db, user.id, project.default_execution_agent_id, "/srv/project", defer_unavailable=True,
     )
-    storage.provision.assert_called_once_with(session.id, project.id)
+    storage.provision.assert_called_once_with(session.id, project.id, user_id=user.id)
 
 
 @pytest.mark.parametrize("with_model", [False, True])
@@ -738,7 +737,7 @@ async def test_opening_an_app_creates_an_empty_session_with_storage(monkeypatch,
     ), user, db)
 
     session = db.add.call_args.args[0]
-    storage.provision.assert_called_once_with(session.id, None)
+    storage.provision.assert_called_once_with(session.id, None, user_id=user.id)
     db.commit.assert_awaited_once()
     start.assert_not_awaited()
     assert result["session"]["id"] == str(session.id)
@@ -2265,7 +2264,7 @@ async def test_session_delete_trashes_commits_and_purges_tree(
     user = _user()
     session = ChatSession(id=session_id, user_id=user.id, title="Test")
     sessions = SessionStorage(tmp_path / "sessions")
-    session_path = sessions.provision(session_id)
+    session_path = sessions.provision(session_id, user_id=user.id)
     (session_path / "files" / "notiz.txt").write_text("Inhalt", encoding="utf-8")
     active_runs_result = MagicMock()
     active_runs_result.all.return_value = []
@@ -2282,6 +2281,7 @@ async def test_session_delete_trashes_commits_and_purges_tree(
     db.commit.assert_awaited_once()
     assert not session_path.exists()
     assert list(sessions.trash_dir.iterdir()) == []
+    assert sessions._owners == {}
 
 
 async def test_session_delete_rejects_files_referenced_by_another_session(
@@ -2322,7 +2322,7 @@ async def test_session_delete_restores_tree_when_database_commit_fails(
     user = _user()
     session = ChatSession(id=session_id, user_id=user.id, title="Test")
     sessions = SessionStorage(tmp_path / "sessions")
-    session_path = sessions.provision(session_id)
+    session_path = sessions.provision(session_id, user_id=user.id)
     stored_file = session_path / "files" / "notiz.txt"
     stored_file.write_text("Inhalt", encoding="utf-8")
     active_runs_result = MagicMock()
@@ -2339,6 +2339,7 @@ async def test_session_delete_restores_tree_when_database_commit_fails(
         await delete_session(session_id, user, db)
 
     assert stored_file.read_text(encoding="utf-8") == "Inhalt"
+    assert sessions._owners == {session_id: user.id}
     assert list(sessions.trash_dir.iterdir()) == []
     assert db.rollback.await_count == 2
 

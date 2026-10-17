@@ -64,7 +64,7 @@ async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypat
     async with app_module.lifespan(None):
         pass
 
-    statements = [call.args[0] for call in db.execute.await_args_list]
+    statements = [call.args[0] for call in db.execute.await_args_list if call.args[0].is_update]
     approval_update = next(
         statement for statement in statements if statement.table.name == "approval_requests"
     )

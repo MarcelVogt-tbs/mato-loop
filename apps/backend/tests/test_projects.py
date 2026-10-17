@@ -267,7 +267,7 @@ async def test_delete_project_with_sessions_trashes_tree_and_database_rows(
     session = ChatSession(
         id=uuid4(), user_id=user.id, project_id=project.id, title="Session"
     )
-    storage.provision(session.id, project.id)
+    storage.provision(session.id, project.id, user_id=user.id)
     shared_file = storage.logical_root_path(session.id, project.id) / "files" / "shared.txt"
     shared_file.write_text("shared", encoding="utf-8")
     monkeypatch.setattr(projects_route, "SessionStorage", lambda: storage)
@@ -295,6 +295,7 @@ async def test_delete_project_with_sessions_trashes_tree_and_database_rows(
     assert not shared_file.exists()
     assert "DELETE FROM chat_sessions" in str(db.execute.await_args.args[0])
     assert list(storage.trash_dir.iterdir()) == []
+    assert storage._owners == {}
     locked_automation_query = db.scalars.await_args_list[4].args[0]
     assert locked_automation_query.get_execution_options()["populate_existing"] is True
     assert "FOR UPDATE" in str(locked_automation_query)

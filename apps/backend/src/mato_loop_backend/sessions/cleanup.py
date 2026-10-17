@@ -73,6 +73,7 @@ async def deleting_child_sessions(
         remaining = set((await db.scalars(
             select(ChatSession.id).where(ChatSession.id.in_([child_id for child_id, _, _ in trashed]))
         )).all()) if trashed else set()
+        await asyncio.to_thread(storage.forget_sessions, [child_id for child_id, _, _ in trashed if child_id not in remaining])
         for child_id, project_id, tree in trashed:
             if tree is not None:
                 try:
@@ -85,6 +86,7 @@ async def deleting_child_sessions(
         raise
     else:
         session_secrets.clear_sessions([child_id for child_id, _ in children])
+        await asyncio.to_thread(storage.forget_sessions, [child_id for child_id, _ in children])
         for _, _, tree in trashed:
             try:
                 await asyncio.to_thread(storage.purge_trashed, tree)

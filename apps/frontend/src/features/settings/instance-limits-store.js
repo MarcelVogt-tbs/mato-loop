@@ -5,7 +5,7 @@ export const INSTANCE_LIMIT_DEFAULTS = {
   maxUploadMib: 64,
   maxAttachmentsPerMessage: 8,
   maxMessageUploadMib: 512,
-  sessionQuotaMib: 500,
+  userQuotaMib: null,
   maxImagePreviewMib: 5,
   maxEditableTextMib: 1,
   maxAudioDurationSeconds: 3600,
@@ -37,6 +37,10 @@ export const useInstanceLimitsStore = defineStore('instance-limits', {
   actions: {
     assignSettings(data) {
       for (const key of Object.keys(INSTANCE_LIMIT_DEFAULTS)) {
+        if (key === 'userQuotaMib' && data?.[key] === null) {
+          this[key] = null
+          continue
+        }
         if (Number.isFinite(Number(data?.[key]))) this[key] = Number(data[key])
       }
     },

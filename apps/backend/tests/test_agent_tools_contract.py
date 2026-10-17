@@ -3,6 +3,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from io import BytesIO
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, Mock
 from uuid import UUID, uuid4
@@ -3057,6 +3058,7 @@ async def test_save_skill_uses_user_scoped_approval_and_persistence(
     )
     context = _context(tmp_path, call)
     storage = context.root_files.session_storage
+    storage.register_owner(context.session.id, context.session.user_id)
     if project_scope:
         context.session.project_id = uuid4()
         storage.move_session(context.session.id, None, context.session.project_id)
@@ -3065,7 +3067,8 @@ async def test_save_skill_uses_user_scoped_approval_and_persistence(
         project_id=context.session.project_id,
         session_storage=storage,
         run_id=context.run_id,
-        session_quota_bytes=17 * 1024 * 1024,
+        user_id=context.session.user_id,
+        user_quota_bytes=17 * 1024 * 1024,
         max_editable_text_bytes=321 * 1024,
     )
     ui_files = RootFileService(
@@ -3141,7 +3144,7 @@ async def test_save_skill_uses_user_scoped_approval_and_persistence(
     assert len(draft_services) == 1
     assert draft_services[0].run_id is None
     assert draft_services[0].root_identity("session") == context.root_files.root_identity("session")
-    assert draft_services[0].SESSION_QUOTA_BYTES == context.root_files.SESSION_QUOTA_BYTES
+    assert draft_services[0].user_quota_bytes == context.root_files.user_quota_bytes
     assert draft_services[0].max_editable_text_bytes == context.root_files.max_editable_text_bytes
     assert len(ui_files.list_revisions(draft_file["path"])) == 2
     assert ui_files.list_revisions("agent-private.txt") == ()
@@ -5055,6 +5058,40 @@ async def test_provide_file_rejects_empty_managed_file(tmp_path) -> None:
     result = await tool_registry.execute(call, context)
 
     assert result.metadata == {"errorCode": "attachment.empty"}
+
+
+async def test_read_waiting_for_storage_keeps_event_loop_responsive(tmp_path, monkeypatch) -> None:
+    call = ToolCall(id="read", name="read", arguments={"root": "session", "path": "notes.txt"})
+    context = _context(tmp_path, call)
+    context.db.scalar.return_value = None
+    context.root_files.write_file("session", "notes.txt", "content")
+    locked, reading, release = Event(), Event(), Event()
+    original = context.root_files.working_revision
+
+    def read_revision(path):
+        reading.set()
+        return original(path)
+
+    def competing_write():
+        with context.root_files.session_storage.lock:
+            locked.set()
+            return release.wait(5)
+
+    async def heartbeat():
+        await asyncio.to_thread(reading.wait, 5)
+        release.set()
+
+    monkeypatch.setattr(context.root_files, "working_revision", read_revision)
+    writer = asyncio.create_task(asyncio.to_thread(competing_write))
+    await asyncio.to_thread(locked.wait, 5)
+    pulse = asyncio.create_task(heartbeat())
+    try:
+        await tool_registry.execute(call, context)
+        assert (reading.is_set(), await writer) == (True, True)
+    finally:
+        release.set()
+        await writer
+        await pulse
 
 
 async def test_read_does_not_access_path_after_denial(tmp_path) -> None:
