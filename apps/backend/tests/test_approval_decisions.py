@@ -31,6 +31,8 @@ from mato_loop_backend.permissions.policy import (
     execution_directory_permission,
     execution_directory_scope,
     integration_operation_permission,
+    session_grant_options,
+    session_grant_options_payload,
     session_grants_fingerprint,
     session_grants_payload,
     shell_action_scope,
@@ -70,7 +72,7 @@ def _fingerprint(approval: ApprovalRequest) -> None:
 
 
 @pytest.mark.parametrize("decision", ["allow_once", "allow_session"])
-@pytest.mark.parametrize("kind", ["legacy_shell", "navigation", "resources", "coding"])
+@pytest.mark.parametrize("kind", ["exact_shell", "navigation", "resources", "computer", "parent", "coding"])
 async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision, kind) -> None:
     approval = _approval()
     profile_id = uuid4()
@@ -86,30 +88,39 @@ async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision
         "trustLevel": "public",
         "sessionGrants": [
             {
-                "access": "write",
+                "category": "write",
                 "resourceType": "shell_action",
                 "resourceScope": action,
                 "resourceDisplay": "touch /target/file",
             },
         ],
     }
-    expected = [("resource.write", "shell_action", action)]
+    expected = [("category.write", "shell_action", action)]
     if kind == "navigation":
         request = execution_directory_permission(agent_id, "/source")
         approval.capability, approval.resource_type, approval.resource_scope = request.capability, request.resource_type, request.resource_scope
         approval.payload["sessionGrants"] = session_grants_payload(request)
         action = request.resource_scope
         expected = [("execution.directory", "execution_directory", action)]
-    elif kind == "resources":
+    elif kind in {"resources", "computer"}:
         requests = shell_command_permissions(agent_id, "/source", "cat /input/file > /target/file", ShellInspectResult(
             required_categories=["read", "write"],
             targets=[{"path": "/input/file", "kind": "input", "access": "read"}, {"path": "/target/file", "kind": "output", "access": "write"}],
             classification="write", read_only=False, analysis_complete=True, commands=[], inspection_revision="a" * 64,
         ))
-        request = requests[-1]
+        request = next(request for request in requests if request.capability == "shell.write")
         approval.resource_scope = request.resource_scope
         approval.payload["sessionGrants"] = session_grants_payload(request)
-        expected = [("category.write", "shell_computer", str(agent_id))]
+        approval.payload["grantOptions"] = session_grant_options_payload(request)
+        expected = [("category.write", "shell_computer", str(agent_id))] if kind == "computer" else [
+            ("category.write", "shell_action", request.effective_session_grants[0].resource_scope),
+        ]
+    elif kind == "parent":
+        request = execution_directory_permission(agent_id, "/source/file.txt", capability="filesystem.write")
+        approval.capability, approval.resource_type, approval.resource_scope = request.capability, request.resource_type, request.resource_scope
+        approval.payload["sessionGrants"] = session_grants_payload(request)
+        approval.payload["grantOptions"] = session_grant_options_payload(request)
+        expected = [("category.write", "execution_path", session_grant_options(request)["parent"].effective_session_grants[0].resource_scope)]
     elif kind == "coding":
         project = SimpleNamespace(id=uuid4(), name="Project", coding_integration_id=uuid4())
         monkeypatch.setattr(tools_coding, "_coding_project", AsyncMock(return_value=project))
@@ -132,7 +143,7 @@ async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision
     monkeypatch.setattr(run_events, "publish", publish)
 
     result = await decide_approval(
-        approval.id, ApprovalDecisionRequest(decision=decision), user, db
+        approval.id, ApprovalDecisionRequest(decision=decision, grant_option=kind if kind in {"computer", "parent"} else None), user, db
     )
 
     grants = [call.args[0] for call in db.add.call_args_list]
@@ -351,6 +362,26 @@ async def test_allow_session_rejects_entire_malformed_grant_set(monkeypatch) -> 
     db.add.assert_not_called()
     db.commit.assert_not_awaited()
     release.assert_called_once_with(approval.id)
+
+
+@pytest.mark.parametrize("selection,offered", [("parent", False), ("computer", True), ("/arbitrary", True), ("parent", True)])
+async def test_scope_selection_rejects_unoffered_or_changed_options(monkeypatch, selection, offered):
+    approval = _approval()
+    request = execution_directory_permission(uuid4(), "/work/file", capability="filesystem.write")
+    approval.capability, approval.resource_type, approval.resource_scope = request.capability, request.resource_type, request.resource_scope
+    approval.payload = {"sessionGrants": session_grants_payload(request), "grantOptions": session_grant_options_payload(request) if offered else []}
+    _fingerprint(approval)
+    if selection == "parent" and offered:
+        approval.payload["grantOptions"][1]["fingerprint"] = "0" * 64
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = approval
+    monkeypatch.setattr(AgentRuntime, "claim_approval_resolution", Mock(return_value=True))
+    release = Mock()
+    monkeypatch.setattr(AgentRuntime, "release_approval_resolution", release)
+    with pytest.raises(ApiError) as exc:
+        await decide_approval(approval.id, ApprovalDecisionRequest(decision="allow_session", grant_option=selection),
+                             UserAccount(id=approval.user_id), db)
+    assert (exc.value.code, db.add.called, release.call_args.args) == ("approval.targetChanged", False, (approval.id,))
 
 
 @pytest.mark.parametrize("count", [1, 257, 258])

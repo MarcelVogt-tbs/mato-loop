@@ -267,7 +267,8 @@ async def _authorize_shell(context: ToolContext, requests, reference=None) -> bo
             for request in requests:
                 if await context.ask_handler(request, check_only=True) in {PermissionDecision.DENY, PermissionDecision.USER_DENIED}:
                     return False
-        for request in requests:
+        # Approve writing before reading so its included read right avoids a redundant prompt.
+        for request in sorted(requests, key=lambda item: item.capability == "shell.read"):
             # The user's edit consent covers the whole revalidated command, not only its first category.
             if edited_approval is not None:
                 context.approval_resolution["argument_edit_approved"] = edited_approval

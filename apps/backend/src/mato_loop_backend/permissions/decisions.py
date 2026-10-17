@@ -13,9 +13,12 @@ from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.events import run_events
 from mato_loop_backend.models import ApprovalRequest, PermissionGrant
 from mato_loop_backend.permissions.policy import (
+    PermissionRequest,
     SessionGrantScope,
     session_grant_matches_request,
+    session_grant_options,
     session_grants_fingerprint,
+    session_grants_payload,
 )
 
 
@@ -103,6 +106,7 @@ async def decide_agent_action(
     expected_revision: str | None = None,
     argument_edits: tuple[tuple[tuple[str, ...], str], ...] = (),
     argument_revision: str | None = None,
+    grant_option: str | None = None,
     idempotent_same_decision: bool = False,
 ) -> dict[str, str]:
     async def decide() -> dict[str, str]:
@@ -121,6 +125,7 @@ async def decide_agent_action(
             expected_revision=expected_revision,
             argument_edits=argument_edits,
             argument_revision=argument_revision,
+            grant_option=grant_option,
             idempotent_same_decision=idempotent_same_decision,
         )
 
@@ -140,6 +145,7 @@ async def _decide_agent_action(
     expected_revision=None,
     argument_edits=(),
     argument_revision=None,
+    grant_option=None,
     idempotent_same_decision=False,
 ) -> dict[str, str]:
     if approval.status != "pending":
@@ -149,6 +155,7 @@ async def _decide_agent_action(
             and approval.action_kind != "terminal_command"
             and approval.status in {"approved", "denied"}
             and approval.decision == decision
+            and (grant_option is None or approval.payload.get("selectedGrantOption") == grant_option)
         ):
             return {"status": approval.status, "decision": decision}
         raise ApprovalDecisionError(409, "approval.alreadyDecided")
@@ -157,6 +164,8 @@ async def _decide_agent_action(
     if decision not in approval.available_decisions:
         raise ApprovalDecisionError(400, "approval.decisionUnavailable")
     if approval.request_type != "agent_action":
+        raise ApprovalDecisionError(400, "approval.decisionUnavailable")
+    if grant_option is not None and (decision not in {"allow_once", "allow_session"} or argument_edits):
         raise ApprovalDecisionError(400, "approval.decisionUnavailable")
     if argument_edits:
         if decision != "allow_once" or expected_revision is not None:
@@ -227,6 +236,8 @@ async def _decide_agent_action(
         decision == "allow_once" and "allow_session" in approval.available_decisions
         and bool(scopes) and not approval.payload.get("runActionOnly")
     )
+    if grant_option is not None and not reusable:
+        raise ApprovalDecisionError(400, "approval.decisionUnavailable")
     if not AgentRuntime.claim_approval_resolution(approval.id):
         approval.status = "expired"
         approval.resolved_at = datetime.now(UTC)
@@ -244,13 +255,8 @@ async def _decide_agent_action(
         )
         or any(
             not isinstance(scope, dict)
-            or set(scope) not in (
-                {"access", "resourceType", "resourceScope", "resourceDisplay"},
-                {"category", "resourceType", "resourceScope", "resourceDisplay"},
-            )
-            or scope.get("category", scope.get("access")) not in (
-                {"read", "read_sensitive", "write", "delete", "navigate"} if "category" in scope else {"read", "write", "navigate"}
-            )
+            or set(scope) != {"category", "resourceType", "resourceScope", "resourceDisplay"}
+            or scope["category"] not in {"read", "read_sensitive", "write", "delete", "navigate"}
             or not isinstance(scope["resourceType"], str)
             or not 1 <= len(scope["resourceType"]) <= 80
             or not isinstance(scope["resourceScope"], str)
@@ -262,13 +268,11 @@ async def _decide_agent_action(
                 approval.resource_type,
                 approval.resource_scope,
                 SessionGrantScope(
-                    scope.get("category", scope.get("access")),
+                    scope["category"],
                     scope["resourceType"],
                     scope["resourceScope"],
                     scope["resourceDisplay"],
-                    legacy="category" not in scope,
                 ),
-                legacy="category" not in scope,
             )
             for scope in scopes
         )
@@ -276,9 +280,35 @@ async def _decide_agent_action(
         AgentRuntime.release_approval_resolution(approval.id)
         raise ApprovalDecisionError(409, "approval.targetChanged")
 
+    if reusable and grant_option is not None:
+        request = PermissionRequest(
+            capability=approval.capability, resource_type=approval.resource_type,
+            resource_scope=approval.resource_scope, action_kind=approval.action_kind,
+            risk_level=approval.risk_level, title=approval.title, summary=approval.summary,
+            available_decisions=tuple(approval.available_decisions),
+            session_grants=tuple(SessionGrantScope(
+                item["category"], item["resourceType"], item["resourceScope"], item["resourceDisplay"],
+            ) for item in scopes),
+        )
+        option = session_grant_options(request).get(grant_option)
+        offered = next((item for item in approval.payload.get("grantOptions", [])
+                        if isinstance(item, dict) and item.get("id") == grant_option), None)
+        selected = session_grants_payload(option) if option is not None else []
+        if offered is None or option is None or offered.get("fingerprint") != session_grants_fingerprint(
+            approval.capability, approval.resource_type, approval.resource_scope, selected,
+        ):
+            AgentRuntime.release_approval_resolution(approval.id)
+            raise ApprovalDecisionError(409, "approval.targetChanged")
+        scopes = selected
+
     approval.status = "approved" if decision.startswith("allow") else "denied"
     approval.decision = decision
     approval.resolved_at = datetime.now(UTC)
+    if reusable:
+        approval.payload = {
+            **approval.payload, "grantedScopes": scopes,
+            "selectedGrantOption": grant_option or "requested",
+        }
     if skill_draft_approval and expected_revision is not None:
         approval.payload = {
             **approval.payload,
@@ -299,7 +329,7 @@ async def _decide_agent_action(
         grant_run_id = approval.run_id if decision == "allow_once" else None
         for scope in scopes:
             capability = SessionGrantScope(
-                scope.get("category", scope.get("access")), scope["resourceType"], scope["resourceScope"], legacy="category" not in scope,
+                scope["category"], scope["resourceType"], scope["resourceScope"],
             ).capability
             existing_grant = await db.scalar(
                 select(PermissionGrant).where(

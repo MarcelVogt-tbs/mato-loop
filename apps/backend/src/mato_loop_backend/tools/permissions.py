@@ -148,7 +148,7 @@ REQUEST_SESSION_PERMISSIONS = ToolDefinition(
     "Supports current-session/workspace files, shell, context search, session read/browse and declared "
     "integrations. No elevation, environment overrides, automation management, notify or silence. "
     "For directory read/write/delete, propose read/create_directory/delete_path at that directory. "
-    "File scopes include descendants, never parents; normal shell scopes bind category/computer. "
+    "File scopes include descendants; approval can select the parent. Shell scopes bind command/context; approval can select the computer. "
     "Allowed access needs no prompt; disabled stays blocked. Action-bound consent requires execution. "
     "Prepare known automation access. Wait for permissionsReady=true.",
     RequestSessionPermissionsArguments, request_session_permissions,

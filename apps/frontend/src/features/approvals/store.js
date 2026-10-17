@@ -75,11 +75,12 @@ export const useApprovalStore = defineStore('approvals', {
       this.loaded = true
       this.loadFailed = false
     },
-    async decide(id, decision, expectedRevision, memoryEdit, argumentEdit) {
+    async decide(id, decision, expectedRevision, memoryEdit, argumentEdit, grantOption) {
       this.submittingId = id
       try {
         await api.post(`/approvals/${id}/decisions`, {
           decision,
+          ...(decision.startsWith('allow') && grantOption != null ? { grant_option: grantOption } : {}),
           ...(decision === 'approve' && memoryEdit != null ? { memory_edit: memoryEdit } : {}),
           ...(decision.startsWith('allow') && expectedRevision != null
             ? { expected_revision: expectedRevision }

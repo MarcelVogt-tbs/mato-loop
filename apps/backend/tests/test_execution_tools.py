@@ -753,7 +753,7 @@ def test_shell_grant_matches_access_class_agent_and_directory(tmp_path) -> None:
     )
 
     assert PermissionPolicy.grant_matches(grant, matching, context.root_files)
-    assert not PermissionPolicy.grant_matches(grant, wrong_class, context.root_files)
+    assert PermissionPolicy.grant_matches(grant, wrong_class, context.root_files)
     assert not PermissionPolicy.grant_matches(grant, wrong_directory, context.root_files)
 
 
@@ -1211,7 +1211,7 @@ async def test_missing_administrator_password_returns_to_input_before_approval(t
     assert all(item.kwargs.get("check_only") for item in context.ask_handler.await_args_list)
 
 
-def test_shell_session_grants_bind_categories_to_the_computer() -> None:
+def test_shell_session_grants_bind_categories_to_the_command() -> None:
     agent_id = uuid4()
     requests = shell_command_permissions(
         agent_id,
@@ -1234,9 +1234,10 @@ def test_shell_session_grants_bind_categories_to_the_computer() -> None:
 
     assert [(request.capability, request.effective_session_grants[0].resource_type,
              request.effective_session_grants[0].resource_scope) for request in requests] == [
-        ("shell.read", "shell_computer", str(agent_id)), ("shell.write", "shell_computer", str(agent_id)),
+        (f"shell.{category}", "shell_action", shell_action_scope(agent_id, "/work", "cat /outside/input.txt > /other/output.txt"))
+        for category in ("write", "read")
     ]
-    request = requests[-1]
+    request = next(request for request in requests if request.capability == "shell.write")
     assert all(
         session_grant_matches_request(
             request.capability, request.resource_type, request.resource_scope, grant
@@ -1299,6 +1300,33 @@ async def test_mixed_shell_categories_are_all_checked_before_execution(tmp_path,
 
     context.ask_handler = AsyncMock(side_effect=authorize)
     assert await _authorize_shell(context, requests) is (blocked is None)
+
+
+@pytest.mark.parametrize("prepare", [False, True])
+async def test_mixed_read_write_shell_needs_only_the_write_approval(tmp_path, prepare):
+    from mato_loop_backend.tools.permissions import authorize_session_requests
+
+    client = FakeExecutionClient({}, {"shell.inspect", "shell.run"})
+    context = _context(tmp_path, ToolCall("shell", "shell_run", {}), client)
+    requests = shell_command_permissions(client.agent_id, client.current_directory, "cat input > output", ShellInspectResult(
+        required_categories=["read", "write"], classification="write", read_only=False,
+        targets=[], commands=[], analysis_complete=True, inspection_revision="a" * 64,
+    ))
+    grants, prompts = [], []
+
+    async def authorize(request, *, check_only=False):
+        if any(PermissionPolicy.grant_matches(grant, request, context.root_files) for grant in grants):
+            return PermissionDecision.ALLOW
+        if check_only:
+            return PermissionDecision.ASK
+        prompts.append(request.capability)
+        scope = request.effective_session_grants[0]
+        grants.append(PermissionGrant(capability=scope.capability, resource_type=scope.resource_type, resource_scope=scope.resource_scope))
+        return PermissionDecision.ALLOW
+
+    context.ask_handler = authorize
+    allowed = not (await authorize_session_requests(context, requests)).is_error if prepare else await _authorize_shell(context, requests)
+    assert (allowed, prompts) == (True, ["shell.write"])
 
 
 async def test_edited_mixed_command_is_approved_once_through_runtime(tmp_path, monkeypatch):
@@ -2055,7 +2083,7 @@ async def test_shell_copy_separates_classification_and_completeness(
     assert request.title == (
         "Shell: Lesen erlauben?"
         if classification == "read"
-        else "Shell: Schreiben erlauben?"
+        else "Shell: Lesen und Schreiben erlauben?"
     )
     assert request.summary == (
         "Es wurden keine bekannten Schreibaktionen erkannt. Der Befehl kann dennoch Nebenwirkungen haben."

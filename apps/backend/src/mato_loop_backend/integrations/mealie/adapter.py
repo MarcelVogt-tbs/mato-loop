@@ -967,7 +967,7 @@ def _permission(
             binding_revision=revision,
             operation_key=operation_key,
             grant_resource_key=resource_key,
-            resource_display=f'Mealie-Konto "{_display_text(instance.name)}"',
+            resource_display=f'{"Rezepte" if resource_key == "recipes" else "Essensplan"} · Mealie-Konto "{_display_text(instance.name)}"',
             title=title,
             summary=summary,
             display_items=display_items,

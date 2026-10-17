@@ -22,6 +22,7 @@ from mato_loop_backend.notifications import NotificationService
 from mato_loop_backend.permissions.coordinator import approval_coordinator
 from mato_loop_backend.permissions.policy import (
     PermissionRequest,
+    session_grant_options_payload,
     session_grants_display,
     session_grants_fingerprint,
     session_grants_payload,
@@ -107,6 +108,7 @@ async def request_approval(
             ),
             "trustLevel": run.trust_level,
             "sessionGrants": grant_payload,
+            "grantOptions": session_grant_options_payload(permission) if "allow_session" in available_decisions else [],
             "runActionScope": agent_run_support._run_action_scope(permission, call),
             "runActionOnly": "allow_session" not in permission.available_decisions,
             "sessionGrantsFingerprint": session_grants_fingerprint(

@@ -49,6 +49,7 @@ class ApprovalArgumentEdit(BaseModel):
 
 class ApprovalDecisionRequest(BaseModel):
     decision: Literal["allow_once", "allow_session", "approve", "deny"]
+    grant_option: str | None = Field(default=None, min_length=1, max_length=80)
     memory_edit: MemoryApprovalEdit | None = None
     argument_edits: list[ApprovalArgumentEdit] | None = Field(
         default=None, min_length=1, max_length=8
@@ -72,15 +73,15 @@ async def _permission_payload(
             resource_display = "Persönliche Skills"
         elif source and isinstance(source.payload.get("resourceDisplay"), str):
             resource_display = source.payload["resourceDisplay"]
-        if source is not None and isinstance(source.payload.get("sessionGrants"), list):
+        if source is not None and isinstance(source.payload.get("grantedScopes", source.payload.get("sessionGrants")), list):
             matching_scope = next(
                 (
-                    item for item in source.payload["sessionGrants"]
+                    item for item in source.payload.get("grantedScopes", source.payload.get("sessionGrants", []))
                     if isinstance(item, dict)
                     and item.get("resourceType") == grant.resource_type
                     and item.get("resourceScope") == grant.resource_scope
                     and SessionGrantScope(
-                        item.get("category", item.get("access")), item.get("resourceType"), item.get("resourceScope"), legacy="category" not in item,
+                        item.get("category"), item.get("resourceType"), item.get("resourceScope"),
                     ).capability == grant.capability
                 ),
                 None,
@@ -219,6 +220,8 @@ async def decide_approval(
     ):
         raise ApiError(400, "approval.decisionUnavailable")
     if approval.request_type == "memory_change":
+        if payload.grant_option is not None:
+            raise ApiError(400, "validation.invalid", field="grant_option")
         await db.refresh(approval, with_for_update=True)
         if approval.status != "pending":
             raise ApiError(409, "approval.alreadyDecided")
@@ -246,6 +249,7 @@ async def decide_approval(
                 else ()
             ),
             argument_revision=payload.argument_revision,
+            grant_option=payload.grant_option,
         )
     except ApprovalDecisionError as exc:
         raise ApiError(

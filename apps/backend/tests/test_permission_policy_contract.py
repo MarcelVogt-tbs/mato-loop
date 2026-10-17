@@ -46,6 +46,7 @@ from mato_loop_backend.permissions.policy import (
     path_permission,
     project_session_path_permission,
     session_browse_permission,
+    session_grant_options,
     session_grants_display,
     session_permission,
     session_search_permission,
@@ -176,7 +177,7 @@ def test_integration_category_grants_reuse_the_same_resource(tmp_path, legacy) -
         grant.resource_scope = json.dumps({**json.loads(grant.resource_scope), "capability": regular.capability}, separators=(",", ":"), sort_keys=True)
     root_files = _root_files(tmp_path, session)
 
-    assert PermissionPolicy.grant_matches(grant, regular, root_files)
+    assert PermissionPolicy.grant_matches(grant, regular, root_files) is not legacy
     assert PermissionPolicy.grant_matches(grant, code, root_files) is not legacy
 
 
@@ -263,7 +264,7 @@ async def test_coding_permission_is_scoped_to_current_project(tmp_path, legacy) 
         )
     assert [PermissionPolicy.grant_matches(grant, target, root_files) for target in (
         request, replace(request, capability="coding.plan.read"),
-    )] == [True, not legacy]
+    )] == [not legacy, not legacy]
 
 
 @pytest.mark.parametrize("legacy", [False, True])
@@ -281,7 +282,7 @@ def test_root_path_grant_matches_only_same_root_identity_and_path(tmp_path, lega
 
     assert PermissionPolicy.grant_matches(
         grant, _path_request(root_files, path), root_files
-    )
+    ) is not legacy
     assert PermissionPolicy.grant_matches(
         grant, _path_request(root_files, f"{path}/readme.md"), root_files
     ) is not legacy
@@ -300,7 +301,7 @@ async def test_managed_read_reuses_saved_filesystem_grant(tmp_path) -> None:
     assert await PermissionPolicy.evaluate(
         db, session, request, root_files, ToolExecutionPolicy.ASK
     ) == PermissionDecision.ALLOW
-    assert ["category.read", "resource.read"] in db.scalars.await_args.args[0].compile().params.values()
+    assert ["category.read", "category.write"] in db.scalars.await_args.args[0].compile().params.values()
     assert await PermissionPolicy.evaluate(
         db, session, request, root_files, ToolExecutionPolicy.DISABLED
     ) == PermissionDecision.DENY
@@ -466,13 +467,15 @@ async def test_shell_grants_use_the_computer_not_file_scopes(tmp_path, legacy, c
 
 @pytest.mark.parametrize("granted_category", ["read", "write", "delete"])
 @pytest.mark.parametrize("requested_category", ["read", "write", "delete"])
-def test_computer_resource_grants_keep_categories_separate(tmp_path, granted_category, requested_category):
+def test_computer_resource_grants_include_read_in_write(tmp_path, granted_category, requested_category):
     session = _session()
     root_files = _root_files(tmp_path, session)
     computer = uuid4()
     granted = execution_directory_permission(computer, "/project", capability=f"filesystem.{granted_category}")
     request = execution_directory_permission(computer, "/project/sub/file", capability=f"filesystem.{requested_category}")
-    assert PermissionPolicy.grant_matches(_grant(granted), request, root_files) == (granted_category == requested_category)
+    assert PermissionPolicy.grant_matches(_grant(granted), request, root_files) == (
+        granted_category == requested_category or (granted_category, requested_category) == ("write", "read")
+    )
 
 
 def test_computer_delete_grant_does_not_advertise_shell_access():
@@ -480,14 +483,85 @@ def test_computer_delete_grant_does_not_advertise_shell_access():
     assert session_grants_display(request) == ["Löschen · einschließlich Unterpfaden: /project"]
 
 
-@pytest.mark.parametrize("category,label", [("write", "Schreiben"), ("delete", "Löschen")])
+@pytest.mark.parametrize("granted", ["read", "write", "delete", "read_sensitive"])
+@pytest.mark.parametrize("requested", ["read", "write", "delete", "read_sensitive"])
+def test_integration_category_coverage_is_resource_bound(tmp_path, granted, requested):
+    connection = uuid4()
+    capabilities = {"read": "calendar.read", "write": "calendar.write", "delete": "calendar.delete", "read_sensitive": "secrets.access"}
+
+    def request(category, resource="calendar:one"):
+        return integration_operation_permission(
+            capability=capabilities[category], integration_id=connection, binding_revision="{}",
+            operation_key="operation", resource_key=resource, title="Zugriff?", summary="Zugriff prüfen.",
+        )
+
+    roots = _root_files(tmp_path, _session())
+    grant = _grant(request(granted))
+    assert [PermissionPolicy.grant_matches(grant, target, roots) for target in (
+        request(requested), request(requested, "calendar:two"),
+    )] == [granted == requested or (granted, requested) == ("write", "read"), False]
+
+
+@pytest.mark.parametrize("path, parent_path", [
+    ("/work/docs/file", "/work/docs"), ("/file", "/"), ("/", None),
+    ("C:/Users/file", "C:/Users"), ("C:/file", "C:/"), ("C:/", None),
+])
+def test_computer_parent_option_stops_at_the_root(tmp_path, path, parent_path):
+    computer = uuid4()
+    request = execution_directory_permission(computer, path, capability="filesystem.write")
+    options = session_grant_options(request)
+    assert {key: json.loads(value.effective_session_grants[0].resource_scope)["path"]
+            for key, value in options.items()} == ({"requested": path, "parent": parent_path} if parent_path else {"requested": path})
+
+
+@pytest.mark.parametrize("path, parent_path", [("docs/file", "docs"), ("file", "."), (".", None)])
+def test_session_parent_option_keeps_the_storage_identity(tmp_path, path, parent_path):
+    roots = _root_files(tmp_path, _session())
+    options = session_grant_options(_path_request(roots, path, capability="session.files.write"))
+    if parent_path is None:
+        assert list(options) == ["requested"]
+    else:
+        grant = _grant(options["parent"])
+        assert [PermissionPolicy.grant_matches(grant, target, roots) for target in (
+            _path_request(roots, f"{parent_path}/sibling" if parent_path != "." else "sibling"),
+            replace(_path_request(roots, path), resource_scope=_path_request(_root_files(tmp_path, _session()), path).resource_scope),
+        )] == [True, False]
+
+
+@pytest.mark.parametrize("scope", ["requested", "computer"])
+def test_shell_scope_choice_controls_reuse(tmp_path, scope):
+    computer = uuid4()
+
+    def request(command="touch file", directory="/work", environment=None, agent=computer, category="write"):
+        return shell_command_permissions(agent, directory, command, ShellInspectResult(
+            required_categories=[category], classification=category, read_only=category == "read",
+            targets=[], commands=[], analysis_complete=True, inspection_revision="a" * 64,
+        ), environment=environment)[0]
+
+    roots = _root_files(tmp_path, _session())
+    grant = _grant(session_grant_options(request())[scope])
+    assert [PermissionPolicy.grant_matches(grant, target, roots) for target in (
+        request(), request(category="read"), request(command="touch another"), request(directory="/other"),
+        request(environment={"MODE": "test"}), request(agent=uuid4()),
+    )] == [True, True, scope == "computer", scope == "computer", False, False]
+
+
+def test_restricted_requests_have_no_broader_options():
+    request = execution_directory_permission(uuid4(), "/work/file", capability="filesystem.write")
+    assert [list(session_grant_options(restricted)) for restricted in (
+        replace(request, sensitive_access=True), replace(request, available_decisions=("allow_once", "deny")),
+        administrator_permission(uuid4(), "/work", capability="filesystem.write", path="/etc/file"),
+    )] == [["requested"]] * 3
+
+
+@pytest.mark.parametrize("category,label", [("write", "Lesen und Schreiben"), ("delete", "Löschen")])
 def test_administrator_shell_grant_display_names_its_category(category, label):
     request = administrator_permission(uuid4(), "/work", capability=f"shell.{category}", command="touch new; rm old")
     assert session_grants_display(request) == [f"{label} · Diesen Shell-Befehl als Administrator ausführen: touch new; rm old · Arbeitsverzeichnis: /work"]
 
 
 @pytest.mark.parametrize("legacy", [False, True])
-def test_only_legacy_write_grants_include_deletion(tmp_path, legacy):
+def test_write_grants_never_include_deletion(tmp_path, legacy):
     roots = _root_files(tmp_path, _session())
     write = _path_request(roots, "file", capability="filesystem.write")
     grant = _grant(write)
@@ -495,7 +569,7 @@ def test_only_legacy_write_grants_include_deletion(tmp_path, legacy):
         grant.capability, grant.resource_scope = "resource.write", write.resource_scope
     assert PermissionPolicy.grant_matches(
         grant, _path_request(roots, "file", capability="filesystem.delete"), roots,
-    ) is legacy
+    ) is False
 
 
 @pytest.mark.parametrize(
@@ -1025,7 +1099,7 @@ async def test_runtime_grant_lifetime_and_boundaries(tmp_path, monkeypatch, life
             assert outcomes == [
                 PermissionDecision.ALLOW, PermissionDecision.ALLOW,
                 PermissionDecision.ALLOW if lifetime == "session" else PermissionDecision.USER_DENIED,
-                PermissionDecision.ALLOW if kind == "shell" and lifetime != "exact" else PermissionDecision.USER_DENIED,
+                PermissionDecision.USER_DENIED,
                 PermissionDecision.USER_DENIED, PermissionDecision.USER_DENIED,
                 *([PermissionDecision.USER_DENIED] * 2 if lifetime == "exact" else []),
                 PermissionDecision.DENY,
@@ -1036,7 +1110,7 @@ async def test_runtime_grant_lifetime_and_boundaries(tmp_path, monkeypatch, life
 
 @pytest.mark.parametrize("elevated", [False, True])
 @pytest.mark.parametrize("command", ["cat input > output", "cat other > output"])
-async def test_legacy_shell_write_grant_covers_only_its_whole_command(tmp_path, elevated, command):
+async def test_shell_write_grant_covers_read_only_for_its_whole_command(tmp_path, elevated, command):
     session = _session(user_id=uuid4(), current_directory="/work")
     agent = ExecutionAgent(id=uuid4(), user_id=session.user_id, home_directory="/home/user",
         home_filesystem_policy="auto", external_filesystem_policy="auto", home_shell_enabled=True, external_shell_enabled=True)
@@ -1047,7 +1121,7 @@ async def test_legacy_shell_write_grant_covers_only_its_whole_command(tmp_path, 
         command=command, inspection=inspection) for category in inspection.required_categories) if elevated else shell_command_permissions(
         agent.id, "/work", command, inspection,
     )
-    grant = PermissionGrant(session_id=session.id, capability="resource.write", resource_type="shell_action",
+    grant = PermissionGrant(session_id=session.id, capability="category.write", resource_type="shell_action",
         resource_scope=shell_action_scope(agent.id, "/work", "cat input > output", elevated=elevated))
     db = _db_with_grants(grant)
     db.scalar.return_value = agent

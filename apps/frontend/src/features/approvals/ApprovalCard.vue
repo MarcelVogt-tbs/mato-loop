@@ -227,6 +227,18 @@
     <q-separator />
     <q-card-actions class="q-pa-md">
       <div v-if="!isMemoryApproval && hasDecision('allow_session') && !argumentEditDirty" class="column col-12">
+        <app-select
+          v-if="grantOptions.length > 1"
+          v-model="grantOption"
+          outlined
+          emit-value
+          map-options
+          option-value="id"
+          label="Gilt für"
+          :options="grantOptions"
+          :disable="Boolean(loadingDecision) || matchingDraftDirty"
+          class="q-mb-md"
+        />
         <q-checkbox dense
           v-if="hasBothAllowDecisions"
           v-model="rememberForSession"
@@ -347,8 +359,12 @@ const memoryCategoryOptions = ['context', 'fact', 'goal', 'identity', 'preferenc
 const memoryAudienceOptions = ['private_only', 'public_only', 'both']
   .map((value) => ({ value, label: memoryAudienceLabel(value) }))
 const rememberForSession = ref(false)
+const grantOption = ref('requested')
+const grantOptions = computed(() => (
+  props.approval.payload?.grantOptions || props.approval.details?.grantOptions || []
+).map((option) => ({ ...option, caption: option.display.join(' · ') })))
 const shellClassification = computed(() => shellClassificationDisplay(props.approval))
-const sessionGrantDisplay = computed(() => (
+const sessionGrantDisplay = computed(() => grantOptions.value.find((option) => option.id === grantOption.value)?.display || (
   props.approval.details?.displayItems || props.approval.payload?.displayItems || []
 ).find((item) => ['Freigegebener Bereich', 'Für diese Session'].includes(item.label))?.value || [])
 const argumentEditPayload = computed(() => props.approval.payload?.argumentEdit)
@@ -531,7 +547,9 @@ async function decide(decision) {
           }))
         }
       : undefined
-    await approvals.decide(props.approval.id, decision, draftRevision.value, edit, toolEdit)
+    const selectedGrant = decision.startsWith('allow') && !argumentEditDirty.value && grantOptions.value.length > 1
+      ? grantOption.value : undefined
+    await approvals.decide(props.approval.id, decision, draftRevision.value, edit, toolEdit, selectedGrant)
   } catch {
     // The central API interceptor displays the error; local edits remain available.
   } finally {

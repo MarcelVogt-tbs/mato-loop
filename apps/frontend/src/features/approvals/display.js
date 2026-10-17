@@ -241,18 +241,11 @@ export function permissionGrantDisplay(grant, sessions = []) {
   if (grant?.resourceType === 'run_action') {
     return { label: grant.command ? 'Bestätigter Shell-Befehl' : 'Bestätigte Aktion', value: grant.resourceDisplay || 'Mit den freigegebenen Werten', icon: grant.command ? 'terminal' : 'verified_user' }
   }
-  if (grant?.resourceType === 'execution_administrator') {
-    return {
-      label: 'Frühere Administratorfreigabe',
-      value: grant.resourceDisplay || `Computer ${grant.resourceScope}`,
-      icon: 'admin_panel_settings'
-    }
-  }
   const resource = approvalResource(grant, sessions)
   const category = {
     'category.read': { label: 'Lesen', icon: 'visibility' },
     'category.read_sensitive': { label: 'Vertrauliche Daten lesen', icon: 'key' },
-    'category.write': { label: 'Schreiben', icon: 'edit' },
+    'category.write': { label: 'Lesen und Schreiben', icon: 'edit' },
     'category.delete': { label: 'Löschen', icon: 'delete_outline' }
   }[grant?.capability]
   if (category) {
@@ -263,99 +256,13 @@ export function permissionGrantDisplay(grant, sessions = []) {
       value: grant.recursive ? `${resource.value.replace(/\/$/, '')}/**` : resource.value
     }
   }
-  if (grant?.resourceType === 'shell_action') {
-    return {
-      label: grant.capability === 'resource.write' ? 'Exakter Shell-Befehl · Schreiben' : 'Exakter Shell-Befehl · Lesen',
-      value: resource.value,
-      icon: 'terminal'
-    }
+  if (grant?.capability === 'execution.directory') {
+    return { label: 'Im Ordnerbaum navigieren', value: resource.value, icon: 'drive_file_move' }
   }
-  if (['resource.read', 'resource.write'].includes(grant?.capability)) {
-    const write = grant.capability === 'resource.write'
-    const exactPath = ['execution_path', 'session_path', 'administrator_path'].includes(grant.resourceType)
-    const legacyPath = ['execution_directory', 'root_path'].includes(grant.resourceType)
-    return {
-      label: exactPath
-        ? `Exakter Pfad · ${write ? 'Schreiben' : 'Lesen'}`
-        : legacyPath ? 'Frühere Bereichsfreigabe' : `Alle passenden ${write ? 'schreibenden' : 'lesenden'} Aktionen`,
-      value: resource.value,
-      icon: grant.resourceType === 'administrator_path' ? 'admin_panel_settings' : write ? 'edit' : 'visibility'
-    }
-  }
-  if (grant?.resourceType === 'shell_command') {
-    const prefixes = Array.isArray(grant.shellPrefixes)
-      ? grant.shellPrefixes
-        .filter((prefix) => Array.isArray(prefix) && prefix.every((token) => typeof token === 'string'))
-        .map((prefix) => prefix.join(' '))
-      : []
-    return {
-      label: grant.capability === 'shell.read'
-        ? 'Shell-Befehle ohne erkannte Schreibaktionen'
-        : 'Als schreibend eingestufte Shell-Befehle',
-      value: [resource.value, ...prefixes].join(' · '),
-      icon: 'terminal'
-    }
-  }
-  if (grant?.resourceType === 'url') {
-    const fingerprint = /^[0-9a-f]{64}$/i.test(String(grant.resourceScope || ''))
-      ? ` · ${grant.resourceScope.slice(0, 8)}`
-      : ''
-    return {
-      label: 'Webseite abrufen · Exakte URL',
-      value: `${resource.value}${fingerprint}`,
-      icon: 'language'
-    }
-  }
-  if (grant?.resourceType === 'skill') {
-    return { label: 'Skill bearbeiten', value: resource.value, icon: 'edit_note' }
-  }
-  const capability = {
-    'filesystem.read': { label: 'Dateien lesen', icon: 'visibility' },
-    'filesystem.write': { label: 'Dateien schreiben', icon: 'edit' },
-    'filesystem.delete': { label: 'Dateien löschen', icon: 'delete_outline' },
-    'execution.directory': { label: 'Im Ordnerbaum navigieren', icon: 'drive_file_move' },
-    'system.info': { label: 'Systeminformationen lesen', icon: 'computer' },
-    'process.execute': { label: 'Befehl ausführen', icon: 'terminal' },
-    'network.search': { label: 'Websuche verwenden', icon: 'travel_explore' },
-    'session.read': { label: 'Session lesen', icon: 'forum' },
-    'session.search': { label: 'Sessions durchsuchen', icon: 'manage_search' },
-    'memory.read': { label: 'Memories lesen', icon: 'psychology' },
-    'memory.write': { label: 'Memory speichern', icon: 'save' },
-    'settings.user_profile.update': { label: 'Persönliches Profil ändern', icon: 'manage_accounts' },
-    'secrets.access': { label: 'Variablen und Secrets verwenden', icon: 'key' },
-    'secrets.write': { label: 'Variable oder Secret speichern', icon: 'save' },
-    'skills.write': { label: 'Skills erstellen', icon: 'auto_awesome' },
-    'automation.read': { label: 'Automationen anzeigen', icon: 'schedule' },
-    'automation.create': { label: 'Automation erstellen', icon: 'add_task' },
-    'automation.update': { label: 'Automation ändern', icon: 'edit_calendar' },
-    'automation.run': { label: 'Automation starten', icon: 'play_arrow' },
-    'automation.delete': { label: 'Automation löschen', icon: 'delete_forever' },
-    'calendar.read': { label: 'Kalender lesen', icon: 'event' },
-    'calendar.write': { label: 'Kalender ändern', icon: 'edit_calendar' },
-    'calendar.delete': { label: 'Kalendereintrag löschen', icon: 'event_busy' },
-    'tasks.read': { label: 'Aufgaben lesen', icon: 'checklist' },
-    'tasks.write': { label: 'Aufgaben ändern', icon: 'edit_note' },
-    'tasks.delete': { label: 'Aufgaben löschen', icon: 'delete_outline' },
-    'mail.read': { label: 'E-Mails lesen', icon: 'mail' },
-    'mail.drafts': { label: 'E-Mail-Entwürfe verwalten', icon: 'drafts' },
-    'mail.send': { label: 'E-Mails senden', icon: 'send' },
-    'mail.delete': { label: 'E-Mails löschen', icon: 'delete_outline' },
-    'knowledge.read': { label: 'Wissensdatenbank lesen', icon: 'menu_book' },
-    'knowledge.write': { label: 'Wissensdatenbank ändern', icon: 'edit_note' },
-    'knowledge.delete': { label: 'Wissenseintrag löschen', icon: 'delete_sweep' },
-    'mealie.accounts.read': { label: 'Mealie-Konten auflisten', icon: 'restaurant' },
-    'recipes.read': { label: 'Rezepte lesen', icon: 'menu_book' },
-    'recipes.write': { label: 'Rezepte ändern', icon: 'edit_note' },
-    'recipes.delete': { label: 'Rezepte löschen', icon: 'delete' },
-    'meal_plan.read': { label: 'Essensplan lesen', icon: 'calendar_month' },
-    'meal_plan.write': { label: 'Essensplan ändern', icon: 'edit_calendar' },
-    'meal_plan.delete': { label: 'Essensplan-Eintrag löschen', icon: 'event_busy' },
-    'integration.private_data.release': { label: 'Private Integrationsdaten freigeben', icon: 'cloud_upload' }
-  }[grant?.capability]
   return {
-    label: capability?.label || 'Tool-Zugriff',
+    label: 'Tool-Zugriff',
     value: resource.value,
-    icon: capability?.icon || 'verified_user'
+    icon: 'verified_user'
   }
 }
 

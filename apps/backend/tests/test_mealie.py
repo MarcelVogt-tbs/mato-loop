@@ -657,7 +657,7 @@ def test_permissions_name_the_account_and_offer_scoped_writes() -> None:
         MealieListAccountsArguments(), context
     )[0]
 
-    assert read.resource_display == 'Mealie-Konto "Familienküche"'
+    assert read.resource_display == 'Essensplan · Mealie-Konto "Familienküche"'
     assert read.available_decisions == ("allow_once", "allow_session", "deny")
     assert read.display_items
     assert write.available_decisions == ("allow_once", "allow_session", "deny")

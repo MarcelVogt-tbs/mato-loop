@@ -39,6 +39,44 @@ def test_unified_grant_migration_removes_only_approval_created_grants(monkeypatc
     engine.dispose()
 
 
+def test_grant_scope_migration_resets_consent_without_expiring_memory_proposals(monkeypatch):
+    path = Path(__file__).parents[1] / "alembic/versions/ab5df5b19220_grant_scopes.py"
+    spec = importlib.util.spec_from_file_location("grant_scopes_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    metadata = sa.MetaData()
+    grants = sa.Table("permission_grants", metadata, sa.Column("id", sa.Uuid(), primary_key=True),
+                      sa.Column("capability", sa.String()), sa.Column("resource_type", sa.String()))
+    approvals = sa.Table("approval_requests", metadata, sa.Column("request_type", sa.String()),
+                         sa.Column("status", sa.String()), sa.Column("resolved_at", sa.DateTime()))
+    engine = sa.create_engine("sqlite://")
+    metadata.create_all(engine)
+    try:
+        with engine.begin() as connection:
+            connection.execute(grants.insert(), [
+                {"id": uuid4(), "capability": capability, "resource_type": resource}
+                for capability, resource in [
+                    ("category.write", "integration_resource"), ("category.write", "execution_path"),
+                    ("category.read", "shell_computer"), ("category.delete", "shell_computer"),
+                    ("category.read", "execution_path"), ("category.delete", "session_path"),
+                    ("execution.directory", "execution_directory"), ("resource.write", "shell_action"),
+                ]
+            ])
+            connection.execute(approvals.insert(), [
+                {"request_type": kind, "status": status} for kind, status in [
+                    ("agent_action", "pending"), ("agent_action", "approved"), ("memory_change", "pending"),
+                ]
+            ])
+            monkeypatch.setattr(migration.op, "execute", connection.execute)
+            migration.upgrade()
+            migration.downgrade()
+            assert (connection.execute(sa.select(grants)).all(), connection.execute(sa.select(approvals.c.request_type, approvals.c.status)).all()) == (
+                [], [("agent_action", "expired"), ("agent_action", "approved"), ("memory_change", "pending")],
+            )
+    finally:
+        engine.dispose()
+
+
 def test_permission_migration_preserves_settings_and_resets_navigation(monkeypatch):
     path = Path(__file__).parents[1] / "alembic/versions/9cee124e2dfb_simplify_permissions.py"
     spec = importlib.util.spec_from_file_location("connection_availability_migration", path)

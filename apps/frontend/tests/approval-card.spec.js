@@ -89,20 +89,40 @@ async function selectOption(card, label, option) {
 }
 
 describe('approval card', () => {
+  it.each([
+    ['parent', 'Übergeordneter Ordner', 'Lesen und Schreiben · einschließlich Unterpfaden: /work/docs'],
+    ['computer', 'Shell auf diesem Computer', 'Lesen und Schreiben · Shell auf diesem Computer']
+  ])('submits the chosen %s scope with its displayed rights', async (id, label, display) => {
+    await mountApproval({
+      ...responses['/approvals/pending'][0], availableDecisions: ['allow_once', 'allow_session', 'deny'],
+      payload: { grantOptions: [
+        { id: 'requested', label: 'Angefragter Bereich', display: ['Lesen und Schreiben: angefragte Ressource'] },
+        { id, label, display: [display] }
+      ] }
+    })
+    const card = root.querySelector('.approval-card')
+    await selectOption(card, 'Gilt für', label)
+    expect(card.textContent).toContain(display)
+    button(card, 'Für diesen Lauf erlauben').click()
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalledExactlyOnceWith('/approvals/approval/decisions', {
+      decision: 'allow_once', grant_option: id
+    }))
+  })
+
   it('shows session grants with their exact shell context', async () => {
     const chat = useChatStore()
     chat.current = { id: 'session-1', activeRun: { id: 'run' } }
     chat.running = true
     responses['/approvals/permissions'] = [{
       id: 'grant-1', sessionId: 'session-1', applicable: false,
-      capability: 'resource.write', resourceType: 'shell_action', resourceDisplay: '/opt/project',
+      capability: 'category.write', resourceType: 'shell_action', resourceDisplay: '/opt/project',
       executionAgentName: 'Notebook', currentDirectory: '/opt/project',
       command: 'printf reviewed > output.txt', elevated: true
     }]
     await mountView(() => h(SessionApp))
     expect(root.querySelector('[aria-label="Memory-Modus auswählen"]').classList.contains('q-field--disabled')).toBe(false)
     await vi.waitFor(() => expect(root.querySelector('[aria-labelledby="session-permissions-title"]')?.textContent).toMatch(
-      /Exakter Shell-Befehl · Schreiben.*Notebook.*\/opt\/project.*printf reviewed > output.txt.*Mit Administratorrechten.*Inaktiv/s
+      /Exakter Shell-Befehl · Lesen und Schreiben.*Notebook.*\/opt\/project.*printf reviewed > output.txt.*Mit Administratorrechten.*Inaktiv/s
     ))
   })
 
@@ -110,7 +130,7 @@ describe('approval card', () => {
     useChatStore().current = { id: 'session-1', preferredExecutionAgentId: 'old' }
     responses['/approvals/permissions'] = [{
       id: 'grant-1', sessionId: 'session-1', applicable: true,
-      capability: 'resource.read', resourceType: 'execution_path', resourceDisplay: '/work/file'
+      capability: 'category.read', resourceType: 'execution_path', resourceDisplay: '/work/file'
     }]
     await mountView(() => h(SessionApp))
     const section = root.querySelector('[aria-labelledby="session-permissions-title"]')
