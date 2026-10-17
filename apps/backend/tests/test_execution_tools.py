@@ -370,6 +370,19 @@ def test_model_paths_resolve_against_current_directory(tmp_path) -> None:
     assert execution_path(context, "/etc/hosts") == "/etc/hosts"
 
 
+async def test_change_to_current_directory_does_not_request_approval(tmp_path) -> None:
+    path = "/home/user/project"
+    call = ToolCall("call", "change_directory", {"path": path})
+    client = FakeExecutionClient(
+        {"filesystem.resolve": DirectoryResult(path=path)}, {"filesystem.resolve"}, path,
+    )
+    context = _context(tmp_path, call, client, decision=PermissionDecision.USER_DENIED)
+
+    result = await _tools(client.operations).execute(call, context)
+
+    assert json.loads(result.content) == {"currentDirectory": path}
+
+
 async def test_workspace_read_dispatches_absolute_filesystem_path(tmp_path) -> None:
     call = ToolCall(
         "call",

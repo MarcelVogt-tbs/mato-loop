@@ -158,6 +158,8 @@ async def _change_directory(
         DirectoryResult,
     )
     assert isinstance(result, DirectoryResult)
+    if result.path == client.current_directory:
+        return ToolResult.json({"currentDirectory": result.path})
     if not await files_access.directory_allowed(
         context,
         result.path,
@@ -415,6 +417,7 @@ GET_SYSTEM_INFO = ToolDefinition(
 CHANGE_DIRECTORY = ToolDefinition(
             "change_directory",
             "Resolve a directory on the selected computer and make it the persistent current directory. "
+            "File and shell tools already use the current directory; call this only to select a different directory. "
             "Use this instead of shell cd; shell cd applies only to that shell call.",
             ChangeDirectoryArguments,
             _change_directory,
