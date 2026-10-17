@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import websockets
 from pydantic import ValidationError
 
@@ -127,6 +128,71 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("name", hello)
             self.assertNotIn("roots", hello)
             self.assertNotIn("dataDir", hello)
+
+    async def test_maintenance_results_are_delivered_before_hello_and_while_connected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            outcomes = home / "agent-state"
+            outcomes.mkdir()
+            after_welcome = "bc7f3dfd-d674-4781-b5fa-22ee0c6e5eb0"
+            events = []
+            delivered = asyncio.Event()
+
+            def save_result(job_id):
+                (outcomes / f"maintenance-{job_id}.json").write_text(
+                    json.dumps(
+                        {
+                            "backendUrl": config.backend_url,
+                            "agentId": AGENT_ID,
+                            "jobId": job_id,
+                            "status": "succeeded",
+                        }
+                    )
+                )
+
+            async def handler(websocket):
+                await websocket.recv()
+                events.append("hello")
+                await websocket.send(
+                    json.dumps({"type": "welcome", "protocolVersion": 1, "agentId": AGENT_ID})
+                )
+                save_result(after_welcome)
+                await asyncio.wait_for(delivered.wait(), 2)
+                await websocket.close()
+
+            def complete(request):
+                job_id = request.url.path.split("/")[-2]
+                events.append(job_id)
+                if job_id == after_welcome:
+                    delivered.set()
+                return httpx.Response(204)
+
+            sleep = asyncio.sleep
+            client = httpx.AsyncClient
+
+            async def fast_sleep(delay, result=None):
+                return await sleep(0 if delay == 30 else delay, result)
+
+            async with websockets.serve(handler, "127.0.0.1", 0) as server:
+                config = configuration(
+                    home,
+                    backendUrl=f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/api/execution-agents/connect",
+                )
+                agent = MatoLoopAgent(config, "key")
+                save_result(REQUEST_ID)
+                with (
+                    patch("matoloop_agent.connection.asyncio.sleep", new=fast_sleep),
+                    patch(
+                        "matoloop_agent.maintenance_results.httpx.AsyncClient",
+                        side_effect=lambda **kwargs: client(
+                            transport=httpx.MockTransport(complete), **kwargs
+                        ),
+                    ),
+                ):
+                    await asyncio.wait_for(agent._connect_once(asyncio.Event()), 5)
+            self.assertEqual(
+                (events, list(outcomes.iterdir())), ([REQUEST_ID, "hello", after_welcome], [])
+            )
 
     def test_system_info_refreshes_linux_probes_and_preserves_live_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

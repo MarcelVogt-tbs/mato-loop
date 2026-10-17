@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from .browser_contracts import BROWSER_ARGUMENT_MODELS
 from .config import AgentConfig
 from .errors import AgentError
+from .maintenance_results import replay_maintenance_results
 from .platform import RuntimeServices, TransferAdapter, current_platform
 from .protocol import (
     AdministratorArguments,
@@ -498,6 +499,8 @@ class MatoLoopAgent:
                 await self.terminal.close_all()
 
     async def _connect_once(self, connected: asyncio.Event) -> None:
+        # Deliver completed updates before hello can trigger another automatic update.
+        await replay_maintenance_results(self.config, self._access_key)
         async with websockets.connect(
             self.config.backend_url,
             additional_headers={"Authorization": f"Bearer {self._access_key}"},
@@ -590,6 +593,12 @@ class MatoLoopAgent:
                     if len(completed) > 10_000:
                         completed.clear()
 
+            async def report_maintenance() -> None:
+                while True:
+                    await asyncio.sleep(30)
+                    await replay_maintenance_results(self.config, self._access_key)
+
+            reporter = asyncio.create_task(report_maintenance())
             try:
                 async for raw in socket:
                     try:
@@ -616,6 +625,8 @@ class MatoLoopAgent:
                         await socket.close(code=1007, reason="Unexpected protocol message")
                         break
             finally:
+                reporter.cancel()
+                await asyncio.gather(reporter, return_exceptions=True)
                 for task in tasks.values():
                     task.cancel()
                 try:

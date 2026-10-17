@@ -24,58 +24,52 @@
       </template>
     </q-banner>
 
-    <q-card flat class="app-surface execution-agent-list-card">
-      <q-list separator>
-        <q-item v-if="agents.loaded && !agents.items.length && !agents.loading" class="q-py-lg">
-          <q-item-section avatar>
-            <q-avatar color="grey-7" text-color="white" icon="computer" />
-          </q-item-section>
-          <q-item-section>
-            <q-item-label>Noch kein Computer eingerichtet</q-item-label>
-            <q-item-label caption>Füge einen Computer hinzu und verbinde ihn mit dem einmalig angezeigten Token.</q-item-label>
-          </q-item-section>
-        </q-item>
-
-        <q-item v-for="agent in agents.items" :key="agent.id" class="execution-agent-item q-py-md">
-          <q-item-section avatar top>
-            <q-avatar :color="statusColor(agent)" :text-color="statusTextColor(agent)" :icon="statusIcon(agent)" />
-          </q-item-section>
-          <q-item-section>
-            <div class="row items-center q-gutter-sm">
-              <q-item-label class="text-weight-medium">{{ agentDisplayName(agent) }}</q-item-label>
-              <q-chip dense :color="statusColor(agent)" :text-color="statusTextColor(agent)">
-                {{ statusLabel(agent) }}
-              </q-chip>
-            </div>
-            <q-item-label caption>
-              {{ agent.computerName || 'Noch keine Verbindung' }}<template v-if="agent.platform"> · {{ agent.platform }}</template><template v-if="agent.agentVersion"> · Agent {{ agent.agentVersion }}</template>
-            </q-item-label>
-            <q-item-label caption>
-              {{ agentVersionLabel(agent.agentVersion, agents.backendVersion) }}<template v-if="agent.agentVersion && !agent.connected"> · Zuletzt gemeldeter Stand</template>
-            </q-item-label>
-            <q-item-label v-if="agent.pairingState === 'pending' && agent.pairingTokenExpiresAt" caption>
-              Kopplungstoken gültig bis: {{ formatExpiry(agent.pairingTokenExpiresAt) }}
-            </q-item-label>
-            <q-item-label v-if="agent.lastSeenAt" caption>
-              Zuletzt gesehen: {{ formatAbsoluteDateTime(agent.lastSeenAt) }}
-            </q-item-label>
-            <q-item-label v-if="agent.maintenance" caption>
-              {{ maintenanceLabel(agent.maintenance) }}
-            </q-item-label>
-
-            <div class="q-mt-sm">
-              <div class="text-caption app-muted">Home-Verzeichnis</div>
-              <div class="text-body2">{{ agent.homeDirectory || 'Noch nicht gemeldet' }}</div>
-            </div>
-
-          </q-item-section>
-          <q-item-section side top class="execution-agent-item__actions">
-            <q-btn flat no-caps icon="settings" label="Verwalten" :aria-label="`${agentDisplayName(agent)} verwalten`" :disable="maintenanceBusy" @click="openManage(agent)" />
-          </q-item-section>
-        </q-item>
-      </q-list>
-      <q-inner-loading :showing="agents.loading" />
-    </q-card>
+    <q-table
+      flat bordered class="app-surface" row-key="id"
+      :rows="agents.items" :columns="columns" :loading="agents.loading"
+      :hide-no-data="agents.loadFailed"
+      :visible-columns="$q.screen.lt.sm ? ['name', 'status', 'actions'] : undefined"
+      :rows-per-page-options="[0]" :pagination="{ rowsPerPage: 0 }"
+    >
+      <template #no-data>
+        <div v-if="agents.loading" role="status">Computer werden geladen …</div>
+        <div v-else-if="agents.loaded" class="q-pa-md">
+          <div>Noch kein Computer eingerichtet</div>
+          <div class="text-caption app-muted">Füge einen Computer hinzu und verbinde ihn mit dem einmalig angezeigten Token.</div>
+        </div>
+      </template>
+      <template #body-cell-name="props">
+        <q-td :props="props">
+          <q-btn flat no-caps color="primary" padding="none" :label="agentDisplayName(props.row)" :disable="actionBusy || maintenanceBusy" @click="openManage(props.row)" />
+          <div v-if="props.row.id === agents.defaultExecutionAgentId" class="text-caption app-muted">Standardcomputer</div>
+        </q-td>
+      </template>
+      <template #body-cell-version="props">
+        <q-td :props="props">
+          {{ props.row.agentVersion || 'Unbekannt' }}
+          <q-icon
+            v-if="props.row.agentVersion && props.row.agentVersion !== agents.backendVersion"
+            name="info_outline" color="primary" size="xs" class="q-ml-xs"
+            role="img" aria-hidden="false" tabindex="0"
+            :aria-label="`Abweichende Agent-Version. ${agentVersionLabel(props.row.agentVersion, agents.backendVersion)}. MatoLoop-Version: ${agents.backendVersion || 'Unbekannt'}`"
+          >
+            <q-tooltip>{{ agentVersionLabel(props.row.agentVersion, agents.backendVersion) }} · MatoLoop-Version: {{ agents.backendVersion || 'Unbekannt' }}</q-tooltip>
+          </q-icon>
+        </q-td>
+      </template>
+      <template #body-cell-status="props">
+        <q-td :props="props">
+          <q-badge :color="statusColor(props.row)" :text-color="statusTextColor(props.row)" :label="statusLabel(props.row)" />
+          <div v-if="props.row.maintenance" class="text-caption" role="status">{{ maintenanceLabel(props.row.maintenance) }}</div>
+        </q-td>
+      </template>
+      <template #body-cell-actions="props">
+        <q-td :props="props">
+          <q-btn flat round icon="settings" color="primary" :aria-label="`${agentDisplayName(props.row)} verwalten`" :disable="actionBusy || maintenanceBusy" @click="openManage(props.row)" />
+          <q-btn flat round icon="delete_outline" color="negative" :aria-label="`${agentDisplayName(props.row)} entfernen`" :disable="actionBusy || maintenanceBusy" @click="revoke(props.row)" />
+        </q-td>
+      </template>
+    </q-table>
 
     <ExecutionAgentConfigDialog
       :model-value="configDialogOpen && (!managedAgentId || Boolean(managedAgent))"
@@ -85,7 +79,13 @@
       @created="showPairingToken"
       @copy-command="copy($event, 'Installationsbefehl')"
     >
-      <template v-if="managedAgent" #actions>
+      <template v-if="managedAgent" #overview>
+        <dl class="q-ma-none q-gutter-y-md">
+          <div v-for="detail in computerDetails" :key="detail.label">
+            <dt class="text-caption app-muted">{{ detail.label }}</dt>
+            <dd class="q-ma-none settings-list-name">{{ detail.value }}</dd>
+          </div>
+        </dl>
         <div>
           <div class="text-subtitle2">{{ agentVersionLabel(managedAgent.agentVersion, agents.backendVersion) }}</div>
           <div v-if="!managedAgent.connected" class="text-caption app-muted">Zuletzt gemeldeter Agent-Stand</div>
@@ -105,6 +105,9 @@
           Für diesen MatoLoop-Stand ist kein reproduzierbares Web-Update verfügbar.
         </div>
         <div v-if="managedAgent.maintenance" class="text-body2" role="status">{{ maintenanceLabel(managedAgent.maintenance) }}</div>
+      </template>
+      <template v-if="managedAgent" #actions>
+        <div v-if="!agents.installationTarget" class="text-body2 app-muted">Für diesen MatoLoop-Stand ist kein reproduzierbares Web-Update verfügbar.</div>
         <q-list>
           <q-item v-if="supportsUpdate(managedAgent)" clickable :disable="maintenanceDisabled || !agents.installationTarget" @click="maintain(managedAgent, 'update')">
             <q-item-section avatar><q-icon name="update" /></q-item-section>
@@ -234,6 +237,23 @@ const maintenanceDisabled = computed(() => (
   actionBusy.value || maintenanceBusy.value || !canMaintain(managedAgent.value)
 ))
 const updateCandidates = computed(() => agents.items.filter(needsUpdate))
+const columns = [
+  { name: 'name', label: 'Name', field: agentDisplayName, align: 'left', sortable: true },
+  { name: 'platform', label: 'Betriebssystem', field: 'platform', format: value => value || 'Unbekannt', align: 'left' },
+  { name: 'version', label: 'Agent-Version', field: 'agentVersion', align: 'left' },
+  { name: 'status', label: 'Status', field: statusLabel, align: 'left' },
+  { name: 'actions', label: 'Aktionen', field: 'id', align: 'right' }
+]
+const computerDetails = computed(() => managedAgent.value ? [
+  { label: 'Computer-ID', value: managedAgent.value.id },
+  { label: 'Computername', value: managedAgent.value.computerName || 'Noch nicht gemeldet' },
+  { label: 'Betriebssystem', value: managedAgent.value.platform || 'Unbekannt' },
+  { label: 'Status', value: statusLabel(managedAgent.value) },
+  { label: 'Home-Verzeichnis', value: managedAgent.value.homeDirectory || 'Noch nicht gemeldet' },
+  { label: 'Zuletzt gesehen', value: managedAgent.value.lastSeenAt ? formatAbsoluteDateTime(managedAgent.value.lastSeenAt) : 'Noch keine Verbindung' },
+  ...(managedAgent.value.pairingState === 'pending' && managedAgent.value.pairingTokenExpiresAt
+    ? [{ label: 'Kopplungstoken gültig bis', value: formatExpiry(managedAgent.value.pairingTokenExpiresAt) }] : [])
+] : [])
 
 function canMaintain(agent) {
   return agent?.connected && !(['running', 'unknown'].includes(agent.maintenance?.status)
@@ -432,12 +452,6 @@ function statusColor(agent) {
 
 function statusTextColor(agent) {
   return agent.pairingState === 'pending' ? 'black' : 'white'
-}
-
-function statusIcon(agent) {
-  if (agent.pairingState === 'unpaired') return 'link_off'
-  if (agent.pairingState === 'pending') return 'hourglass_top'
-  return agent.connected ? 'computer' : 'cloud_off'
 }
 
 async function load(config = null) {

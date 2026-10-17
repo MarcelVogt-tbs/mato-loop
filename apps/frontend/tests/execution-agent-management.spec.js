@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
-import { createApp, h } from 'vue'
+import { createApp, h, nextTick } from 'vue'
 import { createPinia } from 'pinia'
 import { afterEach, expect, it, vi } from 'vitest'
 import {
-  Quasar, QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox,
+  Quasar, QAvatar, QBadge, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox,
   QChip, QDialog, QForm, QIcon, QInnerLoading, QInput, QItem, QItemLabel,
   QItemSection, QList, QSelect, QSeparator, QSpace, QTab, QTabPanel, QTabPanels,
-  QTabs, QToggle, Ripple, ClosePopup, Dialog, Notify, copyToClipboard
+  QTable, QTd, QTabs, QToggle, QTooltip, Ripple, ClosePopup, Dialog, Notify, copyToClipboard
 } from 'quasar'
 
 vi.mock('quasar', async () => ({
@@ -36,10 +36,10 @@ function mountPage() {
   app.use(pinia)
   app.use(Quasar, {
     components: {
-      QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox,
+      QAvatar, QBadge, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox,
       QChip, QDialog, QForm, QIcon, QInnerLoading, QInput, QItem, QItemLabel,
       QItemSection, QList, QSelect, QSeparator, QSpace, QTab, QTabPanel, QTabPanels,
-      QTabs, QToggle
+      QTable, QTd, QTabs, QToggle, QTooltip
     },
     directives: { Ripple, ClosePopup },
     plugins: { Dialog, Notify }
@@ -47,6 +47,20 @@ function mountPage() {
   app.mount(root)
   return pinia
 }
+
+it.each([
+  [{ loading: true, loaded: false, loadFailed: false }, 'Computer werden geladen …'],
+  [{ loading: false, loaded: false, loadFailed: true }, 'Die Computer konnten nicht geladen werden.'],
+  [{ loading: false, loaded: true, loadFailed: false }, 'Noch kein Computer eingerichtet']
+])('shows only the matching inventory state for %j', async (state, expected) => {
+  api.get.mockResolvedValue({ data: { items: [] } })
+  const store = useExecutionAgentStore(mountPage())
+  await store.fetchAll()
+  Object.assign(store, state)
+  await nextTick()
+  const messages = ['Computer werden geladen …', 'Die Computer konnten nicht geladen werden.', 'Noch kein Computer eingerichtet']
+  expect(messages.filter(message => root.textContent.includes(message))).toEqual([expected])
+})
 
 it('shares settings with creation, preserves tab drafts and copies the selected platform command', async () => {
   const agent = {
@@ -64,11 +78,14 @@ it('shares settings with creation, preserves tab drafts and copies the selected 
     ? { defaultDurationSeconds: 1800, maximumDurationSeconds: 86400 } : payload }))
   const pinia = mountPage()
   const click = label => [...document.querySelectorAll('button, .q-item--clickable, .q-tab, .q-chip--clickable')]
-    .find(element => element.textContent.includes(label)).click()
+    .find(element => element.textContent.includes(label) || element.getAttribute('aria-label')?.includes(label)).click()
   await vi.waitFor(() => expect(root.textContent).toContain('Notebook'))
-  expect(root.querySelector('.execution-agent-list-card').textContent).not.toContain('Funktionen')
+  expect(root.querySelector('table thead').textContent).toContain('Agent-Version')
   expect(root.textContent).not.toContain('Agent installieren')
-  click('Verwalten')
+  click('Notebook verwalten')
+  await vi.waitFor(() => expect(document.querySelector('.q-tab--active').textContent).toBe('Übersicht'))
+  expect(document.querySelector('.q-dialog').textContent).toContain('/home/user')
+  click('Einstellungen')
   await vi.waitFor(() => expect(document.querySelector('input[aria-label="Alias (optional)"]').value).toBe('Notebook'))
   expect(document.querySelector('.q-tab--active').textContent).toBe('Einstellungen')
   expect(document.querySelector('.q-dialog').textContent).toContain('Instanzstandard (aktuell an)')
@@ -85,7 +102,7 @@ it('shares settings with creation, preserves tab drafts and copies the selected 
   alias.value = 'Notebook bearbeitet'
   alias.dispatchEvent(new Event('input', { bubbles: true }))
   click('Aktionen')
-  await vi.waitFor(() => expect(document.querySelector('.q-dialog').textContent).toContain('älterer Commit'))
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog').textContent).toContain('Agent aktualisieren'))
   expect(document.querySelector('.q-dialog').textContent).not.toContain('Agent deinstallieren')
   click('Agent aktualisieren')
   await vi.waitFor(() => expect(document.body.textContent).toContain('auch aus anderen Chats'))
@@ -101,6 +118,7 @@ it('shares settings with creation, preserves tab drafts and copies the selected 
 
   payload.items = [{ ...agent, alias: 'Notebook aktualisiert', agentVersion: payload.backendVersion }]
   await useExecutionAgentStore(pinia).fetchAll()
+  click('Übersicht')
   await vi.waitFor(() => expect(document.querySelector('.q-dialog').textContent).toContain('Gleicher Stand wie MatoLoop'))
   expect(document.querySelector('.q-dialog').textContent).toContain('Notebook aktualisiert')
   click('Einstellungen')
@@ -110,7 +128,9 @@ it('shares settings with creation, preserves tab drafts and copies the selected 
   click('Änderungen speichern')
   await vi.waitFor(() => expect(api.patch).toHaveBeenCalledWith('/execution-agents/computer-1', expect.objectContaining({ alias: 'Notebook bearbeitet', autoUpdateEnabled: false, sudoCredentialId: 'sudo-secret' })))
   await vi.waitFor(() => expect(document.querySelector('.q-dialog')).toBeNull())
-  click('Verwalten')
+  click('Notebook bearbeitet verwalten')
+  await vi.waitFor(() => expect(document.querySelector('.q-tab--active').textContent).toBe('Übersicht'))
+  click('Einstellungen')
   await vi.waitFor(() => expect(document.querySelector('.q-tab--active').textContent).toBe('Einstellungen'))
   document.querySelector('[aria-label="sudo-Passwort"]').click()
   await vi.waitFor(() => expect(document.querySelector('.q-menu')?.textContent).toContain('Kein Secret zugeordnet'))

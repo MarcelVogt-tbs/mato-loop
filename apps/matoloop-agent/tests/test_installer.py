@@ -13,8 +13,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
+
 from matoloop_agent.config import AgentConfig
 from matoloop_agent.errors import AgentError
+from matoloop_agent.maintenance_results import replay_maintenance_results
 from matoloop_agent.platform_linux import LinuxPlatform
 
 INSTALLER_PATH = Path(__file__).parents[3] / "scripts/matoloop-agent-installer.py"
@@ -25,6 +28,113 @@ SPEC.loader.exec_module(installer)
 
 
 class InstallerTests(unittest.TestCase):
+    def test_failed_completion_is_retained_and_replayed_with_the_current_credential(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data = Path(temporary)
+            config = AgentConfig(
+                homeDirectory=data,
+                backendUrl="wss://mato.test/api/execution-agents/connect",
+                agentId="2ea504cc-e3c6-4e0d-aa05-080328100fe8",
+            )
+            config._data_directory = data
+            credential = {
+                "backendUrl": config.backend_url,
+                "agentId": config.agent_id,
+                "accessKey": "old-key",
+            }
+            job_id = "bc7f3dfd-d674-4781-b5fa-22ee0c6e5eb0"
+            with (
+                patch.object(installer, "build_opener") as opener,
+                patch.object(installer.time, "sleep"),
+            ):
+                opener.return_value.open.side_effect = OSError("Offline")
+                installer.report_maintenance(credential, job_id, "succeeded", data)
+            pending = data / "agent-state" / f"maintenance-{job_id}.json"
+            self.assertNotIn("old-key", pending.read_text())
+            requests = []
+
+            def complete(request):
+                requests.append(
+                    (
+                        request.url.path,
+                        json.loads(request.content),
+                        request.headers["Authorization"],
+                    )
+                )
+                return httpx.Response(204)
+
+            async def replay():
+                client = httpx.AsyncClient(transport=httpx.MockTransport(complete))
+                with patch(
+                    "matoloop_agent.maintenance_results.httpx.AsyncClient", return_value=client
+                ):
+                    await replay_maintenance_results(config, "current-key")
+
+            asyncio.run(replay())
+            self.assertEqual(
+                (requests, pending.exists()),
+                (
+                    [
+                        (
+                            f"/api/execution-agents/{config.agent_id}/maintenance/{job_id}/complete",
+                            {"status": "succeeded"},
+                            "Bearer current-key",
+                        )
+                    ],
+                    False,
+                ),
+            )
+
+    def test_completion_replay_checks_identity_and_retires_superseded_jobs(self) -> None:
+        for scenario in ("foreign", "superseded", "offline", "symlink"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as temporary:
+                data = Path(temporary)
+                config = AgentConfig(
+                    homeDirectory=data,
+                    backendUrl="wss://mato.test/api/execution-agents/connect",
+                    agentId="2ea504cc-e3c6-4e0d-aa05-080328100fe8",
+                )
+                config._data_directory = data
+                job_id = "bc7f3dfd-d674-4781-b5fa-22ee0c6e5eb0"
+                pending = data / "agent-state" / f"maintenance-{job_id}.json"
+                installer.write_json(
+                    pending,
+                    {
+                        "backendUrl": "wss://other.test/api/execution-agents/connect"
+                        if scenario == "foreign"
+                        else config.backend_url,
+                        "agentId": config.agent_id,
+                        "jobId": job_id,
+                        "status": "failed",
+                    },
+                )
+                if scenario == "symlink":
+                    target = data / "outside.json"
+                    pending.rename(target)
+                    pending.symlink_to(target)
+                requests = []
+
+                def complete(request, requests=requests, scenario=scenario):
+                    requests.append(request)
+                    return httpx.Response(
+                        503 if scenario == "offline" else 409,
+                        json={"error": {"code": "maintenance.jobUnavailable"}},
+                    )
+
+                async def replay(config=config, complete=complete):
+                    client = httpx.AsyncClient(transport=httpx.MockTransport(complete))
+                    with patch(
+                        "matoloop_agent.maintenance_results.httpx.AsyncClient",
+                        return_value=client,
+                    ):
+                        await replay_maintenance_results(config, "key")
+
+                asyncio.run(replay())
+                self.assertEqual(
+                    (len(requests), pending.exists()),
+                    (0 if scenario in {"foreign", "symlink"} else 1, scenario != "superseded"),
+                )
+
     def test_native_lock_excludes_other_commands_and_survives_installer_handoff(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -218,7 +328,20 @@ class InstallerTests(unittest.TestCase):
             layout = installer.paths()
             layout = {**layout, "root": root, "uv": Path(uv)}
             destination = root / "venvs/current"
-            installer.sync_environment(layout, Path(__file__).parents[3], destination)
+            source = root / "source"
+            installer.copy_source(Path(__file__).parents[3], source)
+            installer.stamp_source(Path(__file__).parents[3], source)
+            self.assertEqual(
+                (
+                    sorted(path.name for path in source.iterdir()),
+                    sorted(path.name for path in (source / "apps").iterdir()),
+                ),
+                (["LICENSE", "apps", "libs", "scripts"], ["matoloop-agent"]),
+            )
+            snapshot = root / "reinstalled-source"
+            installer.copy_source(source, snapshot)
+            installer.stamp_source(source, snapshot)
+            installer.sync_environment(layout, snapshot, destination)
             (root / "venv").symlink_to(destination)
             subprocess.run(
                 [root / "venv/bin/matoloop-agent", "--help"],
@@ -229,13 +352,17 @@ class InstallerTests(unittest.TestCase):
                 [
                     destination / "bin/python",
                     "-c",
-                    "import importlib.util; print(importlib.util.find_spec('playwright'))",
+                    "import importlib.util; from matoloop_agent import __version__; "
+                    "print(__version__); print(importlib.util.find_spec('playwright'))",
                 ],
                 check=True,
                 capture_output=True,
                 text=True,
             )
-            self.assertEqual(result.stdout.strip(), "None")
+            stamp = source / "libs/python/version/src/matoloop_version/build-version.txt"
+            self.assertEqual(
+                result.stdout.strip().splitlines(), [stamp.read_text().strip(), "None"]
+            )
 
     def test_container_activation_and_failed_start_restore_the_running_release(self) -> None:
         for failure in (None, "start", "launcher"):
@@ -653,7 +780,9 @@ class InstallerTests(unittest.TestCase):
                     patch.object(installer, "build_opener") as opener,
                 ):
                     opener.return_value.open.side_effect = report
-                    installer.maintenance_run("uninstall", "job-id", socket_path, str(root))
+                    installer.maintenance_run(
+                        "uninstall", "2ea504cc-e3c6-4e0d-aa05-080328100fe8", socket_path, str(root)
+                    )
             finally:
                 installer._maintenance_password = None
                 thread.join(timeout=5)
@@ -662,7 +791,7 @@ class InstallerTests(unittest.TestCase):
                 [
                     "uninstall",
                     (
-                        "https://mato.test/api/execution-agents/agent-id/maintenance/job-id/complete",
+                        "https://mato.test/api/execution-agents/agent-id/maintenance/2ea504cc-e3c6-4e0d-aa05-080328100fe8/complete",
                         {"status": "succeeded"},
                         "Bearer private-token",
                     ),

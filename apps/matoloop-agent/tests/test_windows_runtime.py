@@ -323,6 +323,51 @@ class WindowsRuntimeTests(unittest.TestCase):
         )
         self.assertIn("Home: workspace", result.stdout)
 
+    def test_installer_early_failure_preserves_a_caller_snapshot_directory(self) -> None:
+        sentinel = self.home / "keep.txt"
+        sentinel.write_text("User data", encoding="utf-8")
+        root = Path(self.temporary.name) / "installation"
+        root.mkdir()
+        installer = Path(__file__).parents[3] / "scripts/install-matoloop-agent.ps1"
+        # Run the real preparation block without installing tools or touching Scheduled Tasks.
+        subprocess.run(
+            [
+                self.process.shell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$ErrorActionPreference='Stop'; $tokens=$null; $errors=$null; "
+                "$ast=[Management.Automation.Language.Parser]::ParseFile("
+                "$env:TEST_INSTALLER, [ref]$tokens, [ref]$errors); "
+                "if ($errors) { throw 'Invalid installer syntax' }; "
+                "$start=$ast.Find({ param($node) "
+                "$node -is [Management.Automation.Language.AssignmentStatementAst] "
+                "-and $node.Left.Extent.Text -eq '$env:VIRTUAL_ENV' }, $true).Extent.StartOffset; "
+                "$end=$ast.Find({ param($node) "
+                "$node -is [Management.Automation.Language.TryStatementAst] "
+                "-and $node.Body.Statements[0].Extent.Text -like '$python = & $uv python find*' "
+                "}, $true).Extent.EndOffset; "
+                "$root=$env:TEST_ROOT; $newVenv=Join-Path $root 'venv'; "
+                "$installer=Join-Path $root 'installer.ps1'; $previousInstaller=$null; "
+                "$managedSource=$false; $checkout=$null; $snapshot=$env:TEST_KEEP; "
+                "function Fail($message) { throw $message }; "
+                "$uv={ $global:LASTEXITCODE=1 }; "
+                "try { & ([ScriptBlock]::Create("
+                "$ast.Extent.Text.Substring($start, $end-$start))) } catch {}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env={
+                **os.environ,
+                "TEST_INSTALLER": str(installer),
+                "TEST_ROOT": str(root),
+                "TEST_KEEP": str(self.home),
+            },
+        )
+        self.assertTrue(sentinel.exists())
+
     def test_installer_finds_private_git_without_git_on_path(self) -> None:
         root = Path(self.temporary.name) / "agent root"
         executable = root / "tools/git/cmd/git.exe"

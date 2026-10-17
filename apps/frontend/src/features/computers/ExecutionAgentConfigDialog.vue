@@ -29,6 +29,7 @@
 
       <template v-if="isEditing">
         <q-tabs v-model="tab" dense no-caps align="left" active-color="primary" indicator-color="primary">
+          <q-tab name="overview" label="Übersicht" :disable="blocked" />
           <q-tab name="settings" label="Einstellungen" :disable="blocked" />
           <q-tab name="actions" label="Aktionen" :disable="blocked" />
         </q-tabs>
@@ -37,6 +38,11 @@
 
       <q-form ref="formRef" class="col column no-wrap" @submit.prevent="save">
         <q-tab-panels v-model="tab" keep-alive class="col bg-transparent">
+          <q-tab-panel v-if="isEditing" name="overview" class="q-pa-none">
+            <q-card-section class="q-gutter-y-md">
+              <slot name="overview" />
+            </q-card-section>
+          </q-tab-panel>
           <q-tab-panel name="settings" class="q-pa-none">
             <q-card-section class="q-gutter-md">
               <template v-if="!isEditing">
@@ -283,7 +289,7 @@ async function loadSecrets() {
 watch(() => props.modelValue, async (open) => {
   const currentInitialization = ++initialization
   if (!open) return
-  tab.value = 'settings'
+  tab.value = props.agent ? 'overview' : 'settings'
   installationPlatform.value = 'linux'
   pairingDurationSeconds.value = null
   alias.value = props.agent?.alias || ''

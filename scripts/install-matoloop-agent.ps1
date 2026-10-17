@@ -146,12 +146,20 @@ if ($Command -eq 'maintenance-run') {
         if ($LASTEXITCODE -ne 0) { Fail 'Maintenance failed.' }
         $result = 'succeeded'
     } catch { Write-Host 'MatoLoop Agent maintenance failed.' }
+    $pending = Join-Path $data ("agent-state\maintenance-$($request.jobId).json")
+    $outcome = @{backendUrl=$connection.backendUrl; agentId=$connection.agentId; jobId=$request.jobId; status=$result}
+    $temporary = "$pending.new"
+    try {
+        [IO.File]::WriteAllText($temporary, ($outcome | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporary -Destination $pending -Force
+    } catch { Write-Host 'Maintenance outcome could not be retained; attempting direct delivery.' }
     $reported = $false
     for ($attempt = 0; $attempt -lt 5; $attempt++) {
         try {
             Invoke-RestMethod -Method Post -Uri $completionUrl -TimeoutSec 15 `
                 -Headers @{Authorization="Bearer $($connection.accessKey)"} `
                 -ContentType 'application/json' -Body (@{status=$result} | ConvertTo-Json -Compress) | Out-Null
+            Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
             $reported = $true
             break
         } catch { Start-Sleep -Seconds 2 }
@@ -318,14 +326,29 @@ $newVenv = Join-Path $root ("venvs\" + [Guid]::NewGuid().ToString('N'))
 $installer = Join-Path $root 'installer.ps1'
 $previousInstaller = if (Test-Path -LiteralPath $installer) { [IO.File]::ReadAllBytes($installer) } else { $null }
 $env:VIRTUAL_ENV = $newVenv
+$snapshot = $null
 try {
     $python = & $uv python find 3.13
     if ($LASTEXITCODE) { Fail 'Could not find private Python.' }
     $git = Resolve-Git
     $env:PATH = (Split-Path -Parent $git) + [IO.Path]::PathSeparator + $env:PATH
     $versionScript = Join-Path $checkout 'libs\python\version\src\matoloop_version\__init__.py'
-    & $python $versionScript --source $checkout --output (Join-Path (Split-Path $versionScript) 'build-version.txt')
+    # Build from a compact snapshot; version stamping must precede removing Git metadata.
+    $snapshot = Join-Path $root ('sources\' + [Guid]::NewGuid().ToString('N'))
+    foreach ($relative in @('apps\matoloop-agent\src', 'apps\matoloop-agent\pyproject.toml',
+        'apps\matoloop-agent\uv.lock', 'apps\matoloop-agent\README.md',
+        'libs\python\version\src', 'libs\python\version\pyproject.toml',
+        'scripts\install-matoloop-agent.ps1', 'LICENSE')) {
+        $origin = Join-Path $checkout $relative
+        $destination = Join-Path $snapshot $relative
+        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+        Copy-Item -LiteralPath $origin -Destination $destination -Recurse -Force
+    }
+    $stamp = Join-Path $snapshot 'libs\python\version\src\matoloop_version\build-version.txt'
+    & $python $versionScript --source $checkout --output $stamp
     if ($LASTEXITCODE) { Fail 'Could not determine the Agent version.' }
+    if ($managedSource) { Remove-Item -LiteralPath $checkout -Recurse -Force }
+    $checkout = $snapshot
     & $uv sync --directory (Join-Path $checkout 'apps\matoloop-agent') --frozen --no-dev --no-editable --active --refresh-package matoloop-agent --refresh-package matoloop-version
     if ($LASTEXITCODE) { Fail 'Could not prepare the new Agent environment.' }
     $executable = Join-Path $newVenv 'Scripts\matoloop-agent.exe'
@@ -418,7 +441,8 @@ try {
     }
 } catch {
     Remove-Item -LiteralPath $newVenv -Recurse -Force -ErrorAction SilentlyContinue
-    if ($managedSource) { Remove-Item -LiteralPath $checkout -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($snapshot) { Remove-Item -LiteralPath $snapshot -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($managedSource -and $checkout -ne $snapshot) { Remove-Item -LiteralPath $checkout -Recurse -Force -ErrorAction SilentlyContinue }
     if ($previousInstaller) { [IO.File]::WriteAllBytes($installer, $previousInstaller) } else {
         Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
     }

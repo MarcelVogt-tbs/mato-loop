@@ -367,16 +367,53 @@ def sync_environment(
         fail("uv did not install the MatoLoop Agent executable")
 
 
-def copy_source(source: Path, destination: Path, *, keep_git: bool) -> None:
-    ignored = [".venv", "__pycache__", ".pytest_cache", ".ruff_cache"]
-    if not keep_git:
-        ignored.append(".git")
+def copy_source(source: Path, destination: Path) -> None:
+    included = {
+        ".": {"apps", "libs", "scripts", "LICENSE"},
+        "apps": {"matoloop-agent"},
+        "apps/matoloop-agent": {"src", "pyproject.toml", "uv.lock", "README.md"},
+        "libs": {"python"},
+        "libs/python": {"version"},
+        "libs/python/version": {"src", "pyproject.toml"},
+        "scripts": {
+            "matoloop-agent-installer.py",
+            "install-matoloop-agent.sh",
+            "install-matoloop-agent.ps1",
+        },
+    }
+    generated = shutil.ignore_patterns(
+        "__pycache__", "*.pyc", "*.egg-info", ".env*", "build-version.txt", "build-revision.txt"
+    )
+
+    def ignore(directory, names):
+        allowed = included.get(Path(directory).relative_to(source).as_posix())
+        return set(names) - allowed if allowed is not None else generated(directory, names)
+
     shutil.copytree(
         source,
         destination,
         symlinks=True,
-        ignore=shutil.ignore_patterns(*ignored),
+        ignore=ignore,
     )
+
+
+def stamp_source(source: Path, destination: Path) -> None:
+    relative = Path("libs/python/version/src/matoloop_version/build-version.txt")
+    stamp = source / relative
+    if not (source / ".git").exists() and stamp.is_file():
+        value = stamp.read_text(encoding="ascii").strip()
+        if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{8}(?:-dirty)?", value):
+            fail("the installed source version is invalid")
+        write_file(destination / relative, (value + "\n").encode("ascii"), 0o644)
+    else:
+        run(
+            sys.executable,
+            destination / relative.with_name("__init__.py"),
+            "--source",
+            source,
+            "--output",
+            destination / relative,
+        )
 
 
 def service_text(layout: dict[str, Path]) -> str:
@@ -523,16 +560,8 @@ def install(arguments: argparse.Namespace) -> None:
                 shutil.rmtree(path, ignore_errors=True)
 
     atexit.register(cleanup_staging)
-    copy_source(source, staged_source, keep_git=managed)
-    version_script = staged_source / "libs/python/version/src/matoloop_version/__init__.py"
-    run(
-        sys.executable,
-        version_script,
-        "--source",
-        source,
-        "--output",
-        version_script.with_name("build-version.txt"),
-    )
+    copy_source(source, staged_source)
+    stamp_source(source, staged_source)
     active_source = staged_source
     layout["venvs"].mkdir(exist_ok=True)
     new_venv = layout["venvs"] / secrets.token_hex(8)
@@ -746,10 +775,24 @@ def maintenance_run(
         result = "failed"
         raise
     finally:
-        report_maintenance(credential, job_id, result)
+        report_maintenance(credential, job_id, result, layout["data"])
 
 
-def report_maintenance(credential: dict, job_id: str, result: str) -> None:
+def report_maintenance(credential: dict, job_id: str, result: str, data: Path) -> None:
+    pending = data / "agent-state" / f"maintenance-{UUID(job_id)}.json"
+    # Keep only identity and outcome; replay uses the Agent's current credential.
+    try:
+        write_json(
+            pending,
+            {
+                "backendUrl": credential["backendUrl"],
+                "agentId": credential["agentId"],
+                "jobId": job_id,
+                "status": result,
+            },
+        )
+    except OSError:
+        print("Maintenance outcome could not be retained; attempting direct delivery.", flush=True)
     address = urlsplit(credential["backendUrl"])
     endpoint = urlunsplit(
         (
@@ -776,6 +819,7 @@ def report_maintenance(credential: dict, job_id: str, result: str) -> None:
                 timeout=10,
             ) as response:
                 response.read()
+            pending.unlink(missing_ok=True)
             break
         except OSError:
             if attempt < 2:
@@ -827,17 +871,12 @@ def prepare_container_release(root: Path, state: dict, revision: str) -> Path:
     release = Path(tempfile.mkdtemp(prefix="update-", dir=root / "releases"))
     release.chmod(0o755)  # The unprivileged browser worker executes this environment.
     try:
+        checkout = release / "checkout"
+        fetch_source(state["sourceUrl"], revision, checkout)
         source = release / "source"
-        fetch_source(state["sourceUrl"], revision, source)
-        version = source / "libs/python/version/src/matoloop_version/__init__.py"
-        run(
-            sys.executable,
-            version,
-            "--source",
-            source,
-            "--output",
-            version.with_name("build-version.txt"),
-        )
+        copy_source(checkout, source)
+        stamp_source(checkout, source)
+        shutil.rmtree(checkout)
         sync_environment(
             {"root": root, "uv": Path(shutil.which("uv") or "uv")},
             source,
@@ -1019,7 +1058,7 @@ def container_run() -> None:
                         request.unlink(missing_ok=True)
                         interrupted = False
                         if job_id:
-                            report_maintenance(credential, job_id, result)
+                            report_maintenance(credential, job_id, result, data)
                         else:
                             print(f"Container Agent update {result}.", flush=True)
                 time.sleep(0.5)

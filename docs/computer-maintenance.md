@@ -2,11 +2,17 @@
 
 ## Computer management and version comparison
 
-The Computer overview shows connectivity, the reported Agent version, and its
-comparison with the running backend. **Verwalten** opens the shared configuration
-dialog on **Einstellungen**; **Aktionen** contains version details, pairing,
-updates, uninstallation, and revocation. Settings drafts survive tab changes, and
-reopening starts on the settings tab. Adding uses the same settings form and
+The Computer overview is a table of names, operating systems, reported Agent
+versions, connectivity, and maintenance outcomes. The default computer is marked
+under its name. Names and settings buttons open the shared management dialog on
+**Übersicht**, which contains identity, home directory, last connection, pairing
+expiry, version comparison, and the last maintenance outcome. **Einstellungen**
+contains the alias, default selection, access policies, automatic updates, and sudo
+secret assignment; **Aktionen** contains pairing, updates, uninstallation, and
+revocation. Settings drafts survive tab changes. Removing a computer is also
+available directly in the table and uses the same confirmation. Small screens show
+name, status, and actions; operating system and version remain in the dialog.
+Adding uses the same settings form and
 starts with separate Linux/Windows icon chips and the selected installation command and
 instructions, followed by the optional alias and access settings. Installation
 commands are not part of the overview.
@@ -123,6 +129,26 @@ pinned, checksum-verified archive only when neither is available.
 The Windows installer's `-Home` option is an alias for `-HomeDirectory`; it never
 assigns to PowerShell's read-only `$HOME` automatic variable.
 
+## Durable completion delivery
+
+Native Linux, native Windows, and managed Docker workers atomically retain each
+completed maintenance outcome under `data/agent-state/maintenance-<job-id>.json`
+before attempting the existing authenticated completion endpoint. Records contain
+only backend URL, Agent ID, job ID, and terminal status, never credentials or
+exception text. They are removed after acknowledgement.
+
+The Agent retries retained outcomes before opening its WebSocket connection, so
+completion is attempted before hello can trigger automatic maintenance. While
+connected it also retries every 30 seconds, covering outcomes written after startup
+and transient HTTP failures without requiring another reconnect. Replay uses the
+current credential and checks the stored backend and Agent identity. The existing
+endpoint is idempotent for identical completions; its `maintenance.jobUnavailable`
+response retires results superseded by a newer job without changing that job.
+Unauthenticated or transient failures retain the record. An interrupted worker
+without a terminal outcome still becomes unknown; version equality is not proof of
+successful maintenance. A removed Agent can replay retained results after reinstall
+with its existing identity, but does not run a retry service after uninstallation.
+
 ## Managed container updates
 
 Production Docker Agents advertise `maintenance.update`, which permits updates
@@ -182,3 +208,17 @@ from a developer checkout; user sources and local edits are not changed. Install
 directly from a local checkout remains available for development and dirty source.
 Both sides must support this update protocol, but do not require equal versions to
 connect: an older Agent must remain reachable long enough to be synchronized.
+
+## Compact source snapshots
+
+Managed native Linux and Windows installations and Docker updates retain only the
+Agent package sources, package metadata and lockfile, shared version package,
+required lifecycle scripts, and license. Backend, frontend, tests, and Git metadata
+are not part of the installed snapshot. The full checkout is temporary preparation
+input; its version is stamped before packaging and before that checkout is removed.
+Reinstalling a native Linux snapshot reuses its validated stamp without requiring
+Git metadata. Existing installations adopt the compact layout through their normal
+update, preserving their identity and workspace. The production Docker image
+already uses an explicit source selection. Source download size is unchanged.
+The first update can still use an older installed controller's full-source
+preparation; subsequent updates use the new compact selection.
