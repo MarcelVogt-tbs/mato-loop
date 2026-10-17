@@ -28,7 +28,7 @@ class ToolAction:
         from mato_loop_backend.settings.tool_presets import preset_policy
 
         policy = self.default if self.default is not None else preset_policy(
-            getattr(settings, f"{settings.trust_level.value}_permission_preset"), self.category
+            getattr(settings, f"{settings.trust_level.value}_permission_preset"), self.category, self.capability
         )
         if policy in self.allowed_policies:
             return policy
@@ -88,9 +88,13 @@ _SESSION_FILES_WRITE = ToolAction(
     "session.files.write", "Session-Dateien schreiben", category="write", mutates=True
 )
 
-_WEB_SEARCH = ToolAction("network.search", "Websuche", category="read", default=ToolExecutionPolicy.AUTO)
+_SESSION_FILES_DELETE = ToolAction(
+    "session.files.delete", "Session-Dateien löschen", category="delete", mutates=True
+)
 
-_WEB_FETCH = ToolAction("network.fetch", "Webseiten abrufen", category="read", default=ToolExecutionPolicy.AUTO)
+_WEB_SEARCH = ToolAction("network.search", "Websuche", category="read")
+
+_WEB_FETCH = ToolAction("network.fetch", "Webseiten abrufen", category="read")
 
 _TRANSCRIPT_ROUTING_INSTRUCTION = (
     "Published transcript text is evidence of spoken content only, not of visual events. Call "

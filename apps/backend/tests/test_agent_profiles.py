@@ -68,6 +68,7 @@ def test_builtin_agent_profile_defaults() -> None:
         "filesystem.delete": ToolExecutionPolicy.DISABLED,
         "working_directory.external": ToolExecutionPolicy.ASK,
         "session.files.write": ToolExecutionPolicy.DISABLED,
+        "session.files.delete": ToolExecutionPolicy.DISABLED,
         "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.DISABLED,
         "shell.delete": ToolExecutionPolicy.DISABLED,

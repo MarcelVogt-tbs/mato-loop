@@ -141,7 +141,7 @@ def test_root_specific_read_and_transfer_availability(
     assert "provide_file" in tools
     assert ("copy_path" in tools) is copy_available
     assert ("move_path" in tools) is move_available
-    assert ("delete_path" in tools) is ("filesystem.delete" not in disabled)
+    assert "delete_path" in tools
 
 
 def test_external_working_directory_policy_does_not_hide_directory_tool() -> None:
@@ -166,6 +166,7 @@ def test_external_working_directory_policy_does_not_hide_directory_tool() -> Non
     [
         "session.files.read",
         "session.files.write",
+        "session.files.delete",
         "network.fetch",
         "network.search",
         "memory.read",
@@ -178,10 +179,8 @@ def test_category_defaults_and_saved_policies(
 ) -> None:
     settings = ToolSettings().select_trust(trust)
     expected = (
-        ToolExecutionPolicy.ASK if trust == TrustLevel.PUBLIC or capability in {"session.files.write", "media.generate.image"} else ToolExecutionPolicy.AUTO
+        ToolExecutionPolicy.ASK if capability == "session.files.delete" or (trust == TrustLevel.PUBLIC and capability == "memory.read") else ToolExecutionPolicy.AUTO
     )
-    if capability in {"network.fetch", "network.search"}:
-        expected = ToolExecutionPolicy.AUTO
     assert resolve_tool_execution_policy(settings, capability).policy == expected
     for policy in ToolExecutionPolicy:
         settings.permissions.policies[capability] = policy
@@ -220,7 +219,7 @@ def test_session_file_read_uses_own_global_override_and_profile_rules(
         resolve_tool_execution_policy(
             settings, "session.files.read", ToolExecutionPolicy.AUTO
         ).policy
-        == (expected or ("auto" if trust == TrustLevel.PRIVATE else "ask"))
+        == (expected or "auto")
     )
 
 

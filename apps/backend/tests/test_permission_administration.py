@@ -128,7 +128,7 @@ async def test_integration_permission_page_lists_configured_rights_and_resources
 @pytest.mark.parametrize("trust", list(TrustLevel))
 @pytest.mark.parametrize("preset, expected", [
     ("ask_all", ["ask", "ask", "ask"]),
-    ("ask_changes_sensitive", ["auto", "ask", "ask"]),
+    ("balanced", ["ask", "ask", "ask"]),
     ("ask_changes", ["auto", "ask", "ask"]),
     ("ask_delete", ["auto", "auto", "ask"]),
     ("auto_all", ["auto", "auto", "auto"]),

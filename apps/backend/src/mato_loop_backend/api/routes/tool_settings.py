@@ -96,6 +96,8 @@ class ToolConfigurationRequest(BaseModel):
 
 
 def tool_configuration_payload(settings: ToolSettings) -> dict:
+    from mato_loop_backend.settings.tool_presets import preset_catalog
+
     defaults = settings.model_copy(deep=True)
     defaults.private_permissions = AgentProfilePermissions()
     defaults.public_permissions = AgentProfilePermissions()
@@ -110,6 +112,7 @@ def tool_configuration_payload(settings: ToolSettings) -> dict:
     return {
         "personalSettingsEnabled": settings.personal_settings_enabled,
         "toolPermissionPresets": {trust.value: getattr(settings, f"{trust.value}_permission_preset") for trust in TrustLevel},
+        "presetOptions": preset_catalog(tool_registry.actions_by_capability),
         "privatePermissions": _tool_permissions_payload(settings.private_permissions, tool_registry.catalog(defaults, IntegrationSettings())),
         "publicPermissions": _tool_permissions_payload(settings.public_permissions, tool_registry.catalog(defaults, IntegrationSettings())),
         "shellPrefixes": settings.shell_prefixes.model_dump(),

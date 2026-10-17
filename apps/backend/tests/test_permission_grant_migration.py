@@ -96,3 +96,35 @@ def test_tool_defaults_migration_keeps_only_explicit_overrides(policies):
     assert migration.migrate_documents({("tools", None): original}) == {
         ("tools", None): {**original, "private_permission_preset": "ask_changes", "public_permission_preset": "ask_all"},
     }
+
+
+def test_new_presets_reset_choices_and_preserve_explicit_delete_rules(monkeypatch):
+    path = Path(__file__).parents[1] / "alembic/versions/39856f53cf7e_tool_presets.py"
+    spec = importlib.util.spec_from_file_location("tool_presets_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    metadata = sa.MetaData()
+    settings = sa.Table("settings", metadata, sa.Column("id", sa.Uuid(), primary_key=True), sa.Column("key", sa.String()), sa.Column("data", sa.JSON()))
+    documents = {
+        "tools": {"private_permission_preset": "auto_all", "public_permission_preset": "ask_changes_sensitive",
+            "private_permissions": {"policies": {"filesystem.delete": "disabled", "media.generate.image": "ask"}},
+            "public_permissions": {"policies": {"filesystem.delete": "auto", "session.files.delete": "ask"}}},
+        "agent-profiles": {"profiles": [{"overrides": {"public_permissions": {"policies": {"filesystem.delete": "disabled"}}}}]},
+    }
+    engine = sa.create_engine("sqlite://")
+    metadata.create_all(engine)
+    try:
+        with engine.begin() as connection:
+            connection.execute(settings.insert(), [{"id": uuid4(), "key": key, "data": data} for key, data in documents.items()])
+            monkeypatch.setattr(migration.op, "get_bind", lambda: connection)
+            migration.upgrade()
+            actual = {row.key: row.data for row in connection.execute(sa.select(settings))}
+            assert actual == {
+                "tools": {**documents["tools"], "private_permission_preset": "ask_changes", "public_permission_preset": "balanced",
+                    "private_permissions": {"policies": {"filesystem.delete": "disabled", "session.files.delete": "disabled", "media.generate.image": "ask"}}},
+                "agent-profiles": {"profiles": [{"overrides": {"public_permissions": {"policies": {"filesystem.delete": "disabled", "session.files.delete": "disabled"}}}}]},
+            }
+            migration.downgrade()
+            assert connection.execute(sa.select(settings.c.data).where(settings.c.key == "tools")).scalar_one()["public_permission_preset"] == "ask_all"
+    finally:
+        engine.dispose()

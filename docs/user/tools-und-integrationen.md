@@ -32,9 +32,9 @@ Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte od
 
 **Administration > Tools > Einstellungen > Freigabeverhalten** legt fest, welche Aktionen der Agent standardmäßig automatisch ausführt und wann er um Erlaubnis fragt. Die Auswahl wird als Grundstandard gespeichert; eigene Aktionsregeln haben Vorrang. **Grundeinstellungen** enthält einen gleich benannten direkten Link zu diesem Tab.
 
-- **Privat / Öffentlich:** getrennte Dropdowns bei aktiver Modelltrennung.
+- **Privat / Öffentlich:** getrennte Radio-Auswahllisten bei aktiver Modelltrennung. Jedes Preset hat in beiden Bereichen dieselben Regeln.
 - **Alle Modelle:** bearbeitet bei ausgeschalteter Modelltrennung die privaten Werte. Öffentliche Werte bleiben gespeichert.
-- **Info-Symbol:** öffnet diesen Abschnitt in einem neuen Tab; der Formularentwurf bleibt erhalten.
+- **Info-Symbol neben einem Preset:** zeigt dessen Basisberechtigungen und zusätzlich automatisch erlaubte Aktionen in einem Dialog. Die Auswahl bleibt unverändert.
 - Der gewählte Grundstandard bleibt auch mit eigenen Regeln sichtbar.
 
 #### Welche Auswahl passt?
@@ -42,17 +42,17 @@ Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte od
 | Grundstandard | Normales Lesen | Sensibles Lesen | Schreiben | Löschen |
 | --- | --- | --- | --- | --- |
 | Alles bestätigen | Nachfragen | Nachfragen | Nachfragen | Nachfragen |
-| Änderungen und sensible Zugriffe bestätigen | Automatisch | Nachfragen | Nachfragen | Nachfragen |
-| Änderungen bestätigen | Automatisch | Automatisch | Nachfragen | Nachfragen |
-| Nur Löschen bestätigen | Automatisch | Automatisch | Automatisch | Nachfragen |
-| Alles automatisch ausführen | Automatisch | Automatisch | Automatisch | Automatisch |
+| Ausgewogen | Nachfragen | Nachfragen | Nachfragen | Nachfragen |
+| Komfortabel | Automatisch | Automatisch | Nachfragen | Nachfragen |
+| Automatisch außer Löschen | Automatisch | Automatisch | Automatisch | Nachfragen |
+| Vollautomatisch | Automatisch | Automatisch | Automatisch | Automatisch |
 
-Die Tabelle gilt für Aktionen ohne eigene Tool-Vorgabe. Websuche, Webseitenabruf und veröffentlichte Untertitel bringen **Automatisch** als Vorgabe mit, auch für öffentliche Modelle. **Alles bestätigen** bedeutet daher: Alles außer lesenden Zugriffen auf öffentlich verfügbare Ressourcen bestätigen. Eigene Berechtigungsregeln haben Vorrang. Beim Herunterladen bleibt das Speichern eine getrennte Schreibaktion. Die Einstellung **Nur öffentliche Zieladressen zulassen** begrenzt weiterhin die erreichbaren Ziele; ausdrücklich zugelassene interne Adressen werden ebenfalls ohne zusätzliche Nachfrage abgerufen, sofern keine eigene Regel dies anders festlegt.
+**Ausgewogen** und **Komfortabel** erlauben zusätzlich automatisch: öffentliche Recherche und Downloads in die Session, Session-Dateien lesen/bearbeiten/organisieren, Dateien bereitstellen, Bilder erzeugen/bearbeiten, Sprache und Audio erzeugen/verarbeiten, Videos analysieren, Skills laden und Tool-Ergebnisse der aktuellen Session nachlesen. Diese Aktionen bleiben auch in den beiden großzügigeren Presets automatisch. **Alles bestätigen** enthält diese Ausnahmen nicht. Zusätzliche Datei-, Verbindungs- und Ressourcenrechte bleiben wirksam: Medienverarbeitung erlaubt beispielsweise nicht automatisch das Lesen einer Computerdatei. Die Einstellung **Nur öffentliche Zieladressen zulassen** begrenzt weiterhin die erreichbaren Ziele. Das Löschen von Session-Dateien hat eine eigene Berechtigung, unabhängig vom Löschen im Workspace.
 
-- **Vorgabe privat:** Änderungen bestätigen.
-- **Vorgabe öffentlich:** Alles bestätigen.
-- **Änderungen bestätigen** erlaubt auch sensibles Lesen automatisch, fragt aber vor Schreiben und Löschen. Speziellere Kombinationen lassen sich über eigene Aktionsregeln festlegen.
-- Beim Update bleiben ausdrücklich gespeicherte globale Aktionsregeln erhalten. Frühere implizite Tool-Defaults werden nicht als eigene Regeln nachgebaut; ohne eigene Regel gilt das neue Freigabeverhalten.
+- **Vorgabe privat:** Komfortabel.
+- **Vorgabe öffentlich:** Ausgewogen.
+- **Komfortabel** erlaubt auch sensibles Lesen automatisch, fragt aber vor sonstigem Schreiben und Löschen. Speziellere Kombinationen lassen sich über eigene Aktionsregeln festlegen.
+- Beim Update werden auch bestehende Preset-Auswahlen auf diese Vorgaben gesetzt. Explizite Aktions- und Profilregeln bleiben erhalten. Bereits konfigurierte Löschregeln werden zusätzlich für Session-Dateien übernommen, sofern dort noch keine eigene Regel besteht.
 
 #### Was bedeuten die Kategorien?
 
@@ -63,7 +63,7 @@ Die Tabelle gilt für Aktionen ohne eigene Tool-Vorgabe. Websuche, Webseitenabru
 
 #### Grundstandard ändern
 
-1. Den gewünschten Grundstandard im jeweiligen Dropdown auswählen. **Vorgabe** kennzeichnet die Ausgangseinstellung.
+1. Den gewünschten Grundstandard in der jeweiligen Radio-Liste auswählen. **Vorgabe** kennzeichnet die Ausgangseinstellung.
 2. **Speichern** anklicken.
 
 - Vorhandene eigene Aktionsregeln bleiben erhalten. Ohne eigene Regel gilt zuerst eine ausdrückliche Vorgabe der Toolaktion, andernfalls der gewählte Grundstandard. Das gilt auch für Integrationen und neu hinzukommende Aktionen.

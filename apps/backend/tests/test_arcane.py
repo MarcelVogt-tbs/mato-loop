@@ -179,7 +179,7 @@ async def test_arcane_refuses_redirects_and_unbounded_read_responses():
 @pytest.mark.parametrize("trust", list(TrustLevel))
 @pytest.mark.parametrize("preset, expected", [
     ("ask_all", ("ask", "ask", "ask", "ask")),
-    ("ask_changes_sensitive", ("auto", "auto", "ask", "ask")),
+    ("balanced", ("ask", "ask", "ask", "ask")),
     ("ask_changes", ("auto", "auto", "ask", "ask")),
     ("ask_delete", ("auto", "auto", "auto", "ask")),
     ("auto_all", ("auto", "auto", "auto", "auto")),

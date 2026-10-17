@@ -521,7 +521,7 @@ async def test_edit_image_sends_ordered_session_images_and_scopes_approval(
     tool_context = context(tmp_path, call)
     ai, chat = codex_edit_settings()
     tool_context.model_id = chat.id
-    tools = ToolSettings()
+    tools = ToolSettings(private_permission_preset="ask_all", public_permission_preset="ask_all")
     mock_settings_load(monkeypatch, tools, ai)
     tool_context.db.get.return_value = SimpleNamespace(user_id=None)
     message = Message(
@@ -838,7 +838,7 @@ async def test_media_tools_read_files_without_chat_attachments(tmp_path, monkeyp
         ai = media_settings(ModelCapability.AUDIO_TRANSCRIPTION)
         provider = AsyncMock(return_value=SimpleNamespace(text="transcribed"))
         monkeypatch.setattr(MediaService, "transcribe_audio", provider)
-    mock_settings_load(monkeypatch, ToolSettings(), ai)
+    mock_settings_load(monkeypatch, ToolSettings(private_permission_preset="ask_all", public_permission_preset="ask_all"), ai)
 
     result = await tool_registry.execute(call, tool_context)
 

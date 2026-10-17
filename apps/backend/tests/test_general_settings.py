@@ -90,7 +90,7 @@ async def test_model_trust_switch_preserves_stored_general_settings(monkeypatch,
 
 def tool_request(settings, **updates):
     payload = tool_configuration_payload(settings)
-    for key in ("groups", "privateGroups", "publicGroups", "toolPermissionPresets"):
+    for key in ("groups", "privateGroups", "publicGroups", "toolPermissionPresets", "presetOptions"):
         payload.pop(key)
     return ToolConfigurationRequest.model_validate({**payload, **updates})
 
@@ -98,7 +98,7 @@ def tool_request(settings, **updates):
 @pytest.mark.parametrize("trust", ["private", "public"])
 @pytest.mark.parametrize("preset, read, write, delete, sensitive", [
     ("ask_all", "ask", "ask", "ask", "ask"),
-    ("ask_changes_sensitive", "auto", "ask", "ask", "ask"),
+    ("balanced", "ask", "ask", "ask", "ask"),
     ("ask_changes", "auto", "ask", "ask", "auto"),
     ("ask_delete", "auto", "auto", "ask", "auto"),
     ("auto_all", "auto", "auto", "auto", "auto"),
@@ -124,7 +124,14 @@ async def test_tool_presets_change_only_selected_global_policies(monkeypatch, tr
         "filesystem.read", "filesystem.write", "shell.write", "filesystem.delete", "automation.delete",
         "sensitive_data.access", "secrets.access", "secrets.write",
     )) == (read, write, write, "disabled", delete, sensitive, sensitive, write)
-    assert tuple(tool_execution_policy(tools, key) for key in ("network.search", "network.fetch")) == ("auto", "auto")
+    for key in (
+        "network.search", "network.fetch", "session.files.read", "session.files.write", "file.provide",
+        "media.generate.image", "media.edit.image", "media.generate.speech", "media.generate.audio",
+        "media.transcribe.audio", "media.analyze.audio", "media.analyze.video", "skills.load", "session.tool_result.read",
+    ):
+        assert tool_execution_policy(tools, key) == ("ask" if preset == "ask_all" else "auto")
+    selected = next(option for option in result["presetOptions"] if option["value"] == preset)
+    assert [rule["policy"] for rule in selected["baseline"]] == [read, sensitive, write, delete]
     after = tools.model_dump()
     after[f"{trust}_permission_preset"] = before[f"{trust}_permission_preset"]
     assert after == before

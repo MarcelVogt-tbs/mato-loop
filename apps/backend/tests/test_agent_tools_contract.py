@@ -1912,11 +1912,14 @@ def test_policy_disabled_integration_tool_points_to_integration_settings(monkeyp
 
 
 @pytest.mark.parametrize("trust", list(TrustLevel))
-async def test_session_file_operations_follow_delete_confirmation_preset(tmp_path, trust) -> None:
+@pytest.mark.parametrize("preset", ["balanced", "ask_changes", "ask_delete"])
+async def test_session_file_operations_follow_delete_confirmation_preset(tmp_path, trust, preset) -> None:
     context = _context(tmp_path, ToolCall("setup", "write_file", {}))
     context.tool_settings = ToolSettings(
-        private_permission_preset="ask_delete",
-        public_permission_preset="ask_delete",
+        private_permission_preset=preset,
+        public_permission_preset=preset,
+        private_permissions={"policies": {"filesystem.delete": "auto"}},
+        public_permissions={"policies": {"filesystem.delete": "auto"}},
     ).select_trust(trust)
     context.model_trust_level = trust
     context.db.scalar.return_value = None
@@ -1977,6 +1980,7 @@ async def test_disabling_tool_during_approval_prevents_file_write(tmp_path, monk
     context.db.scalar.return_value = None
     context.db.scalars.return_value = Mock(all=Mock(return_value=[]))
     current = ToolSettings()
+    current.private_permissions.policies["session.files.write"] = ToolExecutionPolicy.ASK
     monkeypatch.setattr("mato_loop_backend.agent.runtime.load_agent_profile_tools", AsyncMock(return_value=(current, None)))
     monkeypatch.setattr("mato_loop_backend.agent.runtime.load_effective_integrations", AsyncMock(return_value=context.integration_settings))
 
@@ -2017,7 +2021,7 @@ async def test_transfer_source_denial_skips_destination_approval(tmp_path, monke
 
 def test_global_policy_removes_tools_requiring_a_disabled_action() -> None:
     settings = _tool_settings(
-        {"policies": {"filesystem.delete": "disabled"}}
+        {"policies": {"filesystem.delete": "disabled", "session.files.delete": "disabled"}}
     )
 
     offered = {

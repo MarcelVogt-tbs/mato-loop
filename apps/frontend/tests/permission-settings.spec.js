@@ -60,8 +60,12 @@ it('saves the public address and agent updates and links to provider and tool se
 it.each([true, false])('saves the base behavior while retaining visible global overrides (model distinction: %s)', async (modelTrustEnabled) => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   const catalog = [{ id: 'processes', label: 'Prozesse', tools: ['Shell', 'Terminal'].map(label => ({ name: label, label, actions: [action('shell.write')] })) }]
-  let current = { ...rights(), privatePermissions: { ...branch(), policies: { 'shell.write': 'disabled' } }, publicPermissions: { ...branch(), policies: { 'shell.write': 'auto' } }, personalSettingsEnabled: false, groups: [], privateGroups: catalog, publicGroups: catalog, shellPrefixes: { read: [], write: [] }, webAccess: { userAgent: 'MatoLoop/1.0', publicAddressesOnly: true }, toolPermissionPresets: { private: 'ask_changes', public: 'ask_all' } }
-  const chosen = { private: 'ask_delete', ...(modelTrustEnabled ? { public: 'ask_changes_sensitive' } : {}) }
+  const presetOptions = [
+    ['ask_all', 'Alles bestätigen'], ['balanced', 'Ausgewogen'], ['ask_changes', 'Komfortabel'],
+    ['ask_delete', 'Automatisch außer Löschen'], ['auto_all', 'Vollautomatisch']
+  ].map(([value, label]) => ({ value, label, baseline: [{ category: 'read', label: 'Lesen', policy: 'ask' }], additionalPermissions: value === 'balanced' ? ['Session-Dateien lesen, bearbeiten und organisieren'] : [] }))
+  let current = { ...rights(), privatePermissions: { ...branch(), policies: { 'shell.write': 'disabled' } }, publicPermissions: { ...branch(), policies: { 'shell.write': 'auto' } }, personalSettingsEnabled: false, groups: [], privateGroups: catalog, publicGroups: catalog, shellPrefixes: { read: [], write: [] }, webAccess: { userAgent: 'MatoLoop/1.0', publicAddressesOnly: true }, toolPermissionPresets: { private: 'ask_changes', public: 'balanced' }, presetOptions }
+  const chosen = { private: 'ask_delete', ...(modelTrustEnabled ? { public: 'balanced' } : {}) }
   api.get.mockImplementation(async url => ({ data: url === '/agent-profiles' ? { agents: [], effectiveAgents: [] } : current }))
   api.put.mockImplementation(async (_url, payload) => {
     current = { ...current, ...payload, toolPermissionPresets: { ...current.toolPermissionPresets, ...payload.toolPermissionPresets } }
@@ -72,17 +76,18 @@ it.each([true, false])('saves the base behavior while retaining visible global o
   const { page } = await mount(ToolPage, { admin: true }, '/admin/tools?tab=general', 'admin-tools', pinia)
   await vi.waitUntil(() => page().saved && !page().loading)
   const choose = async (label, option) => {
-    const select = await vi.waitUntil(() => root.querySelector(`[aria-label="${label}: Freigabeverhalten"]:not([aria-disabled="true"])`))
-    select.click()
-    const item = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find(item => item.querySelector('.q-item__label')?.textContent === option))
-    item.click()
-    await vi.waitUntil(() => !document.querySelector('[role="option"]'))
+    root.querySelector(`[role="radio"][aria-label="${label}: ${option}"]`).click()
+    await nextTick()
   }
-  await vi.waitFor(() => expect(root.textContent).toContain('Änderungen bestätigen'))
-  if (modelTrustEnabled) expect(root.textContent).toContain('Alles außer lesenden Zugriffen auf öffentlich verfügbare Ressourcen bestätigen. Eigene Berechtigungsregeln haben Vorrang.')
-  expect(root.querySelector('a[aria-label="Freigabeverhalten erklärt (öffnet neuen Tab)"]').getAttribute('href')).toBe('/docs/tools-und-integrationen/#globale-tool-vorgaben-anwenden')
-  await choose(modelTrustEnabled ? 'Privat' : 'Alle Modelle', 'Nur Löschen bestätigen')
-  if (modelTrustEnabled) await choose('Öffentlich', 'Änderungen und sensible Zugriffe bestätigen')
+  expect(root.querySelectorAll('[role="radio"]')).toHaveLength(modelTrustEnabled ? 10 : 5)
+  root.querySelector(`[aria-label="${modelTrustEnabled ? 'Privat' : 'Alle Modelle'}: Ausgewogen erklären"]`).click()
+  const dialog = await vi.waitUntil(() => document.querySelector('.q-dialog'))
+  expect(dialog.textContent).toContain('BasisberechtigungenLesenNachfragen')
+  expect(dialog.textContent).toContain('Zusätzlich automatischSession-Dateien lesen, bearbeiten und organisieren')
+  dialog.querySelector('[aria-label="Dialog schließen"]').click()
+  await vi.waitUntil(() => !document.querySelector('.q-dialog'))
+  await choose(modelTrustEnabled ? 'Privat' : 'Alle Modelle', 'Automatisch außer Löschen')
+  if (modelTrustEnabled) await choose('Öffentlich', 'Ausgewogen')
   ;[...root.querySelectorAll('[role="switch"]')].find(item => item.textContent.includes('Nur öffentliche Zieladressen zulassen')).click()
   for (const [label, value] of [['User-Agent', 'Shared/2.0'], ['Maximale Antwortgröße', '7']]) {
     const input = [...root.querySelectorAll('.q-field')].find(field => field.querySelector('.q-field__label')?.textContent === label).querySelector('input')

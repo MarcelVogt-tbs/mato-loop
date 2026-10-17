@@ -863,7 +863,7 @@ async def test_global_policy_can_require_or_deny_a_host_bound_file_action(tmp_pa
     ) == PermissionDecision.DENY
 
 
-@pytest.mark.parametrize("capability", ["filesystem.delete", "sensitive_data.access"])
+@pytest.mark.parametrize("capability", ["session.files.delete", "sensitive_data.access"])
 async def test_policy_revocation_while_waiting_for_approval_stops_action(
     tmp_path, monkeypatch, capability,
 ) -> None:
@@ -891,7 +891,7 @@ async def test_policy_revocation_while_waiting_for_approval_stops_action(
         return _profile_settings(
             {
                 "policies": {
-                    "filesystem.delete": "auto",
+                    "session.files.delete": "auto",
                     capability: (
                         "ask" if settings_loads == 1 else "disabled"
                     )
@@ -2253,7 +2253,8 @@ async def test_sysadmin_arcane_config_uses_sensitive_read_guard(tmp_path, monkey
     instance = IntegrationInstance(name="Host", integration_type="infrastructure", adapter_type="arcane",
         config={"base_url": "https://arcane.example.test"}, profile_permissions={profile.id: IntegrationPermissions(available=True)})
     integrations = IntegrationSettings(instances=[instance])
-    settings = ToolSettings(private_permission_preset="ask_changes_sensitive", public_permission_preset="ask_changes_sensitive").select_trust(trust)
+    settings = ToolSettings(private_permission_preset="balanced", public_permission_preset="balanced").select_trust(trust)
+    settings.permissions.integration_policies[str(instance.id)] = {"arcane.read": ToolExecutionPolicy.AUTO}
     settings._agent_permissions = getattr(profile, f"{trust.value}_permissions")
     session = _session(user_id=uuid4(), agent_profile_id=profile.id)
     run = AgentRun(id=uuid4(), session_id=session.id, agent_profile_id=profile.id, trust_level=trust.value)

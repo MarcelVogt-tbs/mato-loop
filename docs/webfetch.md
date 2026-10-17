@@ -72,9 +72,9 @@ still makes a fresh network request. There is no separate result cache or LLM su
 
 ## Authorization and networking
 
-`network.fetch` declares an overridable `auto` default for both model classes, as does
-`network.search`. This covers Webfetch, published transcripts, and the network part of
-downloads even under **Alles bestätigen**. Explicit action/profile rules retain their
+`network.fetch` and `network.search` are automatic in every preset except
+**Alles bestätigen**, which asks for both. This covers Webfetch, published transcripts,
+and the network part of downloads. Explicit action/profile rules retain their
 normal precedence; download writes are authorized separately. Tool availability and
 the configured address restriction remain enforced, including when internal targets
 have been explicitly enabled.

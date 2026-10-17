@@ -32,17 +32,19 @@
           </div>
         </q-card-section>
         <q-separator />
-        <q-card-section class="row no-wrap items-start q-gutter-sm">
-          <div class="col">
-            <div class="row q-col-gutter-md">
-              <div v-for="audience in audiences" :key="audience.value" :class="auth.modelTrustEnabled ? 'col-12 col-sm-6' : 'col-12'">
-                <AppSelect v-model="selectedPresets[audience.value]" outlined stack-label emit-value map-options :label="audience.label" :aria-label="`${audience.label}: Freigabeverhalten`" :options="presetOptions.map(option => ({ ...option, caption: option.value === audience.default ? 'Vorgabe' : undefined }))" :hint="presetOptions.find(option => option.value === selectedPresets[audience.value])?.description" persistent-hint :disable="loading || saving || loadFailed">
-                  <template #selected><span class="ellipsis">{{ presetOptions.find(option => option.value === selectedPresets[audience.value])?.label }}</span></template>
-                </AppSelect>
+        <q-card-section>
+          <div class="row q-col-gutter-lg">
+            <div v-for="audience in audiences" :key="audience.value" :class="auth.modelTrustEnabled ? 'col-12 col-md-6' : 'col-12'">
+              <div :id="`preset-${audience.value}`" class="text-subtitle2 text-weight-bold q-mb-sm">{{ audience.label }}</div>
+              <div role="radiogroup" :aria-labelledby="`preset-${audience.value}`">
+                <div v-for="option in presetOptions" :key="option.value" class="row no-wrap items-center q-py-xs">
+                  <q-radio v-model="selectedPresets[audience.value]" class="col" :name="`preset-${audience.value}`" :val="option.value" :label="option.label" :aria-label="`${audience.label}: ${option.label}`" :disable="loading || saving || loadFailed" />
+                  <span v-if="option.value === audience.default" class="text-caption app-muted q-mx-xs">Vorgabe</span>
+                  <q-btn flat round dense icon="info_outline" :aria-label="`${audience.label}: ${option.label} erklären`" @click="presetInfo = option; presetDialogOpen = true" />
+                </div>
               </div>
             </div>
           </div>
-          <q-btn flat round dense icon="info_outline" aria-label="Freigabeverhalten erklärt (öffnet neuen Tab)" href="/docs/tools-und-integrationen/#globale-tool-vorgaben-anwenden" target="_blank" rel="noopener noreferrer" />
         </q-card-section>
       </q-card>
       <q-card v-if="admin && section === 'general' && form.configuration.webAccess" flat class="app-surface q-mb-md">
@@ -93,6 +95,29 @@
       </template>
       <q-inner-loading :showing="loading" />
     </q-form>
+    <q-dialog v-model="presetDialogOpen" :maximized="$q.screen.lt.sm" aria-labelledby="preset-info-title">
+      <q-card v-if="presetInfo" class="app-surface column no-wrap full-width">
+        <q-card-section class="row items-center no-wrap">
+          <div id="preset-info-title" class="text-h6 col">{{ presetInfo.label }}</div>
+          <q-btn v-close-popup flat round dense icon="close" aria-label="Dialog schließen" />
+        </q-card-section>
+        <q-separator />
+        <q-card-section class="col scroll">
+          <div class="text-subtitle2 text-weight-bold q-mb-sm">Basisberechtigungen</div>
+          <div v-for="rule in presetInfo.baseline" :key="rule.category" class="row justify-between q-col-gutter-md q-py-xs">
+            <div class="col">{{ rule.label }}</div>
+            <div class="col-auto">{{ rule.policy === 'auto' ? 'Automatisch' : 'Nachfragen' }}</div>
+          </div>
+          <div class="text-subtitle2 text-weight-bold q-mt-lg q-mb-sm">Zusätzlich automatisch</div>
+          <ul v-if="presetInfo.additionalPermissions.length" class="q-my-none q-pl-md">
+            <li v-for="label in presetInfo.additionalPermissions" :key="label" class="q-mb-xs">{{ label }}</li>
+          </ul>
+          <div v-else class="app-muted">Keine</div>
+          <div class="text-caption app-muted q-mt-lg">Eigene Regeln und Profilvorgaben haben Vorrang. Zugriffsgrenzen gelten weiterhin.</div>
+        </q-card-section>
+        <q-card-actions align="right"><q-btn v-close-popup flat no-caps label="Schließen" /></q-card-actions>
+      </q-card>
+    </q-dialog>
     <q-dialog v-model="shellDialogOpen" :maximized="$q.screen.lt.sm" aria-labelledby="shell-prefixes-title">
       <q-card class="app-surface column no-wrap full-width">
         <q-card-section class="row items-center"><div id="shell-prefixes-title" class="text-h6 col">Shell-Präfixe</div><q-btn v-close-popup flat round dense icon="close" aria-label="Dialog schließen" /></q-card-section>
@@ -156,17 +181,13 @@ const formRef = ref(null)
 const saving = ref(false)
 const loadFailed = ref(false)
 const saved = ref('')
-const selectedPresets = ref({ private: 'ask_changes', public: 'ask_all' })
+const selectedPresets = ref({ private: 'ask_changes', public: 'balanced' })
 const audiences = computed(() => auth.modelTrustEnabled
-  ? [{ value: 'private', label: 'Privat', default: 'ask_changes' }, { value: 'public', label: 'Öffentlich', default: 'ask_all' }]
+  ? [{ value: 'private', label: 'Privat', default: 'ask_changes' }, { value: 'public', label: 'Öffentlich', default: 'balanced' }]
   : [{ value: 'private', label: 'Alle Modelle', default: 'ask_changes' }])
-const presetOptions = [
-  { value: 'ask_all', label: 'Alles bestätigen', description: 'Alles außer lesenden Zugriffen auf öffentlich verfügbare Ressourcen bestätigen. Eigene Berechtigungsregeln haben Vorrang.' },
-  { value: 'ask_changes_sensitive', label: 'Änderungen und sensible Zugriffe bestätigen' },
-  { value: 'ask_changes', label: 'Änderungen bestätigen' },
-  { value: 'ask_delete', label: 'Nur Löschen bestätigen' },
-  { value: 'auto_all', label: 'Alles automatisch ausführen' }
-]
+const presetOptions = computed(() => tools.presetOptions)
+const presetInfo = ref(null)
+const presetDialogOpen = ref(false)
 const mediaByName = { generate_image: 'generateImage', edit_image: 'editImage', generate_speech: 'generateSpeech', generate_audio: 'generateAudio', transcribe_audio: 'transcribeAudio', analyze_video: 'analyzeVideo', analyze_audio: 'analyzeAudio' }
 const mediaFields = Object.values(mediaByName)
 const shellDialogOpen = ref(false)
@@ -225,7 +246,7 @@ async function loadPermissions() {
   try {
     const data = selectedId.value ? await tools.fetchProfilePermissions(selectedId.value, admin ? 'instance' : 'personal') : await tools.fetchConfiguration()
     if (token !== loadToken) return
-    selectedPresets.value = data.toolPermissionPresets || { private: 'ask_changes', public: 'ask_all' }
+    selectedPresets.value = data.toolPermissionPresets || { private: 'ask_changes', public: 'balanced' }
     form.permissions = { privatePermissions: data.privatePermissions || emptyPermissions().privatePermissions, publicPermissions: data.publicPermissions || emptyPermissions().publicPermissions }
     permissionGroups.value = data.groupsByTrust || { private: data.privateGroups || [], public: data.publicGroups || [] }
     form.configuration = { toolAvailability: { ...data.toolAvailability }, shellPrefixes: data.shellPrefixes ?? null }

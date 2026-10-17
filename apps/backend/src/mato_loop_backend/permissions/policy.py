@@ -437,9 +437,8 @@ def path_permission(
     access = _access_for_capability(capability)
     return PermissionRequest(
         capability=(
-            "session.files.read"
-            if selected_root == FileRoot.SESSION and capability == "filesystem.read"
-            else capability
+            {"filesystem.read": "session.files.read", "filesystem.delete": "session.files.delete"}.get(capability, capability)
+            if selected_root == FileRoot.SESSION else capability
         ),
         resource_type="root_path",
         resource_scope=scope,
@@ -1859,14 +1858,15 @@ class PermissionPolicy:
                 "file.provide",
                 "session.files.read",
                 "session.files.write",
+                "session.files.delete",
             }:
                 return PermissionDecision.DENY
             if policy == ToolExecutionPolicy.DISABLED:
                 return PermissionDecision.DENY
-            if request.capability == "filesystem.delete" and policy is None:
+            if request.capability in {"filesystem.delete", "session.files.delete"} and policy is None:
                 policy = ToolExecutionPolicy.ASK
             if session_write_paths is not None and root == FileRoot.SESSION and (
-                request.capability in {"session.files.write", "filesystem.delete"}
+                request.capability in {"session.files.write", "session.files.delete", "filesystem.delete"}
                 and (
                     str(path) not in session_write_paths
                     or request.action_kind in {"create_directory", "copy_path", "move_path"}

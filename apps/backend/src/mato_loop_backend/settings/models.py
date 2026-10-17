@@ -97,7 +97,7 @@ class TrustLevel(StrEnum):
     PUBLIC = "public"
     PRIVATE = "private"
 
-ToolPermissionPreset = Literal["ask_all", "ask_changes_sensitive", "ask_changes", "ask_delete", "auto_all"]
+ToolPermissionPreset = Literal["ask_all", "balanced", "ask_changes", "ask_delete", "auto_all"]
 
 
 class ToolExecutionPolicy(StrEnum):
@@ -411,6 +411,7 @@ def plan_profile() -> AgentProfile:
         "filesystem.delete": ToolExecutionPolicy.DISABLED,
         "working_directory.external": ToolExecutionPolicy.ASK,
         "session.files.write": ToolExecutionPolicy.DISABLED,
+        "session.files.delete": ToolExecutionPolicy.DISABLED,
         "shell.read": ToolExecutionPolicy.AUTO,
         "shell.write": ToolExecutionPolicy.DISABLED,
         "shell.delete": ToolExecutionPolicy.DISABLED,
@@ -999,7 +1000,7 @@ class ToolSettings(IntegrationToolSettings):
 
     personal_settings_enabled: bool = False
     private_permission_preset: ToolPermissionPreset = "ask_changes"
-    public_permission_preset: ToolPermissionPreset = "ask_all"
+    public_permission_preset: ToolPermissionPreset = "balanced"
 
     _frozen_action_defaults: dict[str, ToolExecutionPolicy] | None = PrivateAttr(default=None)
     _agent_profile: AgentProfile | None = PrivateAttr(default=None)

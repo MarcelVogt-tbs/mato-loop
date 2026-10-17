@@ -31,6 +31,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
     saving: false,
     loadVersion: 0,
     configurationGroups: [],
+    presetOptions: [],
     configurationWebFetch: defaultConfigurationWebFetch(),
     configurationWebAccess: defaultConfigurationWebAccess(),
     configurationLoaded: false,
@@ -95,6 +96,7 @@ export const useToolSettingsStore = defineStore('tool-settings', {
       }
     },
     assignConfiguration(data) {
+      this.presetOptions = data?.presetOptions || []
       this.configurationGroups = Array.isArray(data?.groups)
         ? data.groups.map((group) => ({
             ...group,

@@ -45,6 +45,7 @@ from mato_loop_backend.tools.actions import (
     _FILESYSTEM_DELETE,
     _FILESYSTEM_READ,
     _FILESYSTEM_WRITE,
+    _SESSION_FILES_DELETE,
     _SESSION_FILES_READ,
     _SESSION_FILES_WRITE,
 )
@@ -1229,7 +1230,10 @@ DELETE_PATH = ToolDefinition(
             group="filesystem",
             label="Pfad löschen",
             icon="delete_outline",
-            actions=(_FILESYSTEM_DELETE,),
+            actions=(_SESSION_FILES_DELETE, _FILESYSTEM_DELETE),
+            alternative_action_groups=(
+                frozenset({"session.files.delete", "filesystem.delete"}),
+            ),
         )
 
 COPY_PATH = ToolDefinition(
