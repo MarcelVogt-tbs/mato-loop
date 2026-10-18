@@ -420,9 +420,11 @@ async def test_workspace_read_dispatches_absolute_filesystem_path(tmp_path) -> N
 @pytest.mark.parametrize("decision", [PermissionDecision.ASK, PermissionDecision.DENY])
 async def test_repository_prefetch_does_not_access_unapproved_paths(decision) -> None:
     client = FakeExecutionClient({}, {"filesystem.stat", "filesystem.read"}, "/work")
-    prompt = await repository_instructions_prompt(client, [], AsyncMock(return_value=decision))
+    checked = {}
+    prompt = await repository_instructions_prompt(client, [], AsyncMock(return_value=decision), checked_entries=checked)
     assert client.requests == []
-    assert json.loads(prompt.splitlines()[-2])["files"] == [{
+    assert "Some repository instructions could not be loaded." in prompt
+    assert list(checked.values()) == [{
         "path": "/work/AGENTS.md", "directory": "/work",
         "status": "approval_required" if decision == PermissionDecision.ASK else "denied",
     }]
@@ -442,8 +444,10 @@ async def test_repository_prefetch_reports_unreadable_files(kind, size, status) 
                                    size=size, modified_at=0.0)
 
     client = FakeExecutionClient({"filesystem.stat": stat}, {"filesystem.stat", "filesystem.read"}, "/work")
-    prompt = await repository_instructions_prompt(client, [], AsyncMock(return_value=PermissionDecision.ALLOW))
-    assert json.loads(prompt.splitlines()[-2])["files"][0]["status"] == status
+    checked = {}
+    prompt = await repository_instructions_prompt(client, [], AsyncMock(return_value=PermissionDecision.ALLOW), checked_entries=checked)
+    assert ("Some repository instructions could not be loaded." in prompt) == (status != "missing")
+    assert checked["/work/AGENTS.md"]["status"] == status
     assert all(operation != "filesystem.read" for operation, _arguments in client.requests)
 
 
@@ -471,6 +475,59 @@ async def test_repository_prefetch_stops_at_git_and_permission_boundaries(root, 
         [root + "/AGENTS.md", cwd + "/AGENTS.md"] if external == PermissionDecision.ALLOW
         else [cwd + "/AGENTS.md"]
     )
+
+
+@pytest.mark.parametrize("child_status", ["missing", "unreadable", "approval_changed"])
+async def test_repository_prefetch_keeps_rules_stable_when_discovery_changes(child_status) -> None:
+    git_allowed = False
+
+    def stat(arguments):
+        path = arguments["path"]
+        if path == "/work/other/AGENTS.md" or (path == "/work/src/AGENTS.md" and child_status == "missing"):
+            raise ExecutionClientError("file.pathNotFound")
+        return WorkspaceStatResult(path=path, kind="directory" if path.endswith(".git") else "file",
+                                   size=33 * 1024 if path == "/work/src/AGENTS.md" else 16, modified_at=0.0)
+
+    async def authorize(request):
+        path = json.loads(request.resource_scope)["path"]
+        if path == "/work/src/AGENTS.md" and child_status == "approval_changed":
+            return PermissionDecision.DENY if git_allowed else PermissionDecision.ASK
+        return PermissionDecision.ASK if not git_allowed and path.endswith(".git") else PermissionDecision.ALLOW
+
+    client = FakeExecutionClient({
+        "filesystem.stat": stat,
+        "filesystem.read": WorkspaceReadResult(content="Use conventions.", lines_read=1, has_more=False,
+                                               truncated_lines=[], sha256="a" * 64),
+    }, {"filesystem.stat", "filesystem.read"}, "/work")
+    before = await repository_instructions_prompt(client, [], authorize, target_paths=("/work/src/main.py",))
+    git_allowed = True
+    after = await repository_instructions_prompt(client, [], authorize,
+        target_paths=("/work/src/main.py", "/work/other/main.py"))
+    assert after == before
+
+
+async def test_repository_prefetch_reports_partial_context_budget_omission() -> None:
+    def stat(arguments):
+        path = arguments["path"]
+        return WorkspaceStatResult(path=path, kind="directory" if path.endswith(".git") else "file",
+                                   size=2_000, modified_at=0.0)
+
+    def read(arguments):
+        return WorkspaceReadResult(
+            content="x" * 2_000 if arguments["path"] == "/work/src/AGENTS.md" else "Root rules.",
+            lines_read=1, has_more=False, truncated_lines=[], sha256="a" * 64,
+        )
+
+    async def fits(context):
+        return len(context) < 1_500
+
+    client = FakeExecutionClient({"filesystem.stat": stat, "filesystem.read": read},
+                                 {"filesystem.stat", "filesystem.read"}, "/work")
+    prompt = await repository_instructions_prompt(
+        client, [], AsyncMock(return_value=PermissionDecision.ALLOW),
+        target_paths=("/work/src/main.py",), fits_context=fits,
+    )
+    assert "Some repository instructions could not be loaded." in prompt
 
 
 async def test_workspace_read_sends_generated_image_to_model(tmp_path) -> None:

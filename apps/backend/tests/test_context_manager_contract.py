@@ -2573,7 +2573,7 @@ async def test_repository_instructions_fit_small_model_request_budget(monkeypatc
             client, records, authorize, checked_entries=checked_entries,
         ),
     )
-    assert json.loads(projection.messages[0]["content"].splitlines()[-2])["files"][0]["status"] == "context_budget_exceeded"
+    assert "Some repository instructions could not be loaded." in projection.messages[0]["content"]
     updated = "Use updated conventions." if changed else content
     monkeypatch.setattr(ExecutionClient, "request", AsyncMock(side_effect=[
         WorkspaceStatResult(path="/work/.git", kind="directory", size=0, modified_at=0.0),
