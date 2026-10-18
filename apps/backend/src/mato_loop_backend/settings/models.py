@@ -1230,11 +1230,18 @@ class InstanceLimits(SettingsDocument):
         return self._mib(self.max_archive_entry_mib)
 
 
+class ChatModelOverride(BaseModel):
+    model_config = ConfigDict(alias_generator=_camel_case, populate_by_name=True, extra="forbid")
+    model_id: UUID | None = None
+    reasoning_effort: ReasoningEffort | None = None
+
+
 class ModelDefaults(BaseModel):
     model_config = ConfigDict(alias_generator=_camel_case, populate_by_name=True, extra="forbid")
 
     default_model_id: UUID | None = None
     reasoning_effort: ReasoningEffort | None = None
+    profile_models: dict[UUID, ChatModelOverride] = Field(default_factory=dict)
     compaction_model_id: UUID | None = None
     title_generation_model_id: UUID | None = None
     title_vision_fallback_enabled: StrictBool | None = None

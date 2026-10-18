@@ -51,14 +51,18 @@ def apply_session_ai(settings: AiSettings, session: ChatSession, profile_id: UUI
 
     effective = settings.model_copy(deep=True)
     configuration = SessionProfileSnapshot.model_validate(session.session_profile or {})
-    override = configuration.agent_models.get(profile_id or session.agent_profile_id, ChatModelOverride())
+    agent_id = profile_id or session.agent_profile_id
+    override = configuration.agent_models.get(agent_id, ChatModelOverride())
+    profile_override = settings.profile_models.get(agent_id, ChatModelOverride())
+    candidates = (override.model_id, session.model_config_id, profile_override.model_id, settings.default_model_id)
     effective.default_model_id = next((
-        model_id for model_id in (override.model_id, session.model_config_id, settings.default_model_id)
+        model_id for model_id in candidates
         if model_id is not None and model_reference_available(settings, "default_model_id", model_id)
     ), None)
-    effective.reasoning_effort = override.reasoning_effort or session.reasoning_effort or effective.reasoning_effort
-    configured_model_id = override.model_id or session.model_config_id or settings.default_model_id
-    if effective.default_model_id != configured_model_id and effective.reasoning_effort is not None:
+    effective.reasoning_effort = override.reasoning_effort or session.reasoning_effort or profile_override.reasoning_effort or effective.reasoning_effort
+    configured_model_id = next((model_id for model_id in candidates if model_id is not None), None)
+    inherited_reasoning = override.reasoning_effort is None and session.reasoning_effort is None
+    if effective.reasoning_effort is not None and (inherited_reasoning or effective.default_model_id != configured_model_id):
         model = available_model(settings, effective.default_model_id)
         provider = next((item for item in settings.providers if model and item.id == model.provider_id), None)
         profile = reasoning_profile(model.model_id, model.discovery_metadata) if model and provider and (
@@ -153,12 +157,18 @@ async def load_effective_agent_identity(
 
 
 async def load_effective_ai(db: AsyncSession, user_id: UUID, *, include_personal: bool = True) -> AiSettings:
+    from mato_loop_backend.providers.settings_service import (
+        first_available_agent_model,
+        model_reference_available,
+    )
+
     inventory = await SettingsStore.load(db, AiProviderSettings)
     defaults = await SettingsStore.load_optional(db, ModelDefaultsSettings) or ModelDefaultsSettings()
     values = defaults.model_dump(include=set(ModelDefaults.model_fields), exclude_none=True)
+    personal_defaults = None
     if include_personal and await personal_settings_allowed(db, user_id, defaults.personal_settings_enabled):
         personal_defaults = await SettingsStore.load_optional(db, UserModelDefaultsSettings, user_id=user_id) or UserModelDefaultsSettings()
-        values.update(personal_defaults.model_dump(exclude_none=True))
+        values.update(personal_defaults.model_dump(exclude={"profile_models"}, exclude_none=True))
     instance = AiSettings.model_validate({**inventory.model_dump(include=set(AiProviderSettings.model_fields)), **values})
     personal = await SettingsStore.load_optional(db, UserAiSettings, user_id=user_id) if include_personal else None
     for provider in instance.providers:
@@ -173,9 +183,15 @@ async def load_effective_ai(db: AsyncSession, user_id: UUID, *, include_personal
             model for model in personal.models if model.provider_id in personal_provider_ids
         )
 
-    if instance.default_model_id is None:
-        from mato_loop_backend.providers.settings_service import first_available_agent_model
+    if personal_defaults is not None:
+        for profile_id, choice in personal_defaults.profile_models.items():
+            fields = choice.model_dump(exclude_none=True)
+            if choice.model_id is not None and not model_reference_available(instance, "default_model_id", choice.model_id):
+                fields.pop("model_id")
+            inherited = instance.profile_models.get(profile_id, ChatModelOverride())
+            instance.profile_models[profile_id] = inherited.model_copy(update=fields)
 
+    if instance.default_model_id is None:
         instance.default_model_id = first_available_agent_model(instance)
 
     general = await SettingsStore.load_optional(db, GeneralSettings) or GeneralSettings()

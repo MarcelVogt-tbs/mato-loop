@@ -42,7 +42,8 @@ async def validate_session_profile(db, user_id, config: SessionProfileConfig, *,
     ai = await load_effective_ai(db, user_id, include_personal=not instance)
     for agent_id, choice in config.agent_models.items():
         unchanged_model = previous is not None and agent_id in previous.agent_models and choice.model_id == previous.agent_models[agent_id].model_id
-        validate_chat_model(ai, choice, model_id, defer_unavailable=defer_unavailable or unchanged_model)
+        profile_choice = ai.profile_models.get(agent_id, ChatModelOverride())
+        validate_chat_model(ai, choice, model_id or profile_choice.model_id, defer_unavailable=defer_unavailable or unchanged_model)
     return ai
 
 

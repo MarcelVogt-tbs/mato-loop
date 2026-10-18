@@ -43,7 +43,7 @@
         </q-tab-panel>
         <q-tab-panel name="access" class="q-pa-none">
           <p class="text-body2 app-muted q-mt-md">Diese Einstellungen werden in ihren jeweiligen Verwaltungsbereichen gepflegt.</p>
-          <q-banner v-if="isCreate" rounded class="app-surface-tonal q-mb-md">Speichere den Agenten zuerst, um seine Persona und Rechte zu öffnen.</q-banner>
+          <q-banner v-if="isCreate" rounded class="app-surface-tonal q-mb-md">Speichere den Agenten zuerst, um seine weiteren Einstellungen zu öffnen.</q-banner>
           <q-card flat class="app-surface">
             <q-card-section class="row items-center q-col-gutter-md">
               <q-icon name="face" color="primary" size="sm" class="col-auto" />
@@ -53,6 +53,17 @@
               </div>
               <div class="col-12 col-sm-auto">
                 <q-btn flat no-caps color="primary" label="Persona öffnen" :disable="!editingAgent || agents.loading || agents.saving" :to="{ name: admin ? 'admin-personas' : 'settings-personalization', query: { ...(!admin ? { tab: 'assistant' } : {}), profileId: editingAgent?.id } }" />
+              </div>
+            </q-card-section>
+            <q-separator />
+            <q-card-section class="row items-center q-col-gutter-md">
+              <q-icon name="stars" color="primary" size="sm" class="col-auto" />
+              <div class="col">
+                <div class="text-subtitle1 text-weight-bold">Modell</div>
+                <div class="text-body2 app-muted">Agentmodell und Reasoning-Vorgabe dieses Agenten.</div>
+              </div>
+              <div class="col-12 col-sm-auto">
+                <q-btn flat no-caps color="primary" label="Modelleinstellungen öffnen" :disable="!accessProfileId || agents.loading || agents.saving" :to="{ name: admin ? 'admin-model-defaults' : 'settings-model-defaults', query: { profileId: accessProfileId } }" />
               </div>
             </q-card-section>
             <q-separator />

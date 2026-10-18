@@ -34,7 +34,7 @@
               <q-expansion-item label="Modell-Overrides je Agent" icon="smart_toy">
                 <q-card-section v-for="id in form.agentIds || []" :key="id">
                   <div class="text-subtitle2 q-mb-sm">{{ agentOptions.find((item) => item.value === id)?.label || 'Nicht verfügbarer Agent' }}</div>
-                  <ChatModelFields :model-value="form.agentModels?.[id] || {}" :inherited="{ modelId: form.modelId || defaults.modelId, reasoningEffort: form.reasoningEffort || defaults.reasoningEffort }" :disabled="store.saving" @update:model-value="setOverride(id, $event)" />
+                  <ChatModelFields :model-value="form.agentModels?.[id] || {}" :inherited="{ modelId: form.modelId || models.effective.profileModels?.[id]?.modelId || defaults.modelId, reasoningEffort: form.reasoningEffort || models.effective.profileModels?.[id]?.reasoningEffort || defaults.reasoningEffort }" :disabled="store.saving" @update:model-value="setOverride(id, $event)" />
                 </q-card-section>
               </q-expansion-item>
             </div>

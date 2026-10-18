@@ -271,7 +271,7 @@ function update(patch) {
 function selectModel(modelId) {
   const model = providers.models.find((item) => item.id === modelId)
   const agentId = displayedAgentProfileId.value
-  const defaultEffort = props.session?.reasoningEffort || providers.modelDefaults?.reasoningEffort
+  const defaultEffort = props.session?.reasoningEffort || providers.modelDefaults?.profileModels?.[agentId]?.reasoningEffort || providers.modelDefaults?.reasoningEffort
   update({ session_profile: (profile) => {
     const effort = profile?.agentModels?.[agentId]?.reasoningEffort || defaultEffort
     const agentModels = { ...profile?.agentModels }

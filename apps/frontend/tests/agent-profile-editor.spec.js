@@ -34,6 +34,8 @@ async function mountEditor(path = '/agents/agent', extraAgents = [], personalAge
     { path: '/admin/agents', name: 'admin-agents', component: { render: () => null } },
     { path: '/tools', name: 'settings-tools', component: { render: () => null } },
     { path: '/admin/tools', name: 'admin-tools', component: { render: () => null } },
+    { path: '/model-defaults', name: 'settings-model-defaults', component: { render: () => null } },
+    { path: '/admin/model-defaults', name: 'admin-model-defaults', component: { render: () => null } },
     { path: '/integrations', name: 'settings-integrations', component: { render: () => null } },
     { path: '/admin/integrations', name: 'admin-integrations', component: { render: () => null } },
     { path: '/personas', name: 'settings-persona', component: { render: () => null } },
@@ -86,7 +88,7 @@ it.each([
   tab.click()
   await nextTick()
   expect([...root.querySelectorAll('.q-tab-panel a')].map((link) => link.getAttribute('href'))).toEqual([
-    personaLink, `${prefix}/tools?profileId=${accessId}`, `${prefix}/integrations?tab=management`
+    personaLink, `${prefix}/model-defaults?profileId=${accessId}`, `${prefix}/tools?profileId=${accessId}`, `${prefix}/integrations?tab=management`
   ])
 })
 

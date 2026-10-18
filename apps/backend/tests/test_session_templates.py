@@ -72,6 +72,73 @@ async def test_template_copy_and_agent_model_resolution(documents):
     assert (ai.default_model_id, plan.default_model_id, plan.reasoning_effort, build.default_model_id, plan.title_generation_model_id, session_agent_allowed(session, SYSADMIN_PROFILE_ID), snapshot.message_size) == (personal_model, plan_model, "high", session_model, global_model, False, "small")
 
 
+@pytest.mark.parametrize("session_model", [False, True])
+async def test_profile_defaults_inherit_independently_below_session_choices(documents, session_model):
+    user = UserAccount(id=uuid4(), username="owner", password_hash="hash", is_admin=True)
+    db = AsyncMock(spec=AsyncSession)
+    provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
+    models = [ModelConfig(provider_id=provider.id, model_id=name, discovery_metadata={"reasoning_efforts": ["low", "high"], "default_reasoning_effort": "low"}) for name in ("default", "profile", "personal", "session")]
+    documents[AiProviderSettings, None] = AiProviderSettings(providers=[provider], models=models)
+    await save_defaults(ModelDefaults(default_model_id=models[0].id, title_generation_model_id=models[0].id, profile_models={PLAN_PROFILE_ID: ChatModelOverride(model_id=models[1].id, reasoning_effort="low")}), user, db, "instance")
+    await save_defaults(ModelDefaults(default_model_id=models[2].id, profile_models={PLAN_PROFILE_ID: ChatModelOverride(reasoning_effort="high")}), user, db, "personal")
+    ai = await load_effective_ai(db, user.id)
+    session = ChatSession(agent_profile_id=PLAN_PROFILE_ID, model_config_id=models[3].id if session_model else None)
+    selected = apply_session_ai(ai, session)
+    other = apply_session_ai(ai, session, BUILD_PROFILE_ID)
+    assert (selected.default_model_id, selected.reasoning_effort, other.default_model_id, selected.title_generation_model_id) == (models[3 if session_model else 1].id, "high", models[3 if session_model else 2].id, models[0].id)
+
+
+async def test_profile_model_uses_its_default_when_inherited_reasoning_is_unsupported(documents):
+    user = UserAccount(id=uuid4(), username="owner", password_hash="hash", is_admin=True)
+    provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
+    models = [ModelConfig(provider_id=provider.id, model_id=name, discovery_metadata={"reasoning_efforts": [effort], "default_reasoning_effort": effort}) for name, effort in (("standard", "low"), ("profile", "high"))]
+    documents[AiProviderSettings, None] = AiProviderSettings(providers=[provider], models=models)
+    await save_defaults(ModelDefaults(default_model_id=models[0].id, reasoning_effort="low", profile_models={PLAN_PROFILE_ID: ChatModelOverride(model_id=models[1].id)}), user, AsyncMock(spec=AsyncSession), "instance")
+    selected = apply_session_ai(await load_effective_ai(AsyncMock(spec=AsyncSession), user.id), ChatSession(agent_profile_id=PLAN_PROFILE_ID))
+    assert (selected.default_model_id, selected.reasoning_effort) == (models[1].id, None)
+
+
+@pytest.mark.parametrize("include_choices", [False, True])
+async def test_standard_model_change_revalidates_preserved_profile_reasoning(documents, include_choices):
+    user = UserAccount(id=uuid4(), username="owner", password_hash="hash", is_admin=True)
+    provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
+    models = [ModelConfig(provider_id=provider.id, model_id=effort, discovery_metadata={"reasoning_efforts": [effort], "default_reasoning_effort": effort}) for effort in ("high", "low")]
+    documents[AiProviderSettings, None] = AiProviderSettings(providers=[provider], models=models)
+    choices = {PLAN_PROFILE_ID: ChatModelOverride(reasoning_effort="high")}
+    documents[ModelDefaultsSettings, None] = ModelDefaultsSettings(default_model_id=models[0].id, profile_models=choices)
+    payload = ModelDefaults(default_model_id=models[1].id, **({"profile_models": choices} if include_choices else {}))
+    with pytest.raises(ApiError, match="validation.invalidChoice"):
+        await save_defaults(payload, user, AsyncMock(spec=AsyncSession), "instance")
+
+
+@pytest.mark.parametrize("unavailable", ["missing", "providers_disabled"])
+async def test_unavailable_personal_profile_model_keeps_global_profile_fallback(documents, unavailable):
+    user_id = uuid4()
+    provider = LlmProviderConfig(name="Global", adapter_type="openai-compatible")
+    standard, profile = [ModelConfig(provider_id=provider.id, model_id=name) for name in ("standard", "profile")]
+    personal_provider = LlmProviderConfig(name="Personal", adapter_type="openai-compatible")
+    personal = ModelConfig(provider_id=personal_provider.id, model_id="personal", availability="missing" if unavailable == "missing" else "available")
+    documents[AiProviderSettings, None] = AiProviderSettings(providers=[provider], models=[standard, profile], personal_providers_enabled=unavailable != "providers_disabled")
+    documents[UserAiSettings, user_id] = UserAiSettings(providers=[personal_provider], models=[personal])
+    documents[ModelDefaultsSettings, None] = ModelDefaultsSettings(default_model_id=standard.id, profile_models={PLAN_PROFILE_ID: ChatModelOverride(model_id=profile.id)})
+    documents[UserModelDefaultsSettings, user_id] = UserModelDefaultsSettings(profile_models={PLAN_PROFILE_ID: ChatModelOverride(model_id=personal.id)})
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = UserAccount(id=user_id, is_admin=False)
+    selected = apply_session_ai(await load_effective_ai(db, user_id), ChatSession(agent_profile_id=PLAN_PROFILE_ID))
+    assert selected.default_model_id == profile.id
+
+
+@pytest.mark.parametrize("invalid", ["profile", "model", "tools", "reasoning"])
+async def test_profile_defaults_validate_profile_and_chat_model(documents, invalid):
+    user = UserAccount(id=uuid4(), username="owner", password_hash="hash", is_admin=True)
+    provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="chat", supports_tools=invalid != "tools")
+    documents[AiProviderSettings, None] = AiProviderSettings(providers=[provider], models=[model])
+    choice = ChatModelOverride(model_id=uuid4() if invalid == "model" else model.id, reasoning_effort="high" if invalid == "reasoning" else None)
+    with pytest.raises(ApiError, match={"profile": "agentProfile.selectedUnavailable", "model": "session.modelUnavailable", "tools": "session.modelUnavailable", "reasoning": "validation.invalidChoice"}[invalid]):
+        await save_defaults(ModelDefaults(profile_models={uuid4() if invalid == "profile" else PLAN_PROFILE_ID: choice}), user, AsyncMock(spec=AsyncSession), "instance")
+
+
 async def test_preview_resolves_the_current_draft_not_the_original_template(documents):
     user = UserAccount(id=uuid4(), username="owner", password_hash="hash")
     model_id = uuid4()
@@ -144,11 +211,12 @@ async def test_personal_gates_and_admin_exception(documents, admin):
     db.get.return_value = user
     personal_model = uuid4()
     own = SessionTemplate(name="Own", agent_ids=[GENERAL_PROFILE_ID], start_agent_id=GENERAL_PROFILE_ID)
-    documents[ModelDefaultsSettings, None] = ModelDefaultsSettings(personal_settings_enabled=False)
-    documents[UserModelDefaultsSettings, user.id] = UserModelDefaultsSettings(default_model_id=personal_model)
+    documents[ModelDefaultsSettings, None] = ModelDefaultsSettings(personal_settings_enabled=False, profile_models={PLAN_PROFILE_ID: ChatModelOverride(reasoning_effort="low")})
+    documents[UserModelDefaultsSettings, user.id] = UserModelDefaultsSettings(default_model_id=personal_model, profile_models={PLAN_PROFILE_ID: ChatModelOverride(reasoning_effort="high")})
     documents[SessionTemplatesSettings, None] = SessionTemplatesSettings(personal_settings_enabled=False)
     documents[UserSessionTemplatesSettings, user.id] = UserSessionTemplatesSettings(templates=[own])
-    assert ((await load_effective_ai(db, user.id)).default_model_id, len(await available_templates(db, user.id))) == (personal_model if admin else None, 3 if admin else 2)
+    ai = await load_effective_ai(db, user.id)
+    assert (ai.default_model_id, ai.profile_models[PLAN_PROFILE_ID].reasoning_effort, len(await available_templates(db, user.id))) == (personal_model if admin else None, "high" if admin else "low", 3 if admin else 2)
     if admin:
         await save_defaults(ModelDefaults(), user, db, "personal")
         await save_template(own.id, own, user, db, "personal")

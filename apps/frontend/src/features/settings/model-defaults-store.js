@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 
 export const useModelDefaultsStore = defineStore('model-defaults', {
-  state: () => ({ configured: {}, inherited: {}, effective: {}, automaticModelId: null, personalSettingsEnabled: true, loading: false, saving: false, loadVersion: 0 }),
+  state: () => ({ configured: {}, inherited: {}, effective: {}, profiles: [], automaticModelId: null, personalSettingsEnabled: true, loading: false, saving: false, loadVersion: 0 }),
   actions: {
     async load(scope) {
       const version = ++this.loadVersion

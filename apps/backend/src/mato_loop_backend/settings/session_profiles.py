@@ -1,27 +1,20 @@
 from typing import Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from mato_loop_backend.settings.models import (
     BUILD_PROFILE_ID,
     GENERAL_PROFILE_ID,
     PLAN_PROFILE_ID,
     SYSADMIN_PROFILE_ID,
-    ReasoningEffort,
+    ChatModelOverride,
     SettingsDocument,
     SettingsScope,
-    _camel_case,
 )
 
 DEFAULT_TEMPLATE_ID = UUID("00000000-0000-4000-8000-000000000101")
 CODING_TEMPLATE_ID = UUID("00000000-0000-4000-8000-000000000102")
-
-
-class ChatModelOverride(BaseModel):
-    model_config = ConfigDict(alias_generator=_camel_case, populate_by_name=True, extra="forbid")
-    model_id: UUID | None = None
-    reasoning_effort: ReasoningEffort | None = None
 
 
 class SessionProfileConfig(BaseModel):

@@ -755,9 +755,10 @@ async def test_instance_model_disable_removes_default_references_for_all_users(
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="agent")
     ai = AiSettings(providers=[provider], models=[model])
-    instance = ModelDefaultsSettings(default_model_id=model.id, compaction_model_id=model.id)
+    profile_id = uuid4()
+    instance = ModelDefaultsSettings(default_model_id=model.id, compaction_model_id=model.id, profile_models={profile_id: {"model_id": model.id}})
     user_documents = [
-        (uuid4(), UserModelDefaultsSettings(title_generation_model_id=model.id))
+        (uuid4(), UserModelDefaultsSettings(title_generation_model_id=model.id, profile_models={profile_id: {"model_id": model.id}}))
         for _ in range(2)
     ]
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=instance))
@@ -785,7 +786,7 @@ async def test_instance_model_disable_removes_default_references_for_all_users(
 
     overrides = [instance, *(document for _, document in user_documents)]
     assert all(
-        not set(override.model_dump(exclude_none=True)) & {
+        not override.profile_models and not set(override.model_dump(exclude_none=True)) & {
             "default_model_id",
             "compaction_model_id",
             "title_generation_model_id",
