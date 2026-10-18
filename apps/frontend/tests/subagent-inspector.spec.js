@@ -21,7 +21,7 @@ import SubagentRequestLink from '../src/features/subagents/SubagentRequestLink.v
 import { useSubagentStore } from '../src/stores/subagents'
 import { useApprovalStore } from '../src/stores/approvals'
 import { useQuestionStore } from '../src/stores/questions'
-import { useChatStore } from '../src/stores/chat'
+import { useChatStore } from '../src/features/chat/store'
 import { useAgentProfileStore } from '../src/stores/agent-profiles'
 import { buildChatTranscript } from '../src/utils/chat-transcript'
 import { agentRunPresentation, mergeAgentActivity } from '../src/utils/agent-activity'

@@ -30,7 +30,7 @@
 
 <script setup>
 import { computed } from 'vue'
-import { useChatStore } from 'stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 import { formatMetricInteger, modelContextPercentage } from 'src/utils/resource-metrics'
 
 defineOptions({ name: 'SessionFooter' })

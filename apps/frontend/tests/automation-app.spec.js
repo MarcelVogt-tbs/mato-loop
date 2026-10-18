@@ -8,7 +8,7 @@ vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 const mocks = vi.hoisted(() => ({ stores: {}, confirm: vi.fn(async () => true) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: mocks.confirm }) }))
 vi.mock('stores/automations', () => ({ useAutomationStore: () => mocks.stores.automations }))
-vi.mock('stores/chat', () => ({ useChatStore: () => mocks.stores.chat }))
+vi.mock('src/features/chat/store', () => ({ useChatStore: () => mocks.stores.chat }))
 vi.mock('stores/control-center', () => ({ useControlCenterStore: () => mocks.stores.controlCenter }))
 import AutomationApp from '../src/features/automations/AutomationApp.vue'
 import { scheduleDraft } from '../src/utils/automation-schedules'

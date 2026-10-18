@@ -14,7 +14,7 @@ import ApprovalCard from '../src/features/approvals/ApprovalCard.vue'
 import SessionApp from '../src/features/chat/components/SessionApp.vue'
 import MemorySettingsPage from '../src/features/memory/MemorySettingsPage.vue'
 import { useApprovalStore } from '../src/stores/approvals'
-import { useChatStore } from '../src/stores/chat'
+import { useChatStore } from '../src/features/chat/store'
 import { api } from 'src/boot/axios'
 
 const { confirm } = vi.hoisted(() => ({ confirm: vi.fn() }))

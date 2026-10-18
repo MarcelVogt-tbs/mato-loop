@@ -8,7 +8,7 @@ const { api } = vi.hoisted(() => ({
 vi.mock('src/boot/axios', () => ({ api }))
 
 import { useAgentProfileStore } from '../src/stores/agent-profiles'
-import { useChatStore } from '../src/stores/chat'
+import { useChatStore } from '../src/features/chat/store'
 
 describe('agent profiles store', () => {
   beforeEach(() => {

@@ -331,7 +331,7 @@ import {
 } from 'src/utils/tool-display'
 import { useApprovalStore } from 'stores/approvals'
 import { useAuthStore } from 'stores/auth'
-import { useChatStore } from 'stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useSkillStore } from 'stores/skills'
 

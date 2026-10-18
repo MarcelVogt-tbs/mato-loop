@@ -6,7 +6,7 @@ import { Terminal } from '@xterm/xterm'
 import TerminalApp from '../src/features/terminal/TerminalApp.vue'
 import TerminalFooter from '../src/features/terminal/TerminalFooter.vue'
 import { useTerminalStore } from '../src/stores/terminal'
-import { useChatStore } from 'stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useControlCenterStore } from 'stores/control-center'
 import { TERMINAL_OPERATIONS } from '../src/app/control-center/manifest'
@@ -17,7 +17,7 @@ vi.hoisted(() => {
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
 })
 
-vi.mock('stores/chat', async () => {
+vi.mock('src/features/chat/store', async () => {
   const { reactive } = await import('vue')
   const chat = reactive({ current: null, processOutputs: {}, activity: {}, running: false, stopping: false, stop: vi.fn() })
   return { useChatStore: () => chat }

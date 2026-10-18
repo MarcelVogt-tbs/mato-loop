@@ -16,12 +16,12 @@ vi.mock('src/boot/axios', () => ({ api }))
 vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 
 import { useApprovalStore } from '../src/stores/approvals'
-import { useChatStore, MAX_ATTACHMENT_DRAFT_BYTES } from '../src/stores/chat'
+import { useChatStore } from '../src/features/chat/store'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { useQuestionStore } from '../src/stores/questions'
 import { useWorkspaceStore } from '../src/stores/workspace'
 import { clearChatOutbox, loadChatOutbox } from '../src/utils/chat-outbox'
-import { buildAttachmentFormData } from '../src/features/chat/attachments'
+import { buildAttachmentFormData, MAX_ATTACHMENT_DRAFT_BYTES } from '../src/features/chat/attachments'
 import { withQueuedTranscriptMessages } from '../src/utils/chat-transcript'
 
 const originalURL = globalThis.URL

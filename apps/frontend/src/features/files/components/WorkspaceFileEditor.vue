@@ -1,15 +1,16 @@
 <template>
   <div class="workspace-editor column no-wrap" @keydown="handleKeydown" @keydown.esc.stop>
+    <q-resize-observer v-if="comparison" @resize="width = $event.width" />
     <template v-if="showToolbar">
       <q-toolbar class="workspace-editor__actions q-px-xs" role="group" aria-label="Editor-Werkzeuge">
-        <q-btn flat round dense icon="save" :color="dirty ? 'primary' : undefined" :loading="saving" :disable="!dirty" aria-label="Speichern" @click="emit('save')">
+        <q-btn flat round dense icon="save" :color="dirty ? 'primary' : undefined" :loading="saving" :disable="!dirty || diffActive || readonly" aria-label="Speichern" @click="emit('save')">
           <q-tooltip>Speichern (Strg/Cmd+S)</q-tooltip>
         </q-btn>
         <q-separator vertical inset class="workspace-editor__secondary q-mx-xs" />
-        <q-btn flat round dense icon="undo" :disable="!canUndo" aria-label="Rückgängig" @click="runHistory(undo)">
+        <q-btn flat round dense icon="undo" :disable="!canUndo || diffActive || readonly" aria-label="Rückgängig" @click="runHistory(undo)">
           <q-tooltip>Rückgängig (Strg/Cmd+Z)</q-tooltip>
         </q-btn>
-        <q-btn flat round dense icon="redo" :disable="!canRedo" aria-label="Wiederholen" @click="runHistory(redo)">
+        <q-btn flat round dense icon="redo" :disable="!canRedo || diffActive || readonly" aria-label="Wiederholen" @click="runHistory(redo)">
           <q-tooltip>Wiederholen (Strg/Cmd+Umschalt+Z)</q-tooltip>
         </q-btn>
         <q-separator vertical inset class="workspace-editor__secondary q-mx-xs" />
@@ -19,8 +20,11 @@
         <q-btn class="workspace-editor__secondary" flat round dense icon="wrap_text" :color="wrap ? 'primary' : undefined" :aria-pressed="wrap" aria-label="Zeilenumbruch" @click="toggleWrap">
           <q-tooltip>Zeilenumbruch</q-tooltip>
         </q-btn>
-        <q-btn v-if="markdown" flat round dense :icon="mode === 'preview' ? 'code' : 'visibility'" :color="mode === 'preview' ? 'primary' : undefined" :aria-pressed="mode === 'preview'" aria-label="Markdown-Vorschau" @click="mode = mode === 'source' ? 'preview' : 'source'">
+        <q-btn v-if="markdown" flat round dense :disable="diffActive" :icon="mode === 'preview' ? 'code' : 'visibility'" :color="mode === 'preview' ? 'primary' : undefined" :aria-pressed="mode === 'preview'" aria-label="Markdown-Vorschau" @click="mode = mode === 'source' ? 'preview' : 'source'">
           <q-tooltip>{{ mode === 'preview' ? 'Quelltext anzeigen' : 'Markdown-Vorschau' }}</q-tooltip>
+        </q-btn>
+        <q-btn v-if="comparison" flat round dense icon="difference" :color="diffActive ? 'primary' : undefined" :aria-pressed="diffActive" :disable="saving || (diffActive && comparison.deleted)" aria-label="Git-Diff umschalten" @click="emit('update:diffActive', !diffActive)">
+          <q-tooltip>{{ comparison.deleted ? 'Datei gelöscht – nur Diff verfügbar' : diffActive ? 'Quelltext anzeigen' : 'Gespeicherten Arbeitsstand mit HEAD vergleichen' }}</q-tooltip>
         </q-btn>
         <q-space />
         <q-btn flat round dense icon="more_vert" aria-label="Weitere Editor-Aktionen">
@@ -34,7 +38,7 @@
               </q-item>
               <slot name="file-menu" />
               <q-separator class="q-my-xs" />
-              <q-item clickable v-close-popup :disable="!dirty || saving" aria-label="Änderungen verwerfen" @click="emit('cancel')">
+              <q-item clickable v-close-popup :disable="!dirty || saving || diffActive" aria-label="Änderungen verwerfen" @click="emit('cancel')">
                 <q-item-section avatar><q-icon name="restore" /></q-item-section>
                 <q-item-section>Änderungen verwerfen</q-item-section>
               </q-item>
@@ -45,16 +49,24 @@
       <q-separator />
     </template>
     <slot name="before-content" />
-    <div v-show="mode === 'source'" ref="sourceRoot" class="workspace-editor__source col" />
-    <div v-if="mode === 'preview'" class="workspace-editor__preview col scroll q-pa-md">
+    <div v-show="!diffActive && mode === 'source'" ref="sourceRoot" class="workspace-editor__source col" />
+    <div v-if="!diffActive && mode === 'preview'" class="workspace-editor__preview col scroll q-pa-md">
       <MessageContent :content="modelValue" :allow-images="false" />
     </div>
+    <template v-if="diffActive">
+      <div v-if="comparison?.loading" class="col flex flex-center"><q-spinner color="primary" size="32px" /></div>
+      <AppStateMessage v-else-if="comparison?.error" class="col q-pa-md" icon="cloud_off" title="Diff konnte nicht geladen werden" :description="apiErrorMessage(comparison.error)">
+        <template #actions><q-btn no-caps color="primary" label="Erneut versuchen" @click="emit('retry-diff')" /></template>
+      </AppStateMessage>
+      <AppStateMessage v-else-if="comparison?.reason" class="col q-pa-md" icon="description" title="Keine Textvorschau verfügbar" :description="diffReason" />
+      <div v-else ref="diffRoot" class="workspace-editor__source col" aria-label="Git-Vergleich mit HEAD" />
+    </template>
   </div>
 </template>
 
 <script setup>
 import AppMenu from 'src/shared/ui/AppMenu.vue'
-import { markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { basicSetup } from 'codemirror'
 import { Compartment, EditorState, StateEffect } from '@codemirror/state'
@@ -64,6 +76,9 @@ import { indentUnit, LanguageDescription } from '@codemirror/language'
 import { languages } from '@codemirror/language-data'
 import { openSearchPanel, search } from '@codemirror/search'
 import { oneDark } from '@codemirror/theme-one-dark'
+import { MergeView, unifiedMergeView } from '@codemirror/merge'
+import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
+import { apiErrorMessage } from 'src/utils/api-errors'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
 
 defineOptions({ name: 'WorkspaceFileEditor' })
@@ -75,11 +90,22 @@ const props = defineProps({
   markdown: Boolean,
   saving: Boolean,
   dirty: Boolean,
-  readonly: Boolean
+  readonly: Boolean,
+  comparison: { type: Object, default: null },
+  diffActive: Boolean
 })
-const emit = defineEmits(['update:modelValue', 'update:session', 'save', 'cancel'])
+const emit = defineEmits(['update:modelValue', 'update:session', 'update:diffActive', 'retry-diff', 'save', 'cancel'])
 const $q = useQuasar()
 const sourceRoot = ref(null)
+const diffRoot = ref(null)
+const width = ref(0)
+const splitDiff = computed(() => width.value >= 720)
+const diffReason = computed(() => ({
+  binary: 'Binärdateien und Dateien ohne UTF-8-Kodierung haben keine Textvorschau.',
+  tooLarge: 'Die Datei überschreitet die Grenze von 64 KiB je Vergleichsseite.',
+  unsupported: 'Für diesen Dateityp ist kein Textvergleich verfügbar.',
+  unchanged: 'Für diese Datei liegt kein aktueller Git-Diff vor.'
+})[props.comparison?.reason])
 const mode = ref('source')
 const canUndo = ref(false)
 const canRedo = ref(false)
@@ -89,9 +115,11 @@ const wrapping = new Compartment()
 const language = new Compartment()
 const editable = new Compartment()
 watch(() => props.readonly, (value) => {
-  if (view) view.dispatch({ effects: editable.reconfigure(EditorState.readOnly.of(value)) })
+  if (view) view.dispatch({ effects: editable.reconfigure([EditorState.readOnly.of(value), EditorView.editable.of(!value)]) })
 })
 let view
+let diffView
+let languageSupport = []
 let languageName = 'Text'
 let languageVersion = 0
 let syncing = false
@@ -110,7 +138,7 @@ function publishSession() {
   })
 }
 
-function extensions(content, lineBreak) {
+function extensions(content, lineBreak, comparisonSide = null) {
   // Preserve CRLF/CR files; mixed line endings keep their literal CR characters.
   const endings = new Set(content.match(/\r\n|\r|\n/g))
   const separator = lineBreak ?? (endings.size === 1 ? [...endings][0] : '\n')
@@ -130,18 +158,19 @@ function extensions(content, lineBreak) {
       'replaced match on line $': 'Treffer in Zeile $ ersetzt', 'replaced $ matches': '$ Treffer ersetzt'
     }),
     EditorView.contentAttributes.of({
-      'aria-label': props.markdown ? 'Markdown-Quelltext' : 'Textinhalt',
+      'aria-label': comparisonSide === 'head' ? 'Datei in HEAD' : comparisonSide ? 'Aktueller Arbeitsstand' : props.markdown ? 'Markdown-Quelltext' : 'Textinhalt',
+      ...(comparisonSide ? { tabindex: '0' } : {}),
       'aria-description': 'Tab rückt ein. Escape, dann Tab verlässt den Editor.',
       spellcheck: 'false'
     }),
     keymap.of([{ key: 'Mod-h', run: openSearchPanel }, indentWithTab]),
     search({ top: true }),
-    language.of([]),
-    editable.of(EditorState.readOnly.of(props.readonly)),
+    language.of(languageSupport),
+    editable.of([EditorState.readOnly.of(props.readonly || Boolean(comparisonSide)), EditorView.editable.of(!props.readonly && !comparisonSide)]),
     wrapping.of(wrap.value ? EditorView.lineWrapping : []),
     // App surfaces take precedence over One Dark; its syntax colors stay intact.
     EditorView.theme({
-      '&': { height: '100%', backgroundColor: 'var(--app-shell-bg)', color: 'var(--app-text)', colorScheme: 'light' },
+      '&': { height: comparisonSide && splitDiff.value ? 'auto' : '100%', backgroundColor: 'var(--app-shell-bg)', color: 'var(--app-text)', colorScheme: 'light' },
       'body.body--dark &': { colorScheme: 'dark' },
       '.cm-scroller': { overflow: 'auto', fontFamily: 'monospace', lineHeight: '1.55' },
       '.cm-content': { caretColor: 'var(--app-text)' },
@@ -181,6 +210,7 @@ function extensions(content, lineBreak) {
     }),
     theme.of($q.dark.isActive ? oneDark : []),
     EditorView.updateListener.of((update) => {
+      if (comparisonSide) return
       if (update.docChanged) {
         const content = update.state.sliceDoc()
         bytes = new TextEncoder().encode(content).byteLength
@@ -188,7 +218,7 @@ function extensions(content, lineBreak) {
       }
       publishSession()
     }),
-    EditorView.domEventHandlers({ scroll: () => { publishSession() } })
+    EditorView.domEventHandlers({ scroll: () => { if (!comparisonSide) publishSession() } })
   ]
 }
 
@@ -199,7 +229,10 @@ async function loadLanguage() {
   publishSession()
   try {
     const support = description ? await description.load() : []
-    if (view && version === languageVersion) view.dispatch({ effects: language.reconfigure(support) })
+    if (view && version === languageVersion) {
+      languageSupport = support
+      for (const editor of editorViews()) editor.dispatch({ effects: language.reconfigure(support) })
+    }
   } catch {
     if (view && version === languageVersion) {
       languageName = 'Text'
@@ -210,6 +243,11 @@ async function loadLanguage() {
 }
 
 async function showSearch() {
+  if (props.diffActive) {
+    const editor = diffView instanceof MergeView ? diffView.b : diffView
+    if (editor) { openSearchPanel(editor); editor.focus() }
+    return
+  }
   mode.value = 'source'
   await nextTick()
   if (view) openSearchPanel(view)
@@ -225,7 +263,7 @@ async function runHistory(command) {
 
 function toggleWrap() {
   wrap.value = !wrap.value
-  view?.dispatch({ effects: wrapping.reconfigure(wrap.value ? EditorView.lineWrapping : []) })
+  for (const editor of editorViews()) editor.dispatch({ effects: wrapping.reconfigure(wrap.value ? EditorView.lineWrapping : []) })
 }
 
 function handleKeydown(event) {
@@ -233,7 +271,7 @@ function handleKeydown(event) {
   const key = event.key.toLowerCase()
   if (key === 's') {
     event.preventDefault()
-    if (props.dirty && !props.saving) emit('save')
+    if (props.dirty && !props.saving && !props.diffActive && !props.readonly) emit('save')
   } else if (['f', 'h'].includes(key) && !event.defaultPrevented) {
     event.preventDefault()
     void showSearch()
@@ -252,10 +290,10 @@ watch(() => props.modelValue, (content) => {
 })
 watch(() => props.filename, loadLanguage)
 watch(() => $q.dark.isActive, (dark) => {
-  view?.dispatch({ effects: theme.reconfigure(dark ? oneDark : []) })
+  for (const editor of editorViews()) editor.dispatch({ effects: theme.reconfigure(dark ? oneDark : []) })
 })
-watch(mode, async (value) => {
-  if (value !== 'source') return
+watch([mode, () => props.diffActive], async ([value, diffActive]) => {
+  if (value !== 'source' || diffActive) return
   await nextTick()
   view?.requestMeasure()
   view?.focus()
@@ -270,11 +308,37 @@ onMounted(() => {
     : EditorState.create({ doc: props.modelValue, extensions: configuration })
   bytes = new TextEncoder().encode(props.modelValue).byteLength
   view = new EditorView({ state, parent: sourceRoot.value, scrollTo: restore ? saved.scroll : undefined })
-  view.focus()
+  if (!props.diffActive) view.focus()
   publishSession()
   void loadLanguage()
 })
+function editorViews() {
+  return [view, ...(diffView instanceof MergeView ? [diffView.a, diffView.b] : [diffView])].filter(Boolean)
+}
+function destroyDiff() {
+  diffView?.destroy()
+  diffView = null
+  diffRoot.value?.replaceChildren()
+}
+async function renderDiff() {
+  await nextTick()
+  destroyDiff()
+  if (!props.diffActive || !diffRoot.value || !props.comparison || props.comparison.loading || props.comparison.error || props.comparison.reason) return
+  const configuration = (content, side) => ({ doc: content, extensions: extensions(content, undefined, side) })
+  const options = { collapseUnchanged: { margin: 3, minSize: 8 }, diffConfig: { timeout: 100 } }
+  if (splitDiff.value) {
+    diffView = new MergeView({ parent: diffRoot.value, a: configuration(props.comparison.before, 'head'), b: configuration(props.comparison.after, 'working'), ...options })
+    diffView.dom.classList.add('full-height', 'scroll')
+  } else {
+    const config = configuration(props.comparison.after, 'working')
+    diffView = new EditorView({ ...config, parent: diffRoot.value, extensions: [...config.extensions,
+      unifiedMergeView({ original: props.comparison.before, mergeControls: false, ...options })
+    ] })
+  }
+}
+watch([() => props.diffActive, () => props.comparison, splitDiff], renderDiff, { immediate: true })
 onBeforeUnmount(() => {
+  destroyDiff()
   languageVersion += 1
   view?.destroy()
   view = null

@@ -25,18 +25,17 @@ MATO_LOOP_COMPOSE_PROJECT_NAME=mato-loop-my-task
 MATO_LOOP_HOST_BACKEND_PORT=16020
 MATO_LOOP_HOST_FRONTEND_PORT=16021
 MATOLOOP_AGENT_DATA=./data/my-task-agent
-MATOLOOP_AGENT_HOME=./data/my-task-home
 ```
 
-Choose unused values for your host. Relative bind paths resolve within that checkout; do not point them at another Agent's data or workspace. Backend/frontend image names follow the Compose project; the development Agent image has the shared tag `matoloop-agent-dev`, so coordinate Agent image rebuilds between worktrees. A documentation-only `compose run --no-deps backend` does not need the Agent or exposed service ports.
+Choose unused values for your host. Relative bind paths resolve within that checkout; do not point them at another Agent's state. The Agent workspace volume follows the Compose project name. Backend/frontend image names follow the Compose project; the development Agent image has the shared tag `matoloop-agent-dev`, so coordinate Agent image rebuilds between worktrees. A documentation-only `compose run --no-deps backend` does not need the Agent or exposed service ports.
 
 `dev.sh check` and `test` mask installed dependency environments with temporary anonymous volumes, while named download caches follow the selected Compose project. These commands do not make the database, service containers, or bind-mounted Agent state worktree-local by themselves.
 
 ## Data
 
-The selected Compose project owns `app_data` (backend files and secrets), `db_data`, `embedding_cache`, `backend_uv_data`, `frontend_node_modules`, `frontend_yarn_cache`, and `matoloop_agent_dependency_data`. Agent state and home are separate bind mounts. Infinity's pinned model download can take minutes on first start. Its model cache is reproducible; lexical search remains available during embedding degradation.
+The selected Compose project owns `app_data` (backend files and secrets), `db_data`, `embedding_cache`, `backend_uv_data`, `frontend_node_modules`, `frontend_yarn_cache`, `matoloop_agent_dependency_data`, and `matoloop_agent_workspace` (Agent home at `/workspace`). Agent state remains a bind mount under `MATOLOOP_AGENT_DATA`. The development workspace no longer uses `MATOLOOP_AGENT_HOME`. Infinity's pinned model download can take minutes on first start. Its model cache is reproducible; lexical search remains available during embedding degradation.
 
-`stop` stops services; `down` removes containers. **`reset-storage` removes all named development volumes, including accounts, database, secrets, and backend files.** It does not remove Agent bind paths. Never run it as incidental cleanup, especially where checkouts share a project name.
+`stop` stops services; `down` removes containers. **`reset-storage` removes all named development volumes, including accounts, database, secrets, backend files, and the Agent workspace.** It does not remove the Agent state bind path. Never run it as incidental cleanup, especially where checkouts share a project name.
 
 ## Checks, migrations, and evaluations
 

@@ -18,7 +18,7 @@ import { useQuestionStore } from '../src/features/questions/store'
 import { useInAppNotificationStore } from '../src/stores/in-app-notifications'
 import { useUserProfileStore } from '../src/features/personalization/store'
 import { useHomeStore } from '../src/features/home/store'
-import { useChatStore } from '../src/stores/chat'
+import { useChatStore } from '../src/features/chat/store'
 
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.resetAllMocks() })

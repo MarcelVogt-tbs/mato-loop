@@ -188,7 +188,7 @@ import ComposerAttachments from 'src/features/chat/components/ComposerAttachment
 import SessionSettingsFields from 'src/features/chat/components/SessionSettingsFields.vue'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useAgentIdentityStore } from 'stores/agent-identity'
-import { useChatStore } from 'stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 import { useProviderStore } from 'stores/providers'
 import { useToolSettingsStore } from 'stores/tool-settings'
 import { useConfirm } from 'src/composables/confirm'

@@ -131,6 +131,10 @@
       :saving="saving"
       :dirty="workspace.editorDirty"
       :show-toolbar="!$slots.toolbar"
+      v-model:diff-active="diffActive"
+      :comparison="comparison"
+      :readonly="comparison?.deleted || false"
+      @retry-diff="loadDiff"
       @save="save"
       @cancel="cancel"
     >
@@ -377,8 +381,10 @@ import MessageContent from 'src/features/chat/components/MessageContent.vue'
 import StlViewerPanel from 'src/features/files/components/StlViewerPanel.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { apiErrorMessage, errorDescriptor } from 'src/utils/api-errors'
+import { notifyError } from 'src/utils/notifications'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useControlCenterStore } from 'stores/control-center'
+import { useGitChangesStore } from 'src/features/files/git-store'
 
 defineOptions({ name: 'FileViewerPanel' })
 const TextEditorApp = defineAsyncComponent(() => import('src/features/files/components/WorkspaceFileEditor.vue'))
@@ -387,16 +393,32 @@ const props = defineProps({
   entry: { type: Object, default: null },
   image: { type: Object, default: null },
   model: { type: Object, default: null },
+  diffActive: Boolean,
   fullscreen: Boolean,
   fullscreenToggle: Boolean
 })
-const emit = defineEmits(['close', 'toggle-fullscreen'])
+const emit = defineEmits(['close', 'toggle-fullscreen', 'update:diffActive'])
 const $q = useQuasar()
 const router = useRouter()
 const { confirm } = useConfirm()
 const workspace = useWorkspaceStore()
 const controlCenter = useControlCenterStore()
+const git = useGitChangesStore()
 const historical = computed(() => props.entry?.revision != null)
+const diffActive = computed({ get: () => props.diffActive && workspace.scope === 'filesystem' && !historical.value, set: (value) => emit('update:diffActive', value) })
+const gitFile = computed(() => workspace.scope === 'filesystem' && workspace.workspaceContext?.executionAgentId === git.current?.executionAgentId
+  ? git.current?.files.find((file) => `${git.current.repository?.replace(/\/$/u, '')}/${file.path}` === props.entry?.path)
+  : null)
+const comparison = computed(() => {
+  if (historical.value || (!gitFile.value && !props.diffActive)) return null
+  const state = git.current
+  const data = state?.preview?.file?.path === gitFile.value?.path ? state?.preview : null
+  return {
+    ...data, loading: state?.loading || (gitFile.value && (!data || state?.previewLoading) && !state?.previewError),
+    error: state?.error || state?.previewError, deleted: gitFile.value?.status === 'deleted',
+    reason: data?.reason || (!gitFile.value && !state?.loading ? 'unchanged' : null)
+  }
+})
 const viewerRoot = ref(null)
 const loading = ref(false)
 const imageLoading = ref(false)
@@ -443,7 +465,7 @@ const editable = computed(() => (
   && ['text', 'markdown', 'openscad'].includes(preview.value.kind)
   && workspace.operationAvailable('filesystem.write')
 ))
-const usingTextEditor = computed(() => workspace.editorActive && editable.value)
+const usingTextEditor = computed(() => diffActive.value || (workspace.editorActive && editable.value))
 const canActivateRevision = computed(() => Boolean(
   props.entry?.path
   && workspace.scope === 'session'
@@ -508,7 +530,12 @@ const unavailableMessage = computed(() => ({
   unsupported: 'Dieser Dateityp kann nur heruntergeladen werden.'
 })[preview.value.reason] || 'Dieser Dateityp kann nur heruntergeladen werden.')
 
-async function loadPreview() {
+async function loadPreview({ revalidate = false } = {}) {
+  if (diffActive.value) {
+    preview.value = workspace.filePreviews[props.entry?.path] || { kind: 'none' }
+    if (!workspace.editorDirty && workspace.editorDraft === null && typeof preview.value.content === 'string') workspace.editorDraft = preview.value.content
+    return
+  }
   const version = ++previewVersion
   saveError.value = null
   conflictLoadError.value = null
@@ -516,10 +543,12 @@ async function loadPreview() {
   conflictPreview.value = null
   loadingLatest.value = false
   saving.value = false
-  clearOpenScadRender()
-  clearOpenScadExport()
-  openScadView.value = historical.value ? 'source' : 'model'
-  preview.value = { kind: 'none', reason: 'unsupported' }
+  if (!revalidate) {
+    clearOpenScadRender()
+    clearOpenScadExport()
+    openScadView.value = historical.value ? 'source' : 'model'
+    preview.value = { kind: 'none', reason: 'unsupported' }
+  }
   loadError.value = null
   if (directModel.value) {
     preview.value = { kind: 'stl' }
@@ -542,8 +571,19 @@ async function loadPreview() {
   try {
     const result = historical.value
       ? await workspace.revisionPreview(props.entry.path, props.entry.revision, props.entry.fileId)
-      : await workspace.preview(props.entry.path)
+      : revalidate ? await workspace.preview(props.entry.path, { cache: false }) : await workspace.preview(props.entry.path)
     if (version === previewVersion && result) {
+      if (revalidate) {
+        if (diffActive.value) return
+        if (workspace.editorDirty) {
+          if (result.revision !== preview.value.revision) workspace.editorExternalChange = true
+          return
+        }
+        if (workspace.editorDraft !== null && result.kind === preview.value.kind && result.content === preview.value.content && result.revision === preview.value.revision) return
+        workspace.filePreviews[props.entry.path] = result
+        clearOpenScadRender()
+        clearOpenScadExport()
+      }
       preview.value = result
       imageLoading.value = result.kind === 'image' && loadedImageUrl.value !== contentUrl.value
       if (editable.value && (result.kind !== 'openscad' || workspace.editorActive)) {
@@ -553,11 +593,27 @@ async function loadPreview() {
       } else if (result.kind === 'openscad' && !historical.value) void renderOpenScad()
     }
   } catch (error) {
-    if (version === previewVersion) loadError.value = error
+    if (version === previewVersion) {
+      loadError.value = error
+      if (revalidate) notifyError(error)
+    }
   } finally {
     if (version === previewVersion) loading.value = false
   }
 }
+
+async function loadDiff() {
+  if (!diffActive.value || !gitFile.value || git.current?.loading) return
+  await git.loadDiff(gitFile.value.path)
+}
+
+watch([
+  () => diffActive.value, () => gitFile.value?.path, () => git.current?.listVersion,
+  () => git.current?.loading, () => workspace.fileChangeVersions[props.entry?.path]
+], ([active], [wasActive] = []) => {
+  if (active) void loadDiff()
+  else if (wasActive && props.entry?.path && !workspace.editorDirty) void loadPreview({ revalidate: true })
+}, { immediate: true })
 
 function revisionId(revision) {
   return revision.id ?? revision.revisionId ?? revision.revision
@@ -649,7 +705,10 @@ async function setOpenScadView(view) {
     $q.notify({ type: 'warning', message: 'Speichere zuerst die Änderungen am Quelltext.' })
     return
   }
-  if (view === 'model') workspace.editorActive = false
+  if (view === 'model') {
+    diffActive.value = false
+    workspace.editorActive = false
+  }
   else if (editable.value) {
     workspace.editorDraft = preview.value.content
     workspace.editorActive = true

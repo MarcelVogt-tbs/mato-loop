@@ -44,7 +44,7 @@ import {
   computerFilesControlCenterAvailable,
   terminalControlCenterState
 } from 'src/app/control-center/manifest'
-import { useChatStore } from 'stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'

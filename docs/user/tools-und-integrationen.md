@@ -137,6 +137,16 @@ Globale Shell-Präfixe konfigurieren Sie unter **Tools > Tool-Einstellungen > Gl
 
 Git-Aktionen verwenden Shell-Befehle auf dem gewählten, verbundenen Computer mit installiertem Git. Es gibt keine eigene Git-Integration, Git-Konfigurationsseite oder Clone-Funktion im Backend. Git-Befehle des Modells folgen den Profilrechten, Präfixlisten, Session-Freigaben und harten Grenzen der Shell; automatisch erlaubte Befehle benötigen keine einzelne Freigabe. Konfigurieren Sie Git und die Anmeldung auf diesem Computer. Bestehende Installationen müssen die [Hinweise zur Bereinigung nach dem Upgrade](betrieb-und-datensicherung.md#removed-git-integration) beachten.
 
+## Git-Änderungen ansehen
+
+Wenn der angezeigte Ordner in einem Git-Repository liegt und der verbundene Computer Git unterstützt, bietet **Computer-Dateien** in der vorhandenen Werkzeugleiste den Schalter **Geänderte Dateien anzeigen**. Er wechselt zwischen Dateibaum und Git-Änderungsliste mit hinzugefügten und entfernten Zeilen. Ein Klick auf eine Datei öffnet den normalen Dateitab direkt im Diff-Modus. Das Browsen ändert nicht automatisch den Arbeitsordner der Session.
+
+Der Vergleich umfasst staged und unstaged Änderungen sowie neue, nicht ignorierte Dateien des gesamten erkannten Repositorys beziehungsweise Worktrees. Auch bereits vorhandene eigene Änderungen gehören dazu. Die Zahlen im Chat zeigen den aktuellen Git-Stand und stellen keinen gespeicherten Änderungsverlauf einzelner KI-Antworten dar. Das Diff-Symbol neben den Zeilenzählern öffnet die Git-Ansicht in **Computer-Dateien**. Im Texteditor schaltet das Diff-Symbol in der vorhandenen Werkzeugleiste zwischen Quelltext und schreibgeschütztem Vergleich von **HEAD** und gespeichertem **Arbeitsstand** um. Auf schmalen Flächen erscheint der Vergleich untereinander. Entwurf und Undo-Verlauf bleiben erhalten; ungespeicherte Änderungen sind nicht im Git-Diff enthalten. Gelöschte Dateien zeigen nur den Vergleich.
+
+Die Ansicht aktualisiert sich nach abgeschlossenen Läufen und beim Öffnen des Computer-Dateibrowsers. Für Änderungen durch externe Programme verwenden Sie **Aktualisieren**. Ohne Git-Repository bleiben Dateibaum und Editor verfügbar. Binärdateien, Submodule und symbolische Links haben keine Textvorschau; Textdateien sind auf 64 KiB je Vergleichsseite begrenzt. Begrenzte Dateilisten werden ausdrücklich gekennzeichnet.
+
+Wenn für eine Datei keine Zeilenanzahl ermittelt werden kann, zeigen die betroffenen Gesamtzähler einen Strich statt einer unvollständigen Summe. Beim Zurückschalten vom Diff zum Quelltext wird ein sauberer Dateistand erneut geprüft; ungespeicherte Entwürfe werden dabei nicht ersetzt. Git-Filterprogramme werden in dieser Ansicht nicht ausgeführt. Bei Repositorys mit solchen Filtern kann der Rohdatenvergleich daher von Gits gefilterter Darstellung abweichen.
+
 ## Terminal im Control Center
 
 **Terminal** ist eine Control-Center-App für gespeicherte Chats mit verbundenem Computer. **Agent-Ausgabe** zeigt Befehle und gefilterte Ausgabe, einschließlich gespeicherter jüngster Ergebnisse. **Terminal** öffnet auf unterstützten Linux-Agents eine persönliche Shell im Home. Eigene Befehle laufen außerhalb von Modellrechten mit den Betriebssystemrechten des Agents.

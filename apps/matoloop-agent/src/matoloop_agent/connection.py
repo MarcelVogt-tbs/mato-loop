@@ -26,6 +26,7 @@ from .protocol import (
     Error,
     Event,
     ExportArguments,
+    GitChangesArguments,
     GlobArguments,
     GrepArguments,
     Hello,
@@ -245,6 +246,10 @@ class MatoLoopAgent:
 
         if isinstance(arguments, StatArguments):
             return await asyncio.to_thread(self.filesystem.stat, arguments.path)
+        if isinstance(arguments, GitChangesArguments):
+            from .git import changes
+
+            return await changes(self.filesystem, arguments.path, arguments.file)
         if isinstance(arguments, ListArguments):
             return await asyncio.to_thread(
                 self.filesystem.list,

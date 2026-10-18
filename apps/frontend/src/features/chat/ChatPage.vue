@@ -188,7 +188,7 @@
               class="q-mt-sm"
               :attachments="message.attachments"
             />
-            <FileChanges :actions="message.fileChanges" @open-file="openToolFile" />
+            <FileChanges :actions="message.fileChanges" :git="currentGit" @open-file="openToolFile" @open-diff="openGitDiff" />
             <ChatFiles
               :actions="message.providedFiles"
               class="q-my-sm"
@@ -551,7 +551,7 @@ import SubagentRows from 'src/features/subagents/SubagentRows.vue'
 import { useSubagentStore } from 'stores/subagents'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useApprovalStore } from 'stores/approvals'
-import { useChatStore } from 'stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 import {
   MAX_CONTROL_CENTER_SPLIT_RATIO,
   MIN_CONTROL_CENTER_SPLIT_RATIO,
@@ -567,6 +567,7 @@ import { useQuestionStore } from 'stores/questions'
 import { useToolSettingsStore } from 'stores/tool-settings'
 import { useInstanceLimitsStore } from 'stores/instance-limits'
 import { useWorkspaceStore } from 'stores/workspace'
+import { gitContext, gitContextKey, useGitChangesStore } from 'src/features/files/git-store'
 import { useConfirm } from 'src/composables/confirm'
 import { agentRunPresentation } from 'src/utils/agent-activity'
 import {
@@ -610,6 +611,45 @@ async function changeTemplate(id) {
 const toolSettings = useToolSettingsStore()
 const controlCenter = useControlCenterStore()
 const workspace = useWorkspaceStore()
+const git = useGitChangesStore()
+const currentGitContext = computed(() => {
+  const tab = controlCenter.activeTab
+  const context = gitContext(chat.current, tab?.fileTarget, git.current, controlCenter.fileDiffModes[tab?.tabId])
+  if (!context) return null
+  return controlCenter.activeContentId === 'computer-files' && workspace.scope === 'filesystem'
+    && workspace.workspaceContext?.executionAgentId === context.executionAgentId && workspace.sessionId === context.sessionId
+    ? { ...context, currentDirectory: workspace.directoryPath } : context
+})
+const gitAvailable = computed(() => {
+  if (!currentGitContext.value) return false
+  const agent = executionAgents.byId(currentGitContext.value.executionAgentId)
+  return Boolean(agent?.connected && agent.operations?.includes('git.changes'))
+})
+const currentGit = computed(() => {
+  const state = git.current
+  return gitAvailable.value && state?.repository && !state.error
+    ? state
+    : null
+})
+watch([
+  () => gitContextKey(currentGitContext.value), gitAvailable, () => chat.running,
+  () => controlCenter.activeContentId === 'computer-files'
+], ([key, available, running, opened], [oldKey, oldAvailable, oldRunning, oldOpened] = []) => {
+  git.setContext(available ? currentGitContext.value : null)
+  if (available && (key !== oldKey || !oldAvailable || (!running && oldRunning) || (opened && !oldOpened))) void git.refresh()
+}, { immediate: true })
+
+async function openGitDiff(path) {
+  const state = git.current
+  if (!state?.repository) return
+  try {
+    if (path) return await git.openFile(path)
+    await controlCenter.openApp('computer-files')
+    await nextTick()
+    await workspace.openDirectory(state.repository)
+    git.showChanges = true
+  } catch { /* Central API toast. */ }
+}
 const scrollArea = ref(null)
 const scrollContent = ref(null)
 const virtualScroll = ref(null)

@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
 from typing import Any, BinaryIO, Protocol
 
 from .config import AgentConfig
@@ -12,6 +13,9 @@ from .credentials import CredentialStore
 
 
 class FilesystemAdapter(Protocol):
+    _lock: RLock
+
+    def _read_bytes(self, path: str, limit: int) -> bytes: ...
     def resolve_directory(self, path: str) -> dict: ...
     def stat(self, path: str) -> dict: ...
     def list(self, path: str, offset: int, limit: int) -> dict: ...

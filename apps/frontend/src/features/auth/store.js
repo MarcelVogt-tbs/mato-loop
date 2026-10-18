@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { useAgentIdentityStore } from 'src/stores/agent-identity'
-import { useChatStore } from 'src/stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 import { useInAppNotificationStore } from 'src/stores/in-app-notifications'
 import { notifyError } from 'src/utils/notifications'
 

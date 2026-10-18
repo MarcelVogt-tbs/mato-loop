@@ -422,6 +422,20 @@ describe('control center store', () => {
     expect(api.patch).toHaveBeenCalledOnce()
   })
 
+  it.each(['removeFileTabs', 'rebindFileTargets'])('sets comparison mode before activation and clears it through %s', async (removal) => {
+    const store = useControlCenterStore()
+    const opening = store.openFile({
+      scope: 'filesystem', executionAgentId: 'agent-1', currentDirectory: '/repo',
+      path: '/repo/deleted.txt', name: 'deleted.txt'
+    }, { diff: true })
+    expect(store.fileDiffModes[store.activeAppId]).toBe(true)
+    await opening
+    const tabId = store.activeAppId
+    if (removal === 'removeFileTabs') await store.removeFileTabs([tabId])
+    else await store.rebindFileTargets(store.activeTab.fileTarget)
+    expect(store.fileDiffModes[tabId]).toBeUndefined()
+  })
+
   it('keys historical tabs by root, file identity and revision independently of the current file', async () => {
     const store = useControlCenterStore()
     const target = {

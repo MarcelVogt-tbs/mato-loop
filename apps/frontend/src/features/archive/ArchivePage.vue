@@ -40,7 +40,7 @@ import { onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import AppPage from 'src/shared/ui/AppPage.vue'
 import { useArchiveStore } from './store'
-import { useChatStore } from 'stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 import { useProjectStore } from 'stores/projects'
 import { useAutomationStore } from 'stores/automations'
 

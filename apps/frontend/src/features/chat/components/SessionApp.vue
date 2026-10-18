@@ -118,7 +118,7 @@ import SessionSettingsFields from 'src/features/chat/components/SessionSettingsF
 import { useConfirm } from 'src/composables/confirm'
 import { permissionGrantDisplay } from 'src/utils/approval-display'
 import { useApprovalStore } from 'stores/approvals'
-import { useChatStore } from 'stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 
 defineOptions({ name: 'SessionApp' })
 

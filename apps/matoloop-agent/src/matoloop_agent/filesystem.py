@@ -541,22 +541,26 @@ class Filesystem:
         limit: int,
         max_line_length: int,
     ) -> dict:
+        data = self._read_bytes(path, self.max_file_bytes)
+        return read_result(data, offset, limit, max_line_length, self.max_response_bytes)
+
+    def _read_bytes(self, path: str, limit: int) -> bytes:
         with (
             self._lock,
             self._parent(path) as (parent, name, _),
         ):
             fd, metadata = self._open_regular(parent, name)
             try:
-                if metadata.st_size > self.max_file_bytes:
+                if metadata.st_size > limit:
                     raise AgentError("file.tooLarge", "File exceeds the read limit")
                 data = bytearray()
-                while chunk := os.read(fd, min(1024 * 1024, self.max_file_bytes + 1 - len(data))):
+                while chunk := os.read(fd, min(1024 * 1024, limit + 1 - len(data))):
                     data.extend(chunk)
-                    if len(data) > self.max_file_bytes:
+                    if len(data) > limit:
                         raise AgentError("file.tooLarge", "File exceeds the read limit")
             finally:
                 os.close(fd)
-        return read_result(data, offset, limit, max_line_length, self.max_response_bytes)
+        return bytes(data)
 
     def write(
         self,

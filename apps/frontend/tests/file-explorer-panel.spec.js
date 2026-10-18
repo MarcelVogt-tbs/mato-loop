@@ -1,15 +1,18 @@
 // @vitest-environment jsdom
 import { createApp, nextTick, reactive } from 'vue'
 import {
-  ClosePopup, QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions, QCardSection, QDialog,
-  QForm, QIcon, QInput, QItem, QItemSection, QLinearProgress, QList, QMenu, QScrollArea,
+  ClosePopup, QBanner, QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions, QCardSection, QDialog,
+  QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QLinearProgress, QList, QMenu, QScrollArea,
   QSelect, QSeparator, QSpinner, QToolbar, QTooltip, Quasar, Ripple
 } from 'quasar'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { useGitChangesStore } from '../src/features/files/git-store'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 
-const { chat, workspace } = vi.hoisted(() => ({
+const { chat, workspace, openFile } = vi.hoisted(() => ({
+  openFile: vi.fn(),
   chat: {
     activeContext: null, current: null, selectedSessionId: 'session-a', running: false,
     sessionList: vi.fn(), fetchSessions: vi.fn(), fetchMoreSessions: vi.fn()
@@ -25,8 +28,8 @@ vi.mock('stores/workspace', async () => {
   const actual = await vi.importActual('stores/workspace')
   return { ...actual, useWorkspaceStore: () => workspace }
 })
-vi.mock('stores/chat', () => ({ useChatStore: () => chat }))
-vi.mock('stores/control-center', () => ({ useControlCenterStore: () => ({ ready: false, requestGeneration: 0 }) }))
+vi.mock('src/features/chat/store', () => ({ useChatStore: () => chat }))
+vi.mock('stores/control-center', () => ({ useControlCenterStore: () => ({ ready: false, requestGeneration: 0, openFile }) }))
 vi.mock('stores/execution-agents', () => ({ useExecutionAgentStore: () => ({ byId: () => null, workspaceContextFor: () => null }) }))
 vi.mock('stores/instance-limits', () => ({ useInstanceLimitsStore: () => ({ maxUploadBytes: 1, maxUploadMib: 1 }) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: vi.fn() }) }))
@@ -39,14 +42,16 @@ import FileExplorerPanel from '../src/features/files/components/FileExplorerPane
 import FileExplorerFooter from '../src/features/files/components/FileExplorerFooter.vue'
 
 const components = {
-  QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions, QCardSection, QDialog, QForm,
-  QIcon, QInput, QItem, QItemSection, QLinearProgress, QList, QMenu, QScrollArea, QSelect,
+  QBanner, QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions, QCardSection, QDialog, QForm,
+  QIcon, QInput, QItem, QItemLabel, QItemSection, QLinearProgress, QList, QMenu, QScrollArea, QSelect,
   QSeparator, QSpinner, QToolbar, QTooltip
 }
-let app, root
+let app, root, pinia
 
 beforeEach(() => {
   vi.clearAllMocks()
+  pinia = createPinia()
+  setActivePinia(pinia)
   workspace.scope = 'session'
   workspace.sessionId = 'session-a'
   workspace.directoryPath = 'reports'
@@ -76,12 +81,30 @@ afterEach(() => {
   document.querySelectorAll('.q-menu').forEach((menu) => menu.remove())
 })
 
-async function mountPanel() {
-  app = createApp(FileExplorerPanel)
+async function mountPanel(scope = 'session') {
+  app = createApp(FileExplorerPanel, { scope })
+  app.use(pinia)
   app.use(Quasar, { components, directives: { ClosePopup, Ripple } })
   app.mount(root)
   await nextTick()
 }
+
+it('offers the Git filter in computer files and opens a deleted file in a normal diff tab', async () => {
+  workspace.scope = 'filesystem'
+  workspace.directoryPath = '/repo'
+  workspace.entries = { '/repo': [] }
+  workspace.filter = ''
+  workspace.operationAvailable.mockReturnValue(true)
+  const git = useGitChangesStore()
+  git.setContext({ sessionId: 'session-a', executionAgentId: 'agent', currentDirectory: '/repo' })
+  Object.assign(git.current, { repository: '/repo', files: [{ path: 'deleted.txt', status: 'deleted', additions: 0, deletions: 2 }] })
+  openFile.mockResolvedValue('file-a')
+  await mountPanel('filesystem')
+  root.querySelector('[aria-label="Geänderte Dateien anzeigen"]').click()
+  await nextTick()
+  root.querySelector('[aria-label="Diff öffnen: deleted.txt"]').click()
+  expect(openFile).toHaveBeenCalledWith(expect.objectContaining({ path: '/repo/deleted.txt', executionAgentId: 'agent' }), { diff: true })
+})
 
 it.each([
   ['read-only session', 'session'],

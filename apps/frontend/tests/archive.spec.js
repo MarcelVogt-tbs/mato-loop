@@ -8,7 +8,7 @@ import { Quasar, QBanner, QBtn, QExpansionItem, QIcon, QItem, QItemLabel, QItemS
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 const mocks = vi.hoisted(() => ({ get: vi.fn(), restore: vi.fn(), refresh: vi.fn() }))
 vi.mock('src/boot/axios', () => ({ api: { get: mocks.get } }))
-vi.mock('stores/chat', () => ({ useChatStore: () => ({ setArchived: mocks.restore }) }))
+vi.mock('src/features/chat/store', () => ({ useChatStore: () => ({ setArchived: mocks.restore }) }))
 vi.mock('stores/projects', () => ({ useProjectStore: () => ({}) }))
 vi.mock('stores/automations', () => ({ useAutomationStore: () => ({ fetchAutomations: mocks.refresh }) }))
 import ArchivePage from '../src/features/archive/ArchivePage.vue'

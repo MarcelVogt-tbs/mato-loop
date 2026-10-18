@@ -3,7 +3,7 @@ import { createApp, h, nextTick, reactive } from 'vue'
 import { createPinia } from 'pinia'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import MainLayout from '../src/app/MainLayout.vue'
-import { useChatStore } from 'stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 import { useBrowserStore } from 'stores/browser'
 import { useControlCenterStore } from 'stores/control-center'
 import { useIntegrationStore } from 'stores/integrations'
@@ -68,7 +68,7 @@ vi.mock('vue-router', async () => {
     onBeforeRouteUpdate: (callback) => { routeUpdate.callback = callback }
   }
 })
-vi.mock('stores/chat', async () => {
+vi.mock('src/features/chat/store', async () => {
   const { reactive } = await import('vue')
   const store = reactive(chat)
   return { useChatStore: () => store }

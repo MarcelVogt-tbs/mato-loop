@@ -166,6 +166,7 @@ class WindowsPlatform:
         )
         operations = (
             "system.info",
+            *(("git.changes",) if shutil.which("git") else ()),
             "filesystem.resolve",
             "filesystem.stat",
             "filesystem.list",

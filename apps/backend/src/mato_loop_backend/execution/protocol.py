@@ -22,6 +22,7 @@ SUPPORTED_OPERATIONS = frozenset(
         "cache.export",
         "cache.store",
         "filesystem.resolve",
+        "git.changes",
         "integration.openscad.discover",
         "integration.openscad.render",
         "integration.openscad.render6",

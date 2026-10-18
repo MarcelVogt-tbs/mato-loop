@@ -40,7 +40,7 @@ vi.mock('src/features/subagents/SubagentInspector.vue', () => ({ default: { rend
 
 import ChatComposer from '../src/features/chat/components/ChatComposer.vue'
 import ChatPage from '../src/features/chat/ChatPage.vue'
-import { useChatStore } from '../src/stores/chat'
+import { useChatStore } from '../src/features/chat/store'
 import { useAgentProfileStore } from '../src/stores/agent-profiles'
 import { useProviderStore } from '../src/stores/providers'
 import { useToolSettingsStore } from '../src/stores/tool-settings'

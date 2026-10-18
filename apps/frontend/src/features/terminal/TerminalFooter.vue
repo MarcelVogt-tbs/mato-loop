@@ -25,7 +25,7 @@
 <script setup>
 import { computed } from 'vue'
 import { agentDisplayName } from 'src/features/computers/display'
-import { useChatStore } from 'stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useTerminalStore } from 'stores/terminal'
 

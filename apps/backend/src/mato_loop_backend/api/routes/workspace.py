@@ -13,7 +13,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Header, Query, Request, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -177,6 +177,92 @@ _SVG_RESPONSE_HEADERS = {
 class CreateDirectoryRequest(BaseModel):
     parent: str = "."
     name: str = Field(min_length=1, max_length=255)
+
+
+class GitChangedFile(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    path: str = Field(min_length=1, max_length=4096)
+    status: Literal["added", "modified", "deleted"]
+    additions: int | None = Field(ge=0)
+    deletions: int | None = Field(ge=0)
+
+    @field_validator("path")
+    @classmethod
+    def relative_path(cls, value: str) -> str:
+        parts = value.split("/")
+        if (
+            "\\" in value or any(part in {"", ".", "..", ".git"} for part in parts)
+            or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value)
+            or (len(value) > 1 and value[1] == ":")
+        ):
+            raise ValueError("Git paths must be normalized relative paths")
+        return value
+
+
+class GitChangesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    repository: str | None = Field(max_length=4096)
+    files: list[GitChangedFile] = Field(max_length=500)
+    truncated: bool
+
+    @field_validator("repository")
+    @classmethod
+    def absolute_repository(cls, value: str | None) -> str | None:
+        if value is not None:
+            try:
+                return _normalize_agent_path(value)
+            except ApiError as exc:
+                raise ValueError("Git repository must be an absolute path") from exc
+        return value
+
+
+class GitFileDiffResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    repository: str = Field(min_length=1, max_length=4096)
+    file: GitChangedFile
+    before: str = Field(max_length=65_536)
+    after: str = Field(max_length=65_536)
+    reason: Literal["binary", "tooLarge", "unsupported"] | None
+
+
+@router.get("/git-changes", response_model=GitChangesResponse | GitFileDiffResponse)
+async def get_git_changes(
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    session_id: Annotated[UUID, Query()],
+    execution_agent_id: Annotated[UUID | None, Query()] = None,
+    current_directory: Annotated[str | None, Query(max_length=4096)] = None,
+    file: Annotated[str | None, Query(min_length=1, max_length=4096)] = None,
+) -> GitChangesResponse | GitFileDiffResponse:
+    if file is not None:
+        try:
+            GitChangedFile.relative_path(file)
+        except ValueError as exc:
+            raise ApiError(400, "file.invalidPath") from exc
+    context = await _file_context(
+        FileScope.FILESYSTEM, session_id, user, db,
+        execution_agent_id=execution_agent_id, current_directory=current_directory,
+    )
+    _require_agent_operations(context, "git.changes")
+    if not context.current_directory:
+        raise ApiError(400, "file.workspaceNotSelected")
+    arguments = {"path": _normalize_agent_path(context.current_directory)}
+    if file is not None:
+        arguments["file"] = file
+    result = await _agent_request(context, "git.changes", arguments, timeout=60)
+    try:
+        if file is None:
+            return GitChangesResponse.model_validate(result)
+        parsed = GitFileDiffResponse.model_validate(result)
+        _normalize_agent_path(parsed.repository)
+        if parsed.file.path != file:
+            raise ValueError("Agent returned a different Git file")
+        return parsed
+    except (ValidationError, ValueError, ApiError) as exc:
+        raise ApiError(502, "executionAgent.protocolError") from exc
 
 
 class RenameEntryRequest(BaseModel):

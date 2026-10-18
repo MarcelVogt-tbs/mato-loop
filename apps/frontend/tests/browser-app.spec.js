@@ -13,7 +13,7 @@ import AgentCodingApp from '../src/features/coding/AgentCodingApp.vue'
 import { useBrowserStore } from '../src/stores/browser'
 import { useIntegrationStore } from '../src/stores/integrations'
 import { useControlCenterStore } from '../src/stores/control-center'
-import { useChatStore } from 'stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 import { FakeWebSocket } from './terminal-websocket'
 import KeyboardModule from '@novnc/novnc/lib/input/keyboard.js'
 import { notifyError } from 'src/utils/notifications'
@@ -25,7 +25,7 @@ vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api }))
 vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm }) }))
-vi.mock('stores/chat', async () => {
+vi.mock('src/features/chat/store', async () => {
   const { reactive } = await import('vue')
   const chat = reactive({ current: null })
   return { useChatStore: () => chat }

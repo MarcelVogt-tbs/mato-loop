@@ -199,6 +199,15 @@ class StatArguments(PathArguments):
     pass
 
 
+class GitChangesArguments(PathArguments):
+    file: str | None = Field(default=None, min_length=1, max_length=4096)
+
+    @field_validator("file")
+    @classmethod
+    def relative_file(cls, value: str | None) -> str | None:
+        return _relative_path(value) if value is not None else None
+
+
 class ListArguments(PathArguments):
     offset: int = Field(default=0, ge=0)
     limit: int = Field(default=100, ge=1, le=1000)
@@ -539,6 +548,7 @@ class MaintenanceUpdateArguments(MaintenanceStartArguments):
 
 
 ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
+    "git.changes": GitChangesArguments,
     "maintenance.start": MaintenanceStartArguments,
     "maintenance.update": MaintenanceUpdateArguments,
     "maintenance.update.interrupt": MaintenanceUpdateArguments,

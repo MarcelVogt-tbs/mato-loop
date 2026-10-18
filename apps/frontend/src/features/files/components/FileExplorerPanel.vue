@@ -52,12 +52,20 @@
           <q-tooltip>{{ searchOpen ? 'Suche schließen' : 'Dateien durchsuchen' }}</q-tooltip>
         </q-btn>
         <q-btn
+          v-if="gitState?.repository || gitState?.error"
+          flat round dense icon="difference"
+          :color="git.showChanges ? 'primary' : undefined"
+          :aria-pressed="git.showChanges"
+          aria-label="Geänderte Dateien anzeigen"
+          @click="git.showChanges = !git.showChanges"
+        ><q-tooltip>Geänderte Dateien anzeigen</q-tooltip></q-btn>
+        <q-btn
           flat
           round
           dense
           icon="refresh"
           aria-label="Dateien aktualisieren"
-          :loading="!projectOverview && workspace.loading[workspace.directoryPath]"
+          :loading="git.showChanges && gitState ? gitState.loading : !projectOverview && workspace.loading[workspace.directoryPath]"
           :disable="!explorerAvailable"
           @click="refreshFiles"
         >
@@ -179,8 +187,19 @@
     />
 
     <q-scroll-area class="col">
+      <div v-if="git.showChanges && gitState" class="q-pa-sm">
+        <div v-if="gitState.loading" class="q-pa-lg text-center"><q-spinner color="primary" size="32px" /></div>
+        <AppStateMessage v-else-if="gitState.error" icon="cloud_off" title="Änderungen konnten nicht geladen werden" :description="apiErrorMessage(gitState.error)">
+          <template #actions><q-btn no-caps color="primary" label="Erneut versuchen" @click="git.refresh" /></template>
+        </AppStateMessage>
+        <template v-else>
+          <q-banner v-if="gitState.truncated" dense class="app-surface-tonal">Die Dateiliste wurde begrenzt. Die Zähler beziehen sich auf die angezeigten Dateien.</q-banner>
+          <FileChanges v-if="changedFiles.length" :git-files="changedFiles" :compact="false" @open-diff="openGitFile" />
+          <AppStateMessage v-else icon="check_circle_outline" title="Keine passenden Git-Änderungen" description="Neue, geänderte und gelöschte Dateien des erkannten Repositorys werden hier angezeigt." />
+        </template>
+      </div>
       <div
-        v-if="explorerUnavailableMessage"
+        v-else-if="explorerUnavailableMessage"
         class="file-load-state app-muted q-ma-md q-pa-lg text-center"
         role="status"
       >
@@ -333,7 +352,10 @@ import FileTreeNode from 'src/features/files/components/FileTreeNode.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { absoluteComputerPath } from 'src/features/files/state'
-import { useChatStore } from 'stores/chat'
+import { useGitChangesStore } from 'src/features/files/git-store'
+import FileChanges from 'src/features/chat/components/FileChanges.vue'
+import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
+import { useChatStore } from 'src/features/chat/store'
 import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useInstanceLimitsStore } from 'stores/instance-limits'
@@ -357,6 +379,9 @@ const chat = useChatStore()
 const controlCenter = useControlCenterStore()
 const executionAgents = useExecutionAgentStore()
 const instanceLimits = useInstanceLimitsStore()
+const git = useGitChangesStore()
+const gitState = computed(() => props.scope === 'filesystem' ? git.current : null)
+const changedFiles = computed(() => (gitState.value?.files || []).filter((file) => file.path.toLocaleLowerCase().includes((workspace.filter || '').toLocaleLowerCase())))
 const uploadInput = ref(null)
 const explorerRoot = ref(null)
 const searchInput = ref(null)
@@ -511,10 +536,16 @@ async function loadProjectSessions(projectId) {
 }
 
 function refreshFiles() {
+  if (git.showChanges && gitState.value) return git.refresh()
   if (projectOverview.value) return loadProjectSessions(chat.current?.projectId)
   const requests = [workspace.refresh()]
+  if (gitState.value) requests.push(git.refresh())
   if (workspace.rootIdentity) requests.push(workspace.fetchStorageUsage(workspace.rootIdentity))
   return Promise.all(requests)
+}
+
+async function openGitFile(path) {
+  try { await git.openFile(path) } catch { /* The central API interceptor displays the error. */ }
 }
 
 async function toggleSearch() {

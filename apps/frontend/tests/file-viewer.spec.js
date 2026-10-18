@@ -9,6 +9,7 @@ import ImageViewerPanel from '../src/features/files/components/ImageViewerPanel.
 import { useControlCenterStore } from '../src/stores/control-center'
 import { useWorkspaceStore } from '../src/stores/workspace'
 import { useExecutionAgentStore } from '../src/stores/execution-agents'
+import { useGitChangesStore } from '../src/features/files/git-store'
 
 const mocks = vi.hoisted(() => ({ confirm: vi.fn(), api: { get: vi.fn(), put: vi.fn() } }))
 
@@ -26,7 +27,7 @@ vi.mock('src/features/files/components/StlViewerPanel.vue', () => ({ default: {
   props: ['src'], render() { return h('div', { 'data-model-src': this.src }) }
 } }))
 vi.mock('src/features/files/components/WorkspaceFileEditor.vue', () => ({ __esModule: true, default: {
-  props: ['modelValue', 'filename', 'markdown', 'saving', 'dirty', 'session', 'showToolbar'],
+  props: ['modelValue', 'filename', 'markdown', 'saving', 'dirty', 'session', 'showToolbar', 'diffActive', 'comparison', 'readonly'],
   emits: ['update:modelValue', 'save', 'cancel'],
   render() {
     return h('div', [
@@ -37,7 +38,7 @@ vi.mock('src/features/files/components/WorkspaceFileEditor.vue', () => ({ __esMo
       ]) : null,
       this.showToolbar !== false ? h('hr', { role: 'separator' }) : null,
       h('div', { 'data-before-content': '' }, this.$slots['before-content']?.()),
-      h('textarea', {
+      this.diffActive ? h('pre', { 'aria-label': 'Git-Diff' }, this.comparison?.before) : h('textarea', {
         'aria-label': this.markdown ? 'Markdown-Quelltext' : 'Textinhalt',
         value: this.modelValue,
         onInput: (event) => this.$emit('update:modelValue', event.target.value)
@@ -140,7 +141,7 @@ it('activates a historical revision only after confirmation', async () => {
   expect(activate).toHaveBeenCalledWith('note.txt', 1, state)
 })
 
-async function mountLiveViewer({ kind = 'text', path = 'note.txt', fileAction = null, agentConnected = true, toolbar, viaApp = false, fullscreen = false, fullscreenToggle = false, previewError = null } = {}) {
+async function mountLiveViewer({ kind = 'text', path = 'note.txt', fileAction = null, agentConnected = true, toolbar, viaApp = false, fullscreen = false, fullscreenToggle = false, previewError = null, deletedDiff = false } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const workspace = useWorkspaceStore()
@@ -161,6 +162,14 @@ async function mountLiveViewer({ kind = 'text', path = 'note.txt', fileAction = 
   const toggleFullscreen = vi.fn()
   const tab = { tabId: 'file-a', kind: 'file', fileTarget: fileAction
     ? workspace.fileTargetFromAction(fileAction) : workspace.fileTarget(workspace.viewedEntry) }
+  if (deletedDiff) {
+    useControlCenterStore().fileDiffModes[tab.tabId] = true
+    const git = useGitChangesStore()
+    git.setContext({ sessionId: 'session-id', executionAgentId: fileAction.executionAgentId, currentDirectory: '/project' })
+    const file = { path: 'deleted.txt', status: 'deleted', additions: 0, deletions: 1 }
+    Object.assign(git.current, { repository: '/project', files: [file] })
+    mocks.api.get.mockResolvedValue({ data: { repository: '/project', file, before: 'old', after: '', reason: null } })
+  }
   app = createApp({ render: () => h(
     viaApp ? FileViewerApp : FileViewerPanel,
     viaApp ? { tab } : { entry: workspace.viewedEntry, fullscreen, fullscreenToggle, onToggleFullscreen: toggleFullscreen },
@@ -274,6 +283,32 @@ it('explains that a computer output can have been moved or deleted', async () =>
   expect(root.textContent).toContain('Unter „/project/_probe2.py“ ist keine Datei mehr verfügbar.')
   expect(root.textContent).toContain('Sie wurde möglicherweise verschoben oder gelöscht.')
   expect(button(root, 'Erneut versuchen')).toBeTruthy()
+})
+
+it('opens a deleted Git file in the existing editor without reading the missing working copy', async () => {
+  const { root, preview } = await mountLiveViewer({ viaApp: true, deletedDiff: true, fileAction: {
+    root: 'workspace', executionAgentId: 'original-agent', currentDirectory: '/project',
+    path: '/project/deleted.txt', filename: 'deleted.txt'
+  } })
+  await vi.waitFor(() => expect(root.querySelector('[aria-label="Git-Diff"]')?.textContent).toBe('old'))
+  expect(preview).not.toHaveBeenCalled()
+})
+
+it('refreshes a clean cached source when returning from an updated Git comparison', async () => {
+  const { root } = await mountLiveViewer({ viaApp: true, fileAction: {
+    root: 'workspace', executionAgentId: 'original-agent', currentDirectory: '/project',
+    path: '/project/edited.txt', filename: 'edited.txt'
+  } })
+  const git = useGitChangesStore()
+  git.setContext({ sessionId: 'session-id', executionAgentId: 'original-agent', currentDirectory: '/project' })
+  const file = { path: 'edited.txt', status: 'modified', additions: 1, deletions: 1 }
+  Object.assign(git.current, { repository: '/project', files: [file] })
+  mocks.api.get.mockResolvedValueOnce({ data: { repository: '/project', file, before: 'original', after: 'external', reason: null } })
+  useControlCenterStore().fileDiffModes['file-a'] = true
+  await vi.waitFor(() => expect(root.querySelector('[aria-label="Git-Diff"]')?.textContent).toBe('original'))
+  mocks.api.get.mockResolvedValueOnce({ data: { kind: 'text', content: 'external', revision: 'b'.repeat(64) } })
+  useControlCenterStore().fileDiffModes['file-a'] = false
+  await vi.waitFor(() => expect(root.querySelector('textarea')?.value).toBe('external'))
 })
 
 async function type(root, content) {

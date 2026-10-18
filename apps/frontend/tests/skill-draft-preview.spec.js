@@ -15,7 +15,7 @@ vi.mock('src/features/chat/components/ChatFiles.vue', () => ({ default: { render
 import ChatPage from '../src/features/chat/ChatPage.vue'
 import { api } from 'src/boot/axios'
 import { useApprovalStore } from '../src/stores/approvals'
-import { useChatStore } from '../src/stores/chat'
+import { useChatStore } from '../src/features/chat/store'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { useWorkspaceStore } from '../src/stores/workspace'
 

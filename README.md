@@ -110,7 +110,7 @@ Use the Docker development stack from the repository root:
 
 The stack uses FastAPI, Pydantic v2, async SQLAlchemy, PostgreSQL/pgvector, Infinity, Vue 3, Quasar, Pinia, and Vue Router. Dependencies are managed with `uv` and Yarn 4.
 
-`.env.dev` is ready to use. Put local settings in the gitignored `.env.dev.override`; start from `.env.dev.override.example`. **Parallel checkouts need distinct Compose project names, ports, and Agent bind paths**; see [development and documentation maintenance](docs/development.md).
+`.env.dev` is ready to use. Put local settings in the gitignored `.env.dev.override`; start from `.env.dev.override.example`. **Parallel checkouts need distinct Compose project names, ports, and Agent state bind paths**; see [development and documentation maintenance](docs/development.md).
 
 ```bash
 ./scripts/dev.sh status

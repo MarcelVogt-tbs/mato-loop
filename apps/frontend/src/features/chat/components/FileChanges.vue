@@ -1,13 +1,24 @@
 <template>
-  <div v-if="changes.length" class="file-changes q-mt-xs">
-    <div class="app-muted">Dateiänderungen: {{ changes.length }}</div>
+  <div v-if="changes.length" :class="compact ? 'file-changes q-mt-md' : 'q-mt-xs'">
+    <div class="row items-center app-muted q-px-xs">
+      <span>{{ gitFiles ? 'Geänderte Dateien' : 'Dateiänderungen' }}: {{ changes.length }}</span>
+      <template v-if="hasStats">
+        <span class="text-positive q-ml-sm">+{{ additions ?? '–' }}</span>
+        <span class="text-negative q-ml-xs">−{{ deletions ?? '–' }}</span>
+        <q-btn v-if="git && !readOnly" flat round dense size="xs" icon="difference" class="q-ml-xs" aria-label="Aktuellen Git-Gesamtdiff öffnen" @click="emit('open-diff', null)">
+          <q-tooltip>Aktuellen Git-Gesamtdiff öffnen</q-tooltip>
+        </q-btn>
+      </template>
+    </div>
     <q-list>
       <q-item
         v-for="change in changes"
         :key="change.key"
         dense
-        class="file-changes__item q-px-xs q-py-none"
-        :clickable="!readOnly && change.kind === 'file' && change.operation !== 'delete'"
+        class="q-px-xs q-py-none"
+        :class="{ 'file-changes__item': compact }"
+        :clickable="canOpen(change)"
+        :aria-label="canOpen(change) ? `${change.diff ? 'Diff' : 'Datei'} öffnen: ${change.path}` : undefined"
         @click="open(change)"
       >
         <q-item-section side class="q-pr-xs">
@@ -15,16 +26,23 @@
         </q-item-section>
         <q-item-section>
           <q-item-label class="ellipsis" :title="change.path">
-            {{ change.filename || change.path }}
+            {{ compact ? change.filename || change.path : change.path }}
           </q-item-label>
         </q-item-section>
         <q-item-section side class="q-pl-xs">
-          {{ change.operations.map((operation) => labels[operation]).join(' · ') }}
+          <div v-if="change.diff" class="row no-wrap q-gutter-xs">
+            <template v-if="change.additions != null">
+              <span class="text-positive">+{{ change.additions }}</span>
+              <span class="text-negative">−{{ change.deletions }}</span>
+            </template>
+            <span v-else>–</span>
+          </div>
+          <span v-else>{{ change.operations.map((operation) => labels[operation]).join(' · ') }}</span>
         </q-item-section>
-        <q-item-section v-if="!readOnly && change.kind === 'file' && change.operation !== 'delete'" side class="q-pl-xs">
+        <q-item-section v-if="canOpen(change)" side class="q-pl-xs">
           <q-icon name="open_in_new" size="12px" />
         </q-item-section>
-        <q-tooltip>
+        <q-tooltip v-if="!gitFiles">
           <span v-if="change.sourcePath">{{ change.sourcePath }} → </span>{{ change.path }}
           · {{ change.root === 'session' ? 'Session-Ablage' : agents.byId(change.executionAgentId)?.name || change.executionAgentId }}
         </q-tooltip>
@@ -38,11 +56,19 @@ import { computed } from 'vue'
 import { attachmentIcon } from 'src/utils/attachments'
 import { useExecutionAgentStore } from 'src/features/computers/store'
 
-const props = defineProps({ actions: { type: Array, default: () => [] }, readOnly: Boolean })
-const emit = defineEmits(['open-file'])
+const props = defineProps({
+  actions: { type: Array, default: () => [] }, readOnly: Boolean,
+  compact: { type: Boolean, default: true },
+  git: { type: Object, default: null },
+  gitFiles: { type: Array, default: null }
+})
+const emit = defineEmits(['open-file', 'open-diff'])
 const agents = useExecutionAgentStore()
 const labels = { write: 'Geändert', create: 'Erstellt', edit: 'Geändert', delete: 'Gelöscht', mkdir: 'Ordner erstellt', copy: 'Kopiert', move: 'Verschoben' }
 const changes = computed(() => {
+  if (props.gitFiles) return props.gitFiles.map((file) => ({
+    ...file, key: file.path, kind: 'file', diff: true, operations: [], operation: file.status === 'deleted' ? 'delete' : 'edit'
+  }))
   const grouped = new Map()
   for (const action of props.actions) {
     const key = JSON.stringify([action.root, action.rootIdentity || action.executionAgentId, action.path])
@@ -54,10 +80,23 @@ const changes = computed(() => {
       if (source) grouped.set(sourceKey, { ...source, kind: 'path' })
     }
   }
-  return [...grouped.values()]
+  return [...grouped.values()].map((change) => {
+    const file = props.git?.repository && change.root === 'workspace' && change.executionAgentId === props.git.executionAgentId
+      ? props.git.files.find((file) => `${props.git.repository?.replace(/\/$/u, '')}/${file.path}` === change.path)
+      : null
+    return file ? { ...change, additions: file.additions, deletions: file.deletions, diff: true, diffPath: file.path } : change
+  })
 })
+const hasStats = computed(() => changes.value.some((change) => change.diff))
+const additions = computed(() => changes.value.some((change) => change.diff && change.additions == null) ? null : changes.value.reduce((sum, change) => sum + (change.additions || 0), 0))
+const deletions = computed(() => changes.value.some((change) => change.diff && change.deletions == null) ? null : changes.value.reduce((sum, change) => sum + (change.deletions || 0), 0))
+function canOpen(change) {
+  return !props.readOnly && change.kind === 'file' && (change.diff || change.operation !== 'delete')
+}
 function open(change) {
-  if (!props.readOnly && change.kind === 'file' && change.operation !== 'delete') emit('open-file', change)
+  if (!canOpen(change)) return
+  if (change.diff) emit('open-diff', change.diffPath || change.path)
+  else emit('open-file', change)
 }
 </script>
 

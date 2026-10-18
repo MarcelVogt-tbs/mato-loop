@@ -7,7 +7,7 @@ vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 import { api } from 'src/boot/axios'
 import { notifyError } from 'src/utils/notifications'
 import { useSubagentStore, subagentStatus } from '../src/stores/subagents'
-import { useChatStore } from '../src/stores/chat'
+import { useChatStore } from '../src/features/chat/store'
 import { useApprovalStore } from '../src/stores/approvals'
 import { useQuestionStore } from '../src/stores/questions'
 import { buildChatTranscript } from '../src/utils/chat-transcript'

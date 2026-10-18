@@ -46,9 +46,9 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Run evaluations through `./scripts/eval.sh`; it delegates to `./scripts/dev.sh compose` and adds `docker-compose.eval.yaml` only for evaluation-specific services.
 - Start the prepared production stack only when explicitly requested.
 - The development stack consists of `db`, `embedding`, `backend`, `frontend`, and `matoloop-agent`.
-- Backend development data lives in the `db_data` and `app_data` named volumes. MatoLoop Agent state and home use the configured host bind mounts.
+- Backend development data lives in the `db_data` and `app_data` named volumes. MatoLoop Agent state uses the configured host bind mount; its `/workspace` home uses the `matoloop_agent_workspace` named volume.
 - Python and frontend dependencies also live in named volumes.
-- The repository bind mount at `/workspace` exists only for HMR and live code changes.
+- The repository bind mounts at `/workspace` (backend/frontend) and `/source` (Agent) exist only for HMR and live code changes.
 - `./scripts/dev.sh reset-storage` deletes persistent development data and must never be run incidentally.
 
 ## Backend

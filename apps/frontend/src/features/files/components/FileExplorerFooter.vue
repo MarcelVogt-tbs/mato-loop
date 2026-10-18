@@ -36,7 +36,7 @@ import {
   formatStorageUsage,
   storageUsageProgress
 } from 'src/utils/resource-metrics'
-import { useChatStore } from 'stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 import { useWorkspaceStore } from 'stores/workspace'
 
 defineOptions({ name: 'FileExplorerFooter' })

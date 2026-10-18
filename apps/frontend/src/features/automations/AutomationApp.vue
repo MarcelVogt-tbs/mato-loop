@@ -128,7 +128,7 @@ import { scheduleDraft, scheduleError, schedulePayload, scheduleSummary } from '
 import { automationLastRunLabel, automationRunStatus, automationStatus, automationTiming } from 'src/utils/automation-status'
 import { isPwaUpdateReload } from 'src/utils/pwa-update'
 import { useAutomationStore } from 'stores/automations'
-import { useChatStore } from 'stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 import { useControlCenterStore } from 'stores/control-center'
 
 const $q = useQuasar()

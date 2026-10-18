@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { createApp, h, nextTick, shallowReactive } from 'vue'
-import { Quasar, ClosePopup, QBtn, QCard, QDialog, QIcon, QItem, QItemSection, QList, QMenu, QSeparator, QSpace, QToolbar, QTooltip } from 'quasar'
+import { Quasar, ClosePopup, QBtn, QCard, QDialog, QIcon, QItem, QItemSection, QList, QMenu, QSeparator, QSpace, QSpinner, QToolbar, QTooltip } from 'quasar'
 import { EditorView } from '@codemirror/view'
 import { isolateHistory, redo, undo, undoDepth } from '@codemirror/commands'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -11,7 +11,7 @@ vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 const rangeGeometry = Object.fromEntries(['getBoundingClientRect', 'getClientRects'].map((name) => [
   name, Object.getOwnPropertyDescriptor(Range.prototype, name)
 ]))
-let app, root
+let app, root, resizeEditor
 
 beforeEach(() => {
   // jsdom has no layout engine; keep CodeMirror's real measurement scheduling.
@@ -43,13 +43,15 @@ async function mountEditor(initial = {}) {
   root = document.createElement('div')
   document.body.append(root)
   app = createApp({ render: () => h(WorkspaceFileEditor, {
-    ...props, 'onUpdate:modelValue': onContent, 'onUpdate:session': onSession, onSave, onCancel
+    ...props, 'onUpdate:modelValue': onContent, 'onUpdate:session': onSession,
+    'onUpdate:diffActive': (value) => { props.diffActive = value }, onSave, onCancel
   }) })
   app.use(Quasar, {
-    components: { QBtn, QCard, QDialog, QIcon, QItem, QItemSection, QList, QMenu, QSeparator, QSpace, QToolbar, QTooltip },
+    components: { QBtn, QCard, QDialog, QIcon, QItem, QItemSection, QList, QMenu, QSeparator, QSpace, QSpinner, QToolbar, QTooltip },
     directives: { ClosePopup }, config: { dark: false }
   })
   app.config.globalProperties.$q.dark.set(false)
+  app.component('QResizeObserver', { setup(_props, { emit }) { resizeEditor = (width) => emit('resize', { width }); return () => null } })
   app.mount(root)
   await nextTick()
   const view = EditorView.findFromDOM(root.querySelector('.cm-editor'))
@@ -70,6 +72,28 @@ function button(label, container = root) {
   expect(element, label).toBeTruthy()
   return element
 }
+
+it('replaces the split diff with a single read-only unified view when the pane narrows', async () => {
+  const { props, view, onSave } = await mountEditor({ comparison: { before: 'old\n', after: 'new\n', reason: null }, diffActive: false })
+  view.dispatch({ changes: { from: 0, insert: 'draft ' } })
+  button('Git-Diff umschalten').click()
+  resizeEditor(1000)
+  await vi.waitFor(() => expect(root.querySelectorAll('.cm-mergeView')).toHaveLength(1))
+  resizeEditor(390)
+  await vi.waitFor(() => {
+    expect(root.querySelectorAll('.cm-mergeView')).toHaveLength(0)
+    expect(root.querySelectorAll('.cm-editor')).toHaveLength(2)
+  })
+  const diff = EditorView.findFromDOM(root.querySelector('[aria-label="Git-Vergleich mit HEAD"] .cm-editor'))
+  expect(diff.state.readOnly).toBe(true)
+  keydown(diff.contentDOM, 's', true)
+  expect(onSave).not.toHaveBeenCalled()
+  button('Git-Diff umschalten').click()
+  await nextTick()
+  expect(props.modelValue).toBe('draft alpha alpha')
+  undo(view)
+  expect(props.modelValue).toBe('alpha alpha')
+})
 
 it('emits DOM typing and provides German search/replace with Ctrl+F/H/S and contained Escape', async () => {
   const { view, props, onContent, onSave } = await mountEditor()

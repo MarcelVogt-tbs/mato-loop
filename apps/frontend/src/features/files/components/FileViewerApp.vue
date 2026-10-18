@@ -1,8 +1,5 @@
 <template>
-  <FileViewerPanel
-    :entry="workspace.viewedEntry"
-    @close="removeTab"
-  >
+  <FileViewerPanel v-model:diff-active="controlCenter.fileDiffModes[tab.tabId]" :entry="workspace.viewedEntry" @close="removeTab">
     <template v-if="$slots.toolbar" #toolbar><slot name="toolbar" /></template>
   </FileViewerPanel>
 </template>
@@ -11,7 +8,7 @@
 import { computed, onBeforeUnmount, watch } from 'vue'
 import FileViewerPanel from 'src/features/files/components/FileViewerPanel.vue'
 import { useConfirm } from 'src/composables/confirm'
-import { useChatStore } from 'stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useWorkspaceStore, workspaceContextKey } from 'stores/workspace'
@@ -28,7 +25,6 @@ let closing = false
 const workspaceContext = computed(() => target.scope === 'filesystem'
   ? executionAgents.workspaceContextFor({ preferredExecutionAgentId: target.executionAgentId })
   : null)
-
 workspace.stashActiveFileTab()
 workspace.configure({
   sessionId: controlCenter.sessionId || chat.current?.id || null,

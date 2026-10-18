@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
-import { useChatStore } from 'stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 
 const scopeConfig = (scope) => ({ params: { scope } })
 

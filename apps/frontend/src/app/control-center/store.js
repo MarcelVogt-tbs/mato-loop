@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
-import { useChatStore } from 'src/stores/chat'
+import { useChatStore } from 'src/features/chat/store'
 import {
   controlCenterFixedAppIds,
   controlCenterGlobalSectionIds,
@@ -253,6 +253,7 @@ export const useControlCenterStore = defineStore('control-center', {
     pendingState: null,
     confirmedState: defaultState(),
     requestedAppId: null,
+    fileDiffModes: {},
     restoredOpen: false
   }),
   getters: {
@@ -278,6 +279,7 @@ export const useControlCenterStore = defineStore('control-center', {
     },
     syncSession(session) {
       const sessionId = session?.id || null
+      if (this.sessionId !== sessionId) this.fileDiffModes = {}
       if (this.sessionId !== sessionId) this.activeGlobalSectionId = null
       const requestedAppId = this.sessionId === sessionId ? this.requestedAppId : null
       this.requestGeneration += 1
@@ -298,6 +300,7 @@ export const useControlCenterStore = defineStore('control-center', {
       this.saving = false
       this.pendingState = null
       if (this.sessionId !== sessionId) {
+        this.fileDiffModes = {}
         this.requestedAppId = null
         this.activeGlobalSectionId = null
       }
@@ -307,6 +310,7 @@ export const useControlCenterStore = defineStore('control-center', {
       this.restoredOpen = true
     },
     resetDraft() {
+      this.fileDiffModes = {}
       this.requestGeneration += 1
       this.ready = true
       this.saving = false
@@ -491,7 +495,7 @@ export const useControlCenterStore = defineStore('control-center', {
       if (index < 0 || !target) return
       return this.reorderIntegration(appId, target.tabId, offset > 0)
     },
-    async openFile(fileTarget) {
+    async openFile(fileTarget, { diff = false } = {}) {
       const target = normalizedFileTarget(fileTarget)
       if (!target) return null
       const sourceKey = JSON.stringify([
@@ -508,26 +512,25 @@ export const useControlCenterStore = defineStore('control-center', {
         tab.fileTarget.revision != null ? tab.fileTarget.fileId : tab.fileTarget.path,
         tab.fileTarget.revision ?? null
       ]) === sourceKey)
-      if (existing) {
-        await this.activate(existing.tabId)
-        if (!this.open || this.restoredOpen) await this.setOpen(true)
-        return existing.tabId
+      if (!existing && this.tabs.length >= 20) return null
+      const tabId = existing?.tabId || `file-${randomUuid()}`
+      const previousMode = this.fileDiffModes[tabId]
+      this.fileDiffModes[tabId] = diff && target.scope === 'filesystem'
+      try {
+        if (existing) {
+          await this.activate(tabId)
+          if (!this.open || this.restoredOpen) await this.setOpen(true)
+        } else {
+          await this.save({
+            tabs: [...this.tabs, { tabId, kind: 'file', appId: 'file-viewer', pinned: false, fileTarget: target }],
+            activeAppId: tabId, open: true, fileView: this.fileView
+          }, { reveal: true })
+        }
+        return tabId
+      } catch (error) {
+        this.fileDiffModes[tabId] = previousMode
+        throw error
       }
-      if (this.tabs.length >= 20) return null
-      const tabId = `file-${randomUuid()}`
-      await this.save({
-        tabs: [...this.tabs, {
-          tabId,
-          kind: 'file',
-          appId: 'file-viewer',
-          pinned: false,
-          fileTarget: target
-        }],
-        activeAppId: tabId,
-        open: true,
-        fileView: this.fileView
-      }, { reveal: true })
-      return tabId
     },
     async closeFile(tabId) {
       const index = this.tabs.findIndex((tab) => tab.tabId === tabId && tab.kind === 'file')
@@ -536,7 +539,8 @@ export const useControlCenterStore = defineStore('control-center', {
       const activeAppId = this.activeAppId === tabId
         ? this.tabs[index - 1]?.tabId || this.tabs[index + 1]?.tabId || 'files'
         : this.activeAppId
-      return this.save({ tabs, activeAppId, open: this.open, fileView: this.fileView })
+      await this.save({ tabs, activeAppId, open: this.open, fileView: this.fileView })
+      delete this.fileDiffModes[tabId]
     },
     async removeFileTabs(tabIds) {
       const removed = new Set(tabIds)
@@ -545,7 +549,9 @@ export const useControlCenterStore = defineStore('control-center', {
       const activeAppId = tabs.some((tab) => tab.tabId === this.activeAppId)
         ? this.activeAppId
         : tabs.find((tab) => tab.appId === 'files')?.tabId || 'session'
-      return this.save({ tabs, activeAppId, open: this.open, fileView: this.fileView })
+      const result = await this.save({ tabs, activeAppId, open: this.open, fileView: this.fileView })
+      for (const tabId of removed) delete this.fileDiffModes[tabId]
+      return result
     },
     async rebindFileTargets(fileTarget, destination = null, tabIds = null) {
       const target = normalizedFileTarget(fileTarget)
@@ -580,6 +586,9 @@ export const useControlCenterStore = defineStore('control-center', {
         ? this.activeAppId
         : tabs.find((tab) => tab.appId === 'files')?.tabId || 'session'
       await this.save({ tabs, activeAppId, open: this.open, fileView: this.fileView })
+      if (destinationTarget === null) {
+        for (const tabId of affectedIds) delete this.fileDiffModes[tabId]
+      }
       return [...affectedIds]
     },
     setSplitRatio(value) {

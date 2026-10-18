@@ -16,7 +16,7 @@ vi.mock('src/utils/notifications', () => ({ notifyError }))
 
 import { useAuthStore } from '../src/stores/auth'
 import { useAgentIdentityStore } from '../src/stores/agent-identity'
-import { useChatStore } from '../src/stores/chat'
+import { useChatStore } from '../src/features/chat/store'
 
 describe('auth store', () => {
   beforeEach(() => {

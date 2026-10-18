@@ -203,6 +203,8 @@ Each enabled account contributes a transient protected **Support-Assistent** pro
 
 Git is not an integration. Git operations use `shell_run` on the selected, connected MatoLoop Agent with Git installed. Repositories remain on that computer; the backend does not clone repositories or provide a Git fallback.
 
+**Computer-Dateien** offers a Git-change filter, and the existing text editor offers a read-only Git comparison. Both use an owner-bound browser API, not a model tool or Git integration. See [the architecture contract](architecture.md#matoloop-agent-boundary).
+
 Git commands follow ordinary shell inspection and permissions: recognized actions require read, write and/or delete. Normal consent is computer/category-bound rather than workspace-bound. Read/write prefix rules remain optional and cannot approve delete. Hard computer zones, ownership, sensitive-data and revision checks still apply. Read classification is not a guarantee of side-effect-free execution. See [the shell policy contract](architecture.md#matoloop-agent-boundary).
 
 Shell Git runs with the agent operating-system user's access, without the removed integration's Git-specific isolation or network policy. Operators manage Git configuration, credentials, and host filesystem and network restrictions on that computer. See [upgrade cleanup](user/betrieb-und-datensicherung.md#removed-git-integration).

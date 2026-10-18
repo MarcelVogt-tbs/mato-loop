@@ -148,7 +148,7 @@ services:
     volumes:
       - .:/source
       - ${MATOLOOP_AGENT_DATA:-./data/matoloop-agent}:/data
-      - ${MATOLOOP_AGENT_HOME:-./data/home}:/workspace
+      - matoloop_agent_workspace:/workspace
       - matoloop_agent_dependency_data:/opt/matoloop-agent
     depends_on:
       backend:
@@ -171,6 +171,7 @@ volumes:
   frontend_node_modules:
   frontend_yarn_cache:
   matoloop_agent_dependency_data:
+  matoloop_agent_workspace:
 
 networks:
   mato-loop:

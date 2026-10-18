@@ -94,6 +94,44 @@ async def test_file_context_hides_foreign_sessions() -> None:
     assert exc_info.value.code == "session.notFound"
 
 
+async def test_git_changes_uses_owned_agent_and_validates_response(monkeypatch) -> None:
+    user, session_id, agent_id = _user(), uuid4(), uuid4()
+    context = workspace_route._FileContext(
+        agent_id=agent_id, current_directory="/repo", agent_operations=frozenset({"git.changes"}),
+    )
+    resolve = AsyncMock(return_value=context)
+    request = AsyncMock(return_value={"repository": "/repo", "files": [{
+        "path": "../secret", "status": "modified", "additions": 1, "deletions": 0,
+    }], "truncated": False})
+    monkeypatch.setattr(workspace_route, "_file_context", resolve)
+    monkeypatch.setattr(workspace_route, "_agent_request", request)
+    db = AsyncMock(spec=AsyncSession)
+    with pytest.raises(ApiError) as error:
+        await workspace_route.get_git_changes(user, db, session_id, agent_id, "/repo")
+    assert error.value.code == "executionAgent.protocolError"
+    resolve.assert_awaited_once_with(
+        FileScope.FILESYSTEM, session_id, user, db, execution_agent_id=agent_id, current_directory="/repo",
+    )
+    request.assert_awaited_once_with(context, "git.changes", {"path": "/repo"}, timeout=60)
+
+
+async def test_git_changes_hides_foreign_session() -> None:
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    foreign = ChatSession(id=uuid4(), user_id=uuid4(), title="Foreign")
+    db.get.return_value = foreign
+    with pytest.raises(ApiError) as error:
+        await workspace_route.get_git_changes(_user(), db, foreign.id)
+    assert error.value.code == "session.notFound"
+
+
+@pytest.mark.parametrize("path", ["../secret", "/etc/passwd", ".git/config", "a/../../secret"])
+async def test_git_changes_rejects_invalid_paths_before_dispatch(path) -> None:
+    with pytest.raises(ApiError) as error:
+        await workspace_route.get_git_changes(_user(), AsyncMock(), uuid4(), file=path)
+    assert error.value.code == "file.invalidPath"
+
+
 async def test_file_context_resolves_explicit_same_project_session_root() -> None:
     user = _user()
     project_id = uuid4()

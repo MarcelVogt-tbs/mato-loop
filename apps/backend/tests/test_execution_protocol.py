@@ -155,6 +155,7 @@ async def test_system_info_follows_connection_lifetime_and_agent_identity() -> N
 
 def test_supported_operations_match_the_execution_agent() -> None:
     assert SUPPORTED_OPERATIONS == {
+        "git.changes",
         "filesystem.stat",
         "filesystem.glob",
         "filesystem.grep",

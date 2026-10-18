@@ -14,7 +14,7 @@ const { api } = vi.hoisted(() => ({
 vi.mock('src/boot/axios', () => ({ api }))
 
 import TbsDeskApp from '../src/features/tbs-desk/TbsDeskApp.vue'
-import { useChatStore } from '../src/stores/chat'
+import { useChatStore } from '../src/features/chat/store'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { useIntegrationStore } from '../src/stores/integrations'
 
