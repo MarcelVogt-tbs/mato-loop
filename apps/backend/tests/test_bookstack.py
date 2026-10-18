@@ -302,6 +302,17 @@ async def test_account_list_uses_only_bound_active_bookstack_snapshot() -> None:
     }
 
 
+def test_book_deletion_displays_the_included_content() -> None:
+    instance = _base()
+    permission = integrations_bookstack_adapter._delete_book_permission(
+        KnowledgeBookArguments(integration_id=instance.id, book_key="book:7"),
+        _context(instance, _revision(instance)),
+    )[0]
+    assert [(item.label, item.value) for item in permission.display_items] == [
+        ("Löschumfang", "Buch und alle enthaltenen Inhalte"),
+    ]
+
+
 async def test_page_token_is_binding_scoped(monkeypatch) -> None:
     instance = _base()
     revision = _revision(instance)

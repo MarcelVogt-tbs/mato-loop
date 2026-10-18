@@ -602,7 +602,10 @@ async def _execute_upload(arguments: BrowserUploadArguments, context: Any):
 
 
 async def _authorization(arguments: BrowserActionArguments | _BrowserArguments, context: Any) -> tuple[Any, ...]:
-    from mato_loop_backend.permissions.policy import integration_operation_permission
+    from mato_loop_backend.permissions.policy import (
+        PermissionDisplayItem,
+        integration_operation_permission,
+    )
 
     if isinstance(arguments, _BrowserArguments):
         arguments = arguments.to_action()
@@ -619,8 +622,16 @@ async def _authorization(arguments: BrowserActionArguments | _BrowserArguments, 
     capabilities = [
         "browser.read" if arguments.action in {"tabs", "inspect", "screenshot", "diagnostics"} else "browser.write"
     ]
+    display_items = ()
     if arguments.action in {"evaluate", "run_code"}:
         capabilities = ["browser.read", "browser.write", "browser.code"]
+        display_items = (
+            PermissionDisplayItem("Python-Code" if arguments.action == "run_code" else "JavaScript", arguments.code or arguments.function, "code"),
+            PermissionDisplayItem("Zugriff", (
+                "Der Code kann auch Dateien und Programme auf dem Computer verwenden."
+                if arguments.action == "run_code" else "Der Code kann Webseiten ändern und Netzwerkanfragen senden."
+            )),
+        )
     elif arguments.observe and capabilities == ["browser.write"]:
         capabilities.append("browser.read")
     return tuple(replace(integration_operation_permission(
@@ -641,6 +652,7 @@ async def _authorization(arguments: BrowserActionArguments | _BrowserArguments, 
         ),
         resource_display="Freigegebener Browser (alle Tabs)",
         action_kind="browser_action",
+        display_items=display_items,
     ), approval_details={"browser": operation}) for capability in capabilities)
 
 

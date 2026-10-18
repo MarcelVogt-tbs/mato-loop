@@ -179,12 +179,44 @@ def session_grant_options_payload(request: PermissionRequest) -> list[dict[str, 
             "id": key,
             "label": "Dieser Befehl" if key == "requested" and request.resource_type == "shell_command" else labels[key],
             "display": session_grants_display(option),
+            "scopeDisplay": session_grants_scope_display(option),
             "fingerprint": session_grants_fingerprint(
                 request.capability, request.resource_type, request.resource_scope, session_grants_payload(option),
             ),
         }
         for key, option in session_grant_options(request).items()
     ]
+
+
+def session_grants_scope_display(request: PermissionRequest) -> list[str]:
+    """Describe grant resources without repeating commands or action categories."""
+    collections = {
+        "execution_agent_collection": "Deine verfügbaren Computer",
+        "session_collection": "Deine Sessions",
+        "memory_collection": "Deine Erinnerungen",
+        "personal_variable_collection": "Deine Variablen und Secrets",
+    }
+    result = []
+    for grant in request.effective_session_grants:
+        if grant.resource_type == "shell_action":
+            result.append("Diesen Befehl")
+        elif grant.resource_type == "shell_computer":
+            result.append("Shell auf diesem Computer")
+        elif grant.resource_type in {"execution_path", "session_path", "administrator_path"}:
+            scope = json.loads(grant.resource_scope)
+            suffix = " einschließlich Unterpfaden" if scope.get("recursive") else " (exakter Pfad)"
+            result.append(f'Pfad „{grant.resource_display}“{suffix}')
+        elif grant.access == "navigate":
+            result.append(f'Ordner „{grant.resource_display}“ und Unterordner (Navigation)')
+        elif grant.resource_type == "skill_collection":
+            result.append(
+                "Verfügbare Skills" if request.capability == "skills.load"
+                else "Globale Skills" if grant.resource_scope.startswith("instance:")
+                else "Persönliche Skills"
+            )
+        else:
+            result.append(collections.get(grant.resource_type) or grant.resource_display or request.resource_display or "Angezeigte Ressource")
+    return result
 
 
 def session_grants_fingerprint(

@@ -90,19 +90,31 @@ async function selectOption(card, label, option) {
 
 describe('approval card', () => {
   it.each([
-    ['parent', 'Übergeordneter Ordner', 'Lesen und Schreiben · einschließlich Unterpfaden: /work/docs'],
+    ['shell_run', 'Shell-Zugriff freigeben'],
+    ['integration_operation', 'Zugriff freigeben']
+  ])('identifies %s permission preparation without implying execution', async (actionKind, title) => {
+    await mountApproval({
+      ...responses['/approvals/pending'][0], actionKind,
+      title: 'Aktion ausführen?', availableDecisions: ['allow_session', 'deny']
+    })
+    expect(root.querySelector('.text-subtitle1').textContent).toBe(title)
+    expect(root.textContent).not.toContain('Jetzt wird keine Aktion ausgeführt.')
+  })
+
+  it.each([
+    ['parent', 'Pfad „/work/docs“ einschließlich Unterpfaden', 'Lesen und Schreiben · einschließlich Unterpfaden: /work/docs'],
     ['computer', 'Shell auf diesem Computer', 'Lesen und Schreiben · Shell auf diesem Computer']
   ])('submits the chosen %s scope with its displayed rights', async (id, label, display) => {
     await mountApproval({
       ...responses['/approvals/pending'][0], availableDecisions: ['allow_once', 'allow_session', 'deny'],
       payload: { grantOptions: [
-        { id: 'requested', label: 'Angefragter Bereich', display: ['Lesen und Schreiben: angefragte Ressource'] },
-        { id, label, display: [display] }
+        { id: 'requested', label: 'Angefragter Bereich', display: ['Lesen und Schreiben: angefragte Ressource'], scopeDisplay: ['Pfad „/work/docs/file“ einschließlich Unterpfaden'] },
+        { id, label, display: [display], scopeDisplay: [label] }
       ] }
     })
     const card = root.querySelector('.approval-card')
-    await selectOption(card, 'Gilt für', label)
-    expect(card.textContent).toContain(display)
+    await selectOption(card, 'Freigabe für', label)
+    expect(card.textContent).toContain(label)
     button(card, 'Für diesen Lauf erlauben').click()
     await vi.waitFor(() => expect(api.post).toHaveBeenCalledExactlyOnceWith('/approvals/approval/decisions', {
       decision: 'allow_once', grant_option: id
@@ -190,28 +202,62 @@ describe('approval card', () => {
         displayItems: [
           { label: 'Shell-Befehl', value: command, format: 'code' },
           { label: 'Terminal-Ordner', value: currentDirectory, format: 'code' },
-          { label: 'Freigegebener Bereich', value: ['Exakter Shell-Befehl auf diesem Computer mit gleichem Arbeitsverzeichnis und gleicher Umgebung'], format: 'list' }
-        ]
+          { label: 'Freigegebener Bereich', value: [`Lesen und Schreiben · Diesen Shell-Befehl ausführen: ${command} · Arbeitsverzeichnis: ${currentDirectory}`], format: 'list' }
+        ],
+        grantOptions: [{
+          id: 'requested', label: 'Dieser Befehl',
+          display: [`Diesen Shell-Befehl ausführen: ${command} · Arbeitsverzeichnis: ${currentDirectory}`],
+          scopeDisplay: ['Diesen Befehl'], scopeHint: 'Nur im angezeigten Ausführungskontext.'
+        }]
       },
       details: { tool: 'shell_run', arguments: { command: 'unreviewed original' } }
     })
     expect(root.querySelector('.tool-call__details').textContent).toBe(command)
-    expect(root.textContent).toContain(currentDirectory)
-    expect(root.textContent).toContain('Begründung des Agenten: Der Befehl prüft die Projektdateien.')
+    expect(root.querySelector('.tool-presentation dt').textContent).toBe('Befehl')
+    expect(root.textContent).not.toContain('Ausführungskontext')
+    expect(root.textContent.split(command)).toHaveLength(2)
+    expect(root.textContent.split(currentDirectory)).toHaveLength(2)
+    expect(root.textContent).toContain('Der Befehl prüft die Projektdateien.')
     expect(root.querySelector('textarea, [contenteditable="true"]')).toBeNull()
-    expect(root.textContent).toContain(classification === 'read' ? 'Keine Schreibaktion erkannt' : 'Als schreibend eingestuft')
+    expect([...root.querySelectorAll('[aria-label="Angefragte Rechte"] .q-chip')].map((chip) => chip.textContent))
+      .toEqual(classification === 'read' ? ['Lesen'] : ['Lesen', 'Schreiben'])
+    expect(root.textContent).not.toContain('Hohes Risiko')
     expect(root.textContent).not.toContain('Analyse unvollständig')
     expect(root.textContent).not.toContain('Erkannte Befehlspräfixe')
     expect(root.textContent).not.toContain('Technische Details')
+    expect(root.querySelector('.q-expansion-item')).toBeNull()
     expect(api.post).not.toHaveBeenCalled()
     root.querySelector('.q-checkbox').click()
     await nextTick()
-    expect(root.textContent).toContain('Exakter Shell-Befehl auf diesem Computer mit gleichem Arbeitsverzeichnis und gleicher Umgebung')
+    expect(root.textContent).toContain('Freigabe für: Diesen Befehl')
+    expect(root.textContent).not.toContain('Gilt bis zum Widerruf.')
     const allow = [...root.querySelectorAll('button')].find((button) => button.textContent === 'Für Session erlauben')
     expect(allow).toBeTruthy()
     allow.click()
     await nextTick()
     expect(api.post).toHaveBeenCalledWith('/approvals/shell/decisions', { decision: 'allow_session' })
+  })
+
+  it('keeps integration content and the wider grant resource visible', async () => {
+    await mountApproval({
+      id: 'calendar', requestType: 'agent_action', title: 'Termin ändern?', riskLevel: 'high',
+      resourceType: 'integration_operation', resourceDisplay: 'Kalender „Persönlich“ · Konto „Privat“',
+      availableDecisions: ['allow_once', 'allow_session', 'deny'],
+      payload: {
+        sessionGrants: [{ category: 'write', resourceType: 'integration_resource' }],
+        displayItems: [
+          { label: 'Termin', value: 'Zahnarzt', format: 'text' },
+          { label: 'Änderungen', value: ['Dienstag, 10:00 → Mittwoch, 14:00'], format: 'list' }
+        ],
+        grantOptions: [{
+          id: 'requested', display: ['Lesen und Schreiben: Kalender „Persönlich“ · Konto „Privat“'],
+          scopeDisplay: ['Kalender „Persönlich“ · Konto „Privat“']
+        }]
+      }
+    })
+    expect(root.textContent).toMatch(/Zahnarzt.*Mittwoch, 14:00.*Freigabe für: Kalender „Persönlich“ · Konto „Privat“.*Lesen.*Schreiben/s)
+    expect(root.textContent.split('Kalender „Persönlich“ · Konto „Privat“')).toHaveLength(2)
+    expect(root.querySelector('.tool-presentation li')?.textContent).toBe('Dienstag, 10:00 → Mittwoch, 14:00')
   })
 
   it('shows long memory content in tool details', async () => {
@@ -222,6 +268,15 @@ describe('approval card', () => {
       details: { tool: 'memory_write', arguments: { content } }
     })
     expect(root.querySelector('.tool-call__details').textContent).toBe(content)
+  })
+
+  it.each([false, true])('shows file content only for exact action consent (runActionOnly=%s)', async (runActionOnly) => {
+    await mountApproval({
+      ...responses['/approvals/pending'][0], capability: 'filesystem.write',
+      availableDecisions: runActionOnly ? ['allow_once', 'deny'] : ['allow_once', 'allow_session', 'deny'],
+      payload: { runActionOnly, displayItems: [{ label: 'Änderungen', value: '8080 → 8090', format: 'text' }] }
+    })
+    expect(root.textContent.includes('8080 → 8090')).toBe(runActionOnly)
   })
 
   it('edits a shell command and approves the final value in one action', async () => {
@@ -240,13 +295,13 @@ describe('approval card', () => {
       },
       details: { tool: 'shell_run', arguments: { command: 'ls' } }
     })
-    button(root, 'Argumente bearbeiten').click()
+    root.querySelector('[aria-label="Argumente bearbeiten"]').click()
     await nextTick()
     const command = root.querySelector('textarea')
     command.value = 'pwd'
     command.dispatchEvent(new Event('input', { bubbles: true }))
     await nextTick()
-    expect(root.textContent).not.toContain('Keine Schreibaktion erkannt')
+    expect(root.querySelector('[aria-label="Angefragte Rechte"]')).toBeNull()
     expect(root.querySelector('.q-checkbox')).toBeNull()
     button(root, 'Für diesen Lauf erlauben').click()
     await vi.waitFor(() => expect(api.post).toHaveBeenCalled())

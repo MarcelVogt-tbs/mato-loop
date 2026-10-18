@@ -268,7 +268,9 @@ async def _create_automation(
                 f'{"aktivieren" if arguments.enabled else "deaktiviert speichern"}.'
             ),
             display_items=(
-                PermissionDisplayItem("Aufgabe", arguments.task, "code"),
+                PermissionDisplayItem("Name", arguments.name),
+                PermissionDisplayItem("Status", "Wird aktiviert." if arguments.enabled else "Wird deaktiviert gespeichert."),
+                PermissionDisplayItem("Aufgabe", arguments.task),
                 PermissionDisplayItem(
                     "Zeitpläne", _automation_schedule_lines(schedules), "list"
                 ),

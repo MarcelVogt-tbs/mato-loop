@@ -7,7 +7,16 @@ from mato_loop_backend.agent.activity import (
     reasoning_activity_label,
     run_activity_label,
 )
-from mato_loop_backend.tools.display import tool_display
+from mato_loop_backend.tools.display import format_duration_minutes, tool_display
+
+
+@pytest.mark.parametrize("minutes,expected", [
+    (0, "0 Minuten"),
+    (1, "1 Minute"),
+    (23_224, "2 Wochen 2 Tage 3 Stunden 4 Minuten"),
+])
+def test_duration_display_keeps_whole_minutes(minutes, expected):
+    assert format_duration_minutes(minutes) == expected
 
 
 @pytest.mark.parametrize(

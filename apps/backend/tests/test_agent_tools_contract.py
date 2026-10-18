@@ -1720,6 +1720,8 @@ async def test_create_automation_approval_uses_current_session_boundaries(
     permission = context.ask_handler.await_args.args[0]
     assert permission.capability == "automation.create"
     assert permission.title == "Automation erstellen?"
+    assert next(item.value for item in permission.display_items if item.label == "Status") == "Wird aktiviert."
+    assert next(item.format for item in permission.display_items if item.label == "Aufgabe") == "text"
     assert permission.approval_details["automationPreview"]["sessionId"] == str(context.session.id)
     if manual:
         assert permission.approval_details["automationPreview"]["schedules"] == []

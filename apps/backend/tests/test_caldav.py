@@ -543,7 +543,7 @@ def test_calendar_permissions_describe_the_requested_action() -> None:
             description="Nächste Schritte abstimmen",
             location="Raum 2",
             timing=timing,
-            reminders_minutes_before=[15, 60],
+            reminders_minutes_before=[15, 60, 180, 10080],
         ),
         context,
     )[0]
@@ -560,7 +560,7 @@ def test_calendar_permissions_describe_the_requested_action() -> None:
         ("Zeitpunkt", "07.08.2026, 14:00 bis 15:00 Uhr (UTC+00:00)", "text"),
         ("Ort", "Raum 2", "text"),
         ("Beschreibung", "Nächste Schritte abstimmen", "text"),
-        ("Erinnerungen", ("15 Minuten vorher", "60 Minuten vorher"), "list"),
+        ("Erinnerungen", ("15 Minuten vorher", "1 Stunde vorher", "3 Stunden vorher", "1 Woche vorher"), "list"),
     ]
 
     event = CalDavEvent(
@@ -581,6 +581,7 @@ def test_calendar_permissions_describe_the_requested_action() -> None:
             calendar_key=key,
             event_token=token,
             location=None,
+            reminders_minutes_before=[1440, 90],
         ),
         context,
     )[0]
@@ -597,7 +598,7 @@ def test_calendar_permissions_describe_the_requested_action() -> None:
     assert [(item.label, item.value) for item in update.display_items] == [
         ("Termin", "Alter Titel"),
         ("Bisheriger Zeitpunkt", "08.08.2026 (ganztägig)"),
-        ("Änderungen", ("Ort entfernen",)),
+        ("Änderungen", ("Ort entfernen", "Erinnerungen 1 Tag vorher, 1 Stunde 30 Minuten vorher setzen")),
     ]
     assert delete.summary == 'Der Agent möchte den Termin "Alter Titel" löschen.'
     assert [(item.label, item.value) for item in delete.display_items] == [

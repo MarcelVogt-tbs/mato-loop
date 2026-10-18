@@ -47,6 +47,7 @@ from mato_loop_backend.permissions.policy import (
     project_session_path_permission,
     session_browse_permission,
     session_grant_options,
+    session_grant_options_payload,
     session_grants_display,
     session_permission,
     session_search_permission,
@@ -512,6 +513,10 @@ def test_computer_parent_option_stops_at_the_root(tmp_path, path, parent_path):
     options = session_grant_options(request)
     assert {key: json.loads(value.effective_session_grants[0].resource_scope)["path"]
             for key, value in options.items()} == ({"requested": path, "parent": parent_path} if parent_path else {"requested": path})
+    assert {option["id"]: option["scopeDisplay"] for option in session_grant_options_payload(request)} == {
+        key: [f'Pfad „{value.effective_session_grants[0].resource_display}“ einschließlich Unterpfaden']
+        for key, value in options.items()
+    }
 
 
 @pytest.mark.parametrize("path, parent_path", [("docs/file", "docs"), ("file", "."), (".", None)])
@@ -540,6 +545,8 @@ def test_shell_scope_choice_controls_reuse(tmp_path, scope):
 
     roots = _root_files(tmp_path, _session())
     grant = _grant(session_grant_options(request())[scope])
+    option = next(option for option in session_grant_options_payload(request()) if option["id"] == scope)
+    assert option["scopeDisplay"] == ["Diesen Befehl" if scope == "requested" else "Shell auf diesem Computer"]
     assert [PermissionPolicy.grant_matches(grant, target, roots) for target in (
         request(), request(category="read"), request(command="touch another"), request(directory="/other"),
         request(environment={"MODE": "test"}), request(agent=uuid4()),
@@ -558,6 +565,7 @@ def test_restricted_requests_have_no_broader_options():
 def test_administrator_shell_grant_display_names_its_category(category, label):
     request = administrator_permission(uuid4(), "/work", capability=f"shell.{category}", command="touch new; rm old")
     assert session_grants_display(request) == [f"{label} · Diesen Shell-Befehl als Administrator ausführen: touch new; rm old · Arbeitsverzeichnis: /work"]
+    assert session_grant_options_payload(request)[0]["scopeDisplay"] == ["Diesen Befehl"]
 
 
 @pytest.mark.parametrize("legacy", [False, True])

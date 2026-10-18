@@ -73,12 +73,14 @@ export function approvalResource(approval, sessions = []) {
   if (['shell_command', 'shell_action', 'execution_administrator'].includes(approval?.resourceType)) {
     return {
       label: approval?.resourceType === 'shell_action' || approval?.actionKind === 'shell_run' ? 'Arbeitsverzeichnis' : 'Datei oder Ordner',
+      format: 'code',
       value: approval?.currentDirectory || approval?.resourceDisplay || 'Pfad nicht verfügbar'
     }
   }
   if (['path', 'root_path', 'execution_root_path', 'execution_path', 'session_path', 'administrator_path'].includes(approval?.resourceType)) {
     return {
       label: 'Datei oder Ordner',
+      format: 'code',
       value: approval?.resourceDisplay || (approval?.resourceType === 'path' ? scope : '') || 'Pfad nicht verfügbar'
     }
   }
@@ -86,6 +88,7 @@ export function approvalResource(approval, sessions = []) {
     return {
       label: approval?.capability?.startsWith('filesystem.') || approval?.capability === 'file.provide'
         ? 'Datei oder Ordner' : 'Ordner und Unterordner',
+      format: 'code',
       value: approval?.resourceDisplay || 'Pfad nicht verfügbar'
     }
   }
@@ -98,6 +101,7 @@ export function approvalResource(approval, sessions = []) {
   if (approval?.resourceType === 'execution_workspace') {
     return {
       label: 'Aktueller Ordner',
+      format: 'code',
       value: approval?.resourceDisplay || 'Ausgewählter Computer'
     }
   }
@@ -177,13 +181,15 @@ export function approvalResource(approval, sessions = []) {
   if (approval?.resourceType === 'automation') {
     return { label: 'Automation', value: approval?.resourceDisplay || 'Ausgewählte Automation' }
   }
+  if (approval?.resourceType === 'project_session_path') {
+    return { label: 'Datei einer Projekt-Session', value: approval?.resourceDisplay || 'Ausgewählter Bereich', format: 'code' }
+  }
   const label = {
     execution_agent_collection: 'Computer',
     media_model: 'Medienmodell',
     agent_identity: 'Agent-Persona',
     personal_settings: 'Persönliche Einstellungen',
-    project: 'Projekt',
-    project_session_path: 'Datei einer Projekt-Session'
+    project: 'Projekt'
   }[approval?.resourceType]
   return {
     label: label || 'Angeforderte Ressource',
@@ -191,23 +197,43 @@ export function approvalResource(approval, sessions = []) {
   }
 }
 
-export function shellClassificationDisplay(approval) {
-  const labels = { read: 'Lesen', write: 'Schreiben', delete: 'Löschen' }
-  const categories = approval?.payload?.shellCategories
-  if (Array.isArray(categories) && categories.length && categories.every(category => Object.hasOwn(labels, category))) {
-    return {
-      color: categories.includes('delete') ? 'negative' : categories.includes('write') ? 'warning' : 'primary',
-      label: `Einstufung: ${categories.map(category => labels[category]).join(', ')}`,
-      incomplete: approval.payload.shellAnalysisComplete === false
-    }
+export function approvalActionDisplay(approval) {
+  const payload = approval?.payload || approval?.details || {}
+  const chips = {
+    read: { label: 'Lesen', color: '#547457', darkColor: '#a4bca8' },
+    read_sensitive: { label: 'Vertrauliche Daten lesen', color: '#817047', darkColor: '#c4b286' },
+    write: { label: 'Schreiben', color: '#817047', darkColor: '#c4b286' },
+    delete: { label: 'Löschen', color: '#996464', darkColor: '#cfa1a1' },
+    navigate: { label: 'Navigieren', color: '#6e6e6e', darkColor: '#bbbbbb' }
   }
-  const classification = approval?.payload?.shellClassification
-  if (!['read', 'write'].includes(classification)) return null
+  const shellCategories = payload.shellCategories
+  // A shell inspection can report more categories than this particular grant authorizes.
+  const categories = payload.sessionGrants?.length
+    ? payload.sessionGrants.map((grant) => grant.category)
+    : Array.isArray(shellCategories) && shellCategories.length
+      ? shellCategories
+      : ['read', 'write'].includes(payload.shellClassification) ? [payload.shellClassification] : []
+  if (!categories.length || categories.some((category) => !Object.hasOwn(chips, category))) return null
+  const unique = [...new Set(categories.flatMap((category) => category === 'write' ? ['read', 'write'] : [category]))]
   return {
-    color: classification === 'read' ? 'primary' : 'warning',
-    label: classification === 'read' ? 'Keine Schreibaktion erkannt' : 'Als schreibend eingestuft',
-    incomplete: approval.payload.shellAnalysisComplete === false
+    chips: unique.map((category) => chips[category]),
+    incomplete: payload.shellAnalysisComplete === false
   }
+}
+
+export function approvalGrantOptions(approval) {
+  const payload = approval?.payload || approval?.details || {}
+  return (payload.grantOptions || []).map((option) => {
+    if (option.id === 'requested' && ['shell_command', 'execution_administrator'].includes(approval.resourceType)
+      && approval.actionKind === 'shell_run'
+      && (!option.scopeDisplay?.length || approval.resourceType === 'execution_administrator')) {
+      return { id: option.id, label: 'Diesen Befehl' }
+    }
+    if (option.scopeDisplay?.length) {
+      return { id: option.id, label: option.scopeDisplay.join(' · ') }
+    }
+    return { id: option.id, label: option.display?.join(' · ') || option.label }
+  })
 }
 
 function sanitize(value, depth, seen, key = '', truncate = true) {

@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest'
 
 import {
   approvalResource,
+  approvalActionDisplay,
+  approvalGrantOptions,
   memoryApprovalDisplay,
   permissionGrantDisplay,
-  shellClassificationDisplay,
   technicalDetailsDisplay
 } from '../src/utils/approval-display'
 
@@ -49,6 +50,7 @@ describe('approval display', () => {
   it('keeps file scopes prominent and unchanged', () => {
     expect(approvalResource({ resourceType: 'path', resourceScope: 'Projekte/demo.txt' })).toEqual({
       label: 'Datei oder Ordner',
+      format: 'code',
       value: 'Projekte/demo.txt'
     })
   })
@@ -83,7 +85,7 @@ describe('approval display', () => {
       resourceType: 'execution_directory',
       resourceScope: 'opaque',
       resourceDisplay: '/home/user/projekt'
-    })).toEqual({ label: 'Ordner und Unterordner', value: '/home/user/projekt' })
+    })).toEqual({ label: 'Ordner und Unterordner', value: '/home/user/projekt', format: 'code' })
     expect(approvalResource({
       resourceType: 'execution_agent',
       resourceDisplay: 'Notebook'
@@ -92,12 +94,12 @@ describe('approval display', () => {
       resourceType: 'execution_workspace',
       resourceScope: '{opaque}',
       resourceDisplay: '/home/user/projekt'
-    })).toEqual({ label: 'Aktueller Ordner', value: '/home/user/projekt' })
+    })).toEqual({ label: 'Aktueller Ordner', value: '/home/user/projekt', format: 'code' })
     expect(approvalResource({
       resourceType: 'root_path',
       resourceScope: '{opaque}',
       resourceDisplay: 'session:plan.md'
-    })).toEqual({ label: 'Datei oder Ordner', value: 'session:plan.md' })
+    })).toEqual({ label: 'Datei oder Ordner', value: 'session:plan.md', format: 'code' })
 
     expect(permissionGrantDisplay({
       capability: 'execution.directory',
@@ -126,8 +128,14 @@ describe('approval display', () => {
   })
 
   it('shows mixed shell categories instead of hiding deletion behind write', () => {
-    expect(shellClassificationDisplay({ payload: { shellCategories: ['write', 'delete'] } }))
-      .toEqual({ color: 'negative', label: 'Einstufung: Schreiben, Löschen', incomplete: false })
+    expect(approvalActionDisplay({ payload: { shellCategories: ['write', 'delete'] } }))
+      .toMatchObject({ chips: [{ label: 'Lesen' }, { label: 'Schreiben' }, { label: 'Löschen' }], incomplete: false })
+  })
+
+  it('does not advertise additional inspected categories as part of the requested grant', () => {
+    expect(approvalActionDisplay({ payload: {
+      shellCategories: ['write', 'delete'], sessionGrants: [{ category: 'write' }]
+    } })?.chips.map((chip) => chip.label)).toEqual(['Lesen', 'Schreiben'])
   })
 
   it('labels computer-bound shell grants separately from file grants', () => {
@@ -136,9 +144,9 @@ describe('approval display', () => {
   })
 
   it.each([
-    ['read', 'primary', 'Keine Schreibaktion erkannt'],
-    ['write', 'warning', 'Als schreibend eingestuft']
-  ])('keeps %s classification independent of analysis completeness', (classification, color, label) => {
+    ['read', ['Lesen']],
+    ['write', ['Lesen', 'Schreiben']]
+  ])('keeps %s classification independent of analysis completeness', (classification, labels) => {
     for (const complete of [true, false, undefined, null]) {
       const approval = Object.freeze({
         title: 'Gespeicherter historischer Titel',
@@ -148,8 +156,8 @@ describe('approval display', () => {
           ...(complete === undefined ? {} : { shellAnalysisComplete: complete })
         })
       })
-      expect(shellClassificationDisplay(approval)).toEqual({
-        color, label, incomplete: complete === false
+      expect(approvalActionDisplay(approval)).toMatchObject({
+        chips: labels.map((label) => ({ label })), incomplete: complete === false
       })
     }
   })
@@ -162,8 +170,31 @@ describe('approval display', () => {
       { payload: { shellClassification: 'unknown', shellAnalysisComplete: false } },
       { capability: 'filesystem.write' }
     ]) {
-      expect(shellClassificationDisplay(approval)).toBeNull()
+      expect(approvalActionDisplay(approval)).toBeNull()
     }
+  })
+
+  it.each([
+    ['read', ['Lesen']], ['read_sensitive', ['Vertrauliche Daten lesen']],
+    ['write', ['Lesen', 'Schreiben']], ['delete', ['Löschen']], ['navigate', ['Navigieren']]
+  ])('uses the declared %s category for any resource type', (category, labels) => {
+    expect(approvalActionDisplay({ payload: { sessionGrants: [{ category }] } })?.chips.map((chip) => chip.label)).toEqual(labels)
+  })
+
+  it('retains the full description for grant options without compact scope data', () => {
+    expect(approvalGrantOptions({ payload: { grantOptions: [{
+      id: 'requested', label: 'Angefragter Bereich', display: ['Lesen: unbekannte Ressource']
+    }] } })[0].label).toBe('Lesen: unbekannte Ressource')
+  })
+
+  it('omits duplicate administrator rights from stored shell scope labels', () => {
+    expect(approvalGrantOptions({
+      resourceType: 'execution_administrator', actionKind: 'shell_run',
+      payload: { grantOptions: [{
+        id: 'requested', scopeDisplay: ['Diesen Befehl mit Administratorrechten'],
+        scopeHint: 'Nur im angezeigten Ausführungskontext.', caption: 'Gilt bis zum Widerruf.'
+      }] }
+    })[0]).toEqual({ id: 'requested', label: 'Diesen Befehl' })
   })
 
   it('shows cleaned URL approvals', () => {

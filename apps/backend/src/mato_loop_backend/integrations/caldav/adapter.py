@@ -41,6 +41,7 @@ from mato_loop_backend.settings import (
     SettingsStore,
 )
 from mato_loop_backend.tools.actions import ApprovalEditField, ToolAction
+from mato_loop_backend.tools.display import format_duration_minutes
 from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 CALDAV_CREDENTIAL_KIND = "caldav.password"
@@ -1457,7 +1458,7 @@ def _create_permission(arguments: CalendarCreateEventArguments, context: Any) ->
     if arguments.reminders_minutes_before:
         items.append(PermissionDisplayItem(
             "Erinnerungen",
-            tuple(f"{minutes} Minuten vorher" for minutes in arguments.reminders_minutes_before),
+            tuple(f"{format_duration_minutes(minutes)} vorher" for minutes in arguments.reminders_minutes_before),
             format="list",
         ))
     return _permission(
@@ -1504,7 +1505,7 @@ def _update_permission(arguments: CalendarUpdateEventArguments, context: Any) ->
                 if not arguments.reminders_minutes_before
                 else "Erinnerungen "
                 + ", ".join(
-                    f"{minutes} Minuten vorher"
+                    f"{format_duration_minutes(minutes)} vorher"
                     for minutes in arguments.reminders_minutes_before
                 )
                 + " setzen"

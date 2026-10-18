@@ -6,7 +6,8 @@
   overflow-wrap: anywhere;
 }
 
-.approval-resource .tool-call__details {
+.approval-resource .tool-call__details,
+.approval-content .tool-call__details {
   padding: 0;
   border: 0;
   background: transparent;
@@ -23,8 +24,20 @@
 }
 
 .approval-card {
-  border-color: color-mix(in srgb, var(--q-warning) 45%, var(--app-surface-border));
   overflow-wrap: anywhere;
+}
+
+.approval-action {
+  border-radius: 8px;
+}
+
+.approval-grant {
+  gap: 8px;
+}
+
+.approval-grant__scope {
+  flex: 1 1 18rem;
+  min-width: 0;
 }
 
 .app-surface-tonal {

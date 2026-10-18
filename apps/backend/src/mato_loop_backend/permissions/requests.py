@@ -53,11 +53,6 @@ async def request_approval(
                 permission, title=f"Administratorzugriff auf „{agent.display_name}“ erlauben?" if permission.resource_type == "execution_administrator" else permission.title,
                 display_items=tuple(replace(item, value=agent.display_name) if item.label == "Computer" else item for item in permission.display_items),
             )
-    grant_payload = session_grants_payload(permission)
-    available_decisions = [
-        decision for decision in permission.available_decisions
-        if decision != "allow_session" or grant_payload
-    ]
     resource_display = permission.resource_display
     if (
         resource_display is None
@@ -71,6 +66,12 @@ async def request_approval(
                 ChatSession.session_type == "chat",
             )
         )
+        permission = replace(permission, resource_display=resource_display)
+    grant_payload = session_grants_payload(permission)
+    available_decisions = [
+        decision for decision in permission.available_decisions
+        if decision != "allow_session" or grant_payload
+    ]
     reason = call.arguments.get(PERMISSION_REASON_ARGUMENT)
     if not isinstance(reason, str) or not (reason := reason.strip()):
         reason = "Keine Begründung angegeben"

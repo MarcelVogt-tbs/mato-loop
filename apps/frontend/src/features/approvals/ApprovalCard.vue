@@ -1,21 +1,15 @@
 <template>
   <q-card flat class="approval-card app-surface">
     <SubagentRequestLink :request="approval" />
-    <q-card-section class="row items-start no-wrap q-gutter-md">
-      <q-avatar :color="riskColor" text-color="white" :icon="actionIcon" />
-      <div class="col">
-        <div class="row items-center q-gutter-sm">
-          <div class="text-subtitle1 text-weight-bold">{{ cardTitle }}</div>
-          <q-chip v-if="isMemoryRemove || approval.riskLevel === 'high'" dense square color="negative" text-color="white">Hohes Risiko</q-chip>
-        </div>
-        <div class="text-body2 app-muted q-mt-xs">{{ cardSummary }}</div>
-        <div v-if="!isMemoryApproval && approval.reason && approval.reason !== 'Keine Begründung angegeben'" class="text-body2 q-mt-sm">
-          <span class="text-weight-medium">Begründung des Agenten:</span> {{ approval.reason }}
-        </div>
+    <q-card-section class="q-pa-md q-pb-sm">
+      <div class="row items-center no-wrap">
+        <q-icon :name="actionIcon" :color="isMemoryRemove ? 'negative' : 'primary'" size="24px" class="q-mr-sm" />
+        <div class="text-subtitle1 text-weight-bold">{{ cardTitle }}</div>
       </div>
+      <div v-if="!isMemoryApproval && approval.reason && approval.reason !== 'Keine Begründung angegeben'" class="text-body2 q-mt-sm">{{ approval.reason }}</div>
     </q-card-section>
 
-    <q-card-section class="q-pt-none">
+    <q-card-section class="q-px-md q-pt-none q-pb-md">
       <template v-if="isMemoryApproval">
         <q-banner v-if="invalidMemoryApproval" rounded class="bg-negative text-white q-mb-md" role="alert">
           Dieser Memory-Vorschlag ist unvollständig und kann nicht genehmigt werden.
@@ -28,13 +22,10 @@
         >
           <div class="text-body2">{{ memory.content }}</div>
           <div class="row items-center q-gutter-xs q-mt-sm">
-            <q-chip dense square>{{ memoryCategoryLabel(memory.category) }}</q-chip>
-            <q-chip dense square :icon="memoryAudienceIcon(memory.audience)">
-              {{ memoryAudienceLabel(memory.audience) }}
-            </q-chip>
-            <q-chip dense square :icon="memory.pinned ? 'push_pin' : 'bookmark_border'">
+            <div class="text-caption app-muted">
+              {{ memoryCategoryLabel(memory.category) }} · {{ memoryAudienceLabel(memory.audience) }} ·
               {{ memory.pinned ? 'Immer im Kontext' : 'Bei passender Anfrage' }}
-            </q-chip>
+            </div>
           </div>
         </div>
         <q-banner v-if="isMemoryRemove" rounded class="bg-negative text-white q-mt-md" role="alert">
@@ -43,16 +34,14 @@
         </q-banner>
         <div v-if="approval.actionKind !== 'memory_pin' && memoryPayload.after" class="q-mt-md">
           <div class="row items-center q-gutter-xs q-mb-xs">
-            <div class="text-caption app-muted">Vorgeschlagenes Ergebnis</div>
+            <div class="text-caption app-muted">Neu</div>
             <q-btn
               v-if="canEditMemory && !memoryEdit"
               flat round dense icon="edit" color="primary"
               aria-label="Vorschlag bearbeiten"
               :disable="Boolean(loadingDecision)"
               @click="startMemoryEdit"
-            >
-              <q-tooltip>Vorschlag bearbeiten</q-tooltip>
-            </q-btn>
+            />
             <q-btn
               v-if="memoryEdit"
               flat dense no-caps icon="undo" label="Bearbeitung verwerfen"
@@ -93,13 +82,10 @@
           <div v-else class="approval-resource">
             <div class="text-body2">{{ memoryPayload.after.content }}</div>
             <div class="row items-center q-gutter-xs q-mt-sm">
-              <q-chip dense square>{{ memoryCategoryLabel(memoryPayload.after.category) }}</q-chip>
-              <q-chip dense square :icon="memoryAudienceIcon(memoryPayload.after.audience)">
-                {{ memoryAudienceLabel(memoryPayload.after.audience) }}
-              </q-chip>
-              <q-chip dense square :icon="memoryPinned ? 'push_pin' : 'bookmark_border'">
+              <div class="text-caption app-muted">
+                {{ memoryCategoryLabel(memoryPayload.after.category) }} · {{ memoryAudienceLabel(memoryPayload.after.audience) }} ·
                 {{ memoryPinned ? 'Immer im Kontext' : 'Bei passender Anfrage' }}
-              </q-chip>
+              </div>
             </div>
           </div>
         </div>
@@ -110,9 +96,11 @@
         </q-banner>
       </template>
       <template v-else>
-        <div class="approval-resource">
-          <div class="text-caption app-muted">{{ resource.label }}</div>
-          <code>{{ resource.value }}</code>
+        <div class="approval-content">
+          <div v-if="!resourceInGrant || computer" class="text-body2 app-muted">
+            <span v-if="computer">{{ computer }}<span v-if="!resourceInGrant"> · </span></span>
+            <component v-if="!resourceInGrant" :is="resource.format === 'code' ? 'code' : 'span'" :aria-label="resource.label">{{ resource.value }}</component>
+          </div>
           <div v-if="approval.capability === 'session.read' && approval.resourceType === 'session' && approval.resourceScope">
             <q-btn
               flat
@@ -127,66 +115,41 @@
               class="q-mt-sm"
             />
           </div>
-          <ToolPresentation
-            v-if="presentation.items.length"
-            :items="presentation.items"
-            :kind="approvalPresentationKind"
-            embedded
-            class="q-mt-md"
-          />
-          <div v-if="canEditArguments" class="q-mt-md">
-            <div class="row items-center q-gutter-sm">
+          <div v-if="presentation.items.length || canEditArguments" class="approval-action app-surface-tonal q-pa-sm q-mt-sm">
+            <div class="row items-start no-wrap q-gutter-sm">
+              <div class="col">
+                <ToolPresentation
+                  v-if="presentation.items.length"
+                  :items="presentation.items"
+                  :kind="approvalPresentationKind"
+                />
+              </div>
               <q-btn
-                v-if="!argumentEdit"
-                outline
-                dense
-                no-caps
-                color="primary"
-                icon="edit"
-                label="Argumente bearbeiten"
+                v-if="canEditArguments"
+                flat round dense
+                :icon="argumentEdit ? 'undo' : 'edit'"
+                :aria-label="argumentEdit ? 'Bearbeitung verwerfen' : 'Argumente bearbeiten'"
                 :disable="Boolean(loadingDecision)"
-                @click="startArgumentEdit"
-              />
-              <q-btn
-                v-else
-                flat
-                dense
-                no-caps
-                icon="undo"
-                label="Bearbeitung verwerfen"
-                :disable="Boolean(loadingDecision)"
-                @click="argumentEdit = null"
+                @click="argumentEdit ? argumentEdit = null : startArgumentEdit()"
               />
             </div>
-            <q-form v-if="argumentEdit" ref="argumentFormRef" class="q-mt-md">
-              <q-input dense
-                v-for="field in argumentEdit"
-                :key="field.path.join('.')"
-                v-model="field.value"
-                outlined
-                :type="field.inputType"
-                :label="field.label"
-                :autogrow="field.inputType === 'textarea'"
-                :maxlength="field.maxLength"
-                :disable="Boolean(loadingDecision)"
-                :rules="argumentRules(field)"
-                class="q-mb-sm"
-              />
-              <q-banner v-if="argumentEditDirty" rounded class="app-surface-tonal">
-                Die bearbeitete Aktion wird erneut validiert und mit diesen Werten für den aktuellen Lauf freigegeben.
-              </q-banner>
-            </q-form>
           </div>
-          <div v-if="shellClassification && !argumentEditDirty" class="q-mt-md">
-            <q-chip
-              dense
-              square
-              :color="shellClassification.color"
-              text-color="white"
-              :label="shellClassification.label"
+          <q-form v-if="argumentEdit" ref="argumentFormRef" class="q-mt-sm">
+            <q-input dense
+              v-for="field in argumentEdit"
+              :key="field.path.join('.')"
+              v-model="field.value"
+              outlined
+              :type="field.inputType"
+              :label="field.label"
+              :autogrow="field.inputType === 'textarea'"
+              :maxlength="field.maxLength"
+              :disable="Boolean(loadingDecision)"
+              :rules="argumentRules(field)"
+              class="q-mb-sm"
             />
-            <q-chip v-if="shellClassification.incomplete" dense square outline label="Analyse unvollständig" />
-          </div>
+          </q-form>
+          <div v-if="actionDisplay?.incomplete && !argumentEditDirty" class="text-caption q-mt-sm">Analyse unvollständig: Nicht alle Befehle und Pfade konnten geprüft werden.</div>
         </div>
         <div v-if="skillPreview" class="approval-resource q-mt-md">
           <div class="text-caption app-muted">Skill-Vorschau</div>
@@ -224,41 +187,55 @@
       </template>
     </q-card-section>
 
-    <q-separator />
-    <q-card-actions class="q-pa-md">
-      <div v-if="!isMemoryApproval && hasDecision('allow_session') && !argumentEditDirty" class="column col-12">
+    <q-card-section v-if="!isMemoryApproval && (hasDecision('allow_once') || hasDecision('allow_session'))" class="q-px-md q-py-none">
+      <div class="approval-grant row items-center q-mb-sm">
         <app-select
-          v-if="grantOptions.length > 1"
+          v-if="grantOptions.length > 1 && !argumentEditDirty"
           v-model="grantOption"
           outlined
           emit-value
           map-options
           option-value="id"
-          label="Gilt für"
+          label="Freigabe für"
           :options="grantOptions"
           :disable="Boolean(loadingDecision) || matchingDraftDirty"
-          class="q-mb-md"
-        />
-        <q-checkbox dense
-          v-if="hasBothAllowDecisions"
-          v-model="rememberForSession"
-          color="primary"
-          label="Für diese Session merken"
-          :disable="Boolean(loadingDecision) || matchingDraftDirty"
-        />
-        <ul class="text-body2 q-my-sm q-pl-md">
-          <li v-for="line in sessionGrantDisplay" :key="line">{{ line }}</li>
-        </ul>
-        <div v-if="rememberForSession || !hasBothAllowDecisions" class="text-caption app-muted q-ml-sm">
-          Gilt bis zum Widerruf.
+          class="approval-grant__scope"
+        >
+          <template #selected><span class="col">{{ grantDisplay.label }}</span></template>
+        </app-select>
+        <div v-else-if="grantDisplay.label" class="text-body2">
+          <span class="app-muted">Freigabe für:</span> {{ grantDisplay.label }}
         </div>
-        <div v-else class="text-caption app-muted q-ml-sm">
-          Gilt bis zum Abschluss oder Abbruch dieses Laufs.
+        <div
+          v-if="(actionDisplay && !argumentEditDirty) || approval.resourceType === 'execution_administrator'"
+          class="row items-center"
+          role="group"
+          aria-label="Angefragte Rechte"
+        >
+          <template v-if="!argumentEditDirty">
+            <q-chip
+              v-for="chip in actionDisplay?.chips || []"
+              :key="chip.label"
+              dense outline size="11px" class="q-my-none"
+              :style="{ color: $q.dark.isActive ? chip.darkColor : chip.color }"
+            >{{ chip.label }}</q-chip>
+          </template>
+          <q-chip
+            v-if="approval.resourceType === 'execution_administrator'"
+            dense outline size="11px" class="q-my-none"
+            :style="{ color: $q.dark.isActive ? '#c4b286' : '#817047' }"
+          >Administratorrechte</q-chip>
         </div>
       </div>
-      <div v-else-if="argumentEditDirty" class="text-caption app-muted">
-        Gilt für die bearbeitete Aktion mit diesen Werten bis zum Ende dieses Laufs.
-      </div>
+    </q-card-section>
+    <q-card-actions class="q-px-md q-pt-sm q-pb-md">
+      <q-checkbox dense
+        v-if="!isMemoryApproval && hasBothAllowDecisions && !argumentEditDirty"
+        v-model="rememberForSession"
+        color="primary"
+        label="Für diese Session merken"
+        :disable="Boolean(loadingDecision) || matchingDraftDirty"
+      />
       <q-space />
       <q-btn
         v-if="hasDecision('deny')"
@@ -322,8 +299,9 @@ import SubagentRequestLink from 'src/features/subagents/SubagentRequestLink.vue'
 import { useConfirm } from 'src/composables/confirm'
 import {
   approvalResource,
-  memoryApprovalDisplay,
-  shellClassificationDisplay
+  approvalActionDisplay,
+  approvalGrantOptions,
+  memoryApprovalDisplay
 } from 'src/utils/approval-display'
 import {
   approvalPresentationKind as resolveApprovalPresentationKind,
@@ -360,13 +338,15 @@ const memoryAudienceOptions = ['private_only', 'public_only', 'both']
   .map((value) => ({ value, label: memoryAudienceLabel(value) }))
 const rememberForSession = ref(false)
 const grantOption = ref('requested')
-const grantOptions = computed(() => (
-  props.approval.payload?.grantOptions || props.approval.details?.grantOptions || []
-).map((option) => ({ ...option, caption: option.display.join(' · ') })))
-const shellClassification = computed(() => shellClassificationDisplay(props.approval))
-const sessionGrantDisplay = computed(() => grantOptions.value.find((option) => option.id === grantOption.value)?.display || (
-  props.approval.details?.displayItems || props.approval.payload?.displayItems || []
-).find((item) => ['Freigegebener Bereich', 'Für diese Session'].includes(item.label))?.value || [])
+const grantOptions = computed(() => approvalGrantOptions(props.approval))
+const actionDisplay = computed(() => approvalActionDisplay(props.approval))
+const grantDisplay = computed(() => {
+  if (argumentEditDirty.value || props.approval.payload?.runActionOnly) return { label: 'diese Aktion mit den angezeigten Werten' }
+  return grantOptions.value.find((option) => option.id === grantOption.value) || {
+    label: (props.approval.details?.displayItems || props.approval.payload?.displayItems || [])
+      .find((item) => ['Freigegebener Bereich', 'Für diese Session'].includes(item.label))?.value?.join(' · ') || ''
+  }
+})
 const argumentEditPayload = computed(() => props.approval.payload?.argumentEdit)
 const canEditArguments = computed(() => (
   props.approval.status === 'pending'
@@ -388,17 +368,18 @@ const canEditMemory = computed(() => isMemoryApproval.value
   && !invalidMemoryApproval.value && hasDecision('approve'))
 const invalidMemoryApproval = computed(() => isMemoryApproval.value && memoryDisplay.value.invalid)
 const isMemoryRemove = computed(() => isMemoryApproval.value && memoryDisplay.value.destructive)
-const cardTitle = computed(() => isMemoryApproval.value ? memoryDisplay.value.title : props.approval.title)
-const cardSummary = computed(() => isMemoryApproval.value ? memoryDisplay.value.summary : props.approval.summary)
+const permissionsOnly = computed(() => hasDecision('allow_session') && !hasDecision('allow_once'))
+const cardTitle = computed(() => isMemoryApproval.value ? memoryDisplay.value.title
+  : permissionsOnly.value ? props.approval.actionKind === 'shell_run' ? 'Shell-Zugriff freigeben' : 'Zugriff freigeben'
+  : props.approval.actionKind === 'shell_run' ? 'Shell-Befehl ausführen' : props.approval.title)
 const memoryTargetLabel = computed(() => memoryDisplay.value.targetLabel)
-const riskColor = computed(() => isMemoryRemove.value || props.approval.riskLevel === 'high' ? 'negative' : 'warning')
 const actionIcon = computed(() => {
   if (isMemoryApproval.value) return memoryDisplay.value.icon
   if (props.approval.capability?.startsWith('memory.')) return 'psychology'
-  if (props.approval.capability?.startsWith('filesystem')) return 'folder_managed'
+  if (props.approval.capability?.startsWith('filesystem') || props.approval.capability?.startsWith('session.files.')) return 'folder'
   if (props.approval.capability === 'execution.directory') return 'drive_file_move'
   if (props.approval.capability === 'system.info') return 'computer'
-  if (props.approval.capability === 'process.execute') return 'terminal'
+  if (props.approval.capability?.startsWith('shell.') || props.approval.capability === 'process.execute') return 'terminal'
   if (props.approval.capability === 'skills.load') return 'school'
   if (props.approval.actionKind === 'edit_skill') return 'edit_note'
   if (props.approval.capability === 'skills.write' || props.approval.actionKind === 'build_skill') return 'auto_awesome'
@@ -410,6 +391,9 @@ const actionIcon = computed(() => {
   return 'approval'
 })
 const resource = computed(() => approvalResource(props.approval, chat.cachedSessions))
+const resourceInGrant = computed(() => !argumentEditDirty.value
+  && (hasDecision('allow_once') || hasDecision('allow_session'))
+  && grantDisplay.value.label === resource.value.value)
 const skillDraftApproval = computed(() => (
   props.approval.actionKind === 'build_skill' || props.approval.actionKind === 'edit_skill'
 ))
@@ -418,10 +402,23 @@ const approvalTool = computed(() => ({
   arguments: props.approval.details?.arguments || props.approval.payload?.arguments
 }))
 const approvalPresentationKind = computed(() => resolveApprovalPresentationKind(approvalTool.value))
-const presentation = computed(() => toolPresentation(
-  approvalTool.value,
-  props.approval.details?.displayItems || props.approval.payload?.displayItems
-))
+const displayItems = computed(() => (
+  props.approval.details?.displayItems || props.approval.payload?.displayItems || []
+).filter((item) => !['Freigegebener Bereich', 'Für diese Session'].includes(item.label)))
+const computer = computed(() => displayItems.value.find((item) => item.label === 'Computer')?.value)
+const presentation = computed(() => {
+  const result = toolPresentation(approvalTool.value, displayItems.value)
+  const resourceLabels = [resource.value.label, 'Pfad', 'Datei', 'Ordner', 'Adresse', 'Arbeitsverzeichnis', 'Terminal-Ordner']
+  const fileAccess = ['filesystem.write', 'session.files.write'].includes(props.approval.capability)
+    && hasDecision('allow_session') && !props.approval.payload?.runActionOnly
+  const fileContentLabels = ['Änderungen', 'Vorher', 'Nachher', 'Dateiinhalt', 'Inhalt', 'Text', 'Patch']
+  return {
+    ...result,
+    items: result.items.filter((item) => item.label !== 'Computer'
+      && !(fileAccess && fileContentLabels.includes(item.label))
+      && !(resourceLabels.includes(item.label) && item.value === resource.value.value))
+  }
+})
 const skillPreview = computed(() => skillDraftApproval.value
   ? skills.draftReviews[props.approval.id] || props.approval.details?.skillPreview
   : null)
@@ -473,10 +470,6 @@ function memoryAudienceLabel(value) {
     public_only: 'Nur öffentliche Modelle',
     both: 'Öffentliche und private Modelle'
   })[value] || value || 'Ohne Modellzugriff'
-}
-
-function memoryAudienceIcon(value) {
-  return ({ private_only: 'lock', public_only: 'public', both: 'groups' })[value] || 'help_outline'
 }
 
 function startMemoryEdit() {

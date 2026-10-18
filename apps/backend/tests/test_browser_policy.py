@@ -339,6 +339,10 @@ async def test_multiple_asks_share_one_independent_guard_and_exact_source(browse
 
     async def approve(*args, **_kwargs):
         case.coordinator.snapshot.assert_awaited_once()
+        assert [(item.label, item.value) for item in args[-1].display_items] == [
+            ("Python-Code", code),
+            ("Zugriff", "Der Code kann auch Dateien und Programme auf dem Computer verwenden."),
+        ]
         details = args[-1].approval_details["browser"]
         assert details["code"] == code
         assert details["tabId"] == case.call.arguments["tabId"]

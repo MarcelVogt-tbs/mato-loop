@@ -1726,8 +1726,12 @@ def _permission(
     title: str,
     summary: str,
     resource: bool = False,
+    deletion_scope: str | None = None,
 ) -> tuple[Any, ...]:
-    from mato_loop_backend.permissions.policy import integration_operation_permission
+    from mato_loop_backend.permissions.policy import (
+        PermissionDisplayItem,
+        integration_operation_permission,
+    )
 
     instance, revision = _binding(context, arguments.integration_id)
     resource_key = getattr(arguments, "book_key", None) if resource else None
@@ -1743,6 +1747,7 @@ def _permission(
             ),
             title=title,
             summary=summary,
+            display_items=(PermissionDisplayItem("Löschumfang", deletion_scope),) if deletion_scope else (),
         ),
     )
 
@@ -1881,6 +1886,7 @@ def _delete_book_permission(
         title="Buch löschen?",
         summary="Der Agent möchte dieses Buch mit allen Inhalten löschen.",
         resource=True,
+        deletion_scope="Buch und alle enthaltenen Inhalte",
     )
 
 
@@ -1923,6 +1929,7 @@ def _delete_chapter_permission(
         title="Kapitel löschen?",
         summary="Der Agent möchte ein Kapitel mit allen Seiten aus diesem Buch löschen.",
         resource=True,
+        deletion_scope="Kapitel und alle enthaltenen Seiten",
     )
 
 

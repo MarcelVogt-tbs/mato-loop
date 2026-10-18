@@ -132,6 +132,21 @@ _TOOL_GROUPS = {
 }
 
 
+def format_duration_minutes(minutes: int) -> str:
+    """Format a nonnegative whole-minute duration for the German UI without rounding."""
+    parts = []
+    for unit_minutes, singular, plural in (
+        (10_080, "Woche", "Wochen"),
+        (1_440, "Tag", "Tage"),
+        (60, "Stunde", "Stunden"),
+        (1, "Minute", "Minuten"),
+    ):
+        amount, minutes = divmod(minutes, unit_minutes)
+        if amount:
+            parts.append(f"{amount} {singular if amount == 1 else plural}")
+    return " ".join(parts) or "0 Minuten"
+
+
 def _group(tool_name: str, declared_group: str | None) -> dict[str, str]:
     family = re.split(r"[_.]", tool_name, maxsplit=1)[0]
     group_id = _TOOL_GROUPS.get(tool_name) or _FAMILY_GROUPS.get(family)
