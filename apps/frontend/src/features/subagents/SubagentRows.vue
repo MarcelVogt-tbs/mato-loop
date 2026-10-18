@@ -7,7 +7,7 @@
       class="rounded-borders"
     >
       <q-item-section side aria-hidden="true">
-        <q-spinner v-if="!reducedMotion && ['queued', 'running'].includes(child.run?.status)" color="primary" size="20px" />
+        <q-spinner-grid v-if="!reducedMotion && ['queued', 'running'].includes(child.run?.status)" color="accent" size="18px" />
         <q-icon
           v-else
           :name="indicators[child.run?.status]?.icon || 'schedule'"

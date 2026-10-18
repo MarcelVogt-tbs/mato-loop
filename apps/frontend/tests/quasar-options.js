@@ -4,7 +4,7 @@ import {
   QExpansionItem, QFile, QForm, QIcon, QInnerLoading, QInput, QItem, QItemLabel,
   QItemSection, QLayout, QLinearProgress, QList, QMenu, QPage, QPageContainer,
   QPagination, QPopupProxy, QRadio, QResizeObserver, QRouteTab, QScrollArea, QSelect, QSeparator,
-  QSkeleton, QSpace, QSpinner, QTab, QTabPanel, QTabPanels, QTabs, QToggle,
+  QSkeleton, QSpace, QSpinner, QSpinnerGrid, QTab, QTabPanel, QTabPanels, QTabs, QToggle,
   QToolbar, QToolbarTitle, QTooltip
 } from 'quasar'
 
@@ -15,7 +15,7 @@ export const quasarOptions = {
     QFile, QForm, QIcon, QInnerLoading, QInput, QItem, QItemLabel, QItemSection,
     QLayout, QLinearProgress, QList, QMenu, QPage, QPageContainer, QPagination,
     QPopupProxy, QRadio, QResizeObserver, QRouteTab, QScrollArea, QSelect, QSeparator, QSkeleton,
-    QSpace, QSpinner, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QToolbar,
+    QSpace, QSpinner, QSpinnerGrid, QTab, QTabPanel, QTabPanels, QTabs, QToggle, QToolbar,
     QToolbarTitle, QTooltip
   },
   directives: { ClosePopup, Ripple }

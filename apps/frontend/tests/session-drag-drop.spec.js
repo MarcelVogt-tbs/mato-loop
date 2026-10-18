@@ -149,7 +149,7 @@ beforeEach(async () => {
   for (const name of ['QLayout', 'QDrawer', 'QToolbar', 'QSpace', 'QSeparator', 'QScrollArea', 'QItem', 'QItemSection', 'QItemLabel', 'QIcon', 'QList', 'QAvatar', 'QBadge', 'QCard', 'QCardSection', 'QCardActions', 'QBanner', 'QPageContainer', 'RouterLink']) {
     app.component(name, container)
   }
-  for (const name of ['QTooltip', 'QInput', 'QSkeleton', 'QSpinner', 'QSpinnerDots', 'RouterView']) app.component(name, { render: () => null })
+  for (const name of ['QTooltip', 'QInput', 'QSkeleton', 'QSpinner', 'QSpinnerDots', 'QSpinnerGrid', 'RouterView']) app.component(name, { render: () => null })
   app.component('QMenu', {
     props: ['modelValue'], emits: ['update:modelValue'],
     render() {

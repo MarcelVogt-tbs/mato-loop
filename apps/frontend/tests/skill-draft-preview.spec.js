@@ -3,7 +3,7 @@ import { createApp, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Quasar, QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QDialog, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QScrollArea, QSelect, QSeparator, QSkeleton, QSpace, QSpinner, QToggle, QTooltip } from 'quasar'
+import { Quasar, QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QDialog, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QScrollArea, QSelect, QSeparator, QSkeleton, QSpace, QSpinner, QSpinnerGrid, QToggle, QTooltip } from 'quasar'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() } }))
@@ -56,7 +56,7 @@ async function mountPage({ actionKind = 'build_skill', rootIdentity, reply } = {
   root = document.createElement('div')
   document.body.append(root)
   app = createApp({ render: () => h(ChatPage) })
-  app.use(pinia).use(router).use(Quasar, { components: { QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QDialog, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QScrollArea, QSelect, QSeparator, QSkeleton, QSpace, QSpinner, QToggle, QTooltip } })
+  app.use(pinia).use(router).use(Quasar, { components: { QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip, QDialog, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QScrollArea, QSelect, QSeparator, QSkeleton, QSpace, QSpinner, QSpinnerGrid, QToggle, QTooltip } })
   app.component('QPage', { render() { return h('div', this.$slots.default?.()) } })
   app.component('QSplitter', { render() { return h('div', this.$slots.before?.()) } })
   app.component('QVirtualScroll', { render() { return h('div', this.$slots.after?.()) } })
