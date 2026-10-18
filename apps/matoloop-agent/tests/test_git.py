@@ -117,7 +117,8 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
     async def test_unsafe_repository_is_an_access_error_not_a_missing_repository(self):
         self.git("init")
         os.chown(self.root, 1000, -1)
-        with self.assertRaises(AgentError) as error:
+        # Git also trusts SUDO_UID when tests run as root through sudo.
+        with patch.dict(os.environ, {"SUDO_UID": "0"}), self.assertRaises(AgentError) as error:
             await changes(self.fs, str(self.root))
         self.assertEqual(error.exception.code, "path.accessDenied")
 
