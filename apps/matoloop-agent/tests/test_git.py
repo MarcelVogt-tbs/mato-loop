@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
@@ -117,8 +118,14 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
     async def test_unsafe_repository_is_an_access_error_not_a_missing_repository(self):
         self.git("init")
         os.chown(self.root, 1000, -1)
-        # Git also trusts SUDO_UID when tests run as root through sudo.
-        with patch.dict(os.environ, {"SUDO_UID": "0"}), self.assertRaises(AgentError) as error:
+        # Ignore sudo ownership exemptions and runner-wide safe.directory entries.
+        with (
+            patch.dict(os.environ, {"SUDO_UID": "0"}),
+            patch.object(
+                git_module, "_git", partial(git_module._git, config={"safe.directory": ""})
+            ),
+            self.assertRaises(AgentError) as error,
+        ):
             await changes(self.fs, str(self.root))
         self.assertEqual(error.exception.code, "path.accessDenied")
 
