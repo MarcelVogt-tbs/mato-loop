@@ -172,6 +172,7 @@ def test_external_working_directory_policy_does_not_hide_directory_tool() -> Non
         "memory.read",
         "skills.load",
         "media.generate.image",
+        "secrets.access",
     ],
 )
 def test_category_defaults_and_saved_policies(
@@ -179,7 +180,7 @@ def test_category_defaults_and_saved_policies(
 ) -> None:
     settings = ToolSettings().select_trust(trust)
     expected = (
-        ToolExecutionPolicy.ASK if capability == "session.files.delete" or (trust == TrustLevel.PUBLIC and capability == "memory.read") else ToolExecutionPolicy.AUTO
+        ToolExecutionPolicy.ASK if capability in {"session.files.delete", "secrets.access"} or (trust == TrustLevel.PUBLIC and capability == "memory.read") else ToolExecutionPolicy.AUTO
     )
     assert resolve_tool_execution_policy(settings, capability).policy == expected
     for policy in ToolExecutionPolicy:

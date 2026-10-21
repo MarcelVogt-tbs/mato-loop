@@ -113,6 +113,11 @@
             <li v-for="label in presetInfo.additionalPermissions" :key="label" class="q-mb-xs">{{ label }}</li>
           </ul>
           <div v-else class="app-muted">Keine</div>
+          <div class="text-subtitle2 text-weight-bold q-mt-lg q-mb-sm">Zusätzlich nachfragen</div>
+          <ul v-if="presetInfo.additionalConfirmations.length" class="q-my-none q-pl-md">
+            <li v-for="label in presetInfo.additionalConfirmations" :key="label" class="q-mb-xs">{{ label }}</li>
+          </ul>
+          <div v-else class="app-muted">Keine</div>
           <div class="text-caption app-muted q-mt-lg">Eigene Regeln und Profilvorgaben haben Vorrang. Zugriffsgrenzen gelten weiterhin.</div>
         </q-card-section>
         <q-card-actions align="right"><q-btn v-close-popup flat no-caps label="Schließen" /></q-card-actions>

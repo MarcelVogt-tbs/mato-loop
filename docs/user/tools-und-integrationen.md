@@ -34,7 +34,7 @@ Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte od
 
 - **Privat / Öffentlich:** getrennte Radio-Auswahllisten bei aktiver Modelltrennung. Jedes Preset hat in beiden Bereichen dieselben Regeln.
 - **Alle Modelle:** bearbeitet bei ausgeschalteter Modelltrennung die privaten Werte. Öffentliche Werte bleiben gespeichert.
-- **Info-Symbol neben einem Preset:** zeigt dessen Basisberechtigungen und zusätzlich automatisch erlaubte Aktionen in einem Dialog. Die Auswahl bleibt unverändert.
+- **Info-Symbol neben einem Preset:** zeigt dessen Basisberechtigungen, zusätzlich automatisch erlaubte Aktionen und zusätzliche Rückfragen in einem Dialog. Die Auswahl bleibt unverändert.
 - Der gewählte Grundstandard bleibt auch mit eigenen Regeln sichtbar.
 
 #### Welche Auswahl passt?
@@ -51,7 +51,8 @@ Nur aufrufbare Tools erhalten ihr vollständiges Argumentschema. Deaktivierte od
 
 - **Vorgabe privat:** Komfortabel.
 - **Vorgabe öffentlich:** Ausgewogen.
-- **Komfortabel** erlaubt auch sensibles Lesen automatisch, fragt aber vor sonstigem Schreiben und Löschen. Speziellere Kombinationen lassen sich über eigene Aktionsregeln festlegen.
+- **Variablen und Secrets verwenden** benötigt in allen fünf Presets eine Freigabe, auch bei **Vollautomatisch**. Eigene Aktions- und Profilregeln sowie passende bestehende Freigaben gelten weiterhin.
+- **Komfortabel** erlaubt sonstiges sensibles Lesen automatisch, fragt aber vor sonstigem Schreiben und Löschen. Speziellere Kombinationen lassen sich über eigene Aktionsregeln festlegen.
 - Beim Update werden auch bestehende Preset-Auswahlen auf diese Vorgaben gesetzt. Explizite Aktions- und Profilregeln bleiben erhalten. Bereits konfigurierte Löschregeln werden zusätzlich für Session-Dateien übernommen, sofern dort noch keine eigene Regel besteht.
 
 #### Was bedeuten die Kategorien?

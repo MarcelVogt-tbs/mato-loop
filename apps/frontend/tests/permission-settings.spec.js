@@ -63,7 +63,7 @@ it.each([true, false])('saves the base behavior while retaining visible global o
   const presetOptions = [
     ['ask_all', 'Alles bestätigen'], ['balanced', 'Ausgewogen'], ['ask_changes', 'Komfortabel'],
     ['ask_delete', 'Automatisch außer Löschen'], ['auto_all', 'Vollautomatisch']
-  ].map(([value, label]) => ({ value, label, baseline: [{ category: 'read', label: 'Lesen', policy: 'ask' }], additionalPermissions: value === 'balanced' ? ['Session-Dateien lesen, bearbeiten und organisieren'] : [] }))
+  ].map(([value, label]) => ({ value, label, baseline: [{ category: 'read', label: 'Lesen', policy: 'ask' }], additionalPermissions: value === 'balanced' ? ['Session-Dateien lesen, bearbeiten und organisieren'] : [], additionalConfirmations: ['ask_changes', 'ask_delete', 'auto_all'].includes(value) ? ['Variablen und Secrets verwenden'] : [] }))
   let current = { ...rights(), privatePermissions: { ...branch(), policies: { 'shell.write': 'disabled' } }, publicPermissions: { ...branch(), policies: { 'shell.write': 'auto' } }, personalSettingsEnabled: false, groups: [], privateGroups: catalog, publicGroups: catalog, shellPrefixes: { read: [], write: [] }, webAccess: { userAgent: 'MatoLoop/1.0', publicAddressesOnly: true }, toolPermissionPresets: { private: 'ask_changes', public: 'balanced' }, presetOptions }
   const chosen = { private: 'ask_delete', ...(modelTrustEnabled ? { public: 'balanced' } : {}) }
   api.get.mockImplementation(async url => ({ data: url === '/agent-profiles' ? { agents: [], effectiveAgents: [] } : current }))
@@ -87,6 +87,10 @@ it.each([true, false])('saves the base behavior while retaining visible global o
   dialog.querySelector('[aria-label="Dialog schließen"]').click()
   await vi.waitUntil(() => !document.querySelector('.q-dialog'))
   await choose(modelTrustEnabled ? 'Privat' : 'Alle Modelle', 'Automatisch außer Löschen')
+  root.querySelector(`[aria-label="${modelTrustEnabled ? 'Privat' : 'Alle Modelle'}: Automatisch außer Löschen erklären"]`).click()
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog')?.textContent).toContain('Zusätzlich nachfragenVariablen und Secrets verwenden'))
+  document.querySelector('.q-dialog [aria-label="Dialog schließen"]').click()
+  await vi.waitUntil(() => !document.querySelector('.q-dialog'))
   if (modelTrustEnabled) await choose('Öffentlich', 'Ausgewogen')
   ;[...root.querySelectorAll('[role="switch"]')].find(item => item.textContent.includes('Nur öffentliche Zieladressen zulassen')).click()
   for (const [label, value] of [['User-Agent', 'Shared/2.0'], ['Maximale Antwortgröße', '7']]) {

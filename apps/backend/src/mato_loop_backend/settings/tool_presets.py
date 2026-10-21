@@ -35,8 +35,15 @@ AUTOMATIC_ACTION_GROUPS = {
 }
 AUTOMATIC_CAPABILITIES = frozenset(capability for group in AUTOMATIC_ACTION_GROUPS.values() for capability in group)
 
+CONFIRMATION_ACTION_GROUPS = {
+    "Variablen und Secrets verwenden": ("secrets.access",),
+}
+CONFIRMATION_CAPABILITIES = frozenset(capability for group in CONFIRMATION_ACTION_GROUPS.values() for capability in group)
+
 
 def preset_policy(preset: ToolPermissionPreset, category: ToolActionCategory, capability: str | None = None) -> ToolExecutionPolicy:
+    if capability in CONFIRMATION_CAPABILITIES:
+        return ToolExecutionPolicy.ASK
     automatic = category in PRESETS[preset].automatic_categories or (
         preset != "ask_all" and capability in AUTOMATIC_CAPABILITIES
     )
@@ -53,6 +60,13 @@ def preset_catalog(actions: Mapping[str, ToolAction]) -> list[dict]:
             ],
             "additionalPermissions": [
                 label for label, capabilities in AUTOMATIC_ACTION_GROUPS.items()
+                if any(
+                    preset_policy(key, actions[capability].category) != preset_policy(key, actions[capability].category, capability)
+                    for capability in capabilities
+                )
+            ],
+            "additionalConfirmations": [
+                label for label, capabilities in CONFIRMATION_ACTION_GROUPS.items()
                 if any(
                     preset_policy(key, actions[capability].category) != preset_policy(key, actions[capability].category, capability)
                     for capability in capabilities

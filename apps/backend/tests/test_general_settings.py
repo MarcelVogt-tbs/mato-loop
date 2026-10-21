@@ -123,7 +123,7 @@ async def test_tool_presets_change_only_selected_global_policies(monkeypatch, tr
     assert tuple(tool_execution_policy(tools, key) for key in (
         "filesystem.read", "filesystem.write", "shell.write", "filesystem.delete", "automation.delete",
         "sensitive_data.access", "secrets.access", "secrets.write",
-    )) == (read, write, write, "disabled", delete, sensitive, sensitive, write)
+    )) == (read, write, write, "disabled", delete, sensitive, "ask", write)
     for key in (
         "network.search", "network.fetch", "session.files.read", "session.files.write", "file.provide",
         "media.generate.image", "media.edit.image", "media.generate.speech", "media.generate.audio",
@@ -132,6 +132,7 @@ async def test_tool_presets_change_only_selected_global_policies(monkeypatch, tr
         assert tool_execution_policy(tools, key) == ("ask" if preset == "ask_all" else "auto")
     selected = next(option for option in result["presetOptions"] if option["value"] == preset)
     assert [rule["policy"] for rule in selected["baseline"]] == [read, sensitive, write, delete]
+    assert selected["additionalConfirmations"] == (["Variablen und Secrets verwenden"] if sensitive == "auto" else [])
     after = tools.model_dump()
     after[f"{trust}_permission_preset"] = before[f"{trust}_permission_preset"]
     assert after == before
