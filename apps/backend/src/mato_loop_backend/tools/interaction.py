@@ -98,7 +98,7 @@ async def _variable_read(
     )
 
 
-async def _secret_input(
+async def collect_secret_input(
     arguments: SecretInputArguments, context: ToolContext
 ) -> ToolResult:
     # Reuse run-local answers across direct-message continuations without extending their lifetime.
@@ -366,11 +366,12 @@ SECRET_INPUT = ToolDefinition(
             "parts, shell_run.environment, or the personal settings tool. "
             "For the selected computer's administrator password, set administrator=true and masked=true "
             "on that field, then pass its reference as sudo_password_ref to elevated tools. "
+            "Elevated tools also request missing administrator input directly; use this tool for advance or grouped input. "
              "Submitting this field authenticates only; elevated actions require separate authorization. "
             "Reuse the exact name/reference pairs instead of asking again. Set masked false only for values the user may see while "
             "typing. Use customize_matoloop only for explicitly requested durable storage.",
             SecretInputArguments,
-            _secret_input,
+            collect_secret_input,
             group="agent",
             label="Secret einmalig abfragen",
             icon="password",

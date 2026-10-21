@@ -596,7 +596,7 @@ class MatoLoopAgent:
                             error=Error(code=code, params=exc.params),
                         )
                     )
-                except Exception:
+                except Exception as exc:
                     logger.error("Execution operation failed")
                     await send(
                         Response(
@@ -605,6 +605,9 @@ class MatoLoopAgent:
                             error=Error(
                                 code="browser.actionFailed"
                                 if request.operation in BROWSER_ARGUMENT_MODELS
+                                else "path.accessDenied"
+                                if isinstance(exc, PermissionError)
+                                and request.operation.startswith("filesystem.")
                                 else "operation.failed"
                             ),
                         )

@@ -22,6 +22,10 @@ The `answered` status means the request is closed, not that every field has a va
 discards the draft instead of submitting it.
 
 Protected questions from `secret_input` and `variable_write` also allow empty answer lists.
+Elevated file and shell tools reuse the same protected-input flow directly when no password
+reference or passwordless sudo is available. The suspended tool resumes after input without a
+model turn, then independently authorizes its action. Skipping, rejecting, or expiring input
+stops that invocation. `secret_input` remains available for advance or grouped credential input.
 Only filled fields receive secret references or can be remembered for the session. A skipped
 administrator password supplies no authentication. Temporary protected answers persist only a received
 marker for filled fields and an empty list for skipped fields; their values are never persisted.

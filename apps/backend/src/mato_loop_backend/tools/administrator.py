@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 from mato_loop_backend.execution import ExecutionClientError
@@ -10,8 +11,10 @@ from mato_loop_backend.permissions.policy import (
     PermissionRequest,
 )
 from mato_loop_backend.tools import access
+from mato_loop_backend.tools.arguments import SecretInputArguments, SecretInputField
 from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import ToolResult
+from mato_loop_backend.tools.interaction import collect_secret_input
 from mato_loop_backend.tools.secrets import (
     discard_sudo_reference,
     effective_sudo_reference,
@@ -35,7 +38,18 @@ async def authorize(context: ToolContext, request: PermissionRequest, reference=
             "administrator.run", {"operation": "authenticate", "arguments": {}}, AdministratorAuthenticationResult,
         )
         if not authentication.passwordless:
-            raise ExecutionClientError("process.sudoAuthRequired")
+            name = f"SUDO_PASSWORD_{context.execution_client.agent_id.hex.upper()}"
+            result = await collect_secret_input(SecretInputArguments(inputs=[SecretInputField(
+                name=name, label="Administrator-Passwort",
+                question="Welches sudo-Passwort soll für diesen Computer verwendet werden?",
+                administrator=True,
+            )]), context)
+            if result.is_error:
+                context.user_denied = result.metadata["errorCode"] == "question.rejected"
+                raise ExecutionClientError(result.metadata["errorCode"])
+            if name in json.loads(result.content)["unanswered"]:
+                context.user_denied = True
+                raise ExecutionClientError("question.rejected")
     previews = []
     fields = (
         (("oldText", "Vorher"), ("newText", "Nachher")) if context.tool_call.name == "edit_file"

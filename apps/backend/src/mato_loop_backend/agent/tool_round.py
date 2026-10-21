@@ -553,7 +553,12 @@ async def execute_tool_batch(
                     "currentDirectory": execution_client.current_directory,
                     "paths": list(tool_context.repository_target_paths),
                 }
-            if tool_result.metadata.get("userEdited") is True:
+            if authentication_scope and reference is None:
+                reference = await effective_sudo_reference(
+                    db, session, run_secret_refs, execution_client.agent_id, call.arguments.get("sudo_password_ref"),
+                )
+                authentication_scope = f":agent={execution_client.agent_id}:sudo={reference}"
+            if tool_result.metadata.get("userEdited") is True or authentication_scope:
                 call_signature = run_support._tool_call_signature(call)
                 call_signature += authentication_scope
                 if call.arguments.get("root") in {"workspace", "computer"} or call.name in {"shell_run", "apply_patch"}:

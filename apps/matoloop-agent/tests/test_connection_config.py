@@ -357,6 +357,52 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(received["ok"])
             self.assertEqual(received["result"]["sha256"], "a" * 64)
 
+    async def test_filesystem_permission_error_retains_controlled_error_code(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            received = {}
+
+            async def handler(websocket):
+                await websocket.recv()
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "type": "welcome",
+                            "protocolVersion": 1,
+                            "agentId": AGENT_ID,
+                        }
+                    )
+                )
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "type": "request",
+                            "id": REQUEST_ID,
+                            "operation": "filesystem.delete",
+                            "arguments": {
+                                "path": os.fspath(Path(temporary) / "models"),
+                                "recursive": True,
+                            },
+                        }
+                    )
+                )
+                received.update(json.loads(await websocket.recv()))
+                await websocket.close()
+
+            async with websockets.serve(handler, "127.0.0.1", 0) as server:
+                agent = MatoLoopAgent(
+                    configuration(
+                        Path(temporary),
+                        backendUrl=f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/api/execution-agents/connect",
+                    ),
+                    "secret",
+                )
+                with patch.object(
+                    agent.filesystem, "delete", side_effect=PermissionError("private detail")
+                ):
+                    await asyncio.wait_for(agent._connect_once(asyncio.Event()), 5)
+
+            self.assertEqual(received["error"], {"code": "path.accessDenied"})
+
     async def test_cancelled_mutation_reports_its_actual_error(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

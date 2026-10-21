@@ -1855,14 +1855,15 @@ def test_secret_input_prompt_routes_all_credentials_before_probing() -> None:
     assert "stable non-credential user context" in prompt
     assert "Credential routing overrides the missing-information contract" in prompt
     assert "usernames count as credentials even when they are visible" in prompt
-    assert "omit sudo_password_ref to try the computer's assigned secret under existing permissions" in prompt
+    assert "the runtime requests missing administrator input directly" in prompt
     assert "secret_input, not question, before authentication or commands. Group missing credentials in one call" in prompt
     assert "masked=false for visible identifiers and masked=true for secrets" in prompt
     assert "returned environment references to shell_run.environment" in prompt
     assert "references remain reusable throughout the current run" in prompt
     assert "shell_run(elevated=true), without sudo in the command" in prompt
     assert "secret_input with administrator=true" in prompt
-    assert "Submitting administrator input grants access" in prompt
+    assert "Administrator input authenticates only" in prompt
+    assert "If input is skipped, cancelled, or denied, do not ask again" in prompt
     assert "Try elevated shell commands without a password first" not in prompt
     assert "not a confirmed disclosure" in prompt
 

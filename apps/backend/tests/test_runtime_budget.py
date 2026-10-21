@@ -243,16 +243,16 @@ async def test_unrelated_success_does_not_reset_failed_call_protection(monkeypat
     assert _tool_messages(db)[-1].provider_data["_matoloop"]["errorCode"] == "agent.repeatedToolCall"
 
 
-@pytest.mark.parametrize("matching_agent", [True, False])
-async def test_sudo_retry_requires_changed_authentication_for_the_selected_agent(monkeypatch, matching_agent):
+@pytest.mark.parametrize(("matching_agent", "input_inside_call"), [(True, False), (False, False), (True, True)])
+async def test_sudo_retry_requires_changed_authentication_for_the_selected_agent(monkeypatch, matching_agent, input_inside_call):
     agent_id = uuid4()
     name = f"SUDO_PASSWORD_{(agent_id if matching_agent else uuid4()).hex.upper()}"
     command = ToolCall("admin", "shell_run", {"command": "id -u", "elevated": True})
     secret = ToolCall("password", "secret_input", {"inputs": [
         {"name": name, "label": "sudo", "question": "Enter the password"},
     ]})
-    calls = [command, secret, command]
-    if matching_agent:
+    calls = [command, command] if input_inside_call else [command, secret, command]
+    if matching_agent and not input_inside_call:
         calls += [secret, command]
     db, run, _requests, _projections, _events = await _runtime_setup(
         monkeypatch,
@@ -272,6 +272,10 @@ async def test_sudo_retry_requires_changed_authentication_for_the_selected_agent
     async def execute(call, context, bound_tool):
         if call.name == "secret_input":
             return await ToolRegistry._execute_definition(tool_registry, call, context, bound_tool)
+        if input_inside_call and name not in context.run_secret_refs:
+            secret_id = uuid4()
+            context.one_time_secrets[secret_id] = "private password"
+            context.run_secret_refs[name] = f"run-secret:{secret_id}"
         password = await resolve_sudo_password(context, None, context.execution_client.agent_id)
         passwords.append(password)
         return ToolResult.error("process.sudoAuthRequired" if password is None else "process.commandFailed")
@@ -279,9 +283,12 @@ async def test_sudo_retry_requires_changed_authentication_for_the_selected_agent
     tool_registry._execute_definition.side_effect = execute
     await AgentRuntime._execute_loop(db, run)
 
-    assert passwords == ([None, "private password"] if matching_agent else [None])
+    expected_passwords = [None, "private password"] if matching_agent else [None]
+    if input_inside_call:
+        expected_passwords = ["private password"]
+    assert passwords == expected_passwords
     assert _tool_messages(db)[-1].provider_data["_matoloop"]["errorCode"] == "agent.repeatedToolCall"
-    question.assert_awaited_once()
+    assert question.await_count == (0 if input_inside_call else 1)
 
 
 def test_only_one_identical_snapshot_retry_is_allowed_after_unstable_observation():

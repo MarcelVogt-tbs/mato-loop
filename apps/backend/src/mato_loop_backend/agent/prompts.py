@@ -303,16 +303,17 @@ def general_system_prompt(
     if "secret_input" in offered_tool_names:
         parts.append(
             "Credential routing overrides the missing-information contract. Account usernames count as credentials even when they are visible. "
-            "For administrator actions, omit sudo_password_ref to try the computer's assigned secret under existing permissions. "
-            "Explicit or temporary references take precedence. If unavailable, select a matching stored variable or "
-            "call secret_input with administrator=true and masked=true. For other missing credentials, "
+            "Omit sudo_password_ref to reuse permitted administrator authentication; "
+            "the runtime requests missing administrator input directly. Explicit references override defaults. "
+            "Use secret_input with administrator=true and masked=true for advance or grouped input. For other missing credentials, "
             "call secret_input, not question, before authentication or commands. Group missing credentials in one call. Use "
             "masked=false for visible identifiers and masked=true for secrets. Pass only references to "
              "customize_matoloop; references remain reusable throughout the current run. For protected text, "
-            "use literal and {value_ref: reference} parts; never interpolate values in model text. Reuse available references. "
-             "After input, continue the requested work in this run, not just an acknowledgement. "
-             "A final answer ends the run and expires run-secret references. History does not restore them; "
-             "use current runtime references or call secret_input for missing credentials."
+            "use literal and {value_ref: reference} parts; never interpolate values in model text. "
+             "After input, continue the work in this run, not just an acknowledgement. "
+             "Final answers expire run-secret references; history cannot restore them. "
+             "use current runtime references or call secret_input for missing credentials. "
+            "If input is skipped, cancelled, or denied, do not ask again unless the user requests it."
         )
         if "shell_run" in offered_tool_names:
             parts.append(
@@ -320,9 +321,9 @@ def general_system_prompt(
                 "In shell commands, reference only environment variable names; never reveal, transform, "
              "persist, or trace credential values, session cookies, or derived authentication tokens. "
                 "For administrator commands use shell_run(elevated=true), without sudo in the command. "
-                "Pass the password reference as sudo_password_ref. Submitting administrator input grants access "
-                "for the run; the user may extend it to the session in that dialog. If authentication is missing "
-                "or rejected, request fresh protected input and retry rather than ending the task. "
+                "Pass an existing password reference as sudo_password_ref. Administrator input authenticates only; "
+                "actions require separate authorization. Input is reusable for the run; the user may retain it for the session. "
+                "If authentication is rejected, request fresh protected input before retrying. "
                 "A secret-output warning identifies a possible risk, not a confirmed disclosure; assess "
                 "the command, execution status, and result."
             )
@@ -514,8 +515,11 @@ def general_system_prompt(
             "operations. Never bypass denials by switching tools. "
             "Shell read does not authorize writes or deletes. "
             + (
+                "Before batches of computer changes or deletions, check relevant filesystem permissions, including parent directories. "
+                "Use explicit elevation when required; a system path alone does not establish that need. "
                 "file.accessDenied is not permission.userDenied. Retry protected UTF-8 computer files "
                 "with elevated=true on read/write_file/edit_file unless shell was explicitly requested. "
+                "For operations without elevated file support, use shell_run(elevated=true). "
                 "Never bypass denied approval, disabled capabilities, or hard path boundaries. "
                 if "shell_run" in offered_tool_names else ""
             )

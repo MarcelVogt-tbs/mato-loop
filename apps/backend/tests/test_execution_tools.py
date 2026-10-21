@@ -1256,16 +1256,71 @@ async def test_variable_write_reports_skipped_value(tmp_path, monkeypatch):
     assert json.loads(result.content) == {"saved": False, "name": "API_TOKEN", "unanswered": ["value"]}
 
 
-async def test_missing_administrator_password_returns_to_input_before_approval(tmp_path):
+@pytest.mark.parametrize("remember", [False, True])
+async def test_missing_administrator_password_is_collected_and_reused_without_model_turn(tmp_path, remember):
+    client = FakeExecutionClient(
+        {"authenticate": AdministratorAuthenticationResult(passwordless=False), "administrator.run": ProcessResult(
+            exit_code=0, timed_out=False, duration_ms=1, stdout_bytes=0, stderr_bytes=0,
+            stdout_truncated=False, stderr_truncated=False,
+        )},
+        {"shell.run", "shell.classify", "administrator.run"},
+    )
+    call = ToolCall("admin", "shell_run", {"command": "id -u", "elevated": True})
+    context = _context(tmp_path, call, client)
+    context.session.preferred_execution_agent_id = client.agent_id
+    agent = ExecutionAgent(id=client.agent_id, user_id=context.session.user_id, alias="AI-PC")
+    context.db.scalar.return_value = agent
+    context.db.get.side_effect = lambda model, *args, **kwargs: AgentRun(id=context.run_id) if model is AgentRun else agent
+    name = f"SUDO_PASSWORD_{client.agent_id.hex.upper()}"
+    context.question_handler = AsyncMock(return_value=ProtectedQuestionResolution(
+        {name: ["private password"]}, frozenset({name}) if remember else frozenset(),
+    ))
+    try:
+        for _ in range(2):
+            result = await _tools(client.operations).execute(call, context)
+            assert not result.is_error
+        assert context.question_handler.await_count == 1
+        assert client.requests[-1][1]["sudoPassword"] == "private password"
+        assert "private password" not in result.content
+    finally:
+        session_secrets.clear_session(context.session.id)
+
+
+@pytest.mark.parametrize("mode", ["skipped", "rejected", "expired", "denied", "policy_changed", "target_changed"])
+async def test_missing_administrator_password_never_bypasses_cancellation_or_policy(tmp_path, mode):
     client = FakeExecutionClient(
         {"authenticate": AdministratorAuthenticationResult(passwordless=False)},
         {"shell.run", "shell.classify", "administrator.run"},
     )
     call = ToolCall("admin", "shell_run", {"command": "id -u", "elevated": True})
-    context = _context(tmp_path, call, client)
+    context = _context(tmp_path, call, client, decision=(
+        PermissionDecision.DENY if mode == "denied" else PermissionDecision.ALLOW
+    ))
+    context.session.preferred_execution_agent_id = client.agent_id
+    context.db.scalar.return_value = ExecutionAgent(id=client.agent_id, alias="AI-PC")
+
+    async def answer(questions):
+        if mode == "policy_changed":
+            context.ask_handler.return_value = PermissionDecision.DENY
+        if mode == "target_changed":
+            context.session.preferred_execution_agent_id = uuid4()
+        return {"rejected": "rejected", "expired": None}.get(mode, ProtectedQuestionResolution({
+            questions.questions[0].id: [] if mode == "skipped" else ["private password"],
+        }))
+
+    context.question_handler = AsyncMock(side_effect=answer)
+    context.db.get.side_effect = lambda model, *args, **kwargs: AgentRun(id=context.run_id) if model is AgentRun else None
     result = await _tools(client.operations).execute(call, context)
-    assert json.loads(result.content)["error"]["code"] == "process.sudoAuthRequired"
-    assert all(item.kwargs.get("check_only") for item in context.ask_handler.await_args_list)
+    assert result.metadata["errorCode"] == {
+        "skipped": "question.rejected", "rejected": "question.rejected", "expired": "question.expired",
+    }.get(mode, "permission.denied")
+    assert context.user_denied is (mode in {"skipped", "rejected"})
+    assert not any(
+        operation == "administrator.run" and arguments["operation"] != "authenticate"
+        for operation, arguments in client.requests
+    )
+    if mode == "denied":
+        context.question_handler.assert_not_awaited()
 
 
 def test_shell_session_grants_bind_categories_to_the_command() -> None:

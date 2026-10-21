@@ -258,7 +258,7 @@ def main() -> None:
     except (ValueError, KeyError, TypeError, IndexError, ValidationError):
         response = {"error": {"code": "request.invalid"}}
     except PermissionError:
-        response = {"error": {"code": "file.accessDenied"}}
+        response = {"error": {"code": "path.accessDenied"}}
     except OSError:
         response = {"error": {"code": "process.startFailed"}}
     print(json.dumps(response), flush=True)

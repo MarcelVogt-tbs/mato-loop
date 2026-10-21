@@ -474,8 +474,9 @@ SHELL_RUN = ToolDefinition(
              "requested and executed arguments. Optional timeout: seconds, 0 < timeout <= 3600; null uses the "
              "agent default, capped locally. Nonzero exits/timeouts return errors with bounded output. "
              "elevated=true runs as administrator with the same category checks. Use environment references; "
-             "sudo preserves only explicitly named variables. Choose a password reference for this computer "
-             "or call secret_input with administrator=true on the masked field; pass sudo_password_ref. "
+             "sudo preserves only explicitly named variables. Omit sudo_password_ref to reuse authentication "
+             "or request missing administrator input directly. Pass an existing matching reference explicitly; "
+             "use secret_input with administrator=true for advance or grouped input. "
              "Passwords authenticate only. Elevated/explicit-environment consent binds exact command/context. "
              "Never put sudo, password pipes, or passwords in the command.",
             ShellRunArguments,
