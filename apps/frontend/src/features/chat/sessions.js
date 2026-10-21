@@ -455,7 +455,8 @@ export const sessionsActions = {
         memory_mode: 'memoryMode',
         web_search_policy: 'webSearchPolicy',
         preferred_execution_agent_id: 'preferredExecutionAgentId',
-        current_directory: 'currentDirectory'
+        current_directory: 'currentDirectory',
+        workspace_mode: 'workspaceMode'
       }
       const normalizedPatch = { ...patch }
       if (typeof normalizedPatch.session_profile === 'function') {
@@ -565,10 +566,13 @@ export const sessionsActions = {
       await this.refreshSessions(null, data.projectId || null)
       return data
     },
-    async deleteSession(id, { automationMode = null, automationImpact = null, suppressErrorToast = false } = {}) {
+    async deleteSession(id, { automationMode = null, automationImpact = null, removeWorktree = false, suppressErrorToast = false } = {}) {
       const config = {
         ...(suppressErrorToast ? { suppressErrorToast: true } : {}),
-        ...(automationMode ? { params: { automationMode, automationImpact } } : {})
+        ...(automationMode || removeWorktree ? { params: {
+          ...(automationMode ? { automationMode, automationImpact } : {}),
+          ...(removeWorktree ? { removeWorktree: true } : {})
+        } } : {})
       }
       const queued = [...(this.queuedMessages[id] || [])]
       const ownerUserId = this.draftOwnerUserId

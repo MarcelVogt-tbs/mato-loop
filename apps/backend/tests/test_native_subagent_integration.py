@@ -16,9 +16,11 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 import mato_loop_backend.agent.runtime as mock_agent_runtime
 import mato_loop_backend.agent.summarization as mock_agent_summarization
 import mato_loop_backend.agent.titles as mock_agent_titles
+import mato_loop_backend.notifications as mock_notifications
 import mato_loop_backend.tools.web as mock_tools_web
 import mato_loop_backend.web_push as mock_web_push
 from mato_loop_backend.agent import subagents
+from mato_loop_backend.agent.run_contracts import AgentRunError
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.routes import approvals, sessions
@@ -26,11 +28,17 @@ from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.base import Base
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.events import run_events
+from mato_loop_backend.execution import (
+    DirectoryResult,
+    ExecutionClient,
+    execution_agent_connections,
+)
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
     ChatSession,
+    ExecutionAgent,
     Message,
     Project,
     UserAccount,
@@ -46,6 +54,7 @@ from mato_loop_backend.settings.models import (
     LlmProviderConfig,
     ModelConfig,
     ToolExecutionPolicy,
+    UserAgentProfilesSettings,
 )
 from mato_loop_backend.web.fetch import WebFetchResult
 
@@ -69,7 +78,7 @@ async def native_database(request, tmp_path, monkeypatch):
     monkeypatch.setattr(config, "embedding_enabled", False)
     monkeypatch.setattr(config, "web_push_enabled", False)
     _mock_value = factory
-    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles, mock_web_push):
+    for _mock_target in (mock_agent_runtime, mock_agent_summarization, mock_agent_titles, mock_web_push, mock_notifications):
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(subagents, "AsyncSessionFactory", factory)
     async with admin.begin() as db:
@@ -83,11 +92,24 @@ async def native_database(request, tmp_path, monkeypatch):
             user = UserAccount(username=f"native-{uuid4().hex}", password_hash="test")
             db.add(user)
             await db.flush()
+            agent = ExecutionAgent(user_id=user.id, alias="Test computer", home_directory="/workspace")
+            db.add(agent)
+            await db.flush()
             provider = LlmProviderConfig(name="Scripted", adapter_type="openai-compatible", pseudonymization_enabled=False)
             model = ModelConfig(provider_id=provider.id, model_id="scripted-native")
             await SettingsStore.save(db, AiSettings(providers=[provider], models=[model], default_model_id=model.id))
             await SettingsStore.save(db, ToolSettings(public_permissions={"policies": {"session.read": "ask"}}))
             await db.commit()
+
+        operations = frozenset({"filesystem.resolve", "filesystem.read", "filesystem.glob",
+                                "filesystem.grep", "filesystem.write"})
+        monkeypatch.setattr(execution_agent_connections, "snapshot", lambda agent_id: operations if agent_id == agent.id else None)
+
+        async def resolve_directory(_client, operation, arguments, _result_model, **_kwargs):
+            assert operation == "filesystem.resolve"
+            return DirectoryResult(path=arguments["path"])
+
+        monkeypatch.setattr(ExecutionClient, "request", resolve_directory)
 
         app = FastAPI()
         app.include_router(sessions.router, prefix="/api")
@@ -101,7 +123,7 @@ async def native_database(request, tmp_path, monkeypatch):
 
         app.dependency_overrides[get_db_session] = database
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
-            yield SimpleNamespace(factory=factory, user=user, model=model, client=client, owned_runs=owned_runs)
+            yield SimpleNamespace(factory=factory, user=user, model=model, agent=agent, client=client, owned_runs=owned_runs)
     finally:
         try:
             # Stop and join only this fixture's runs before dropping its committed data.
@@ -134,6 +156,46 @@ async def _events(run_id, event_type, count=1):
                 pytest.fail(f"Run failed before {event_type}: {event}")
 
 
+async def test_admission_account_lock_allows_first_personal_settings_insert(native_database):
+    fixture = native_database
+    async with fixture.factory() as admission, fixture.factory() as settings:
+        await AgentRuntime._ensure_user_active(admission, fixture.user.id, for_update=True)
+        await settings.execute(text("SET LOCAL lock_timeout = '2s'"))
+        record = await SettingsStore.save(settings, UserAgentProfilesSettings(), user_id=fixture.user.id)
+        assert record.user_id == fixture.user.id
+
+
+async def test_coding_command_excludes_new_runs_in_nested_directories(native_database, monkeypatch):
+    fixture = native_database
+    monkeypatch.setattr(AgentRuntime, "_schedule_run", lambda run: fixture.owned_runs.add(run.id))
+    async with fixture.factory() as db:
+        agent = ExecutionAgent(user_id=fixture.user.id, alias="Coding", home_directory="/workspace")
+        db.add(agent)
+        await db.flush()
+        owner = ChatSession(user_id=fixture.user.id, title="Publication", agent_profile_id=BUILD_PROFILE_ID,
+                            model_config_id=fixture.model.id, preferred_execution_agent_id=agent.id,
+                            current_directory="/worktree", memory_mode="disabled")
+        other = ChatSession(user_id=fixture.user.id, title="Other task", agent_profile_id=BUILD_PROFILE_ID,
+                            model_config_id=fixture.model.id, preferred_execution_agent_id=agent.id,
+                            current_directory="/project/src", memory_mode="disabled")
+        db.add_all([owner, other])
+        await db.flush()
+        message = Message(session_id=owner.id, role="user", content="/git_merge", provider_data={
+            "_matoloop": {"codingCommand": {"name": "git_merge", "resources": ["/project", "/worktree"]}},
+        })
+        db.add(message)
+        await db.flush()
+        run = AgentRun(session_id=owner.id, input_message_id=message.id, status="running",
+                       execution_agent_id=agent.id, current_directory_snapshot="/worktree")
+        db.add(run)
+        await db.commit()
+        other_id = other.id
+    async with fixture.factory() as db:
+        other = await db.get(ChatSession, other_id)
+        with pytest.raises(AgentRunError, match="git.projectBusy"):
+            await AgentRuntime.start(db, other, "Continue normal coding.")
+
+
 @pytest.mark.parametrize("with_project", [False, True], ids=["without-project", "with-project"])
 async def test_direct_message_during_model_response(native_database, monkeypatch, with_project):
     fixture = native_database
@@ -163,6 +225,7 @@ async def test_direct_message_during_model_response(native_database, monkeypatch
             title="Direct message regression", title_generation_status="skipped",
             agent_profile_id=BUILD_PROFILE_ID, model_config_id=fixture.model.id,
             memory_mode="disabled", web_search_policy="available",
+            preferred_execution_agent_id=fixture.agent.id, current_directory="/workspace",
         )
         db.add(session)
         await db.flush()
@@ -251,6 +314,8 @@ async def test_native_delegation_pipeline(native_database, monkeypatch, profile_
                              title_generation_status="skipped", agent_profile_id=profile_id,
                              model_config_id=fixture.model.id, memory_mode="disabled",
                              reasoning_effort="high", web_search_policy="available")
+        parent.preferred_execution_agent_id = fixture.agent.id
+        parent.current_directory = "/workspace"
         db.add(parent)
         await db.flush()
         SessionStorage().provision(parent.id)
@@ -380,6 +445,8 @@ async def test_webfetch_dispatch_cannot_bypass_spawn_ask_after_live_auto(native_
         parent = ChatSession(id=parent_id, user_id=fixture.user.id, title="Ceiling regression",
                              title_generation_status="skipped", agent_profile_id=BUILD_PROFILE_ID,
                              model_config_id=fixture.model.id, memory_mode="disabled")
+        parent.preferred_execution_agent_id = fixture.agent.id
+        parent.current_directory = "/workspace"
         db.add(parent)
         await db.flush()
         SessionStorage().provision(parent_id)

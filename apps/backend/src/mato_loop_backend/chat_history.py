@@ -15,6 +15,7 @@ from mato_loop_backend.models import (
     ChatSession,
     Message,
     TitleGenerationStatus,
+    UserAccount,
 )
 from mato_loop_backend.sessions.cleanup import deleting_child_sessions
 
@@ -218,6 +219,7 @@ class ChatHistoryService:
             raise ChatHistoryError("session.runAlreadyActive", 409)
         await db.rollback()
         await AgentRuntime.cancel_descendants(session_id)
+        await db.execute(select(UserAccount.id).where(UserAccount.id == user_id).with_for_update(key_share=True))
         session = await cls._owned_session(db, session_id, user_id)
         if await cls._active_run(db, session_id) is not None:
             raise ChatHistoryError("session.runAlreadyActive", 409)

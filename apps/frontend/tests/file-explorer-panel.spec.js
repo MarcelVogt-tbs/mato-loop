@@ -7,7 +7,6 @@ import {
 } from 'quasar'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { useGitChangesStore } from '../src/features/files/git-store'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 
@@ -88,23 +87,6 @@ async function mountPanel(scope = 'session') {
   app.mount(root)
   await nextTick()
 }
-
-it('offers the Git filter in computer files and opens a deleted file in a normal diff tab', async () => {
-  workspace.scope = 'filesystem'
-  workspace.directoryPath = '/repo'
-  workspace.entries = { '/repo': [] }
-  workspace.filter = ''
-  workspace.operationAvailable.mockReturnValue(true)
-  const git = useGitChangesStore()
-  git.setContext({ sessionId: 'session-a', executionAgentId: 'agent', currentDirectory: '/repo' })
-  Object.assign(git.current, { repository: '/repo', files: [{ path: 'deleted.txt', status: 'deleted', additions: 0, deletions: 2 }] })
-  openFile.mockResolvedValue('file-a')
-  await mountPanel('filesystem')
-  root.querySelector('[aria-label="Geänderte Dateien anzeigen"]').click()
-  await nextTick()
-  root.querySelector('[aria-label="Diff öffnen: deleted.txt"]').click()
-  expect(openFile).toHaveBeenCalledWith(expect.objectContaining({ path: '/repo/deleted.txt', executionAgentId: 'agent' }), { diff: true })
-})
 
 it.each([
   ['read-only session', 'session'],

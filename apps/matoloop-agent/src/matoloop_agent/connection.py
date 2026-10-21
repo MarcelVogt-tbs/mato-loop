@@ -250,6 +250,23 @@ class MatoLoopAgent:
             from .git import changes
 
             return await changes(self.filesystem, arguments.path, arguments.file)
+        if request.operation == "git.repository":
+            from .git import repository
+
+            return {
+                **await repository(
+                    self.filesystem, arguments.path, target_branch=arguments.target_branch
+                ),
+                "worktreeRoot": (self.config.data_dir / "worktrees").as_posix(),
+            }
+        if request.operation == "git.worktree":
+            from .git import prepare_worktree
+
+            return await prepare_worktree(self.config, self.filesystem, arguments)
+        if request.operation == "git.worktree.remove":
+            from .git import remove_worktree
+
+            return await remove_worktree(self.config, self.filesystem, arguments)
         if isinstance(arguments, ListArguments):
             return await asyncio.to_thread(
                 self.filesystem.list,

@@ -1,3 +1,4 @@
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -15,6 +16,7 @@ class RunSessionSettings(BaseModel):
     reasoning_effort: str | None = None
     memory_mode: MemoryMode
     web_search_policy: WebSearchPolicy
+    coding_workspace: dict[str, Any] | None = None
 
 
 def apply_run_session_settings(session: ChatSession, run: AgentRun) -> bool:

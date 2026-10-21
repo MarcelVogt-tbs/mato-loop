@@ -156,6 +156,9 @@ async def test_system_info_follows_connection_lifetime_and_agent_identity() -> N
 def test_supported_operations_match_the_execution_agent() -> None:
     assert SUPPORTED_OPERATIONS == {
         "git.changes",
+        "git.repository",
+        "git.worktree",
+        "git.worktree.remove",
         "filesystem.stat",
         "filesystem.glob",
         "filesystem.grep",
@@ -296,6 +299,7 @@ async def test_latest_connection_replaces_old_and_disconnects_are_classified() -
     assert manager.snapshot(agent_id) is not None
     assert disconnect_error_code("filesystem.read", True) == "executionAgent.unavailable"
     assert disconnect_error_code("filesystem.write", True) == "executionAgent.outcomeUnknown"
+    assert disconnect_error_code("git.worktree", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("filesystem.upsert", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("filesystem.edit", True) == "executionAgent.outcomeUnknown"
     assert disconnect_error_code("filesystem.patch", True) == "executionAgent.outcomeUnknown"
@@ -412,6 +416,7 @@ async def test_default_timeout_is_bounded_and_cancels_request() -> None:
 async def test_dispatched_mutation_and_shell_timeouts_have_unknown_outcomes() -> None:
     for operation, expected_code in (
         ("filesystem.write", "executionAgent.outcomeUnknown"),
+        ("git.worktree", "executionAgent.outcomeUnknown"),
         ("shell.run", "process.outcomeUnknown"),
     ):
         manager = ExecutionAgentConnectionManager(default_timeout=0.01)
@@ -430,6 +435,7 @@ async def test_dispatched_mutation_and_shell_timeouts_have_unknown_outcomes() ->
     ("filesystem.edit", "file.editTextNotFound", "file.editTextNotFound", WorkspaceWriteResult),
     ("filesystem.edit", "file.editTextNotUnique", "file.editTextNotUnique", WorkspaceWriteResult),
     ("terminal.open", "request.invalid", "executionAgent.protocolError", TerminalOpenResult),
+    ("git.worktree", "operation.cancelled", "executionAgent.outcomeUnknown", WorkspaceWriteResult),
 ])
 async def test_execution_client_maps_remote_errors(monkeypatch, operation, code, expected, result_model) -> None:
     client = ExecutionClient(uuid4(), frozenset({operation}))

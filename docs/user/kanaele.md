@@ -21,6 +21,31 @@ Texteingabe wechselt direkt zur nächsten Frage. Mit
 
 Die endgültige Antwort wird als normale Nachricht zugestellt und zusammen mit der Anfrage vollständig in der zugehörigen MatoLoop-Session gespeichert. Telegram stellt Überschriften, Hervorhebungen, Listen, Links, Zitate und Code passend dar; komplexere Inhalte wie Tabellen, Mathematik oder Mermaid-Diagramme erscheinen in einer lesbaren Text- oder Codeform. Mit `/new` beginnen Sie eine neue Session, `/sessions` zeigt zuletzt verwendete Sessions und `/use <ID>` wechselt die Session. `/current`, `/stop`, `/unlink` und `/help` stehen ebenfalls zur Verfügung.
 
+## Coding-Befehle
+
+Das Telegram-Befehlsmenü und `/help` verwenden denselben allgemeinen Befehlskatalog
+wie die Palette am MatoLoop-Eingabefeld. Die **Git**-App zeigt dessen Git-Aktionen:
+
+- `/git_init`: Git im gewählten Workspace anlegen, ohne Commit oder Veröffentlichung.
+- `/git_review`: Änderungen einschließlich noch nicht übernommener Commits prüfen.
+- `/git_merge`: Worktree-Änderungen committen, mit dem aktuellen Zielbranch
+  zusammenführen, reviewen, prüfen und veröffentlichen.
+- `/git_pr`: Session-Branch veröffentlichen und einen Pull Request erstellen
+  beziehungsweise den vorhandenen aktualisieren.
+- `/git_sync`: Den ursprünglichen Projekt-Checkout aktualisieren, wenn er sauber,
+  auf dem Zielbranch und ohne zusätzliche Zusammenführung aktualisierbar ist.
+- `/git_remote [Name] [Adresse]`: Einen Remote über den Agenten einrichten oder
+  seine Adresse ändern. Fehlende Angaben fragt der Agent nach. Zugangsdaten gehören
+  in die Anmeldung auf dem Computer, nicht in die Adresse. Ein geändertes Ziel muss
+  in bestehenden Sessions über die Git-App ausdrücklich übernommen werden.
+
+Wählen Sie vorher mit `/sessions` und `/use <ID>` die gewünschte Coding-Session.
+Die Befehle starten normale Agentenläufe auf dem Computer dieser Session; die
+vorhandenen Tool-Rechte, Rückfragen und Freigaben gelten weiter. Merge und PR
+benötigen zunächst eine Session mit verwaltetem Worktree. Für PRs müssen ein
+geeignetes Werkzeug und die Anmeldung beim Git-Hoster auf dem Computer vorhanden
+sein. Ein laufender Auftrag wird durch diese Befehle nicht unterbrochen.
+
 ## Administrative Freigabe
 
 Kommunikationskanäle sind global zunächst deaktiviert, auch für Administratoren. Aktivieren Sie **Kommunikationskanäle aktivieren** unter **Administration > Kanäle > Einstellungen**. **Verwaltung** enthält die Anbieterfreigaben; Telegram ist standardmäßig erlaubt, braucht aber weiterhin die globale Aktivierung.

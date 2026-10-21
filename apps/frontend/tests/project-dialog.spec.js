@@ -2,7 +2,7 @@
 import { createApp, h, ref } from 'vue'
 import { createPinia } from 'pinia'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Quasar, Dialog, Notify, QDialog, QCard, QForm, QCardSection, QInput, QSeparator, QSelect, QItem, QItemSection, QIcon, QItemLabel, QBtn, QTooltip, QCardActions, ClosePopup } from 'quasar'
+import { Quasar, Dialog, Notify, QDialog, QCard, QForm, QCardSection, QInput, QSeparator, QSelect, QItem, QItemSection, QIcon, QItemLabel, QBtn, QTooltip, QCardActions, QSpace, ClosePopup } from 'quasar'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), patch: vi.fn() } }))
@@ -24,7 +24,7 @@ it.each([false, true])('saves project fields through the shared dialog (editing=
   const open = ref(true), created = vi.fn()
   root = document.createElement('div'); document.body.append(root)
   app = createApp({ render: () => h(ProjectDialog, { modelValue: open.value, 'onUpdate:modelValue': value => { open.value = value }, project: editing ? project : null, onCreated: created }) })
-  app.use(createPinia()).use(Quasar, { components: { QDialog, QCard, QForm, QCardSection, QInput, QSeparator, QSelect, QItem, QItemSection, QIcon, QItemLabel, QBtn, QTooltip, QCardActions }, directives: { ClosePopup }, plugins: { Dialog, Notify } })
+  app.use(createPinia()).use(Quasar, { components: { QDialog, QCard, QForm, QCardSection, QInput, QSeparator, QSelect, QItem, QItemSection, QIcon, QItemLabel, QBtn, QTooltip, QCardActions, QSpace }, directives: { ClosePopup }, plugins: { Dialog, Notify } })
   app.mount(root)
   await vi.waitFor(() => expect(document.querySelector('.q-dialog input')).not.toBeNull())
   const name = document.querySelector('.q-dialog input')
@@ -41,7 +41,9 @@ it.each([false, true])('saves project fields through the shared dialog (editing=
     name: 'Umbenannt', instructions: editing ? 'Anweisungen' : '',
     defaultSessionTemplateId: editing ? 'coding' : null,
     defaultExecutionAgentId: editing ? 'computer' : null,
-    defaultCurrentDirectory: editing ? '/home/user/project' : null
+    defaultCurrentDirectory: editing ? '/home/user/project' : null,
+    gitTargetBranch: null,
+    gitWorkspaceMode: 'local'
   })
   if (editing) expect(created).not.toHaveBeenCalled()
   else expect(created).toHaveBeenCalledWith(project)

@@ -15,6 +15,7 @@ import {
   controlCenterGlobalSectionIds,
   controlCenterIntegrationIds
 } from 'src/app/control-center/manifest'
+import { useChatStore } from 'src/features/chat/store'
 
 const originalLocalStorage = globalThis.localStorage
 const testIntegrationIds = ['calendar', 'test-app']
@@ -87,6 +88,12 @@ describe('control center store', () => {
     expect(store.activeContentId).toBe('session')
     expect(store.open).toBe(false)
     expect(store.fileView).toBeNull()
+  })
+
+  it('opens Git settings on a draft without creating a session or worktree', async () => {
+    const create = vi.spyOn(useChatStore(), 'createEmptySession')
+    await useControlCenterStore().openApp('git')
+    expect(create).not.toHaveBeenCalled()
   })
 
   it('keeps global sections outside the integration manifest', () => {

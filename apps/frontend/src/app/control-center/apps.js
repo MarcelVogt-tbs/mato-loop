@@ -1,4 +1,5 @@
 import AgentCodingApp from 'src/features/coding/AgentCodingApp.vue'
+import GitApp from 'src/features/coding/GitApp.vue'
 import AutomationApp from 'src/features/automations/AutomationApp.vue'
 import ComputerFileExplorerPanel from 'src/features/files/components/ComputerFileExplorerPanel.vue'
 import FileExplorerPanel from 'src/features/files/components/FileExplorerPanel.vue'
@@ -23,6 +24,7 @@ import {
 const components = {
   session: SessionApp,
   'agent-coding': AgentCodingApp,
+  git: GitApp,
   files: FileExplorerPanel,
   automation: AutomationApp,
   'computer-files': ComputerFileExplorerPanel,

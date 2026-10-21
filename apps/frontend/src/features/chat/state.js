@@ -14,6 +14,7 @@ export function defaultSessionOptions() {
     webSearchPolicy: 'available',
     preferredExecutionAgentId: null,
     currentDirectory: null,
+    workspaceMode: 'local',
     workspaceContext: null
   }
 }
@@ -35,6 +36,7 @@ export function sessionCreatePayload(options, projectId, controlCenter) {
     memory_mode: options.memoryMode,
     web_search_policy: options.webSearchPolicy,
     preferred_execution_agent_id: options.preferredExecutionAgentId,
+    workspace_mode: projectId && options.preferredExecutionAgentId && options.currentDirectory ? options.workspaceMode || 'local' : 'local',
     ...(options.preferredExecutionAgentId ? { current_directory: options.currentDirectory } : {}),
     control_center: controlCenter
   }
@@ -54,6 +56,7 @@ export function optionsFromSession(session) {
     webSearchPolicy: session.webSearchPolicy,
     preferredExecutionAgentId: session.preferredExecutionAgentId,
     currentDirectory: session.currentDirectory,
+    workspaceMode: session.workspaceMode || 'local',
     workspaceContext: session.workspaceContext || null
   })
 }
@@ -134,6 +137,7 @@ export function normalizedNewSessionDraft(value) {
         ? options.preferredExecutionAgentId
         : null,
       currentDirectory: typeof options.currentDirectory === 'string' ? options.currentDirectory : null,
+      workspaceMode: options.workspaceMode === 'worktree' ? 'worktree' : 'local',
       workspaceContext: null
     })
   }

@@ -108,7 +108,7 @@ async def test_child_mutation_routes_reject_before_side_effects(operation) -> No
     assert (error.value.status_code, error.value.code) == (403, "session.readOnly")
     db.commit.assert_not_awaited()
     db.delete.assert_not_awaited()
-    db.execute.assert_not_awaited()
+    assert all(call.args[0].is_select for call in db.execute.await_args_list)
 
 
 async def test_child_history_and_duplicate_submission_cannot_bypass_guard() -> None:

@@ -70,6 +70,18 @@
               </q-btn>
             </template>
           </q-input>
+          <div v-if="executionAgentId && currentDirectory" class="row items-center q-mt-sm">
+            <div class="col text-caption app-muted" role="status">
+              {{ !selectedAgent?.connected ? 'Computer offline; Git-Status nicht geprüft.' : repositoryError ? apiErrorMessage(repositoryError) : repository?.repository ? 'Git-Repository erkannt.' : repositoryLoading ? 'Git wird geprüft …' : repository ? 'Kein Git-Repository erkannt.' : 'Git-Status nicht geprüft.' }}
+            </div>
+            <q-btn flat round dense icon="refresh" aria-label="Git-Repository erneut prüfen" :loading="repositoryLoading" :disable="!selectedAgent?.connected" @click="refreshRepository" />
+          </div>
+          <template v-if="repository?.repository || (!repository && project?.gitTargetBranch)">
+            <q-separator class="q-my-lg" />
+            <div class="text-subtitle1 text-weight-bold q-mb-sm">Git</div>
+            <q-input v-model.trim="gitTargetBranch" dense outlined label="Standard-Zielbranch" maxlength="300" hint="Ausgangspunkt neuer Worktrees und Ziel für Übernahme oder Pull Request." class="q-mb-md" />
+            <AppSelect v-model="gitWorkspaceMode" dense outlined emit-value map-options label="Standard-Arbeitsbereich" :options="[{ label: 'Lokal', value: 'local' }, { label: 'Worktree', value: 'worktree' }]" hint="Vorgabe für neue Sessions; vor dem Sessionstart änderbar." />
+          </template>
         </q-card-section>
         <q-card-actions align="right" class="q-pa-md q-pt-none">
           <q-btn flat no-caps label="Abbrechen" :disable="saving" v-close-popup />
@@ -96,6 +108,8 @@ import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useSessionTemplateStore } from 'src/features/settings/session-templates-store'
 import ExecutionAgentDirectoryPickerDialog from 'src/features/computers/ExecutionAgentDirectoryPickerDialog.vue'
 import { agentDisplayName } from 'src/features/computers/display'
+import { useRepositoryProbe } from 'src/features/coding/repository'
+import { apiErrorMessage } from 'src/utils/api-errors'
 
 const props = defineProps({ project: { type: Object, default: null } })
 const emit = defineEmits(['created'])
@@ -119,6 +133,13 @@ const name = ref('')
 const instructions = ref('')
 const executionAgentId = ref(null)
 const currentDirectory = ref(null)
+const gitTargetBranch = ref(null)
+const gitWorkspaceMode = ref('local')
+const { repository, loading: repositoryLoading, error: repositoryError, refresh: refreshRepository } = useRepositoryProbe(executionAgentId, currentDirectory, open)
+watch(repository, (info) => {
+  if (!info?.repository) return
+  if (!gitTargetBranch.value) gitTargetBranch.value = info.defaultBranch
+})
 const directoryPickerOpen = ref(false)
 const saving = ref(false)
 const selectedAgent = computed(() => executionAgents.byId(executionAgentId.value))
@@ -147,6 +168,8 @@ watch(open, (shown) => {
   sessionTemplateId.value = props.project?.defaultSessionTemplateId || null
   executionAgentId.value = props.project?.defaultExecutionAgentId || null
   currentDirectory.value = props.project?.defaultCurrentDirectory || null
+  gitTargetBranch.value = props.project?.gitTargetBranch || null
+  gitWorkspaceMode.value = props.project?.gitWorkspaceMode || 'local'
   directoryPickerOpen.value = false
   void executionAgents.fetchAll({ suppressErrorToast: true }).catch(() => {})
   void templates.load().catch(() => {})
@@ -163,7 +186,9 @@ async function save() {
   const defaults = {
     defaultSessionTemplateId: sessionTemplateId.value,
     defaultExecutionAgentId: executionAgentId.value,
-    defaultCurrentDirectory: executionAgentId.value ? currentDirectory.value?.trim() || null : null
+    defaultCurrentDirectory: executionAgentId.value ? currentDirectory.value?.trim() || null : null,
+    gitTargetBranch: gitTargetBranch.value || null,
+    gitWorkspaceMode: gitWorkspaceMode.value
   }
   saving.value = true
   try {

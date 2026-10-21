@@ -208,6 +208,43 @@ class GitChangesArguments(PathArguments):
         return _relative_path(value) if value is not None else None
 
 
+class GitRepositoryArguments(PathArguments):
+    target_branch: str | None = Field(
+        default=None, alias="targetBranch", min_length=1, max_length=300
+    )
+
+
+class GitWorktreeRemoveArguments(PathArguments):
+    owner_id: str = Field(alias="ownerId", pattern=UUID_PATTERN)
+    project_id: str = Field(alias="projectId", pattern=UUID_PATTERN)
+    session_id: str = Field(alias="sessionId", pattern=UUID_PATTERN)
+    common_directory: str = Field(alias="commonDirectory", min_length=1, max_length=4096)
+
+    _common_path = field_validator("common_directory")(_absolute_path)
+
+
+class GitWorktreeArguments(PathArguments):
+    common_directory: str = Field(alias="commonDirectory", min_length=1, max_length=4096)
+    owner_id: str = Field(alias="ownerId", pattern=UUID_PATTERN)
+    project_id: str = Field(alias="projectId", pattern=UUID_PATTERN)
+    session_id: str = Field(alias="sessionId", pattern=UUID_PATTERN)
+    remote: str | None = Field(
+        default=None, min_length=1, max_length=200, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+    )
+    target_branch: str = Field(alias="targetBranch", min_length=1, max_length=300)
+    remote_identity: str | None = Field(
+        default=None, alias="remoteIdentity", pattern=r"^[0-9a-f]{64}$"
+    )
+
+    _common_path = field_validator("common_directory")(_absolute_path)
+
+    @model_validator(mode="after")
+    def paired_remote(self):
+        if (self.remote is None) != (self.remote_identity is None):
+            raise ValueError("Remote and remoteIdentity must be supplied together")
+        return self
+
+
 class ListArguments(PathArguments):
     offset: int = Field(default=0, ge=0)
     limit: int = Field(default=100, ge=1, le=1000)
@@ -549,6 +586,9 @@ class MaintenanceUpdateArguments(MaintenanceStartArguments):
 
 ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "git.changes": GitChangesArguments,
+    "git.repository": GitRepositoryArguments,
+    "git.worktree": GitWorktreeArguments,
+    "git.worktree.remove": GitWorktreeRemoveArguments,
     "maintenance.start": MaintenanceStartArguments,
     "maintenance.update": MaintenanceUpdateArguments,
     "maintenance.update.interrupt": MaintenanceUpdateArguments,

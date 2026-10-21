@@ -32,6 +32,7 @@ from mato_loop_backend.models import (
 from mato_loop_backend.security import require_user
 from mato_loop_backend.sessions.archive import ArchiveRequest, set_archived
 from mato_loop_backend.sessions.cleanup import descendant_sessions
+from mato_loop_backend.sessions.coding import validate_git_branch, validate_git_remote
 from mato_loop_backend.sessions.service import (
     SessionServiceError,
     validate_execution_preferences,
@@ -61,6 +62,14 @@ class ProjectRequest(BaseModel):
         max_length=4096,
         validation_alias=AliasChoices("defaultCurrentDirectory", "default_current_directory"),
     )
+    git_remote: str | None = Field(default=None, validation_alias=AliasChoices("gitRemote", "git_remote"))
+    git_target_branch: str | None = Field(default=None, validation_alias=AliasChoices("gitTargetBranch", "git_target_branch"))
+    git_workspace_mode: Literal["local", "worktree"] = Field(
+        default="local", validation_alias=AliasChoices("gitWorkspaceMode", "git_workspace_mode")
+    )
+
+    _remote = field_validator("git_remote")(validate_git_remote)
+    _branch = field_validator("git_target_branch")(validate_git_branch)
 
     @field_validator("name", mode="before")
     @classmethod
@@ -87,6 +96,9 @@ class ProjectResponse(BaseModel):
     default_session_template_id: UUID | None = Field(default=None, alias="defaultSessionTemplateId")
     default_execution_agent_id: UUID | None = Field(alias="defaultExecutionAgentId")
     default_current_directory: str | None = Field(alias="defaultCurrentDirectory")
+    git_remote: str | None = Field(alias="gitRemote")
+    git_target_branch: str | None = Field(alias="gitTargetBranch")
+    git_workspace_mode: Literal["local", "worktree"] = Field(alias="gitWorkspaceMode")
     session_count: int = Field(alias="sessionCount")
     has_unread_messages: bool = Field(default=False, alias="hasUnreadMessages")
     created_at: datetime = Field(alias="createdAt")
@@ -109,6 +121,9 @@ def _payload(project: Project, session_count: int, has_unread_messages: bool = F
         defaultSessionTemplateId=project.default_session_template_id,
         defaultExecutionAgentId=project.default_execution_agent_id,
         defaultCurrentDirectory=project.default_current_directory,
+        gitRemote=project.git_remote,
+        gitTargetBranch=project.git_target_branch,
+        gitWorkspaceMode=project.git_workspace_mode or "local",
         sessionCount=session_count,
         hasUnreadMessages=has_unread_messages,
         createdAt=project.created_at,
@@ -292,6 +307,9 @@ async def create_project(
         default_session_template_id=payload.default_session_template_id,
         default_execution_agent_id=payload.default_execution_agent_id,
         default_current_directory=current_directory,
+        git_remote=payload.git_remote,
+        git_target_branch=payload.git_target_branch,
+        git_workspace_mode=payload.git_workspace_mode,
     )
     db.add(project)
     await db.commit()
@@ -317,6 +335,12 @@ async def update_project(
     project.name = payload.name
     if "instructions" in payload.model_fields_set:
         project.instructions = payload.instructions
+    if "git_remote" in payload.model_fields_set:
+        project.git_remote = payload.git_remote
+    if "git_target_branch" in payload.model_fields_set:
+        project.git_target_branch = payload.git_target_branch
+    if "git_workspace_mode" in payload.model_fields_set:
+        project.git_workspace_mode = payload.git_workspace_mode
     execution_fields = {
         "default_execution_agent_id",
         "default_current_directory",

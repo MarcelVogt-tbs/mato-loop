@@ -102,6 +102,7 @@ beforeEach(async () => {
       queueMode: chat.messageQueueActive,
       attachments: chat.activeAttachmentDraft,
       onUpdate: (patch) => chat.updateActive(patch),
+      'onUpdate:draft': (value) => chat.setDraft(value),
       onSend: (content, options) => sentMessages.push({ content, options }),
       onStop: () => { stoppedCount += 1 },
       'onAdd-attachments': (files, done, options) => done?.(chat.addAttachmentFiles(files, options)),
@@ -125,6 +126,7 @@ beforeEach(async () => {
     app.component(name, { render() { return h('div', this.$slots.default?.()) } })
   }
   app.component('QMenu', defineComponent({
+    methods: { updatePosition() {} },
     emits: ['hide'],
     setup: (_, { emit, slots }) => () => h('div', { onClick: () => emit('hide') }, slots.default?.())
   }))
@@ -150,6 +152,7 @@ beforeEach(async () => {
     render() { return h('div', this.items.map((item) => this.$slots.default?.({ item }))) }
   })
   app.component('QSkeleton', { render: () => null })
+  app.component('QResizeObserver', { render: () => null })
   app.component('QDialog', { render: () => null })
   app.mount(root)
 })
@@ -164,8 +167,35 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
+  it('shows the saved command prompt instead of its invocation in the user message', async () => {
+    mocks.api.get.mockResolvedValue({ data: { items: [] } })
+    await router.push('/')
+    showPage.value = true
+    await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
+    const prompt = 'Review the working changes.\n\nOnly parser changes.'
+    chat.current = { id: 'session-1', messages: [{ id: 'command', role: 'user', content: '/git_review only parser changes', commandPrompt: prompt }] }
+    await nextTick()
+    expect(root.querySelector('[data-message-id="command"] .chat-message__content')?.textContent).toBe(prompt)
+  })
+  it('selects a general command with the keyboard and sends it only after arguments are entered', async () => {
+    mocks.api.post.mockResolvedValue({ data: { items: [
+      { name: 'example-one', description: 'Erster Auftrag', source: 'example' },
+      { name: 'example-two', description: 'Zweiter Auftrag', source: 'example' }
+    ] } })
+    chat.setDraft('/')
+    await vi.waitFor(() => expect(root.querySelectorAll('[role="option"]')).toHaveLength(2))
+    const input = root.querySelector('textarea')
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    await nextTick()
+    expect([chat.activeDraft, sentMessages]).toEqual(['/example-two ', []])
+    chat.setDraft('/example-two additional arguments')
+    await nextTick()
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(sentMessages).toEqual([{ content: '/example-two additional arguments', options: { interrupt: false } }])
+  })
   it('invalidates message heights and remounts the composer input when the session message size changes', async () => {
-    mocks.api.get.mockResolvedValue({ data: {} })
+    mocks.api.get.mockResolvedValue({ data: { items: [] } })
     await router.push('/')
     showPage.value = true
     await nextTick()
@@ -182,7 +212,7 @@ describe('voice attachment composer', () => {
   })
 
   it('shows the first outgoing message in the transcript with its delivery state', async () => {
-    mocks.api.get.mockResolvedValue({ data: {} })
+    mocks.api.get.mockResolvedValue({ data: { items: [] } })
     await router.push('/')
     showPage.value = true
     await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
@@ -204,7 +234,7 @@ describe('voice attachment composer', () => {
   })
 
   it('renders host failures as message content with a red metadata retry action', async () => {
-    mocks.api.get.mockResolvedValue({ data: {} })
+    mocks.api.get.mockResolvedValue({ data: { items: [] } })
     await router.push('/')
     showPage.value = true
     await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
@@ -224,7 +254,7 @@ describe('voice attachment composer', () => {
   })
 
   it('keeps sent-message undo and queue recovery visible after local cleanup fails', async () => {
-    mocks.api.get.mockResolvedValue({ data: {} })
+    mocks.api.get.mockResolvedValue({ data: { items: [] } })
     await router.push('/')
     showPage.value = true
     await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
@@ -242,7 +272,7 @@ describe('voice attachment composer', () => {
     mocks.mobile = mobile
     chat.outboxLoaded = true
     mocks.api.get.mockImplementation(async (url) => ({ data: url.startsWith('/sessions/session-')
-      ? { id: url.split('/').pop(), messages: [] } : {} }))
+      ? { id: url.split('/').pop(), messages: [] } : { items: [] } }))
     await router.push('/')
     showPage.value = true
     await vi.waitFor(() => expect(root.querySelector('.chat-start-project')).not.toBeNull())
@@ -457,7 +487,7 @@ describe('voice attachment composer', () => {
     mocks.api.get.mockImplementation(async (url) => ({ data: url === '/sessions/session-1'
       ? await new Promise((resolve) => { releaseChild = resolve })
       : url === '/sessions/parent' ? { id: 'parent', messages: [] }
-        : url.endsWith('/children') ? [] : {} }))
+        : url.endsWith('/children') ? [] : { items: [] } }))
     showPage.value = true
     await vi.waitFor(() => expect(releaseChild).toBeTypeOf('function'))
     expect(root.querySelector('.chat-composer')).toBeNull()
@@ -476,7 +506,7 @@ describe('voice attachment composer', () => {
     chat.outboxLoaded = true
     mocks.api.get.mockImplementation(async (url) => ({ data: url === '/sessions/session-1'
       ? { id: 'session-1', messages: [] }
-      : url.endsWith('/children') ? [] : {} }))
+      : url.endsWith('/children') ? [] : { items: [] } }))
     showPage.value = true
     await vi.waitFor(() => expect(mocks.api.get.mock.calls.some(([url]) => url === '/sessions/session-1')).toBe(true))
     await vi.waitFor(() => expect(chat.current?.id).toBe('session-1'))
@@ -581,7 +611,7 @@ describe('voice attachment composer', () => {
     chat.outboxLoaded = true
     mocks.api.get.mockImplementation(async (url) => ({ data: url.startsWith('/sessions/session-')
       ? { id: url.split('/').pop(), messages: [] }
-      : {} }))
+      : { items: [] } }))
     showPage.value = true
     await vi.waitFor(() => expect(mocks.api.get.mock.calls.some(([url]) => url === '/sessions/session-1')).toBe(true))
     await vi.waitFor(() => expect(chat.current?.id).toBe('session-1'))

@@ -181,7 +181,7 @@
                 @rendered="handleMessageRendered"
                 @trust-image-origin="trustImageOrigin"
               />
-              <div v-else-if="message.content" class="chat-message__content">{{ message.content }}</div>
+              <div v-else-if="message.content" class="chat-message__content">{{ message.commandPrompt || message.content }}</div>
             </template>
             <ChatFiles
               v-if="message.attachments?.length"
@@ -387,9 +387,9 @@
           v-if="isNewConversation"
           :session="chat.activeContext"
           :disabled="draftProjectDisabled"
-           :fields="['memory', 'webSearch']"
-            compact
-            equal-fields
+          :fields="['memory', 'webSearch']"
+          compact
+          equal-fields
           class="q-mb-sm"
           @update="chat.updateActive"
         >
@@ -421,11 +421,13 @@
                 </template>
               </AppSelect>
             </div>
+            <WorkspaceField :session="chat.activeContext" :project-id="routeProjectId" :disabled="draftProjectDisabled" @update="chat.updateActive" />
             <AppSelect :model-value="chat.activeContext.sessionTemplateId || templates.defaultTemplateId" :options="templates.templates.map((item) => ({ label: `${item.name}${item.scope === 'personal' ? ' (Persönlich)' : ''}`, value: item.id }))" :disable="draftProjectDisabled" :loading="templates.loading" borderless dense emit-value map-options hide-bottom-space class="chat-start-select q-px-sm text-body2" aria-label="Sessionvorlage auswählen" @update:model-value="changeTemplate">
               <template #prepend><q-icon name="dashboard_customize" size="18px" /></template>
             </AppSelect>
           </template>
         </SessionSettingsFields>
+        <div v-if="!isNewConversation" class="row q-mb-sm"><WorkspaceField :session="chat.activeContext" /></div>
         <SessionTodoStrip
           :todos="chat.current?.todos || []"
           :collapsed="chat.current?.todosCollapsed || false"
@@ -542,6 +544,7 @@ import ProjectDialog from 'src/features/projects/ProjectDialog.vue'
 import ChatComposer from 'src/features/chat/components/ChatComposer.vue'
 import SessionTodoStrip from 'src/features/chat/components/SessionTodoStrip.vue'
 import SessionSettingsFields from 'src/features/chat/components/SessionSettingsFields.vue'
+import WorkspaceField from 'src/features/coding/WorkspaceField.vue'
 import ControlCenterPanel from 'src/app/control-center/ControlCenterPanel.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
 import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
@@ -614,11 +617,7 @@ const workspace = useWorkspaceStore()
 const git = useGitChangesStore()
 const currentGitContext = computed(() => {
   const tab = controlCenter.activeTab
-  const context = gitContext(chat.current, tab?.fileTarget, git.current, controlCenter.fileDiffModes[tab?.tabId])
-  if (!context) return null
-  return controlCenter.activeContentId === 'computer-files' && workspace.scope === 'filesystem'
-    && workspace.workspaceContext?.executionAgentId === context.executionAgentId && workspace.sessionId === context.sessionId
-    ? { ...context, currentDirectory: workspace.directoryPath } : context
+  return gitContext(chat.current, tab?.fileTarget, git.current, controlCenter.fileDiffModes[tab?.tabId])
 })
 const gitAvailable = computed(() => {
   if (!currentGitContext.value) return false
@@ -632,11 +631,10 @@ const currentGit = computed(() => {
     : null
 })
 watch([
-  () => gitContextKey(currentGitContext.value), gitAvailable, () => chat.running,
-  () => controlCenter.activeContentId === 'computer-files'
-], ([key, available, running, opened], [oldKey, oldAvailable, oldRunning, oldOpened] = []) => {
+  () => gitContextKey(currentGitContext.value), gitAvailable, () => chat.running
+], ([key, available, running], [oldKey, oldAvailable, oldRunning] = []) => {
   git.setContext(available ? currentGitContext.value : null)
-  if (available && (key !== oldKey || !oldAvailable || (!running && oldRunning) || (opened && !oldOpened))) void git.refresh()
+  if (available && (key !== oldKey || !oldAvailable || (!running && oldRunning))) void git.refresh()
 }, { immediate: true })
 
 async function openGitDiff(path) {
@@ -644,10 +642,7 @@ async function openGitDiff(path) {
   if (!state?.repository) return
   try {
     if (path) return await git.openFile(path)
-    await controlCenter.openApp('computer-files')
-    await nextTick()
-    await workspace.openDirectory(state.repository)
-    git.showChanges = true
+    await git.openChanges()
   } catch { /* Central API toast. */ }
 }
 const scrollArea = ref(null)

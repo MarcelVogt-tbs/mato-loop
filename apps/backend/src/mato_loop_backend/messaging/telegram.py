@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import logging
+import re
 import secrets
 from contextlib import aclosing
 from dataclasses import replace
@@ -17,7 +18,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from telegram import Bot, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Bot, BotCommand, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.error import InvalidToken, NetworkError, RetryAfter, TelegramError, TimedOut
 
@@ -75,6 +76,7 @@ from mato_loop_backend.models import (
 from mato_loop_backend.permissions.decisions import ApprovalDecisionError
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.security import load_credential, read_credential
+from mato_loop_backend.sessions.commands import parse_command, registered_commands
 from mato_loop_backend.settings import (
     InstanceLimits,
     SettingsStore,
@@ -97,6 +99,37 @@ DRAFT_UPDATE_SECONDS = 1
 DRAFT_REFRESH_SECONDS = 20
 DRAFT_CLEAR_TEXT = "\u2063"
 MESSAGE_CONTENT_MAX_LENGTH = 200_000
+_command_menus: dict[UUID, str] = {}
+
+
+def telegram_commands() -> list[BotCommand]:
+    return [
+        BotCommand("new", "Neue Session beginnen"),
+        BotCommand("sessions", "Letzte Sessions anzeigen"),
+        BotCommand("use", "Session anhand ihrer ID auswählen"),
+        BotCommand("current", "Aktuelle Session anzeigen"),
+        BotCommand("stop", "Laufende Antwort stoppen"),
+        BotCommand("help", "Befehle anzeigen"),
+        BotCommand("unlink", "Telegram-Verknüpfung lösen"),
+        *(BotCommand(item.name, item.description[:256]) for item in registered_commands()
+          if re.fullmatch(r"[a-z0-9_]{1,32}", item.name)),
+    ]
+
+
+def command_error(code: str) -> str:
+    return {
+        "git.sessionRequired": "Wähle zuerst mit /sessions und /use <ID> eine Coding-Session aus.",
+        "git.notRepository": "Im Arbeitsverzeichnis der Session wurde kein Git-Repository erkannt.",
+        "git.configurationRequired": "Prüfe die Git-Konfiguration: Worktrees benötigen einen Zielbranch, Veröffentlichung und Synchronisierung zusätzlich einen Remote.",
+        "git.localBranchRequired": "Der lokale Zielbranch fehlt oder enthält noch keinen Commit. Prüfe den Zielbranch und erstelle bei Bedarf zuerst einen Commit.",
+        "git.worktreeRequired": "Starte für diese Aktion eine neue Projekt-Session mit dem Arbeitsbereich Worktree.",
+        "git.invalidRemote": "Remote-Name oder Netzwerkadresse ist ungültig. Die Anmeldung gehört auf den Computer, nicht in die Adresse.",
+        "git.worktreeChanged": "Der Worktree passt nicht mehr zur gespeicherten Session-Zuordnung.",
+        "git.projectBusy": "Im Projektverzeichnis arbeitet noch ein Agent. Warte auf dessen Abschluss.",
+        "session.runAlreadyActive": "In dieser Session läuft bereits ein Auftrag. Warte oder verwende /stop.",
+        "executionAgent.unavailable": "Der Computer der Session ist offline.",
+        "file.workspaceNotSelected": "Für diese Session ist kein Arbeitsverzeichnis ausgewählt.",
+    }.get(code, "Der Coding-Befehl konnte nicht gestartet werden. Prüfe die Session in MatoLoop.")
 
 
 class TelegramServiceError(RuntimeError):
@@ -498,6 +531,14 @@ async def _poll(endpoint_id: UUID, owner: str) -> None:
     try:
         async with asyncio.timeout(POLL_REQUEST_TIMEOUT_SECONDS):
             async with Bot(token=token) as bot:
+                fingerprint = hashlib.sha256(token.encode()).hexdigest()
+                if _command_menus.get(endpoint_id) != fingerprint:
+                    try:
+                        await bot.set_my_commands(telegram_commands(), read_timeout=5, connect_timeout=5)
+                    except TelegramError:
+                        logger.warning("Telegram command menu registration failed for endpoint %s", endpoint_id)
+                    else:
+                        _command_menus[endpoint_id] = fingerprint
                 updates = await bot.get_updates(
                     offset=offset,
                     timeout=POLL_TIMEOUT_SECONDS,
@@ -620,6 +661,8 @@ async def _command(
             "/current - aktuelle Session anzeigen\n"
             "/stop - laufende Antwort stoppen\n"
             "/unlink - Telegram-Verknüpfung lösen"
+            + "\n\nCoding (zuerst eine Session mit Computer und Workspace über /use <ID> auswählen):\n"
+            + "\n".join(f"/{item.name} - {item.description}" for item in registered_commands())
         )
     elif command == "/new":
         endpoint.current_session_id = None
@@ -1370,14 +1413,24 @@ async def process_inbox(inbox_id: UUID) -> UUID | None:
             from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
 
             try:
+                selected_session_id = (
+                    inbox.session_id or endpoint.current_session_id
+                    if parse_command(content) is not None else endpoint.current_session_id
+                )
+                if parse_command(content) is not None and selected_session_id is None:
+                    raise TelegramServiceError("git.sessionRequired")
                 session = await get_owned_session(
-                    db, endpoint.current_session_id, endpoint.user_id
-                ) if endpoint.current_session_id else None
+                    db, selected_session_id, endpoint.user_id
+                ) if selected_session_id else None
             except SessionServiceError as exc:
                 raise TelegramServiceError(exc.code) from exc
             if session is None or session.user_id != endpoint.user_id or session.session_type != "chat":
+                if parse_command(content) is not None:
+                    raise TelegramServiceError("git.sessionRequired")
                 run = await _new_session(db, endpoint, content, attachments, inbox.id)
             else:
+                if parse_command(content) is not None:
+                    inbox.session_id = session.id
                 run = await AgentRuntime.start(
                     db,
                     session,
@@ -1447,7 +1500,7 @@ async def process_inbox(inbox_id: UUID) -> UUID | None:
             code = getattr(exc, "code", None) or getattr(exc, "public_code", None) or "channel.unavailable"
             inbox.processing_at = None
             inbox.error_code = code
-            if code == "session.runAlreadyActive" and inbox.attempts < OUTBOX_MAX_ATTEMPTS:
+            if code == "session.runAlreadyActive" and parse_command(text) is None and inbox.attempts < OUTBOX_MAX_ATTEMPTS:
                 inbox.status = "pending"
                 inbox.next_attempt_at = datetime.now(UTC) + timedelta(seconds=10)
             else:
@@ -1457,7 +1510,10 @@ async def process_inbox(inbox_id: UUID) -> UUID | None:
                     endpoint,
                     destination=inbox.payload["chatId"],
                     key=f"inbox-error:{inbox.id}",
-                    text="Die Nachricht konnte nicht verarbeitet werden. Prüfe die Session in MatoLoop.",
+                    text=(
+                        command_error(code) if parse_command(text) is not None
+                        else "Die Nachricht konnte nicht verarbeitet werden. Prüfe die Session in MatoLoop."
+                    ),
                     inbox_id=inbox.id,
                 )
             await db.commit()

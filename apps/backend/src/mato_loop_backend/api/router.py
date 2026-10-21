@@ -9,8 +9,10 @@ from mato_loop_backend.api.routes.automations import router as automations_route
 from mato_loop_backend.api.routes.browser_integrations import router as browser_integrations_router
 from mato_loop_backend.api.routes.browsers import router as browsers_router
 from mato_loop_backend.api.routes.channels import router as channels_router
+from mato_loop_backend.api.routes.commands import router as commands_router
 from mato_loop_backend.api.routes.execution_agents import router as execution_agents_router
 from mato_loop_backend.api.routes.general_settings import router as general_settings_router
+from mato_loop_backend.api.routes.git import router as git_router
 from mato_loop_backend.api.routes.health import router as health_router
 from mato_loop_backend.api.routes.instance_limits import router as instance_limits_router
 from mato_loop_backend.api.routes.integrations import router as integrations_router
@@ -42,6 +44,8 @@ api_router.include_router(health_router, tags=["health"])
 api_router.include_router(auth_router, tags=["auth"])
 api_router.include_router(automations_router, tags=["automations"])
 api_router.include_router(channels_router, tags=["channels"])
+api_router.include_router(commands_router, tags=["commands"])
+api_router.include_router(git_router, tags=["git"])
 api_router.include_router(users_router, tags=["users"])
 api_router.include_router(execution_agents_router, tags=["execution-agents"])
 api_router.include_router(instance_limits_router, tags=["instance-limits"])

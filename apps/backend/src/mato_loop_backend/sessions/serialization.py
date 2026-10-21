@@ -344,6 +344,8 @@ def session_payload(
             else None
         ),
         "currentDirectory": item.current_directory,
+        "workspaceMode": item.workspace_mode or "local",
+        "codingWorkspace": item.coding_workspace,
         "workspaceContext": workspace_context
         or {
             "executionAgentId": (
@@ -422,6 +424,8 @@ def message_payload(
     attribution_resolved: bool = False,
 ) -> dict[str, Any]:
     runtime_data = (item.provider_data or {}).get("_matoloop", {})
+    command = runtime_data.get("codingCommand") if item.role == "user" and isinstance(runtime_data, dict) else None
+    command_prompt = command.get("prompt") if isinstance(command, dict) else None
     run_id = runtime_data.get("runId") if isinstance(runtime_data, dict) else None
     agent_profile_id = (
         runtime_data.get("agentProfileId") if isinstance(runtime_data, dict) else None
@@ -470,6 +474,7 @@ def message_payload(
             if item.role == "assistant"
             else item.content
         ),
+        **({"commandPrompt": command_prompt} if isinstance(command_prompt, str) else {}),
         "modelName": item.model_name,
         "generationStatus": item.generation_status or "completed",
         "continuationSegment": item.role == "assistant" and isinstance(runtime_data, dict)

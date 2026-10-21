@@ -8,7 +8,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any, Literal
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import (
     and_,
@@ -55,6 +55,7 @@ from mato_loop_backend.models import (
     PermissionGrant,
     Project,
     TitleGenerationStatus,
+    UserAccount,
 )
 from mato_loop_backend.permissions.policy import execution_directory_scope
 from mato_loop_backend.settings import (
@@ -984,8 +985,12 @@ async def create_session(
     if duplicate is not None:
         return duplicate
     content = payload.content.strip() if payload.content is not None else None
+    from mato_loop_backend.sessions.commands import parse_command
+
+    command = parse_command(content) if content else None
     if content == "" and not attachments:
         raise SessionServiceError(422, "validation.required", field="content")
+    await db.execute(select(UserAccount.id).where(UserAccount.id == user.id).with_for_update(key_share=True))
     project = None
     if payload.project_id is not None:
         project = await db.scalar(
@@ -997,6 +1002,10 @@ async def create_session(
             raise SessionServiceError(404, "project.notFound", field="projectId")
         if project.archived_at is not None:
             raise SessionServiceError(409, "project.archived")
+        if payload.run_id is not None:
+            duplicate = await duplicate_submission(db, payload.run_id, user.id)
+            if duplicate is not None:
+                return duplicate
     from mato_loop_backend.sessions.templates import (
         load_template,
         validate_chat_model,
@@ -1030,8 +1039,9 @@ async def create_session(
             else None
         )
     )
+    workspace_mode = (command.initial_workspace_mode if command else None) or payload.workspace_mode or (project.git_workspace_mode if project else None) or "local"
     item = ChatSession(
-        id=uuid4(),
+        id=uuid5(user.id, str(payload.run_id)) if payload.run_id and workspace_mode == "worktree" else uuid4(),
         user_id=user.id,
         project_id=payload.project_id,
         title="Neue Session",
@@ -1043,6 +1053,7 @@ async def create_session(
         memory_mode=payload.memory_mode.value if "memory_mode" in fields else template.memory_mode,
         web_search_policy=payload.web_search_policy.value,
         preferred_execution_agent_id=agent_id,
+        workspace_mode=workspace_mode,
         control_center=payload.control_center.model_dump(mode="json"),
     )
     ai = apply_session_ai(ai, item)
@@ -1051,9 +1062,33 @@ async def create_session(
         db, user.id, agent_id, requested_directory, defer_unavailable=content is not None,
     )
     item.current_directory = current_directory
-    db.add(item)
+    if item.workspace_mode == "worktree":
+        from mato_loop_backend.sessions.coding import prepare_session_worktree
+
+        await prepare_session_worktree(db, item, project)
+        current_directory, directory_policy = await validate_execution_preferences(
+            db, user.id, agent_id, item.current_directory
+        )
+    elif (project and current_directory
+          and agent_id == project.default_execution_agent_id
+          and current_directory == project.default_current_directory):
+        item.coding_workspace = {
+            "mode": "local", "repository": current_directory, "path": current_directory,
+            "remote": project.git_remote, "targetBranch": project.git_target_branch,
+            "executionAgentId": str(agent_id),
+        }
+    try:
+        db.add(item)
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        duplicate = await duplicate_submission(db, payload.run_id, user.id)
+        if duplicate is not None:
+            return duplicate
+        raise SessionServiceError(409, "http.conflict") from exc
     item_id = item.id
     item_project_id = item.project_id
+    session_storage = storage_factory()
     if content is not None and model_available(ai, model_id):
         selected_model = model_for_session(ai, model_id)
         selected_provider = provider_for_session(ai, selected_model)
@@ -1068,7 +1103,6 @@ async def create_session(
             effective_model_trust(selected_provider, selected_model).value,
         )
     await db.flush()
-    session_storage = storage_factory()
     try:
         await asyncio.to_thread(session_storage.provision, item_id, item_project_id, user_id=user.id)
         if content is None:
@@ -1203,6 +1237,10 @@ async def continue_run(
             raise SessionServiceError(409, "http.conflict")
         return {"message": message_serializer(message), "runId": str(run_id)}
     content = payload.content.strip()
+    from mato_loop_backend.sessions.commands import parse_command
+
+    if parse_command(content) is not None:
+        raise SessionServiceError(409, "session.runAlreadyActive")
     if not content and not attachments:
         raise SessionServiceError(422, "validation.required", field="content")
     run = await db.scalar(select(AgentRun).where(
@@ -1269,6 +1307,7 @@ async def send_message(
     duplicate_submission,
     message_serializer: MessageSerializer,
 ) -> dict[str, Any]:
+    await db.execute(select(UserAccount.id).where(UserAccount.id == user.id).with_for_update(key_share=True))
     item = await owned_session_query(db, session_id, user.id, for_update=True)
     if item is None:
         raise SessionServiceError(404, "session.notFound")
@@ -1369,6 +1408,8 @@ async def update_session(
         "current_directory",
     }
     if fields & (policy_fields | {"control_center", "todos_collapsed"}):
+        if fields & execution_fields:
+            await db.execute(select(UserAccount.id).where(UserAccount.id == user.id).with_for_update(key_share=True))
         await db.scalar(
             select(ChatSession.id)
             .where(ChatSession.id == session_id, ChatSession.user_id == user.id)
@@ -1377,6 +1418,11 @@ async def update_session(
     item = await owned_session_query(db, session_id, user.id)
     if item is None:
         raise SessionServiceError(404, "session.notFound")
+    if item.workspace_mode == "worktree" and any(
+        name in fields and getattr(payload, name) != getattr(item, name)
+        for name in execution_fields
+    ):
+        raise SessionServiceError(409, "git.worktreeChanged")
     if "session_template_id" in fields:
         from mato_loop_backend.sessions.templates import load_template
 
@@ -1541,6 +1587,8 @@ async def update_session(
             current_directory = (
                 payload.current_directory if "current_directory" in fields else None
             )
+        if (selected_new_agent or current_directory != item.current_directory) and (item.coding_workspace or {}).get("mode") != "worktree":
+            item.coding_workspace = None
         item.current_directory, directory_policy = await validate_execution_preferences(
             db, user.id, agent_id, current_directory
         )
@@ -1686,7 +1734,8 @@ async def session_delete_impact(
     *,
     owned_session_query,
 ) -> dict[str, int | str]:
-    if await owned_session_query(db, session_id, user_id) is None:
+    item = await owned_session_query(db, session_id, user_id)
+    if item is None:
         raise SessionServiceError(404, "session.notFound")
     linked = list(
         (
@@ -1702,6 +1751,7 @@ async def session_delete_impact(
         "automationCount": len(linked),
         "requiredAutomationCount": len(linked),
         "automationImpact": automation_impact_token(linked),
+        "hasWorktree": (item.coding_workspace or {}).get("mode") == "worktree",
         "fileReferenceCount": await _external_file_reference_count_for_roots(
             db,
             [
@@ -1782,6 +1832,7 @@ async def delete_session(
     automation_impact: str | None,
     storage_factory,
     owned_session_query,
+    remove_worktree: bool = False,
 ) -> None:
     item = await db.scalar(
         select(ChatSession).where(
@@ -1848,6 +1899,8 @@ async def delete_session(
     await db.rollback()
     for root_id in descendant_roots:
         await AgentRuntime.cancel_descendants(root_id)
+    if remove_worktree:
+        await db.execute(select(UserAccount.id).where(UserAccount.id == user_id).with_for_update(key_share=True))
     linked_automations = list(
         (
             await db.scalars(
@@ -1916,6 +1969,7 @@ async def delete_session(
                 automation_impact=automation_impact,
                 storage_factory=storage_factory,
                 owned_session_query=owned_session_query,
+                remove_worktree=remove_worktree,
             )
     session_storage = storage_factory()
     storage_sessions = [
@@ -1946,6 +2000,10 @@ async def delete_session(
         ).limit(1)
     )).all():
         raise SessionServiceError(409, "session.runAlreadyActive")
+    if remove_worktree:
+        from mato_loop_backend.sessions.coding import remove_session_worktree
+
+        await remove_session_worktree(db, item, storage_session_ids)
     trashed_trees = []
     try:
         for storage_session_id, project_id in storage_sessions:

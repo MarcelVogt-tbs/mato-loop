@@ -244,6 +244,7 @@ import {
   codingControlCenterAvailable,
   browserControlCenterAvailable,
   computerFilesControlCenterAvailable,
+  gitControlCenterAvailable,
   mailControlCenterAvailable,
   tbsDeskControlCenterAvailable,
   terminalControlCenterState
@@ -284,7 +285,8 @@ const launcherIntegrations = computed(() => closedIntegrations.value.filter((ite
   (item.id !== 'mail' || mailControlCenterAvailable(mail))
   && (item.id !== 'tbs-desk' || tbsDeskControlCenterAvailable(integrations))
   && (item.id !== 'coding' || codingControlCenterAvailable(activeProject.value))
-  && (item.id !== 'computer-files' || computerFilesControlCenterAvailable(chat.activeContext, executionAgents))
+   && (item.id !== 'computer-files' || computerFilesControlCenterAvailable(chat.activeContext, executionAgents))
+   && (item.id !== 'git' || gitControlCenterAvailable(chat.activeContext, executionAgents))
   && (item.id !== 'terminal' || terminalControlCenterState(chat.activeContext, executionAgents).available)
   && (item.id !== 'browser' || browserControlCenterAvailable(chat.activeContext, executionAgents, integrations))
 )))

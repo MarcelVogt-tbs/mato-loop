@@ -42,6 +42,7 @@ import {
   controlCenterIntegrationManifest,
   codingControlCenterAvailable,
   computerFilesControlCenterAvailable,
+  gitControlCenterAvailable,
   terminalControlCenterState
 } from 'src/app/control-center/manifest'
 import { useChatStore } from 'src/features/chat/store'
@@ -61,6 +62,7 @@ const activeProject = computed(() => projects.items.find(
   (project) => project.id === (chat.current ? chat.current.projectId : chat.sessionsProjectId)
 ))
 const actions = computed(() => [
+  { id: 'git', label: 'Git', caption: 'Arbeitsbereich, Repository-Status und Git-Aktionen öffnen', icon: 'account_tree', available: gitControlCenterAvailable(chat.activeContext, executionAgents) },
   { id: 'files', label: 'Session-Dateien', caption: 'Dateien dieser Session öffnen', icon: 'folder_open', available: true },
   { id: 'computer-files', label: 'Computer-Dateien', caption: 'Dateien auf dem verbundenen Computer öffnen', icon: 'folder_shared', available: computerFilesControlCenterAvailable(chat.activeContext, executionAgents) },
   { id: 'terminal', label: 'Terminal', caption: 'Terminal für diese Session öffnen', icon: 'terminal', available: terminalControlCenterState(chat.current, executionAgents).available },

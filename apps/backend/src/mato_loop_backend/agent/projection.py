@@ -416,6 +416,15 @@ def _model_tool_calls(
     return projected
 
 
+def command_message_content(message: Message) -> str:
+    content = message.content
+    runtime_data = (message.provider_data or {}).get("_matoloop", {})
+    command = runtime_data.get("codingCommand") if isinstance(runtime_data, dict) else None
+    if message.role == "user" and isinstance(command, dict) and isinstance(command.get("instructions"), str):
+        content += "\n\n[User-selected coding command]\n" + command["instructions"]
+    return content
+
+
 def message_dict(
     message: Message,
     *,
@@ -423,7 +432,7 @@ def message_dict(
     include_attachment_markers: bool = True,
     attachment_service: AttachmentService | None = None,
 ) -> dict[str, Any]:
-    content = message.content
+    content = command_message_content(message)
     if message.role == "assistant" and message.generation_status == "interrupted":
         content = f"{content}\n\n[Response interrupted by the user.]".strip()
     provider_data = dict(message.provider_data or {})
@@ -1713,7 +1722,7 @@ def _summary_source(
         if item.role not in {"user", "assistant"}:
             continue
         role = item.role.upper()
-        content = item.content
+        content = command_message_content(item)
         if item.role == "assistant" and item.generation_status == "interrupted":
             content = f"{content}\n[Response interrupted by the user]".strip()
         content = _timestamp_user_message(item, content)

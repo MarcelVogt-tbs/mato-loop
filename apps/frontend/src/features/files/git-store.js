@@ -28,20 +28,29 @@ function params(context, file = null) {
   }
 }
 
+function contextState(context) {
+  return context ? {
+    ...context, repository: null, files: [], truncated: false, loading: false, error: null,
+    preview: null, previewLoading: false, previewError: null,
+    listVersion: 0, previewVersion: 0
+  } : null
+}
+
 export const useGitChangesStore = defineStore('git-changes', {
-  state: () => ({ current: null, showChanges: false }),
+  state: () => ({ current: null, overview: null, view: 'changes' }),
   actions: {
+    async openChanges() {
+      this.view = 'changes'
+      await useControlCenterStore().openApp('git')
+    },
     setContext(context) {
       if (gitContextKey(context) === gitContextKey(this.current)) return
-      if (context?.sessionId !== this.current?.sessionId || context?.executionAgentId !== this.current?.executionAgentId) this.showChanges = false
-      this.current = context ? {
-        ...context, repository: null, files: [], truncated: false, loading: false, error: null,
-        preview: null, previewLoading: false, previewError: null,
-        listVersion: 0, previewVersion: 0
-      } : null
+      this.current = contextState(context)
     },
-    async refresh() {
-      const state = this.current
+    setOverviewContext(context) {
+      if (gitContextKey(context) !== gitContextKey(this.overview)) this.overview = contextState(context)
+    },
+    async refresh(state = this.current) {
       if (!state) return
       const version = ++state.listVersion
       state.loading = true
@@ -50,7 +59,6 @@ export const useGitChangesStore = defineStore('git-changes', {
         const { data } = await api.get('/workspace/git-changes', { params: params(state) })
         if (version !== state.listVersion) return
         Object.assign(state, data)
-        if (this.current === state && !state.repository) this.showChanges = false
       } catch (error) {
         if (version === state.listVersion) {
           state.error = error
@@ -61,8 +69,7 @@ export const useGitChangesStore = defineStore('git-changes', {
         if (version === state.listVersion) state.loading = false
       }
     },
-    async openFile(path) {
-      const state = this.current
+    async openFile(path, state = this.current) {
       if (!state?.repository || !state.files.some((file) => file.path === path)) return null
       return useControlCenterStore().openFile({
         scope: 'filesystem', path: `${state.repository.replace(/\/$/u, '')}/${path}`,

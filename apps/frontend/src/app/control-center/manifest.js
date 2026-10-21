@@ -1,6 +1,7 @@
 export const controlCenterIntegrationManifest = Object.freeze([
   { id: 'session', label: 'Session', icon: 'tune', fixed: true },
   { id: 'agent-coding', label: 'Agent-Coding', icon: 'smart_toy' },
+  { id: 'git', label: 'Git', icon: 'account_tree' },
   { id: 'files', label: 'Ablage', icon: 'folder_open' },
   { id: 'automation', label: 'Automationen', icon: 'schedule' },
   { id: 'computer-files', label: 'Computer-Dateien', icon: 'folder_shared' },
@@ -38,6 +39,11 @@ export function codingControlCenterAvailable(project) {
 export function computerFilesControlCenterAvailable(context, executionAgents) {
   const agent = executionAgents.byId(context?.preferredExecutionAgentId)
   return Boolean(agent?.connected && agent.operations?.includes('filesystem.list'))
+}
+
+export function gitControlCenterAvailable(context, executionAgents) {
+  const agent = executionAgents.byId(context?.preferredExecutionAgentId)
+  return Boolean(context?.currentDirectory && agent?.connected && agent.operations?.includes('git.repository'))
 }
 
 export function browserControlCenterAvailable(context, executionAgents, integrations, integrationId = null) {

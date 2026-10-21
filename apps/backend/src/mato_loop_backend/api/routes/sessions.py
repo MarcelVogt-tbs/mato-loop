@@ -359,6 +359,7 @@ class SessionCreateRequest(SessionOptionsRequest):
     web_search_policy: WebSearchPolicy = WebSearchPolicy.AVAILABLE
     preferred_execution_agent_id: UUID | None = None
     current_directory: str | None = Field(default=None, max_length=4_096)
+    workspace_mode: Literal["local", "worktree"] | None = None
     control_center: ControlCenterState = Field(default_factory=default_control_center_state)
     active_file: ActiveFileRequest | None = Field(
         default=None, validation_alias=AliasChoices("active_file", "activeFile")
@@ -366,6 +367,7 @@ class SessionCreateRequest(SessionOptionsRequest):
 
 
 class SessionUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     session_template_id: UUID | None = None
     session_profile: SessionProfileSnapshot | None = None
     title: str | None = Field(default=None, max_length=240)
@@ -807,6 +809,7 @@ async def session_defaults(
         "webSearchPolicy": WebSearchPolicy.AVAILABLE.value,
         "preferredExecutionAgentId": str(preferred_agent_id) if preferred_agent_id else None,
         "currentDirectory": current_directory,
+        "workspaceMode": (project.git_workspace_mode if project else None) or "local",
     }
 
 
@@ -1016,6 +1019,7 @@ async def delete_session(
         str | None,
         Query(alias="automationImpact", min_length=64, max_length=64),
     ] = None,
+    remove_worktree: Annotated[bool, Query(alias="removeWorktree")] = False,
 ) -> None:
     try:
         await session_service.delete_session(
@@ -1024,6 +1028,7 @@ async def delete_session(
             db,
             automation_mode=automation_mode,
             automation_impact=automation_impact,
+            remove_worktree=remove_worktree,
             storage_factory=SessionStorage,
             owned_session_query=_mutable_session,
         )

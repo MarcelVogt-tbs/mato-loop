@@ -397,7 +397,7 @@ export const useControlCenterStore = defineStore('control-center', {
         this.requestedAppId = null
         return this.setOpen(true)
       }
-      if (!this.sessionId && this.ready && appId !== 'session' && controlCenterIntegrationIds.has(appId)) {
+      if (!this.sessionId && this.ready && !['session', 'git'].includes(appId) && controlCenterIntegrationIds.has(appId)) {
         const session = await useChatStore().createEmptySession({
           tabs: this.tabs.some((tab) => tab.appId === appId) ? this.tabs : [...this.tabs, appTab(appId)],
           activeAppId: appId,

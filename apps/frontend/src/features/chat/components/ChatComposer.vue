@@ -1,5 +1,13 @@
 <template>
   <div class="chat-composer">
+    <q-resize-observer @resize="resizeComposer" />
+    <AppMenu
+      v-if="paletteOpen" ref="commandMenu" :model-value="paletteOpen" fit no-parent-event no-focus no-refocus
+      anchor="top left" self="bottom left" max-height="min(360px, 45dvh)" :max-width="`${composerWidth}px`"
+      @update:model-value="!$event && dismissCommands()"
+    >
+      <CommandList :id="paletteId" ref="commandList" :filter="slashQuery || ''" :disabled="inputDisabled" @selected="selectCommand" @resize="commandMenu?.updatePosition()" />
+    </AppMenu>
     <q-card flat class="app-surface chat-composer__card">
       <q-form @submit.prevent="submit">
         <q-input
@@ -15,6 +23,8 @@
           :class="{ 'chat-composer__input--small': session?.sessionProfile?.messageSize === 'small' }"
           :placeholder="inputPlaceholder"
           :disable="inputDisabled"
+          role="combobox" aria-autocomplete="list" :aria-expanded="paletteOpen"
+          :aria-controls="paletteOpen ? paletteId : undefined" :aria-activedescendant="paletteOpen ? commandList?.activeId : undefined"
           @update:model-value="$emit('update:draft', $event)"
           @keydown="handleComposerKeydown"
           @keydown.enter.exact.prevent="submit"
@@ -182,7 +192,7 @@
 
 <script setup>
 import AppMenu from 'src/shared/ui/AppMenu.vue'
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import ComposerAttachments from 'src/features/chat/components/ComposerAttachments.vue'
 import SessionSettingsFields from 'src/features/chat/components/SessionSettingsFields.vue'
@@ -196,6 +206,7 @@ import { recorderErrorMessage, useAudioRecorder } from 'src/features/chat/audio-
 import { clipboardAttachmentFiles } from 'src/utils/attachment-drafts'
 import { formatAttachmentDuration } from 'src/utils/attachments'
 import { sessionModel } from '../session-model'
+import CommandList from 'src/features/commands/CommandList.vue'
 
 defineOptions({ name: 'ChatComposer' })
 
@@ -220,6 +231,16 @@ const input = ref(null)
 const attachmentInput = ref(null)
 const settingsFields = ref(null)
 const sendMode = ref('interrupt')
+const commandList = ref(null)
+const commandMenu = ref(null)
+const composerWidth = ref(0)
+const paletteId = useId()
+const slashDismissed = ref(false)
+const slashQuery = computed(() => /^\/[a-z0-9_-]*$/iu.test(props.draft) ? props.draft : null)
+const paletteOpen = computed(() => !inputDisabled.value && !voiceActivity.value
+  && !slashDismissed.value && slashQuery.value !== null)
+watch(() => props.draft, () => { slashDismissed.value = false })
+watch([() => props.session?.id, () => chat.sessionsProjectId], dismissCommands)
 const sendingRecording = ref(false)
 const { confirm } = useConfirm()
 let recordingScope = null
@@ -297,7 +318,25 @@ const canSendDuringRun = computed(() => props.running && (voiceActivity.value ||
 )))
 const sessionSettingsWarning = computed(() => settingsFields.value?.warning || '')
 
-function submit() {
+function dismissCommands() {
+  slashDismissed.value = true
+}
+
+function resizeComposer({ width }) {
+  composerWidth.value = width
+  void nextTick(() => commandMenu.value?.updatePosition())
+}
+
+function selectCommand(command) {
+  const argumentsText = props.draft.replace(/^\/[a-z0-9_-]*(?:\s+|$)/iu, '')
+  dismissCommands()
+  emit('update:draft', `/${command.name} ${argumentsText}`)
+  void nextTick(() => input.value?.focus())
+}
+
+function submit(event) {
+  if (event?.isComposing) return
+  if (paletteOpen.value && (commandList.value?.select() || commandList.value?.pending)) return
   if (recording.value) {
     void finishAndSendRecording()
     return
@@ -308,6 +347,14 @@ function submit() {
 }
 
 function handleComposerKeydown(event) {
+  if (paletteOpen.value && !event.isComposing && ['ArrowDown', 'ArrowUp', 'Escape', 'Tab'].includes(event.key)) {
+    if (event.key === 'Escape') dismissCommands()
+    else if (event.key === 'Tab') { if (!commandList.value?.select()) return }
+    else commandList.value?.move(event.key === 'ArrowDown' ? 1 : -1)
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
   if (
     event.defaultPrevented || event.repeat || event.isComposing || event.altKey
     || event.ctrlKey === event.metaKey || event.code !== 'Period'

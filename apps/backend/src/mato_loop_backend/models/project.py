@@ -44,6 +44,11 @@ class Project(Base):
     default_current_directory: Mapped[str | None] = mapped_column(
         String(4096), nullable=True
     )
+    git_remote: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    git_target_branch: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    git_workspace_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="local", server_default="local"
+    )
     coding_integration_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
     coding_project_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
     coding_workspace_key: Mapped[str | None] = mapped_column(String(1000), nullable=True)

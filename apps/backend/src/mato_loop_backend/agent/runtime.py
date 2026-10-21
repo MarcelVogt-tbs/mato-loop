@@ -140,7 +140,8 @@ class AgentRuntime:
     ) -> None:
         statement = select(UserAccount.is_active).where(UserAccount.id == user_id)
         if for_update:
-            statement = statement.with_for_update()
+            # Admission must serialize without blocking foreign-key inserts for personal settings.
+            statement = statement.with_for_update(key_share=True)
         active = await db.scalar(statement)
         if active is False or active is None:
             raise AgentRunError("auth.accountDisabled")
@@ -184,6 +185,7 @@ class AgentRuntime:
             or source_endpoint_id is None
         ):
             raise ValueError("invalid message source")
+        await db.execute(select(UserAccount.id).where(UserAccount.id == chat_session.user_id).with_for_update(key_share=True))
         locked_session = await db.scalar(
             select(ChatSession)
             .where(ChatSession.id == chat_session.id)
@@ -206,7 +208,22 @@ class AgentRuntime:
         )
         if active_run is not None:
             raise AgentRunError("session.runAlreadyActive")
+        from mato_loop_backend.sessions.commands import parse_command, prepare_command
+        from mato_loop_backend.sessions.git_commands import check_workspace_admission
+        from mato_loop_backend.sessions.service import SessionServiceError
+
         await cls._ensure_user_active(db, chat_session.user_id, for_update=True)
+        selected_command = parse_command(content)
+        command_data = None
+        if selected_command is not None:
+            try:
+                command_data = await prepare_command(db, chat_session, selected_command, content)
+            except SessionServiceError as exc:
+                raise AgentRunError(exc.code, params=exc.params) from exc
+            if selected_command.mutates_workspace and (
+                agent_profile_id_override or chat_session.agent_profile_id
+            ) == PLAN_PROFILE_ID:
+                agent_profile_id_override = BUILD_PROFILE_ID
         profile_id = agent_profile_id_override or chat_session.agent_profile_id
         from mato_loop_backend.settings.effective import session_agent_allowed
 
@@ -262,6 +279,15 @@ class AgentRuntime:
                     assert isinstance(directory, DirectoryResult)
                     current_directory = directory.path
             execution_operations = sorted(snapshot) if snapshot is not None else []
+        try:
+            await check_workspace_admission(
+                db, chat_session.user_id, chat_session.preferred_execution_agent_id,
+                current_directory, command_data,
+                metadata_directory=((chat_session.coding_workspace or {}).get("commonDirectory")
+                                    if (chat_session.coding_workspace or {}).get("executionAgentId") == str(chat_session.preferred_execution_agent_id) else None),
+            )
+        except SessionServiceError as exc:
+            raise AgentRunError(exc.code) from exc
         if agent_profile_id_override is not None and profile_id != chat_session.agent_profile_id:
             await db.execute(
                 delete(PermissionGrant).where(PermissionGrant.session_id == chat_session.id)
@@ -275,6 +301,7 @@ class AgentRuntime:
             trust_level=trust_level.value,
             provider_data={"_matoloop": {
                 "executionAgentId": str(execution_agent.id) if execution_agent else None,
+                **({"codingCommand": command_data} if command_data else {}),
                 **({"source": {
                     "type": "automationRun", "automationId": str(automation_run.automation_id),
                     "runId": str(automation_run.id), "trigger": automation_run.trigger,
@@ -411,7 +438,7 @@ class AgentRuntime:
             raise AgentRunError("session.archived")
         if failed_run.session_id != chat_session.id or failed_run.status != "failed":
             raise AgentRunError("session.retryUnavailable")
-        await cls._ensure_user_active(db, chat_session.user_id)
+        await cls._ensure_user_active(db, chat_session.user_id, for_update=True)
         ai_settings = apply_session_ai(await load_effective_ai(db, chat_session.user_id), chat_session)
         model_id = ai_settings.default_model_id if before_execution else failed_run.model_config_id
         agent_id = chat_session.preferred_execution_agent_id if before_execution else failed_run.execution_agent_id
@@ -487,6 +514,36 @@ class AgentRuntime:
             if input_message is None:
                 raise AgentRunError("session.retryUnavailable")
             metadata = (input_message.provider_data or {}).get("_matoloop", {})
+            from mato_loop_backend.sessions.command_contracts import command_context
+            from mato_loop_backend.sessions.commands import parse_command, prepare_command
+            from mato_loop_backend.sessions.git_commands import check_workspace_admission
+            from mato_loop_backend.sessions.service import SessionServiceError
+
+            saved_command = metadata.get("codingCommand")
+            try:
+                if parse_command(input_message.content) is not None and not isinstance(saved_command, dict):
+                    raise SessionServiceError(409, "git.worktreeChanged")
+                if isinstance(saved_command, dict):
+                    if agent_id != failed_run.execution_agent_id or current_directory != failed_run.current_directory_snapshot:
+                        raise SessionServiceError(409, "git.worktreeChanged")
+                    selected_command = parse_command("/" + saved_command["name"])
+                    if selected_command is None:
+                        raise SessionServiceError(409, "git.worktreeChanged")
+                    fresh_command = await prepare_command(db, chat_session, selected_command, input_message.content)
+                    saved_context = command_context(saved_command)
+                    if not saved_context or any(fresh_command["context"].get(key) != value
+                                                for key, value in saved_context.items()):
+                        raise SessionServiceError(409, "git.worktreeChanged")
+                    saved_command = {**saved_command, "resources": fresh_command["resources"],
+                                     "context": fresh_command["context"]}
+                    metadata = {**metadata, "codingCommand": saved_command}
+                    input_message.provider_data = {**(input_message.provider_data or {}), "_matoloop": metadata}
+                await check_workspace_admission(db, chat_session.user_id, agent_id, current_directory,
+                                                saved_command, exclude_run_id=run.id,
+                                                metadata_directory=((chat_session.coding_workspace or {}).get("commonDirectory")
+                                                                    if (chat_session.coding_workspace or {}).get("executionAgentId") == str(agent_id) else None))
+            except SessionServiceError as exc:
+                raise AgentRunError(exc.code) from exc
             if not before_execution:
                 input_message.provider_data = {
                     **(input_message.provider_data or {}),

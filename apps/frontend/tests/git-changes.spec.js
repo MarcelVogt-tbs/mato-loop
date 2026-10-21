@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import FileChanges from '../src/features/chat/components/FileChanges.vue'
 import { gitContext, useGitChangesStore } from '../src/features/files/git-store'
+import { useControlCenterStore } from '../src/app/control-center/store'
 
 const { api } = vi.hoisted(() => ({ api: { get: vi.fn() } }))
 vi.mock('src/boot/axios', () => ({ api }))
@@ -11,6 +12,14 @@ const context = { sessionId: 'session', executionAgentId: 'agent', currentDirect
 let app
 beforeEach(() => { setActivePinia(createPinia()); api.get.mockReset() })
 afterEach(() => app?.unmount())
+
+it('opens the Git changes view from the overall diff entry point', async () => {
+  const git = useGitChangesStore()
+  git.view = 'settings'
+  const open = vi.spyOn(useControlCenterStore(), 'openApp').mockResolvedValue({})
+  await git.openChanges()
+  expect([open.mock.calls, git.view]).toEqual([[['git']], 'changes'])
+})
 
 it('keeps the fallback and shows deleted or uncounted Git files', async () => {
   const root = document.createElement('div')

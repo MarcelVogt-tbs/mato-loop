@@ -16,6 +16,7 @@ from mato_loop_backend.agent.projection import (
     _target_tool_result,
     _tool_names_by_message_id,
     _tool_result_reference,
+    command_message_content,
     tool_execution_binding,
 )
 from mato_loop_backend.agent.session_secrets import session_secrets
@@ -80,7 +81,7 @@ def _message_item(
     available_secret_references: set[str] | None = None,
 ) -> tuple[dict[str, Any], int]:
     content_limit = min(SESSION_TOOL_RESULT_CHUNK_CHARACTERS, max(0, remaining))
-    content = message.content
+    content = command_message_content(message)
     if message.role == "tool":
         content = _target_tool_result(
             tool_names.get(message.id), message.content, target_trust_level,

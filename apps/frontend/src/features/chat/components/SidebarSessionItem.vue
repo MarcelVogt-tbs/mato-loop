@@ -67,7 +67,6 @@
               <SidebarNavItem icon="archive" label="Archivieren" v-close-popup @click="emit('archive', session)" />
               <SidebarNavItem
                 icon="delete_outline" label="Löschen" v-close-popup class="text-negative"
-                v-confirm="{ message: `Session „${session.title}“ löschen?`, title: 'Session löschen', okLabel: 'Löschen' }"
                 @click="emit('delete', session)"
               />
             </template>

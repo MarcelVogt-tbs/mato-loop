@@ -131,6 +131,7 @@ const selectedExecutionAgent = computed(() => (
 ))
 const directoryPickerOpen = ref(false)
 const directoryPickerAvailable = computed(() => !props.disabled && selectedExecutionAgent.value?.connected === true
+  && !(props.session?.id && props.session?.workspaceMode === 'worktree')
   && selectedExecutionAgent.value.operations?.includes('filesystem.list'))
 watch([() => props.session?.id, () => props.session?.preferredExecutionAgentId], () => {
   directoryPickerOpen.value = false
@@ -383,6 +384,7 @@ const ReasoningField = defineComponent(() => () => h(AppSelect, selectProps({
 })))
 const ComputerField = defineComponent(() => () => [
   h(AppSelect, selectProps({
+    disable: props.disabled || Boolean(props.session?.id && props.session?.workspaceMode === 'worktree'),
     modelValue: props.session?.preferredExecutionAgentId,
     options: executionAgentOptions.value,
     label: props.compact ? undefined : 'Computer',

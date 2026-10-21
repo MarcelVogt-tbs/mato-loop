@@ -581,7 +581,8 @@ async def test_mark_session_read_uses_owned_assistant_message_monotonically(has_
     db.commit.assert_awaited_once()
 
 
-async def test_session_is_created_with_first_message_and_run(monkeypatch) -> None:
+@pytest.mark.parametrize("content", ["Erste Nachricht", "/git_init"])
+async def test_session_is_created_with_first_message_and_run(monkeypatch, content) -> None:
     from mato_loop_backend.api.routes import sessions as sessions_route
     from mato_loop_backend.settings.session_profiles import CODING_TEMPLATE_ID
 
@@ -639,13 +640,14 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
         id=uuid4(),
         session_id=run.session_id,
         role="user",
-        content="Erste Nachricht",
+        content=content,
     )
     db.scalar.side_effect = [project, persisted_message, None, None]
 
     result = await create_session(
         SessionCreateRequest(
-            content="  Erste Nachricht  ",
+            content=f"  {content}  ",
+            workspace_mode="worktree" if content == "/git_init" else None,
             project_id=project.id,
             reasoning_effort="low",
             control_center={
@@ -661,6 +663,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     )
 
     session = db.add.call_args.args[0]
+    assert session.workspace_mode == "local"
     assert session.model_config_id is None
     assert session.reasoning_effort == "low"
     assert session.user_id == user.id
@@ -684,7 +687,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch) -> Non
     start.assert_awaited_once_with(
         db,
         session,
-        "Erste Nachricht",
+        content,
         run_id=None,
         attachments=None,
         active_file=None,
@@ -800,7 +803,8 @@ async def test_first_session_retry_returns_canonical_session_and_attachment() ->
     db.add.assert_not_called()
 
 
-async def test_concurrent_first_session_retry_recovers_winning_run(monkeypatch) -> None:
+@pytest.mark.parametrize("failure_stage", ["insert", "runtime"])
+async def test_concurrent_first_session_retry_recovers_winning_run(monkeypatch, failure_stage) -> None:
     from mato_loop_backend.api.routes import sessions as sessions_route
 
     user = _user()
@@ -840,6 +844,8 @@ async def test_concurrent_first_session_retry_recovers_winning_run(monkeypatch) 
         "start",
         AsyncMock(side_effect=IntegrityError("insert", {}, Exception("duplicate"))),
     )
+    if failure_stage == "insert":
+        db.flush.side_effect = IntegrityError("insert", {}, Exception("duplicate"))
     storage = MagicMock()
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
 
@@ -850,7 +856,10 @@ async def test_concurrent_first_session_retry_recovers_winning_run(monkeypatch) 
     assert result["session"]["id"] == str(winner.id)
     assert result["runId"] == str(run_id)
     db.rollback.assert_awaited()
-    storage.remove_session.assert_called_once()
+    if failure_stage == "runtime":
+        storage.remove_session.assert_called_once()
+    else:
+        storage.remove_session.assert_not_called()
 
 
 async def test_session_defaults_report_effective_memory_state(monkeypatch) -> None:
@@ -2255,8 +2264,9 @@ async def test_attachment_download_has_secure_headers_and_checks_hierarchy(
     assert response.headers["content-disposition"].startswith("inline;")
 
 
+@pytest.mark.parametrize("worktree_failure", [False, True])
 async def test_session_delete_trashes_commits_and_purges_tree(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, worktree_failure
 ) -> None:
     from mato_loop_backend.api.routes import sessions as sessions_route
 
@@ -2275,6 +2285,12 @@ async def test_session_delete_trashes_commits_and_purges_tree(
     monkeypatch.setattr(AgentRuntime, "cancel_descendants", AsyncMock(), raising=False)
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: sessions)
 
+    if worktree_failure:
+        monkeypatch.setattr("mato_loop_backend.sessions.coding.remove_session_worktree", AsyncMock(side_effect=SessionServiceError(409, "git.worktreeRemoveFailed")))
+        with pytest.raises(ApiError, match="git.worktreeRemoveFailed"):
+            await delete_session(session_id, user, db, remove_worktree=True)
+        assert session_path.exists() and db.delete.await_count == 0
+        return
     await delete_session(session_id, user, db)
 
     db.delete.assert_awaited_once_with(session)

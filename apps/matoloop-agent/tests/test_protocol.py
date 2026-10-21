@@ -4,13 +4,33 @@ import unittest
 
 from pydantic import ValidationError
 
-from matoloop_agent.protocol import Hello, Request, SystemInfo, parse_inbound, validate_arguments
+from matoloop_agent.protocol import (
+    GitWorktreeArguments,
+    Hello,
+    Request,
+    SystemInfo,
+    parse_inbound,
+    validate_arguments,
+)
 
 REQUEST_ID = "bbc46aa8-698d-4554-92c2-1cd5c6cc33a6"
 AGENT_ID = "2ea504cc-e3c6-4e0d-aa05-080328100fe8"
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_worktree_remote_and_identity_must_be_paired(self) -> None:
+        for remote in ({"remote": "origin"}, {"remoteIdentity": "a" * 64}):
+            with self.subTest(remote=remote), self.assertRaises(ValidationError):
+                GitWorktreeArguments(
+                    path="/repo",
+                    commonDirectory="/repo/.git",
+                    ownerId=AGENT_ID,
+                    projectId=AGENT_ID,
+                    sessionId=REQUEST_ID,
+                    targetBranch="main",
+                    **remote,
+                )
+
     def test_maintenance_password_is_single_line(self) -> None:
         request = Request(
             type="request",

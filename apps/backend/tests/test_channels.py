@@ -602,6 +602,10 @@ async def test_telegram_poll_releases_database_session_before_network(monkeypatc
             assert kwargs["allowed_updates"] == ["message", "callback_query"]
             return ()
 
+        async def set_my_commands(self, commands, **_kwargs):
+            assert session.closed is True
+            assert "git_review" in {item.command for item in commands}
+
     ingest = AsyncMock()
     monkeypatch.setattr(telegram, "AsyncSessionFactory", lambda: session)
     monkeypatch.setattr(

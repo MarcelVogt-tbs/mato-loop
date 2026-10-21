@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { apiErrorMessage, decodeBlobApiError, errorDescriptor } from '../src/utils/api-errors'
 
 describe('API error messages', () => {
+  it('explains why a local worktree cannot start from an unborn branch', () => {
+    expect(apiErrorMessage({ error: { code: 'git.localBranchRequired' } })).toBe(
+      'Der lokale Zielbranch fehlt oder enthält noch keinen Commit. Prüfe den Zielbranch und erstelle bei Bedarf zuerst einen Commit.'
+    )
+  })
   it('explains why a dirty backend cannot supply an Agent installation target', () => {
     expect(apiErrorMessage({ error: { code: 'maintenance.targetUnavailable' } })).toBe(
       'Für diesen Backend-Stand ist keine reproduzierbare Agent-Version verfügbar. Verwende einen veröffentlichten Build oder einen lokalen Entwicklungs-Checkout.'

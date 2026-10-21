@@ -525,6 +525,7 @@ class ExecutionClient:
                 )
             elif code == "operation.cancelled":
                 mapped_code = (
+                    "executionAgent.outcomeUnknown" if operation in {"git.worktree", "git.worktree.remove"} else
                     "process.interrupted"
                     if operation.startswith("shell.") or operation == "terminal.run"
                     else "tool.executionInterrupted"
@@ -533,6 +534,14 @@ class ExecutionClient:
                 operation.startswith("shell.") or operation == "terminal.run"
             ):
                 mapped_code = "process.failed"
+            elif operation.startswith("git.") and code in {
+                "git.notRepository", "git.repositoryRootRequired", "git.remoteRequired",
+                "git.invalidBranch", "git.fetchFailed", "git.worktreeFailed",
+                "git.worktreeChanged", "git.worktreeLocation",
+                "git.localRemoteUnsupported", "git.localBranchRequired",
+                "git.worktreeRemoveFailed", "git.worktreeInUse",
+            }:
+                mapped_code = code
             else:
                 mapped_code = _REMOTE_ERROR_CODES.get(
                     code or "", "executionAgent.protocolError"

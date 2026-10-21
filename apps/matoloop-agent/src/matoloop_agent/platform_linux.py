@@ -93,7 +93,14 @@ class LinuxPlatform:
         openscad = OpenScadRunner(config, filesystem, cache, transfer)
         operations = set(ARGUMENT_MODELS) | set(BROWSER_ARGUMENT_MODELS)
         if shutil.which("git") is None:
-            operations.discard("git.changes")
+            operations.difference_update(
+                {
+                    "git.changes",
+                    "git.repository",
+                    "git.worktree",
+                    "git.worktree.remove",
+                }
+            )
         managed_container = os.environ.get("MATOLOOP_AGENT_INSTALL_ROOT")
         if not (
             os.environ.get("MATOLOOP_AGENT_CONTAINER") == "1"
