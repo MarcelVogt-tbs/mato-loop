@@ -387,7 +387,7 @@
           v-if="isNewConversation"
           :session="chat.activeContext"
           :disabled="draftProjectDisabled"
-          :fields="['memory', 'webSearch']"
+          :fields="['memory']"
           compact
           equal-fields
           class="q-mb-sm"
