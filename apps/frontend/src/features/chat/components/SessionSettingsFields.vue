@@ -427,7 +427,8 @@ const DirectoryField = defineComponent(() => () => h(QInput, {
 const MemoryField = defineComponent(() => () => h(AppSelect, selectProps({
   modelValue: props.session?.memoryMode,
   options: memoryModeOptions,
-  label: props.compact ? undefined : 'Memory',
+  label: 'Memory',
+  stackLabel: props.compact,
   class: props.compact ? 'chat-start-select col-auto q-px-sm text-body2' : undefined,
   hideBottomSpace: props.compact,
   'aria-label': 'Memory-Modus auswählen',
@@ -440,9 +441,9 @@ const MemoryField = defineComponent(() => () => h(AppSelect, selectProps({
     size: props.compact ? '18px' : undefined,
     color: props.compact && props.session?.memoryMode !== 'disabled' && props.session?.memoryUnavailableReason ? 'warning' : undefined
   }),
-  selected: props.compact ? () => h('span', { class: 'ellipsis' }, `Memory: ${memoryModeOptions.find(
+  selected: props.compact ? () => h('span', { class: 'ellipsis' }, memoryModeOptions.find(
     (option) => option.value === props.session?.memoryMode
-  )?.label || 'Nicht verfügbar'}`) : undefined
+  )?.label || 'Nicht verfügbar') : undefined
 }))
 const WebSearchField = defineComponent(() => () => h(AppSelect, selectProps({
   modelValue: props.session?.webSearchPolicy,

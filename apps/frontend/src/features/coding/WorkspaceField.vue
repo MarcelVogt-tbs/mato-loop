@@ -11,7 +11,9 @@
     class="chat-start-select q-px-sm text-body2"
     @popup-show="refresh"
     @update:model-value="$emit('update', { workspace_mode: $event })"
-  />
+  >
+    <template #prepend><q-icon name="workspaces" size="18px" /></template>
+  </AppSelect>
 </template>
 
 <script setup>

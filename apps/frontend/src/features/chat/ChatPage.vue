@@ -402,7 +402,8 @@
                 :disable="draftProjectDisabled"
                 :loading="projects.loading || changingDraftProject"
                 :clearable="Boolean(routeProjectId)"
-                borderless dense emit-value map-options options-dense hide-bottom-space
+                label="Projekt"
+                borderless dense stack-label emit-value map-options options-dense hide-bottom-space
                 behavior="menu"
                 class="draft-project-select q-px-sm text-body2 col"
                 aria-label="Projekt wählen oder wechseln"
@@ -422,7 +423,7 @@
               </AppSelect>
             </div>
             <WorkspaceField :session="chat.activeContext" :project-id="routeProjectId" :disabled="draftProjectDisabled" @update="chat.updateActive" />
-            <AppSelect :model-value="chat.activeContext.sessionTemplateId || templates.defaultTemplateId" :options="templates.templates.map((item) => ({ label: `${item.name}${item.scope === 'personal' ? ' (Persönlich)' : ''}`, value: item.id }))" :disable="draftProjectDisabled" :loading="templates.loading" borderless dense emit-value map-options hide-bottom-space class="chat-start-select q-px-sm text-body2" aria-label="Sessionvorlage auswählen" @update:model-value="changeTemplate">
+            <AppSelect :model-value="chat.activeContext.sessionTemplateId || templates.defaultTemplateId" :options="templates.templates.map((item) => ({ label: `${item.name}${item.scope === 'personal' ? ' (Persönlich)' : ''}`, value: item.id }))" :disable="draftProjectDisabled" :loading="templates.loading" label="Sessionvorlage" borderless dense stack-label emit-value map-options hide-bottom-space class="chat-start-select q-px-sm text-body2" aria-label="Sessionvorlage auswählen" @update:model-value="changeTemplate">
               <template #prepend><q-icon name="dashboard_customize" size="18px" /></template>
             </AppSelect>
           </template>
@@ -707,7 +708,7 @@ const newSessionRequested = computed(() => Object.hasOwn(route.query, 'new'))
 const showHome = computed(() => isNewConversation.value && !newSessionRequested.value && !chat.activeQueuedMessages.length)
 const draftProjectLabel = computed(() => routeProjectId.value
   ? projects.items.find(project => project.id === routeProjectId.value)?.name || 'Projekt'
-  : $q.screen.lt.sm ? 'Projekt' : 'Projekt wählen')
+  : 'Ohne Projekt')
 const changingDraftProject = ref(false)
 const draftProjectDialogOpen = ref(false)
 let draftProjectCreationContext = null
