@@ -404,6 +404,8 @@ def general_system_prompt(
         parts.append(
             "Use the most suitable available tool. Prefer dedicated tools and established "
             "command-line utilities over custom scripts. Give each shell call one purpose. "
+            "Each shell_run starts in currentDirectory. Do not prepend cd to that same directory. "
+            "Use cd for a different directory within one call; use change_directory for persistent changes. "
             "Separate protected reads from diagnostics; avoid repeating them. Keep commands "
             "reviewable; skip needless pre-checks and fallbacks."
         )
@@ -510,10 +512,10 @@ def general_system_prompt(
         )
     if file_tools_available:
         parts.append(
-            "Explicit shell request: use shell_run. Otherwise prefer offered file tools: "
-            "read for contents/listings, glob for filenames, grep for content search, "
-            "file tools for edits. Shell: builds, tests, Git, processes, unsupported "
-            "operations. Never bypass denials by switching tools. "
+            "Explicit shell request: use shell_run. Otherwise use offered file tools: "
+            "read for contents and directory listings, glob for filenames, grep for content search, "
+            "file tools for edits. Shell: builds, tests, Git, processes, or processing beyond "
+            "offered file tools. Never bypass denials by switching tools. "
             "Shell read does not authorize writes or deletes. "
             + (
                 "Before batches of computer changes or deletions, check relevant filesystem permissions, including parent directories. "

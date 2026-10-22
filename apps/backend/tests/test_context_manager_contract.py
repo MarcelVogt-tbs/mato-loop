@@ -3297,7 +3297,7 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     assert "Read AGENTS.md" not in main
     assert "Read AGENTS.md" not in work
     assert "Read AGENTS.md" not in general
-    assert "Otherwise prefer offered file tools: read for contents/listings" in general
+    assert "Otherwise use offered file tools: read for contents and directory listings" in general
     assert "file.accessDenied is not permission.userDenied" not in general
     assert "file.accessDenied is not permission.userDenied" in general_system_prompt(
         session, agent_profile=general_profile(), offered_tool_names=tools | {"shell_run"},

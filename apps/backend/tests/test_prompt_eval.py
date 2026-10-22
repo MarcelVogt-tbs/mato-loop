@@ -341,10 +341,13 @@ def test_agent_web_routing_production_prompt_is_conditional() -> None:
     command_rule = (
         "Use the most suitable available tool. Prefer dedicated tools and established "
         "command-line utilities over custom scripts. Give each shell call one purpose. "
+        "Each shell_run starts in currentDirectory. Do not prepend cd to that same directory. "
+        "Use cd for a different directory within one call; use change_directory for persistent changes. "
         "Separate protected reads from diagnostics; avoid repeating them. Keep commands "
         "reviewable; skip needless pre-checks and fallbacks."
     )
     assert messages[0]["content"].count(command_rule) == 1
+    assert messages[0]["content"].index(command_rule) < messages[0]["content"].index("Selected computer context:")
     assert command_rule not in offline_messages[0]["content"]
     assert "[██████████████░░░░░░] 72 % · 12,000 / 16,556 files" in messages[0]["content"]
     growth = prompt_eval.estimate_tokens(messages[0]["content"], 4.0) - prompt_eval.estimate_tokens(
