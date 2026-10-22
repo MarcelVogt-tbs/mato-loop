@@ -59,13 +59,13 @@ async function mountEditor(path = '/agents/agent', extraAgents = [], personalAge
 afterEach(() => { app?.unmount(); root?.remove(); vi.clearAllMocks() })
 
 it('starts a sparse profile from Allgemein and retains explicit content when changing its base', async () => {
-  const page = await mountEditor('/agents/new?copyFrom=agent', [{ id: 'plan', scope: 'instance', protected: true, name: 'Plan', instructions: 'Create a plan.', maxToolCalls: null, delegationEnabled: true, repositoryInstructionsEnabled: true }])
+  const page = await mountEditor('/agents/new?copyFrom=agent', [{ id: 'plan', scope: 'instance', protected: true, name: 'Plan', instructions: 'Create a plan.', maxToolCalls: null, delegationEnabled: true, repositoryInstructionsEnabled: true, temporaryFilesEnabled: true }])
   expect(page.requestPayload()).toEqual({ name: '', description: '', baseProfileId: builtinId, overrides: {} })
   page.setOwnership('instructions', 'own')
   page.form.instructions = 'Eigene Aufgabe'
   page.form.baseProfileId = 'plan'
   page.applyInheritedValues()
-  expect(page.form).toMatchObject({ instructions: 'Eigene Aufgabe', maxToolCalls: null, delegationEnabled: true, repositoryInstructionsEnabled: true })
+  expect(page.form).toMatchObject({ instructions: 'Eigene Aufgabe', maxToolCalls: null, delegationEnabled: true, repositoryInstructionsEnabled: true, temporaryFilesEnabled: true })
 })
 
 it('uses the administration route for global creation', async () => {
@@ -102,9 +102,15 @@ it('round-trips profile content without sending permissions through the profile 
   const page = await mountEditor()
   page.setModelValue('todoEnabled', false)
   page.setModelValue('repositoryInstructionsEnabled', true)
+  const temporaryFiles = [...root.querySelectorAll('.q-field')].find(field => field.querySelector('.q-field__label')?.textContent === 'Temporäre Dateien erlauben')
+  temporaryFiles.querySelector('[role="combobox"]').focus()
+  temporaryFiles.querySelector('[role="combobox"]').click()
+  const enabled = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find(item => item.querySelector('.q-item__label')?.textContent === 'An'))
+  enabled.click()
+  await vi.waitUntil(() => !document.querySelector('[role="option"]'))
   await page.saveAgent()
   expect(api.put).toHaveBeenCalledWith('/agent-profiles/agent', expect.objectContaining({ overrides: {
-    maxToolCalls: null, todoEnabled: false, delegationEnabled: true, repositoryInstructionsEnabled: true, sessionWritePaths: []
+    maxToolCalls: null, todoEnabled: false, delegationEnabled: true, repositoryInstructionsEnabled: true, temporaryFilesEnabled: true, sessionWritePaths: []
   } }), { params: { scope: 'personal' } })
 })
 

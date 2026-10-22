@@ -134,10 +134,10 @@ const blocked = computed(() => !admin.value && !auth.isAdmin && !agents.personal
 const inheritOptions = [{ label: 'Erben', value: 'inherit' }, { label: 'Eigener Wert', value: 'own' }]
 const INHERIT_MODEL_VALUE = '__inherit__'
 const textFields = [{ key: 'instructions', label: 'Anweisungen', max: 16000 }, { key: 'runtimeInstructions', label: 'Laufzeit-Hinweis', max: 4000 }]
-const booleanFields = [{ key: 'todoEnabled', label: 'Session-Aufgaben' }, { key: 'delegationEnabled', label: 'Delegation erlauben' }, { key: 'repositoryInstructionsEnabled', label: 'AGENTS.md automatisch laden', hint: 'Lädt Projekt- und Verzeichnisanweisungen automatisch in den Modellkontext. Bestehende Zugriffsrechte gelten weiterhin.' }]
+const booleanFields = [{ key: 'todoEnabled', label: 'Session-Aufgaben' }, { key: 'delegationEnabled', label: 'Delegation erlauben' }, { key: 'repositoryInstructionsEnabled', label: 'AGENTS.md automatisch laden', hint: 'Lädt Projekt- und Verzeichnisanweisungen automatisch in den Modellkontext. Bestehende Zugriffsrechte gelten weiterhin.' }, { key: 'temporaryFilesEnabled', label: 'Temporäre Dateien erlauben', hint: 'Erlaubt Lesen, Schreiben und Löschen im gemeinsamen Tempbereich des ausgewählten Computers unter Linux und Windows. Andere Sessions können diesen Bereich ebenfalls nutzen. Computersperren und der Schutz vertraulicher Daten gelten weiterhin.' }]
 const sessionWriteModeOptions = [{ label: 'Unbeschränkt', value: 'unrestricted' }, { label: 'Alles verweigern', value: 'denied' }, { label: 'Nur angegebene Pfade', value: 'paths' }]
-const scalarFields = ['instructions', 'runtimeInstructions', 'maxToolCalls', 'todoEnabled', 'delegationEnabled', 'repositoryInstructionsEnabled']
-const form = reactive({ name: '', description: '', baseProfileId: null, instructions: '', runtimeInstructions: '', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false, repositoryInstructionsEnabled: false, sessionWriteMode: 'unrestricted', sessionWritePathsText: '' })
+const scalarFields = ['instructions', 'runtimeInstructions', 'maxToolCalls', 'todoEnabled', 'delegationEnabled', 'repositoryInstructionsEnabled', 'temporaryFilesEnabled']
+const form = reactive({ name: '', description: '', baseProfileId: null, instructions: '', runtimeInstructions: '', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false, repositoryInstructionsEnabled: false, temporaryFilesEnabled: false, sessionWriteMode: 'unrestricted', sessionWritePathsText: '' })
 const ownership = reactive(Object.fromEntries([...scalarFields, 'sessionWritePaths'].map((field) => [field, false])))
 const baseProfiles = computed(() => agents.baseProfiles)
 const baseProfileOptions = computed(() => baseProfiles.value.map((agent) => ({ label: agent.name, value: agent.id })))
@@ -154,7 +154,7 @@ function requestPayload() {
   return { name: form.name.trim(), description: form.description.trim(), baseProfileId: form.baseProfileId, overrides }
 }
 function assignValues(agent) {
-  for (const field of scalarFields) form[field] = agent?.[field] ?? ({ instructions: '', runtimeInstructions: '', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false, repositoryInstructionsEnabled: false }[field] ?? null)
+  for (const field of scalarFields) form[field] = agent?.[field] ?? ({ instructions: '', runtimeInstructions: '', maxToolCalls: 25, todoEnabled: false, delegationEnabled: false, repositoryInstructionsEnabled: false, temporaryFilesEnabled: false }[field] ?? null)
   if (agent?.maxToolCalls === null) form.maxToolCalls = null
   const paths = agent?.sessionWritePaths
   form.sessionWriteMode = paths == null ? 'unrestricted' : paths.length ? 'paths' : 'denied'

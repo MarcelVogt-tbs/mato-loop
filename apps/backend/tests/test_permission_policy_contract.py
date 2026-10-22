@@ -667,6 +667,7 @@ async def test_current_directory_is_the_auto_workspace_boundary(tmp_path) -> Non
 
 
 @pytest.mark.parametrize("capability", ["filesystem.read", "filesystem.write", "filesystem.delete"])
+@pytest.mark.parametrize("temporary_directory", ["/tmp/mato-loop", "C:/Users/Test/AppData/Local/Temp/mato-loop"])
 @pytest.mark.parametrize("case,expected", [
     ("temporary", PermissionDecision.ALLOW),
     ("outside", PermissionDecision.DENY),
@@ -677,14 +678,15 @@ async def test_current_directory_is_the_auto_workspace_boundary(tmp_path) -> Non
     ("sensitive", PermissionDecision.ASK),
 ])
 async def test_profile_temporary_grant_is_bound_to_selected_computer_and_path(
-    tmp_path, monkeypatch, capability, case, expected,
+    tmp_path, monkeypatch, capability, temporary_directory, case, expected,
 ):
-    session = _session(user_id=uuid4(), preferred_execution_agent_id=uuid4(), current_directory="/work")
+    workspace = "C:/work" if temporary_directory.startswith("C:") else "/work"
+    session = _session(user_id=uuid4(), preferred_execution_agent_id=uuid4(), current_directory=workspace)
     agent = ExecutionAgent(id=session.preferred_execution_agent_id, user_id=session.user_id,
-                           home_directory="/work", home_filesystem_policy="auto",
+                           home_directory=workspace, home_filesystem_policy="auto",
                            external_filesystem_policy="deny" if case == "hard_deny" else "ask")
-    monkeypatch.setattr(execution_agent_connections, "system_info", lambda _id: SystemInfo(temporary_directory="/tmp/mato-loop"))
-    path = {"outside": "/work/source.py", "prefix": "/tmp/mato-loop-other/file", "sensitive": "/tmp/mato-loop/.env"}.get(case, "/tmp/mato-loop/check.py")
+    monkeypatch.setattr(execution_agent_connections, "system_info", lambda _id: SystemInfo(temporary_directory=temporary_directory))
+    path = {"outside": f"{workspace}/source.py", "prefix": f"{temporary_directory}-other/file", "sensitive": f"{temporary_directory}/.env"}.get(case, f"{temporary_directory}/check.py")
     if case == "other_computer":
         session.preferred_execution_agent_id = uuid4()
     db = _db_with_grants()

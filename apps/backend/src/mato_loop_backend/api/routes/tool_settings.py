@@ -205,7 +205,6 @@ class ProfileToolPermissionsRequest(BaseModel):
     public_permissions: AgentProfilePermissions = Field(default_factory=AgentProfilePermissions, alias="publicPermissions")
     shell_prefixes: ShellPrefixSettings | None = Field(default=None, alias="shellPrefixes")
     tool_availability: dict[str, StrictBool] = Field(default_factory=dict, alias="toolAvailability")
-    temporary_files_enabled: StrictBool | None = Field(default=None, alias="temporaryFilesEnabled")
 
 
 async def _profile_permissions(db, user, profile_id, scope, *, for_update=False):
@@ -219,8 +218,6 @@ async def _profile_permissions(db, user, profile_id, scope, *, for_update=False)
         groups[trust.value] = tool_registry.catalog(copy, IntegrationSettings())
     payload = {
         "groupsByTrust": groups,
-        "temporaryFilesEnabled": overrides.temporary_files_enabled,
-        "inheritedTemporaryFilesEnabled": baseline.temporary_files_enabled,
         "shellPrefixes": overrides.shell_prefixes.model_dump() if overrides.shell_prefixes is not None else None,
         "inheritedShellPrefixes": (baseline.shell_prefixes if baseline._shell_prefixes_configured else tools.shell_prefixes).model_dump(),
         "toolAvailability": overrides.tool_availability or {},
@@ -271,10 +268,6 @@ async def update_profile_tool_permissions(
         values.pop("tool_availability", None)
         if payload.tool_availability:
             values["tool_availability"] = payload.tool_availability
-    if "temporary_files_enabled" in payload.model_fields_set:
-        values.pop("temporary_files_enabled", None)
-        if payload.temporary_files_enabled is not None:
-            values["temporary_files_enabled"] = payload.temporary_files_enabled
     if isinstance(overrides, AgentProfileAccessOverrides):
         settings.builtin_access_overrides[profile_id] = AgentProfileAccessOverrides.model_validate(values)
     else:

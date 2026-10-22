@@ -2,10 +2,12 @@
 
 ## Tool-Rechte
 
-Unter **Tools > Berechtigungen** steuert **Temporäre Dateien erlauben** den zusätzlichen
+Direkt im **Agentenprofil**, neben dem Session-Ablagezugriff, steuert **Temporäre Dateien erlauben** den zusätzlichen
 Lese-, Schreib- und Löschzugriff auf den gemeinsamen Tempbereich des ausgewählten Computers
-(`/tmp/mato-loop` unter Linux). Plan und Build aktivieren ihn standardmäßig. Eigene Profile
-erben den Wert und können ihn überschreiben; das Rücksetzen stellt die Vorgabe wieder her.
+(`/tmp/mato-loop` unter Linux, der Unterordner `mato-loop` im Tempverzeichnis des Agent-Benutzers unter Windows).
+Plan und Build aktivieren ihn standardmäßig. Eigene Profile wählen **Erben**, **An** oder **Aus**;
+mitgelieferte Profile zeigen den wirksamen Wert schreibgeschützt wie die übrigen Profilfelder.
+Gespeicherte eigene Werte bleiben erhalten. Die Einstellung gehört nicht zu den Tool-Anpassungen.
 Der Bereich ist nicht pro Session isoliert: Unterordner dienen nur der Ordnung. Andere
 Worktrees werden dadurch nicht zugänglich. Werkzeugverbote, harte Computersperren,
 vertrauliche Daten und Delegationsgrenzen gelten weiterhin. Shell-Rechte bleiben unverändert.

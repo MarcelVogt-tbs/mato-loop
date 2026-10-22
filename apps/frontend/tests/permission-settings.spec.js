@@ -162,18 +162,16 @@ it.each([true, false])('selects a tool and its action for owned profile rules (s
 it('lets administration remove built-in overrides and save inheritance', async () => {
   api.get.mockImplementation(async (url) => ({ data: url === '/agent-profiles' ? {
     agents: [{ id: builtinId, name: 'Allgemein', scope: 'instance', protected: true }], effectiveAgents: [],
-  } : { ...rights(), temporaryFilesEnabled: null, inheritedTemporaryFilesEnabled: true, privatePermissions: { ...branch(), policies: { 'shell.write': 'disabled' } }, groupsByTrust: groups('shell.write'), shellPrefixes: null, inheritedShellPrefixes: { read: [], write: [] } } }))
+  } : { ...rights(), privatePermissions: { ...branch(), policies: { 'shell.write': 'disabled' } }, groupsByTrust: groups('shell.write'), shellPrefixes: null, inheritedShellPrefixes: { read: [], write: [] } } }))
   api.put.mockResolvedValue({ data: {} })
   const { page } = await mount(ToolPage, { admin: true }, `/tools?profileId=${builtinId}`, 'settings-tools')
   await vi.waitFor(() => expect(page().saved).toBeTruthy())
   expect(root.textContent).toContain('Deaktiviert')
   expect(root.textContent).toContain('Eigene Regel hinzufügen')
-  root.querySelector('[aria-label="Temporäre Dateien erlauben"]').click()
-  await nextTick()
   root.querySelector('[aria-label="Schreiben: Private Modelle entfernen"]').click()
   await vi.waitFor(() => expect(page().payload().privatePermissions.policies).toEqual({}))
   await page().save()
-  expect(api.put).toHaveBeenCalledWith(`/tools/profiles/${builtinId}/permissions`, expect.objectContaining({ temporaryFilesEnabled: false, privatePermissions: expect.objectContaining({ policies: {} }) }), { params: { scope: 'instance' } })
+  expect(api.put).toHaveBeenCalledWith(`/tools/profiles/${builtinId}/permissions`, expect.objectContaining({ privatePermissions: expect.objectContaining({ policies: {} }) }), { params: { scope: 'instance' } })
 })
 
 it('edits JavaScript hosts in a cancellable dialog before saving the settings', async () => {

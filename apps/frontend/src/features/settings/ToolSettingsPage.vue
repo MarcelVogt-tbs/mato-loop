@@ -86,15 +86,6 @@
         </q-card>
       </template>
       <template v-if="section === 'management'">
-        <q-card v-if="selectedId" flat class="app-surface q-mb-md">
-          <q-card-section>
-            <div class="row items-center">
-              <q-toggle :model-value="form.configuration.temporaryFilesEnabled ?? inheritedTemporaryFilesEnabled" class="col" color="primary" label="Temporäre Dateien erlauben" :disable="loading || saving || loadFailed" @update:model-value="form.configuration.temporaryFilesEnabled = $event" />
-              <q-btn v-if="form.configuration.temporaryFilesEnabled != null" flat round dense icon="undo" aria-label="Vorgabe für temporäre Dateien wiederherstellen" :disable="loading || saving || loadFailed" @click="form.configuration.temporaryFilesEnabled = null" />
-            </div>
-            <div class="text-caption app-muted">Erlaubt Lesen, Schreiben und Löschen im gemeinsamen Tempbereich des Computers (/tmp/mato-loop unter Linux). Andere Sessions können diesen Bereich ebenfalls nutzen. Werkzeugverbote und sensible Zugriffe bleiben unabhängig davon. Vorgabe: {{ inheritedTemporaryFilesEnabled ? 'Erlaubt' : 'Keine zusätzliche Freigabe' }}.</div>
-          </q-card-section>
-        </q-card>
         <q-banner v-if="!selectedId" rounded class="app-surface-tonal q-mb-md">Eigene Regeln ändern das Freigabeverhalten. Ein technisch nicht verfügbares Tool wird dadurch nicht aktiviert.</q-banner>
         <ProfileToolOverrides :key="selectedId || 'global'" v-model="form.permissions" :groups-by-trust="permissionGroups" :model-trust-enabled="auth.modelTrustEnabled" :disabled="loading || saving || loadFailed">
           <template #actions>
@@ -182,7 +173,6 @@ const permissionGroups = ref({ private: [], public: [] })
 const inheritedShellPrefixes = ref({ read: [], write: [] })
 const technicalGroups = ref([])
 const inheritedAvailability = ref({})
-const inheritedTemporaryFilesEnabled = ref(false)
 const globalAvailability = ref({})
 const permissionsLoading = ref(false)
 let loadToken = 0
@@ -231,7 +221,7 @@ function applyJavascript() {
 }
 const emptyPermissions = () => ({ privatePermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} }, publicPermissions: { policies: {}, integrationPolicies: {}, resourcePolicies: {} } })
 const form = reactive({ personalSettingsEnabled: false, permissions: emptyPermissions(), configuration: { toolAvailability: {}, shellPrefixes: null } })
-const hasOverrides = computed(() => form.configuration.temporaryFilesEnabled != null || ['privatePermissions', 'publicPermissions'].some(branch => Object.keys(form.permissions[branch].policies).length))
+const hasOverrides = computed(() => ['privatePermissions', 'publicPermissions'].some(branch => Object.keys(form.permissions[branch].policies).length))
 const payload = () => ({
   ...form.permissions,
   ...form.configuration,
@@ -265,8 +255,6 @@ async function loadPermissions() {
     form.permissions = { privatePermissions: data.privatePermissions || emptyPermissions().privatePermissions, publicPermissions: data.publicPermissions || emptyPermissions().publicPermissions }
     permissionGroups.value = data.groupsByTrust || { private: data.privateGroups || [], public: data.publicGroups || [] }
     form.configuration = { toolAvailability: { ...data.toolAvailability }, shellPrefixes: data.shellPrefixes ?? null }
-    inheritedTemporaryFilesEnabled.value = data.inheritedTemporaryFilesEnabled ?? false
-    if (selectedId.value) form.configuration.temporaryFilesEnabled = data.temporaryFilesEnabled ?? null
     inheritedShellPrefixes.value = data.inheritedShellPrefixes || { read: [], write: [] }
     inheritedAvailability.value = data.inheritedToolAvailability || {}
     globalAvailability.value = data.globalToolAvailability || {}
@@ -296,7 +284,6 @@ async function selectSection(value) {
 async function resetPermissions() {
   if (!await confirm('Alle eigenen Regeln dieses Profils entfernen, einschließlich öffentlicher Werte? Die Tool-Einstellungen bleiben erhalten.', 'Alle eigenen Regeln entfernen?', { okLabel: 'Entfernen', okColor: 'negative' })) return
   form.permissions = emptyPermissions()
-  if (selectedId.value) form.configuration.temporaryFilesEnabled = null
 }
 async function save() {
   if (!canEdit.value || loading.value || saving.value || loadFailed.value || !await formRef.value?.validate()) return

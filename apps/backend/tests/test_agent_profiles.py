@@ -802,7 +802,8 @@ def test_agent_profile_request_rejects_blank_trimmed_text() -> None:
                             overrides={"personaId": uuid4()})
 
 
-async def test_agent_profile_request_replaces_sparse_overrides(monkeypatch) -> None:
+@pytest.mark.parametrize("overrides", [{"temporaryFilesEnabled": False}, {}])
+async def test_agent_profile_request_replaces_sparse_overrides(monkeypatch, overrides) -> None:
     async def load_settings(_db, settings_type, **_kwargs):
         return settings_type()
 
@@ -810,14 +811,14 @@ async def test_agent_profile_request_replaces_sparse_overrides(monkeypatch) -> N
     existing = CustomAgentProfile(
         name="Agent", description="Old", baseProfileId=GENERAL_PROFILE_ID,
         enabled=False,
-        overrides={"instructions": "Old task", "todoEnabled": True},
+        overrides={"instructions": "Old task", "todoEnabled": True, "temporaryFilesEnabled": False},
     )
     user = UserAccount(
         id=uuid4(), username="admin", password_hash="hash", is_admin=True
     )
     payload = AgentProfileRequest(
         name="Agent", description="New", baseProfileId=PLAN_PROFILE_ID,
-        overrides={"instructions": "New task"},
+        overrides={"instructions": "New task", **overrides},
     )
 
     updated = await _profile_from_request(
@@ -832,4 +833,4 @@ async def test_agent_profile_request_replaces_sparse_overrides(monkeypatch) -> N
     assert updated.base_profile_id == PLAN_PROFILE_ID
     assert updated.description == "New"
     assert updated.enabled is False
-    assert updated.overrides.model_dump(exclude_unset=True) == {"instructions": "New task"}
+    assert updated.overrides.model_dump(exclude_unset=True, by_alias=True) == {"instructions": "New task", **overrides}

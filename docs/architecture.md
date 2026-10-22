@@ -185,8 +185,12 @@ owner, originating input, session, active run, delivered outbox prompt, and pend
 
 ## Agent and Tools
 
-`temporaryFilesEnabled` is a profile access setting, enabled by default for Plan and Build.
-It inherits through existing profile access overrides and personal-setting gates. For the
+`temporaryFilesEnabled` is an inherited workflow field beside `sessionWritePaths` in the
+profile editor, enabled by default for Plan and Build. Personal profiles follow the
+personal-profile gate, not the personal-tool gate. Tool permission endpoints do not
+expose or edit this field. Existing custom and built-in values remain in their current
+profile JSON documents, so no schema or data migration is needed. Built-in values are
+displayed read-only like other protected workflow fields. For the
 selected owner-bound computer, its advertised `temporaryDirectory` (`/tmp/mato-loop` on
 Linux, the OS temporary directory's `mato-loop` child on Windows) supplies implicit
 read/write/delete path grants through the existing category/resource matchers. These
