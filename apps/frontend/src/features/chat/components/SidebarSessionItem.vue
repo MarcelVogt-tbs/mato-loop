@@ -17,7 +17,7 @@
             <q-badge v-if="indicator.count > 1" floating rounded color="warning" text-color="dark" :label="indicator.count" />
           </template>
           <q-spinner-grid v-else-if="indicator.kind === 'active'" color="primary" size="16px" />
-          <q-icon v-else name="fiber_manual_record" color="primary" size="8px" />
+          <q-icon v-else name="fiber_manual_record" color="primary" size="12px" />
           <q-tooltip v-if="$q.platform.is.mobile !== true">{{ indicator.label }}</q-tooltip>
         </span>
       </span>

@@ -18,13 +18,23 @@
         <p v-else-if="home.loadFailed" class="app-muted">Sessions konnten nicht geladen werden.</p>
         <q-list v-else-if="recentSessions.length">
           <q-item v-for="session in recentSessions" :key="session.id" clickable v-ripple :dense="$q.screen.lt.sm" :active="false" :to="sessionRoute(session)" class="rounded-borders q-px-sm" :class="$q.screen.lt.sm ? 'q-py-xs' : 'q-py-sm'">
-            <q-item-section side class="q-pr-sm"><q-icon name="chat_bubble_outline" color="primary" size="20px" /></q-item-section>
+            <q-item-section side class="q-pr-sm">
+              <span class="home-session-status row items-center justify-center relative-position" :role="session.status ? 'status' : undefined" :aria-label="session.status?.label">
+                <template v-if="session.status?.kind === 'approval'">
+                  <q-icon name="pending_actions" color="warning" size="16px" />
+                  <q-badge v-if="session.status.count > 1" floating rounded color="warning" text-color="dark" :label="session.status.count" />
+                </template>
+                <q-spinner-grid v-else-if="session.status?.kind === 'active'" color="primary" size="16px" />
+                <q-icon v-else-if="session.status?.kind === 'unread'" name="fiber_manual_record" color="primary" size="12px" />
+                <q-icon v-else name="chat_bubble_outline" color="primary" size="20px" />
+                <q-tooltip v-if="session.status && $q.platform.is.mobile !== true">{{ session.status.label }}</q-tooltip>
+              </span>
+            </q-item-section>
             <q-item-section>
-              <q-item-label lines="1" :class="{ 'text-weight-medium': session.hasUnreadMessages }">
-                {{ session.title }}<span v-if="session.hasUnreadMessages" class="text-primary text-caption q-ml-xs">Neue Antwort</span>
+              <q-item-label lines="1" :class="{ 'text-weight-medium': session.status?.kind === 'unread' }">
+                {{ session.title }}
               </q-item-label>
               <q-item-label caption>{{ projectName(session.projectId) }} · {{ formatRelativeDateTime(session.lastMessageAt || session.createdAt) }}</q-item-label>
-              <q-item-label v-if="session.status" caption class="text-primary">{{ session.status }}</q-item-label>
             </q-item-section>
             <q-item-section side class="q-pl-sm"><q-icon name="chevron_right" /></q-item-section>
           </q-item>
@@ -84,7 +94,8 @@ const failedSources = computed(() => [
 ].filter(([, store]) => store.loadFailed).map(([label]) => label))
 const recentSessions = computed(() => home.sessions.map((session) => ({
   ...session,
-  status: sessionSidebarStatus(session, approvals.forSession(session.id).length, questions.forSession(session.id).length)?.label
+  status: sessionSidebarStatus(session, approvals.forSession(session.id).length, questions.forSession(session.id).length)
+    || (session.hasUnreadMessages ? { kind: 'unread', label: 'Ungelesene Antwort' } : null)
 })))
 const upcoming = computed(() => automations.items
   .filter((item) => item.effectiveState?.enabled && item.effectiveState.nextRunAt)
@@ -113,5 +124,10 @@ onMounted(() => { void Promise.allSettled([home.load(), profile.fetchProfile()])
 .chat-home {
   width: min(900px, 100%);
   margin-bottom: 24px;
+}
+
+.home-session-status {
+  width: 20px;
+  height: 20px;
 }
 </style>

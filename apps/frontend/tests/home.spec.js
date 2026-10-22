@@ -3,7 +3,7 @@ import { createApp, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Quasar, QBanner, QBtn, QIcon, QItem, QItemLabel, QItemSection, QLayout, QList, QPageContainer, QSkeleton, Ripple } from 'quasar'
+import { Quasar, QBadge, QBanner, QBtn, QIcon, QItem, QItemLabel, QItemSection, QLayout, QList, QPageContainer, QSkeleton, QSpinnerGrid, QTooltip, Ripple } from 'quasar'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 const mocks = vi.hoisted(() => ({ get: vi.fn() }))
@@ -54,7 +54,7 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   await router.push('/home')
   root = document.createElement('div'); document.body.append(root)
   app = createApp({ render: () => h(QLayout, null, () => h(QPageContainer, null, () => h(RouterView))) })
-  app.use(pinia).use(router).use(Quasar, { components: { QBanner, QBtn, QIcon, QItem, QItemLabel, QItemSection, QList, QSkeleton }, directives: { Ripple } })
+  app.use(pinia).use(router).use(Quasar, { components: { QBadge, QBanner, QBtn, QIcon, QItem, QItemLabel, QItemSection, QList, QSkeleton, QSpinnerGrid, QTooltip }, directives: { Ripple } })
   app.mount(root)
 
   await vi.waitFor(() => expect(root.textContent).toContain('Ein Gespräch fortsetzen'))
@@ -64,8 +64,8 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   useUserProfileStore().assignProfile({})
   await vi.waitFor(() => expect(root.querySelector('h1').textContent).toBe('Willkommen zurück'))
   expect(mocks.get).toHaveBeenCalledWith('/sessions', { params: { pageSize: 6, sort: 'recent' } })
-  expect(root.textContent).toContain('Neue Antwort')
-  expect(root.textContent).toContain('Agent arbeitet')
+  expect(root.textContent).not.toContain('Neue Antwort')
+  expect(root.querySelector('a[href*="session=session-1"] [role="status"]').getAttribute('aria-label')).toBe('Agent arbeitet')
   app.config.globalProperties.$q.screen.gt.xs = false
   app.config.globalProperties.$q.screen.lt.sm = true
   await nextTick()
