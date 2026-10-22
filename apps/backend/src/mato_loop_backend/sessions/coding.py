@@ -1,6 +1,7 @@
 """Owner-bound repository discovery and persistent session worktree bindings."""
 
 import re
+from typing import Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -64,6 +65,7 @@ class RepositoryResult(ExecutionResult):
     remote_urls: dict[str, str | None] = Field(default_factory=dict, max_length=100)
     git_directory: str | None = Field(default=None, max_length=4096)
     worktree_root: str | None = Field(default=None, max_length=4096)
+    worktree_layout: Literal["short-session", "project-session"] = "project-session"
     target_has_commit: bool | None = None
 
     _repository_path = field_validator("repository", "common_directory", "git_directory", "worktree_root")(
@@ -168,10 +170,14 @@ async def prepare_session_worktree(db, session: ChatSession, project: Project | 
         raise SessionServiceError(409, "git.notRepository")
     if info.worktree_root is None:
         raise SessionServiceError(409, "executionAgent.updateRequired")
-    expected_path = f"{info.worktree_root.rstrip('/')}/{project.id}/{session.id}"
-    if execution_filesystem_policy(agent, expected_path) == "deny":
-        raise SessionServiceError(403, "permission.denied")
     binding, remote, target = resolve_git_target(session, project, info)
+    legacy_path = f"{info.worktree_root.rstrip('/')}/{project.id}/{session.id}"
+    expected_paths = [legacy_path]
+    if info.worktree_layout == "short-session":
+        expected_paths.insert(0, f"{info.worktree_root.rstrip('/')}/{str(session.id)[:8]}")
+    expected_paths = [path for path in expected_paths if execution_filesystem_policy(agent, path) != "deny"]
+    if not expected_paths:
+        raise SessionServiceError(403, "permission.denied")
     if target is None:
         raise SessionServiceError(409, "git.configurationRequired")
     identity = info.remote_identities.get(remote)
@@ -187,12 +193,13 @@ async def prepare_session_worktree(db, session: ChatSession, project: Project | 
             "sessionId": str(session.id), "remote": remote,
             "targetBranch": target,
             "remoteIdentity": identity,
+            **({"destinations": expected_paths} if info.worktree_layout == "short-session" else {}),
         }, WorktreeResult, timeout=300)
     except ExecutionClientError as exc:
         code = exc.code if exc.code.startswith(("git.", "executionAgent.")) else "git.worktreeFailed"
         raise SessionServiceError(409, code) from exc
-    expected_branch = f"matoloop/{session.user_id}/{session.id}"
-    if (result.repository != session.current_directory or result.path != expected_path or result.branch != expected_branch
+    expected_branches = {f"matoloop/{session.user_id}/{session.id}", f"worktree-{str(session.id)[:8]}"}
+    if (result.repository != session.current_directory or result.path not in expected_paths or result.branch not in expected_branches
             or result.remote != remote or result.target_branch != target
             or result.remote_identity != identity or result.common_directory != info.common_directory):
         raise SessionServiceError(502, "executionAgent.protocolError")

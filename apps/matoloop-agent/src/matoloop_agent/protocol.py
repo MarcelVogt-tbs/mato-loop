@@ -242,8 +242,14 @@ class GitWorktreeArguments(PathArguments):
     remote_identity: str | None = Field(
         default=None, alias="remoteIdentity", pattern=r"^[0-9a-f]{64}$"
     )
+    destinations: list[Annotated[str, Field(min_length=1, max_length=4096)]] | None = Field(
+        default=None, min_length=1, max_length=2
+    )
 
     _common_path = field_validator("common_directory")(_absolute_path)
+    _destination_paths = field_validator("destinations")(
+        lambda values: [_absolute_path(value) for value in values] if values is not None else None
+    )
 
     @model_validator(mode="after")
     def paired_remote(self):

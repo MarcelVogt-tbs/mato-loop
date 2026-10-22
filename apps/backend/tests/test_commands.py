@@ -134,32 +134,48 @@ async def test_worktree_checks_destination_policy_before_creating_files(monkeypa
     db = AsyncMock()
     db.get.return_value = ExecutionAgent(home_directory="/workspace", external_filesystem_policy="deny")
     monkeypatch.setattr("mato_loop_backend.sessions.coding.inspect_repository", AsyncMock(return_value=RepositoryResult(
-        repository="/project", remotes=[], defaultRemote=None, defaultBranch="main", branch="main", worktreeRoot="/data/worktrees",
+        repository="/project", remotes=[], defaultRemote=None, defaultBranch="main", branch="main", worktreeRoot="/data/worktrees", worktreeLayout="short-session",
     )))
     with pytest.raises(SessionServiceError, match="permission.denied"):
         await prepare_session_worktree(db, session, project)
     client.request.assert_not_awaited()
 
 
-async def test_session_prepares_a_worktree_without_a_remote(monkeypatch):
+@pytest.mark.parametrize(("layout", "path_kind"), [
+    ("short-session", "current"), ("project-session", "current"),
+    ("short-session", "outside"), ("short-session", "legacy"), ("short-session", "legacy_denied"),
+])
+async def test_session_prepares_a_worktree_without_a_remote(monkeypatch, layout, path_kind):
     agent_id = uuid4()
     project = Project(id=uuid4(), default_execution_agent_id=agent_id, default_current_directory="/project", git_target_branch="develop")
     session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=agent_id,
                           current_directory="/project", workspace_mode="worktree")
-    destination = f"/data/worktrees/{project.id}/{session.id}"
+    current_path = f"/data/worktrees/{str(session.id)[:8]}"
+    destination = f"/data/worktrees/{project.id}/{session.id}" if layout == "project-session" or path_kind.startswith("legacy") else current_path
     client = AsyncMock()
     client.request.return_value = WorktreeResult(
-        repository="/project", path=destination, branch=f"matoloop/{session.user_id}/{session.id}",
+        repository="/project", path="/outside" if path_kind == "outside" else destination,
+        branch=f"worktree-{str(session.id)[:8]}" if layout != "project-session" else f"matoloop/{session.user_id}/{session.id}",
         baseCommit="a" * 40, remote=None, targetBranch="develop", remoteIdentity=None, commonDirectory="/project/.git",
         gitDirectory="/project/.git/worktrees/session",
     )
     monkeypatch.setattr("mato_loop_backend.sessions.coding.coding_client", AsyncMock(return_value=client))
     monkeypatch.setattr("mato_loop_backend.sessions.coding.inspect_repository", AsyncMock(return_value=RepositoryResult(
         repository="/project", commonDirectory="/project/.git", remotes=[], defaultRemote=None, defaultBranch="main", branch="main", worktreeRoot="/data/worktrees",
+        **({"worktreeLayout": layout} if layout != "project-session" else {}),
     )))
     monkeypatch.setattr("mato_loop_backend.sessions.service.validate_execution_preferences", AsyncMock(return_value=(destination, "auto")))
     db = AsyncMock()
-    db.get.return_value = ExecutionAgent(home_directory="/workspace", home_filesystem_policy="auto")
+    db.get.return_value = ExecutionAgent(
+        home_directory=current_path if path_kind == "legacy_denied" else "/workspace",
+        home_filesystem_policy="auto", external_filesystem_policy="deny" if path_kind == "legacy_denied" else "auto",
+    )
+    if path_kind in {"outside", "legacy_denied"}:
+        with pytest.raises(SessionServiceError, match="executionAgent.protocolError"):
+            await prepare_session_worktree(db, session, project)
+        if path_kind == "legacy_denied":
+            assert client.request.await_args.args[1]["destinations"] == [current_path]
+        return
     await prepare_session_worktree(db, session, project)
     assert (session.current_directory, session.coding_workspace["remote"]) == (destination, None)
 

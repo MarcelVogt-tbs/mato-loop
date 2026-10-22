@@ -46,12 +46,26 @@ The Git app displays the workspace path with a copy action. Opening it in a brow
 draft does not create a session or prepare a worktree.
 
 Choosing worktree mode explicitly authorizes preparation on the selected computer.
-Session creation in worktree mode creates a local branch under
-`matoloop/<owner-id>/<session-id>`. With a selected remote, it first fetches the
+Session creation in worktree mode creates a local branch named
+`worktree-<first-eight-session-id-hex-digits>`. Name collisions stop preparation
+without adopting or overwriting another branch. Existing worktrees retain their
+recorded branch names.
+With a selected remote, it first fetches the
 configured target branch. Without a remote, it uses the committed local target
 branch, not uncommitted working changes. A missing or unborn local target is rejected.
 It freezes that base commit and checks it out under
-`<agent-data>/worktrees/<project-id>/<session-id>`. No other managed location is supported.
+`<agent-data>/worktrees/<first-eight-session-id-hex-digits>`, using the same prefix
+as the branch. No project directory or path allocation is needed. An occupied path
+without a matching preparation record stops creation, even if it belongs to another
+repository. Existing worktrees keep their recorded paths and branches, including
+the original `<project-id>/<session-id>` layout. Repository inspection reports the
+Agent's layout so the backend checks the exact destination's filesystem policy
+before preparation. The fixed layouts may be authorized so an interrupted creation
+can recover its old path after an Agent update. Older Agents retain the
+project/session layout until updated. New Agents reject short-path preparation
+without explicit permitted destinations from the Backend; existing project/session
+preparations can still be recovered without this newer request field.
+No other managed location is supported.
 Only the concrete worktree is selected
 and granted, never the Agent data directory. Normal computer filesystem and shell
 policies still apply, including external-path denials. No model, file browser,
@@ -72,10 +86,14 @@ recovers only a completed matching worktree and does not reset existing work.
 The Agent keeps a private preparation record with the repository metadata identity,
 optional remote fingerprint covering all effective fetch and push URLs, target and base
 commit. A process-shared lock and the filesystem mutation lock protect preparation.
+New worktrees store the full owner/session identity in their Git metadata. Short-path
+recovery and removal require this identity; a missing or changed marker requires
+manual inspection, while legacy project/session paths remain supported without it.
 Changed inputs, replacement repositories
 and incomplete registered checkouts are rejected; they require explicit inspection.
-An operation-owned branch left by a failed checkout is reused only while it still
-points to the recorded base and is not checked out elsewhere.
+An existing short branch without a completed registered worktree requires inspection;
+it is never adopted after an uncertain checkout failure. Legacy operation-owned branches
+are reused only at the recorded base and when not checked out elsewhere.
 Requests with a run ID derive a stable session ID so retries can recover preparation.
 Archiving and project deletion retain worktrees. Session deletion offers an unchecked
 **Worktree ebenfalls entfernen** checkbox, backed by `DELETE /sessions/{id}?removeWorktree=true`.

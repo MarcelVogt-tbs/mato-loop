@@ -504,6 +504,17 @@ async def prepare_worktree(
         return await _prepare_worktree(config, filesystem, arguments, state_directory)
 
 
+def _check_worktree_session(filesystem, git_directory: str, owner: str, session: str) -> None:
+    try:
+        identity = filesystem._read_bytes(f"{git_directory}/matoloop-session", 128)
+    except AgentError as exc:
+        if exc.code != "path.notFound":
+            raise
+        raise AgentError("git.worktreeChanged", "The worktree session identity is missing") from exc
+    if identity != f"{owner}/{session}".encode():
+        raise AgentError("git.worktreeChanged", "The worktree session identity changed")
+
+
 async def remove_worktree(config, filesystem, arguments: GitWorktreeRemoveArguments) -> dict:
     async with _locked_worktrees(config, filesystem) as state_directory:
         owner, project = str(UUID(arguments.owner_id)), str(UUID(arguments.project_id))
@@ -513,14 +524,19 @@ async def remove_worktree(config, filesystem, arguments: GitWorktreeRemoveArgume
             state = json.loads(filesystem._read_bytes(record.as_posix(), 256 * 1024))
         except (ValueError, UnicodeDecodeError) as exc:
             raise AgentError("git.worktreeChanged", "Invalid preparation record") from exc
-        path = (config.data_dir / "worktrees" / project / session).as_posix()
+        path = state.get("path") if isinstance(state, dict) else None
+        worktrees = config.data_dir / "worktrees"
         if (
             not isinstance(state, dict)
             or not state.get("ready")
             or state.get("projectId") != project
-            or state.get("path") != path
+            or path
+            not in (
+                (worktrees / session[:8]).as_posix(),
+                (worktrees / project / session).as_posix(),
+            )
             or arguments.path != path
-            or state.get("branch") != f"matoloop/{owner}/{session}"
+            or state.get("branch") not in (f"matoloop/{owner}/{session}", f"worktree-{session[:8]}")
             or state.get("commonDirectory") != arguments.common_directory
         ):
             raise AgentError("git.worktreeChanged", "The worktree binding changed")
@@ -542,6 +558,8 @@ async def remove_worktree(config, filesystem, arguments: GitWorktreeRemoveArgume
                 or current["gitDirectory"] != state.get("gitDirectory")
             ):
                 raise AgentError("git.worktreeChanged", "The worktree binding changed")
+            if path == (worktrees / session[:8]).as_posix():
+                _check_worktree_session(filesystem, current["gitDirectory"], owner, session)
             code, _, _ = await _git(
                 state["repository"],
                 "worktree",
@@ -607,7 +625,9 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
     owner = str(UUID(arguments.owner_id))
     project = str(UUID(arguments.project_id))
     session = str(UUID(arguments.session_id))
-    path = (config.data_dir / "worktrees" / project / session).as_posix()
+    worktrees = config.data_dir / "worktrees"
+    path = (worktrees / session[:8]).as_posix()
+    branch = f"worktree-{session[:8]}"
     state_path = (state_directory / f"{owner}-{session}.json").as_posix()
     try:
         state = json.loads(filesystem._read_bytes(state_path, 256 * 1024))
@@ -617,13 +637,22 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
         state = None
     except (ValueError, UnicodeDecodeError) as exc:
         raise AgentError("git.worktreeChanged", "Invalid preparation record") from exc
+    if state is not None:
+        if (
+            not isinstance(state, dict)
+            or state.get("path") not in (path, (worktrees / project / session).as_posix())
+            or state.get("branch") not in (branch, f"matoloop/{owner}/{session}")
+        ):
+            raise AgentError("git.worktreeChanged", "Invalid preparation binding")
+        path, branch = state["path"], state["branch"]
+    # Older Backends authorize only the original project/session destination.
+    destinations = arguments.destinations or [(worktrees / project / session).as_posix()]
+    if path not in destinations:
+        raise AgentError("git.worktreeChanged", "The expected worktree path changed")
     if path == root or path.startswith(root.rstrip("/") + "/"):
         raise AgentError(
             "git.worktreeLocation", "Managed worktrees must be outside the source repository"
         )
-    parent = path.rsplit("/", 1)[0]
-    filesystem.mkdir(parent, True)
-    branch = f"matoloop/{owner}/{session}"
     base_ref = f"refs/matoloop/bases/{owner}/{session}"
     binding = {
         "repository": root,
@@ -640,6 +669,8 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
         or any(state.get(key) != value for key, value in binding.items())
     ):
         raise AgentError("git.worktreeChanged", "Preparation inputs changed")
+    parent = path.rsplit("/", 1)[0]
+    filesystem.mkdir(parent, True)
     # Recover only the exact registered worktree; never adopt or reset an unrelated directory.
     registered = (await _checked(root, "worktree", "list", "--porcelain", "-z")).split(b"\0")
     exists = f"worktree {path}".encode() in registered
@@ -666,6 +697,8 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
             or git_dir != state.get("gitDirectory")
         ):
             raise AgentError("git.worktreeChanged", "The session worktree binding changed")
+        if path == (worktrees / session[:8]).as_posix():
+            _check_worktree_session(filesystem, git_dir, owner, session)
     elif state.get("ready"):
         raise AgentError("git.worktreeChanged", "The completed worktree is no longer registered")
     if state.get("baseCommit") is None:
@@ -700,7 +733,8 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
             root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"
         )
         if code == 0 and (
-            previous.decode().strip() != base
+            branch == f"worktree-{session[:8]}"
+            or previous.decode().strip() != base
             or f"branch refs/heads/{branch}".encode() in registered
         ):
             raise AgentError("git.worktreeChanged", "The preparation branch changed or is in use")
@@ -744,6 +778,7 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
             .strip()
             .replace("\\", "/")
         )
+        filesystem.upsert(f"{state['gitDirectory']}/matoloop-session", f"{owner}/{session}")
         state["ready"] = True
         filesystem.upsert(state_path, json.dumps(state))
     await loop.run_in_executor(_preparation_executor, filesystem.resolve_directory, path)

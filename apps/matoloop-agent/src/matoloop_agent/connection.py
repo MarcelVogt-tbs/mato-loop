@@ -258,6 +258,7 @@ class MatoLoopAgent:
                     self.filesystem, arguments.path, target_branch=arguments.target_branch
                 ),
                 "worktreeRoot": (self.config.data_dir / "worktrees").as_posix(),
+                "worktreeLayout": "short-session",
             }
         if request.operation == "git.worktree":
             from .git import prepare_worktree
