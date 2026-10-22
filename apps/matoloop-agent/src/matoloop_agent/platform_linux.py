@@ -295,7 +295,10 @@ class LinuxPlatform:
     ) -> dict[str, Any]:
         from matoloop_version import get_version
 
+        from .temporary import temporary_directory
+
         result: dict[str, Any] = {
+            "temporaryDirectory": temporary_directory(),
             "agentVersion": get_version(),
             "platform": self.platform_id[:80],
             "operatingSystem": None,

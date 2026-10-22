@@ -15,8 +15,10 @@ import mato_loop_backend.agent.run_support as mock_agent_run_support
 import mato_loop_backend.agent.runtime as mock_agent_runtime
 import mato_loop_backend.integrations.arcane.adapter as arcane_module
 from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.agent.subagents import permission_snapshot
+from mato_loop_backend.agent.subagents import apply_delegation_ceiling, permission_snapshot
 from mato_loop_backend.execution import ShellInspectResult
+from mato_loop_backend.execution.manager import execution_agent_connections
+from mato_loop_backend.execution.protocol import SystemInfo
 from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.models import (
@@ -662,6 +664,38 @@ async def test_current_directory_is_the_auto_workspace_boundary(tmp_path) -> Non
         ToolExecutionPolicy.AUTO,
         external_working_directory_policy=ToolExecutionPolicy.DISABLED,
     ) == PermissionDecision.DENY
+
+
+@pytest.mark.parametrize("capability", ["filesystem.read", "filesystem.write", "filesystem.delete"])
+@pytest.mark.parametrize("case,expected", [
+    ("temporary", PermissionDecision.ALLOW),
+    ("outside", PermissionDecision.DENY),
+    ("prefix", PermissionDecision.DENY),
+    ("disabled", PermissionDecision.DENY),
+    ("other_computer", PermissionDecision.DENY),
+    ("hard_deny", PermissionDecision.DENY),
+    ("sensitive", PermissionDecision.ASK),
+])
+async def test_profile_temporary_grant_is_bound_to_selected_computer_and_path(
+    tmp_path, monkeypatch, capability, case, expected,
+):
+    session = _session(user_id=uuid4(), preferred_execution_agent_id=uuid4(), current_directory="/work")
+    agent = ExecutionAgent(id=session.preferred_execution_agent_id, user_id=session.user_id,
+                           home_directory="/work", home_filesystem_policy="auto",
+                           external_filesystem_policy="deny" if case == "hard_deny" else "ask")
+    monkeypatch.setattr(execution_agent_connections, "system_info", lambda _id: SystemInfo(temporary_directory="/tmp/mato-loop"))
+    path = {"outside": "/work/source.py", "prefix": "/tmp/mato-loop-other/file", "sensitive": "/tmp/mato-loop/.env"}.get(case, "/tmp/mato-loop/check.py")
+    if case == "other_computer":
+        session.preferred_execution_agent_id = uuid4()
+    db = _db_with_grants()
+    db.scalar.return_value = agent
+    request = execution_directory_permission(agent.id, path, capability=capability)
+
+    assert await PermissionPolicy.evaluate(
+        db, session, request, _root_files(tmp_path, session), ToolExecutionPolicy.DISABLED,
+        external_working_directory_policy=ToolExecutionPolicy.DISABLED,
+        temporary_files_enabled=case != "disabled",
+    ) == expected
 
 
 async def test_shell_ignores_workspace_policy_but_keeps_sensitive_checks(
@@ -1877,6 +1911,18 @@ def test_external_working_directory_delegation_ceiling(current, offered) -> None
             ToolExecutionPolicy.DISABLED,
         ).index,
     )
+
+
+@pytest.mark.parametrize("parent_enabled", [None, False, True])
+def test_temporary_file_access_cannot_widen_frozen_delegation(parent_enabled):
+    settings = ToolSettings()
+    settings._temporary_files_enabled = True
+    snapshot = permission_snapshot(settings, {"write_file"})
+    if parent_enabled is None:
+        snapshot.pop("temporaryFilesEnabled")
+    else:
+        snapshot["temporaryFilesEnabled"] = parent_enabled
+    assert apply_delegation_ceiling(settings, snapshot)._temporary_files_enabled is (parent_enabled is True)
 
 
 def test_missing_delegated_capability_disables_external_working_directory() -> None:

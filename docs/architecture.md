@@ -185,6 +185,27 @@ owner, originating input, session, active run, delivered outbox prompt, and pend
 
 ## Agent and Tools
 
+`temporaryFilesEnabled` is a profile access setting, enabled by default for Plan and Build.
+It inherits through existing profile access overrides and personal-setting gates. For the
+selected owner-bound computer, its advertised `temporaryDirectory` (`/tmp/mato-loop` on
+Linux, the OS temporary directory's `mato-loop` child on Windows) supplies implicit
+read/write/delete path grants through the existing category/resource matchers. These
+grants are evaluated in memory, not persisted as session grants, and exempt only that
+subtree from ordinary profile filesystem and external-working-directory restrictions.
+Tool disablement, hard computer zones, sensitive-data policy, no-follow filesystem
+operations, and frozen delegation ceilings remain binding. Older Agents without the
+metadata receive no implicit grant. Session subdirectories organize files but do not
+isolate sessions; no other worktree receives automatic access. Plan permits analysis
+check files there, not project implementation. Shell policy is unchanged; authorized
+normal shell execution may prepare the directory and receive host-controlled
+`TMPDIR`/`TEMP`/`TMP` defaults without replacing explicit process values. Failed
+scratch preparation logs a controlled warning and leaves the ordinary process
+environment unchanged, without following or taking over unsafe paths.
+Tool schemas remain static; the path appears only in dynamic
+computer context. Managed worktree checkout directories retain Agent-process ownership
+instead of inheriting a potentially foreign data-directory owner, preserving Git's
+unsafe-repository checks elsewhere.
+
 `Allgemein`, `Plan`, `Build`, and `Sysadmin` have stable IDs and protected names and workflow definitions. Their tool rights, availability, shell prefixes, and default integration selection accept administrative overrides without modifying the shipped baseline. Agent profiles have no model fields. Both global and personal custom profiles inherit one core base and allow separately managed tool rights and settings. Removing action rules preserves tool availability and shell prefixes. Built-ins and custom profiles may be disabled. The configured instance default must always be active. Session templates choose a start agent and constrain the session's available agents without overriding instance availability. Deletion switches affected sessions to the current default and removes their old grants; session agent selections may then require adjustment. Disabled profiles remain stored and historical runs retain their provenance. Personal settings show only the owner's explicit profiles.
 
 Static host-controlled prompts, repair instructions, prompt fragments, tool descriptions, schema descriptions, and model-facing markers use simple English. Contracts remain concise, explicit, provider-neutral, and free of redundant or contradictory instructions so medium-sized local instruction models and cloud models use the same text. Dynamic user, identity, memory, source, and tool data may use any language; exact German UI labels can appear as quoted product identifiers.

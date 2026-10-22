@@ -172,6 +172,7 @@ def general_system_prompt(
     execution_agent_platform: str | None = None,
     execution_agent_connected: bool = False,
     execution_agent_system_info: SystemInfo | None = None,
+    temporary_files_enabled: bool = False,
     current_directory: str | None = None,
     session_environment: dict[str, dict[str, str]] | None = None,
     delegated: bool = False,
@@ -633,9 +634,13 @@ def general_system_prompt(
                     "status": "connected" if execution_agent_connected else "offline",
                     "platform": execution_agent_platform,
                     "currentDirectory": current_directory,
+                    **({"temporaryDirectory": execution_agent_system_info.temporary_directory}
+                       if temporary_files_enabled and execution_agent_connected
+                       and execution_agent_system_info is not None
+                       and execution_agent_system_info.temporary_directory is not None else {}),
                     **(
                         {"systemInfo": execution_agent_system_info.model_dump(
-                            by_alias=True, exclude_none=True,
+                            by_alias=True, exclude_none=True, exclude={"temporary_directory"},
                         )}
                         if execution_agent_connected and execution_agent_system_info is not None
                         else {}
@@ -647,6 +652,10 @@ def general_system_prompt(
             "MatoLoop Agent, not the backend. Use commands appropriate for its reported OS; "
             "do not assume installed programs or container resource limits. Missing values are unknown. "
             "System information does not grant tool permissions."
+            " When temporaryDirectory is reported, the profile permits scratch files there, subject to normal restrictions. "
+            "Use a session-specific subdirectory for checks; other sessions may reuse this shared area. "
+            "Create the directory with create_directory if missing. Do not overwrite or remove another "
+            "session's files without a request. File access does not authorize shell effects."
             + ("\nNo live computer operations are available." if not execution_agent_connected else "")
         )
     elif execution_agent_id is not None:

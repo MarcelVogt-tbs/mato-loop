@@ -62,6 +62,19 @@ def test_todo_tool_follows_profile_availability(profile, enabled):
     assert ("todo_write" in effective.tools) is enabled
 
 
+@pytest.mark.parametrize("temporary,available", [(False, True), (True, True), (True, False)])
+def test_temporary_file_tools_keep_their_schema_and_respect_availability(temporary, available):
+    tools = ToolSettings(tool_availability={"write_file": available})
+    tools._agent_permissions = plan_profile().private_permissions
+    tools._temporary_files_enabled = temporary
+    first = tool_registry.effective(IntegrationSettings(), tool_settings=tools)
+    second = tool_registry.effective(IntegrationSettings(), tool_settings=tools)
+    assert first.schemas() == second.schemas()
+    assert ("write_file" in first.tools) is (temporary and available)
+    if temporary and available:
+        assert first.tools["write_file"].schema() == tool_registry._definitions["write_file"].schema()
+
+
 @pytest.mark.parametrize("model", [AgentProfile, AgentProfileOverrides])
 @pytest.mark.parametrize("value", ["timeline", "compact"])
 def test_removed_answer_display_is_rejected(model, value):

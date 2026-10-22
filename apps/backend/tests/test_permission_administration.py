@@ -229,15 +229,17 @@ async def test_builtin_access_overrides_can_be_changed_and_removed(monkeypatch):
     })}
     db = settings_db(monkeypatch, documents)
     response = await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(
-        publicPermissions={"policies": {"shell.write": "ask"}}, toolAvailability={"read": False}, shellPrefixes={"read": [["git", "status"]]},
+        publicPermissions={"policies": {"shell.write": "ask"}}, toolAvailability={"read": False}, shellPrefixes={"read": [["git", "status"]]}, temporaryFilesEnabled=False,
     ), user, db, "instance")
     actions = [action for group in response["groupsByTrust"]["public"] for tool in group["tools"] for action in tool["actions"]]
+    assert (response["temporaryFilesEnabled"], response["inheritedTemporaryFilesEnabled"]) == (False, True)
     assert (response["publicPermissions"]["policies"]["shell.write"], next(action["policy"] for action in actions if action["capability"] == "shell.write"), response["inheritedToolAvailability"].get("read", True), response["inheritedShellPrefixes"]) == ("ask", "disabled", True, {"read": [], "write": []})
     await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(
-        publicPermissions={}, toolAvailability={}, shellPrefixes=None,
+        publicPermissions={}, toolAvailability={}, shellPrefixes=None, temporaryFilesEnabled=None,
     ), user, db, "instance")
     await update_profile_integration_availability(PLAN_PROFILE_ID, ProfileIntegrationAvailabilityRequest(integrationsEnabledByDefault=None), user, db, "instance")
     tools, profile = await load_agent_profile_tools(db, user.id, PLAN_PROFILE_ID, TrustLevel.PUBLIC)
+    assert tools._temporary_files_enabled is True
     assert (tool_execution_policy(tools, "shell.write"), tools.tool_availability.get("read", True), tools.shell_prefixes.read, profile.integrations_enabled_by_default) == ("disabled", True, [], False)
 
 

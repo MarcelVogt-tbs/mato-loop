@@ -225,6 +225,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                         "cpuModel": "Test CPU",
                         "logicalCpuCount": 8,
                         "totalMemoryBytes": 8192 * 1024,
+                        "temporaryDirectory": "/tmp/mato-loop",
                     },
                 )
                 live = agent.system_info(temporary)
@@ -261,7 +262,10 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                 patch("matoloop_agent.platform_linux.os.cpu_count", side_effect=OSError),
                 patch("matoloop_agent.platform_linux.open", side_effect=FileNotFoundError),
             ):
-                self.assertEqual(json.loads(serialize_message(agent.hello()))["systemInfo"], {})
+                self.assertEqual(
+                    json.loads(serialize_message(agent.hello()))["systemInfo"],
+                    {"temporaryDirectory": "/tmp/mato-loop"},
+                )
             files = {
                 "/etc/os-release": 'PRETTY_NAME="unterminated\n',
                 "/usr/lib/os-release": "PRETTY_NAME=\n",

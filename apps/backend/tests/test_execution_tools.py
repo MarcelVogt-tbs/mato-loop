@@ -40,7 +40,7 @@ from mato_loop_backend.execution.client import (
     WorkspaceListResult,
     WorkspaceStatResult,
 )
-from mato_loop_backend.execution.protocol import ResponseMessage
+from mato_loop_backend.execution.protocol import ResponseMessage, SystemInfo
 from mato_loop_backend.execution.terminals import (
     BrowserTerminalConnection,
     TerminalRuntime,
@@ -1865,7 +1865,7 @@ async def test_shell_policy_covers_incomplete_analysis(
     ),
 ])
 async def test_shell_dispatches_with_inspection_classification(
-    tmp_path, command, commands, prefixes,
+    tmp_path, monkeypatch, command, commands, prefixes,
 ) -> None:
     call = ToolCall("shell", "shell_run", {"command": command})
     client = FakeExecutionClient(
@@ -1892,6 +1892,10 @@ async def test_shell_dispatches_with_inspection_classification(
         {"shell.inspect", "shell.run"},
     )
     context = _context(tmp_path, call, client)
+    context.tool_settings._temporary_files_enabled = True
+    monkeypatch.setattr("mato_loop_backend.tools.access.profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr("mato_loop_backend.tools.computer.execution_agent_connections.system_info", lambda _id: SystemInfo(temporary_directory="/tmp/mato-loop"))
+    context.db.get.return_value = ExecutionAgent(home_directory="/home/user", external_filesystem_policy="ask")
 
     result = await _tools(client.operations).execute(call, context)
 
@@ -1905,6 +1909,7 @@ async def test_shell_dispatches_with_inspection_classification(
         "currentDirectory": client.current_directory,
         "timeoutSeconds": None,
         "expectedInspectionRevision": "a" * 64,
+        "useTemporaryDirectory": True,
     }
     request = context.ask_handler.await_args.args[0]
     assert request.capability == "shell.read"

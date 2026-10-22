@@ -35,6 +35,7 @@ from mato_loop_backend.agent.subagents import (
     integration_ceiling_ids,
     permission_origin,
     session_write_paths_ceiling,
+    temporary_files_ceiling,
 )
 from mato_loop_backend.agent.title_generation import initial_session_title as _initial_session_title
 from mato_loop_backend.db.session import AsyncSessionFactory
@@ -1689,6 +1690,7 @@ class AgentRuntime:
             agent_profile_id=agent_profile_id,
             trust_level=TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
             session_write_paths=session_write_paths,
+            temporary_files_enabled=tool_settings._temporary_files_enabled and temporary_files_ceiling(ceiling),
             run_id=run.id,
             **permission_namespace,
         )
@@ -1868,6 +1870,7 @@ class AgentRuntime:
             agent_profile_id=agent_profile_id,
             trust_level=TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
             session_write_paths=session_write_paths,
+            temporary_files_enabled=tool_settings._temporary_files_enabled and temporary_files_ceiling(ceiling),
             run_id=run.id,
             **permission_namespace,
         )

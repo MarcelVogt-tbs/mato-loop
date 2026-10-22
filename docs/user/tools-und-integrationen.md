@@ -2,6 +2,15 @@
 
 ## Tool-Rechte
 
+Unter **Tools > Berechtigungen** steuert **Temporäre Dateien erlauben** den zusätzlichen
+Lese-, Schreib- und Löschzugriff auf den gemeinsamen Tempbereich des ausgewählten Computers
+(`/tmp/mato-loop` unter Linux). Plan und Build aktivieren ihn standardmäßig. Eigene Profile
+erben den Wert und können ihn überschreiben; das Rücksetzen stellt die Vorgabe wieder her.
+Der Bereich ist nicht pro Session isoliert: Unterordner dienen nur der Ordnung. Andere
+Worktrees werden dadurch nicht zugänglich. Werkzeugverbote, harte Computersperren,
+vertrauliche Daten und Delegationsgrenzen gelten weiterhin. Shell-Rechte bleiben unverändert.
+Ältere Agents ohne gemeldeten Tempbereich erhalten diese zusätzliche Freigabe nicht.
+
 Das globale Freigabeverhalten und eingebaute Profil-Presets konfigurieren Administratoren unter **Administration > Tools**. Erlaubte eigene Profilrechte stehen unter **Einstellungen > Tools**. Arbeitsanweisungen bleiben am Profil; Modellwahl gehört zu **Standardmodelle** und **Sessionvorlagen**, Persona-Zuordnungen zu **Personas**. Integrations- und Ressourcenrechte bearbeiten Sie an der Verbindung. Rechte haben getrennte Werte für private und öffentliche Modelle:
 
 - **Deaktiviert**: Das Tool kann nicht aufgerufen werden. Der Agent kennt die installierte Fähigkeit weiterhin und kann bei einer passenden Anfrage erklären, wie sie aktiviert wird.

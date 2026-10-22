@@ -207,6 +207,13 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
             ("local target\n", "uncommitted work\n", None, None),
         )
 
+    @unittest.skipUnless(os.geteuid() == 0, "Requires ownership changes")
+    async def test_worktree_checkout_uses_process_ownership_with_foreign_owned_agent_data(self):
+        source, _ = await self.managed_source()
+        os.chown(self.config.data_dir, 1000, 1000)
+        result = await prepare_worktree(self.config, self.fs, self.arguments(source, remote=None))
+        self.assertEqual((Path(result["path"]) / "file.txt").read_text(), "old\n")
+
     async def test_local_worktree_requires_a_committed_target(self):
         source = self.root / "source"
         self.git("init", "-b", "develop", str(source))

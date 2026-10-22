@@ -39,6 +39,7 @@ from mato_loop_backend.execution import (
     WorkspaceReadResult,
     WorkspaceStatResult,
 )
+from mato_loop_backend.execution.protocol import SystemInfo
 from mato_loop_backend.media.attachments import AttachmentService
 from mato_loop_backend.models import (
     AgentRun,
@@ -1790,6 +1791,8 @@ def test_computer_identity_changes_prompt_only_when_binding_changes() -> None:
         "execution_agent_name": "Workstation",
         "execution_agent_platform": "linux",
         "execution_agent_connected": True,
+        "execution_agent_system_info": SystemInfo(temporary_directory="/tmp/mato-loop"),
+        "temporary_files_enabled": True,
         "current_directory": "/work",
         "include_local_time": False,
         "offered_tool_names": frozenset({"list_execution_agents", "select_execution_agent"}),
@@ -1797,6 +1800,10 @@ def test_computer_identity_changes_prompt_only_when_binding_changes() -> None:
     first = general_system_prompt(_session(), **options)
 
     assert first == general_system_prompt(_session(), **options)
+    without_temporary = general_system_prompt(_session(), **{**options, "temporary_files_enabled": False})
+    assert first.split("Selected computer context:")[0] == without_temporary.split("Selected computer context:")[0]
+    assert '"temporaryDirectory": "/tmp/mato-loop"' in first
+    assert '"temporaryDirectory"' not in without_temporary
     assert f'"id": "{agent_id}"' in first
     assert first != general_system_prompt(_session(), **{**options, "execution_agent_id": uuid4()})
     assert "available MatoLoop Agents" not in first

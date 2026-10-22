@@ -35,12 +35,13 @@ when opening project settings, changing the computer/path, or explicitly refresh
 creating a repository later does not require recreating the project. Discovery does
 not fetch and never replaces an explicitly saved target with a discovered default.
 
-Session templates contain no Git configuration. The permanent **Arbeitsbereich**
+Session templates contain no Git configuration. Before session creation, the **Arbeitsbereich**
 field above the composer shows **Nicht verfügbar**, **Lokal** or **Worktree**.
 New project sessions can override the project default before creation. Worktrees
 require the configured project computer and repository. Without a workspace the
 field shows **Nicht verfügbar**; a selected offline computer does not change an
-existing mode. After session creation the mode is immutable and displayed read-only.
+existing mode. After session creation the mode is immutable; the composer field is hidden.
+Existing sessions show workspace information in the Git app instead.
 The Git app displays the workspace path with a copy action. Opening it in a browser
 draft does not create a session or prepare a worktree.
 
@@ -117,6 +118,11 @@ and preserve the normal authenticated session selection and ingress semantics.
 
 Merge and PR commands initially require a managed worktree. Review also works in a
 local repository; sync requires a configured or unambiguous remote and target.
+Review checks correctness and unnecessary complexity and reports only; it never repairs
+project files. Temporary check files outside the project remain subject to normal permissions.
+Merge resolves clear conflicts in the session worktree, preserving both contributions,
+then reviews and tests the combined result before publication. Unclear intent, findings,
+or failed checks stop publication. Reports distinguish actual checks from limitations.
 Telegram users select an existing coding session with `/sessions` and `/use <ID>`;
 messaging commands never create an unrelated empty session. Web submission can
 start a new session using its explicit draft configuration. Existing command source,

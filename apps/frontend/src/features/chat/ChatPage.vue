@@ -427,7 +427,6 @@
             </AppSelect>
           </template>
         </SessionSettingsFields>
-        <div v-if="!isNewConversation" class="row q-mb-sm"><WorkspaceField :session="chat.activeContext" /></div>
         <SessionTodoStrip
           :todos="chat.current?.todos || []"
           :collapsed="chat.current?.todosCollapsed || false"

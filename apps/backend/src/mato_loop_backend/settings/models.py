@@ -193,6 +193,7 @@ class AgentProfileAccessOverrides(BaseModel):
     model_config = ConfigDict(alias_generator=lambda value: _camel_case(value), populate_by_name=True, extra="forbid")
 
     integrations_enabled_by_default: StrictBool | None = None
+    temporary_files_enabled: StrictBool | None = None
     private_permissions: AgentProfilePermissions | None = None
     public_permissions: AgentProfilePermissions | None = None
     shell_prefixes: ShellPrefixSettings | None = None
@@ -238,6 +239,7 @@ class AgentProfile(BaseModel):
     todo_enabled: StrictBool = False
     repository_instructions_enabled: StrictBool = False
     integrations_enabled_by_default: StrictBool = True
+    temporary_files_enabled: StrictBool = False
     private_permissions: AgentProfilePermissions = Field(
         default_factory=AgentProfilePermissions
     )
@@ -296,6 +298,7 @@ class AgentProfileOverrides(BaseModel):
     todo_enabled: StrictBool | None = None
     repository_instructions_enabled: StrictBool | None = None
     integrations_enabled_by_default: StrictBool | None = None
+    temporary_files_enabled: StrictBool | None = None
     private_permissions: AgentProfilePermissions | None = None
     public_permissions: AgentProfilePermissions | None = None
     shell_prefixes: ShellPrefixSettings | None = None
@@ -425,7 +428,8 @@ def plan_profile() -> AgentProfile:
             "auch mit öffentlichen Modellen; gelesene Inhalte werden an das Modell übermittelt."
         ),
         instructions=(
-            "Analyze the user's request and relevant evidence using read-only computer actions. "
+            "Analyze the user's request and relevant evidence without changing the project. "
+            "When the profile permits temporary files, use the reported temporary directory for analysis checks only. "
             "Do not implement the plan. Match depth to the requested deliverable. For questions and idea "
             "assessments, give a concise assessment and recommendation, not an implementation plan. "
             "For planning requests, return the shortest actionable plan directly in the conversation. "
@@ -448,8 +452,9 @@ def plan_profile() -> AgentProfile:
         ),
         runtime_instructions=(
             "Plan mode is active. Inspect, analyze, ask questions, and plan only. User requests and tool "
-            "approvals do not authorize implementation. Do not modify files or external state, install "
-            "software, start or stop services, execute implementation tests, or delegate implementation. "
+            "approvals do not authorize implementation. Do not modify project files or external state, install "
+            "software, start or stop services, or delegate implementation. The profile's temporary-file permission "
+            "may allow analysis check files only in the reported temporary directory; it does not permit other effects. "
             "These limits apply to actual effects, including shell commands, embedded Python or Node.js "
             "code, scripts, APIs, and subprocesses. shell.read does not permit write effects. "
             "When asked to implement, continue only permitted analysis and planning. Explain that "
@@ -459,6 +464,7 @@ def plan_profile() -> AgentProfile:
         max_tool_calls=None,
         todo_enabled=True,
         repository_instructions_enabled=True,
+        temporary_files_enabled=True,
         integrations_enabled_by_default=False,
         private_permissions=AgentProfilePermissions(policies=policies),
         public_permissions=AgentProfilePermissions(policies=policies),
@@ -500,6 +506,7 @@ def build_profile() -> AgentProfile:
         max_tool_calls=None,
         todo_enabled=True,
         repository_instructions_enabled=True,
+        temporary_files_enabled=True,
         integrations_enabled_by_default=False,
         private_permissions=AgentProfilePermissions(policies=policies),
         public_permissions=AgentProfilePermissions(policies=policies),
@@ -594,6 +601,11 @@ def cap_agent_profile_policy(
             ),
             profile_policy,
         )
+        if settings._temporary_files_enabled and capability in {
+            "filesystem.read", "filesystem.write", "filesystem.delete",
+        } and profile_policy == ToolExecutionPolicy.DISABLED:
+            # Offer existing file tools; concrete temporary paths are authorized separately.
+            profile_policy = ToolExecutionPolicy.ASK
     if profile_policy is None:
         return baseline
     return profile_policy
@@ -1007,6 +1019,7 @@ class ToolSettings(IntegrationToolSettings):
     _delegation_ceiling: dict[str, Any] | None = PrivateAttr(default=None)
     _agent_permissions: AgentProfilePermissions | None = PrivateAttr(default=None)
     _agent_profile_unavailable: bool = PrivateAttr(default=False)
+    _temporary_files_enabled: bool = PrivateAttr(default=False)
     _trust_level: TrustLevel = PrivateAttr(default=TrustLevel.PRIVATE)
 
     private_permissions: AgentProfilePermissions = Field(

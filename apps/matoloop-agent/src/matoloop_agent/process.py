@@ -1927,6 +1927,7 @@ class ProcessRunner:
         stream: StreamCallback,
         expected_inspection_revision: str | None = None,
         environment: dict[str, str] | None = None,
+        use_temporary_directory: bool = False,
     ) -> dict:
         timeout = self.execution_timeout(timeout)
         argv, inspection = self.execution_argv(
@@ -1941,6 +1942,10 @@ class ProcessRunner:
             process_environment = self.execution_environment(
                 current_directory, inspection, environment
             )
+            if use_temporary_directory:
+                from .temporary import temporary_environment
+
+                process_environment.update(temporary_environment(self.filesystem, environment))
             self.validate_executable(argv[0])
             process = await asyncio.create_subprocess_exec(
                 *argv,

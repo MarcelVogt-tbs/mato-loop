@@ -194,7 +194,7 @@ it.each([false, true])('rechecks worktree availability when reopening the select
   await vi.waitFor(() => expect(chat.activeContext.workspaceMode).toBe('worktree'))
 })
 
-it('keeps the workspace field visible and existing sessions read-only even offline', async () => {
+it('keeps the standalone workspace information read-only for existing sessions even offline', async () => {
   const pinia = createPinia()
   setActivePinia(pinia)
   const chat = useChatStore()

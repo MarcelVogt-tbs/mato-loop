@@ -29,19 +29,26 @@ COMMANDS = (
         icon="create_new_folder", mutates_workspace=True, initial_workspace_mode="local"),
     Command("git_review", "Änderungen prüfen", "Änderungen und betroffenen Code prüfen.",
         "Review the working changes and unpublished commits against the configured target. "
-        "Read affected callers and project instructions. Report concrete correctness issues with file locations. "
-        "Do not edit files, commit, merge, push, or create a pull request.", icon="fact_check"),
+        "Read affected callers and project instructions. Check correctness, regressions, data preservation, and "
+        "unnecessary complexity, abstractions, dependencies, or tests within the requested scope. "
+        "Use existing relevant checks; do not create another test environment or explore hypothetical features. "
+        "Report concrete findings with file locations, separating blockers from optional simplifications. "
+        "Include actual checks and limitations. Report only: do not repair or modify the project, commit, merge, "
+        "push, or create a pull request. Temporary check files outside the project are allowed by normal permissions.", icon="fact_check"),
     Command("git_merge", "In Zielbranch übernehmen", "Zusammenführen, prüfen und veröffentlichen.",
         "Inspect all pending changes, including existing commits. Preserve unrelated local work. "
         "Create any needed commit with an accurate generated message following repository instructions. "
         "Fetch the current configured remote target. Merge it into the session branch; do not rebase published commits. "
-        "Stop on conflicts and report them. Review the combined result and affected callers for semantic merge errors. "
+        "Resolve conflicts in the session worktree only when the intended result is clear; preserve both contributions. "
+        "Never choose one side wholesale to hide a conflict. Stop and ask about unclear intent. "
+        "Review the combined result and affected callers for correctness, semantic merge errors, and unnecessary complexity. "
         "Run the relevant existing project checks. Stop on findings or failed checks. "
         "Before publishing, verify the exact reviewed commit and a clean working tree. "
         "Push that commit explicitly to the configured remote target with a normal non-force push. "
         "If the remote advanced, fetch, merge, review and check the new combination before another push. "
         "Then update the original project checkout with fast-forward-only merge only if it is clean and on the target branch. "
-        "Otherwise leave it unchanged and explain why.", icon="merge", mutates_workspace=True),
+        "Otherwise leave it unchanged and explain why. End with a concise report of the published commit, "
+        "conflict resolutions, actual checks, and remaining limitations.", icon="merge", mutates_workspace=True),
     Command("git_pr", "Pull Request erstellen", "Branch veröffentlichen und Pull Request erstellen.",
         "Inspect pending changes and unpublished commits against the configured remote target. "
         "Preserve unrelated work. Create needed commits with accurate generated messages following repository instructions. "

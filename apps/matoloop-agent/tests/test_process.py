@@ -120,6 +120,55 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                     stream=stream,
                 )
 
+    async def test_authorized_temporary_environment_is_prepared_without_following_links(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            filesystem = Filesystem(configuration(root))
+            runner = ProcessRunner(configuration(root), filesystem)
+            scratch = root / "scratch"
+            chunks = []
+
+            async def stream(channel, data):
+                chunks.append(data)
+
+            with patch("matoloop_agent.temporary.temporary_directory", return_value=str(scratch)):
+                await runner.exec(
+                    current_directory=str(root),
+                    command='test -d "$TMPDIR" && printf %s "$TMPDIR"',
+                    timeout=2,
+                    stream=stream,
+                    use_temporary_directory=True,
+                )
+                self.assertEqual("".join(chunks), str(scratch))
+                chunks.clear()
+                await runner.exec(
+                    current_directory=str(root),
+                    command='printf "%s|%s|%s" "$TMPDIR" "$TEMP" "$TMP"',
+                    timeout=2,
+                    stream=stream,
+                    environment={
+                        "TMPDIR": "explicit-dir",
+                        "TEMP": "explicit-temp",
+                        "TMP": "explicit-tmp",
+                    },
+                    use_temporary_directory=True,
+                )
+                self.assertEqual("".join(chunks), "explicit-dir|explicit-temp|explicit-tmp")
+            link = root / "link"
+            link.symlink_to(root, target_is_directory=True)
+            chunks.clear()
+            with patch("matoloop_agent.temporary.temporary_directory", return_value=str(link)):
+                await runner.exec(
+                    current_directory=str(root),
+                    command='test -z "${TMPDIR+x}" && pwd',
+                    timeout=2,
+                    stream=stream,
+                    use_temporary_directory=True,
+                )
+                self.assertEqual("".join(chunks), str(root) + "\n")
+
     async def test_shell_timeout_and_inspection_revision(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -299,6 +299,7 @@ class WindowsProcess:
         stream: Callable[[str, str], Awaitable[None]],
         expected_inspection_revision: str | None = None,
         environment: dict[str, str] | None = None,
+        use_temporary_directory: bool = False,
     ) -> dict:
         inspection = await asyncio.to_thread(self.inspect_shell, command, current_directory)
         if expected_inspection_revision is not None and (
@@ -326,6 +327,10 @@ class WindowsProcess:
             }
         }
         env.update(environment or {})
+        if use_temporary_directory:
+            from .temporary import temporary_environment
+
+            env.update(temporary_environment(self.filesystem, environment))
         # Stable host prefix sets the pipe encoding; the inspected user command stays intact.
         source = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; " + command
         if len(_encoded(source)) > 30_000:

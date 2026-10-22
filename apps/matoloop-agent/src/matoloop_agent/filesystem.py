@@ -985,7 +985,7 @@ class Filesystem:
                 results.append(result)
         return {"files": results}
 
-    def mkdir(self, path: str, parents: bool) -> dict:
+    def mkdir(self, path: str, parents: bool, *, inherit_ownership: bool = True) -> dict:
         parts = _parts(path)
         if not parts:
             raise AgentError("path.rootMutation", "The filesystem root is immutable")
@@ -1014,7 +1014,8 @@ class Filesystem:
                                 os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                                 dir_fd=fd,
                             )
-                            self._set_ownership(child, os.fstat(fd))
+                            if inherit_ownership:
+                                self._set_ownership(child, os.fstat(fd))
                             os.fchmod(child, 0o700)
                             _rename_no_replace(fd, temporary, fd, part)
                             _fsync(fd)

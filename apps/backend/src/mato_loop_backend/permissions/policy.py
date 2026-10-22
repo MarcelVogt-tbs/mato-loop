@@ -1539,6 +1539,7 @@ class PermissionPolicy:
         permission_session_id: UUID | None = None,
         run_id: UUID | None = None,
         session_write_paths: list[str] | None = None,
+        temporary_files_enabled: bool = False,
     ) -> PermissionDecision:
         grant_session_id = permission_session_id or chat_session.id
         if grant_session_id != chat_session.id:
@@ -1792,8 +1793,26 @@ class PermissionPolicy:
             )
             if agent is None:
                 return PermissionDecision.DENY
-            if policy == ToolExecutionPolicy.DISABLED:
+            temporary_allowed = False
+            if (
+                temporary_files_enabled
+                and agent.id == chat_session.preferred_execution_agent_id
+                and request.capability in {"filesystem.read", "filesystem.write", "filesystem.delete"}
+            ):
+                from mato_loop_backend.execution.manager import execution_agent_connections
+
+                info = execution_agent_connections.system_info(agent.id)
+                if info is not None and info.temporary_directory is not None:
+                    grant = PermissionGrant(
+                        capability=f"category.{_access_for_capability(request.capability)}",
+                        resource_type="execution_path",
+                        resource_scope=execution_directory_scope(agent.id, info.temporary_directory, recursive=True),
+                    )
+                    temporary_allowed = PermissionPolicy.grant_matches(grant, request, root_files)
+            if policy == ToolExecutionPolicy.DISABLED and not temporary_allowed:
                 return PermissionDecision.DENY
+            if temporary_allowed:
+                policy = ToolExecutionPolicy.ASK
             path = scope[1]
             home = agent.home_directory
             selected_policy = (
@@ -1809,12 +1828,14 @@ class PermissionPolicy:
                 else None
             )
             inside_workspace = workspace is not None and _path_is_within(path, workspace)
-            if not inside_workspace and external_working_directory_policy == ToolExecutionPolicy.DISABLED:
+            if not inside_workspace and external_working_directory_policy == ToolExecutionPolicy.DISABLED and not temporary_allowed:
                 return PermissionDecision.DENY
             if (decision := sensitive_decision(
                 request.sensitive_access or request.capability != "file.provide" and confidential_execution_path(str(path))
             )) is not None:
                 return decision
+            if temporary_allowed:
+                return PermissionDecision.ALLOW
             if policy == ToolExecutionPolicy.AUTO and inside_workspace:
                 return PermissionDecision.ALLOW
             if (

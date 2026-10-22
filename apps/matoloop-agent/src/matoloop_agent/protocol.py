@@ -106,6 +106,13 @@ class StrictModel(BaseModel):
 
 
 class SystemInfo(StrictModel):
+    temporary_directory: str | None = Field(
+        default=None, alias="temporaryDirectory", max_length=4096
+    )
+
+    _temporary_is_absolute = field_validator("temporary_directory")(
+        lambda value: _absolute_path(value) if value is not None else None
+    )
     operating_system: str | None = Field(
         default=None, alias="operatingSystem", min_length=1, max_length=80
     )
@@ -353,6 +360,7 @@ class HostDirectoryArguments(StrictModel):
 
 
 class ShellArguments(HostDirectoryArguments):
+    use_temporary_directory: bool = Field(default=False, alias="useTemporaryDirectory")
     command: str = Field(min_length=1, max_length=256 * 1024)
     timeout_seconds: float | None = Field(default=None, alias="timeoutSeconds", gt=0, le=3600)
     expected_inspection_revision: str | None = Field(

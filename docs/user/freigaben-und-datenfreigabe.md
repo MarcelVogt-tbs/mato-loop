@@ -2,6 +2,12 @@
 
 ## Session-Freigaben
 
+Die Profiloption **Temporäre Dateien erlauben** ergänzt Dateirechte im gemeinsamen
+Tempbereich des ausgewählten Computers. Plan und Build aktivieren sie standardmäßig.
+Sie erzeugt keine Einträge unter Session-Freigaben und erlaubt keine anderen Worktrees.
+Auch dort gelten Computersperren, Werkzeugverbote und die Prüfung vertraulicher Daten.
+Unterordner verschiedener Sessions sind keine Zugriffsgrenzen; legen Sie dort keine Secrets ab.
+
 Unter **Session > Session-Freigaben** sehen Sie die erteilten Sessionrechte. Computer und Arbeitsverzeichnis wählen Sie in den eigenen Feldern des Sessionbereichs. Eine Ordnerwahl erlaubt Navigation, keine Datei- oder Shell-Aktionen. Automatische Regeln und konfigurierte Shell-Präfixe gelten auch bei leerer Freigabeliste. Eine Freigabe überstimmt keine deaktivierte Aktion oder harte Grenze.
 
 ## Freigabeanfragen

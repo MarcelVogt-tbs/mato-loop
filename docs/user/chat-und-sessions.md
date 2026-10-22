@@ -45,13 +45,14 @@ die Schaltfläche zum erneuten Prüfen erkannt. Bei einem Repository speichern S
 **Standard-Zielbranch** und **Standard-Arbeitsbereich**. Bereits gespeicherte Werte werden nicht durch erkannte
 Vorschläge überschrieben. Verwenden Sie die Repository-Wurzel als Projektverzeichnis.
 
-Über dem Eingabefeld steht dauerhaft **Arbeitsbereich** mit **Nicht verfügbar**,
+Vor dem Sessionstart steht über dem Eingabefeld **Arbeitsbereich** mit **Nicht verfügbar**,
 **Lokal** oder **Worktree**. Ohne Computer oder Workspace ist der Arbeitsbereich
 nicht verfügbar. Ein ausgewählter Offline-Computer ändert den angezeigten Modus nicht.
 Bei neuen Projekt-Sessions wählen Sie vor dem Start **Lokal** oder **Worktree**;
 die Projektvorgabe liefert die Vorauswahl. Worktrees benötigen den im Projekt
-eingerichteten Computer und Repositorypfad. Nach dem Start ist der Modus fest und
-wird nur noch angezeigt. Sessionvorlagen enthalten keinen Git-Schalter.
+eingerichteten Computer und Repositorypfad. Nach dem Start ist der Modus fest; das Feld
+verschwindet aus dem Chat. Die Informationen bleiben unter **Control Center > Git > Einstellungen** sichtbar.
+Sessionvorlagen enthalten keinen Git-Schalter.
 Lokal bleibt einschließlich eigener Änderungen alles im vorhandenen Verzeichnis.
 Beim Sessionstart mit Worktree verwendet MatoLoop ohne Remote den letzten Commit des lokalen
 Zielbranches. Der Branch muss bereits einen Commit enthalten; uncommittete Änderungen

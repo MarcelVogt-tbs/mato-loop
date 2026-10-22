@@ -281,7 +281,7 @@ class WindowsFilesystem:
                 )
         return {"files": results}
 
-    def mkdir(self, path: str, parents: bool) -> dict:
+    def mkdir(self, path: str, parents: bool, *, inherit_ownership: bool = True) -> dict:
         if len(path) == 3:
             raise AgentError("path.rootMutation", "Drive root cannot be created")
         if parents:

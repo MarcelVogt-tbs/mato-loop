@@ -434,6 +434,7 @@ class MatoLoopAgent:
                 stream=stream,
                 expected_inspection_revision=arguments.expected_inspection_revision,
                 environment=arguments.environment,
+                use_temporary_directory=arguments.use_temporary_directory,
             )
         if isinstance(arguments, ShellInspectArguments):
             return await asyncio.to_thread(

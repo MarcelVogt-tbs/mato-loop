@@ -223,7 +223,10 @@ class WindowsPlatform:
     def system_info(self, current_directory: str | None, filesystem: FilesystemAdapter) -> dict:
         from matoloop_version import get_version
 
+        from .temporary import temporary_directory
+
         result = {
+            "temporaryDirectory": temporary_directory(),
             "agentVersion": get_version(),
             "platform": self.platform_id,
             "operatingSystem": "Windows",

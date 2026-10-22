@@ -103,6 +103,7 @@ def test_hello_system_info_is_optional_bounded_and_strict() -> None:
         "operatingSystem": "Linux", "distribution": "Debian GNU/Linux 13 (trixie)",
         "kernel": "6.12", "architecture": "x86_64", "cpuModel": "AMD Ryzen 9 7950X",
         "logicalCpuCount": 32, "totalMemoryBytes": 64 * 1024**3,
+        "temporaryDirectory": "/tmp/mato-loop",
     }
     payload["systemInfo"] = info
     assert HelloMessage.model_validate(payload).system_info.model_dump(by_alias=True) == info

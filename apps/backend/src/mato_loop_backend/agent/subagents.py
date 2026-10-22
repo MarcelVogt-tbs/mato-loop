@@ -54,6 +54,7 @@ def permission_snapshot(
             settings._agent_profile.session_write_paths
             if settings._agent_profile is not None else None
         ),
+        "temporaryFilesEnabled": settings._temporary_files_enabled,
         "shellPrefixes": settings.shell_prefixes.model_dump(mode="json"),
         "toolNames": sorted(tool_names - {"task"}),
         "contextSources": [source for source in ("memories", "sessions") if source_available(settings, source)],
@@ -99,6 +100,7 @@ def ceiling_settings(snapshot: dict[str, Any], trust: TrustLevel) -> ToolSetting
         shell_prefixes=snapshot["shellPrefixes"],
     ).select_trust(trust)
     settings._frozen_action_defaults = snapshot["actionDefaults"]
+    settings._temporary_files_enabled = snapshot.get("temporaryFilesEnabled", False) is True
     if snapshot["agentPermissions"] is not None:
         settings._agent_permissions = AgentProfilePermissions.model_validate(
             snapshot["agentPermissions"]
@@ -108,6 +110,7 @@ def ceiling_settings(snapshot: dict[str, Any], trust: TrustLevel) -> ToolSetting
 
 def apply_delegation_ceiling(settings: ToolSettings, snapshot: dict[str, Any] | None) -> ToolSettings:
     settings._delegation_ceiling = snapshot
+    settings._temporary_files_enabled &= temporary_files_ceiling(snapshot)
     if snapshot is not None:
         # Aggregate integrations enumerate scoped keys before checking each resource policy.
         # Retain those keys, not old values that could override stricter current defaults.
@@ -124,6 +127,14 @@ def apply_delegation_ceiling(settings: ToolSettings, snapshot: dict[str, Any] | 
                     for resource_key in resources:
                         current.setdefault(resource_key, {})
     return settings
+
+
+def temporary_files_ceiling(snapshot: dict[str, Any] | None) -> bool:
+    while snapshot is not None:
+        if snapshot.get("temporaryFilesEnabled") is not True:
+            return False
+        snapshot = snapshot.get("offeredCeiling")
+    return True
 
 
 async def delegation_snapshot(

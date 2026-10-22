@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from mato_loop_backend.execution.paths import absolute_path, windows_path
 
@@ -102,6 +102,11 @@ class WireModel(BaseModel):
 
 
 class SystemInfo(WireModel):
+    temporary_directory: str | None = Field(default=None, max_length=4096)
+
+    _temporary_is_absolute = field_validator("temporary_directory")(
+        lambda value: _absolute_path(value) if value is not None else None
+    )
     operating_system: str | None = Field(default=None, min_length=1, max_length=80)
     distribution: str | None = Field(default=None, min_length=1, max_length=255)
     kernel: str | None = Field(default=None, min_length=1, max_length=160)

@@ -711,7 +711,8 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
             if any(Path(path).iterdir()):
                 raise AgentError("git.worktreeChanged", "The incomplete destination contains files")
         else:
-            filesystem.mkdir(path, False)
+            # Git checks out as the Agent process, not the data directory's owner.
+            filesystem.mkdir(path, False, inherit_ownership=False)
         filesystem.resolve_directory(path)
         filesystem.upsert(state_path, json.dumps(state))
         code, _, _ = await _git(

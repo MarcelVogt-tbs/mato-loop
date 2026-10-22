@@ -429,6 +429,7 @@ async def execute_loop_body(
                 if selected_execution_agent is not None
                 else None
             ),
+            temporary_files_enabled=tool_settings._temporary_files_enabled,
             current_directory=run.current_directory_snapshot,
             session_environment={
                 **{name: {"valueRef": ref} for name, ref in run_secret_refs.items()},

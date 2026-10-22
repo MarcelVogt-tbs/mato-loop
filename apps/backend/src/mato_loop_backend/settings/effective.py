@@ -473,5 +473,6 @@ async def load_agent_profile_tools(
         if key in tool_registry.actions_by_capability
     })
     tools._agent_profile = profile
+    tools._temporary_files_enabled = permission_profile.temporary_files_enabled
     apply_integration_permissions(tools, await load_effective_integrations(db, user_id), profile.id)
     return tools, profile
