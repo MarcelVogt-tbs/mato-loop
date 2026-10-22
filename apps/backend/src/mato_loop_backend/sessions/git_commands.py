@@ -37,7 +37,10 @@ COMMANDS = (
         "push, or create a pull request. Temporary check files outside the project are allowed by normal permissions.", icon="fact_check"),
     Command("git_merge", "In Zielbranch übernehmen", "Zusammenführen, prüfen und veröffentlichen.",
         "Inspect all pending changes, including existing commits. Preserve unrelated local work. "
-        "Create any needed commit with an accurate generated message following repository instructions. "
+        "Create needed commits with accurate messages. "
+        "Follow supplied repository commit-message rules for every commit, including merge commits. "
+        "Read relevant referenced guidelines before committing. Apply required format, language, and trailers. "
+        "Use recent history only where no explicit rule applies. Verify the resulting commit message. "
         "Fetch the current configured remote target. Merge it into the session branch; do not rebase published commits. "
         "Resolve conflicts in the session worktree only when the intended result is clear; preserve both contributions. "
         "Never choose one side wholesale to hide a conflict. Stop and ask about unclear intent. "
@@ -51,7 +54,10 @@ COMMANDS = (
         "conflict resolutions, actual checks, and remaining limitations.", icon="merge", mutates_workspace=True),
     Command("git_pr", "Pull Request erstellen", "Branch veröffentlichen und Pull Request erstellen.",
         "Inspect pending changes and unpublished commits against the configured remote target. "
-        "Preserve unrelated work. Create needed commits with accurate generated messages following repository instructions. "
+        "Preserve unrelated work. Create needed commits with accurate messages. "
+        "Follow supplied repository commit-message rules for every commit, including merge commits. "
+        "Read relevant referenced guidelines before committing. Apply required format, language, and trailers. "
+        "Use recent history only where no explicit rule applies. Verify the resulting commit message. "
         "Fetch the target and review the complete proposed changes and affected callers. Run relevant existing checks. "
         "Stop on concrete findings, conflicts, or failed checks. "
         "Verify the reviewed commit before pushing the session branch with a normal non-force push. "

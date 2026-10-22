@@ -471,6 +471,10 @@ async def test_repository_prefetch_stops_at_git_and_permission_boundaries(root, 
                                                truncated_lines=[], sha256="a" * 64),
     }, {"filesystem.stat", "filesystem.read"}, cwd)
     prompt = await repository_instructions_prompt(client, [], authorize)
+    assert (
+        "Do not rediscover AGENTS.md files yourself. "
+        "Read explicitly referenced guidelines when relevant to the current task." in prompt
+    )
     assert [entry["path"] for entry in json.loads(prompt.splitlines()[-2])["files"]] == (
         [root + "/AGENTS.md", cwd + "/AGENTS.md"] if external == PermissionDecision.ALLOW
         else [cwd + "/AGENTS.md"]

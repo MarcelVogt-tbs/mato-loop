@@ -33,6 +33,15 @@ def test_browser_and_telegram_share_portable_coding_commands():
     assert parse_command("Explain /git_merge") is None
 
 
+def test_git_merge_and_pr_follow_explicit_commit_message_rules():
+    rules = (
+        "Follow supplied repository commit-message rules for every commit, including merge commits. "
+        "Read relevant referenced guidelines before committing. Apply required format, language, and trailers. "
+        "Use recent history only where no explicit rule applies. Verify the resulting commit message."
+    )
+    assert all(rules in parse_command(f"/{name}").instructions for name in ("git_merge", "git_pr"))
+
+
 @pytest.mark.parametrize("branch", ["--upload-pack=bad", "main..other", "main:other", "bad\nbranch"])
 def test_project_rejects_invalid_git_branch(branch):
     with pytest.raises(ValueError):
