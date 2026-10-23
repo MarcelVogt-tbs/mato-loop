@@ -39,6 +39,15 @@
           flat
           round
           dense
+          icon="create_new_folder"
+          aria-label="Neuen Ordner anlegen"
+          :disable="loading || loadFailed || !executionAgentId"
+          @click="createDirectory"
+        />
+        <q-btn
+          flat
+          round
+          dense
           icon="refresh"
           aria-label="Ordner aktualisieren"
           :loading="loading"
@@ -59,6 +68,7 @@
             v-for="entry in directories"
             :key="entry.path"
             clickable
+            :disable="loading"
             v-ripple
             @click="load(entry.path)"
           >
@@ -96,6 +106,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { useQuasar } from 'quasar'
 import { api } from 'src/boot/axios'
 import { absoluteComputerPath, parentPath } from 'src/features/files/state'
 
@@ -105,6 +116,7 @@ const props = defineProps({
   initialPath: { type: String, default: '/' }
 })
 const emit = defineEmits(['update:modelValue', 'select'])
+const $q = useQuasar()
 
 const currentPath = ref('/')
 const directories = ref([])
@@ -165,6 +177,37 @@ async function load(path, append = false) {
   } finally {
     if (version === requestVersion) loading.value = false
   }
+}
+
+function createDirectory() {
+  $q.dialog({
+    title: 'Neuen Ordner anlegen',
+    prompt: {
+      model: '',
+      label: 'Ordnername',
+      dense: true,
+      isValid: (value) => Boolean(value.trim())
+    },
+    cancel: { label: 'Abbrechen', flat: true, noCaps: true },
+    ok: { label: 'Anlegen', color: 'primary', unelevated: true, noCaps: true }
+  }).onOk(async (name) => {
+    const version = ++requestVersion
+    loading.value = true
+    try {
+      const { data } = await api.post('/workspace/directories', {
+        parent: currentPath.value,
+        name: name.trim()
+      }, {
+        params: { scope: 'filesystem', execution_agent_id: props.executionAgentId }
+      })
+      $q.notify({ type: 'positive', message: 'Ordner wurde angelegt.' })
+      if (version === requestVersion && props.modelValue) await load(data.path)
+    } catch {
+      // The central API interceptor displays the error.
+    } finally {
+      if (version === requestVersion) loading.value = false
+    }
+  })
 }
 
 function close() {

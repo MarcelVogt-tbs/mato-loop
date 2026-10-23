@@ -4,11 +4,11 @@ import { afterEach, expect, it, vi } from 'vitest'
 import {
   Quasar, QAvatar, QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions,
   QCardSection, QDialog, QIcon, QItem, QItemLabel, QItemSection, QLinearProgress,
-  QList, QSeparator, QToolbar, Ripple
+  QList, QSeparator, QToolbar, Dialog, Notify, Ripple
 } from 'quasar'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
-vi.mock('src/boot/axios', () => ({ api: { get: vi.fn() } }))
+vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn() } }))
 
 import ExecutionAgentDirectoryPickerDialog from '../src/features/computers/ExecutionAgentDirectoryPickerDialog.vue'
 import { api } from 'src/boot/axios'
@@ -22,7 +22,8 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-it('browses and selects directories on the chosen execution agent', async () => {
+it('browses, creates and selects directories on the chosen execution agent', async () => {
+  api.post.mockResolvedValue({ data: { path: '/home/user/projects/new-folder' } })
   api.get.mockImplementation(async (_url, { params }) => ({
     data: params.path === '/home/user'
       ? {
@@ -34,7 +35,7 @@ it('browses and selects directories on the chosen execution agent', async () => 
           hasMore: false,
           nextOffset: null
         }
-      : { path: '/home/user/projects', entries: [], hasMore: false, nextOffset: null }
+      : { path: params.path, entries: [], hasMore: false, nextOffset: null }
   }))
   const open = ref(true)
   const selected = ref(null)
@@ -56,7 +57,8 @@ it('browses and selects directories on the chosen execution agent', async () => 
       QCardSection, QDialog, QIcon, QItem, QItemLabel, QItemSection,
       QLinearProgress, QList, QSeparator, QToolbar
     },
-    directives: { Ripple }
+    directives: { Ripple },
+    plugins: { Dialog, Notify }
   })
   app.mount(root)
 
@@ -77,11 +79,23 @@ it('browses and selects directories on the chosen execution agent', async () => 
     expect.objectContaining({ params: expect.objectContaining({ path: '/home/user/projects' }) })
   ))
   await vi.waitFor(() => expect(document.body.textContent).toContain('Keine Unterordner vorhanden.'))
+  document.querySelector('[aria-label="Neuen Ordner anlegen"]').click()
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog input')).not.toBeNull())
+  const input = document.querySelector('.q-dialog input')
+  input.value = 'new-folder'
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  const createButton = [...document.querySelectorAll('button')].find((item) => item.textContent === 'Anlegen')
+  await vi.waitFor(() => expect(createButton.disabled).toBe(false))
+  createButton.click()
+  await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith('/workspace/directories', {
+    parent: '/home/user/projects', name: 'new-folder'
+  }, { params: { scope: 'filesystem', execution_agent_id: 'agent-1' } }))
+  await vi.waitFor(() => expect(document.body.textContent).toContain('new-folder'))
   ;[...document.querySelectorAll('button')]
     .find((button) => button.textContent.includes('Diesen Ordner auswählen'))
     .click()
 
-  expect(selected.value).toBe('/home/user/projects')
+  expect(selected.value).toBe('/home/user/projects/new-folder')
   expect(open.value).toBe(false)
 })
 
