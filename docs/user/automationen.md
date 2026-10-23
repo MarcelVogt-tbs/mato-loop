@@ -1,6 +1,6 @@
 # Automationen
 
-Eine Automation ist ein gespeicherter Agentenauftrag in einer gewöhnlichen sichtbaren Session. **Automationen** in der Seitenleiste öffnet dieselbe Unterhaltung wie die Projekt- oder Sessionliste.
+Eine Automation ist ein gespeicherter Agentenauftrag in einer gewöhnlichen sichtbaren Session. Ein Klick auf einen Eintrag unter **Automationen** in der Seitenleiste öffnet die zugehörige Unterhaltung und wählt die Automation in der Control-Center-App **Automationen** aus. Das Eintragsmenü bietet **Automation bearbeiten** und **Automation löschen**; Sessionaktionen finden Sie in der Projekt- oder Sessionliste.
 
 ## Erstellen und bearbeiten
 
@@ -40,7 +40,7 @@ Einmalige Termine und optionale Endzeitpunkte werden in der lokalen Gerätezeitz
 
 Archivieren betrifft die Session oder ihr Projekt, nicht die Automationsdefinition. Archivierte Sessions bleiben lesbar, neue Starts benötigen Wiederherstellung. Eingereihte Arbeit wird abgebrochen, aktive Arbeit darf enden. Die Aktivierungseinstellung bleibt gespeichert; verpasste Auslösungen werden nicht nachgeholt. Details stehen unter [Archiv](anmeldung-und-oberflaeche.md#archiv).
 
-**Automation entfernen** löscht Definition, Zeitpläne und Auslösungsverlauf; Session, Dateien, Rechte und bereits laufender Agent bleiben erhalten. Das Löschen der Session oder ihres Projekts entfernt nach Bestätigung auch die abhängigen Automationen.
+**Automation entfernen** in der App oder **Automation löschen** im Seitenleistenmenü löscht nach Bestätigung Definition, Zeitpläne und Auslösungsverlauf; Session, Dateien, Rechte und bereits laufender Agent bleiben erhalten. Das Löschen der Session oder ihres Projekts entfernt nach Bestätigung auch die abhängigen Automationen.
 
 Früher verborgene Ausführungssessions bleiben mit IDs, Verlauf und Dateien als normale Chats erhalten. Alte Ausgabekopien bleiben historisch; neue Ergebnisse erscheinen nur in der Ausführungssession. Alte Konfigurations-/Lauflinks öffnen diese Session bzw. die Nachricht. Ehemals archivierte Aufgaben werden deaktiviert; frühere Skillbindungen werden ausdrückliche Auftragsanweisungen.
 

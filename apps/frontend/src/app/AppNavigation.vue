@@ -60,17 +60,18 @@
                 :title="automation.name"
                 :caption="automationStatus(automation).label"
                 :status="sessionStatuses.get(automation.executionSessionId)"
-                :active="routeSessionId === automation.executionSessionId"
+                :active="routeSessionId === automation.executionSessionId && route.query.automation === automation.id && controlCenter.open && controlCenter.activeContentId === 'automation'"
                 :show-pin="false"
                 :draggable="false"
                 :menu-open="openAutomationMenuId === automation.id"
-                @update:menu-open="setAutomationMenu(automation, $event)"
-                @open="openSession"
-                @rename="openRenameDialog"
-                @move="openMoveDialog"
-                @archive="archiveSession"
-                @delete="removeSession"
-              />
+                @update:menu-open="openAutomationMenuId = $event ? automation.id : null"
+                @open="openAutomation(automation)"
+              >
+                <template #menu>
+                  <SidebarNavItem icon="edit" label="Automation bearbeiten" v-close-popup @click="openAutomation(automation)" />
+                  <SidebarNavItem icon="delete_outline" label="Automation löschen" v-close-popup class="text-negative" @click="removeAutomation(automation)" />
+                </template>
+              </SidebarSessionItem>
               <q-item v-if="automations.loaded && !automations.items.length" dense class="q-px-sm"><q-item-section><q-item-label caption>Noch keine Automationen</q-item-label></q-item-section></q-item>
             </q-list>
           </section>
@@ -270,7 +271,7 @@ import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { mdiFolderOpenOutline, mdiFolderOutline } from '@quasar/extras/mdi-v7'
-import { useRoute, useRouter } from 'vue-router'
+import { isNavigationFailure, NavigationFailureType, useRoute, useRouter } from 'vue-router'
 import AccountDialog from 'src/features/auth/AccountDialog.vue'
 import AppLogo from 'src/shared/ui/AppLogo.vue'
 import SidebarIconButton from 'src/shared/ui/SidebarIconButton.vue'
@@ -324,7 +325,6 @@ const automationsSectionOpen = ref(false)
 const sidebarNow = ref(Date.now())
 let clockTimer
 const openAutomationMenuId = ref(null)
-const automationMenuSessions = ref({})
 const accountDialogOpen = ref(false)
 const {
   projectOptions, standaloneSessionList, sessionStatuses,
@@ -362,7 +362,7 @@ const userMenuLabel = computed(() => 'Benutzermenü öffnen')
 
 function automationSession(automation) {
   const id = automation.executionSessionId
-  const session = chat.findCachedSession(id) || automationMenuSessions.value[id]
+  const session = chat.findCachedSession(id)
   const lastMessageAt = session?.lastMessageAt
   return {
     ...session,
@@ -377,18 +377,34 @@ function requiredRule(value) {
   return Boolean(String(value || '').trim()) || 'Pflichtfeld'
 }
 
-async function setAutomationMenu(automation, open) {
-  if (!open) {
-    if (openAutomationMenuId.value === automation.id) openAutomationMenuId.value = null
-    return
-  }
-  openAutomationMenuId.value = automation.id
+async function openAutomation(automation) {
+  const sameSession = routeSessionId.value === automation.executionSessionId
+  const projectId = chat.findCachedSession(automation.executionSessionId)?.projectId
+  closeDrawerOnMobile()
   try {
-    const session = chat.findCachedSession(automation.executionSessionId)
-      || await chat.fetchSession(automation.executionSessionId)
-    automationMenuSessions.value[automation.executionSessionId] = session
+    const failure = await router.push({ name: 'chat', query: {
+      session: automation.executionSessionId,
+      automation: automation.id,
+      controlCenter: 'automation',
+      ...(projectId ? { project: projectId } : {})
+    } })
+    if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
+    if (sameSession && chat.current?.id === automation.executionSessionId) await controlCenter.openApp('automation')
   } catch {
-    if (openAutomationMenuId.value === automation.id) openAutomationMenuId.value = null
+    // The central Axios interceptor displays the error.
+  }
+}
+
+async function removeAutomation(automation) {
+  if (!await confirm(`„${automation.name}“ mit allen Zeitplänen löschen? Die Session und ihre Nachrichten bleiben erhalten.`, 'Automation löschen?', { okLabel: 'Löschen' })) return
+  try {
+    if (routeSessionId.value === automation.executionSessionId && route.query.automation === automation.id) {
+      const failure = await router.replace({ query: { ...route.query, automation: undefined, run: undefined } })
+      if (failure) return
+    }
+    await automations.deleteAutomation(automation.id, automation.revision)
+    $q.notify({ type: 'positive', message: 'Automation gelöscht' })
+  } catch {
     // The central Axios interceptor displays the error.
   }
 }

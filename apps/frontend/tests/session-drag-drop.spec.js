@@ -51,17 +51,19 @@ const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, te
   }
 })
 vi.mock('quasar', () => ({ useQuasar: () => quasar }))
-vi.mock('vue-router', async () => {
+vi.mock('vue-router', async (importOriginal) => {
+  const actual = await importOriginal()
   const { reactive } = await import('vue')
   const route = reactive({ name: 'chat', query: {} })
   const router = { push: vi.fn(async (to) => {
-    const next = { name: to.name, query: to.query || {} }
-    if (await routeUpdate.callback?.(next, { name: route.name, query: route.query }) === false) return false
+    const next = { name: to.name || route.name, query: to.query || {} }
+    if (await routeUpdate.callback?.(next, { name: route.name, query: route.query }) === false) return { type: actual.NavigationFailureType.aborted }
     route.name = next.name
     route.query = next.query
-    return true
   }) }
+  router.replace = router.push
   return {
+    ...actual,
     useRoute: () => route,
     useRouter: () => router,
     onBeforeRouteLeave: vi.fn(),
@@ -88,6 +90,7 @@ vi.mock('stores/control-center', async () => {
   const store = reactive({
     sessionId: null, ready: true, open: false, restoredOpen: false, tabs: [], fileTabs: [], confirmedState: { tabs: [] },
     openApp: vi.fn(async function () { this.open = true; this.restoredOpen = false }),
+    ensureApp: vi.fn().mockResolvedValue(),
     removeFileTabs: vi.fn().mockResolvedValue()
   })
   return { useControlCenterStore: () => store }
@@ -108,7 +111,7 @@ vi.mock('stores/integrations', async () => {
 vi.mock('stores/auth', () => ({ useAuthStore: () => ({ username: 'Tester' }) }))
 vi.mock('stores/automations', async () => {
   const { reactive } = await import('vue')
-  const store = reactive({ items: [], fetchAutomations: vi.fn().mockResolvedValue() })
+  const store = reactive({ items: [], fetchAutomations: vi.fn().mockResolvedValue(), deleteAutomation: vi.fn().mockResolvedValue() })
   return { useAutomationStore: () => store }
 })
 vi.mock('stores/execution-agents', () => ({ useExecutionAgentStore: () => ({ byId: (id) => id === 'agent-1' ? { connected: true, operations: [] } : null }) }))
@@ -302,23 +305,27 @@ it('keeps project and session actions visible while their shared menu is open', 
   expect(root.querySelector('.session-actions-menu [aria-label="Project session anheften"]')).toBeNull()
 })
 
-it('uses the linked session project in the automation session menu even when it is not cached', async () => {
-  useAutomationStore().items = [{ id: 'automation', executionSessionId: 'linked', name: 'Bericht', enabled: true, lastActivityAt: new Date(Date.now() - 120_000).toISOString() }]
-  chat.fetchSession.mockImplementation(async (id) => id === 'linked' ? { id, title: 'Recherche', projectId: 'b' } : null)
+it.each([false, true])('opens the automation and respects blocked navigation when deleting (blocked=%s)', async (blocked) => {
+  useChatStore().current = chat.cachedSessions[0]
+  useRoute().query = { session: 'standalone' }
+  useAutomationStore().items = [{ id: 'automation', executionSessionId: 'standalone', name: 'Bericht', revision: 4, enabled: true }]
   await nextTick()
-  const toggle = root.querySelector('[aria-controls="automation-list"]')
-  expect(toggle.getAttribute('aria-expanded')).toBe('false')
-  toggle.click()
-  await nextTick()
-  expect(root.querySelector('#automation-list time').textContent).toBe('2m')
+  root.querySelector('#automation-list .session-list-item').click()
+  await vi.waitFor(() => expect(useControlCenterStore().openApp).toHaveBeenCalledWith('automation'))
+  expect(useRoute().query).toEqual({ session: 'standalone', automation: 'automation', controlCenter: 'automation' })
   root.querySelector('[aria-label="Aktionen für Bericht"] .menu-stub__show').click()
   await nextTick()
-  await nextTick()
-  expect(root.querySelector('[aria-label="Recherche anheften"]')).toBeNull()
-  const move = [...root.querySelectorAll('.session-actions-menu [clickable]')].find((item) => item.textContent === 'Verschieben')
-  move.click()
-  await nextTick()
-  expect(root.querySelector('[role="dialog"] select').value).toBe('b')
+  confirm.mockResolvedValueOnce(true)
+  if (blocked) routeUpdate.callback = vi.fn(() => false)
+  const remove = [...root.querySelectorAll('.session-actions-menu [clickable]')].find((item) => item.textContent === 'Automation löschen')
+  remove.click()
+  if (blocked) {
+    await vi.waitFor(() => expect(routeUpdate.callback).toHaveBeenCalled())
+    expect(useAutomationStore().deleteAutomation).not.toHaveBeenCalled()
+  } else {
+    await vi.waitFor(() => expect(useAutomationStore().deleteAutomation).toHaveBeenCalledWith('automation', 4))
+  }
+  expect(useRoute().query.session).toBe('standalone')
 })
 
 it('shows compact activity times and prioritizes approval over the unread dot', async () => {

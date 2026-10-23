@@ -338,6 +338,15 @@ function beforeUnload(event) {
 onBeforeRouteUpdate((to, from) => to.query.session !== from.query.session || (to.query.automation === from.query.automation && to.query.run === from.query.run) || confirmDiscard())
 watch(dirty, (value) => { automations.dirty = value }, { flush: 'sync' })
 watch([sessionId, selectedId, () => route.query.run], () => { if (sessionId.value) void load(); else version += 1 }, { immediate: true })
+watch(() => automations.items, (items, previous) => {
+  if (!saving.value && previous.some((item) => item.id === selectedId.value) && !items.some((item) => item.id === selectedId.value)) {
+    version += 1
+    loading.value = false
+    starting.value = false
+    assign(null)
+    void select(null)
+  }
+})
 watch(() => automations.items.filter((item) => item.executionSessionId === sessionId.value).map((item) => `${item.id}:${item.revision}`).join(','), () => {
   if (sessionId.value && !selectedId.value && !loading.value && !saving.value) void load()
 })

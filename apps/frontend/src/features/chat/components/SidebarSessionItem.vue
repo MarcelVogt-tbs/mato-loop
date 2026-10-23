@@ -55,22 +55,24 @@
             :aria-label="`Aktionen für ${title || session.title}`"
             list-class="session-actions-menu"
           >
-            <template v-if="session.title != null">
-              <SidebarNavItem
-                v-if="showPin && $q.screen.lt.md" icon="push_pin"
-                :label="session.pinned ? 'Nicht mehr anheften' : 'Anheften'"
-                :disable="pinning" v-close-popup @click="emit('toggle-pin', session)"
-              />
-              <SidebarNavItem icon="edit" label="Umbenennen" v-close-popup @click="emit('rename', session)" />
-              <SidebarNavItem icon="drive_file_move" label="Verschieben" v-close-popup @click="emit('move', session)" />
-              <q-separator class="q-my-xs" />
-              <SidebarNavItem icon="archive" label="Archivieren" v-close-popup @click="emit('archive', session)" />
-              <SidebarNavItem
-                icon="delete_outline" label="Löschen" v-close-popup class="text-negative"
-                @click="emit('delete', session)"
-              />
-            </template>
-            <q-item v-else><q-item-section>Session wird geladen …</q-item-section></q-item>
+            <slot name="menu">
+              <template v-if="session.title != null">
+                <SidebarNavItem
+                  v-if="showPin && $q.screen.lt.md" icon="push_pin"
+                  :label="session.pinned ? 'Nicht mehr anheften' : 'Anheften'"
+                  :disable="pinning" v-close-popup @click="emit('toggle-pin', session)"
+                />
+                <SidebarNavItem icon="edit" label="Umbenennen" v-close-popup @click="emit('rename', session)" />
+                <SidebarNavItem icon="drive_file_move" label="Verschieben" v-close-popup @click="emit('move', session)" />
+                <q-separator class="q-my-xs" />
+                <SidebarNavItem icon="archive" label="Archivieren" v-close-popup @click="emit('archive', session)" />
+                <SidebarNavItem
+                  icon="delete_outline" label="Löschen" v-close-popup class="text-negative"
+                  @click="emit('delete', session)"
+                />
+              </template>
+              <q-item v-else><q-item-section>Session wird geladen …</q-item-section></q-item>
+            </slot>
           </SidebarActionMenu>
         </div>
         <time

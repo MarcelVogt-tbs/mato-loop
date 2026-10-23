@@ -151,6 +151,23 @@ it('removes the automation without navigating away from its session', async () =
   expect(router.currentRoute.value.query.session).toBe('session')
 })
 
+it('leaves an automation reopened before its pending deletion completes', async () => {
+  const { page, store, router } = await mount()
+  const remove = store.deleteAutomation.getMockImplementation()
+  let finish
+  store.deleteAutomation.mockImplementationOnce(async (id) => {
+    await new Promise((resolve) => { finish = resolve })
+    await remove(id)
+  })
+  const deleting = store.deleteAutomation('automation', 4)
+  await page.select(null)
+  await page.select('automation')
+  await vi.waitFor(() => expect(page.definition?.id).toBe('automation'))
+  finish()
+  await deleting
+  await vi.waitFor(() => expect(router.currentRoute.value.query).toEqual({ session: 'session' }))
+})
+
 it.each(['completed', 'failed'])('opens the last %s run at its original session message', async (status) => {
   const { router } = await mount({ ...definition(), lastRun: {
     id: 'run', status, startedAt: '2026-10-06T14:32:00Z', messageId: 'message'
