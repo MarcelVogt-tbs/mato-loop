@@ -323,26 +323,22 @@ class ToolRegistry:
             str,
             tuple[str, str | None, str | None, tuple[tuple[str, str], ...]],
         ] = {name: ("builtin", None, None, ()) for name in definitions}
+        revisions = {
+            str(instance.id): _model_revision(instance)
+            for instance in integration_settings.instances
+        }
         for contribution in contributions.tools:
             if contribution.name in definitions:
                 raise ValueError(f"duplicate contributed tool: {contribution.name}")
             definitions[contribution.name] = self._contributed_definition(contribution)
-            source_instance = next(
-                (
-                    instance
-                    for instance in integration_settings.instances
-                    if str(instance.id) == contribution.integration_id
-                ),
-                None,
-            )
             sources[contribution.name] = (
                 "integration",
                 contribution.integration_id,
-                _model_revision(source_instance) if source_instance is not None else None,
+                revisions.get(contribution.integration_id),
                 tuple(
-                    (str(instance.id), _model_revision(instance))
-                    for instance in integration_settings.instances
-                    if str(instance.id) in contribution.integration_ids
+                    (instance_id, revision)
+                    for instance_id, revision in revisions.items()
+                    if instance_id in contribution.integration_ids
                 ),
             )
         attached_fragments = {

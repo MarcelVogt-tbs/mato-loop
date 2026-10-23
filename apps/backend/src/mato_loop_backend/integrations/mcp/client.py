@@ -12,21 +12,21 @@ from mcp import ClientSession
 from mcp.client.auth import OAuthRegistrationError
 from mcp.client.streamable_http import streamable_http_client
 
-MAX_MCP_TOOLS = 100
-MAX_MCP_CATALOG_BYTES = 256 * 1024
+# Bound discovery memory, not the number of tools or pages a server exposes.
+MAX_MCP_CATALOG_BYTES = 32 * 1024 * 1024
 MAX_MCP_RESULT_BYTES = 1024 * 1024
-MAX_MCP_PAGES = 20
 
 
 class _BoundedStream(httpx.AsyncByteStream):
-    def __init__(self, stream: httpx.AsyncByteStream) -> None:
+    def __init__(self, stream: httpx.AsyncByteStream, max_bytes: int) -> None:
         self.stream = stream
+        self.max_bytes = max_bytes
 
     async def __aiter__(self):
         size = 0
         async for chunk in self.stream:
             size += len(chunk)
-            if size > MAX_MCP_RESULT_BYTES:
+            if size > self.max_bytes:
                 raise McpClientError("mcp.responseTooLarge")
             yield chunk
 
@@ -41,13 +41,16 @@ class _BoundedTransport(httpx.AsyncBaseTransport):
         self,
         transport: httpx.AsyncBaseTransport | None = None,
         authentication_failed: Callable[[], Awaitable[None]] | None = None,
+        *,
+        max_response_bytes: int = MAX_MCP_RESULT_BYTES,
     ) -> None:
         self.transport = transport or httpx.AsyncHTTPTransport(retries=0)
         self.authentication_failed = authentication_failed
+        self.max_response_bytes = max_response_bytes
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         response = await self.transport.handle_async_request(request)
-        response.stream = _BoundedStream(response.stream)
+        response.stream = _BoundedStream(response.stream, self.max_response_bytes)
         if self.authentication_failed and (
             response.status_code == 401
             or (
@@ -88,6 +91,8 @@ def _nested_client_error(exc: BaseException) -> McpClientError | None:
         return exc
     if isinstance(exc, httpx.TimeoutException):
         return McpClientError("mcp.timeout")
+    if isinstance(exc, TimeoutError):
+        return McpClientError("mcp.timeout")
     if isinstance(exc, httpx.TransportError):
         return McpClientError("mcp.connectionFailed")
     if isinstance(exc, OAuthRegistrationError):
@@ -114,14 +119,17 @@ class McpClient:
         self.http_client = http_client
 
     @asynccontextmanager
-    async def _session(self):
+    async def _session(self, *, max_response_bytes: int = MAX_MCP_RESULT_BYTES):
         async with AsyncExitStack() as stack:
             client = self.http_client or await stack.enter_async_context(
                 httpx.AsyncClient(
                     headers=self.headers,
                     timeout=httpx.Timeout(60, connect=10),
                     trust_env=False,
-                    transport=_BoundedTransport(authentication_failed=self.authentication_failed),
+                    transport=_BoundedTransport(
+                        authentication_failed=self.authentication_failed,
+                        max_response_bytes=max_response_bytes,
+                    ),
                 )
             )
             async with streamable_http_client(self.endpoint, http_client=client) as streams:
@@ -130,27 +138,56 @@ class McpClient:
     async def discover_tools(self, *, read_timeout_seconds: int = 30) -> list[dict[str, Any]]:
         initialized = False
         try:
-            async with self._session() as (read, write, _session_id):
+            async with (
+                asyncio.timeout(read_timeout_seconds),
+                self._session(max_response_bytes=MAX_MCP_CATALOG_BYTES) as (read, write, _session_id),
+            ):
                 async with ClientSession(
                     read, write, read_timeout_seconds=timedelta(seconds=read_timeout_seconds)
                 ) as session:
                     await session.initialize()
                     initialized = True
-                    result = await session.list_tools()
-                    discovered = list(result.tools)
+                    tools = []
+                    catalog_size = 2
                     cursors = set()
-                    pages = 1
-                    while result.nextCursor is not None:
-                        if (
-                            len(discovered) >= MAX_MCP_TOOLS
-                            or pages >= MAX_MCP_PAGES
-                            or result.nextCursor in cursors
-                        ):
+                    cursor = None
+                    while True:
+                        result = await session.list_tools(cursor=cursor)
+                        for tool in result.tools:
+                            item = {
+                                "name": tool.name,
+                                "title": tool.title,
+                                "description": tool.description or "",
+                                "input_schema": tool.inputSchema,
+                                "output_schema": tool.outputSchema,
+                                "annotations": {
+                                    key: getattr(tool.annotations, key, None)
+                                    for key in (
+                                        "readOnlyHint",
+                                        "destructiveHint",
+                                        "idempotentHint",
+                                        "openWorldHint",
+                                    )
+                                },
+                            }
+                            try:
+                                catalog_size += len(json.dumps(
+                                    item, ensure_ascii=True, separators=(",", ":"), allow_nan=False
+                                ).encode()) + bool(tools)
+                            except (TypeError, ValueError) as exc:
+                                raise McpClientError("mcp.invalidResponse") from exc
+                            if catalog_size > MAX_MCP_CATALOG_BYTES:
+                                raise McpClientError("mcp.responseTooLarge")
+                            tools.append(item)
+                        cursor = result.nextCursor
+                        if cursor is None:
+                            break
+                        if cursor in cursors:
                             raise McpClientError("mcp.invalidResponse")
-                        cursors.add(result.nextCursor)
-                        result = await session.list_tools(cursor=result.nextCursor)
-                        discovered.extend(result.tools)
-                        pages += 1
+                        catalog_size += len(cursor.encode())
+                        if catalog_size > MAX_MCP_CATALOG_BYTES:
+                            raise McpClientError("mcp.responseTooLarge")
+                        cursors.add(cursor)
         except Exception as exc:
             error = _nested_client_error(exc)
             url = httpx.URL(self.endpoint)
@@ -161,35 +198,6 @@ class McpClient:
             if error is exc:
                 raise
             raise error or McpClientError("mcp.refreshFailed") from exc
-        tools = [
-            {
-                "name": tool.name,
-                "title": tool.title,
-                "description": tool.description or "",
-                "input_schema": tool.inputSchema,
-                "output_schema": tool.outputSchema,
-                "annotations": {
-                    key: getattr(tool.annotations, key, None)
-                    for key in (
-                        "readOnlyHint",
-                        "destructiveHint",
-                        "idempotentHint",
-                        "openWorldHint",
-                    )
-                },
-            }
-            for tool in discovered
-        ]
-        try:
-            catalog_size = len(
-                json.dumps(
-                    tools, ensure_ascii=True, separators=(",", ":"), allow_nan=False
-                ).encode()
-            )
-        except (TypeError, ValueError) as exc:
-            raise McpClientError("mcp.invalidResponse") from exc
-        if len(tools) > MAX_MCP_TOOLS or catalog_size > MAX_MCP_CATALOG_BYTES:
-            raise McpClientError("mcp.responseTooLarge")
         return tools
 
     async def call_tool(

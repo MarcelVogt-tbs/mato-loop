@@ -30,7 +30,6 @@ MCP_CREDENTIAL_KIND = "mcp.bearer"
 MCP_ACTION = ToolAction(
     "mcp.call", "MCP-Tool aufrufen", category="write"
 )
-MAX_MCP_SCHEMA_BYTES = 64 * 1024
 MAX_MCP_SCHEMA_DEPTH = 64
 
 
@@ -53,13 +52,9 @@ def _validate_schema_value(value: Any, depth: int = 0) -> None:
 def validate_mcp_schema(value: dict[str, Any], *, require_object: bool) -> dict[str, Any]:
     _validate_schema_value(value)
     try:
-        size = len(
-            json.dumps(value, ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode()
-        )
+        json.dumps(value, ensure_ascii=True, separators=(",", ":"), allow_nan=False)
     except (TypeError, ValueError) as exc:
         raise ValueError("MCP schema must be finite JSON") from exc
-    if size > MAX_MCP_SCHEMA_BYTES:
-        raise ValueError("MCP schema exceeds maximum size")
     try:
         validator_for(value).check_schema(value)
     except SchemaError as exc:
@@ -82,8 +77,8 @@ class McpCatalogTool(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=256)
-    title: str | None = Field(default=None, max_length=160)
-    description: str = Field(default="", max_length=4_000)
+    title: str | None = None
+    description: str = ""
     input_schema: dict[str, Any]
     output_schema: dict[str, Any] | None = None
     annotations: McpToolAnnotations = Field(default_factory=McpToolAnnotations)
@@ -110,7 +105,7 @@ class McpConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     endpoint: HttpUrl
-    tools: list[McpCatalogTool] = Field(default_factory=list, max_length=100)
+    tools: list[McpCatalogTool] = Field(default_factory=list)
     oauth: OAuthConfig | None = None
 
     @field_validator("tools")

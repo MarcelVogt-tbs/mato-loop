@@ -321,6 +321,25 @@ async def test_mcp_discovery_rejects_repeated_pagination_cursor(monkeypatch) -> 
     assert exc_info.value.code == "mcp.invalidResponse"
 
 
+@pytest.mark.parametrize("budget, timeout, code", [
+    (1, 30, "mcp.responseTooLarge"),
+    (32 * 1024 * 1024, 0.01, "mcp.timeout"),
+])
+async def test_mcp_discovery_bounds_endless_unique_cursors(monkeypatch, budget, timeout, code):
+    class EndlessSession(FakeSession):
+        async def list_tools(self, cursor=None):
+            await asyncio.sleep(0)
+            return SimpleNamespace(tools=[], nextCursor=str(int(cursor or 0) + 1))
+
+    monkeypatch.setattr(client_module, "MAX_MCP_CATALOG_BYTES", budget)
+    monkeypatch.setattr(client_module, "streamable_http_client", fake_transport)
+    monkeypatch.setattr(client_module, "ClientSession", EndlessSession)
+    with pytest.raises(McpClientError, match=code):
+        await McpClient("https://mcp.example.test/rpc", "secret").discover_tools(
+            read_timeout_seconds=timeout
+        )
+
+
 def test_mcp_contribution_has_stable_schema_and_tool_resource_policy() -> None:
     instance = IntegrationInstance(
         id=uuid4(),
@@ -337,7 +356,8 @@ def test_mcp_contribution_has_stable_schema_and_tool_resource_policy() -> None:
                         "properties": {"query": {"type": "string"}},
                         "required": ["query"],
                     },
-                }
+                },
+                {"name": "other", "input_schema": {"type": "object"}},
             ],
         },
     )
@@ -367,6 +387,11 @@ def test_mcp_contribution_has_stable_schema_and_tool_resource_policy() -> None:
     assert contribution.integration_id == str(instance.id)
     assert contribution.policy_resource_key == mcp_resource_key("lookup")
     assert contribution.name.startswith(f"mcp_{instance.id.hex}_")
+    _, sources, _ = ToolRegistry([])._combined_definitions(
+        IntegrationSettings(instances=[instance])
+    )
+    first, second = sources.values()
+    assert first[2] is second[2]
 
 
 def test_mcp_permission_accepts_catalog_sized_binding_revision() -> None:

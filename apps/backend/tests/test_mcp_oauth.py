@@ -46,8 +46,8 @@ def transport(monkeypatch):
         monkeypatch.setattr(
             _BoundedTransport,
             "__init__",
-            lambda self, transport=None, authentication_failed=None: original(
-                self, httpx.MockTransport(handler), authentication_failed
+            lambda self, transport=None, authentication_failed=None, **kwargs: original(
+                self, httpx.MockTransport(handler), authentication_failed, **kwargs
             ),
         )
 
@@ -84,6 +84,7 @@ def payload():
         "cimd",
         "ha_http",
         "lan_dynamic",
+        "large_catalog",
         "invalid_catalog",
         "invalid_token_response",
     ],
@@ -144,7 +145,7 @@ async def test_sdk_login_and_discovery(transport, mode, caplog):
                 return httpx.Response(202)
             tool = {"name": "lookup", "inputSchema": {"type": "object"}}
             if mode == "invalid_catalog":
-                tool["description"] = "private-value" * 400
+                tool["inputSchema"]["type"] = "private-value"
             result = (
                 dict(
                     protocolVersion=LATEST_PROTOCOL_VERSION,
@@ -154,6 +155,16 @@ async def test_sdk_login_and_discovery(transport, mode, caplog):
                 if message["method"] == "initialize"
                 else {"tools": [tool]}
             )
+            if mode == "large_catalog" and message["method"] == "tools/list":
+                page = int(message.get("params", {}).get("cursor", 0))
+                result = {"tools": [
+                    dict(tool, name=f"lookup_{page}_{index}", title="Title" * 40,
+                         description="Details" * 1000,
+                         inputSchema={"type": "object", "description": "Schema" * 12_000})
+                    for index in range(85 if page == 0 else 1)
+                ]}
+                if page < 20:
+                    result["nextCursor"] = str(page + 1)
             data = dict(jsonrpc="2.0", id=message["id"], result=result)
             if mode == "streaming" and message["method"] == "initialize":
                 stream = Stream()
@@ -163,10 +174,15 @@ async def test_sdk_login_and_discovery(transport, mode, caplog):
                 )
         else:
             return httpx.Response(404)
+        if mode == "large_catalog":
+            return httpx.Response(
+                200, headers={"content-type": "application/json"},
+                stream=httpx.ByteStream(json.dumps(data).encode()),
+            )
         return httpx.Response(200, json=data)
 
     transport(handle)
-    dynamic = mode in {"dynamic", "streaming", "redirected", "cimd", "lan_dynamic", "invalid_catalog", "invalid_token_response"}
+    dynamic = mode in {"dynamic", "streaming", "redirected", "cimd", "lan_dynamic", "large_catalog", "invalid_catalog", "invalid_token_response"}
     config = oauth.OAuthConfig(
         client_id=None
         if dynamic
@@ -213,8 +229,8 @@ async def test_sdk_login_and_discovery(transport, mode, caplog):
         if mode == "invalid_catalog":
             assert (
                 "phase=catalog_validation" in caplog.text
-                and '"loc": ["tools", 0, "description"]' in caplog.text
-                and "string_too_long" in caplog.text
+                and '"loc": ["tools", 0, "input_schema"]' in caplog.text
+                and "value_error" in caplog.text
                 and "private-value" not in caplog.text
             )
         elif mode == "invalid_token_response":
@@ -224,6 +240,8 @@ async def test_sdk_login_and_discovery(transport, mode, caplog):
                 and "private-value" not in caplog.text
                 and "private-token" not in caplog.text
             )
+        elif mode == "large_catalog":
+            assert attempt.error_code is None and len(attempt.tools) == 105
         else:
             assert attempt.error_code is None and attempt.tools[0]["name"] == "lookup"
         token_request = next(request for request in requests if request.url.path.endswith("/token"))

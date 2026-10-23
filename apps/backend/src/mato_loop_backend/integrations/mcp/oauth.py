@@ -18,7 +18,12 @@ from mcp.shared.auth_utils import check_resource_allowed
 from pydantic import AnyUrl, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from mato_loop_backend.db.session import AsyncSessionFactory
-from mato_loop_backend.integrations.mcp.client import McpClient, McpClientError, _BoundedTransport
+from mato_loop_backend.integrations.mcp.client import (
+    MAX_MCP_CATALOG_BYTES,
+    McpClient,
+    McpClientError,
+    _BoundedTransport,
+)
 from mato_loop_backend.models import Credential
 from mato_loop_backend.security import (
     load_credential,
@@ -85,7 +90,7 @@ class _OAuthTransport(_BoundedTransport):
     interactive_auth = True
 
     def __init__(self, scope: str | None = None, transport=None):
-        super().__init__(transport)
+        super().__init__(transport, max_response_bytes=MAX_MCP_CATALOG_BYTES)
         self.scope = scope
 
     async def handle_async_request(self, request):
