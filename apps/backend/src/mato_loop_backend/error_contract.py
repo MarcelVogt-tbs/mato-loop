@@ -468,6 +468,8 @@ _MESSAGES = {
     "webfetch.engineUnsupported": "The selected web fetch engine is unsupported.",
     "webfetch.renderFailed": "The web page could not be processed by the JavaScript engine.",
     "webfetch.userAgentUnsupported": "The Lightpanda user agent must not contain Mozilla.",
+    "attachment.pdfRenderFailed": "The PDF page could not be rendered.",
+    "attachment.pdfPageInvalid": "The requested PDF page does not exist.",
     "webfetch.pdfInvalid": "The PDF document is invalid or unsupported.",
     "webfetch.pdfRenderFailed": "The PDF page could not be rendered.",
     "webfetch.pdfVisionFailed": "The PDF page could not be read by the vision model.",

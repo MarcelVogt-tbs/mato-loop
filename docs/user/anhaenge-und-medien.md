@@ -8,6 +8,10 @@ Uploads und ausdrücklich gespeicherte Dokumentableitungen sind verwaltete Datei
 
 ## Bildverarbeitung
 
+PDF-Anhänge erhalten neben dem Textauszug eine visuelle Vorschau: bei bis zu vier Seiten vollständig, sonst zunächst die erste Seite. Ein bildfähiges Chatmodell erhält die Seitenbilder direkt; andernfalls liest das konfigurierte Vision-Modell Text, Tabellen und Bildinhalte. Der Fallback verwendet kein weniger vertrauliches Modell als das Chatmodell. Weitere Seiten kann der Agent gezielt über den Dateizugriff nachladen. Die üblichen Bild- und Größenlimits gelten weiterhin; nicht übertragene oder nicht ausgewertete Seiten werden gekennzeichnet. Temporäre Seitenbilder werden nicht als zusätzliche Sessiondateien gespeichert.
+
+PDFs lassen sich im gemeinsamen Dateiviewer öffnen. Die Anzeige verwendet den PDF-Viewer Ihres Browsers. Wenn dieser keine eingebettete Vorschau unterstützt, stehen **PDF separat öffnen** und der Download zur Verfügung.
+
 Bildfähige Modelle können geeignete aktuelle oder ausdrücklich referenzierte Bilder erhalten. Große Bilder werden für die Modellanfrage normalisiert. Das gespeicherte Original bleibt unverändert. Bilder, Audio und andere Binärdaten werden vor der Übertragung nicht pseudonymisiert.
 
 Bei einer Bildbearbeitung speichert MatoLoop sowohl die unmittelbaren Quellen als auch eine kontrollierte Ursprungslinie. Wenn Sie eine Bearbeitung derselben Bildlinie für die Session freigeben, können daraus erzeugte Bilder erneut bearbeitet werden, ohne bei jedem Zwischenergebnis nachzufragen. Andere Bilder, Sessions, Modelle oder Vertrauenslevel bleiben von dieser Freigabe getrennt.

@@ -2,7 +2,7 @@ import json
 from copy import deepcopy
 from datetime import UTC, datetime
 from functools import partial
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -196,6 +196,39 @@ def test_user_attachment_excerpt_is_untrusted_and_strictly_budgeted() -> None:
     assert "truncated by the host" in projected["content"]
     assert "x" * MAX_ATTACHMENT_EXCERPT_CHARACTERS in projected["content"]
     assert "x" * (MAX_ATTACHMENT_EXCERPT_CHARACTERS + 1) not in projected["content"]
+
+
+@pytest.mark.parametrize("include_attachment_text", [False, True])
+def test_pdf_visual_observations_are_reserved_before_long_text(include_attachment_text):
+    message = _message(uuid4(), "user", "Compare both PDFs")
+    message.attachments = [MessageAttachment(
+        id=uuid4(), kind="document", mime_type="application/pdf", filename=name, file_path=name,
+    ) for name in ("long.pdf", "chart.pdf")]
+    service = Mock(spec=AttachmentService)
+    service.read_derived_text.side_effect = lambda item, *args, **kwargs: "A" * 24_000 if item.filename == "long.pdf" else ""
+    context = {str(item.id): {"path": item.file_path, "observations": {1: "CHART_EVIDENCE" if item.filename == "chart.pdf" else "Text page"}}
+               for item in message.attachments}
+    projected = message_dict(message, include_attachment_text=include_attachment_text, attachment_service=service, pdf_context=context)
+    assert projected["content"].count("CHART_EVIDENCE") == 1
+
+
+async def test_pdf_context_fits_a_small_model_without_changing_system_instructions():
+    session = _session()
+    message = _message(session.id, "user", "Read the PDF")
+    attachment = MessageAttachment(id=uuid4(), kind="document", mime_type="application/pdf", filename="long.pdf", file_path="long.pdf")
+    message.attachments = [attachment]
+    service = Mock(spec=AttachmentService)
+    service.run_id = None
+    service.read_derived_text.return_value = "A" * 24_000
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    result = await _build_context(
+        db, chat_session=session, records=[message], system_prompt="Stable system instructions.",
+        tool_schemas=[], model=_model(context_window_tokens=8_192),
+        settings=AgentRuntimeSettings(safety_reserve_tokens=1_024), summarize=AsyncMock(),
+        attachment_service=service, pdf_context={str(attachment.id): {"observations": {1: "A text page"}}},
+    )
+    assert (result.messages[0]["content"], result.estimated_input_tokens <= result.input_budget_tokens) == ("Stable system instructions.", True)
 
 
 def test_attachment_excerpt_is_never_injected_into_tool_content() -> None:

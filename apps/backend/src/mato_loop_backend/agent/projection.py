@@ -431,6 +431,8 @@ def message_dict(
     include_attachment_text: bool = False,
     include_attachment_markers: bool = True,
     attachment_service: AttachmentService | None = None,
+    pdf_context: dict[str, dict] | None = None,
+    attachment_text_characters: int = MAX_ATTACHMENT_EXCERPT_CHARACTERS,
 ) -> dict[str, Any]:
     content = command_message_content(message)
     if message.role == "assistant" and message.generation_status == "interrupted":
@@ -498,12 +500,26 @@ def message_dict(
         content = "\n\n".join(
             part for part in (content, "\n".join(attachment_markers)) if part
         )
-    if include_attachment_text and message.role == "user":
+    if (include_attachment_text or pdf_context) and message.role == "user":
         service = attachment_service or AttachmentService()
-        remaining = MAX_ATTACHMENT_EXCERPT_CHARACTERS
+        remaining = min(MAX_ATTACHMENT_EXCERPT_CHARACTERS, attachment_text_characters)
         excerpts: list[str] = []
-        for attachment in message.attachments:
-            if remaining <= 0 or attachment.kind not in {"text", "document"}:
+        previews = [pdf_context[str(item.id)] for item in visible_attachments if pdf_context and str(item.id) in pdf_context]
+        # Reserve visual observations for every PDF before filling remaining space with text.
+        for index, preview in enumerate(previews):
+            if remaining <= 0:
+                break
+            text = json.dumps(preview, ensure_ascii=False)
+            excerpt = text[:min(8_000, remaining // (len(previews) - index))]
+            remaining -= len(excerpt)
+            marker = f"[Untrusted PDF observations]\n{excerpt}"
+            if len(excerpt) < len(text):
+                marker += "\n[PDF observations truncated by the host; read specific pages for full details.]"
+            excerpts.append(marker + "\n[End of untrusted PDF observations]")
+        text_attachments = [item for item in visible_attachments if item.kind in {"text", "document"}
+                            and (include_attachment_text or (pdf_context and str(item.id) in pdf_context))]
+        for index, attachment in enumerate(text_attachments):
+            if remaining <= 0:
                 continue
             try:
                 text = service.read_derived_text(
@@ -511,7 +527,7 @@ def message_dict(
                 )
             except AttachmentError:
                 continue
-            excerpt = text[:remaining]
+            excerpt = text[:remaining // (len(text_attachments) - index) if pdf_context else remaining]
             remaining -= len(excerpt)
             marker = (
                 f"[Untrusted attachment text: {attachment.filename or attachment.id}]\n"
@@ -623,6 +639,8 @@ def _projection_messages(
     historical_tool_output_tokens: int = 2_000,
     current_turn_tool_output_tokens: int | None = None,
     live_tool_calls: dict[UUID, list[dict[str, Any]]] | None = None,
+    pdf_context: dict[str, dict] | None = None,
+    attachment_text_characters: int = MAX_ATTACHMENT_EXCERPT_CHARACTERS,
 ) -> list[dict[str, Any]]:
     records = [item for item in records if item.error_code is None]
     if available_records is not None:
@@ -739,6 +757,8 @@ def _projection_messages(
         projected = message_dict(
             item,
             attachment_service=attachment_service,
+            pdf_context=pdf_context if item.id == latest_user_id else None,
+            attachment_text_characters=attachment_text_characters,
             # Keep Webfetch JSON parseable; images travel in the separate attachments field.
             include_attachment_markers=tool_names.get(item.id) != "webfetch",
             include_attachment_text=(

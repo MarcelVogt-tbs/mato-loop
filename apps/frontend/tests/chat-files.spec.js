@@ -6,10 +6,10 @@ import ChatFiles from '../src/features/chat/components/ChatFiles.vue'
 import { supportedAttachments } from '../src/utils/attachments'
 
 vi.mock('src/features/files/components/FileViewerPanel.vue', () => ({ default: {
-  props: ['image', 'model'],
+  props: ['image', 'model', 'pdf'],
   render() { return h('div', {
-    'data-preview-url': this.image?.url || this.model?.url,
-    'data-download-url': this.image?.downloadUrl || this.model?.downloadUrl
+    'data-preview-url': this.image?.url || this.model?.url || this.pdf?.url,
+    'data-download-url': this.image?.downloadUrl || this.model?.downloadUrl || this.pdf?.downloadUrl
   }) }
 } }))
 
@@ -62,7 +62,7 @@ it('previews a queued SVG without document navigation and releases its URL on un
   expect([preview, navigation, revokeObjectURL.mock.calls]).toEqual(['blob:local-image', null, [['blob:local-image']]])
 })
 
-it.each(['photo.png', 'model.stl', 'model.off'])('opens provided %s in the shared viewer', async (filename) => {
+it.each(['photo.png', 'model.stl', 'model.off', 'manual.pdf'])('opens provided %s in the shared viewer', async (filename) => {
   const sessionId = '550e8400-e29b-41d4-a716-446655440000'
   const downloadUrl = `/api/workspace/files/provided/${sessionId}/550e8400-e29b-41d4-a716-446655440001/0/download`
   const root = mount({ actions: [{

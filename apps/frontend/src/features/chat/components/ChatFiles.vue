@@ -101,6 +101,11 @@
             name: selectedAttachment.filename || '3D-Modell',
             format: modelFormat(selectedAttachment)
           } : null"
+          :pdf="isPdf(selectedAttachment) ? {
+            url: selectedAttachment.safeUrl,
+            downloadUrl: selectedAttachment.downloadUrl,
+            name: selectedAttachment.filename || 'PDF'
+          } : null"
           fullscreen
           @close="attachmentDialog = false"
           @toggle-fullscreen="attachmentDialog = false"
@@ -160,7 +165,7 @@ const selectedAttachment = ref(null)
 
 function hasDirectPreview(attachment) {
   return attachment.safeUrl && !loadErrors[attachment.id]
-    && (attachment.kind === 'image' || isModel(attachment))
+    && (attachment.kind === 'image' || isModel(attachment) || isPdf(attachment))
     && (!attachment.fileAction || attachment.safeUrl !== attachment.downloadUrl)
 }
 
@@ -177,6 +182,10 @@ function modelFormat(attachment) {
   return attachment?.mimeType === 'model/vnd.off' || attachment?.filename?.toLocaleLowerCase().endsWith('.off')
     ? 'off'
     : 'stl'
+}
+
+function isPdf(attachment) {
+  return attachment?.mimeType === 'application/pdf'
 }
 
 function isModel(attachment) {

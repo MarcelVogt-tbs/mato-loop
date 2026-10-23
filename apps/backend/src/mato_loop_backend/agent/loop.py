@@ -10,8 +10,10 @@ from uuid import UUID, uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.agent.run_support as agent_run_support
+from mato_loop_backend.agent.media_model_helpers import media_model_handlers
 from mato_loop_backend.agent.memory_context import MemoryCache, prepare_memory_context
 from mato_loop_backend.agent.model_turn import complete_model_turn, persist_model_response
+from mato_loop_backend.agent.pdf_attachments import prepare_pdf_attachments
 from mato_loop_backend.agent.prompts import general_system_prompt
 from mato_loop_backend.agent.repository_instructions import repository_instructions_prompt
 from mato_loop_backend.agent.run_contracts import AgentRunError, _VisibleResponse
@@ -232,6 +234,7 @@ async def execute_loop_body(
     pseudonymization_key = secrets.token_bytes(32)
     session_read_cursors: dict[UUID, UUID | None] = {}
     memory_cache = MemoryCache()
+    pdf_cache = {}
     continuation_context_stale = False
 
     while True:
@@ -464,6 +467,19 @@ async def execute_loop_body(
             ),
         }
 
+        pdf_handler, *_ = media_model_handlers(
+            db=db, run=run, session=chat_session, ai_settings=ai_settings,
+            model=model, model_trust_level=model_trust_level,
+            runtime_settings=runtime_settings, tool_settings=tool_settings,
+            tool_phase={}, next_model_request=next_helper_request,
+            count_model_request=count_helper_request,
+        )
+        pdf_context = await prepare_pdf_attachments(
+            records, AttachmentService(settings=instance_limits, run_id=run.id),
+            images=ephemeral_images, cache=pdf_cache,
+            supports_images=model.supports_image_input,
+            trust=model_trust_level, handler=pdf_handler,
+        )
         projection, injected_memory_count, injected_episode_count = await build_turn_context(
             cls, db, run, chat_session,
             ai_settings=ai_settings,
@@ -473,6 +489,7 @@ async def execute_loop_body(
             instance_limits=instance_limits,
             records=records,
             system_prompt=system_prompt,
+            pdf_context=pdf_context,
             runtime_instructions=(prompt_agent_profile.runtime_instructions if prompt_agent_profile else ""),
             schemas=schemas,
             offered_tool_names=frozenset(effective_toolset.tools if effective_toolset else ()),

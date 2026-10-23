@@ -34,12 +34,16 @@ from mato_loop_backend.media.attachments import (
     MAX_IMAGE_ATTACHMENT_BYTES,
     AttachmentService,
     image_mime_type,
+    processing_limits,
     validate_image,
 )
+from mato_loop_backend.media.pdf import initial_pdf_pages, render_pdf_page
+from mato_loop_backend.media.processing import AttachmentProcessingError, extract_pdf_pages
 from mato_loop_backend.models import Message, MessageAttachment
 from mato_loop_backend.permissions.policy import administrator_permission
+from mato_loop_backend.providers.base import MAX_PROVIDER_IMAGE_BYTES, ProviderError
 from mato_loop_backend.providers.service import normalize_provider_image
-from mato_loop_backend.settings import ToolExecutionPolicy
+from mato_loop_backend.settings import InstanceLimits, SettingsStore, ToolExecutionPolicy
 from mato_loop_backend.tools.actions import (
     _FILE_PROVIDE,
     _FILESYSTEM_DELETE,
@@ -68,6 +72,7 @@ from mato_loop_backend.tools.contracts import ToolDefinition as ToolDefinition
 from mato_loop_backend.tools.contracts import ToolFileAction as ToolFileAction
 from mato_loop_backend.tools.contracts import ToolResult as ToolResult
 from mato_loop_backend.tools.secrets import resolve_protected_text
+from mato_loop_backend.web.fetch import WebFetchError
 
 logger = logging.getLogger("mato_loop_backend.agent.tools")
 
@@ -165,6 +170,8 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
         )
     if kind != "file":
         return ToolResult.error("file.unsupportedType")
+    if normalized_path.lower().endswith(".pdf"):
+        return await _read_pdf(arguments, context, root_files, normalized_path)
     if arguments.root == "session" and target_session_id == context.session.id:
         try:
             selected_revision = await asyncio.to_thread(root_files.working_revision, normalized_path)
@@ -254,6 +261,59 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
             "path": normalized_path,
         }
     return tool_result
+
+
+async def _read_pdf(arguments: ReadArguments, context: ToolContext, root_files, path: str) -> ToolResult:
+    limits = await SettingsStore.load(context.db, InstanceLimits)
+    data = await files_access.read_bytes(
+        context, arguments.root, path, limit=limits.max_upload_bytes, root_files=root_files,
+    )
+    try:
+        pages, metadata = await asyncio.to_thread(extract_pdf_pages, data, limits=processing_limits(limits))
+        requested = arguments.pdf_pages or initial_pdf_pages(len(pages))
+        if any(number > len(pages) for number in requested):
+            return ToolResult.error("attachment.pdfPageInvalid")
+        images = []
+        image_bytes = 0
+        failed_pages = []
+        if context.pdf_images_enabled or context.pdf_vision_handler is not None:
+            for number in requested:
+                try:
+                    image = await asyncio.to_thread(render_pdf_page, data, number)
+                except AttachmentProcessingError:
+                    failed_pages.append(number)
+                    continue
+                if image_bytes + len(image) > MAX_PROVIDER_IMAGE_BYTES:
+                    break
+                images.append((number, image))
+                image_bytes += len(image)
+        descriptions = {}
+        visual_status = "failed" if failed_pages else "available" if images else "unavailable"
+        if images and not context.pdf_images_enabled:
+            try:
+                descriptions = await context.pdf_vision_handler(images, context.model_trust_level.value == "private")
+            except (WebFetchError, ProviderError):
+                visual_status = "failed"
+        lines = "\n".join(f"--- Page {number} ---\n{text}" for number, text in enumerate(pages, 1))
+        selected_lines = lines.splitlines()[arguments.offset - 1:arguments.offset - 1 + arguments.limit]
+        result = ToolResult.json({
+            "root": arguments.root, "path": path, "pageCount": len(pages),
+            "imagePages": metadata["imagePages"], "content": "\n".join(selected_lines)[:24_000],
+            "visualPages": [number for number, _image in images],
+            "visualDescriptions": descriptions, "requestedPages": requested,
+            "failedPages": failed_pages,
+            "visualStatus": visual_status,
+            "note": "Visual coverage requires supplied images or successful visualDescriptions. Use pdf_pages for other pages. Text uses line offset/limit and may be truncated.",
+            "contentIsUntrusted": True,
+        })
+        if context.pdf_images_enabled:
+            result.attachments = tuple(ToolAttachment(
+                image, "image/jpeg", f"{posixpath.basename(path)}-page-{number}.jpg", presentation="internal", ephemeral=True,
+                metadata={"pageNumber": number},
+            ) for number, image in images)
+        return result
+    except AttachmentProcessingError as exc:
+        return ToolResult.error(exc.code)
 
 
 def _read_text_result(arguments: ReadArguments, target_session_id: UUID, result) -> ToolResult:
@@ -1102,12 +1162,10 @@ async def _move_path(arguments: MovePathArguments, context: ToolContext) -> Tool
 
 READ = ToolDefinition(
             "read",
-            "Read a directory, UTF-8 text, or PNG/JPEG/WebP/GIF image. "
-            "Pagination applies to directories and text. "
-            "To inspect an image, read its source path in root=computer or root=files directly; "
-             "do not copy it or call provide_file first. elevated=true supports regular UTF-8 computer files; "
-             "pass a matching sudo_password_ref or omit it for automatic authentication reuse or protected input. "
-             "Reuse its returned file SHA-256 as expectedSha256 when changing the file.",
+            "Read directories, UTF-8 text, PDFs, or images directly. "
+            "offset/limit paginate text/directories; pdf_pages selects visual PDF pages. "
+            "Text is not visual evidence. elevated=true: UTF-8 computer files; optional "
+            "sudo_password_ref, else reuse/request authentication. Reuse returned SHA-256 as expectedSha256 for edits.",
             ReadArguments,
             _read,
             tool_type="shared",

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.media.attachments as media_attachments
 import mato_loop_backend.media.processing as media_processing
+from mato_loop_backend.agent.pdf_attachments import prepare_pdf_attachments
 from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.media.attachments import (
@@ -24,7 +25,8 @@ from mato_loop_backend.media.attachments import (
     classify_attachment,
 )
 from mato_loop_backend.models import ChatSession, Message
-from mato_loop_backend.settings import InstanceLimits
+from mato_loop_backend.providers.base import ProviderImageInput
+from mato_loop_backend.settings import InstanceLimits, TrustLevel
 
 
 def wav_bytes(*, frames: int = 80, sample_rate: int = 8_000) -> bytes:
@@ -117,6 +119,33 @@ def test_modern_documents_are_classified_and_extracted(document_format: str) -> 
         assert b"Sicherer" in result.derived_files["content.txt"]
     if document_format == "xlsx":
         assert b"MatoLoop" in result.derived_files["content.txt"]
+
+
+@pytest.mark.parametrize("supports_images,page_count", [(True, 2), (False, 2), (True, 9)])
+async def test_pdf_upload_preview_uses_images_or_vision_and_rejects_stale_cache(tmp_path, supports_images, page_count):
+    session = ChatSession(id=uuid4(), user_id=uuid4())
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(session.id)
+    service = AttachmentService(storage)
+    message = Message(id=uuid4(), session_id=session.id, role="user", content="Erkläre das Diagramm")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = session
+    attachment = await service.create_attachment(
+        db, message, pdf_bytes(pages=page_count), "application/pdf", kind="document",
+        filename="diagram.pdf", position=0,
+    )
+    message.attachments = [attachment]
+    expected = list(range(1, page_count + 1)) if page_count <= 4 else [1]
+    vision = AsyncMock(return_value={number: "A diagram" for number in expected})
+    images = {(uuid4(), 0, "pdf-upload:old", number): ProviderImageInput(0, b"old", "private") for number in range(8)}
+    cache = {}
+    options = dict(images=images, cache=cache, supports_images=supports_images, trust=TrustLevel.PRIVATE, handler=vision)
+    context = await prepare_pdf_attachments([message], service, **options)
+    preview = (len(images), vision.await_count, context[str(attachment.id)]["previewPages"] == expected)
+    files = RootFileService(session.id, session_storage=storage)
+    files.append_output_revision(attachment.file_id, pdf_bytes(pages=3))
+    await prepare_pdf_attachments([message], service, **options)
+    assert (preview, len(images), bool(cache)) == ((len(expected) if supports_images else 0, 0 if supports_images else 1, True), 0, False)
 
 
 def test_claimed_corrupt_readable_formats_are_not_downgraded_to_generic_files() -> None:

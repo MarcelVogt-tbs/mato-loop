@@ -7,7 +7,6 @@ import ipaddress
 import logging
 import re
 import socket
-import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from email.message import Message
@@ -22,6 +21,11 @@ from bs4.element import Tag
 from markdownify import markdownify
 from yarl import URL
 
+from mato_loop_backend.media.pdf import (
+    PDF_VISION_BATCH_PAGES,
+    PdfVisionHandler,
+    render_pdf_page,
+)
 from mato_loop_backend.media.processing import (
     AttachmentProcessingError,
     extract_pdf_pages,
@@ -37,8 +41,6 @@ logger = logging.getLogger("mato_loop_backend.integrations.webfetch")
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 MAX_REQUEST_BYTES = 256 * 1024
 MAX_REDIRECTS = 5
-PDF_RENDER_TIMEOUT_SECONDS = 30
-PDF_VISION_BATCH_PAGES = 4
 MAX_PDF_PAGE_IMAGES = 8
 MAX_PDF_PAGE_IMAGE_BYTES = 20 * 1024 * 1024
 
@@ -180,11 +182,6 @@ class WebFetchResult:
     images: tuple[WebFetchImage, ...] = ()
     page_count: int | None = None
     unavailable_pages: tuple[int, ...] = ()
-
-
-PdfVisionHandler = Callable[
-    [list[tuple[int, bytes]], bool], Awaitable[dict[int, str]]
-]
 
 
 @dataclass(frozen=True, slots=True)
@@ -630,33 +627,9 @@ def _valid_image_signature(content_type: str, body: bytes) -> bool:
 
 def _render_pdf_page(data: bytes, page_number: int) -> bytes:
     try:
-        result = subprocess.run(
-            [
-                "pdftoppm",
-                "-f",
-                str(page_number),
-                "-l",
-                str(page_number),
-                "-singlefile",
-                "-scale-to",
-                "1600",
-                "-jpeg",
-                "-jpegopt",
-                "quality=85",
-                "-q",
-                "-",
-            ],
-            input=data,
-            capture_output=True,
-            check=False,
-            timeout=PDF_RENDER_TIMEOUT_SECONDS,
-            shell=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        return render_pdf_page(data, page_number)
+    except AttachmentProcessingError as exc:
         raise _error("pdfRenderFailed") from exc
-    if result.returncode != 0 or not result.stdout.startswith(b"\xff\xd8\xff"):
-        raise _error("pdfRenderFailed")
-    return result.stdout
 
 
 async def _convert_pdf(

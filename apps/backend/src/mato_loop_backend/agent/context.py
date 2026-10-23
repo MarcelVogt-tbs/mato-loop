@@ -78,6 +78,7 @@ class ContextManager:
         live_tool_calls: dict[UUID, list[dict[str, Any]]] | None = None,
         attachment_service: AttachmentService | None = None,
         tool_snapshots: list[dict[str, Any]] | None = None,
+        pdf_context: dict[str, dict] | None = None,
     ) -> ContextProjection:
         """Budget original projections with raw request estimates, before slack and safety."""
         # Reorder only the model's view; persisted timestamps and message order stay intact.
@@ -131,25 +132,34 @@ class ContextManager:
             current_user = next((item for item in reversed(records) if item.role == "user"), None)
             if current_user is not None and all(item.id != current_user.id for item in selected):
                 selected = [current_user, *selected]
-            messages = await asyncio.to_thread(
-                agent_projection._projection_messages,
-                system_prompt,
-                summary,
-                selected,
-                target_trust_level,
-                memory_context=memory_context,
-                tool_snapshots=tool_snapshots,
-                tool_snapshot_characters=int(input_budget * 0.05 * characters_per_token),
-                runtime_instructions=runtime_instructions,
-                include_attachment_text=not tool_schemas,
-                attachment_service=attachment_service,
-                available_records=records,
-                characters_per_token=characters_per_token,
-                historical_tool_output_tokens=settings.historical_tool_output_tokens,
-                live_tool_calls=live_tool_calls,
-            )
-            total = await estimate_request(messages)
-            return messages, total
+            attachment_characters = agent_projection.MAX_ATTACHMENT_EXCERPT_CHARACTERS
+            while True:
+                messages = await asyncio.to_thread(
+                    agent_projection._projection_messages,
+                    system_prompt,
+                    summary,
+                    selected,
+                    target_trust_level,
+                    memory_context=memory_context,
+                    tool_snapshots=tool_snapshots,
+                    tool_snapshot_characters=int(input_budget * 0.05 * characters_per_token),
+                    runtime_instructions=runtime_instructions,
+                    include_attachment_text=not tool_schemas,
+                    attachment_service=attachment_service,
+                    pdf_context=pdf_context,
+                    attachment_text_characters=attachment_characters,
+                    available_records=records,
+                    characters_per_token=characters_per_token,
+                    historical_tool_output_tokens=settings.historical_tool_output_tokens,
+                    live_tool_calls=live_tool_calls,
+                )
+                total = await estimate_request(messages)
+                if not pdf_context or total <= input_budget or attachment_characters == 0:
+                    return messages, total
+                attachment_characters = max(0, min(
+                    attachment_characters // 2,
+                    attachment_characters - int((total - input_budget) * characters_per_token),
+                ))
 
         messages, estimated = await project(latest, active_records)
         if estimated <= max(1, trigger_tokens):

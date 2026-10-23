@@ -284,6 +284,7 @@
         <StlViewerPanel v-else-if="openScadUrl" :src="openScadUrl" format="off" />
       </template>
       <StlViewerPanel v-else-if="preview.kind === 'stl'" :src="stlUrl" :format="directModel?.format || 'stl'" />
+      <PdfViewerPanel v-else-if="preview.kind === 'pdf'" :src="directPdf?.url || contentUrl" :name="viewerName" />
       <AppStateMessage
         v-else
         class="fit q-pa-xl"
@@ -379,6 +380,7 @@ import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import ImageViewerPanel from 'src/features/files/components/ImageViewerPanel.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
 import StlViewerPanel from 'src/features/files/components/StlViewerPanel.vue'
+import PdfViewerPanel from 'src/features/files/components/PdfViewerPanel.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { apiErrorMessage, errorDescriptor } from 'src/utils/api-errors'
 import { notifyError } from 'src/utils/notifications'
@@ -393,6 +395,7 @@ const props = defineProps({
   entry: { type: Object, default: null },
   image: { type: Object, default: null },
   model: { type: Object, default: null },
+  pdf: { type: Object, default: null },
   diffActive: Boolean,
   fullscreen: Boolean,
   fullscreenToggle: Boolean
@@ -448,7 +451,8 @@ let exportVersion = 0
 let previewVersion = 0
 const directImage = computed(() => props.image?.url ? props.image : null)
 const directModel = computed(() => props.model?.url ? props.model : null)
-const viewerName = computed(() => (props.entry?.name || directModel.value?.name || '')
+const directPdf = computed(() => props.pdf?.url ? props.pdf : null)
+const viewerName = computed(() => (props.entry?.name || directModel.value?.name || directPdf.value?.name || '')
   + (historical.value ? ` · Version ${props.entry.revision}` : ''))
 const draft = computed({
   get: () => workspace.editorDraft ?? '',
@@ -471,7 +475,7 @@ const canActivateRevision = computed(() => Boolean(
   && workspace.scope === 'session'
   && workspace.operationAvailable('filesystem.write')
 ))
-const canDownload = computed(() => Boolean(directModel.value) || workspace.operationAvailable('filesystem.export'))
+const canDownload = computed(() => Boolean(directModel.value || directPdf.value) || workspace.operationAvailable('filesystem.export'))
 const stlUrl = computed(() => directModel.value?.url
   || contentUrl.value)
 const openScadViewOptions = computed(() => [
@@ -525,6 +529,7 @@ const revisionActionPending = computed(() => activatingRevisionId.value)
 const unavailableMessage = computed(() => ({
   invalidAudio: 'Die Audiodatei konnte nicht geladen werden oder wird von diesem Browser nicht unterstützt.',
   invalidImage: 'Die Bilddatei ist beschädigt oder ungültig.',
+  invalidPdf: 'Die PDF-Datei ist beschädigt oder ungültig.',
   unsafeSvg: 'Die SVG-Datei enthält aktive oder externe Inhalte und kann nicht sicher angezeigt werden.',
   tooLarge: 'Die Datei ist für eine Vorschau zu groß.',
   unsupported: 'Dieser Dateityp kann nur heruntergeladen werden.'
@@ -550,8 +555,8 @@ async function loadPreview({ revalidate = false } = {}) {
     preview.value = { kind: 'none', reason: 'unsupported' }
   }
   loadError.value = null
-  if (directModel.value) {
-    preview.value = { kind: 'stl' }
+  if (directModel.value || directPdf.value) {
+    preview.value = { kind: directPdf.value ? 'pdf' : 'stl' }
     await nextTick()
     viewerRoot.value?.focus()
     return
@@ -885,13 +890,14 @@ function download() {
     anchor.click()
     return
   }
-  if (!directModel.value) {
+  const directFile = directPdf.value || directModel.value
+  if (!directFile) {
     workspace.download(props.entry.path)
     return
   }
   const anchor = document.createElement('a')
-  anchor.href = directModel.value.downloadUrl || directModel.value.url
-  anchor.download = directModel.value.name || `modell.${directModel.value.format || 'stl'}`
+  anchor.href = directFile.downloadUrl || directFile.url
+  anchor.download = directFile.name || 'datei'
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()
@@ -918,6 +924,7 @@ watch(
     () => props.entry?.revision,
     () => props.entry?.fileId,
     () => directModel.value?.url,
+    () => directPdf.value?.url,
     () => workspace.scope,
     () => workspace.sessionId,
     () => workspace.currentDirectory,

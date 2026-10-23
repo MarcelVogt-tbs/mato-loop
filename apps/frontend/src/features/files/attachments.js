@@ -19,6 +19,7 @@ const PROVIDED_IMAGE_MIME_TYPES = new Map([
   ['.webp', 'image/webp']
 ])
 const PROVIDED_MEDIA_MIME_TYPES = new Map([
+  ['.pdf', 'application/pdf'],
   ['.mp3', 'audio/mpeg'], ['.wav', 'audio/wav'], ['.ogg', 'audio/ogg'], ['.oga', 'audio/ogg'],
   ['.m4a', 'audio/mp4'], ['.aac', 'audio/aac'], ['.flac', 'audio/flac'], ['.opus', 'audio/ogg'],
   ['.mp4', 'video/mp4'], ['.webm', 'video/webm'], ['.mov', 'video/quicktime'],

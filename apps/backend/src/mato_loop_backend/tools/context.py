@@ -11,6 +11,7 @@ from mato_loop_backend.agent.media_analysis import ResolvedAnalysisModel
 from mato_loop_backend.execution import ExecutionClient
 from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.integrations.contracts import IntegrationResource
+from mato_loop_backend.media.pdf import PdfVisionHandler
 from mato_loop_backend.media.video_processing import VideoAnalysisMode
 from mato_loop_backend.models import ChatSession
 from mato_loop_backend.permissions.policy import PermissionDecision, PermissionRequest
@@ -30,7 +31,6 @@ from mato_loop_backend.tools.arguments import (
     QuestionRequestArguments,
     TaskArguments,
 )
-from mato_loop_backend.web.fetch import PdfVisionHandler
 
 
 class AskHandler(Protocol):
@@ -81,6 +81,7 @@ class ToolContext:
     question_handler: QuestionHandler | None = None
     tool_settings: ToolSettings = field(default_factory=ToolSettings)
     pdf_vision_handler: PdfVisionHandler | None = None
+    pdf_images_enabled: bool = False
     video_analysis_handler: VideoAnalysisHandler | None = None
     video_analysis_target: VideoAnalysisTargetResolver | None = None
     audio_analysis_handler: AudioAnalysisHandler | None = None

@@ -483,6 +483,7 @@ async def execute_tool_batch(
                 root_files=root_files, integration_settings=integration_settings,
                 ask_handler=authorize, question_handler=question, tool_settings=tool_settings,
                 pdf_vision_handler=pdf_vision_handler,
+                pdf_images_enabled=model.supports_image_input,
                 video_analysis_handler=video_analysis_handler,
                 audio_analysis_handler=audio_analysis_handler,
                 audio_analysis_target=audio_target,
@@ -631,6 +632,7 @@ async def execute_tool_batch(
                     ephemeral_images[image_key] = ProviderImageInput(
                         message_index=0, data=attachment.data,
                         mime_type=attachment.mime_type, trust_level=tool_trust.value,
+                        filename=attachment.filename,
                     )
                 attachment.data = b""
             attachments = tuple(attachment for attachment in attachments if not attachment.ephemeral)

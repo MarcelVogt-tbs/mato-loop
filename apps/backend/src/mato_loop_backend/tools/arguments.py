@@ -349,6 +349,17 @@ class ReadArguments(SessionFileReadArguments, ElevatedArguments):
     path: str = Field(min_length=1, max_length=1_000)
     offset: int = Field(default=1, ge=1)
     limit: int = Field(default=1_000, ge=1, le=1_000)
+    pdf_pages: list[Annotated[int, Field(ge=1, strict=True)]] = Field(
+        default_factory=list, max_length=8,
+        description="PDF visual pages (1-based).",
+    )
+
+    @model_validator(mode="after")
+    def pdf_requires_regular_read(self) -> ReadArguments:
+        if self.pdf_pages and (self.elevated or not self.path.lower().endswith(".pdf")):
+            raise ValueError("PDF pages require a non-elevated PDF read")
+        self.pdf_pages = sorted(set(self.pdf_pages))
+        return self
 
 
 class GlobArguments(SessionFileReadArguments):

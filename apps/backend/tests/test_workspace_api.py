@@ -577,7 +577,7 @@ async def test_revision_api_activates_without_deleting_and_rejects_stale_confirm
 @pytest.mark.parametrize("filename,kind", [
     ("notes.txt", "text"), ("notes.md", "markdown"), ("model.scad", "openscad"),
     ("image.png", "image"), ("image.svg", "image"), ("model.stl", "stl"),
-    ("song.MP3", "audio"),
+    ("song.MP3", "audio"), ("manual.pdf", "pdf"),
 ])
 async def test_historical_preview_and_content_use_exact_revision_bytes(
     tmp_path: Path, monkeypatch, filename: str, kind: str,
@@ -593,6 +593,9 @@ async def test_historical_preview_and_content_use_exact_revision_bytes(
         data = b'<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>'
     elif filename.endswith(".stl"):
         data = bytes(80) + struct.pack("<I", 1) + struct.pack("<12fH", *(0.0,) * 12, 0)
+    elif filename.endswith(".pdf"):
+        from document_helpers import pdf_bytes
+        data = pdf_bytes()
     original = service.create_output_file(filename, data)
     service.append_output_revision(original.file_id, b"current bytes")
     get_context = AsyncMock(return_value=context)
@@ -605,7 +608,7 @@ async def test_historical_preview_and_content_use_exact_revision_bytes(
     get_context.assert_awaited_with(
         FileScope.SESSION, service.session_id, user, db, root_identity=str(service.session_id)
     )
-    if kind in {"image", "stl", "audio"}:
+    if kind in {"image", "stl", "audio", "pdf"}:
         response = await workspace_route.content_file_revision(*args, **kwargs)
         assert response.body == data
         assert response.headers["x-content-type-options"] == "nosniff"

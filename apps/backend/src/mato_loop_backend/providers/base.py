@@ -51,6 +51,7 @@ class ProviderImageInput:
     data: bytes = field(repr=False)
     trust_level: Literal["public", "private"]
     mime_type: str = "image/jpeg"
+    filename: str | None = None
 
 
 @dataclass(slots=True)

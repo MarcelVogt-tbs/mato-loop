@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 import pytest
 import zxingcpp
+from document_helpers import pdf_bytes
 from PIL import Image
 from pydantic import BaseModel, ValidationError
 from skill_helpers import store_skill
@@ -51,6 +52,7 @@ from mato_loop_backend.integrations.contracts import (
 )
 from mato_loop_backend.integrations.youtube_transcript.client import TranscriptResult
 from mato_loop_backend.media.attachments import AttachmentService
+from mato_loop_backend.media.processing import AttachmentProcessingError
 from mato_loop_backend.memory.retrieval import (
     MemoryRetrieval,
     MemoryRetrievalService,
@@ -83,6 +85,7 @@ from mato_loop_backend.settings import (
     AiProviderSettings,
     AiSettings,
     EffectiveAgentIdentity,
+    InstanceLimits,
     InstanceSkillsSettings,
     IntegrationInstance,
     IntegrationSettings,
@@ -5169,6 +5172,24 @@ async def test_public_model_can_select_same_project_session_files(tmp_path) -> N
     statement = str(context.db.scalar.await_args.args[0])
     assert "chat_sessions.user_id" in statement
     assert "chat_sessions.project_id" in statement
+
+
+@pytest.mark.parametrize("supports_images,render_failed", [(True, False), (False, False), (True, True)])
+async def test_read_pdf_pages_reuses_file_read_and_vision(tmp_path, monkeypatch, supports_images, render_failed):
+    call = ToolCall("read-pdf", "read", {"root": "files", "path": "diagram.pdf", "pdf_pages": [2]})
+    context = _context(tmp_path, call)
+    call.arguments["path"] = context.root_files.create_output_file("diagram.pdf", pdf_bytes(pages=2)).path
+    context.pdf_images_enabled = supports_images
+    context.pdf_vision_handler = AsyncMock(return_value={2: "Diagram on page two"})
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=InstanceLimits()))
+    if render_failed:
+        monkeypatch.setattr("mato_loop_backend.tools.files.render_pdf_page", Mock(side_effect=AttachmentProcessingError("attachment.pdfRenderFailed")))
+    result = await tool_registry.execute(call, context)
+    payload = json.loads(result.content)
+    assert (payload["visualPages"], len(result.attachments), payload["visualDescriptions"], "--- Page 1 ---" in payload["content"]) == (
+        [] if render_failed else [2], 1 if supports_images and not render_failed else 0,
+        {} if supports_images else {"2": "Diagram on page two"}, True,
+    )
 
 
 async def test_read_exposes_managed_session_images(tmp_path) -> None:

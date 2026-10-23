@@ -51,6 +51,7 @@ async def build_turn_context(
     tool_snapshots: list[dict[str, Any]] | None = None,
     session_automations: list[dict[str, Any]] | None = None,
     repository_context_loader: Callable[..., Awaitable[str]] | None = None,
+    pdf_context: dict[str, dict] | None = None,
 ) -> tuple[ContextProjection, int, int]:
     async def summarize(source: str, output_tokens: int) -> SummaryResult:
         await run_support._publish_run_phase(run.id, "compacting_context")
@@ -117,6 +118,7 @@ async def build_turn_context(
                 target_trust_level=trust_level,
                 settings=settings,
                 attachment_service=attachment_service(settings=instance_limits, run_id=run.id),
+                pdf_context=pdf_context,
                 summarize=summarize,
                 estimate_request=estimate_request,
                 live_tool_calls=live_tool_calls,

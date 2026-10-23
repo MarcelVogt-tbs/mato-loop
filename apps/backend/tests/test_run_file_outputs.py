@@ -64,7 +64,7 @@ from mato_loop_backend.settings import (
     ToolSettings,
     TrustLevel,
 )
-from mato_loop_backend.settings.models import IntegrationInstance, ModelConfig
+from mato_loop_backend.settings.models import IntegrationInstance, LlmProviderConfig, ModelConfig
 from mato_loop_backend.tools.arguments import ProvideFileArguments
 from mato_loop_backend.tools.contracts import ToolAttachment, ToolResult
 
@@ -894,6 +894,26 @@ def test_ephemeral_projection_keeps_user_references_and_newest_images(persisted_
     assert mock_agent_run_support._project_ephemeral_images(
         messages, images, model=model, target_trust_level=TrustLevel.PUBLIC,
     ) == (projected, direct)
+
+
+@pytest.mark.parametrize("serialize,history_key", [(provider_service._chat_body, "messages"), (provider_service._responses_body, "input")])
+async def test_pdf_upload_images_preserve_the_provider_prefix_across_tool_rounds(serialize, history_key):
+    provider = LlmProviderConfig(name="Test", adapter_type="openai-compatible", pseudonymization_enabled=False)
+    model = ModelConfig(provider_id=provider.id, model_id="vision", supports_image_input=True)
+    messages = [{"role": "system", "content": "Stable instructions"}, {"role": "user", "content": "Inspect the PDF"}]
+    images = {(uuid4(), 0, "pdf-upload:test", 1): ProviderImageInput(0, png("red"), "private", "image/png", filename="PDF page 1")}
+    bodies = []
+    for index in range(2):
+        projected, direct = mock_agent_run_support._project_ephemeral_images(messages, images, model=model, target_trust_level=TrustLevel.PRIVATE)
+        prepared = await provider_service.ProviderService.prepare_request(
+            provider=provider, model=model, messages=projected, image_inputs=direct, tools=[],
+        )
+        bodies.append(serialize(prepared.request))
+        messages.extend([
+            {"role": "assistant", "content": "", "tool_calls": [{"id": str(index), "name": "read", "arguments": {"path": "notes.txt"}}]},
+            {"role": "tool", "tool_call_id": str(index), "content": "Notes"},
+        ])
+    assert {**bodies[1], history_key: bodies[1][history_key][:len(bodies[0][history_key])]} == bodies[0]
 
 
 @pytest.mark.parametrize("export_stl", [False, True])

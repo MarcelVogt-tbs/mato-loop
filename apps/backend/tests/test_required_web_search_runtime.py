@@ -2923,11 +2923,11 @@ async def test_required_search_stops_after_two_semantic_retries(monkeypatch) -> 
 
 
 @pytest.mark.parametrize(
-    ("active_supports_image_input", "expected_model"),
-    [(True, "local-model"), (False, "vision-model")],
+    ("active_supports_image_input", "expected_model", "private_active"),
+    [(True, "local-model", False), (False, "vision-model", False), (False, None, True)],
 )
 async def test_pdf_vision_prefers_active_model_then_configured_fallback(
-    monkeypatch, active_supports_image_input: bool, expected_model: str
+    monkeypatch, active_supports_image_input: bool, expected_model: str | None, private_active: bool,
 ) -> None:
     db, run, requests, _, _ = await _runtime_setup(
         monkeypatch,
@@ -2942,15 +2942,21 @@ async def test_pdf_vision_prefers_active_model_then_configured_fallback(
                 ],
                 finish_reason="tool_calls",
             ),
-            ProviderResult(content='[{"page":1,"text":"Scan text"}]'),
+            *([ProviderResult(content='[{"page":1,"text":"Scan text"}]')] if expected_model else []),
             ProviderResult(content="Fertige Antwort", finish_reason="stop"),
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
         active_supports_image_input=active_supports_image_input,
         vision_fallback=True,
     )
+    if private_active:
+        ai = await SettingsStore.load(db, AiProviderSettings)
+        ai.models[0].trust_level = TrustLevel.PRIVATE
 
     async def execute(_call, context, _tool):
+        if expected_model is None:
+            assert context.pdf_vision_handler is None
+            return ToolResult.error("webfetch.pdfVisionUnavailable")
         assert context.pdf_vision_handler is not None
         extracted = await context.pdf_vision_handler([(1, b"jpeg")], False)
         return ToolResult.json({"content": extracted[1]})
@@ -2959,7 +2965,10 @@ async def test_pdf_vision_prefers_active_model_then_configured_fallback(
 
     await AgentRuntime._execute_loop(db, run)
 
-    assert len(requests) == 3
+    assert len(requests) == (3 if expected_model else 2)
+    if expected_model is None:
+        assert not any(request.get("image_inputs") for request in requests)
+        return
     assert requests[1]["model"].model_id == expected_model
     assert requests[1]["tool_choice"] == "none"
     assert requests[1]["image_inputs"][0].message_index == 1
