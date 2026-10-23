@@ -21,7 +21,7 @@ import { useGitActionStore } from './git-actions-store'
 const props = defineProps({ disabled: Boolean })
 defineEmits(['refresh'])
 const catalog = useCommandStore(), actions = useGitActionStore()
-const items = computed(() => catalog.items.filter(command => command.source === 'git' && command.name !== 'git_remote'))
+const items = computed(() => catalog.items.filter(command => command.source === 'git' && command.name !== 'git-remote'))
 const busy = computed(() => props.disabled || catalog.loading || actions.busy)
 async function run(command) {
   if (busy.value || command.disabledReason) return

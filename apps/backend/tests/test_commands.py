@@ -27,10 +27,10 @@ from mato_loop_backend.tools.sessions import _message_item
 
 def test_browser_and_telegram_share_portable_coding_commands():
     assert {command.command for command in telegram_commands() if command.command.startswith("git_")} == {
-        item.name for item in registered_commands()
+        item.name.replace("-", "_") for item in registered_commands()
     }
-    assert parse_command("/git_review@my_bot").name == "git_review"
-    assert parse_command("Explain /git_merge") is None
+    assert (parse_command("/git-review").name, parse_command("/git_review@my_bot").name) == ("git-review", "git-review")
+    assert parse_command("Explain /git-merge") is None
 
 
 def test_git_merge_and_pr_follow_explicit_commit_message_rules():
@@ -39,7 +39,7 @@ def test_git_merge_and_pr_follow_explicit_commit_message_rules():
         "Read relevant referenced guidelines before committing. Apply required format, language, and trailers. "
         "Use recent history only where no explicit rule applies. Verify the resulting commit message."
     )
-    assert all(rules in parse_command(f"/{name}").instructions for name in ("git_merge", "git_pr"))
+    assert all(rules in parse_command(f"/{name}").instructions for name in ("git-merge", "git-pr"))
 
 
 @pytest.mark.parametrize("branch", ["--upload-pack=bad", "main..other", "main:other", "bad\nbranch"])
@@ -61,6 +61,15 @@ async def test_non_git_provider_supports_arguments_without_a_computer(monkeypatc
     catalog = await commands.command_catalog(AsyncMock(), session)
     await commands.prepare_command(AsyncMock(), session, parsed, "/example-task some arguments")
     assert (parsed, [item["source"] for item in catalog], prepare.await_args.args[-1]) == (command, ["example"], "/example-task some arguments")
+
+
+def test_command_registration_rejects_underscore_names():
+    from mato_loop_backend.sessions.command_contracts import Command, CommandProvider
+    from mato_loop_backend.sessions.commands import register_command_provider
+
+    command = Command("example_task", "Beispiel", "Allgemeiner Auftrag", "Perform the requested task.")
+    with pytest.raises(ValueError):
+        register_command_provider(CommandProvider("example", (command,), AsyncMock(), AsyncMock()))
 
 
 async def test_catalog_rejects_an_unowned_session_before_provider_discovery(monkeypatch):
@@ -86,13 +95,13 @@ async def test_command_binds_worktree_target_and_displays_its_prompt_without_run
     )))
     db = AsyncMock()
     db.scalar.return_value = None
-    definition = parse_command("/git_review")
-    command = await prepare_command(db, session, definition, "/git_review only parser changes")
-    message = Message(id=uuid4(), role="user", content="/git_review only parser changes", provider_data={"_matoloop": {"codingCommand": command}})
+    definition = parse_command("/git-review")
+    command = await prepare_command(db, session, definition, "/git-review only parser changes")
+    message = Message(id=uuid4(), role="user", content="/git-review only parser changes", provider_data={"_matoloop": {"codingCommand": command}})
     result = message_dict(message)
     assert '"targetBranch": "develop"' in result["content"]
     assert command["context"]["remote"] is None
-    assert message.content == "/git_review only parser changes"
+    assert message.content == "/git-review only parser changes"
     assert message_payload(message)["commandPrompt"] == definition.instructions + "\n\nonly parser changes"
 
 
@@ -107,7 +116,7 @@ async def test_command_rejects_changed_worktree_binding(monkeypatch, changed):
         repository="/worktree", remotes=["origin"], defaultRemote="origin", defaultBranch="main", branch="other" if changed == "branch" else "session",
     )))
     with pytest.raises(SessionServiceError, match="git.worktreeChanged"):
-        await prepare_command(AsyncMock(), session, parse_command("/git_merge"))
+        await prepare_command(AsyncMock(), session, parse_command("/git-merge"))
 
 
 async def test_local_command_rejects_a_changed_publication_target(monkeypatch):
@@ -117,10 +126,10 @@ async def test_local_command_rejects_a_changed_publication_target(monkeypatch):
         remoteIdentities={"origin": "a" * 64},
     )
     monkeypatch.setattr("mato_loop_backend.sessions.git_commands.inspect_repository", AsyncMock(return_value=info))
-    await prepare_command(AsyncMock(), session, parse_command("/git_remote"), "/git_remote origin https://example.com/new.git")
+    await prepare_command(AsyncMock(), session, parse_command("/git-remote"), "/git-remote origin https://example.com/new.git")
     info.remote_identities["origin"] = "b" * 64
     with pytest.raises(SessionServiceError, match="git.worktreeChanged"):
-        await prepare_command(AsyncMock(), session, parse_command("/git_sync"))
+        await prepare_command(AsyncMock(), session, parse_command("/git-sync"))
 
 
 async def test_worktree_checks_destination_policy_before_creating_files(monkeypatch):
@@ -214,7 +223,7 @@ async def test_repository_checks_the_actual_git_metadata_destination(monkeypatch
 @pytest.mark.parametrize("directory", ["/repo", "/repo/src", "C:/Repo/src"])
 async def test_admission_blocks_overlap_in_both_directions(incoming_command, directory):
     root = "C:/repo" if directory.startswith("C:") else "/repo"
-    command = {"name": "git_sync", "resources": [root]}
+    command = {"name": "git-sync", "resources": [root]}
     db = AsyncMock()
     db.execute.return_value = [(directory, {} if incoming_command else {"_matoloop": {"codingCommand": command}}, None)]
     with pytest.raises(SessionServiceError, match="git.projectBusy"):
@@ -224,7 +233,7 @@ async def test_admission_blocks_overlap_in_both_directions(incoming_command, dir
 async def test_admission_keeps_a_relocated_command_directory_reserved():
     db = AsyncMock()
     db.execute.return_value = [("/relocated", {"_matoloop": {"codingCommand": {
-        "name": "git_sync", "resources": ["/original"],
+        "name": "git-sync", "resources": ["/original"],
     }}}, None)]
     with pytest.raises(SessionServiceError, match="git.projectBusy"):
         await check_workspace_admission(db, uuid4(), uuid4(), "/relocated")
@@ -243,7 +252,7 @@ async def test_continuation_rejects_coding_commands_before_run_reservation(monke
     reserve = AsyncMock()
     monkeypatch.setattr(AgentRuntime, "reserve_continuation", reserve)
     with pytest.raises(SessionServiceError, match="session.runAlreadyActive"):
-        await continue_run(session.id, uuid4(), SimpleNamespace(content="/git_merge", message_id=uuid4()),
+        await continue_run(session.id, uuid4(), SimpleNamespace(content="/git-merge", message_id=uuid4()),
                            SimpleNamespace(id=session.user_id), db, attachments=None,
                            owned_session_query=AsyncMock(return_value=session), message_serializer=lambda value: value)
     reserve.assert_not_called()
@@ -251,7 +260,7 @@ async def test_continuation_rejects_coding_commands_before_run_reservation(monke
 
 def test_command_task_survives_compaction_and_model_session_retrieval():
     marker = "Target: origin/develop; merge review before publishing."
-    message = Message(id=uuid4(), role="user", content="/git_merge", provider_data={"_matoloop": {
+    message = Message(id=uuid4(), role="user", content="/git-merge", provider_data={"_matoloop": {
         "codingCommand": {"instructions": marker},
     }})
     summary = _summary_source(None, [message])
@@ -264,7 +273,7 @@ async def test_init_is_prepared_for_a_workspace_without_a_repository(monkeypatch
     monkeypatch.setattr("mato_loop_backend.sessions.git_commands.inspect_repository", AsyncMock(return_value=RepositoryResult(
         repository=None, remotes=[], defaultRemote=None, defaultBranch=None, branch=None,
     )))
-    task = await prepare_command(AsyncMock(), session, parse_command("/git_init"))
+    task = await prepare_command(AsyncMock(), session, parse_command("/git-init"))
     assert task["context"]["workspaceDirectory"] == "/project"
 
 
@@ -282,7 +291,7 @@ async def test_remote_flow_rejects_embedded_credentials(monkeypatch, url):
         repository="/project", remotes=[], defaultRemote=None, defaultBranch="main", branch="main",
     )))
     with pytest.raises(SessionServiceError, match="git.invalidRemote"):
-        await prepare_command(AsyncMock(), session, parse_command("/git_remote"), f"/git_remote origin {url}")
+        await prepare_command(AsyncMock(), session, parse_command("/git-remote"), f"/git-remote origin {url}")
 
 
 async def test_target_adoption_rejects_a_remote_changed_since_the_preview(monkeypatch):

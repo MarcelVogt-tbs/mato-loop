@@ -173,7 +173,7 @@ describe('voice attachment composer', () => {
     showPage.value = true
     await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
     const prompt = 'Review the working changes.\n\nOnly parser changes.'
-    chat.current = { id: 'session-1', messages: [{ id: 'command', role: 'user', content: '/git_review only parser changes', commandPrompt: prompt }] }
+    chat.current = { id: 'session-1', messages: [{ id: 'command', role: 'user', content: '/git-review only parser changes', commandPrompt: prompt }] }
     await nextTick()
     expect(root.querySelector('[data-message-id="command"] .chat-message__content')?.textContent).toBe(prompt)
   })

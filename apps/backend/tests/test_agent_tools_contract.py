@@ -533,7 +533,7 @@ async def test_workspace_tools_recheck_session_mode_and_admission(monkeypatch, t
     run = AgentRun(id=context.run_id, execution_agent_id=agent_id, current_directory_snapshot="/worktree")
     context.db.get.return_value = run
     context.db.scalar.return_value = ExecutionAgent(id=selected_id, user_id=context.session.user_id)
-    context.db.execute.side_effect = [None, [("/reserved", {"_matoloop": {"codingCommand": {"name": "git_sync"}}}, None)]]
+    context.db.execute.side_effect = [None, [("/reserved", {"_matoloop": {"codingCommand": {"name": "git-sync"}}}, None)]]
     monkeypatch.setattr(AgentRuntime, "_session_settings", {run.id: RunSessionSettings(
         session_profile={}, memory_mode="disabled", web_search_policy="available",
     )})

@@ -26,6 +26,11 @@ Die endgültige Antwort wird als normale Nachricht zugestellt und zusammen mit d
 Das Telegram-Befehlsmenü und `/help` verwenden denselben allgemeinen Befehlskatalog
 wie die Palette am MatoLoop-Eingabefeld. Die **Git**-App zeigt dessen Git-Aktionen:
 
+In MatoLoop heißen die Befehle beispielsweise `/git-review`. Telegram benötigt
+Unterstriche und zeigt deshalb `/git_review` im Menü und in `/help`; MatoLoop
+ordnet diese Schreibweise automatisch demselben Befehl zu. In Telegram stehen
+folgende Befehle zur Verfügung:
+
 - `/git_init`: Git im gewählten Workspace anlegen, ohne Commit oder Veröffentlichung.
 - `/git_review`: Änderungen einschließlich noch nicht übernommener Commits prüfen.
 - `/git_merge`: Worktree-Änderungen committen, mit dem aktuellen Zielbranch

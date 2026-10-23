@@ -71,7 +71,7 @@ Repositorys. Bestehende Sessions müssen das geänderte Ziel vor weiteren Git-Au
 über **Ziel übernehmen** ausdrücklich bestätigen. Projektvorgaben werden dabei nur
 für den zugehörigen Computer und Repositorypfad aktualisiert.
 
-Ohne Repository bietet die Git-App **Git-Repository anlegen** (`/git_init`). Der
+Ohne Repository bietet die Git-App **Git-Repository anlegen** (`/git-init`). Der
 Agent initialisiert nur den gewählten Workspace und legt weder Commit noch Remote
 an. Die Git-Ansicht lässt sich im Browserentwurf öffnen, ohne eine Session oder einen
 Worktree anzulegen. Erst ein Agentenauftrag oder der Sessionstart erzeugt sie;

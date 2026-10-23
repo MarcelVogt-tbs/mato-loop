@@ -111,8 +111,8 @@ def telegram_commands() -> list[BotCommand]:
         BotCommand("stop", "Laufende Antwort stoppen"),
         BotCommand("help", "Befehle anzeigen"),
         BotCommand("unlink", "Telegram-Verknüpfung lösen"),
-        *(BotCommand(item.name, item.description[:256]) for item in registered_commands()
-          if re.fullmatch(r"[a-z0-9_]{1,32}", item.name)),
+        *(BotCommand(item.name.replace("-", "_"), item.description[:256]) for item in registered_commands()
+          if re.fullmatch(r"[a-z0-9_]{1,32}", item.name.replace("-", "_"))),
     ]
 
 
@@ -662,7 +662,7 @@ async def _command(
             "/stop - laufende Antwort stoppen\n"
             "/unlink - Telegram-Verknüpfung lösen"
             + "\n\nCoding (zuerst eine Session mit Computer und Workspace über /use <ID> auswählen):\n"
-            + "\n".join(f"/{item.name} - {item.description}" for item in registered_commands())
+            + "\n".join(f"/{item.name.replace('-', '_')} - {item.description}" for item in registered_commands())
         )
     elif command == "/new":
         endpoint.current_session_id = None

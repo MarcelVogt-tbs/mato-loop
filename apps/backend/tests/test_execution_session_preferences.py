@@ -345,7 +345,7 @@ async def test_start_persists_rootless_executor_snapshot(monkeypatch, revoked, c
                 return []
             assert locked
             return [("/home/user", {"_matoloop": {"codingCommand": {
-                "name": "git_sync", "resources": ["/home/user"],
+                "name": "git-sync", "resources": ["/home/user"],
             }}}, None)]
 
         db.execute.side_effect = execute
@@ -358,9 +358,12 @@ async def test_start_persists_rootless_executor_snapshot(monkeypatch, revoked, c
     assert run.execution_operations == ([] if revoked else ["filesystem.read", "filesystem.resolve"])
 
 
-@pytest.mark.parametrize("before_execution", [False, True])
-@pytest.mark.parametrize("changed_command", [False, True])
-async def test_retry_uses_current_computer_only_for_preflight_failure(monkeypatch, before_execution, changed_command):
+@pytest.mark.parametrize(("before_execution", "command_error"), [
+    (False, None), (True, None),
+    (False, "git.worktreeChanged"), (True, "git.worktreeChanged"),
+    (False, "git.projectBusy"),
+])
+async def test_retry_uses_current_computer_only_for_preflight_failure(monkeypatch, before_execution, command_error):
     session = ChatSession(id=uuid4(), user_id=uuid4(), current_directory="/home/user")
     agent = _agent(session.user_id)
     session.preferred_execution_agent_id = agent.id
@@ -378,16 +381,21 @@ async def test_retry_uses_current_computer_only_for_preflight_failure(monkeypatc
     monkeypatch.setattr("mato_loop_backend.agent.runtime.load_agent_profile", AsyncMock(return_value=general_profile()))
     monkeypatch.setattr("mato_loop_backend.agent.runtime.load_effective_ai", AsyncMock(return_value=AiSettings(providers=[provider], models=[model])))
     monkeypatch.setattr(execution_agent_connections, "snapshot", lambda _id: None)
-    if changed_command:
+    if command_error:
         from mato_loop_backend.agent.run_contracts import AgentRunError
         from mato_loop_backend.sessions.service import SessionServiceError
 
         message.content = "/git_merge"
-        message.provider_data = {"_matoloop": {"codingCommand": {"name": "git_merge"}}}
+        command_context = {"repository": session.current_directory}
+        message.provider_data = {"_matoloop": {"codingCommand": {"name": "git_merge", "context": command_context}}}
         failed.execution_agent_id = agent.id
         failed.current_directory_snapshot = session.current_directory
-        monkeypatch.setattr("mato_loop_backend.sessions.commands.prepare_command", AsyncMock(side_effect=SessionServiceError(409, "git.worktreeChanged")))
-        with pytest.raises(AgentRunError, match="git.worktreeChanged"):
+        monkeypatch.setattr("mato_loop_backend.sessions.commands.prepare_command", AsyncMock(
+            side_effect=SessionServiceError(409, command_error) if command_error == "git.worktreeChanged" else None,
+            return_value={"context": command_context, "resources": [session.current_directory]},
+        ))
+        db.execute.return_value = [("/home/user/src", {}, None)]
+        with pytest.raises(AgentRunError, match=command_error):
             await AgentRuntime.retry(db, session, failed, before_execution=before_execution)
         return
     retried = await AgentRuntime.retry(db, session, failed, before_execution=before_execution)

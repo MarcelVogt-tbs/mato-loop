@@ -535,7 +535,7 @@ class AgentRuntime:
                     if not saved_context or any(fresh_command["context"].get(key) != value
                                                 for key, value in saved_context.items()):
                         raise SessionServiceError(409, "git.worktreeChanged")
-                    saved_command = {**saved_command, "resources": fresh_command["resources"],
+                    saved_command = {**saved_command, "name": selected_command.name, "resources": fresh_command["resources"],
                                      "context": fresh_command["context"]}
                     metadata = {**metadata, "codingCommand": saved_command}
                     input_message.provider_data = {**(input_message.provider_data or {}), "_matoloop": metadata}

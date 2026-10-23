@@ -581,7 +581,7 @@ async def test_mark_session_read_uses_owned_assistant_message_monotonically(has_
     db.commit.assert_awaited_once()
 
 
-@pytest.mark.parametrize("content", ["Erste Nachricht", "/git_init"])
+@pytest.mark.parametrize("content", ["Erste Nachricht", "/git-init"])
 async def test_session_is_created_with_first_message_and_run(monkeypatch, content) -> None:
     from mato_loop_backend.api.routes import sessions as sessions_route
     from mato_loop_backend.settings.session_profiles import CODING_TEMPLATE_ID
@@ -647,7 +647,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch, conten
     result = await create_session(
         SessionCreateRequest(
             content=f"  {content}  ",
-            workspace_mode="worktree" if content == "/git_init" else None,
+            workspace_mode="worktree" if content == "/git-init" else None,
             project_id=project.id,
             reasoning_effort="low",
             control_center={

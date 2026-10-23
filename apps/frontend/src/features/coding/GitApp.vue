@@ -216,7 +216,7 @@ async function saveRemote() {
       $q.notify({ type: 'positive', message: 'Git-Ziel gespeichert.' })
     } else {
       if (!url) return
-      const sessionId = await commands.run('git_remote', [name, url])
+      const sessionId = await commands.run('git-remote', [name, url])
       if (!sessionId) return
       $q.notify({ type: 'positive', message: 'Remote-Einrichtung gestartet.' })
     }

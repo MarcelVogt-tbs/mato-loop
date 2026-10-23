@@ -5,7 +5,8 @@
 `sessions/commands.py` owns the host-registered command catalog, parsing and dispatch.
 Providers register one `CommandProvider` from `sessions/command_contracts.py` with a
 unique source, one or more commands, an availability callback and a preparation
-callback. Command names support letters, digits, underscores and hyphens. Duplicate
+callback. Command names use lowercase letters, digits and hyphens. The parser maps
+underscores to hyphens in invocations without changing arguments. Duplicate
 sources or names are rejected instead of silently replacing another command.
 The Git provider lives in `sessions/git_commands.py`; the generic menu has no Git
 dependency. Skill discovery, package installation and executable plugin hooks are
@@ -121,18 +122,19 @@ not copied or isolated. See [parallel development worktrees](development.md#para
 ## Shared command entry points
 
 The composer palette and Git app use the shared catalog. Telegram registers
-transport-compatible command names in its native menu and
-includes them in `/help`. Additional channel providers should project this catalog
-and preserve the normal authenticated session selection and ingress semantics.
+command names with hyphens mapped to underscores in its native menu and `/help`.
+Incoming Telegram names resolve through the shared parser. Additional channel
+providers should project this catalog and preserve the normal authenticated session
+selection and ingress semantics.
 
 | Command | Task |
 | --- | --- |
-| `/git_init` | Initialize Git in the selected workspace without committing, adding a remote, or publishing. |
-| `/git_review` | Review working changes and unpublished commits without editing or publishing. |
-| `/git_merge` | Commit, fetch, merge, review, run relevant checks, publish to the target, and update a clean fast-forwardable original checkout. |
-| `/git_pr` | Commit, review, check, publish the session branch, and create or update its pull request through available host tools. |
-| `/git_sync` | Fetch and fast-forward the clean original project checkout without switching branches or discarding work. |
-| `/git_remote [name] [url]` | Configure only the explicitly requested remote through normal agent tools; ask for missing values. |
+| `/git-init` | Initialize Git in the selected workspace without committing, adding a remote, or publishing. |
+| `/git-review` | Review working changes and unpublished commits without editing or publishing. |
+| `/git-merge` | Commit, fetch, merge, review, run relevant checks, publish to the target, and update a clean fast-forwardable original checkout. |
+| `/git-pr` | Commit, review, check, publish the session branch, and create or update its pull request through available host tools. |
+| `/git-sync` | Fetch and fast-forward the clean original project checkout without switching branches or discarding work. |
+| `/git-remote [name] [url]` | Configure only the explicitly requested remote through normal agent tools; ask for missing values. |
 
 Merge and PR commands initially require a managed worktree. Review also works in a
 local repository; sync requires a configured or unambiguous remote and target.
@@ -148,6 +150,8 @@ run-ID deduplication, channel pairing, questions, approvals and outbox delivery 
 A busy session does not silently queue a messaging publication command for later.
 Coding commands are rejected as in-run continuations. Retry revalidates the saved
 executor, directory and command context before dispatching a new run.
+Saved command names with underscores remain readable for retries and workspace
+admission; new preparations and retries store canonical hyphenated names.
 Opening or selecting in the web palette never starts an agent or creates a session.
 
 The Git app has two retained views: **Änderungen** shows the session-workspace change

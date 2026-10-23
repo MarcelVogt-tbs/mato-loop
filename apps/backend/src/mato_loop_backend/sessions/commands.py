@@ -13,7 +13,7 @@ def register_command_provider(provider: CommandProvider) -> None:
     existing = {command.name for command in registered_commands()}
     if (not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", provider.source)
             or provider.source in _providers or len(names) != len(set(names))
-            or any(not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", name) or name in existing for name in names)):
+            or any(not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", name) or name in existing for name in names)):
         raise ValueError("Command providers must have unique sources and valid, unique command names")
     _providers[provider.source] = provider
 
@@ -26,7 +26,7 @@ def parse_command(content: str) -> Command | None:
     text = content.strip()
     if not text.startswith("/"):
         return None
-    name = text.split(None, 1)[0][1:].split("@", 1)[0].casefold()
+    name = text.split(None, 1)[0][1:].split("@", 1)[0].casefold().replace("_", "-")
     return next((command for command in registered_commands() if command.name == name), None)
 
 

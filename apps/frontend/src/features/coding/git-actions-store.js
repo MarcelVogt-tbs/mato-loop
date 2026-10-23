@@ -20,7 +20,7 @@ export const useGitActionStore = defineStore('git-actions', {
       if (this.busy) return null
       if (!chat.current) {
         const context = chat.activeContext, projectId = chat.sessionsProjectId
-        if (['git_init', 'git_remote'].includes(name) && context.workspaceMode === 'worktree') {
+        if (['git-init', 'git-remote'].includes(name) && context.workspaceMode === 'worktree') {
           await chat.updateActive({ workspace_mode: 'local' })
           if (chat.current || chat.activeContext !== context || chat.sessionsProjectId !== projectId) return null
         }

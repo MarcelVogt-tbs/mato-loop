@@ -70,7 +70,7 @@ it('runs a selected command in the current session without consuming its draft',
   setActivePinia(pinia)
   const commands = useCommandStore()
   commands.loaded = true
-  commands.items = [{ source: 'git', name: 'git_review', label: 'Änderungen prüfen', description: 'Review' }]
+  commands.items = [{ source: 'git', name: 'git-review', label: 'Änderungen prüfen', description: 'Review' }]
   const chat = useChatStore()
   chat.outboxLoaded = true
   chat.current = { id: 'session', messages: [], agentProfileId: 'stored', preferredExecutionAgentId: 'agent', currentDirectory: '/repo' }
@@ -83,7 +83,7 @@ it('runs a selected command in the current session without consuming its draft',
   app.use(pinia).use(Quasar, quasarOptions).mount(root)
   await nextTick()
   root.querySelector('.q-item--clickable').click()
-  expect(send).toHaveBeenCalledWith('/git_review', [], expect.objectContaining({ clearDraft: false, activeFile: null, agentProfileId: 'selected' }))
+  expect(send).toHaveBeenCalledWith('/git-review', [], expect.objectContaining({ clearDraft: false, activeFile: null, agentProfileId: 'selected' }))
   chat.queueDrainPromise = Promise.resolve()
   await nextTick()
   expect(root.querySelector('.q-item').getAttribute('aria-disabled')).toBe('true')
@@ -94,7 +94,7 @@ it('explains and blocks publication without a remote in the Git app', async () =
   setActivePinia(pinia)
   const commands = useCommandStore(), chat = useChatStore()
   commands.loaded = true
-  commands.items = [{ source: 'git', name: 'git_sync', label: 'Projektverzeichnis aktualisieren', disabledReason: 'Remote einrichten, um zu veröffentlichen.' }, { source: 'git', name: 'git_remote', label: 'Remote einrichten' }]
+  commands.items = [{ source: 'git', name: 'git-sync', label: 'Projektverzeichnis aktualisieren', disabledReason: 'Remote einrichten, um zu veröffentlichen.' }, { source: 'git', name: 'git-remote', label: 'Remote einrichten' }]
   chat.outboxLoaded = true
   chat.current = { id: 'session', preferredExecutionAgentId: 'agent', currentDirectory: '/repo', workspaceMode: 'local' }
   useExecutionAgentStore().items = [{ id: 'agent', connected: true }]
@@ -105,7 +105,7 @@ it('explains and blocks publication without a remote in the Git app', async () =
   app.use(pinia).use(Quasar, quasarOptions).mount(root)
   await nextTick()
   root.querySelector('.q-item').click()
-  expect([root.textContent.includes('Remote einrichten, um zu veröffentlichen.'), root.textContent.includes('/git_'), root.querySelectorAll('.q-item').length, run.mock.calls.length])
+  expect([root.textContent.includes('Remote einrichten, um zu veröffentlichen.'), root.textContent.includes('/git-'), root.querySelectorAll('.q-item').length, run.mock.calls.length])
     .toEqual([true, false, 1, 0])
 })
 

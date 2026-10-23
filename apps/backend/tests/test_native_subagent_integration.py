@@ -165,7 +165,8 @@ async def test_admission_account_lock_allows_first_personal_settings_insert(nati
         assert record.user_id == fixture.user.id
 
 
-async def test_coding_command_excludes_new_runs_in_nested_directories(native_database, monkeypatch):
+@pytest.mark.parametrize("command_name", ["git-merge", "git_merge"])
+async def test_coding_command_excludes_new_runs_in_nested_directories(native_database, monkeypatch, command_name):
     fixture = native_database
     monkeypatch.setattr(AgentRuntime, "_schedule_run", lambda run: fixture.owned_runs.add(run.id))
     async with fixture.factory() as db:
@@ -180,8 +181,8 @@ async def test_coding_command_excludes_new_runs_in_nested_directories(native_dat
                             current_directory="/project/src", memory_mode="disabled")
         db.add_all([owner, other])
         await db.flush()
-        message = Message(session_id=owner.id, role="user", content="/git_merge", provider_data={
-            "_matoloop": {"codingCommand": {"name": "git_merge", "resources": ["/project", "/worktree"]}},
+        message = Message(session_id=owner.id, role="user", content=f"/{command_name}", provider_data={
+            "_matoloop": {"codingCommand": {"name": command_name, "resources": ["/project", "/worktree"]}},
         })
         db.add(message)
         await db.flush()

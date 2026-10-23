@@ -81,7 +81,7 @@ async def set_target(
                 raise SessionServiceError(409, "git.worktreeChanged")
         resources = sorted({path for path in (info.repository, info.common_directory, binding.get("repository")) if path})
         await check_workspace_admission(db, user.id, session.preferred_execution_agent_id, session.current_directory,
-                                        {"name": "git_remote", "resources": resources})
+                                        {"name": "git-remote", "resources": resources})
         project = await db.scalar(select(Project).where(Project.id == session.project_id, Project.user_id == user.id)) if session.project_id else None
         configured = (project is not None and project.default_execution_agent_id == session.preferred_execution_agent_id
                       and project.default_current_directory == binding.get("repository", info.repository))

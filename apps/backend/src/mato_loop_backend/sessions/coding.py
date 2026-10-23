@@ -236,7 +236,7 @@ async def remove_session_worktree(db, session: ChatSession, deleting_session_ids
     if info.common_directory != binding["commonDirectory"]:
         raise SessionServiceError(409, "git.worktreeChanged")
     await check_workspace_admission(db, session.user_id, agent_id, binding["path"],
-                                    {"name": "git_remote", "resources": [binding["path"], binding["repository"], binding["commonDirectory"]]})
+                                    {"name": "git-remote", "resources": [binding["path"], binding["repository"], binding["commonDirectory"]]})
     try:
         result = await client.request("git.worktree.remove", {
             "ownerId": str(session.user_id), "projectId": binding["projectId"], "sessionId": str(session.id),
