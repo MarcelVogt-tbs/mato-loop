@@ -12,7 +12,7 @@
     </div>
     <q-list>
       <q-item
-        v-for="change in changes"
+        v-for="change in visibleChanges"
         :key="change.key"
         dense
         class="q-px-xs q-py-none"
@@ -48,11 +48,18 @@
         </q-tooltip>
       </q-item>
     </q-list>
+    <q-btn
+      v-if="compact && changes.length > 10"
+      flat dense no-caps size="sm" class="app-muted"
+      :label="expanded ? 'Weniger anzeigen' : `Alle ${changes.length} anzeigen`"
+      :aria-expanded="expanded"
+      @click="toggleExpanded"
+    />
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { attachmentIcon } from 'src/utils/attachments'
 import { useExecutionAgentStore } from 'src/features/computers/store'
 
@@ -62,8 +69,9 @@ const props = defineProps({
   git: { type: Object, default: null },
   gitFiles: { type: Array, default: null }
 })
-const emit = defineEmits(['open-file', 'open-diff'])
+const emit = defineEmits(['open-file', 'open-diff', 'resize-start', 'resized'])
 const agents = useExecutionAgentStore()
+const expanded = ref(false)
 const labels = { write: 'Geändert', create: 'Erstellt', edit: 'Geändert', delete: 'Gelöscht', mkdir: 'Ordner erstellt', copy: 'Kopiert', move: 'Verschoben' }
 const changes = computed(() => {
   if (props.gitFiles) return props.gitFiles.map((file) => ({
@@ -87,9 +95,15 @@ const changes = computed(() => {
     return file ? { ...change, additions: file.additions, deletions: file.deletions, diff: true, diffPath: file.path } : change
   })
 })
+const visibleChanges = computed(() => props.compact && !expanded.value ? changes.value.slice(0, 10) : changes.value)
 const hasStats = computed(() => changes.value.some((change) => change.diff))
 const additions = computed(() => changes.value.some((change) => change.diff && change.additions == null) ? null : changes.value.reduce((sum, change) => sum + (change.additions || 0), 0))
 const deletions = computed(() => changes.value.some((change) => change.diff && change.deletions == null) ? null : changes.value.reduce((sum, change) => sum + (change.deletions || 0), 0))
+function toggleExpanded() {
+  emit('resize-start')
+  expanded.value = !expanded.value
+  nextTick(() => emit('resized'))
+}
 function canOpen(change) {
   return !props.readOnly && change.kind === 'file' && (change.diff || change.operation !== 'delete')
 }

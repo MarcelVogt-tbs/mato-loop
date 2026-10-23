@@ -188,7 +188,7 @@
               class="q-mt-sm"
               :attachments="message.attachments"
             />
-            <FileChanges :actions="message.fileChanges" :git="currentGit" @open-file="openToolFile" @open-diff="openGitDiff" />
+            <FileChanges :actions="message.fileChanges" :git="currentGit" @open-file="openToolFile" @open-diff="openGitDiff" @resize-start="beginActivityResize" @resized="finishActivityResize" />
             <ChatFiles
               :actions="message.providedFiles"
               class="q-my-sm"

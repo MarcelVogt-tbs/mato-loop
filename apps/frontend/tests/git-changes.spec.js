@@ -24,9 +24,14 @@ it('opens the Git changes view from the overall diff entry point', async () => {
 it('keeps the fallback and shows deleted or uncounted Git files', async () => {
   const root = document.createElement('div')
   const onOpenFile = vi.fn(), onOpenDiff = vi.fn()
+  const resizeRows = []
   const actions = [{ root: 'workspace', executionAgentId: 'agent', path: '/repo/code.py', filename: 'code.py', kind: 'file', operation: 'edit' }]
   const props = shallowReactive({ actions, gitFiles: null })
-  app = createApp({ render: () => h(FileChanges, { ...props, onOpenFile, onOpenDiff }) })
+  app = createApp({ render: () => h(FileChanges, {
+    ...props, onOpenFile, onOpenDiff,
+    onResizeStart: () => resizeRows.push(root.querySelectorAll('button').length),
+    onResized: () => resizeRows.push(root.querySelectorAll('button').length)
+  }) })
   app.use(createPinia())
   for (const name of ['QList', 'QItemSection', 'QItemLabel', 'QIcon', 'QTooltip', 'QBtn']) {
     app.component(name, { render() { return h('div', this.$attrs, this.$slots.default?.()) } })
@@ -44,6 +49,22 @@ it('keeps the fallback and shows deleted or uncounted Git files', async () => {
   props.gitFiles = [{ path: 'large.py', status: 'added', additions: null, deletions: null }]
   await nextTick()
   expect([...root.querySelectorAll('.app-muted .text-positive, .app-muted .text-negative')].map((item) => item.textContent)).toEqual(['+–', '−–'])
+
+  props.gitFiles = null
+  props.actions = Array.from({ length: 11 }, (_, index) => ({ ...actions[0], path: `/repo/file-${index}.py` }))
+  await nextTick()
+  const visibleCounts = [root.querySelectorAll('button').length]
+  root.querySelector('[aria-expanded]').click()
+  await nextTick()
+  visibleCounts.push(root.querySelectorAll('button').length)
+  root.querySelector('[aria-expanded]').click()
+  await nextTick()
+  visibleCounts.push(root.querySelectorAll('button').length)
+  props.compact = false
+  await nextTick()
+  visibleCounts.push(root.querySelectorAll('button').length)
+  expect(visibleCounts).toEqual([10, 11, 10, 11])
+  expect(resizeRows).toEqual([10, 11, 11, 10])
 })
 
 it('uses the captured repository directory when a diff file parent has been deleted', () => {
