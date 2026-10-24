@@ -27,6 +27,12 @@ it.each([false, true])('saves project fields through the shared dialog (editing=
   app.use(createPinia()).use(Quasar, { components: { QDialog, QCard, QForm, QCardSection, QInput, QSeparator, QSelect, QItem, QItemSection, QIcon, QItemLabel, QBtn, QTooltip, QCardActions, QSpace }, directives: { ClosePopup }, plugins: { Dialog, Notify } })
   app.mount(root)
   await vi.waitFor(() => expect(document.querySelector('.q-dialog input')).not.toBeNull())
+  if (editing) {
+    await vi.waitFor(() => expect([
+      document.querySelector('.q-dialog [role="status"]')?.textContent.trim(),
+      document.querySelector('[aria-label="Git-Repository erneut prüfen"]')?.disabled
+    ]).toEqual(['Git-Prüfung nicht verfügbar. Agent-Version und Git-Installation prüfen.', true]))
+  }
   const name = document.querySelector('.q-dialog input')
   name.value = 'Umbenannt'
   name.dispatchEvent(new Event('input', { bubbles: true }))

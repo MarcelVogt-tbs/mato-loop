@@ -72,9 +72,9 @@
           </q-input>
           <div v-if="executionAgentId && currentDirectory" class="row items-center q-mt-sm">
             <div class="col text-caption app-muted" role="status">
-              {{ !selectedAgent?.connected ? 'Computer offline; Git-Status nicht geprüft.' : repositoryError ? apiErrorMessage(repositoryError) : repository?.repository ? 'Git-Repository erkannt.' : repositoryLoading ? 'Git wird geprüft …' : repository ? 'Kein Git-Repository erkannt.' : 'Git-Status nicht geprüft.' }}
+              {{ !selectedAgent?.connected ? 'Computer offline; Git-Status nicht geprüft.' : !repositoryAvailable ? 'Git-Prüfung nicht verfügbar. Agent-Version und Git-Installation prüfen.' : repositoryError ? apiErrorMessage(repositoryError) : repository?.repository ? 'Git-Repository erkannt.' : repositoryLoading ? 'Git wird geprüft …' : repository ? 'Kein Git-Repository erkannt.' : 'Git-Status nicht geprüft.' }}
             </div>
-            <q-btn flat round dense icon="refresh" aria-label="Git-Repository erneut prüfen" :loading="repositoryLoading" :disable="!selectedAgent?.connected" @click="refreshRepository" />
+            <q-btn flat round dense icon="refresh" aria-label="Git-Repository erneut prüfen" :loading="repositoryLoading" :disable="!repositoryAvailable" @click="refreshRepository" />
           </div>
           <template v-if="repository?.repository || (!repository && project?.gitTargetBranch)">
             <q-separator class="q-my-lg" />
@@ -168,6 +168,8 @@ watch(repository, (info) => {
 const directoryPickerOpen = ref(false)
 const saving = ref(false)
 const selectedAgent = computed(() => executionAgents.byId(executionAgentId.value))
+const repositoryAvailable = computed(() => selectedAgent.value?.connected === true
+  && selectedAgent.value.operations?.includes('git.repository') === true)
 const executionAgentOptions = computed(() => {
   const options = [
     { label: 'Keine Projektvorgabe', value: null, connected: null, caption: 'Allgemeine Session-Vorgabe verwenden' },
