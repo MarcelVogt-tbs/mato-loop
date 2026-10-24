@@ -61,6 +61,8 @@ class RepositoryResult(ExecutionResult):
     default_remote: str | None = Field(max_length=200)
     default_branch: str | None = Field(max_length=300)
     branch: str | None = Field(max_length=300)
+    local_branches: list[str] = Field(default_factory=list, max_length=1000)
+    local_branches_truncated: bool = False
     remote_identities: dict[str, str] = Field(default_factory=dict, max_length=100)
     remote_urls: dict[str, str | None] = Field(default_factory=dict, max_length=100)
     git_directory: str | None = Field(default=None, max_length=4096)

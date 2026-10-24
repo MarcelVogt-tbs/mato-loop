@@ -339,6 +339,8 @@ async def repository(
                 "defaultRemote": None,
                 "defaultBranch": None,
                 "branch": None,
+                "localBranches": [],
+                "localBranchesTruncated": False,
             }
         raise AgentError("path.unavailable", "Git repository inspection failed")
     root = output.decode("utf-8").rstrip("\r\n").replace("\\", "/")
@@ -378,6 +380,15 @@ async def repository(
     remote = "origin" if "origin" in remotes else remotes[0] if len(remotes) == 1 else None
     code, branch, _ = await _git(root, "symbolic-ref", "--quiet", "HEAD")
     branch = branch.decode("utf-8").strip().removeprefix("refs/heads/") if code == 0 else None
+    local_branches = (
+        (
+            await _checked(
+                root, "for-each-ref", "--format=%(refname:lstrip=2)", "--count=1001", "refs/heads/"
+            )
+        )
+        .decode("utf-8")
+        .splitlines()
+    )
     default_branch = None
     if remote:
         code, reference, _ = await _git(
@@ -401,6 +412,8 @@ async def repository(
         "defaultRemote": remote,
         "defaultBranch": default_branch or branch,
         "branch": branch,
+        "localBranches": local_branches[:1000],
+        "localBranchesTruncated": len(local_branches) > 1000,
         "remoteIdentities": identities,
         "remoteUrls": urls,
         "targetHasCommit": target_has_commit,

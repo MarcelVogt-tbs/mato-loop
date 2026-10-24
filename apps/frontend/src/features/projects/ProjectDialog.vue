@@ -79,7 +79,26 @@
           <template v-if="repository?.repository || (!repository && project?.gitTargetBranch)">
             <q-separator class="q-my-lg" />
             <div class="text-subtitle1 text-weight-bold q-mb-sm">Git</div>
-            <q-input v-model.trim="gitTargetBranch" dense outlined label="Standard-Zielbranch" maxlength="300" hint="Ausgangspunkt neuer Worktrees und Ziel für Übernahme oder Pull Request." class="q-mb-md" />
+            <AppSelect
+              v-model="gitTargetBranch"
+              dense
+              outlined
+              clearable
+              use-input
+              bottom-slots
+              :input-debounce="0"
+              label="Standard-Zielbranch"
+              :options="branchOptions"
+              :loading="repositoryLoading"
+              :disable="!selectedAgent?.connected || !repository?.repository || repositoryLoading || Boolean(repositoryError)"
+              class="q-mb-md"
+              @filter="filterBranches"
+            >
+              <template #hint>
+                Ausgangspunkt neuer Worktrees und Ziel für Übernahme oder Pull Request.
+                <span v-if="repository?.localBranchesTruncated">Angezeigt werden die ersten 1.000 lokalen Branches und der gewählte Zielbranch.</span>
+              </template>
+            </AppSelect>
             <AppSelect v-model="gitWorkspaceMode" dense outlined emit-value map-options label="Standard-Arbeitsbereich" :options="[{ label: 'Lokal', value: 'local' }, { label: 'Worktree', value: 'worktree' }]" hint="Vorgabe für neue Sessions; vor dem Sessionstart änderbar." />
           </template>
         </q-card-section>
@@ -136,6 +155,12 @@ const currentDirectory = ref(null)
 const gitTargetBranch = ref(null)
 const gitWorkspaceMode = ref('local')
 const { repository, loading: repositoryLoading, error: repositoryError, refresh: refreshRepository } = useRepositoryProbe(executionAgentId, currentDirectory, open)
+const branchSearch = ref('')
+const branchOptions = computed(() => [...new Set([
+  ...(repository.value?.localBranches || []),
+  ...(gitTargetBranch.value ? [gitTargetBranch.value] : [])
+])].filter(branch => branch.toLocaleLowerCase().includes(branchSearch.value.toLocaleLowerCase())))
+function filterBranches(value, update) { update(() => { branchSearch.value = value }) }
 watch(repository, (info) => {
   if (!info?.repository) return
   if (!gitTargetBranch.value) gitTargetBranch.value = info.defaultBranch
@@ -169,6 +194,7 @@ watch(open, (shown) => {
   executionAgentId.value = props.project?.defaultExecutionAgentId || null
   currentDirectory.value = props.project?.defaultCurrentDirectory || null
   gitTargetBranch.value = props.project?.gitTargetBranch || null
+  branchSearch.value = ''
   gitWorkspaceMode.value = props.project?.gitWorkspaceMode || 'local'
   directoryPickerOpen.value = false
   void executionAgents.fetchAll({ suppressErrorToast: true }).catch(() => {})

@@ -136,6 +136,32 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
         result = await repository(self.fs, str(self.root))
         self.assertIsNone(result["remoteUrls"]["origin"])
 
+    async def test_repository_lists_local_branches_without_tags_or_remote_refs(self):
+        self.git("init", "-b", "develop")
+        self.git("commit", "--allow-empty", "-m", "Initial")
+        self.git("branch", "feature/release")
+        self.git("tag", "feature/release")
+        self.git("update-ref", "refs/remotes/origin/remote-only", "HEAD")
+        result = await repository(self.fs, str(self.root))
+        self.assertEqual(result["localBranches"], ["develop", "feature/release"])
+
+    async def test_repository_truncates_branch_choices_without_failing_inspection(self):
+        self.git("init", "-b", "develop")
+        self.git("commit", "--allow-empty", "-m", "Initial")
+        commit = self.git("rev-parse", "HEAD").decode().strip()
+        subprocess.run(
+            ["git", "update-ref", "--stdin"],
+            cwd=self.root,
+            input="".join(f"create refs/heads/branch-{index} {commit}\n" for index in range(1000)),
+            text=True,
+            check=True,
+            capture_output=True,
+        )
+        result = await repository(self.fs, str(self.root))
+        self.assertEqual(
+            (len(result["localBranches"]), result["localBranchesTruncated"]), (1000, True)
+        )
+
     async def test_repository_identity_includes_additional_push_destinations(self):
         self.git("init")
         self.git("remote", "add", "origin", "https://example.com/project.git")

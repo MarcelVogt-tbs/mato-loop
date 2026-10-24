@@ -18,7 +18,7 @@ it.each([false, true])('saves project fields through the shared dialog (editing=
   api.get.mockImplementation(url => Promise.resolve({ data: url === '/session-templates'
     ? { templates: [{ id: 'coding', name: 'Coding' }] }
     : { items: [{ id: 'computer', alias: 'Rechner', connected: true, operations: [], homeDirectory: '/home/user' }] } }))
-  const project = { id: 'project', name: 'Bestehend', instructions: 'Anweisungen', defaultSessionTemplateId: 'coding', defaultExecutionAgentId: 'computer', defaultCurrentDirectory: '/home/user/project' }
+  const project = { id: 'project', name: 'Bestehend', instructions: 'Anweisungen', defaultSessionTemplateId: 'coding', defaultExecutionAgentId: 'computer', defaultCurrentDirectory: '/home/user/project', gitTargetBranch: 'main' }
   const request = editing ? api.patch : api.post
   request.mockReset().mockRejectedValueOnce(new Error('unavailable')).mockResolvedValue({ data: project })
   const open = ref(true), created = vi.fn()
@@ -42,9 +42,30 @@ it.each([false, true])('saves project fields through the shared dialog (editing=
     defaultSessionTemplateId: editing ? 'coding' : null,
     defaultExecutionAgentId: editing ? 'computer' : null,
     defaultCurrentDirectory: editing ? '/home/user/project' : null,
-    gitTargetBranch: null,
+    gitTargetBranch: editing ? 'main' : null,
     gitWorkspaceMode: 'local'
   })
   if (editing) expect(created).not.toHaveBeenCalled()
   else expect(created).toHaveBeenCalledWith(project)
+})
+
+it('filters local branches and saves the selected target branch', async () => {
+  vi.stubGlobal('scrollTo', vi.fn())
+  api.get.mockImplementation(url => Promise.resolve({ data: url === '/session-templates' ? { templates: [] }
+    : { items: [{ id: 'computer', connected: true, operations: ['git.repository'] }] } }))
+  api.post.mockReset().mockResolvedValue({ data: { repository: '/repo', defaultBranch: 'develop', localBranches: ['develop', 'feature/release'] } })
+  api.patch.mockReset().mockResolvedValue({ data: {} })
+  root = document.createElement('div'); document.body.append(root)
+  app = createApp({ render: () => h(ProjectDialog, { modelValue: true, project: { id: 'project', name: 'Projekt', defaultExecutionAgentId: 'computer', defaultCurrentDirectory: '/repo' } }) })
+  app.use(createPinia()).use(Quasar, { components: { QDialog, QCard, QForm, QCardSection, QInput, QSeparator, QSelect, QItem, QItemSection, QIcon, QItemLabel, QBtn, QTooltip, QCardActions, QSpace }, directives: { ClosePopup }, plugins: { Dialog, Notify } })
+  app.mount(root)
+  await vi.waitFor(() => expect(document.querySelector('input[aria-label="Standard-Zielbranch"]')?.disabled).toBe(false))
+  const input = document.querySelector('input[aria-label="Standard-Zielbranch"]')
+  input.focus()
+  input.value = 'RELEASE'
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  await vi.waitFor(() => expect([...document.querySelectorAll('[role="option"] .q-item__label')].map(option => option.textContent)).toEqual(['feature/release']))
+  document.querySelector('[role="option"]').click()
+  document.querySelector('.q-dialog form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+  await vi.waitFor(() => expect(api.patch).toHaveBeenCalledWith('/projects/project', expect.objectContaining({ gitTargetBranch: 'feature/release' })))
 })
