@@ -40,7 +40,7 @@ Im Dateibrowser ist zunächst die aktuelle Session ausgewählt. Innerhalb eines 
 
 Versionen gelten nur für verwaltete Dateien. **Ordner als ZIP herunterladen** lädt einen Ordner samt Inhalt; große oder unsichere Dateibäume können die Transfergrenzen überschreiten. Home-, absolute Pfad- und Arbeitsordneraktionen gehören ausschließlich zu **Computer-Dateien**.
 
-Session-Freigaben zeigen und widerrufen Sie unter **Session > Session-Freigaben**, nicht in der Datei-App oder im Benachrichtigungsbereich. Laufrechte erscheinen dort nicht. Ordnernavigation ist von Datei- und Shell-Rechten getrennt. Neue Dateifreigaben gelten je Kategorie für den angezeigten Pfad einschließlich Unterpfaden (`/**`). Ob Dateizugriffe außerhalb des Arbeitsordners nachfragen, bestimmt das Agentenprofil. Normale Shell-Freigaben gelten dagegen je Kategorie für den Computer, ohne Workspace-Begrenzung. Alte exakte Freigaben bleiben exakt; siehe [Freigaben](freigaben-und-datenfreigabe.md).
+Session-Freigaben zeigen und widerrufen Sie unter **Session > Session-Freigaben**, nicht in der Datei-App oder im Benachrichtigungsbereich. Laufrechte erscheinen dort nicht. Ordnernavigation ist von Datei- und Shell-Rechten getrennt. Neue Freigaben für einzelne Dateien gelten je Kategorie exakt für den angezeigten Pfad. Ordnerfreigaben schließen Unterpfade ein; die Liste nennt diesen Umfang ausdrücklich, ohne `/**` an den Pfad anzuhängen. Ob Dateizugriffe außerhalb des Arbeitsordners nachfragen, bestimmt das Agentenprofil. Normale Shell-Freigaben gelten dagegen je Kategorie für den Computer, ohne Workspace-Begrenzung. Bestehende Freigaben behalten ihren bisherigen Umfang; siehe [Freigaben](freigaben-und-datenfreigabe.md).
 
 ### Navigation im Ordnerbaum
 

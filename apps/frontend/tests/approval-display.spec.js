@@ -117,7 +117,7 @@ describe('approval display', () => {
     expect(permissionGrantDisplay({
       capability: `category.${category}`, resourceType: 'execution_path',
       resourceDisplay: '/srv/project', recursive: true
-    })).toMatchObject({ label, value: '/srv/project/**' })
+    })).toMatchObject({ label: `${label} · einschließlich Unterpfaden`, value: '/srv/project' })
   })
 
   it('labels shell-action grants independently of file access and uses their bound directory', () => {

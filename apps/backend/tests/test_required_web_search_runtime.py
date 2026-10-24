@@ -1934,7 +1934,9 @@ async def test_direct_message_supersedes_approval_and_replans(monkeypatch, tmp_p
         monkeypatch.setattr(module, "RootFileService", lambda session_id, **kwargs: RootFileService(
             session_id, session_storage=storage,
         ))
-    monkeypatch.setattr(PermissionPolicy, "evaluate", AsyncMock(return_value=PermissionDecision.ASK))
+    monkeypatch.setattr(PermissionPolicy, "evaluate", AsyncMock(side_effect=lambda *_args, **_kwargs: (
+        PermissionDecision.ALLOW if approvals and approvals[-1].status == "approved" else PermissionDecision.ASK
+    )))
     monkeypatch.setattr(mock_permissions_requests.NotificationService, "create_for_approval", AsyncMock(return_value=None))
     db.scalars.return_value = SimpleNamespace(all=lambda: [])
     db.scalar.side_effect = lambda statement: True if statement.column_descriptions[0]["entity"] is UserAccount else None

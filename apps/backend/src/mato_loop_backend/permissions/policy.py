@@ -150,15 +150,13 @@ def session_grant_options(request: PermissionRequest) -> dict[str, PermissionReq
         if parsed is None:
             return options
         scope = json.loads(grant.resource_scope)
-        if scope.get("recursive") is not True:
-            return options
         path = scope["path"]
         parent_path = str(PurePosixPath(path).parent) if grant.resource_type == "session_path" else parent(path)
         if parent_path == path:
             return options
         display = f"{scope['root']}:{parent_path}" if grant.resource_type == "session_path" else parent_path
         broader = replace(grant, resource_scope=json.dumps(
-            {**scope, "path": parent_path}, ensure_ascii=True, separators=(",", ":"), sort_keys=True,
+            {**scope, "path": parent_path, "recursive": True}, ensure_ascii=True, separators=(",", ":"), sort_keys=True,
         ), resource_display=display)
         options["parent"] = replace(request, session_grants=(broader,))
     elif grant.resource_type == "shell_action" and request.resource_type == "shell_command":
@@ -1541,6 +1539,8 @@ class PermissionPolicy:
         session_write_paths: list[str] | None = None,
         temporary_files_enabled: bool = False,
     ) -> PermissionDecision:
+        from mato_loop_backend.permissions.requests import prepare_file_grants
+
         grant_session_id = permission_session_id or chat_session.id
         if grant_session_id != chat_session.id:
             if chat_session.parent_session_id != grant_session_id:
@@ -1854,6 +1854,8 @@ class PermissionPolicy:
                     )
                 ).all()
             )
+            if grants:
+                request = await prepare_file_grants(request, root_files)
             return (
                 PermissionDecision.ALLOW
                 if any(PermissionPolicy.grant_matches(item, request, root_files) for item in grants)
@@ -1982,6 +1984,8 @@ class PermissionPolicy:
                 )
             ).all()
         )
+        if request.resource_type == "root_path" and grants:
+            request = await prepare_file_grants(request, root_files)
         for grant in grants:
             if PermissionPolicy.grant_matches(grant, request, root_files):
                 return PermissionDecision.ALLOW
@@ -2035,6 +2039,12 @@ class PermissionPolicy:
             or grant.resource_type != requested.resource_type
         ):
             return False
+        if requested.resource_type in {"session_path", "execution_path"}:
+            try:
+                if json.loads(requested.resource_scope).get("recursive") and not json.loads(grant.resource_scope).get("recursive"):
+                    return False
+            except (ValueError, TypeError, AttributeError):
+                return False
         if requested.resource_type == "session_path":
             resource = _root_path_scope(requested.resource_scope)
             granted = _root_path_scope(grant.resource_scope)

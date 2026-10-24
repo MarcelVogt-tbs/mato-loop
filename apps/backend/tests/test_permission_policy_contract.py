@@ -16,7 +16,12 @@ import mato_loop_backend.agent.runtime as mock_agent_runtime
 import mato_loop_backend.integrations.arcane.adapter as arcane_module
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.subagents import apply_delegation_ceiling, permission_snapshot
-from mato_loop_backend.execution import ShellInspectResult
+from mato_loop_backend.execution import (
+    ExecutionClient,
+    ExecutionClientError,
+    ShellInspectResult,
+    WorkspaceStatResult,
+)
 from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.execution.protocol import SystemInfo
 from mato_loop_backend.files.service import RootFileService
@@ -63,6 +68,7 @@ from mato_loop_backend.permissions.policy import (
     user_profile_permission,
     webfetch_permission,
 )
+from mato_loop_backend.permissions.requests import prepare_file_grants
 from mato_loop_backend.permissions.resolution import resolve_tool_execution_policy
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
@@ -533,6 +539,37 @@ def test_session_parent_option_keeps_the_storage_identity(tmp_path, path, parent
             _path_request(roots, f"{parent_path}/sibling" if parent_path != "." else "sibling"),
             replace(_path_request(roots, path), resource_scope=_path_request(_root_files(tmp_path, _session()), path).resource_scope),
         )] == [True, False]
+
+
+@pytest.mark.parametrize("root", ["workspace", "session"])
+@pytest.mark.parametrize("kind", ["file", "directory", "missing", "create_directory", "write_file"])
+async def test_exact_file_consent_does_not_cover_subtrees(tmp_path, monkeypatch, root, kind):
+    roots = _root_files(tmp_path, _session())
+    if root == "workspace":
+        path = "/opt/halogen/compose.yaml"
+        stat = AsyncMock()
+        if kind in {"missing", "create_directory", "write_file"}:
+            stat.side_effect = ExecutionClientError("file.fileNotFound")
+        else:
+            stat.return_value = WorkspaceStatResult(path=path, kind=kind, size=0, modified_at=0.0)
+        monkeypatch.setattr(ExecutionClient, "request", stat)
+        request = execution_directory_permission(uuid4(), path, capability="filesystem.write")
+    else:
+        path = "compose.yaml"
+        if kind == "file":
+            roots.write_file("session", path, "services: {}")
+        elif kind == "directory":
+            roots.create_directory("session", path)
+        request = _path_request(roots, path, capability="session.files.write")
+    if kind in {"create_directory", "write_file"}:
+        request = replace(request, action_kind=kind)
+    prepared = await prepare_file_grants(request, roots)
+    recursive = kind in {"directory", "missing", "create_directory"}
+    assert {key: (json.loads(option.effective_session_grants[0].resource_scope).get("recursive", False),
+                  PermissionPolicy.grant_matches(_grant(option), request, roots))
+            for key, option in session_grant_options(prepared).items()} == {
+        "requested": (recursive, recursive), "parent": (True, True),
+    }
 
 
 @pytest.mark.parametrize("scope", ["requested", "computer"])
@@ -1174,7 +1211,7 @@ async def test_shell_write_grant_covers_read_only_for_its_whole_command(tmp_path
             for request in requests] == [PermissionDecision.ALLOW if command == "cat input > output" else PermissionDecision.ASK] * 2
 
 
-@pytest.mark.parametrize("kind", ["file", "shell"])
+@pytest.mark.parametrize("kind", ["file", "changed_file", "shell"])
 @pytest.mark.parametrize(
     ("policy_after_approval", "expected"),
     [
@@ -1196,11 +1233,13 @@ async def test_file_workspace_or_shell_action_policy_is_revalidated_after_approv
         home_shell_enabled=True,
         external_shell_enabled=True,
     )
-    if kind == "file":
+    if kind != "shell":
         request = execution_directory_permission(
             agent.id, "/srv/data.txt", capability="filesystem.read"
         )
         call = ToolCall(id="read", name="read", arguments={})
+        stat = WorkspaceStatResult(path="/srv/data.txt", kind="file", size=0, modified_at=0.0)
+        monkeypatch.setattr(ExecutionClient, "request", AsyncMock(return_value=stat))
     else:
         request = PermissionRequest(
             capability="shell.read",
@@ -1235,7 +1274,7 @@ async def test_file_workspace_or_shell_action_policy_is_revalidated_after_approv
                 request.capability: ("ask" if settings_loads == 1 else policy_after_approval) if kind == "shell" else "auto",
                 "working_directory.external": (
                     "ask" if settings_loads == 1 else policy_after_approval
-                ) if kind == "file" else "disabled",
+                ) if kind != "shell" else "disabled",
             }
         })
 
@@ -1243,7 +1282,15 @@ async def test_file_workspace_or_shell_action_policy_is_revalidated_after_approv
     monkeypatch.setattr(
         SettingsStore, "load_optional", AsyncMock(side_effect=load_optional)
     )
-    approve = AsyncMock(return_value="allow_once")
+
+    async def approve_file(_db, _run, _session, _call, permission, **_kwargs):
+        if kind != "shell":
+            db.scalars.return_value.all.return_value = [_grant(permission, session.id)]
+            if kind == "changed_file":
+                stat.kind = "directory"
+        return "allow_once"
+
+    approve = AsyncMock(side_effect=approve_file)
     monkeypatch.setattr(AgentRuntime, "_request_approval", approve)
     db = _db_with_grants()
     db.scalar.return_value = agent
@@ -1257,7 +1304,7 @@ async def test_file_workspace_or_shell_action_policy_is_revalidated_after_approv
         root_files,
     )
 
-    assert decision == expected
+    assert decision == (PermissionDecision.DENY if kind == "changed_file" else expected)
     approve.assert_awaited_once()
 
 

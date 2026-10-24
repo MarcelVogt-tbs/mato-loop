@@ -16,6 +16,9 @@ from mato_loop_backend.agent.run_contracts import ApprovalResolution
 from mato_loop_backend.agent.run_timing import run_timing_payload, transition_run_status
 from mato_loop_backend.agent.subagents import permission_origin, provenance
 from mato_loop_backend.events import run_events
+from mato_loop_backend.execution import ExecutionClient, ExecutionClientError, WorkspaceStatResult
+from mato_loop_backend.execution.manager import execution_agent_connections
+from mato_loop_backend.files.service import RootFileError, RootFileService
 from mato_loop_backend.messaging.approvals import enqueue_approval_prompt
 from mato_loop_backend.models import AgentRun, ApprovalRequest, ChatSession, ExecutionAgent, Message
 from mato_loop_backend.notifications import NotificationService
@@ -30,6 +33,38 @@ from mato_loop_backend.permissions.policy import (
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.tools.contracts import PERMISSION_REASON_ARGUMENT, ToolCallSuperseded
 from mato_loop_backend.tools.display import tool_display
+
+
+async def prepare_file_grants(permission: PermissionRequest, root_files: RootFileService) -> PermissionRequest:
+    """Resolve required file scopes after hard policy checks."""
+    grants = []
+    for grant in permission.effective_session_grants:
+        if grant.resource_type not in {"execution_path", "session_path"}:
+            grants.append(grant)
+            continue
+        scope = json.loads(grant.resource_scope)
+        recursive = permission.action_kind not in {
+            "write_file", "edit_file", "apply_patch", "download_file", "browser_download", "browser_upload_source",
+        }
+        if recursive and permission.action_kind != "create_directory":
+            try:
+                if grant.resource_type == "execution_path":
+                    agent_id = UUID(scope["agentId"])
+                    client = ExecutionClient(agent_id, execution_agent_connections.snapshot(agent_id) or frozenset())
+                    result = await client.request("filesystem.stat", {"path": scope["path"]}, WorkspaceStatResult)
+                    recursive = result.path != scope["path"] or result.kind != "file"
+                else:
+                    recursive = await asyncio.to_thread(root_files.path_kind, scope["root"], scope["path"]) == "directory"
+            except (ExecutionClientError, RootFileError):
+                # Unknown targets may be directories; never promise narrower access.
+                recursive = True
+        scope.pop("recursive", None)
+        if recursive:
+            scope["recursive"] = True
+        grants.append(replace(grant, resource_scope=json.dumps(
+            scope, ensure_ascii=True, separators=(",", ":"), sort_keys=True,
+        )))
+    return replace(permission, session_grants=tuple(grants))
 
 
 async def request_approval(

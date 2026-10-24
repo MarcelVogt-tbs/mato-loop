@@ -278,8 +278,9 @@ export function permissionGrantDisplay(grant, sessions = []) {
     return {
       ...category,
       label: grant.resourceType === 'shell_action' ? `Exakter Shell-Befehl · ${category.label}`
-        : grant.resourceType === 'shell_computer' ? `Shell · ${category.label}` : category.label,
-      value: grant.recursive ? `${resource.value.replace(/\/$/, '')}/**` : resource.value
+        : grant.resourceType === 'shell_computer' ? `Shell · ${category.label}`
+          : grant.recursive ? `${category.label} · einschließlich Unterpfaden` : category.label,
+      value: resource.value
     }
   }
   if (grant?.capability === 'execution.directory') {

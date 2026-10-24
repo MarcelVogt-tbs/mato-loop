@@ -104,7 +104,6 @@
               </q-item>
             </q-list>
           </q-card>
-          <div v-if="sessionGrants.some(grant => grant.recursive) && !approvals.grantsLoadFailed" class="text-caption app-muted q-mt-xs">/** schließt Unterpfade ein.</div>
         </section>
       </template>
     </q-scroll-area>

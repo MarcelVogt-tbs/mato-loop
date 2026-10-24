@@ -1772,6 +1772,9 @@ class AgentRuntime:
             ):
                 approval_resolution["expected_revision"] = draft_file["initialRevision"]
             return decision
+        from mato_loop_backend.permissions.requests import prepare_file_grants
+
+        request = await prepare_file_grants(request, root_files)
         definition = (
             tool_registry._combined_definitions(integration_settings)[0].get(call.name)
             or tool_registry._operation_definitions.get(call.name)
@@ -1874,6 +1877,10 @@ class AgentRuntime:
             run_id=run.id,
             **permission_namespace,
         )
+        if current_decision == PermissionDecision.ASK and "allow_session" in request.available_decisions and any(
+            grant.resource_type in {"execution_path", "session_path"} for grant in request.effective_session_grants
+        ):
+            return PermissionDecision.DENY
         if current_decision != PermissionDecision.DENY and browser_approval_key is not None:
             approval_resolution[browser_approval_key] = approval_decision
         return (
