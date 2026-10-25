@@ -28,7 +28,8 @@ class ToolAction:
         from mato_loop_backend.settings.tool_presets import preset_policy
 
         policy = self.default if self.default is not None else preset_policy(
-            getattr(settings, f"{settings.trust_level.value}_permission_preset"), self.category, self.capability
+            getattr(settings, f"{settings.trust_level.value}_permission_preset"), self.category, self.capability,
+            profile=settings._agent_profile,
         )
         if policy in self.allowed_policies:
             return policy

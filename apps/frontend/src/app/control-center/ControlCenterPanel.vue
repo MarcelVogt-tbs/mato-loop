@@ -98,6 +98,18 @@
       </q-btn>
 
       <q-btn
+        v-if="$q.screen.lt.md && chat.running"
+        flat
+        round
+        dense
+        icon="stop"
+        color="negative"
+        aria-label="Agent-Anfrage stoppen"
+        :disable="chat.stopping"
+        @click="chat.stop()"
+      />
+
+      <q-btn
         id="control-center-session-button"
         flat
         round

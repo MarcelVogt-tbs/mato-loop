@@ -867,7 +867,6 @@ class IntegrationInstance(BaseModel):
     permissions: IntegrationPermissions = Field(default_factory=IntegrationPermissions)
     profile_permissions: dict[UUID, IntegrationPermissions] = Field(default_factory=dict)
     _execution_operations: frozenset[str] | None = PrivateAttr(default=None)
-    _browser_attached: bool = PrivateAttr(default=False)
 
     def binding_data(self) -> dict[str, Any]:
         """Keep live permission changes separate from the connection revision fence."""

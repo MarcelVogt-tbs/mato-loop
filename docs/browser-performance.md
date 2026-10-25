@@ -17,7 +17,8 @@ The historical aggregate-tool description lives only in `browser_perf_eval.py`; 
 MatoLoop keeps Python Playwright, not the official MCP runtime or its fixed waits. Public
 `browser_*` tools now have small per-operation schemas. `browser_run_code` uses Python
 `async def run(page)` rather than JavaScript Playwright snippets; `browser_evaluate` runs
-JavaScript in Chromium. Both require the read/write/code permission scope, resolved from
+JavaScript in Chromium. Website JavaScript requires browser use; Python additionally requires
+its separate code permission. Both use the existing permission scope, resolved from
 the saved trust preset and connection/profile overrides. Normal actions no longer require whole-page source hashes;
 only actual approval waits capture guards. See [Code Authority](browser.md#code-authority).
 

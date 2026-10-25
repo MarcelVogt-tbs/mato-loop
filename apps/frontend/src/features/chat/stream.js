@@ -2,7 +2,6 @@ import { markRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useApprovalStore } from 'src/stores/approvals'
-import { useBrowserStore } from 'src/stores/browser'
 import { useControlCenterStore } from 'src/stores/control-center'
 import { useQuestionStore } from 'src/stores/questions'
 import { useSubagentStore } from 'src/stores/subagents'
@@ -69,7 +68,6 @@ export const streamActions = {
       this.streamModelName = run.modelName || this.streamModelName
       source.onopen = () => {
         if (this.eventSource !== source) return
-        void useBrowserStore().reconcileControlRequest(sessionId)
         if (useSubagentStore().parentId === sessionId) void useSubagentStore().loadChildren()
         this.reconnectAttempts = 0
         if (this.activity.phase === 'reconnecting') {
@@ -116,10 +114,6 @@ export const streamActions = {
         void useApprovalStore().fetchPending().catch(() => {})
         void useQuestionStore().fetchPending().catch(() => {})
         if (useSubagentStore().parentId === sessionId) void useSubagentStore().loadChildren()
-      })
-      source.addEventListener('browser.control.requested', () => {
-        if (this.eventSource !== source || this.current?.id !== sessionId) return
-        void useBrowserStore().reconcileControlRequest(sessionId)
       })
       source.addEventListener('run.timing', (event) => {
         if (this.eventSource !== source) return

@@ -7,7 +7,7 @@ RUN --mount=type=bind,source=.,target=/source \
 
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim@sha256:531f855bda2c73cd6ef67d56b733b357cea384185b3022bd09f05e002cd144ca
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y git openscad ripgrep \
+    && apt-get install --no-install-recommends -y git openscad ripgrep xauth xvfb \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /data /workspace
 ENV UV_LINK_MODE=copy \
@@ -23,6 +23,7 @@ COPY apps/matoloop-agent/pyproject.toml apps/matoloop-agent/uv.lock apps/matoloo
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --group browser --no-install-project --no-editable --refresh-package matoloop-version
 COPY apps/matoloop-agent/src ./src
 COPY scripts/matoloop-agent-installer.py ../../scripts/matoloop-agent-installer.py
+# Share headless browser dependencies with development and managed updates.
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --group browser --no-editable \
     && sh src/matoloop_agent/container-browser-setup.sh "$UV_PROJECT_ENVIRONMENT/bin/python"
 ARG AGENT_SOURCE_URL=https://github.com/devmato/mato-loop.git

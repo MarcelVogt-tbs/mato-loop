@@ -15,7 +15,6 @@ import SessionFooter from 'src/features/chat/components/SessionFooter.vue'
 import TerminalApp from 'src/features/terminal/TerminalApp.vue'
 import TerminalFooter from 'src/features/terminal/TerminalFooter.vue'
 import BrowserApp from 'src/features/browser/BrowserApp.vue'
-import BrowserFooter from 'src/features/browser/BrowserFooter.vue'
 import {
   controlCenterGlobalSectionManifest,
   controlCenterIntegrationManifest
@@ -41,8 +40,7 @@ const footerComponents = {
   session: SessionFooter,
   files: FileExplorerFooter,
   'file-viewer': FileViewerFooter,
-  terminal: TerminalFooter,
-  browser: BrowserFooter
+  terminal: TerminalFooter
 }
 
 function withComponents(items) {

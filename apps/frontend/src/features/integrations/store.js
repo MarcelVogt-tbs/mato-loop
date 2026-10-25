@@ -619,10 +619,6 @@ export const useIntegrationStore = defineStore('integrations', {
       if (version === this.browserLoadVersion) this.browserStatuses[id] = data
       return data
     },
-    async resetBrowser(id) {
-      await api.post(`/integrations/browser/${id}/reset`, null, scopeConfig('personal'))
-      delete this.browserStatuses[id]
-    },
     async fetchAccess(id) {
       const context = scopeContext(this)
       const { data } = await api.get(`/integrations/${id}/access`, scopeConfig(context.scope))

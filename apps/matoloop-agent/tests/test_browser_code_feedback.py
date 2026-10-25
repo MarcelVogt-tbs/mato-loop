@@ -246,7 +246,6 @@ class BrowserCodeFeedbackTests(unittest.IsolatedAsyncioTestCase):
         self.worker._settle.assert_not_awaited()
 
     async def test_tab_creation_close_and_late_failure_preserve_steps(self):
-        self.worker.desktop = True
         result = await self.execute("newtab", url="https://example.test")
         create = "page = await page.context.new_page()"
         navigate = (
@@ -278,12 +277,12 @@ class BrowserCodeFeedbackTests(unittest.IsolatedAsyncioTestCase):
             "browser.outcomeUnknown",
         )
         self.page.close.side_effect = None
-        self.worker.navigation_state.side_effect = RuntimeError("private")
-        result = await self.execute("closetab")
+        self.worker._inspect.side_effect = RuntimeError("private")
+        result = await self.execute("closetab", observe=True)
         self.assert_code(result, "await page.context.new_page()\nawait page.close()")
         self.assertEqual(result["data"], {"observationFailed": True})
         self.worker.tabs[str(uuid4())] = self.page
-        self.worker.navigation_state.side_effect = None
+        self.worker._inspect.side_effect = None
         self.assert_code(await self.execute("closetab"), "await page.close()")
 
     async def test_whole_line_budget_omission_on_success_and_failure(self):
@@ -364,11 +363,6 @@ class BrowserCodeFeedbackTests(unittest.IsolatedAsyncioTestCase):
             await self.execute("fill", selector="#x", text="x", slowly=True)
         self.assertEqual(error.exception.code, "browser.invalidTarget")
         self.locator.press_sequentially.assert_not_awaited()
-        self.worker.close = AsyncMock()
-        with self.assertRaises(AgentError):
-            await self.execute("click", selector="#x", allowNetwork=False)
-        self.worker.close.assert_awaited_once()
-        self.locator.click.assert_not_awaited()
 
     async def test_batch_confirmed_prefix_and_only_dispatched_attempt(self):
         fields = [

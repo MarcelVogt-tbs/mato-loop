@@ -1,7 +1,7 @@
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y git openscad ripgrep \
+    && apt-get install --no-install-recommends -y git openscad ripgrep xauth xvfb \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /data /workspace /opt/matoloop-agent/venv /opt/matoloop-agent/uv-cache \
     && mv /usr/local/bin/uv /usr/local/bin/uv-real
@@ -9,6 +9,7 @@ COPY --chmod=755 docker/uv /usr/local/bin/uv
 ENV PLAYWRIGHT_BROWSERS_PATH=/usr/local/lib/matoloop-agent/tools/browser \
     MATOLOOP_AGENT_CONTAINER=1
 COPY src/matoloop_agent/container-browser-setup.sh /usr/local/lib/matoloop-agent/browser-setup.sh
+# The shared setup installs headless Chromium, without a desktop server.
 RUN uv venv /tmp/browser-build \
     && uv pip install --python /tmp/browser-build/bin/python playwright==1.59.0 \
     && sh /usr/local/lib/matoloop-agent/browser-setup.sh /tmp/browser-build/bin/python \

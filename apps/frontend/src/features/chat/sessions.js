@@ -1,7 +1,6 @@
 import { markRaw, toRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { useApprovalStore } from 'src/stores/approvals'
-import { useBrowserStore } from 'src/stores/browser'
 import { controlCenterRequestState, useControlCenterStore } from 'src/stores/control-center'
 import { useQuestionStore } from 'src/stores/questions'
 import { useInAppNotificationStore } from 'src/stores/in-app-notifications'
@@ -350,7 +349,6 @@ export const sessionsActions = {
               session.nextMessageCursor = this.current.nextMessageCursor
             }
             this.applySessionResult(session)
-            void useBrowserStore().reconcileControlRequest(id)
             this.loadError = null
             if (session.activeRun && this.runId !== session.activeRun.id) {
               this.watchRun(id, session.activeRun.id, session.activeRun)

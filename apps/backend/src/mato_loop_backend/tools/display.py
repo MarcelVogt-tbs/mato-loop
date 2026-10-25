@@ -89,8 +89,6 @@ TOOL_ACTIVITY_LABELS = {
     "browser_fill_form": "Browser-Formular", "browser_press_key": "Browser-Tastendruck",
     "browser_scroll": "Browser-Scrollen", "browser_diagnostics": "Browser-Diagnose",
     "browser_evaluate": "Browser-JavaScript", "browser_run_code": "Browser-Python",
-    "browser_request_control": "Browser-Steuerung anfordern",
-    "browser_release_control": "Browser-Steuerung freigeben",
 }
 
 _FAMILY_GROUPS = {

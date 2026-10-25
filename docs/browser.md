@@ -1,190 +1,177 @@
 # Browser Architecture and Operations
 
-The optional `browser` integration runs Playwright-managed Chromium on an owner-bound MatoLoop Agent. Native agents run it headless for model automation. Container agents additionally provide the existing noVNC desktop, Quasar website tabs and address/navigation toolbar; Chromium's native controls can be restored with **Browseroberfläche anzeigen**. The backend uses one authorization and attachment path for both deployments, while the agent advertises whether graphical viewing is available. See [the agent runtime contract](../apps/matoloop-agent/BROWSER.md) for detailed RPC and process behavior.
+The optional personal Browser integration runs Playwright-managed Chromium on the
+selected owner-bound MatoLoop Agent. Native Linux and container agents use the same
+headless runtime, private viewer relay, and manual controls. No VNC or desktop server
+is used. Website traffic originates on the Agent, not the backend or the user's browser.
 
 ## Availability and Setup
 
-- Configure the personal Browser connection under **Einstellungen > Integrationen**. It reuses the existing administrator-controlled adapter availability (`full` or `disabled`), with no separate global browser switch. Disabling availability retains configuration and permits deletion, but blocks use and setup.
-- Each owned agent permits one personal browser integration with an immutable agent assignment and empty technical configuration. There are no configurable commands, executable paths, browser endpoints or remote setup scripts.
-- Native browser installation is optional and starts only through the integration's **Browser einrichten** dialog and explicit **Einrichtung starten** confirmation. It installs the pinned Playwright and Pillow packages into the current Agent environment, downloads matching Chromium and offers missing browser host packages. Neither the general Agent installer, Agent startup, a status check, opening the viewer nor a model call installs browser dependencies.
-- The bundled `browser-setup.sh` downloads the Playwright-matched Chromium as the runtime user and probes it before offering missing Debian/Ubuntu runtime packages. System package installation requires an interactive confirmation and defaults to yes.
-- Both agent images preinstall Chromium, Playwright, Xvfb, Openbox, x11vnc and xclip. Container setup checks the installed runtime instead of modifying packages at runtime.
-- Native setup finishes with a disposable sandboxed headless launch and screenshot. Container setup additionally verifies its headed desktop and private RFB handshake. Idle status checks perform the same mode-appropriate probe; an executable's presence alone is not readiness.
+- Configure one personal Browser integration per owned computer under **Einstellungen > Integrationen**.
+  Existing adapter availability, integration selection and agent-profile restrictions apply.
+- Setup is explicit. Native setup installs the pinned Playwright/Pillow packages and matching
+  Chromium; missing Debian/Ubuntu host packages require interactive consent. Container images
+  and managed updates share `container-browser-setup.sh`. Opening a browser never installs software.
+- Readiness performs a disposable sandboxed launch and renderer screenshot. Chromium's renderer
+  sandbox remains mandatory; there is no `--no-sandbox` fallback. Prepared Compose stacks retain
+  their existing user-namespace/security settings. No debugging or viewer TCP port is published.
+- The independent setup terminal retains its bounded replay buffer across viewer reconnects,
+  but not an Agent process restart. Do not restart an Agent during package installation.
 
-The setup process and its 1 MiB rolling output buffer survive closing/reopening the dialog and reconnecting the main agent WebSocket. Reopen the dialog and refresh status to resume viewing; closing it must not cancel an apt transaction. This is process-local continuity, not a durable job: agent daemon termination/restart does not preserve setup. Avoid service restarts during installation.
+## Isolation and Lifetime
 
-The main agent translates SIGTERM/SIGINT into one orderly cancellation; repeated signals do not interrupt cleanup. Browser cleanup precedes cancelled-request draining and also runs when the agent is disconnected or retrying. The worker has a 10-second total cleanup budget, the manager allows 12 seconds before killing remaining descendants, and the CLI has a 25-second final deadline including executor teardown. Both prepared agent Compose services allow 30 seconds with `stop_grace_period`. This makes ordinary container replacement flush the profile and release Chromium's singleton entries instead of leaving a foreign-container lock behind.
+Each chat/computer binding has a separate disposable worker and Chromium profile. Tabs in one
+chat share that profile; other chats receive neither its tabs, cookies, logins, local storage
+nor service workers. Up to eight browser workers may be active on one Agent. This reuses the
+existing process cleanup and IPC boundaries rather than adding shared-browser context management.
 
-## Production Requirements
+The runtime keeps its profile in a private temporary directory, not a workspace or backend
+session directory. Cookies are not restored after runtime close or Agent restart.
+Existing backend/Agent/owner binding checks remain. Old persistent profiles are neither loaded,
+migrated, nor deleted automatically. They may still contain sensitive credentials on disk and
+require explicit operator cleanup. There is no persistent-profile reset API or UI.
 
-The prepared production and development Agent services set `init: true`, `shm_size: 256mb`, `no-new-privileges:true`, and `seccomp:unconfined`. They do not reference `apps/matoloop-agent/docker/browser-seccomp.json`; that file is not a required deployment companion. The no-agent stack has no browser runtime.
+The model and human share their chat's runtime independently of the Control Center app.
+Switching chats opens a distinct binding. Multiple views of the same chat subscribe without
+takeover; each view retains its own authenticated login binding. Closing a view or the app does
+not end the runtime. The WebUI confirms explicit browser close because it removes logins and
+unsaved website input for every view. Explicit close, invalidated session/integration access, or Agent
+disconnect ends it. The existing worker limits bound retained runtimes. Worker cleanup remains
+bounded and runs before Agent shutdown completes.
 
-`seccomp:unconfined` disables Docker seccomp filtering for the Agent container; it is distinct from privileged mode and from Chromium's renderer sandbox. Chromium still requires unprivileged user namespaces permitted by the host kernel and AppArmor policy. A blocked renderer sandbox reports `browser.sandboxUnavailable`; there is no `--no-sandbox` fallback. Keep TLS and WebSocket forwarding enabled at the application reverse proxy; no VNC, X11, or debugging TCP port needs publication.
+## Viewer and Model Access
 
-Browser support is Linux-only. Future platform support belongs behind the agent-local setup/runtime boundary, not in provider adapters or platform-specific backend execution fallbacks. The native setup script, fresh managed Chromium download and sandboxed worker launch are covered by agent tests; a pristine Linux installation remains a separate platform acceptance check.
+Visible activation of **Control Center > Browser** subscribes a viewer. Browser tools are offered
+when the selected computer, integration and profile allow them. The first tool action starts the
+chat's browser if necessary; no app entry, attachment, control request or viewer is required.
+Ordinary action permissions remain authoritative. Concurrent starts reuse one runtime per chat
+and computer. All views share one viewport; an explicit resize affects every view.
 
-## Storage and Maintenance
+The Agent streams the selected page through CDP `Page.startScreencast`; the WebUI draws JPEG
+frames and sends typed mouse, keyboard, text and dialog input. Tabs, address, history, reload
+and stop remain Quasar controls. Resize changes the actual viewport (320x240 to 3840x2160),
+coalesced through the existing control socket. Chromium's native chrome, Settings and native
+DevTools are not part of the viewer. Website JavaScript dialogs use an explicit Quasar dialog.
 
-Let `<data>` be the agent configuration directory, `/data` in the container:
+Mouse movement drives Chromium's own hover effects; leaving the image clears remote hover.
+The existing state stream reports the standard CSS cursor at most ten times per second during
+manual interaction, including same-origin/cross-origin frames and open shadow roots. Playwright
+resolves each iframe's own execution context with frame-local coordinates; website security
+settings remain unchanged. The viewer accepts only cursor keywords, never cursor image URLs.
+For `cursor: auto`, selectable text is detected at the pointer rather than treating the whole
+element as text. Cursor samples remain usable while the pointer moves within the same live page;
+leaving, control changes and tab changes still clear them.
+Tab/Shift+Tab navigate website fields. Ctrl/Cmd+L/T/W, Ctrl/Cmd+R and F5 use the existing navigation
+controls; Ctrl+Tab/Shift+Tab and Ctrl+PageUp/PageDown cycle website tabs when the local browser
+delivers those keys. Browser-reserved shortcuts cannot be overridden reliably by a web app.
 
-| Content | Location |
+Manual input and clipboard/file UI operations are blocked only while a model browser action is
+running, on the server and worker rather than only in the frontend. A muted **Agent aktiv** label
+appears in the existing tab strip during the action without changing its layout. The worker releases
+held keys/buttons and rotates its input epoch at control changes; the same stream remains open.
+Inputs must name the current view epoch and selected tab, so old queued input cannot replay after
+unlocking. Manual input is restored after success, failure, or cancellation. Approval snapshots also
+briefly lock input; the final approved action rechecks the snapshot while holding control.
+Website dialogs can be answered after reconnecting, before the first image; ordinary input still
+requires the current displayed image. Stream changes and resizing do not wait for an open dialog.
+For human interaction the model asks and waits, without a handoff tool or polling.
+Ctrl+Alt+Escape releases local viewer focus. Switching input sources releases held keys/buttons;
+joining or leaving another viewer does not replace the runtime or grant model access.
+
+## Permissions
+
+The integration uses the shared resolver, categories, presets and persistent approval requests:
+
+| Capability | Category / scope |
 | --- | --- |
-| Native managed Chromium | `<data-parent>/tools/browser` |
-| Image-managed Chromium | `/usr/local/lib/matoloop-agent/tools/browser` |
-| Persistent browser data | `<data>/tools/browser/<namespace>/` |
-| Owner binding and profile | `<namespace>/binding` and `<namespace>/browser/profile/` |
+| `browser.use` | `write`: all ordinary browser actions, observations, and JavaScript in the website context. |
+| `browser.code` | `write`: unrestricted Python/Playwright, with a separate execution grant resource. |
 
-The namespace is SHA-256 of the configured backend URL, a newline and agent ID. The separate binding marker records backend, agent and owner; mismatched ownership is refused rather than silently reused. Profiles are per agent/binding, not per chat session or integration UUID. Deleting/recreating an integration does not erase logins. The existing agent data mount holds all persistent data; no backend session tree or workspace is used for profiles.
+Returning control is automatic and has no configurable permission capability.
 
-Protect and back up browser data as sensitive website credentials, cookies and browsing state; it is not stored in MatoLoop's encrypted credential table. Close the runtime before a consistent backup and preserve binding identity and ownership when restoring. **Profil zurücksetzen** requires confirmation and an idle browser/setup; it deletes the runtime profile tree, retaining the binding and installed binaries. Integration/account deletion is not agent-disk cleanup. Temporary staging, desktop HOME/XDG files and private sockets are disposable and removed on normal runtime close.
+Browser use defaults to AUTO for Build and profiles based on Build, except in `ask_all`.
+Allgemein, Plan, Sysadmin, and other profiles default to ASK, independently of model trust and
+the other preset categories. Browser Python defaults to ASK in every profile and preset.
+Explicit connection/profile rules and matching grants retain their existing precedence.
+Browser use deliberately includes website JavaScript, authenticated content, and private-network
+targets made accessible in the chat; it is not the public-network-only contract of `webfetch`.
+File access retains its independent permissions. Ordinary browser grants never authorize Python.
+Reusable grants bind the browser context and
+integration revision, not a transient viewer or attachment revision. A fresh context cannot
+reuse the previous context's grants. Invocation checks bind the runtime ID and live access, so
+old queued or approved calls cannot act in a replacement runtime. Disabled actions remain binding.
 
-Chromium remains the authority for its profile singleton. A positively identified lock conflict reports `browser.profileInUse` (HTTP 409), not missing installation. No runtime path deletes `SingletonLock`, `SingletonSocket` or `SingletonCookie` automatically. A foreign hostname or missing local PID/socket alone does not prove inactivity across containers or hosts. After a hard crash, operator recovery must first exclude every active user of that exact profile and then remove only verified orphaned singleton entries without following symlink targets. Preserve all other profile data. Startup logs include only a fixed failure stage and temporary/persistent mode, never raw Chromium exceptions or profile contents. Disposable readiness probes establish runtime availability, not ownership of the persistent profile.
+Uploads retain their independent source-read check. Saving downloads retains the destination-write
+check. Secret access uses the ordinary secret permissions. Website clicks cannot be reliably
+classified by business effect: a write-authorized click may delete data or make a purchase.
+**Automatisch außer Löschen** does not prevent destructive website actions.
 
-Root agents launch the worker as `matoloop-browser` without supplementary groups; non-root native agents use their own account. The runtime child is mode `0700`, storage rejects symlinked ancestors and the root-owned binding remains outside the worker-owned child. Root-run native deployments must explicitly grant the runtime user traversal through otherwise private ancestors and access to the frozen executable/resources. Setup does not chmod/chown the agent data directory or its ancestors; do not make credential directories readable to fix traversal.
-
-Image deployments can replace the Agent image or use managed WebUI updates to the running backend's commit. Managed updates survive restart, but recreation restores the image version; see [computer maintenance](computer-maintenance.md). Native updates replace the Agent environment, so run integration setup again when browser support is needed. Setup installs pinned Python packages and missing matching Chromium; optional host-package changes require interactive consent. The native lifecycle manager records newly installed host packages and offers their removal during uninstall.
-
-## Viewer and Attachment
-
-1. On a container agent, select the connected computer in an owned top-level chat and add or activate the Browser Control Center app. Its visible, confirmed tab opens the browser automatically. Native agents show that the browser is model-controlled in the background and do not offer a viewer or manual controls. A matching live connection is reused. Ordinary app activation does not attach a model.
-   A new browser context inherits MatoLoop's effective light or dark mode for `prefers-color-scheme`. Reusing a running browser does not reset later page-level media emulation, so the agent can still switch modes for tests.
-2. On container agents, **Agent verbinden** explicitly attaches a manually opened browser to this chat. Model-requested control instead starts or takes over the browser and completes attachment in the backend; it does not wait for a control socket, relay or viewer. Profile integration selection remains authoritative: Plan, Build, and Sysadmin exclude integrations by default, so browser tools stay unavailable unless explicitly enabled through the existing profile settings.
-3. While attached, manual input and clipboard/file UI operations are locked. The agent confirms x11vnc view-only mode server-side and releases held keys/buttons; frontend view-only state alone is not the boundary.
-4. **Manuell übernehmen** revokes attachment immediately. A dispatched action may finish, but queued actions lose their binding. Manual input stays locked until that action settles; old RFB streams are discarded and the view reconnects to the same browser ID before unlocking. This never automatically reattaches the model.
-   The attached model can invoke `browser_release_control` to perform the same handoff before asking the human to sign in, solve a challenge or enter secrets. Release follows the configured `write` policy, keeps Chromium and its tabs open, and does not grant later reattachment.
-
-There is one live browser and one controlling view per agent. Another eligible same-owner view receives an ordinary occupied state naming the owning session, with **Browser hier übernehmen**, not an error toast. That single explicit action revokes the old view and its model attachment, waits for already-dispatched operations, releases native keys/buttons, and replaces the view transport. Chromium, tabs, browser ID and profile remain unchanged; the new view starts manually controlled. Stale offers cannot replace a newer controlling view. The replaced view stays disconnected until deliberate reconnection and never automatically reclaims or reattaches.
-
-Each controlling connection has one ephemeral `viewId`, not a persisted revision record. The backend replaces the immutable session/login/connection binding on handoff while retaining the browser ID and shared action lock. Old controls, replies, HTTP transfers and cleanup cannot act on the replacement. Native input fencing runs even when the old viewer has already disconnected. Dispatched human operations drain before handing off the lock; unfinished upload staging is removed before the next view becomes active. Existing model attachment checks remain separate and continue rejecting old queued/approved calls.
-
-Collapsing/remounting the panel and switching between chats retain the controlling sockets, viewer, browser tabs and model attachment. The original session's agent may continue working while its viewer is parked; the newly displayed chat cannot send input or display the original chat's page as its own. Returning reuses the same view without reconnecting. Viewer or control-socket loss preserves an active model attachment; a later viewer reconnects read-only to the current browser state. An unattached runtime still uses the 30-second idle grace. **Browser schließen** ends the runtime immediately. Main agent disconnect, backend shutdown or invalidated access ends the runtime; the profile survives. Setup-terminal processes remain independent of view takeover. No parallel browser instances, tab groups or implicit session creation are introduced.
-
-### Model-Requested Control
-
-`browser_request_control(reason)` is available before attachment when the selected agent, personal browser integration and agent profile permit it. Its separate `browser.control` permission follows the shared `write` default or an explicit connection/profile rule, using the existing approval and grant system. The model may request it when an ordinary web fetch cannot complete the task; no automatic webfetch fallback or permission bypass is added. Ordinary page-action tools remain unavailable until attachment.
-
-After authorization, the currently displayed requesting chat adds and persists its Browser app without opening the Control Center or navigating to another chat. This starts Chromium if absent or implicitly takes over the existing browser, preserving its tabs and profile, without another takeover dialog. The approval explicitly covers opening, takeover and model attachment. Read/write/code policies still apply separately; approving control does not override them. Reading uses the `read` category; writing and code execution use `write`. Their defaults follow the saved trust preset unless connection or profile rules override them.
-
-The backend binds a request to its owner, live run, integration revision, selected agent generation and reviewed browser/view identity. Authorization adds the Browser app without opening the Control Center or changing its active app, then starts or takes over Chromium and performs the model-input fence directly. The model receives success only after attachment completes. A graphical relay and noVNC viewer are optional and may connect later when the agent advertises `integration.browser.view`; opening or closing that viewer does not establish model authority. Denial has no browser effect. Cancellation, manual takeover, policy changes or stale bindings invalidate pending authority. An already-dispatched operation may settle, but cancellation cannot leave a latent attachment.
-
-The compact icon toolbar leaves the remaining content area to the browser. A content-box observer sends bounded, coalesced dimensions through the existing control WebSocket. The host-only `integration.browser.resize` operation changes the actual private Xvfb RandR output, not just CSS scaling. Chromium has no fixed emulated viewport and its maximized window follows the desktop. Sizes range from 320x240 through 3840x2160 CSS pixels; hidden/zero-size hosts are ignored, with fit/scroll fallback beyond those bounds. Resize preserves the browser, tabs and RFB stream and is serialized with model actions. The applied geometry contributes to approval snapshots. Images and native setup include `xrandr` and `xprop`.
-
-RFB framebuffer requests and responses continue while a model action holds the browser action lock. Manual input is still disabled and confirmed inside the browser worker before model attachment, so live viewing does not bypass the input fence. Queue bounds, frame limits, connection replacement, and relay cleanup remain active.
-
-Quasar navigation uses the host-only `integration.browser.navigation` operation. It exposes state, tab creation/selection/closing, HTTP(S)/`about:blank` navigation, history, reload/stop, and native-chrome presentation. These are human controls, not additional model tools: mutations require manual control and are rechecked under the action lock. Closing the last custom tab creates a fresh blank page. Navigation acceptance does not mean loading has completed; the backend periodically observes actual titles, URLs, active page, history, and loading state after the viewer subscribes, publishing changes without acknowledging unrelated pending commands. Renderer stalls retain the last observed focus/history rather than blocking Stop indefinitely. The address field preserves an in-progress user edit, then resumes actual URL updates when editing ends.
-
-The fixed Chromium `--force-app-mode` launch switch suppresses browser-fullscreen entry/exit overlays while retaining native Settings and DevTools. It is not `--kiosk` (which disables DevTools). The Quasar viewer handles Ctrl+L/T/W and maps focused remote F12 to Chromium's supported Ctrl+Shift+I DevTools chord. These shortcuts do not capture unrelated local application fields. Native address-bar mouse editing, Settings, popups and permission dialogs remain available through **Browseroberfläche anzeigen**. Native window mode changes reapply the current desktop geometry, including Chromium's minimum-width workaround on narrow panels. This is not a general guarantee for every Chromium-native accelerator; Linux presentation is tested against the pinned browser build.
-
-## Clipboard and Files
-
-Clipboard transfer uses xclip's `UTF8_STRING` selection on the private X display. With the manually controlled viewer focused, Ctrl+V receives a trusted plaintext paste, uploads the literal UTF-8 text, and then sends a balanced remote paste chord. Text is never replayed as individual keystrokes. Ctrl+C calls the host-only `POST /browsers/{id}/clipboard/copy`: the worker subscribes to XFixes selection notifications before injecting native Ctrl+C with XTest and returns text only after a confirmed fresh CLIPBOARD selection, including repeated copies of identical text. No arbitrary key command or PRIMARY selection is exposed.
-
-The frontend reserves local clipboard access in the user gesture where supported. HTTPS/localhost, browser permissions and focus still govern local Clipboard API access. When it is blocked, the existing dialog retains confirmed text for explicit local copying. Shortcuts do not intercept input outside the viewer or while the model controls it. **Zwischenablage setzen** remains a set-only dialog fallback; use the remote browser context menu to paste that staged text, since local Ctrl+V deliberately imports the local clipboard. The wire limit is 16,384 UTF-8 bytes; the UI requires strictly less than 16 KiB. Clipboard text is neither persisted nor logged.
-
-For a manual upload, first click the website's file input, then use **Datei hochladen**. The picker reads existing files from **Ablage** or **Computer-Dateien**. A local file first uses the ordinary upload API in the picker's current directory and is then selected like any other existing file; there is no separate persistent browser upload directory. Playwright intercepts the pending website chooser instead of opening a remote filesystem picker. If no chooser is ready, the UI retains the temporary upload ID: click the website input and use **Datei einsetzen** without transferring the file again. Navigation, page close and control-mode changes invalidate pending choosers.
-
-Completed website downloads are automatically published as ordinary computer files below `<homeDirectory>/browser/downloads`. Existing files are never overwritten; bounded numbered suffixes resolve name collisions. The browser UI links to that directory in **Computer-Dateien**. Model-origin downloads require current `browser.read` and ordinary `filesystem.write` permission for the actual destination; an ASK decision leaves the temporary download pending for the foreground `browser_downloads` tool instead of creating a background approval. Human-origin downloads use the authenticated manual file authority. Origin identifies the controller active when Playwright emits the download event, not causal ownership of an earlier click or website timer. A later browser takeover never supplies authority for an already captured origin.
-
-Managed transfers use runtime-scoped opaque UUIDs, plain filenames and checked 64 KiB chunks. Limits are 64 MiB per file, 32 active entries and 256 MiB reserved/retained staging per runtime; an unfinished download reserves 64 MiB. The worker and descendants also inherit a 64 MiB per-file OS limit. Failed metadata is bounded but does not consume byte or active-entry capacity. Published downloads survive browser close and profile reset; unfinished staging does not. Temporary upload staging is removed after model use and otherwise remains only for the explicit manual retry lifecycle. These managed-transfer limits do not restrict arbitrary filesystem operations explicitly authorized through `browser.code`.
-
-## Model and Security Boundaries
-
-The model receives small static `browser_*` tools, not the former `browser(action=...)` schema:
-
-| Tool | Purpose |
-| --- | --- |
-| `browser_request_control` | Request permission to open/take over the Browser app in this chat and attach the model. |
-| `browser_release_control` | Return an attached browser to manual human control. |
-| `browser_tabs` | List/new/close/select, with opaque tab IDs. |
-| `browser_navigate` | Navigate a known tab to HTTP(S). |
-| `browser_snapshot` | Obtain an accessibility snapshot, optionally focused by selector/depth; large results return a managed file. |
-| `browser_take_screenshot` | Obtain a temporary viewport image. |
-| `browser_click` | Click an observed ref. |
-| `browser_type` | Fill text, optionally type slowly or submit with Enter. |
-| `browser_fill_form` | Fill an ordered independent field list. |
-| `browser_press_key` | Press a key/chord without forcing another target's focus. |
-| `browser_scroll` | Scroll a known tab. |
-| `browser_diagnostics` | Read bounded browser diagnostics. |
-| `browser_evaluate` | Run JavaScript in the page or on a ref. |
-| `browser_run_code` | Run Python defining `async def run(page)`. |
-| `browser_upload` | Upload an authorized existing `files` or `computer` file to a known file-input ref. |
-| `browser_downloads` | Publish a completed model download after ordinary destination authorization. |
-
-`browser.read` uses the `read` category; `browser.write`, `browser.code`, `browser.release`, and `browser.control` use `write`. They inherit the saved private/public base preset unless a connection/profile rule overrides it. Both code tools require all three content capabilities, even with `observe=false`; code is never classified as harmless reading. Explicit `ask`/`disabled`, profile restrictions, integration selection and delegation ceilings remain effective. A stored `tool_availability["browser"]=false` disables the entire family, including control requests. No saved policy is rewritten. **Agent verbinden** or an authorized control request releases browser contents to the selected model; neither is a sandbox. Setup, reset, clipboard and staging remain host/UI operations.
-
-Before effects the backend revalidates owner, login, session, selected agent/generation, integration revision, profile selection and attachment revision. AUTO or an existing applicable grant dispatches one action RPC, without authorization snapshots or whole-page hash comparisons. Public ref arguments contain no `snapshotSha256`; Playwright resolves current refs normally. Only an actual human-approval wait captures a settled guard, binding the exact invocation and browser identity; execution compares that guard freshly afterward. After a wait, all required capabilities are revalidated without another prompt, including capabilities checked before the wait. New ASK requirements or explicit denials stop dispatch. `browser.snapshotChanged` means inspect the same tab; `browser.bindingChanged` means attachment identity changed. No mutation is automatically retried.
-
-Settling requires 150 ms of DOM/request quiet, document readiness, and completed finite animations, within 600 ms for normal observations or 1.8 seconds for approval guards, plus bounded cleanup. Infinite animations and WebSockets are not blockers. Normal reads/post-write captures remain usable with `data.settled=false` when the deadline expires. Approval guards fail closed with `browser.observationUnstable`; final execution guards inspect immediately. Exactly one identical snapshot retry is permitted after that transient error. This is an observation heuristic, not a page freeze.
-
-`browser_fill_form` accepts one ordered list of 1-20 independent fields from one inspection, identified by `name`, `ref`, `type` and string `value`, with unique refs and at most 32,768 value characters total. Textboxes, checkboxes, radios and native single-select comboboxes are supported; custom comboboxes still use inspected click/keyboard targets or Playwright code. Checkbox values are `true`/`false`, radio values `true`, and combobox values are exact unique option labels. The list is authorized once and executed in one worker RPC, with fixed handles and per-field document/type/value/form-target checks. `batch.completed` identifies the successful prefix; `batch.errorCode` reports a subsequent stale target or uncertain outcome. Never replay completed fields. The batch is not transactional.
-
-`browser_snapshot` needs one settled inspection in AUTO. Normal observations skip the supplemental DOM scan used only for approval guards. Ordinary writes return one final accessibility observation by default, requiring read permission too. The two code tools default `observe` to false because their compact return value should confirm the relevant state; set it true only when the next step needs a fresh accessibility snapshot. `observe=false` never bypasses the code tools' read/write/code requirements. Failed follow-up observation carries `observationFailed=true` without erasing a completed mutation or script return value. Unknown outcomes must be inspected before retrying. Listing tabs and diagnostics are browser-level actions without `tabId`.
-
-Explicit snapshots accept a native Playwright `selector` and `depth` from 1 to 100. Small explicit captures remain inline; oversized captures and post-write observations transfer complete UTF-8 text into a run-bound session file exposed as `snapshotFile` (`root=files`, path, size, SHA-256). Read or search it with ordinary file tools; its contents are not automatically loaded into model context. Staging is deleted after transfer. Capture/persistence failure sets `observationFailed=true` without erasing a completed action.
-
-Complete inline observations may later use an incremental unified diff with `snapshotFormat="diff"` and `baseSnapshotSha256` when the base exists and the encoding is smaller. Empty diff means unchanged text. Hashes identify observations, not action preconditions. Explicit snapshots, new turns, navigation, missing/shortened bases, and error recovery use full text. Estimation and completion share the projection, preserving completion and unknown-outcome flags. See [Browser Performance](browser-performance.md).
-
-Ordinary navigation/tab mutations, clicks, typing, keys, scrolling and form batches also return worker-generated `playwrightCode`. `completed` contains equivalent Python statements for Playwright calls that returned; `attempted` identifies a dispatched call without confirmed completion, with a controlled `errorCode`. Method completion does not establish application-level success. The feedback uses the actual selectors/refs and safely quoted Python literals, not guessed role/name selectors. Form statements describe equivalent locator operations; execution still uses frozen handles and guards. Refs are observation-scoped, so the feedback is not a safe-replay guarantee or automatically executed source. Internal guards, screenshots, diagnostics and free-code callbacks do not echo extra code. The combined code budget is 32,768 characters; oversized lines are omitted whole and `truncated=true` marks omissions. Snapshot diffs preserve feedback. Context shortening may omit code but retains unknown-outcome/error flags. No additional system prompt is injected.
-
-Explicit `screenshot` calls capture a viewport PNG and scale it on the MatoLoop Agent using Playwright MCP's image bounds: at most 1568 pixels per edge and `1.15 * 1024 * 1024` pixels in total, without upscaling or changing the live viewport. Only the scaled PNG is briefly staged and transferred by opaque file ID in 64 KiB chunks. There is no special 500 KB screenshot limit and no larger RPC envelope. The backend deletes the staging file after transfer, including on cancellation or validation failure; abandoned captures are removed on the next capture or runtime close. No full-resolution original is saved or sent.
-
-Screenshots are temporary visual observations, not session artifacts. The active run retains the newest eight images within a combined 20 MiB in-memory budget and can send them in later requests even after text-context compaction. Existing user image references retain provider-budget priority; request-only labels identify omitted screenshots when the combined budget is full. Images go only to image-capable models. Completion, failure, cancellation and process restart discard the run-local images. The tool call remains in history, but no screenshot file, pending artifact or image attachment is persisted, so later runs cannot redisplay these observations. Existing historical image attachments are unchanged. Normal actions still return accessibility text rather than automatic screenshots.
-
-Inspection uses Python Playwright 1.59's public page-level AI snapshot and built-in ref resolver; no official MCP runtime or additional Node package is used. Models pass bare refs such as `e12`; the host translates them to `aria-ref=e12`. Normal observation IDs bind the returned text and document/tab identity. Only approval guards add bounded field/form/focus/geometry state. Those guards are stale-state heuristics, not a complete semantic guarantee or a page freeze.
+The existing session Stop action cancels an active agent browser command through the Agent
+cancellation channel, independently of the browser action lock, and remains visible beside draft sending.
+Mobile Control Center panels
+expose that same session action because they cover the chat composer. Browser Stop only stops
+manual page loading. Cancellation cannot undo website effects; an interrupted worker may be
+terminated to avoid reusing an uncertain RPC stream, losing its temporary logins and tabs.
 
 ### Code Authority
 
-`browser_run_code` deliberately grants unrestricted Python execution with the browser worker OS account's rights. This includes accessible files, processes, network services and browser-profile credentials, not just the selected tab or workspace. The existing credential-free environment does not mean accessible credentials on disk are hidden. Root agents normally use the dedicated browser account; non-root agents use their own account. The Python namespace and source-contract checks are not a sandbox. There is no added Linux-specific isolation dependency; existing graphical browser support remains Linux-specific and is not a claim of current Windows/macOS support.
+`browser_run_code` executes unrestricted Python with the worker account's OS rights. It is
+not a browser-only sandbox: accessible files, processes, network services and other browser
+data may be reachable. Separate chat profiles are website-state isolation, not OS isolation
+against explicitly authorized code or ordinary computer tools. Root Agents use the dedicated
+browser account and a credential-free environment; native non-root Agents use their own account.
+Use external OS isolation or disable code where this authority is unacceptable.
 
-`browser_evaluate` runs a JavaScript function through Chromium, optionally on a ref. It can mutate pages and send authenticated requests. Both tools check read/write/code policies and expose the exact source when approval is needed. New category grants may satisfy the same category on the same browser resource across capabilities; a disabled `browser.code` policy remains binding. Shell/file grants are not reused, and individual operations inside Python are not inspected by those tool policies. Operators must disable `browser.code` or supply external OS isolation where this deliberately broad authority is unacceptable. Arbitrary code can leave callbacks/tasks behind or interfere with the worker; process cleanup is not adversarial containment.
+`browser_evaluate` runs JavaScript in the selected page and can mutate it or send authenticated
+requests. It requires only `browser.use`; Python requires both `browser.use` and `browser.code`,
+even with `observe=false`. The code grant resource remains distinct from ordinary browser use.
+Source and results remain bounded, errors controlled, and unknown outcomes are never retried
+automatically. See [Browser Performance](browser-performance.md) for observation behavior.
 
-Code is limited to 32,768 characters. A fresh Python namespace must define `async def run(page)`. The complete callback runs once with a 120-second cooperative deadline; the agent waits up to 140 seconds and the backend up to 160 seconds so observation, transport and cleanup do not preempt that limit. Ordinary actions retain their shorter budgets. Stdout/stderr capture is bounded and kept outside the JSON-lines protocol. Results expose `script.value`, `script.output`, `script.outputTruncated` and optional `script.errorCode`, `script.failureReason`, `script.failureDetail`, and Python source `script.line`. Invalid results distinguish controlled `resultTooLarge`, `resultTooDeep`, and `resultTypeUnsupported` details; no exception text, path, stack trace, source excerpt, or local value is released. JSON values are finite, depth-bounded and at most 32,768 UTF-8 bytes. Invalid source before execution fails without dispatch; failures after execution began retain an unknown outcome. Neither effects nor partial script execution are rolled back or automatically replayed. Scripts should wait for concrete UI postconditions and return compact confirmed progress. Standard screenshots remain temporary; files deliberately written by unrestricted Python are outside managed screenshot cleanup.
+Migration `6b6ce77be67f` discards saved browser read/write/use/Python policies at every settings
+level and removes browser-specific grants. The new profile defaults apply afterward.
+Pending browser approvals expire. Integration availability and all non-browser rules and grants,
+including independent file permissions, remain unchanged. Discarded consent cannot be restored by downgrade.
 
-Python `runtimeError` results additionally distinguish `typeError` and `attributeError` through fixed `failureDetail` values while preserving the failing line and captured output. The active tool descriptions explain Python locator properties and the `aria-ref=` resolver, request compact results, and require rechecking relevant input values after navigation or rerendering. JavaScript results still require strict finite JSON: extract primitive DOM properties and normalize missing values explicitly, for example `value ?? null`. These are website-independent contracts; no page-specific selectors, automatic code rewrites, or mutation retries are introduced.
+## Clipboard and Files
 
-The worker logs validated phase diagnostics for settling outcome/duration and snapshot duration/character count beside the existing pipe and coordinator timings. These technical logs contain no page text, selectors, script values, or exception details.
+Manual text insertion uses the focused website field and bounded UTF-8 text, never the host
+system clipboard. Copy reads the selection in the focused website frame, including text fields
+but not password fields. Custom website copy handlers and native clipboard menus are not
+emulated. Select text with the mouse or keyboard and use Ctrl/Cmd+C or Ctrl/Cmd+V directly in
+the viewer. Command shortcuts are translated to Control for the remote Linux browser.
+Local clipboard access remains explicit and subject to browser permissions. Copy writes directly,
+using Quasar's `execCommand('copy')` fallback when the Clipboard API is absent, including HTTP.
+Copy failures show a toast, never a copy dialog. Paste retains its manual text fallback.
+No clipboard toolbar buttons or right-click
+menu are added. Text is not persisted or logged and is limited to 16 KiB.
 
-For transitions such as closing a Quasar dialog, a count is not a completion condition because the node can remain during its leave transition. Wait for the actual postcondition before continuing:
+Manual upload selects an ordinary **Ablage** or **Computer-Dateien** file after clicking the
+website's file input. Playwright intercepts the chooser; a staged file can be retried without
+transferring it again. Completed downloads publish below `<homeDirectory>/browser/downloads`
+without overwriting existing files. Download events retain controller-origin attribution.
+Unlocking input does not clear model attribution: subsequent downloads in that runtime conservatively
+retain the latest model origin and its file-permission checks, including downloads clicked manually.
+Published downloads survive browser close; temporary transfers do not.
 
-```python
-await dialog.get_by_role("button", name="Speichern", exact=True).click()
-await dialog.wait_for(state="hidden")
-```
-
-The worker receives a clean, credential-free environment and private inherited JSON pipes. X11 uses private authentication and no TCP listener; x11vnc uses inetd through a private Unix socket. A separate bounded binary relay connects outbound to the backend using a one-use connection-bound token, keeping RFB traffic off the agent command channel. Viewer/setup WebSockets require authenticated ownership and an allowed origin, with periodic live access checks; errors travel on the JSON control channel, never inside RFB bytes.
-
-Chromium's renderer sandbox does not sandbox the whole MatoLoop Agent. The existing root shell/filesystem boundaries remain accepted: root or the same native OS account can access browser data through separately authorized ordinary computer operations. A human-controlled browser has normal browser/OS access. Model navigation arguments are HTTP(S)-only without embedded credentials, but there is no browser public-address filter or per-request egress firewall; service workers remain enabled. Host-only `allowNetwork=false` refuses opening or closes before execution, not an offline browsing sandbox. Operators control network reachability and host isolation.
-
-There is no global browser/agent memory/process cap, delegated cgroup, or automatic service modification. Tabs are limited to 32, inline text to 32,768 characters, staged files to 64 MiB each, and diagnostics to 50 entries of 500 characters. Managed snapshot files allow larger complete text within staging bounds. These limits do not bound aggregate Chromium memory or profile growth. Operators must budget disk, memory, and process capacity for the whole Agent workload. Core dumps are disabled; `RLIMIT_AS`/`RLIMIT_NPROC` are not substitutes for workload limits.
+Existing limits remain: 32 tabs, 64 MiB per managed file, 32 staging entries, 256 MiB staging,
+64 KiB transfer chunks, bounded diagnostics and code. Screenshots for the model remain scaled,
+ephemeral observations, separate from viewer frames; neither is a persistent session image.
 
 ## API and Troubleshooting
 
-### Latency Diagnostics
+`/api/browsers/{integrationId}` carries authenticated JSON control; `/view` carries the private
+binary page stream. The Agent connects outbound to `/api/browser-relay/{relayId}` using the
+existing one-use, connection-bound token. Login ownership, allowed origins, live access checks,
+queue limits and transport cleanup remain enforced. No arbitrary CDP method or upstream URL
+is exposed. See [the Agent runtime contract](../apps/matoloop-agent/BROWSER.md).
 
-Browser latency uses monotonic clocks and technical INFO logs, never model-visible tool text or approval data. When no root logging handler is configured, the backend applies `MATO_LOOP_LOG_LEVEL` (default `INFO`) to application logs and leaves third-party logging at `WARNING`. Custom process logging configurations must enable INFO output for `mato_loop_backend.execution.browsers` and `matoloop_agent.browser` when collecting measurements.
+API errors use the central error catalog and German frontend formatter. No raw Chromium,
+Playwright or installer exception is exposed. Technical latency logs and durable browser
+open/close diagnostics remain content-free. For an unknown operation outcome,
+inspect state instead of blindly repeating a mutation.
 
-- Backend `Browser coordinator latency` records separate authorization (`operation=snapshot`) and execution summaries, correlated by session and browser ID. `total_ms` includes lock wait, access validation, RPCs and state notifications. `lock_wait_ms`, `access_ms`, `reinspection_rpc_ms` and `action_rpc_ms` isolate the main phases; in the authorization summary the inspection metric describes the initial snapshot. Unstarted phases are omitted; failed or cancelled phases retain their elapsed time.
-- Agent `Browser execution latency` records the validated action, browser ID, `pipe_roundtrip_ms` and `worker_elapsed_ms`. Worker time covers Playwright execution and result assembly, including tab-title collection. The worker reports it only in the private pipe envelope; the agent consumes it without forwarding it in tool results. Missing or malformed optional measurements appear as `None`.
-- Existing assistant-message `_matoloop.performance.providerDurationMs` measures model-provider time separately. Compare it with browser timings rather than attributing every pause to Chromium. RPC durations include worker execution, so do not add nested timings together or interpret the remainder as network latency alone.
-
-Logs contain no URLs, selectors, page text, field values, screenshots or snapshot digests. Timing instrumentation does not change timeouts, approvals or retries. These measurements are diagnostic logs, not a persisted per-tool trace. The deterministic transport regression checks the two-inspection RPC count and phase attribution; it is not a live-model speed benchmark.
-
-While the owner's diagnostic access is active, the existing durable diagnostics store also records `browser.opened`, `browser.attached`, `browser.detached`, and `browser.closed` events. Each carries the owning session, browser/view and agent/integration IDs, attachment revision, a host-controlled reason, and an optional controlled error code. Reasons distinguish model requests/releases, manual control changes, takeover, access revocation, agent disconnection, watch failures, idle expiry, and shutdown. A `closed` event records backend authority revocation, not confirmation that Chromium has finished cleanup. These session events can be inspected even when no run is active. Viewer loss alone does not emit a model-detachment event. The events use the existing debug-access checks and retention policy and contain no page content or raw exception messages.
-
-### API Errors
-
-Under `/api`, `/integrations/browser` provides personal CRUD, `GET /{id}/status`, `POST /{id}/test` and `POST /{id}/reset`. `/browsers/{id}` is the control WebSocket; `/view` carries RFB and `/setup` carries setup control/output. RFB and clipboard/file REST routes require `sessionId`, `browserId` and the active `viewId`, plus authentication as the controlling login. Occupancy offers use `availability`; explicit `takeover` names the offered browser/view IDs. Replacement uses `replaced` and close code 4001; `release` is distinct from runtime `close`. `/browser-relay/{id}` accepts only the agent's one-use connection-bound bearer token, not a user-selected upstream.
-
-After authorization, the backend persists the Browser app, opens or takes over the runtime and attaches model control without waiting for a frontend connection. Opening the app later creates an optional read-only viewer of the current attached browser. `GET /browsers/control-requests?sessionId=...` remains as a compatibility endpoint and returns no pending request because control authority stays in the backend. `browser.controlTimeout` reports an expired backend attachment attempt.
-
-Status returns `missing`, `installing`, `ready`, `error` or `unsupported`, with bounded version/missing-component details, optional `setupId` and catalogued `errorCode`. HTTP failures use the central `error.code`/controlled English fallback contract; the frontend translates centrally into German. Raw worker, Playwright and installer exceptions are not API errors or host logs.
-
-| HTTP mapping | Codes / operator response |
-| --- | --- |
-| 404 | `integration.notFound`, `executionAgent.notFound`: check the owned binding. |
-| 409 | `browser.busy`, `browser.bindingChanged`, `browser.profileOwnerMismatch`: close competing use, reattach/reinspect, or resolve storage identity; never reuse another owner's profile. |
-| 409 | `browser.snapshotChanged`, `browser.observationUnstable`: inspect the same tab again; these are not requests to reattach the browser. |
-| 503 | `browser.unavailable`, `browser.notReady`, `browser.notConnected` and other mapped execution-agent failures: check availability, connection and runtime status. |
-| 502 | Other mapped browser failures, including `dependenciesMissing`, `setupFailed`, `unsupported`, `sandboxUnavailable`, `invalidTarget`, `fileTooLarge`, `actionFailed`, `outcomeUnknown` (all prefixed `browser.`). Inspect status/setup output or current page state; do not repeat an uncertain mutation blindly. |
-
-Request-validation/authentication errors retain the normal API contract; upload boundary validation can return 400. WebSocket authentication/origin failures close with 4401/4403. Source checks live in backend `test_browser_integration.py`/`test_browser_transport.py`, agent `test_browser.py` and frontend `browser*.spec.js`. The opt-in `test_browser_e2e.py` verifies the real dev backend/agent/noVNC path, automatic opening, adaptive desktop/mobile light/dark rendering, attachment, trusted Unicode clipboard shortcuts and byte-exact file transfers using an isolated test owner.
+Clipboard copy uses `POST /clipboard/copy`; text insertion uses `PUT /clipboard`.
+Manual uploads use `/upload-source`: local files first enter the ordinary `/api/workspace/files`
+flow, then the browser picker selects the session or computer file. Session-file uploads share
+one bounded staging implementation with model uploads; their authorization remains separate.

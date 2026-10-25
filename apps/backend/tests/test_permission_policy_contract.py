@@ -162,7 +162,7 @@ def _root_files(tmp_path, session: ChatSession) -> RootFileService:
 def test_integration_category_grants_reuse_the_same_resource(tmp_path, legacy) -> None:
     integration_id = uuid4()
     regular = integration_operation_permission(
-        capability="browser.write",
+        capability="browser.use",
         integration_id=integration_id,
         binding_revision="{}",
         operation_key="click",

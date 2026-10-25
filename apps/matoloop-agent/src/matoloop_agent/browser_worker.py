@@ -10,18 +10,14 @@ import ast
 import asyncio
 import base64
 import contextlib
-import ctypes
 import hashlib
 import hmac
 import inspect
 import json
 import mimetypes
 import os
-import re
 import resource
-import shutil
 import signal
-import socket
 import struct
 import subprocess
 import sys
@@ -42,7 +38,6 @@ from playwright.async_api import async_playwright
 from pydantic import ValidationError
 
 from .browser_contracts import (
-    MAX_CLIPBOARD_BYTES,
     MAX_FILE_BYTES,
     BrowserActionResult,
     BrowserClipboardArguments,
@@ -52,6 +47,7 @@ from .browser_contracts import (
     BrowserExecuteArguments,
     BrowserFileArguments,
     BrowserFormField,
+    BrowserInput,
     BrowserNavigationArguments,
     BrowserNavigationResult,
     BrowserResizeArguments,
@@ -61,18 +57,6 @@ from .browser_contracts import (
     decode_chunk,
 )
 from .errors import AgentError
-
-OPENBOX_CONFIG = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<openbox_config xmlns="http://openbox.org/3.4/rc">
-  <desktops>
-    <number>1</number>
-  </desktops>
-  <mouse>
-    <context name="Root" />
-  </mouse>
-</openbox_config>
-"""
 
 
 def fail(code: str) -> AgentError:
@@ -113,10 +97,8 @@ def launch_error_code(error: Exception) -> str:
 class BrowserWorker:
     def __init__(self, root: Path) -> None:
         self.root = root
-        self.desktop = os.environ.get("MATOLOOP_AGENT_CONTAINER") == "1"
         self.context = None
         self.playwright = None
-        self.processes: list[subprocess.Popen] = []
         self.tasks: set[asyncio.Task] = set()
         self.tabs: dict[str, object] = {}
         self.files: dict[str, dict] = {}
@@ -125,31 +107,25 @@ class BrowserWorker:
         self.server = None
         self.temporary = None
         self.manual = True
-        self.vnc_lock = asyncio.Lock()
-        self.vnc_generation = 0
-        self.vnc_sessions: dict[asyncio.Task, tuple[asyncio.subprocess.Process, dict]] = {}
-        self.clipboard_owner = None
+        self.input_lock = asyncio.Lock()
+        self.input_epoch = str(uuid4())
+        self.viewers = set()
+        self.input_writer = None
+        self.view_task = None
+        self.view_refresh = False
+        self.dialogs = {}
+        self.held_keys = {}
+        self.held_buttons = {}
+        self.pointer = None
         self.document_ids: dict[object, str] = {}
         self.snapshot_key = os.urandom(32)
-        self.geometry = (
-            {"width": 3840, "height": 2160}
-            if self.desktop
-            else {
-                "width": 1280,
-                "height": 800,
-            }
-        )
-        self.resize_mode = None
+        self.geometry = {"width": 1280, "height": 800}
         self.page_sessions: dict[object, asyncio.Task] = {}
         self.loading_frames: dict[object, set[str]] = {}
         self.pending_requests: dict[object, set[object]] = {}
         self.request_activity: dict[object, float] = {}
-        self.page_focus_state: dict[object, dict] = {}
         self.page_history: dict[object, dict] = {}
         self.active_tab_id = None
-        self.active_window_id = None
-        self.native_chrome = False
-        self.windows: set[int] = set()
         self.startup_stage = "storage"
         self.execution_metrics = {}
         self.file_origin = None
@@ -163,30 +139,14 @@ class BrowserWorker:
     async def start(
         self,
         *,
-        probe: bool = False,
-        allow_network: bool = True,
         color_scheme: Literal["light", "dark"] = "light",
     ) -> dict:
         self.startup_stage = "storage"
-        if not allow_network:
-            raise fail("invalidTarget")
         try:
             with tempfile.TemporaryFile(dir=self.root):
                 pass
         except OSError:
             raise fail("notReady") from None
-        missing = [
-            name
-            for name in ("Xvfb", "xrandr", "xprop", "openbox", "x11vnc", "xclip")
-            if self.desktop and not shutil.which(name)
-        ]
-        if missing:
-            return BrowserStatus(
-                state="missing",
-                missing=missing,
-                errorCode="browser.dependenciesMissing",
-                playwrightVersion=version("playwright"),
-            ).model_dump(by_alias=True)
         # Keep the Unix socket path below Linux's 108-byte sockaddr_un limit.
         self.temporary = tempfile.TemporaryDirectory(prefix="matoloop-browser-")
         live = Path(self.temporary.name)
@@ -198,8 +158,6 @@ class BrowserWorker:
             "XDG_CACHE_HOME": str(live / "cache"),
             "XDG_RUNTIME_DIR": str(live),
         }
-        if self.desktop:
-            await self.start_desktop(live)
         self.startup_stage = "chromium"
         self.playwright = await async_playwright().start()
         executable = self.playwright.chromium.executable_path
@@ -211,7 +169,7 @@ class BrowserWorker:
                 playwrightVersion=version("playwright"),
             ).model_dump(by_alias=True)
         launch = {
-            "headless": not self.desktop,
+            "headless": True,
             "chromium_sandbox": True,
             "env": self.environment,
             "accept_downloads": True,
@@ -219,27 +177,30 @@ class BrowserWorker:
             "downloads_path": str(live / "downloads"),
             "args": ["--disable-gpu", "--hide-crash-restore-bubble"],
         }
-        if self.desktop:
-            launch.update(
-                no_viewport=True,
-                args=[
-                    *launch["args"],
-                    "--start-maximized",
-                    # App mode suppresses fullscreen overlays but retains DevTools.
-                    "--force-app-mode",
-                ],
-            )
-        else:
-            launch["viewport"] = self.geometry
-            launch["channel"] = "chromium"
+        launch["viewport"] = self.geometry
+        launch["channel"] = "chromium"
         try:
+            browser_major = (
+                subprocess.check_output(
+                    [executable, "--version"],
+                    env=self.environment,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    timeout=5,
+                )
+                .split()[-1]
+                .split(".")[0]
+            )
+            # Some firewalls reject the HeadlessChrome token even for ordinary page reads.
+            launch["user_agent"] = (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                f"(KHTML, like Gecko) Chrome/{browser_major}.0.0.0 Safari/537.36"
+            )
             self.context = await self.playwright.chromium.launch_persistent_context(
-                str(live / "probe" if probe else self.root / "profile"),
+                str(live / "profile"),
                 **launch,
                 timeout=20_000,
             )
-            if self.desktop:
-                await self.disable_translation_prompt()
         except Exception as exc:
             # Classify locally; raw Playwright errors can contain profile data and secrets.
             raise fail(launch_error_code(exc)) from None
@@ -259,158 +220,22 @@ class BrowserWorker:
             raise fail("notReady")
         await self.context.pages[0].bring_to_front()
         await self.page_sessions[self.context.pages[0]]
-        if self.desktop:
-            self.startup_stage = "resize"
-            # Exercise the native minimum-size workaround and both directions at startup.
-            await self.resize(320, 240)
-            await self.resize(1280, 800)
         await self.context.pages[0].screenshot(type="png", timeout=8000)
+        self.server = await asyncio.start_unix_server(self.view_client, path=str(live / "view"))
         return BrowserStatus(
             state="ready",
             browserVersion=self.context.browser.version,
             playwrightVersion=version("playwright"),
         ).model_dump(by_alias=True)
 
-    async def start_desktop(self, live: Path) -> None:
-        auth = live / "Xauthority"
-        # FamilyWild cookie authorizes only clients with this private file, never TCP.
-        cookie = os.urandom(16)
-        auth.write_bytes(
-            struct.pack(">H", 65535)
-            + b"".join(
-                struct.pack(">H", len(v)) + v for v in (b"", b"", b"MIT-MAGIC-COOKIE-1", cookie)
-            )
-        )
-        auth.chmod(0o600)
-        self.startup_stage = "display"
-        read_fd, write_fd = os.pipe()
-        try:
-            xvfb = subprocess.Popen(
-                [
-                    "Xvfb",
-                    "-displayfd",
-                    str(write_fd),
-                    "-auth",
-                    str(auth),
-                    "-nolisten",
-                    "tcp",
-                    "-screen",
-                    "0",
-                    "3840x2160x24",
-                    "-noreset",
-                ],
-                pass_fds=(write_fd,),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            self.processes.append(xvfb)
-        finally:
-            os.close(write_fd)
-        os.set_blocking(read_fd, False)
-        display = b""
-        try:
-            async with asyncio.timeout(10):
-                while b"\n" not in display:
-                    try:
-                        chunk = os.read(read_fd, 32)
-                        if not chunk:
-                            raise fail("notReady")
-                        display += chunk
-                    except BlockingIOError:
-                        await asyncio.sleep(0.05)
-        finally:
-            os.close(read_fd)
-        self.environment.update(
-            {
-                "DISPLAY": ":" + str(int(display)),
-                "XAUTHORITY": str(auth),
-            }
-        )
-        openbox_config = live / "config" / "openbox" / "rc.xml"
-        openbox_config.parent.mkdir(parents=True)
-        openbox_config.write_text(OPENBOX_CONFIG)
-        await self.resize(1280, 800)
-        self.processes.append(
-            subprocess.Popen(
-                ["openbox", "--sm-disable", "--config-file", str(openbox_config)],
-                env=self.environment,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        )
-        self.startup_stage = "vnc"
-        # Verify X authentication, the WM and full-duplex inetd RFB before Chromium launch.
-        self.server = await asyncio.start_unix_server(self.vnc_client, path=str(live / "vnc"))
-        reader, writer = await asyncio.open_unix_connection(live / "vnc")
-        try:
-            banner = await asyncio.wait_for(reader.readexactly(12), 10)
-            if not banner.startswith(b"RFB ") or any(p.poll() is not None for p in self.processes):
-                raise fail("notReady")
-        finally:
-            writer.close()
-            await writer.wait_closed()
-
-    async def x_command(self, *arguments: str) -> str:
-        process = await asyncio.create_subprocess_exec(
-            *arguments,
-            env=self.environment,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        try:
-            async with asyncio.timeout(5):
-                output, _ = await process.communicate()
-            if process.returncode:
-                raise fail("actionFailed")
-            return output.decode("ascii")
-        finally:
-            if process.returncode is None:
-                process.kill()
-            await process.wait()
-
     async def resize(self, width: int, height: int) -> dict:
-        requested = BrowserResizeResult(width=width, height=height).model_dump()
-        query = await self.x_command("xrandr", "--query")
-        maximum = re.search(r"maximum (\d+) x (\d+)", query)
-        if not maximum or width > int(maximum[1]) or height > int(maximum[2]):
-            raise fail("invalidTarget")
-        if self.context:
-            # Chromium's 500px minimum hint otherwise clips the maximized window on mobile.
-            # Only windows on this authenticated private desktop can appear in this property.
-            windows = await self.x_command("xprop", "-root", "_NET_CLIENT_LIST")
-            for window in re.findall(r"0x[0-9a-fA-F]+", windows):
-                await self.x_command("xprop", "-id", window, "-remove", "WM_NORMAL_HINTS")
-        mode = f"matoloop-{width}x{height}"
-        if not re.search(rf"^\s+{re.escape(mode)}\s", query, re.MULTILINE):
-            # Virtual output timings only; no physical monitor or caller-supplied modeline.
-            await self.x_command(
-                "xrandr",
-                "--newmode",
-                mode,
-                f"{(width + 24) * (height + 3) * 60 / 1_000_000:.6f}",
-                str(width),
-                str(width + 8),
-                str(width + 16),
-                str(width + 24),
-                str(height),
-                str(height + 1),
-                str(height + 2),
-                str(height + 3),
-            )
-        await self.x_command("xrandr", "--addmode", "screen", mode)
-        await self.x_command("xrandr", "--output", "screen", "--mode", mode)
-        applied = re.search(r"current (\d+) x (\d+)", await self.x_command("xrandr", "--query"))
-        if not applied:
-            raise fail("actionFailed")
-        self.geometry = BrowserResizeResult(
-            width=int(applied[1]), height=int(applied[2])
-        ).model_dump()
-        if self.geometry != requested:
-            raise fail("actionFailed")
-        previous, self.resize_mode = self.resize_mode, mode
-        if previous and previous != mode:
-            await self.x_command("xrandr", "--delmode", "screen", previous)
-            await self.x_command("xrandr", "--rmmode", previous)
+        geometry = BrowserResizeResult(width=width, height=height).model_dump()
+        async with self.input_lock:
+            await self.release_input()
+            for page in list(self.tabs.values()):
+                await self.dispatch_input(page, page.set_viewport_size(geometry))
+            self.geometry = geometry
+            self.input_epoch = str(uuid4())
         return self.geometry
 
     def network_diagnostic(self, event: str, url: str, status: int | None = None) -> None:
@@ -429,401 +254,426 @@ class BrowserWorker:
         prefix = f"{event} {status}" if status is not None else event
         self.diagnostics.append(f"{prefix} {target}"[:500])
 
-    async def vnc_client(self, reader, writer) -> None:
-        generation = self.vnc_generation
-        process = None
-        vnc_writer = None
-        parent, child = socket.socketpair()
-        pumps = []
-        task = asyncio.current_task()
-        self.tasks.add(task)
-        try:
-            async with self.vnc_lock:
-                if generation != self.vnc_generation:
-                    return
-                environment = {**self.environment, "X11VNC_REMOTE": "MATOLOOP_" + uuid4().hex}
-                process = await asyncio.create_subprocess_exec(
-                    "x11vnc",
-                    "-inetd",
-                    "-display",
-                    environment["DISPLAY"],
-                    "-auth",
-                    environment["XAUTHORITY"],
-                    "-nopw",
-                    "-quiet",
-                    "-noxdamage",
-                    "-xrandr",
-                    "resize",
-                    "-norc",
-                    "-nocmds",
-                    "-nosel",
-                    "-input",
-                    "KMB",
-                    *([] if self.manual else ["-viewonly"]),
-                    stdin=child,
-                    stdout=child,
-                    stderr=asyncio.subprocess.DEVNULL,
-                    env=environment,
-                )
-                self.vnc_sessions[task] = (process, environment)
-            child.close()
-            vnc_reader, vnc_writer = await asyncio.open_connection(sock=parent)
-
-            async def pump(source, target):
-                while chunk := await source.read(65_536):
-                    target.write(chunk)
-                    await target.drain()
-
-            pumps = [
-                asyncio.create_task(pump(reader, vnc_writer)),
-                asyncio.create_task(pump(vnc_reader, writer)),
-            ]
-            await asyncio.wait(pumps, return_when=asyncio.FIRST_COMPLETED)
-        except (OSError, ConnectionError):
-            pass
-        finally:
-            self.vnc_sessions.pop(task, None)
-            child.close()
-            for pump_task in pumps:
-                pump_task.cancel()
-            await asyncio.gather(*pumps, return_exceptions=True)
-            if process is not None:
-                with contextlib.suppress(ProcessLookupError):
-                    # Let x11vnc detach and remove its System V shared-memory segments.
-                    process.terminate()
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(asyncio.shield(process.wait()), 2)
-                if process.returncode is None:
-                    process.kill()
-                await process.wait()
-            if vnc_writer is not None:
-                vnc_writer.close()
-                with contextlib.suppress(ConnectionError, TimeoutError):
-                    async with asyncio.timeout(1):
-                        await vnc_writer.wait_closed()
-            else:
-                parent.close()
-            writer.close()
-            with contextlib.suppress(ConnectionError, TimeoutError):
-                async with asyncio.timeout(1):
-                    await writer.wait_closed()
-            self.tasks.discard(task)
-
     async def control(
         self,
         manual: bool,
         *,
-        rotate_view: bool = False,
         origin: str | None = None,
         control_epoch: int | None = None,
     ) -> dict:
         if origin is not None:
             self.file_origin, self.control_epoch = origin, control_epoch
-        if not self.desktop:
-            self.manual = manual
-            if not manual:
+        async with self.input_lock:
+            if not manual and self.dialogs:
+                raise fail("busy")
+            if manual != self.manual:
+                self.manual = False
+                self.input_epoch = str(uuid4())
                 self.pending_choosers.clear()
-            return {"ok": True}
-        async with self.vnc_lock:
-            if manual and self.manual:
-                return {"ok": True}
-            self.vnc_generation += 1
-            self.manual = False
-            self.pending_choosers.clear()
-            sessions = list(self.vnc_sessions.items())
-            if manual or rotate_view:
-                # Rotation drops partial RFB messages and every queued byte before unlocking.
-                # Keeping the same stream would require a second, complete RFB input parser.
-                for task, _ in sessions:
-                    task.cancel()
-                await asyncio.gather(*(task for task, _ in sessions), return_exceptions=True)
-                sessions = []
-            if manual:
-                self.manual = True
-                return {"ok": True}
-            release = "clear_keys;" + ";".join(
-                f"fakebuttonevent:{button},0" for button in range(1, 6)
-            )
-            try:
-                for _, (server, environment) in sessions:
-                    # x11vnc can lose PropertyNotify during startup/resize. Reissue the
-                    # idempotent fence until acknowledged, never extend the overall deadline.
-                    async with asyncio.timeout(5):
-                        while server.returncode is None:
-                            process = await asyncio.create_subprocess_exec(
-                                "x11vnc",
-                                "-norc",
-                                "-nocmds",
-                                "-display",
-                                environment["DISPLAY"],
-                                "-auth",
-                                environment["XAUTHORITY"],
-                                "-R",
-                                "script:viewonly;" + release,
-                                "-Q",
-                                "viewonly",
-                                env={**environment, "X11VNC_SYNC_TIMEOUT": "0.25"},
-                                stdout=asyncio.subprocess.PIPE,
-                                stderr=asyncio.subprocess.DEVNULL,
-                            )
-                            try:
-                                try:
-                                    output = await process.stdout.readexactly(1025)
-                                except asyncio.IncompleteReadError as exc:
-                                    output = exc.partial
-                                if len(output) > 1024:
-                                    raise fail("notReady")
-                                await process.wait()
-                                if (
-                                    process.returncode == 0
-                                    and b"ans=viewonly:1" in output.splitlines()
-                                ):
-                                    break
-                            finally:
-                                if process.returncode is None:
-                                    process.kill()
-                                await process.wait()
-                            await asyncio.sleep(0.05)
-                # X11 retains held input after a viewer exits; no live VNC server is required.
-                await self.x_command(
-                    "x11vnc",
-                    "-norc",
-                    "-nocmds",
-                    "-display",
-                    self.environment["DISPLAY"],
-                    "-auth",
-                    self.environment["XAUTHORITY"],
-                    "-R",
-                    "DIRECT:script:" + release,
-                )
-            except BaseException:
-                for task, _ in sessions:
-                    task.cancel()
-                await asyncio.gather(*(task for task, _ in sessions), return_exceptions=True)
-                raise
+                await self.release_input()
+            self.manual = manual
         return {"ok": True}
 
-    async def copy_clipboard(self, args: BrowserClipboardArguments) -> dict:
+    async def release_input(self) -> None:
+        self.input_writer = None
+        keys, self.held_keys = self.held_keys, {}
+        buttons, self.held_buttons = self.held_buttons, {}
+        for (page, _), params in keys.items():
+            if not page.is_closed():
+                await self.dispatch_input(
+                    page,
+                    (await self.page_sessions[page]).send(
+                        "Input.dispatchKeyEvent", {"type": "keyUp", **params}
+                    ),
+                )
+        for page, button in buttons:
+            if not page.is_closed():
+                await self.dispatch_input(page, page.mouse.up(button=button))
+
+    async def reset_input(self) -> None:
+        async with self.input_lock:
+            await self.release_input()
+            self.input_epoch = str(uuid4())
+
+    async def input(self, event: BrowserInput, writer) -> None:
+        async with self.input_lock:
+            if (
+                writer not in self.viewers
+                or not self.manual
+                or (event.kind != "release" and event.input_epoch != self.input_epoch)
+                or (event.kind != "release" and event.tab_id != self.active_tab_id)
+            ):
+                return
+            if event.kind == "release":
+                if self.input_writer is writer:
+                    await self.release_input()
+                return
+            page = self.tabs.get(event.tab_id)
+            if page is None or page.is_closed():
+                return
+            if page in self.dialogs and event.kind != "dialog":
+                return
+            if event.kind == "dialog":
+                dialog = self.dialogs.pop(page, None)
+                if dialog is not None:
+                    if event.accept:
+                        await dialog.accept(event.text)
+                    else:
+                        await dialog.dismiss()
+                return
+            if self.input_writer is not writer:
+                await self.release_input()
+                self.input_writer = writer
+            if event.kind == "text":
+                await self.dispatch_input(page, page.keyboard.insert_text(event.text))
+            elif event.kind == "key":
+                params = {
+                    "key": event.key,
+                    "code": event.code,
+                    "windowsVirtualKeyCode": event.key_code,
+                }
+                session = await self.page_sessions[page]
+                if event.event == "down":
+                    self.held_keys[(page, event.code)] = params
+                else:
+                    self.held_keys.pop((page, event.code), None)
+                modifiers = sum(
+                    {"Alt": 1, "Control": 2, "Meta": 4, "Shift": 8}.get(key, 0)
+                    for key in {value["key"] for value in self.held_keys.values()}
+                )
+                await self.dispatch_input(
+                    page,
+                    session.send(
+                        "Input.dispatchKeyEvent",
+                        {
+                            "type": "keyDown" if event.event == "down" else "keyUp",
+                            "modifiers": modifiers,
+                            **params,
+                            **(
+                                {"text": event.text or "\r", "unmodifiedText": event.text or "\r"}
+                                if event.event == "down"
+                                and (event.text or (event.key == "Enter" and not modifiers & 7))
+                                else {}
+                            ),
+                        },
+                    ),
+                )
+            elif event.kind == "mouse":
+                self.pointer = (
+                    (page, event.x, event.y)
+                    if event.x < self.geometry["width"] and event.y < self.geometry["height"]
+                    else None
+                )
+                if event.event == "down":
+                    self.held_buttons[(page, event.button)] = True
+                elif event.event == "up":
+                    self.held_buttons.pop((page, event.button), None)
+                button = event.button
+                if event.event == "move":
+                    button = next(
+                        (button for candidate, button in self.held_buttons if candidate is page),
+                        "none",
+                    )
+                elif event.event == "wheel":
+                    button = "none"
+                session = await self.page_sessions[page]
+                await self.dispatch_input(
+                    page,
+                    session.send(
+                        "Input.dispatchMouseEvent",
+                        {
+                            "type": {
+                                "move": "mouseMoved",
+                                "down": "mousePressed",
+                                "up": "mouseReleased",
+                                "wheel": "mouseWheel",
+                            }[event.event],
+                            "x": event.x,
+                            "y": event.y,
+                            "modifiers": event.modifiers,
+                            "button": button,
+                            "buttons": sum(
+                                {"left": 1, "right": 2, "middle": 4}[button]
+                                for candidate, button in self.held_buttons
+                                if candidate is page
+                            ),
+                            "clickCount": event.click_count if event.event in {"up", "down"} else 0,
+                            **(
+                                {"deltaX": event.delta_x, "deltaY": event.delta_y}
+                                if event.event == "wheel"
+                                else {}
+                            ),
+                        },
+                    ),
+                )
+
+    async def dispatch_input(self, page, command) -> None:
+        # Chromium delays command acknowledgements until website dialogs close.
+        opened = asyncio.Event()
+
+        def listener(_dialog):
+            opened.set()
+
+        page.on("dialog", listener)
+        if page in self.dialogs:
+            opened.set()
+        dispatched = asyncio.create_task(command)
+        dialog = asyncio.create_task(opened.wait())
+        try:
+            done, _ = await asyncio.wait((dispatched, dialog), return_when=asyncio.FIRST_COMPLETED)
+            if dispatched in done:
+                dispatched.result()
+        finally:
+            page.remove_listener("dialog", listener)
+            for task in (dispatched, dialog):
+                task.cancel()
+            await asyncio.gather(dispatched, dialog, return_exceptions=True)
+
+    async def cursor_at(self, page, x: float, y: float) -> str:
+        frame = page.main_frame
+        while frame is not None:
+            handle = await frame.evaluate_handle(
+                """([x, y]) => {
+                    let node = document.elementFromPoint(x, y);
+                    while (node) {
+                        const inner = node.shadowRoot?.elementFromPoint(x, y);
+                        if (!inner || inner === node) break;
+                        node = inner;
+                    }
+                    if (!node) return 'default';
+                    if (node.tagName === 'IFRAME') return node;
+                    const style = getComputedStyle(node);
+                    const cursor = style.cursor.split(',').at(-1).trim().slice(0, 32);
+                    if (cursor !== 'auto') return cursor;
+                    if (style.userSelect === 'none') return 'default';
+                    const textCursor = style.writingMode.startsWith('vertical')
+                        ? 'vertical-text' : 'text';
+                    if (node.isContentEditable) return textCursor;
+                    const range = document.caretRangeFromPoint(x, y);
+                    const text = range?.startContainer, offset = range?.startOffset;
+                    if (text?.nodeType !== 3 || !node.contains(text)) return 'default';
+                    range.setStart(text, Math.max(0, offset - 1));
+                    range.setEnd(text, Math.min(text.length, offset + 1));
+                    return [...range.getClientRects()].some(rect =>
+                        x >= rect.left && x < rect.right &&
+                        y >= rect.top && y < rect.bottom) ? textCursor : 'default';
+                }""",
+                [x, y],
+            )
+            try:
+                element = handle.as_element()
+                if element is None:
+                    return await handle.json_value()
+                x, y = await element.evaluate(
+                    """(node, [x, y]) => {
+                        const rect = node.getBoundingClientRect();
+                        return [(x - rect.left) * node.offsetWidth / rect.width - node.clientLeft,
+                            (y - rect.top) * node.offsetHeight / rect.height - node.clientTop];
+                    }""",
+                    [x, y],
+                )
+                frame = await element.content_frame()
+            finally:
+                await handle.dispose()
+        return "default"
+
+    async def stream_views(self) -> None:
+        session = None
+        current = None
+        frames = deque(maxlen=1)
+        ready = asyncio.Event()
+        previous = epoch = latest = None
+        cursor = "default"
+        cursor_sampled = 0
+
+        def frame(event):
+            frames.append(event)
+            ready.set()
+
+        async def write(writer, packet):
+            try:
+                writer.write(packet)
+                async with asyncio.timeout(3):
+                    await writer.drain()
+            except (ConnectionError, TimeoutError):
+                self.viewers.discard(writer)
+                writer.close()
+
+        try:
+            while self.viewers:
+                page = self.tabs.get(self.active_tab_id)
+                if page is not current or epoch != self.input_epoch:
+                    if session is not None:
+                        session.remove_listener("Page.screencastFrame", frame)
+                        with contextlib.suppress(PlaywrightError):
+                            await self.dispatch_input(current, session.send("Page.stopScreencast"))
+                            await self.dispatch_input(current, session.detach())
+                    frames.clear()
+                    session = latest = None
+                    current = page
+                    epoch = self.input_epoch
+                    self.pointer = None
+                    cursor = "default"
+                    if page is not None:
+                        try:
+                            session = await self.context.new_cdp_session(page)
+                            session.on("Page.screencastFrame", frame)
+                            await self.dispatch_input(
+                                page,
+                                session.send(
+                                    "Page.startScreencast", {"format": "jpeg", "quality": 80}
+                                ),
+                            )
+                        except PlaywrightError:
+                            if not page.is_closed():
+                                raise
+                            continue
+                dialog = self.dialogs.get(page)
+                pointer = self.pointer
+                if (
+                    self.manual
+                    and not dialog
+                    and pointer
+                    and pointer[0] is page
+                    and monotonic() - cursor_sampled >= 0.1
+                ):
+                    cursor_sampled = monotonic()
+                    with contextlib.suppress(PlaywrightError, TimeoutError):
+                        async with asyncio.timeout(0.2):
+                            cursor = await self.cursor_at(page, *pointer[1:])
+                if page is not self.tabs.get(self.active_tab_id) or epoch != self.input_epoch:
+                    continue
+                if (
+                    not self.manual
+                    or page in self.dialogs
+                    or not self.pointer
+                    or self.pointer[0] is not page
+                ):
+                    cursor = "default"
+                state = {
+                    "tabId": self.active_tab_id,
+                    "inputEpoch": self.input_epoch,
+                    "manual": self.manual,
+                    "width": self.geometry["width"],
+                    "height": self.geometry["height"],
+                    "cursor": cursor,
+                    "dialog": {
+                        "type": dialog.type,
+                        "message": dialog.message[:2000],
+                        "defaultValue": dialog.default_value[:2000],
+                    }
+                    if dialog
+                    else None,
+                }
+                refresh, self.view_refresh = self.view_refresh, False
+                event = frames.pop() if frames else None
+                if event is not None:
+                    latest = event["data"]
+                if event is not None or state != previous or refresh:
+                    image = latest if event is not None or refresh else None
+                    payload = json.dumps(
+                        {
+                            **state,
+                            "type": "frame" if image else "state",
+                            **({"data": image} if image else {}),
+                        }
+                    ).encode()
+                    if len(payload) > 4 * 1024 * 1024:
+                        raise fail("fileTooLarge")
+                    packet = struct.pack(">I", len(payload)) + payload
+                    await asyncio.gather(*(write(writer, packet) for writer in list(self.viewers)))
+                    previous = state
+                    if event is not None:
+                        try:
+                            await session.send(
+                                "Page.screencastFrameAck", {"sessionId": event["sessionId"]}
+                            )
+                        except PlaywrightError:
+                            if not page.is_closed():
+                                raise
+                ready.clear()
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(ready.wait(), 0.1)
+        finally:
+            if session is not None:
+                with contextlib.suppress(PlaywrightError):
+                    await self.dispatch_input(current, session.send("Page.stopScreencast"))
+                    await self.dispatch_input(current, session.detach())
+
+    async def view_client(self, reader, writer) -> None:
+        async with self.input_lock:
+            self.viewers.add(writer)
+            self.view_refresh = True
+            if self.view_task is None or self.view_task.done():
+                self.view_task = asyncio.create_task(self.stream_views())
+            sender = self.view_task
+        task = asyncio.current_task()
+        self.tasks.add(task)
+        header = None
+        try:
+            while not sender.done():
+                header = asyncio.create_task(reader.readexactly(4))
+                done, _ = await asyncio.wait([header, sender], return_when=asyncio.FIRST_COMPLETED)
+                if sender in done:
+                    header.cancel()
+                    await asyncio.gather(header, return_exceptions=True)
+                    sender.result()
+                    break
+                size = struct.unpack(">I", header.result())[0]
+                if not 0 < size <= 32768:
+                    raise fail("invalidTarget")
+                async with asyncio.timeout(5):
+                    data = await reader.readexactly(size)
+                    event = BrowserInput.model_validate_json(data)
+                    await self.input(event, writer)
+        except (
+            asyncio.IncompleteReadError,
+            ConnectionError,
+            PlaywrightError,
+            ValueError,
+            AgentError,
+            TimeoutError,
+        ):
+            pass
+        finally:
+            if header is not None:
+                header.cancel()
+                await asyncio.gather(header, return_exceptions=True)
+            async with self.input_lock:
+                self.viewers.discard(writer)
+                if self.input_writer is writer:
+                    with contextlib.suppress(PlaywrightError):
+                        await self.release_input()
+                if not self.viewers:
+                    sender.cancel()
+                    await asyncio.gather(sender, return_exceptions=True)
+            writer.close()
+            self.tasks.discard(task)
+
+    async def clipboard(self, args: BrowserClipboardArguments) -> dict:
         if not self.manual:
             raise fail("busy")
-        environment = next(
-            (env for server, env in self.vnc_sessions.values() if server.returncode is None), None
-        )
-        if environment is None:
-            raise fail("actionFailed")
-
-        # Xlib's native event layout (XIDs and Time are unsigned long, even on LP64).
-        class SelectionNotify(ctypes.Structure):
-            _fields_ = [
-                ("type", ctypes.c_int),
-                ("serial", ctypes.c_ulong),
-                ("send_event", ctypes.c_int),
-                ("display", ctypes.c_void_p),
-                ("window", ctypes.c_ulong),
-                ("subtype", ctypes.c_int),
-                ("owner", ctypes.c_ulong),
-                ("selection", ctypes.c_ulong),
-                ("timestamp", ctypes.c_ulong),
-                ("selection_timestamp", ctypes.c_ulong),
-            ]
-
-        display = None
-        try:
-            x11 = ctypes.CDLL("libX11.so.6")
-            fixes, xtest = ctypes.CDLL("libXfixes.so.3"), ctypes.CDLL("libXtst.so.6")
-            pointer, ulong, integer = ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int
-            for library, name, arguments, result in (
-                (x11, "XOpenDisplay", [ctypes.c_char_p], pointer),
-                (x11, "XCloseDisplay", [pointer], integer),
-                (x11, "XDefaultRootWindow", [pointer], ulong),
-                (x11, "XInternAtom", [pointer, ctypes.c_char_p, integer], ulong),
-                (x11, "XSync", [pointer, integer], integer),
-                (x11, "XPending", [pointer], integer),
-                (x11, "XNextEvent", [pointer, pointer], integer),
-                (x11, "XGetSelectionOwner", [pointer, ulong], ulong),
-                (x11, "XKeysymToKeycode", [pointer, ulong], ctypes.c_ubyte),
-                (fixes, "XFixesQueryExtension", [pointer, pointer, pointer], integer),
-                (fixes, "XFixesSelectSelectionInput", [pointer, ulong, ulong, ulong], None),
-                (
-                    xtest,
-                    "XTestQueryExtension",
-                    [pointer, pointer, pointer, pointer, pointer],
-                    integer,
-                ),
-                (xtest, "XTestFakeKeyEvent", [pointer, ctypes.c_uint, integer, ulong], integer),
-            ):
-                function = getattr(library, name)
-                function.argtypes, function.restype = arguments, result
-            # No await while changing this credential-free worker's process-local environment.
-            previous_auth = os.environ.get("XAUTHORITY")
-            os.environ["XAUTHORITY"] = environment["XAUTHORITY"]
-            try:
-                display = x11.XOpenDisplay(environment["DISPLAY"].encode("ascii"))
-            finally:
-                if previous_auth is None:
-                    os.environ.pop("XAUTHORITY", None)
-                else:
-                    os.environ["XAUTHORITY"] = previous_auth
-            event_base, error_base = integer(), integer()
-            if not display or not fixes.XFixesQueryExtension(
-                display, ctypes.byref(event_base), ctypes.byref(error_base)
-            ):
-                raise fail("actionFailed")
-            major, minor, test_event, test_error = integer(), integer(), integer(), integer()
-            if not xtest.XTestQueryExtension(
-                display,
-                ctypes.byref(test_event),
-                ctypes.byref(test_error),
-                ctypes.byref(major),
-                ctypes.byref(minor),
-            ):
-                raise fail("actionFailed")
-            control_key, copy_key = (
-                x11.XKeysymToKeycode(display, keysym) for keysym in (0xFFE3, 0x63)
-            )
-            if not control_key or not copy_key:
-                raise fail("actionFailed")
-            selection = x11.XInternAtom(display, b"CLIPBOARD", False)
-            fixes.XFixesSelectSelectionInput(
-                display, x11.XDefaultRootWindow(display), selection, 1
-            )  # XFixesSetSelectionOwnerNotifyMask only, not PRIMARY or destruction events.
-            x11.XSync(display, True)  # Subscribe and discard any pre-injection notifications.
-            event = (ctypes.c_long * 24)()  # XEvent's public ABI includes 24 longs of padding.
-            try:
-                async with asyncio.timeout(2):
-                    for key, down in (
-                        (control_key, 1),
-                        (copy_key, 1),
-                        (copy_key, 0),
-                        (control_key, 0),
-                    ):
-                        if not xtest.XTestFakeKeyEvent(display, key, down, 0):
-                            raise fail("actionFailed")
-                    x11.XSync(display, False)
-                    while True:
-                        if x11.XPending(display):
-                            x11.XNextEvent(display, ctypes.byref(event))
-                            notice = SelectionNotify.from_buffer(event)
-                            if (
-                                notice.type == event_base.value
-                                and not notice.send_event
-                                and notice.subtype == 0
-                                and notice.selection == selection
-                                and notice.owner
-                                and notice.selection_timestamp
-                            ):
-                                owner = notice.owner
-                                timestamp = notice.selection_timestamp
-                                break
-                        await asyncio.sleep(0.01)
-                    result = await self.clipboard(
-                        BrowserClipboardArguments(browserId=args.browser_id, action="read"),
-                        require_text=True,
-                    )
-                    # Chromium's omnibox may announce the same owner/timestamp more than once.
-                    # Refuse a different selection during the UTF-8 transfer, not duplicate events.
-                    x11.XSync(display, False)
-                    for _ in range(64):
-                        if not x11.XPending(display):
-                            break
-                        x11.XNextEvent(display, ctypes.byref(event))
-                        notice = SelectionNotify.from_buffer(event)
-                        if (
-                            notice.type != event_base.value
-                            or notice.send_event
-                            or notice.owner != owner
-                            or notice.selection_timestamp != timestamp
-                        ):
-                            raise fail("actionFailed")
-                    if x11.XPending(display) or x11.XGetSelectionOwner(display, selection) != owner:
-                        raise fail("actionFailed")
-                    return result
-            finally:
-                # Release both keys even after cancellation or a partially failed chord.
-                copy_released = xtest.XTestFakeKeyEvent(display, copy_key, 0, 0)
-                control_released = xtest.XTestFakeKeyEvent(display, control_key, 0, 0)
-                x11.XSync(display, False)
-                if not copy_released or not control_released:
-                    with contextlib.suppress(Exception):
-                        await self.control(False)
-                    raise fail("actionFailed")
-        except (OSError, AttributeError, TimeoutError):
-            raise fail("actionFailed") from None
-        finally:
-            if display:
-                x11.XCloseDisplay(display)
-
-    async def clipboard(
-        self, args: BrowserClipboardArguments, *, require_text: bool = False
-    ) -> dict:
-        if args.action == "copy":
-            return await self.copy_clipboard(args)
+        page = self.tabs.get(self.active_tab_id)
+        if page is None:
+            raise fail("invalidTarget")
         if args.action == "write":
-            if not self.manual:
-                raise fail("busy")
-            if self.clipboard_owner is not None:
-                with contextlib.suppress(ProcessLookupError):
-                    self.clipboard_owner.kill()
-                await self.clipboard_owner.wait()
-            self.clipboard_owner = await asyncio.create_subprocess_exec(
-                "xclip",
-                "-selection",
-                "clipboard",
-                "-target",
-                "UTF8_STRING",
-                "-in",
-                "-quiet",
-                env=self.environment,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            self.clipboard_owner.stdin.write(args.text.encode("utf-8"))
-            await self.clipboard_owner.stdin.drain()
-            self.clipboard_owner.stdin.close()
-        try:
-            async with asyncio.timeout(4):
-                while True:
-                    process = await asyncio.create_subprocess_exec(
-                        "xclip",
-                        "-selection",
-                        "clipboard",
-                        "-target",
-                        "UTF8_STRING",
-                        "-out",
-                        env=self.environment,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.DEVNULL,
-                        limit=MAX_CLIPBOARD_BYTES + 1,
-                    )
-                    try:
-                        try:
-                            data = await process.stdout.readexactly(MAX_CLIPBOARD_BYTES + 1)
-                        except asyncio.IncompleteReadError as exc:
-                            data = exc.partial
-                        if len(data) > MAX_CLIPBOARD_BYTES:
-                            if args.action == "write":
-                                # The old selection may still own CLIPBOARD while xclip starts.
-                                await asyncio.sleep(0.05)
-                                continue
-                            raise fail("fileTooLarge")
-                        await process.wait()
-                        if process.returncode not in {0, 1} or (
-                            require_text and process.returncode
-                        ):
-                            raise fail("actionFailed")
-                        text = data.decode("utf-8") if process.returncode == 0 else ""
-                    finally:
-                        if process.returncode is None:
-                            process.kill()
-                        await process.wait()
-                    if args.action == "read" or text == args.text:
-                        return BrowserClipboardResult(text=text).model_dump()
-                    if self.clipboard_owner.returncode is not None:
-                        raise fail("actionFailed")
-                    await asyncio.sleep(0.05)
-        except TimeoutError:
-            raise fail("actionFailed") from None
+            await page.keyboard.insert_text(args.text)
+            return BrowserClipboardResult(text=args.text).model_dump()
+        # Read the focused frame's selection, never the host's system clipboard.
+        text = ""
+        for frame in page.frames:
+            selection = await frame.evaluate("""() => {
+                if (!document.hasFocus()) return null;
+                const node = document.activeElement;
+                if (node && ['INPUT', 'TEXTAREA'].includes(node.tagName) &&
+                    typeof node.selectionStart === 'number')
+                    return node.type === 'password' ? '' :
+                        node.value.slice(node.selectionStart, node.selectionEnd);
+                return window.getSelection()?.toString() ?? '';
+            }""")
+            if selection is not None:
+                text = selection
+        return BrowserClipboardResult(text=text).model_dump()
 
     def add_page(self, page) -> None:
         if page in self.document_ids:
@@ -833,8 +683,8 @@ class BrowserWorker:
             return
         tab_id = str(uuid4())
         self.tabs[tab_id] = page
-        if self.active_tab_id is None:
-            self.active_tab_id = tab_id
+        self.active_tab_id = tab_id
+        self.task(self.reset_input())
         self.document_ids[page] = str(uuid4())
         self.loading_frames[page] = set()
         self.pending_requests[page] = set()
@@ -877,19 +727,28 @@ class BrowserWorker:
             self.loading_frames.pop(page, None)
             self.pending_requests.pop(page, None)
             self.request_activity.pop(page, None)
-            self.page_focus_state.pop(page, None)
             self.page_history.pop(page, None)
             self.page_sessions.pop(page, None)
+            self.dialogs.pop(page, None)
 
         def navigated(frame):
             self.pending_choosers.pop(page, None)
             if frame == page.main_frame:
                 self.document_ids[page] = str(uuid4())
+                self.task(self.reset_input())
+
+        def dialog_opened(dialog):
+            if self.manual:
+                self.input_epoch = str(uuid4())
+                self.dialogs[page] = dialog
+            else:
+                self.task(dialog.dismiss())
 
         page.on("close", closed)
         # Listening intercepts the native picker; the human supplies an opaque staged file.
         page.on("filechooser", lambda chooser: self.pending_choosers.__setitem__(page, chooser))
         page.on("framenavigated", navigated)
+        page.on("dialog", dialog_opened)
         page.on(
             "download",
             lambda download: self.task(
@@ -904,61 +763,15 @@ class BrowserWorker:
 
     async def observe_page(self, page):
         session = await self.context.new_cdp_session(page)
-        if self.desktop:
-            # Playwright otherwise emulates focus in background tabs. Never trust page-world APIs.
-            await session.send("Emulation.setFocusEmulationEnabled", {"enabled": False})
         frames = self.loading_frames[page]
         session.on("Page.frameStartedLoading", lambda event: frames.add(event["frameId"]))
         session.on("Page.frameStoppedLoading", lambda event: frames.discard(event["frameId"]))
+        session.on("Page.frameDetached", lambda event: frames.discard(event["frameId"]))
         await session.send("Page.enable")
-        if self.desktop:
-            window = await session.send("Browser.getWindowForTarget")
-            if window["windowId"] not in self.windows:
-                self.windows.add(window["windowId"])
-                # Once per browser window, never on status reads or native permission dialogs.
-                await self.set_chrome(session, window, self.native_chrome)
         return session
 
-    async def page_focus(self, session) -> dict:
-        # A renderer swap can reapply Playwright's synthetic focus. This does not activate a tab.
-        await session.send("Emulation.setFocusEmulationEnabled", {"enabled": False})
-        tree = await session.send("Page.getFrameTree")
-        world = await session.send(
-            "Page.createIsolatedWorld",
-            {"frameId": tree["frameTree"]["frame"]["id"], "worldName": "matoloop-native-state"},
-        )
-        result = await session.send(
-            "Runtime.evaluate",
-            {
-                "expression": (
-                    "({focused:document.hasFocus(),visible:document.visibilityState==='visible',"
-                    "fullscreen:innerWidth===screen.width && innerHeight===screen.height})"
-                ),
-                "contextId": world["executionContextId"],
-                "returnByValue": True,
-            },
-        )
-        return result.get("result", {}).get("value", {})
-
-    async def set_chrome(self, session, window, native_chrome: bool) -> None:
-        # Chromium requires a normal intermediate state when leaving native fullscreen.
-        if window["bounds"]["windowState"] == "fullscreen" and native_chrome:
-            await session.send(
-                "Browser.setWindowBounds",
-                {"windowId": window["windowId"], "bounds": {"windowState": "normal"}},
-            )
-        await session.send(
-            "Browser.setWindowBounds",
-            {
-                "windowId": window["windowId"],
-                "bounds": {"windowState": "maximized" if native_chrome else "fullscreen"},
-            },
-        )
-        # Chrome restores its minimum-width hint when switching native window modes.
-        await self.resize(**self.geometry)
-
     async def navigation_state(self) -> dict:
-        tabs, observed = [], {}
+        tabs = []
         for tab_id, page in list(self.tabs.items()):
             if page.is_closed():
                 continue
@@ -972,16 +785,6 @@ class BrowserWorker:
                 except TimeoutError:
                     continue
                 info = (await session.send("Target.getTargetInfo"))["targetInfo"]
-                window = await session.send("Browser.getWindowForTarget")
-                # Renderer commands can stall while a navigation waits for response headers.
-                # Retain observed selection, not invented focus, so Stop remains reachable.
-                try:
-                    async with asyncio.timeout(0.1):
-                        self.page_focus_state[page] = await self.page_focus(session)
-                except (PlaywrightError, TimeoutError):
-                    pass
-                focus = self.page_focus_state.get(page, {})
-                observed[tab_id] = (session, window, focus)
                 tabs.append(
                     {
                         "id": tab_id,
@@ -993,24 +796,10 @@ class BrowserWorker:
             except PlaywrightError:
                 # A page may close or replace its execution context during this read.
                 continue
-        focused = next(
-            (key for key, (_, _, state) in observed.items() if state.get("focused")), None
-        )
-        visible = [key for key, (_, _, state) in observed.items() if state.get("visible")]
-        if focused:
-            self.active_tab_id = focused
-        elif self.active_tab_id not in visible:
-            # Native omnibox/menu focus does not focus the document; retain its selected page.
-            self.active_tab_id = next(
-                (key for key in visible if observed[key][1]["windowId"] == self.active_window_id),
-                visible[-1] if visible else None,
-            )
         back = forward = loading = False
-        if self.active_tab_id in observed:
-            session, window, focus = observed[self.active_tab_id]
-            self.active_window_id = window["windowId"]
-            self.native_chrome = window["bounds"]["windowState"] != "fullscreen"
-            page = self.tabs.get(self.active_tab_id)
+        page = self.tabs.get(self.active_tab_id)
+        if page is not None:
+            session = await self.page_sessions[page]
             try:
                 async with asyncio.timeout(0.1):
                     self.page_history[page] = await session.send("Page.getNavigationHistory")
@@ -1026,7 +815,6 @@ class BrowserWorker:
             canGoBack=back,
             canGoForward=forward,
             loading=loading,
-            nativeChrome=self.native_chrome,
         ).model_dump(by_alias=True)
 
     async def navigation(self, args: BrowserNavigationArguments) -> dict:
@@ -1045,26 +833,21 @@ class BrowserWorker:
             page = await self.context.new_page()
             await self.page_sessions[page]
             await page.bring_to_front()
+            self.active_tab_id = next(key for key, value in self.tabs.items() if value is page)
             if args.url:
                 await self.navigation_command(
                     await self.page_sessions[page], "Page.navigate", {"url": args.url}
                 )
         elif args.action == "select":
+            await self.release_input()
             await page.bring_to_front()
+            self.active_tab_id = args.tab_id
+            self.input_epoch = str(uuid4())
         elif args.action == "close":
             if len(self.tabs) == 1:
                 fresh = await self.context.new_page()
                 await self.page_sessions[fresh]
             await page.close()
-        elif args.action == "chrome":
-            state = await self.navigation_state()
-            page = self.tabs.get(state["activeTabId"])
-            if page is None:
-                raise fail("invalidTarget")
-            session = await self.page_sessions[page]
-            await self.set_chrome(
-                session, await session.send("Browser.getWindowForTarget"), args.native_chrome
-            )
         else:
             session = await self.page_sessions[page]
             if args.action == "navigate":
@@ -1252,14 +1035,7 @@ class BrowserWorker:
                 if page.is_closed():
                     self.pending_choosers.pop(page, None)
                     continue
-                try:
-                    state = await self.page_focus(await self.page_sessions[page])
-                    focused = state.get("focused") and state.get("visible")
-                except PlaywrightError:
-                    if self.pending_choosers.get(page) is chooser:
-                        self.pending_choosers.pop(page, None)
-                    continue
-                if not focused:
+                if page is not self.tabs.get(self.active_tab_id):
                     continue
                 if self.pending_choosers.get(page) is not chooser:
                     raise fail("invalidTarget")
@@ -1355,24 +1131,6 @@ class BrowserWorker:
             raise
         return {"fileId": file_id, "size": len(data)}
 
-    async def disable_translation_prompt(self) -> None:
-        # Use Chromium's preference API after it owns the profile, not a Preferences file rewrite.
-        async with asyncio.timeout(8):
-            settings = await self.context.new_page()
-            try:
-                await settings.goto("chrome://settings/languages", wait_until="domcontentloaded")
-                disabled = await settings.evaluate("""() => new Promise(resolve => {
-                    chrome.settingsPrivate.setPref('translate.enabled', false, '', () => {
-                        chrome.settingsPrivate.getPref('translate.enabled', pref => {
-                            resolve(pref.value === false);
-                        });
-                    });
-                })""")
-                if disabled is not True:
-                    raise fail("notReady")
-            finally:
-                await settings.close()
-
     async def screenshot(self, page, browser_id: str) -> dict:
         self.discard_generated_files("screenshot")
         data = await page.screenshot(type="png", full_page=False, timeout=8000)
@@ -1397,12 +1155,7 @@ class BrowserWorker:
         self.execution_metrics = {}
         if not self.context:
             raise fail("notConnected")
-        if not args.allow_network:
-            await self.close()
-            raise fail("invalidTarget")
         action = args.action
-        if not args.tab_id and self.desktop:
-            await self.navigation_state()
         page = self.tabs.get(args.tab_id or self.active_tab_id)
         if args.tab_id and page is None:
             raise fail("invalidTarget")
@@ -1447,8 +1200,6 @@ class BrowserWorker:
                 if len(self.tabs) == 1:
                     await step("await page.context.new_page()", self.context.new_page)
                 await step("await page.close()", page.close)
-                if self.desktop:
-                    await self.navigation_state()
                 page = self.tabs.get(self.active_tab_id)
             elif action == "inspect":
                 if args.settle:
@@ -1962,7 +1713,6 @@ class BrowserWorker:
         guard: bool = True,
         selector: str | None = None,
         depth: int | None = None,
-        force_file: bool = False,
     ) -> tuple[str | None, dict[str, str | int], dict | None]:
         document_id = self.document_ids[page]
         state = (
@@ -2041,7 +1791,7 @@ class BrowserWorker:
         ).encode()
         snapshot = (
             await self.stage_generated_file(encoded, browser_id, "browser-snapshot.yml", "snapshot")
-            if encoded and browser_id is not None and (force_file or len(text) > 32_768)
+            if encoded and browser_id is not None and len(text) > 32_768
             else None
         )
         released = (
@@ -2073,7 +1823,6 @@ class BrowserWorker:
                     self.server.close()
                 try:
                     async with asyncio.timeout_at(deadline):
-                        # Persist the profile before waiting for cancelled page/VNC requests.
                         if self.context:
                             with contextlib.suppress(Exception):
                                 await asyncio.wait_for(self.context.close(), 5)
@@ -2090,19 +1839,6 @@ class BrowserWorker:
                 except TimeoutError:
                     pass
                 finally:
-                    if self.clipboard_owner is not None:
-                        with contextlib.suppress(ProcessLookupError):
-                            self.clipboard_owner.kill()
-                    for process in reversed(self.processes):
-                        with contextlib.suppress(ProcessLookupError):
-                            process.kill()
-                    with contextlib.suppress(TimeoutError):
-                        async with asyncio.timeout_at(deadline):
-                            await asyncio.gather(
-                                *(asyncio.to_thread(process.wait) for process in self.processes)
-                            )
-                            if self.clipboard_owner is not None:
-                                await self.clipboard_owner.wait()
                     try:
                         self.discard_generated_files("screenshot")
                         self.discard_generated_files("snapshot")
@@ -2141,8 +1877,6 @@ async def serve(root: Path) -> None:
                 op = request["op"]
                 if op == "start":
                     result = await worker.start(
-                        probe=request.get("probe", False),
-                        allow_network=request.get("allowNetwork", True),
                         color_scheme=request.get("colorScheme", "light"),
                     )
                 elif op == "execute":
@@ -2164,7 +1898,6 @@ async def serve(root: Path) -> None:
                     args = BrowserControlArguments.model_validate(request["args"])
                     result = await worker.control(
                         args.manual,
-                        rotate_view=args.rotate_view,
                         origin=args.origin,
                         control_epoch=args.control_epoch,
                     )
@@ -2176,15 +1909,9 @@ async def serve(root: Path) -> None:
                     args = BrowserResizeArguments.model_validate(request["args"])
                     result = await worker.resize(args.width, args.height)
                 elif op == "view":
-                    result = {"socket": str(worker.live / "vnc")}
+                    result = {"socket": str(worker.live / "view")}
                 elif op == "health":
-                    result = {
-                        "ok": bool(
-                            worker.context
-                            and worker.context.browser.is_connected()
-                            and all(p.poll() is None for p in worker.processes)
-                        )
-                    }
+                    result = {"ok": bool(worker.context and worker.context.browser.is_connected())}
                 elif op == "close":
                     break
                 else:

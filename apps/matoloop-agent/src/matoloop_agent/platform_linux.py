@@ -120,13 +120,6 @@ class LinuxPlatform:
             operations.discard("maintenance.start")
         if not {"maintenance.start", "maintenance.update"}.intersection(operations):
             operations.discard("maintenance.update.interrupt")
-        if os.environ.get("MATOLOOP_AGENT_CONTAINER") != "1":
-            operations -= {
-                "integration.browser.view",
-                "integration.browser.resize",
-                "integration.browser.navigation",
-                "integration.browser.clipboard",
-            }
         if process.shell is None:
             operations.remove("shell.run")
         if shutil.which("sudo") is None or os.geteuid() == 0:

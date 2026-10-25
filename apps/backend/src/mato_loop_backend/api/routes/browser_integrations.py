@@ -12,7 +12,6 @@ import mato_loop_backend.api.browser_errors as api_browser_errors
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.execution.browser_contracts import (
     BrowserConfig,
-    BrowserControlResult,
     BrowserStatusResult,
 )
 from mato_loop_backend.execution.client import ExecutionClientError
@@ -120,19 +119,5 @@ async def browser_integration_status(integration_id: UUID, db: Db, user: User, s
         return await browser_client(instance.execution_agent_id).request(
             "integration.browser.status", {}, BrowserStatusResult,
         )
-    except ExecutionClientError as exc:
-        raise api_browser_errors.browser_api_error(exc) from exc
-
-
-@router.post("/{integration_id}/reset")
-async def reset_browser_integration(integration_id: UUID, db: Db, user: User, scope: Literal["personal"] = "personal") -> BrowserControlResult:
-    try:
-        instance = await load_browser_integration(db, user.id, integration_id, require_enabled=False)
-        result = await browser_client(instance.execution_agent_id).request(
-            "integration.browser.reset", {"ownerId": str(user.id)}, BrowserControlResult,
-        )
-        if not result.ok:
-            raise ExecutionClientError("browser.actionFailed")
-        return result
     except ExecutionClientError as exc:
         raise api_browser_errors.browser_api_error(exc) from exc

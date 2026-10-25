@@ -147,7 +147,6 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
       if (chat.current?.id && !chat.running) {
         requests.push(chat.refreshSession(chat.current.id, { suppressErrorToast: true }))
       }
-      if (chat.current?.id && chat.running) void browser.reconcileControlRequest(chat.current.id)
       for (const [scope, list] of Object.entries(chat.sessionLists)) {
         if (list.items.some((session) => ACTIVE_RUN_STATUSES.has(session.activeRunStatus))) {
           requests.push(chat.refreshSessions(
@@ -226,10 +225,6 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   ], ([sessionId, agentId, , available, tabPresent]) => {
     browser.syncContext({ sessionId, agentId, available, tabPresent })
   }, { immediate: true, flush: 'post' })
-
-  watch(() => [chat.current?.id, routeSessionId.value, route.name, controlCenter.ready], ([sessionId, routeId, name]) => {
-    if (name === 'chat' && sessionId === routeId) void browser.reconcileControlRequest(sessionId)
-  }, { immediate: true, flush: 'sync' })
 
   onMounted(async () => {
     updateVisualViewport()

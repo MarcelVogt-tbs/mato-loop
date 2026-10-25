@@ -202,7 +202,6 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "integration.browser.clipboard",
         "integration.browser.view",
         "integration.browser.close",
-        "integration.browser.reset",
         "integration.browser.execute",
         "integration.browser.file",
         "integration.browser.files",

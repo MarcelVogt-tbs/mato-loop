@@ -36,6 +36,7 @@ from mato_loop_backend.models import UserAccount
 from mato_loop_backend.permissions.policy import integration_operation_permission
 from mato_loop_backend.permissions.resolution import tool_execution_policy
 from mato_loop_backend.settings import (
+    BUILD_PROFILE_ID,
     GENERAL_PROFILE_ID,
     PLAN_PROFILE_ID,
     AgentProfilesSettings,
@@ -122,7 +123,19 @@ async def test_integration_permission_page_lists_configured_rights_and_resources
     monkeypatch.setattr("mato_loop_backend.api.integration_resources._integration_resources", AsyncMock(return_value=(IntegrationResource("calendar:work", "Arbeit"),)))
     response = await get_integration_permissions(integration.id, user, db, "personal")
     assert (response["permissions"]["privatePermissions"]["policies"],
-              {resource["key"] for resource in response["inherited"]["private"]["resources"]}) == ({"calendar.read": "ask"}, {"calendar:work"})
+               {resource["key"] for resource in response["inherited"]["private"]["resources"]}) == ({"calendar.read": "ask"}, {"calendar:work"})
+
+
+@pytest.mark.parametrize("profile_id,expected", [(None, "ask"), (GENERAL_PROFILE_ID, "ask"), (PLAN_PROFILE_ID, "ask"), (BUILD_PROFILE_ID, "auto")])
+async def test_browser_permission_page_displays_the_selected_profile_defaults(monkeypatch, profile_id, expected):
+    user = UserAccount(id=uuid4(), is_admin=False)
+    integration = IntegrationInstance(name="Browser", integration_type="browser", adapter_type="browser", execution_agent_id=uuid4())
+    db = settings_db(monkeypatch, {(UserIntegrationSettings, user.id): UserIntegrationSettings(instances=[integration])})
+    monkeypatch.setattr("mato_loop_backend.api.integration_resources._integration_resources", AsyncMock(return_value=()))
+    response = await get_integration_permissions(integration.id, user, db, "personal", profile_id)
+    assert [(action["label"], action["policy"]) for action in response["inherited"]["public"]["actions"] if action["capability"].startswith("browser.")] == [
+        ("Browser verwenden", expected), ("Browser-Python ausführen", "ask"),
+    ]
 
 
 @pytest.mark.parametrize("trust", list(TrustLevel))

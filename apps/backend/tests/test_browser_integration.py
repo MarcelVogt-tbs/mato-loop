@@ -44,8 +44,6 @@ from mato_loop_backend.files.service import RootFileError
 from mato_loop_backend.integrations.browser.adapter import (
     BROWSER_ADAPTER,
     BROWSER_DOWNLOADS,
-    BROWSER_RELEASE_CONTROL,
-    BROWSER_REQUEST_CONTROL,
     BROWSER_TOOL_ACTIONS,
     BROWSER_TOOLS,
     BROWSER_UPLOAD,
@@ -115,21 +113,17 @@ def test_config_empty_action_requirements_and_wire_host_fields():
         BrowserConfig(profilePath="/tmp/profile")
     args = BrowserActionArguments(action="fill", tabId=str(uuid4()), selector="input", text="")
     assert args.text == ""
-    snapshot = "a" * 64
-    assert BrowserActionArguments(
-        action="click", tabId=str(uuid4()), selector="aria-ref=e12", snapshotSha256=snapshot
-    ).snapshot_sha256 == snapshot
-    for selector, token in (
-        ("button", snapshot), ("aria-ref=bad", snapshot),
-        ("aria-ref=e12 >> nth=0", None),
+    for invalid in (
+        {"selector": "aria-ref=e12", "snapshotSha256": "a" * 64},
+        {"selector": "aria-ref=bad"}, {"selector": "aria-ref=e12 >> nth=0"},
     ):
         with pytest.raises(ValidationError):
             BrowserActionArguments(
-                action="click", tabId=str(uuid4()), selector=selector, snapshotSha256=token
+                action="click", tabId=str(uuid4()), **invalid,
             )
     assert BrowserActionArguments(action="newtab").tab_id is None
-    wire = BrowserExecuteArguments(browserId=str(uuid4()), allowNetwork=False, **args.model_dump())
-    assert wire.model_dump()["allowNetwork"] is False
+    wire = BrowserExecuteArguments(browserId=str(uuid4()), **args.model_dump())
+    assert "allowNetwork" not in wire.model_dump()
     schema = BrowserActionArguments.model_json_schema()
     assert schema["additionalProperties"] is False
     assert not {"browserId", "ownerId", "allowNetwork", "settle", "profilePath", "command", "script"} & schema["properties"].keys()
@@ -153,7 +147,6 @@ def test_public_browser_tools_have_narrow_static_schemas_and_no_legacy_tool():
     }
     assert BROWSER_ADAPTER.execution_tools == (
         *BROWSER_TOOLS, BROWSER_UPLOAD, BROWSER_DOWNLOADS,
-        BROWSER_REQUEST_CONTROL, BROWSER_RELEASE_CONTROL,
     )
     upload = mock_tools_catalog.ToolRegistry._contributed_definition(BROWSER_UPLOAD).schema()
     assert set(upload["parameters"]["properties"]) == {
@@ -164,14 +157,6 @@ def test_public_browser_tools_have_narrow_static_schemas_and_no_legacy_tool():
         "integration.browser.file", "integration.browser.upload",
     )
     assert set(BROWSER_DOWNLOADS.arguments_model.model_json_schema()["properties"]) == {"downloadId"}
-    assert not BROWSER_REQUEST_CONTROL.arguments_model.model_json_schema()["properties"]
-    control = mock_tools_catalog.ToolRegistry._contributed_definition(
-        BROWSER_REQUEST_CONTROL
-    ).schema()
-    assert "browser-only interaction" in control["parameters"]["properties"][
-        "_reason"
-    ]["description"]
-    assert not BROWSER_RELEASE_CONTROL.arguments_model.model_json_schema()["properties"]
     assert set(BROWSER_TOOL_ACTIONS) == set(expected)
     for tool in BROWSER_TOOLS:
         schema = tool.arguments_model.model_json_schema()
@@ -286,7 +271,7 @@ def test_active_browser_guidance_supports_reliable_compact_workflows(name, guida
 def test_fill_form_rejects_invalid_action_fields(changes):
     with pytest.raises(ValidationError):
         BrowserActionArguments.model_validate({
-            "action": "fill_form", "tabId": str(uuid4()), "snapshotSha256": "a" * 64,
+            "action": "fill_form", "tabId": str(uuid4()),
             "fields": [{"name": "Field", "ref": "e1", "type": "textbox", "value": ""}],
             **changes,
         })
@@ -301,7 +286,7 @@ def test_fill_form_rejects_invalid_action_fields(changes):
 def test_fill_form_rejects_invalid_native_field(changes):
     with pytest.raises(ValidationError):
         BrowserActionArguments(
-            action="fill_form", tabId=str(uuid4()), snapshotSha256="a" * 64,
+            action="fill_form", tabId=str(uuid4()),
             fields=[{"name": "Field", "ref": "e1", "type": "textbox", "value": "", **changes}],
         )
 
@@ -310,7 +295,7 @@ def test_fill_form_boundary_and_host_only_settle():
     fields = [{"name": "N" * 200, "ref": f"f0e{i}", "type": "textbox", "value": ""} for i in range(20)]
     fields[0]["value"] = "x" * 32768
     arguments = BrowserActionArguments(
-        action="fill_form", tabId=str(uuid4()), fields=fields, snapshotSha256="a" * 64,
+        action="fill_form", tabId=str(uuid4()), fields=fields,
     )
     assert "fill_form" in BROWSER_SNAPSHOT_ACTIONS
     assert BrowserActionArguments.model_validate(arguments.model_dump()) == arguments
@@ -363,30 +348,28 @@ def test_setup_and_file_contracts_are_bounded():
         BrowserFileResult(fileId=str(uuid4()), offset=2, size=1, complete=True)
 
 
-def test_browser_schema_requires_live_binding_and_preserves_profile_exclusion():
+def test_browser_schema_is_available_without_viewer_and_preserves_profile_exclusion():
     instance = _instance()
     settings = IntegrationSettings(instances=[instance])
-    assert not effective_integration_contributions(settings).tools
+    assert effective_integration_contributions(settings).tools
     assert [tool.name for tool in effective_integration_contributions(effective_execution_integration_settings(
         settings, instance.execution_agent_id, {"integration.browser.execute"},
-    )).tools] == ["browser_request_control"]
+    )).tools] == list(BROWSER_TOOL_ACTIONS)
     active = effective_execution_integration_settings(
         settings, instance.execution_agent_id,
         {
             "integration.browser.execute", "integration.browser.file", "integration.browser.upload",
             "integration.browser.files", "integration.browser.publish", "filesystem.stat",
         },
-        browser_integration_id=instance.id,
     )
     assert [tool.name for tool in effective_integration_contributions(active).tools] == [
         *BROWSER_TOOL_ACTIONS, "browser_upload", "browser_downloads",
-        "browser_request_control", "browser_release_control",
     ]
     excluded = filter_agent_profile_integrations(active, None, allowed_ids=[])
     assert not effective_integration_contributions(excluded).tools
     for agent, operations in [(uuid4(), {"integration.browser.execute"}), (instance.execution_agent_id, set())]:
         assert not effective_integration_contributions(effective_execution_integration_settings(
-            settings, agent, operations, browser_integration_id=instance.id,
+            settings, agent, operations,
         )).tools
     assert _effective_execution_operations(SimpleNamespace(
         execution_operations=["integration.browser.execute", "filesystem.read"], current_directory_snapshot=None,
@@ -399,12 +382,11 @@ def test_browser_schema_requires_live_binding_and_preserves_profile_exclusion():
 def browser_case(monkeypatch):
     instance = _instance()
     settings = IntegrationSettings(instances=[instance])
-    settings.instances[0]._browser_attached = True
     session = ChatSession(id=uuid4(), user_id=instance.owner_id)
     connection = SimpleNamespace(
-        browser_id=uuid4(), attachment_revision=1, integration_id=instance.id,
+        browser_id=uuid4(), integration_id=instance.id,
         agent_id=instance.execution_agent_id, owner_id=instance.owner_id,
-        session_id=session.id, attached=True, closed=False,
+        session_id=session.id, model_available=True, closed=False, check_access=AsyncMock(),
     )
     async def execute(*args):
         arguments = args[-1]
@@ -413,8 +395,8 @@ def browser_case(monkeypatch):
         return BrowserActionResult()
 
     coordinator = SimpleNamespace(
-        attached_for=Mock(return_value=connection), execute=AsyncMock(side_effect=execute),
-        snapshot=AsyncMock(return_value="a" * 64), attachment=AsyncMock(),
+        current_for=Mock(return_value=connection), execute=AsyncMock(side_effect=execute),
+        snapshot=AsyncMock(return_value="a" * 64),
     )
     # The parent owns the coordinator; this test exercises only its published interface.
     monkeypatch.setitem(sys.modules, "mato_loop_backend.execution.browsers", SimpleNamespace(browser_coordinator=coordinator))
@@ -433,18 +415,6 @@ def browser_case(monkeypatch):
         instance=instance, settings=settings, connection=connection, coordinator=coordinator,
         current=current, context=context, call=call, effective=effective,
     )
-
-
-async def test_browser_release_returns_control_to_human(browser_case):
-    case = browser_case
-    case.call.name = "browser_release_control"
-    case.call.arguments = {}
-
-    result = await case.effective.execute(case.call, case.context)
-
-    assert not result.is_error
-    assert json.loads(result.content) == {"ok": True}
-    case.coordinator.attachment.assert_awaited_once_with(case.connection, False, reason="modelRelease")
 
 
 @pytest.mark.parametrize("observe", [True, False])
@@ -501,7 +471,7 @@ def guarded_browser_case(browser_case):
 
 
 @pytest.mark.parametrize("action", ["navigate", "click"])
-@pytest.mark.parametrize("change", ["viewer", "owner", "session", "agent", "integration", "binding", "reattach", "profile", "disabled", "run"])
+@pytest.mark.parametrize("change", ["access", "owner", "session", "agent", "integration", "binding", "profile", "disabled", "run"])
 async def test_browser_revalidates_after_approval(browser_case, change, action):
     case = browser_case
     if action == "click":
@@ -509,14 +479,12 @@ async def test_browser_revalidates_after_approval(browser_case, change, action):
         case.call.arguments = {"tabId": str(uuid4()), "ref": "e1"}
 
     async def approve(_request):
-        if change == "viewer":
-            case.connection.attached = False
+        if change == "access":
+            case.connection.model_available = False
         elif change in {"owner", "session", "agent", "integration"}:
             setattr(case.connection, f"{change}_id", uuid4())
         elif change == "binding":
             case.connection.browser_id = uuid4()
-        elif change == "reattach":
-            case.connection.attachment_revision += 2
         elif change == "profile":
             case.current.return_value = IntegrationSettings()
         elif change == "disabled":
@@ -531,39 +499,39 @@ async def test_browser_revalidates_after_approval(browser_case, change, action):
     case.coordinator.execute.assert_not_awaited()
 
 
-async def test_no_viewer_or_wrong_owner_never_asks_or_executes(browser_case):
+async def test_wrong_owner_never_asks_or_executes(browser_case):
     case = browser_case
-    for connection in (None, SimpleNamespace(**{**vars(case.connection), "owner_id": uuid4()})):
-        case.coordinator.attached_for.return_value = connection
-        result = await case.effective.execute(case.call, case.context)
-        assert result.metadata["errorCode"] == "browser.notConnected"
+    case.connection.owner_id = uuid4()
+    result = await case.effective.execute(case.call, case.context)
+    assert result.metadata["errorCode"] == "browser.notConnected"
     case.context.ask_handler.assert_not_awaited()
     case.coordinator.execute.assert_not_awaited()
     case.coordinator.snapshot.assert_not_awaited()
 
 
-async def test_approval_scope_binds_exact_action_and_live_attachment(browser_case):
+async def test_approval_scope_binds_exact_action_and_live_browser(browser_case):
     case = browser_case
     result = await case.effective.execute(case.call, case.context)
     assert not result.is_error
     requests = [call.args[0] for call in case.context.ask_handler.await_args_list]
-    assert [request.capability for request in requests] == ["browser.write", "browser.read"]
+    assert [request.capability for request in requests] == ["browser.use"]
     request = requests[0]
+    grant_scope = request.effective_session_grants
     assert request.policy_integration_id == case.instance.id
     assert all(
         item.effective_session_grants[0].resource_display
-        == "Freigegebener Browser (alle Tabs)"
+        == "Browser dieses Chats (alle Tabs)"
         for item in requests
     )
     scope = json.loads(request.resource_scope)
     assert scope["integrationId"] == str(case.instance.id)
     args = case.coordinator.execute.await_args.args[-1]
     assert args["expectedBrowserId"] == str(case.connection.browser_id)
-    assert args["expectedAttachmentRevision"] == 1
     assert "allowNetwork" not in args
-    case.connection.attachment_revision += 1
+    case.call.arguments["url"] = "https://other.example/"
     await case.effective.execute(case.call, case.context)
     assert case.context.ask_handler.await_args.args[0].resource_scope != request.resource_scope
+    assert case.context.ask_handler.await_args.args[0].effective_session_grants == grant_scope
     assert result.metadata == {"privateIntegrationData": True}
 
 
@@ -590,14 +558,15 @@ async def test_public_ref_action_rejects_model_supplied_guard(browser_case):
 
 async def test_write_observation_can_be_disabled_or_fail_after_success(browser_case):
     case = browser_case
+    case.call.name = "browser_click"
     case.call.arguments = {
-        "tabId": str(uuid4()), "url": "https://example.org",
+        "tabId": str(uuid4()), "ref": "e1",
         "observe": False,
     }
     result = await case.effective.execute(case.call, case.context)
     assert not result.is_error
     assert [call.args[0].capability for call in case.context.ask_handler.await_args_list] == [
-        "browser.write"
+        "browser.use"
     ]
 
     case.context.ask_handler.reset_mock()
@@ -608,7 +577,7 @@ async def test_write_observation_can_be_disabled_or_fail_after_success(browser_c
     assert not result.is_error
     assert json.loads(result.content)["data"] == {"observationFailed": True}
     assert [call.args[0].capability for call in case.context.ask_handler.await_args_list] == [
-        "browser.write", "browser.read"
+        "browser.use"
     ]
 
 
@@ -631,7 +600,7 @@ async def test_screenshot_is_a_model_image_not_base64_text(browser_case):
     assert result.attachments[0].presentation == "internal"
     assert result.attachments[0].ephemeral
     assert "screenshot" not in result.content
-    assert case.context.ask_handler.await_args.args[0].capability == "browser.read"
+    assert case.context.ask_handler.await_args.args[0].capability == "browser.use"
     assert "observe" not in case.coordinator.execute.await_args.args[-1]
 
 
@@ -745,7 +714,7 @@ async def test_inspect_accepts_only_exact_snapshot_data(browser_case, data):
 
 @pytest.mark.parametrize("name,arguments", [
     ("browser_tabs", {"action": "close"}), ("browser_snapshot", {}), ("browser_take_screenshot", {}),
-    ("browser_click", {"ref": "e1"}), ("browser_type", {"ref": "e1", "text": "value"}),
+    ("browser_click", {"ref": "e1", "_reason": "Open the requested article"}), ("browser_type", {"ref": "e1", "text": "value"}),
     ("browser_press_key", {"key": "Enter"}), ("browser_scroll", {"direction": "down"}),
 ])
 async def test_page_actions_bind_host_snapshot_before_approval(guarded_browser_case, name, arguments):
@@ -762,7 +731,6 @@ async def test_page_actions_bind_host_snapshot_before_approval(guarded_browser_c
     async def capture(*args):
         events.append("snapshot")
         assert case.context.bound_options["browser_id"] == case.connection.browser_id
-        assert case.context.bound_options["attachment_revision"] == 1
         assert args == (case.context.session.id, case.connection.agent_id, case.instance.id, tab_id)
         return snapshot
 
@@ -779,7 +747,6 @@ async def test_page_actions_bind_host_snapshot_before_approval(guarded_browser_c
         events.append("execute")
         assert args[-1]["expectedSnapshot"] == snapshot
         assert args[-1]["expectedBrowserId"] == str(case.connection.browser_id)
-        assert args[-1]["expectedAttachmentRevision"] == 1
         if action == "inspect":
             return BrowserActionResult(text=inspection, data={"snapshotSha256": snapshot})
         if action == "screenshot":
@@ -795,8 +762,7 @@ async def test_page_actions_bind_host_snapshot_before_approval(guarded_browser_c
     case.coordinator.execute.side_effect = execute
     result = await case.effective.execute(case.call, case.context)
     assert not result.is_error
-    approvals = 1 if action in {"inspect", "screenshot"} else 2
-    assert events == ["snapshot", *("approval" for _ in range(approvals)), "execute"]
+    assert events == ["snapshot", "approval", "execute"]
     if action == "inspect":
         assert json.loads(result.content)["data"] == {"snapshotSha256": snapshot}
         assert json.loads(result.content)["text"] == inspection
@@ -830,7 +796,6 @@ async def test_upload_approval_binds_exact_unobserved_action(browser_case):
     )
     assert captured.approval_details["browser"] == {
         "browserId": str(case.connection.browser_id),
-        "attachmentRevision": 1,
         **arguments.to_action().model_dump(mode="json"),
         "snapshotSha256": "a" * 64,
     }
@@ -849,11 +814,11 @@ async def test_auto_actions_do_not_snapshot(browser_case, name, arguments):
     assert not result.is_error
     case.coordinator.snapshot.assert_not_awaited()
     assert "expectedSnapshot" not in case.coordinator.execute.await_args.args[-1]
-    assert case.context.ask_handler.await_args.args[0].approval_details["browser"]["snapshotSha256"] is None
+    assert "snapshotSha256" not in case.context.ask_handler.await_args.args[0].approval_details["browser"]
 
 
-@pytest.mark.parametrize("change", ["binding", "reattach", "viewer", "owner"])
-async def test_attachment_changed_during_snapshot_never_asks(guarded_browser_case, change):
+@pytest.mark.parametrize("change", ["binding", "access", "owner"])
+async def test_browser_changed_during_snapshot_never_asks(guarded_browser_case, change):
     case = guarded_browser_case
     case.call.name = "browser_click"
     case.call.arguments = {"tabId": str(uuid4()), "ref": "e1"}
@@ -861,10 +826,8 @@ async def test_attachment_changed_during_snapshot_never_asks(guarded_browser_cas
     async def capture(*_args):
         if change == "binding":
             case.connection.browser_id = uuid4()
-        elif change == "reattach":
-            case.connection.attachment_revision += 2
-        elif change == "viewer":
-            case.connection.attached = False
+        elif change == "access":
+            case.connection.model_available = False
         else:
             case.connection.owner_id = uuid4()
         return "a" * 64
@@ -946,7 +909,7 @@ async def test_script_results_preserve_bounded_data_and_mark_partial_effect_erro
         **({"errorCode": error_code, "failureReason": "runtimeError", "failureDetail": "typeError", "line": 3} if error_code else {}),
     }
     requests = [call.args[0] for call in case.context.ask_handler.await_args_list]
-    assert [request.capability for request in requests] == ["browser.read", "browser.write", "browser.code"]
+    assert [request.capability for request in requests] == ["browser.use", *(["browser.code"] if name == "browser_run_code" else [])]
     key = next(iter(source))
     assert all(request.approval_details["browser"][key] == source[key] for request in requests)
     case.coordinator.snapshot.assert_not_awaited()
@@ -984,7 +947,7 @@ async def test_known_browser_errors_are_catalogued_and_remote_params_discarded(m
 
 
 async def test_browser_mutation_disconnect_preserves_unknown_outcome(monkeypatch):
-    for operation in ("execute", "setup", "setupwrite", "open", "close", "reset", "file"):
+    for operation in ("execute", "setup", "setupwrite", "open", "close", "file"):
         operation = f"integration.browser.{operation}"
         assert operation in SUPPORTED_OPERATIONS
         assert disconnect_error_code(operation, True) == "browser.outcomeUnknown"
@@ -1072,7 +1035,7 @@ def test_global_disable_blocks_use_but_allows_deletion(browser_api):
     assert case.client.delete(f"{base}/{item['id']}").status_code == 200
 
 
-def test_status_test_reset_use_only_fixed_owner_bound_rpc(browser_api, monkeypatch):
+def test_status_uses_only_fixed_owner_bound_rpc_and_has_no_profile_reset(browser_api, monkeypatch):
     case = browser_api
     base = "/api/integrations/browser"
     item = case.client.post(base, json={"executionAgentId": str(case.agent)}).json()["instances"][0]
@@ -1088,9 +1051,8 @@ def test_status_test_reset_use_only_fixed_owner_bound_rpc(browser_api, monkeypat
         client.request.assert_awaited_with("integration.browser.status", {}, BrowserStatusResult)
     client.request.side_effect = ExecutionClientError("browser.busy", {"secret": "token"})
     response = case.client.post(f"{url}/reset")
-    assert response.status_code == 409
+    assert response.status_code == 404
     assert "token" not in response.text
-    assert client.request.await_args.args[1] == {"ownerId": str(case.user.id)}
     factory.assert_called_with(case.agent)
 
 
@@ -1108,13 +1070,13 @@ def test_browser_client_is_generation_bound(monkeypatch):
     assert browser_module.browser_client(uuid4()).expected_generation == 7
 
 
-async def test_current_tool_context_cannot_bypass_profile_with_attachment(monkeypatch):
+async def test_current_tool_context_cannot_bypass_profile(monkeypatch):
     instance = _instance()
     session = ChatSession(id=uuid4(), user_id=instance.owner_id, agent_profile_id=uuid4())
     profile = AgentProfile(id=session.agent_profile_id, name="Browser excluded", instructions="Test profile", integrations_enabled_by_default=False)
     monkeypatch.setattr(mock_tools_context, 'load_effective_integrations', AsyncMock(return_value=IntegrationSettings(instances=[instance])))
     monkeypatch.setattr(mock_tools_context, 'load_agent_profile', AsyncMock(return_value=profile))
-    coordinator = SimpleNamespace(attached_for=Mock())
+    coordinator = SimpleNamespace(current_for=Mock())
     monkeypatch.setitem(sys.modules, "mato_loop_backend.execution.browsers", SimpleNamespace(browser_coordinator=coordinator))
     context = ToolContext(
         db=AsyncMock(), run_id=uuid4(), session=session, tool_call=ToolCall("test", "browser_diagnostics", {}),
@@ -1122,22 +1084,22 @@ async def test_current_tool_context_cannot_bypass_profile_with_attachment(monkey
         ask_handler=AsyncMock(), execution_client=ExecutionClient(instance.execution_agent_id, frozenset({"integration.browser.execute"})),
     )
     assert not (await context.current_integrations()).instances
-    coordinator.attached_for.assert_not_called()
+    coordinator.current_for.assert_not_called()
 
 
 async def test_profile_disabled_browser_actions_are_not_offered():
     instance = _instance()
     settings = effective_execution_integration_settings(
         IntegrationSettings(instances=[instance]), instance.execution_agent_id,
-        {"integration.browser.execute"}, browser_integration_id=instance.id,
+        {"integration.browser.execute"},
     )
     tools = ToolSettings()
     for permissions in (tools.private_permissions, tools.public_permissions):
-        permissions.policies.update({"browser.read": "disabled", "browser.write": "disabled"})
+        permissions.policies["browser.use"] = "disabled"
     effective = mock_tools_catalog.tool_registry.effective(settings, tool_settings=tools)
     assert not set(BROWSER_TOOL_ACTIONS) & effective.tools.keys()
     assert {action.capability for action in mock_tools_catalog.tool_registry.integration_resource_actions(instance)} == {
-        "browser.read", "browser.write", "browser.code", "browser.control", "browser.release",
+        "browser.use", "browser.code",
         "filesystem.read", "session.files.read", "filesystem.write",
     }
 
@@ -1154,13 +1116,9 @@ async def test_stored_browser_family_disable_is_projected_into_effective_setting
     assert stored.tool_availability == {"browser": False, "browser_run_code": True}
 
 
-def test_narrow_write_and_code_tools_are_not_offered_with_write_disabled():
+def test_no_browser_tools_are_offered_with_browser_use_disabled():
     instance = _instance()
-    instance._browser_attached = True
     settings = ToolSettings()
-    settings.permissions.policies["browser.write"] = "disabled"
+    settings.permissions.policies["browser.use"] = "disabled"
     effective = mock_tools_catalog.ToolRegistry([]).effective(IntegrationSettings(instances=[instance]), tool_settings=settings)
-    assert set(effective.tools) == {
-        "browser_tabs", "browser_snapshot", "browser_take_screenshot", "browser_diagnostics",
-        "browser_downloads", "browser_request_control", "browser_release_control",
-    }
+    assert not effective.tools

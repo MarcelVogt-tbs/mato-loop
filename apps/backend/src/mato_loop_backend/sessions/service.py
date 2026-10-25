@@ -1505,12 +1505,7 @@ async def update_session(
         item.title_generation_status = TitleGenerationStatus.SKIPPED.value
     if "pinned" in fields and payload.pinned is not None:
         item.is_pinned = payload.pinned
-    browser_closed = False
     if "control_center" in fields:
-        browser_closed = any(
-            tab.get("app_id") == "browser" and tab.get("kind", "app") == "app"
-            for tab in (item.control_center or {}).get("tabs", [])
-        ) and not any(tab.app_id == "browser" and tab.kind == "app" for tab in payload.control_center.tabs)
         control_center = payload.control_center.model_dump(mode="json")
         if "todos_collapsed" in (item.control_center or {}):
             control_center["todos_collapsed"] = item.control_center["todos_collapsed"]
@@ -1621,10 +1616,6 @@ async def update_session(
 
     async def finalize_storage() -> None:
         nonlocal move_receipt
-        if browser_closed:
-            from mato_loop_backend.execution.browser_control import browser_control_requests
-
-            browser_control_requests.cancel_session(user.id, session_id)
         if move_receipt is None:
             return
         receipt, move_receipt = move_receipt, None

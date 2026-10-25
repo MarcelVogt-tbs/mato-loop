@@ -230,9 +230,8 @@
             />
             <q-toggle dense v-model="form.enabled" color="primary" label="Integration aktivieren" />
             <template v-if="form.integration_type === 'browser'">
-              <p class="text-caption app-muted">Ein dauerhaftes Browserprofil pro Computer. Die Agent-Freigabe erfolgt in der Browser-App; die Integrationsauswahl im Agentenprofil bleibt maßgeblich.</p>
+              <p class="text-caption app-muted">Jeder Chat erhält einen eigenen Browser mit getrennten Tabs und Anmeldungen. Beim Schließen des Browsers gehen diese verloren. Agenten können ihn auch ohne geöffnete Browser-App nutzen; Integrationsauswahl und Werkzeugrechte bleiben maßgeblich.</p>
               <q-btn v-if="integration?.id" outline no-caps icon="terminal" label="Browser einrichten / Status anzeigen" @click="setupOpen = true" />
-              <q-btn v-if="integration?.id" flat no-caps color="negative" icon="restart_alt" label="Browserprofil zurücksetzen" :disable="dirty || saving || testing" @click="resetBrowser" />
               <div v-else class="text-caption">Nach dem Speichern kannst du die Einrichtung öffnen.</div>
             </template>
         </q-card-section>
@@ -623,18 +622,6 @@ async function testConnection() {
   try {
     testResult.value = (await integrations.testIntegration(integration.value)).message
   } catch { testResult.value = 'Verbindungstest fehlgeschlagen.' }
-  finally { testing.value = false }
-}
-
-async function resetBrowser() {
-  if (!integration.value || dirty.value || blocked.value || saving.value || testing.value) return
-  if (!await confirm('Alle Browser-Anmeldungen, Cookies und Profildaten auf diesem Computer löschen? Die Installation bleibt erhalten. Schließe vorher alle Browser-Verbindungen.', 'Browserprofil zurücksetzen?', { okLabel: 'Zurücksetzen', okColor: 'negative' })) return
-  testing.value = true
-  try {
-    await integrations.resetBrowser(integration.value.id)
-    testResult.value = ''
-    $q.notify({ type: 'positive', message: 'Browserprofil zurückgesetzt' })
-  } catch { /* Central API toast. */ }
   finally { testing.value = false }
 }
 

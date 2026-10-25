@@ -132,7 +132,7 @@ async def test_tool_presets_change_only_selected_global_policies(monkeypatch, tr
         assert tool_execution_policy(tools, key) == ("ask" if preset == "ask_all" else "auto")
     selected = next(option for option in result["presetOptions"] if option["value"] == preset)
     assert [rule["policy"] for rule in selected["baseline"]] == [read, sensitive, write, delete]
-    assert selected["additionalConfirmations"] == (["Variablen und Secrets verwenden"] if sensitive == "auto" else [])
+    assert selected["additionalConfirmations"] == (["Variablen und Secrets verwenden"] if sensitive == "auto" else []) + (["Browser verwenden (außer im Build-Profil)", "Browser-Python ausführen"] if write == "auto" else [])
     after = tools.model_dump()
     after[f"{trust}_permission_preset"] = before[f"{trust}_permission_preset"]
     assert after == before

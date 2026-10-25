@@ -69,7 +69,7 @@ class BrowserIdArguments(StrictModel):
 
 
 class BrowserOpenArguments(BrowserOwnerArguments, BrowserIdArguments):
-    allow_network: bool = Field(default=True, alias="allowNetwork")
+    session_id: Id = Field(alias="sessionId")
     color_scheme: Literal["light", "dark"] = Field(default="light", alias="colorScheme")
 
 
@@ -78,9 +78,39 @@ class BrowserViewArguments(BrowserIdArguments):
     relay_token: str = Field(alias="relayToken", min_length=16, max_length=8192)
 
 
+class BrowserInput(StrictModel):
+    kind: Literal["mouse", "key", "text", "release", "dialog"]
+    tab_id: Id = Field(alias="tabId")
+    input_epoch: Id = Field(alias="inputEpoch")
+    event: Literal["move", "down", "up", "wheel"] | None = None
+    x: float = Field(default=0, ge=0, le=3840, allow_inf_nan=False)
+    y: float = Field(default=0, ge=0, le=2160, allow_inf_nan=False)
+    button: Literal["left", "middle", "right"] = "left"
+    click_count: int = Field(default=1, alias="clickCount", ge=1, le=3)
+    modifiers: int = Field(default=0, ge=0, le=15)
+    delta_x: float = Field(default=0, alias="deltaX", ge=-10000, le=10000, allow_inf_nan=False)
+    delta_y: float = Field(default=0, alias="deltaY", ge=-10000, le=10000, allow_inf_nan=False)
+    key: str = Field(default="", max_length=100)
+    code: str = Field(default="", max_length=100)
+    key_code: int = Field(default=0, alias="keyCode", ge=0, le=255)
+    text: str = Field(default="", max_length=MAX_CLIPBOARD_BYTES)
+    accept: bool = False
+
+    @model_validator(mode="after")
+    def valid_event(self):
+        if self.kind in {"mouse", "key"} and self.event is None:
+            raise ValueError("Input event is required")
+        if self.kind == "key" and (
+            self.event not in {"down", "up"} or not self.key or not self.code
+        ):
+            raise ValueError("Invalid key event")
+        if len(self.text.encode("utf-8")) > MAX_CLIPBOARD_BYTES:
+            raise ValueError("Input text exceeds 16384 bytes")
+        return self
+
+
 class BrowserControlArguments(BrowserIdArguments):
     manual: bool
-    rotate_view: bool = Field(default=False, alias="rotateView")
     origin: str | None = Field(default=None, min_length=1, max_length=255)
     control_epoch: int | None = Field(default=None, alias="controlEpoch", ge=0)
 
@@ -112,7 +142,7 @@ class BrowserClipboardResult(StrictModel):
 
 
 class BrowserClipboardArguments(BrowserIdArguments):
-    action: Literal["read", "write", "copy"]
+    action: Literal["write", "copy"]
     text: str | None = Field(default=None, max_length=MAX_CLIPBOARD_BYTES)
 
     @model_validator(mode="after")
@@ -122,7 +152,7 @@ class BrowserClipboardArguments(BrowserIdArguments):
                 raise ValueError("Clipboard write requires text")
             BrowserClipboardResult(text=self.text)
         elif self.text is not None:
-            raise ValueError("Clipboard read and copy do not accept text")
+            raise ValueError("Clipboard copy does not accept text")
         return self
 
 
@@ -196,9 +226,7 @@ class BrowserExecuteArguments(BrowserIdArguments):
     text: str | None = Field(default=None, max_length=32_768)
     key: str | None = Field(default=None, max_length=100)
     direction: Literal["up", "down"] | None = None
-    download_id: Id | None = Field(default=None, alias="downloadId")
     upload_id: Id | None = Field(default=None, alias="uploadId")
-    allow_network: bool = Field(default=True, alias="allowNetwork")
     observe: bool = False
     settle: bool = False
     guard: bool = False
@@ -318,11 +346,10 @@ class BrowserUploadArguments(BrowserIdArguments):
 
 class BrowserNavigationArguments(BrowserIdArguments):
     action: Literal[
-        "state", "select", "new", "close", "navigate", "back", "forward", "reload", "stop", "chrome"
+        "state", "select", "new", "close", "navigate", "back", "forward", "reload", "stop"
     ]
     tab_id: Id | None = Field(default=None, alias="tabId")
     url: str | None = Field(default=None, max_length=4096)
-    native_chrome: bool | None = Field(default=None, alias="nativeChrome")
 
     @field_validator("url")
     @classmethod
@@ -341,7 +368,6 @@ class BrowserNavigationArguments(BrowserIdArguments):
         fields = {
             "state": set(),
             "new": {"url"},
-            "chrome": {"native_chrome"},
             "navigate": {"tab_id", "url"},
         }.get(self.action, {"tab_id"})
         supplied = self.model_fields_set - {"browser_id", "action"}
@@ -444,7 +470,6 @@ class BrowserNavigationResult(StrictModel):
     can_go_back: bool = Field(alias="canGoBack")
     can_go_forward: bool = Field(alias="canGoForward")
     loading: bool
-    native_chrome: bool = Field(alias="nativeChrome")
 
 
 class BrowserScreenshot(StrictModel):
@@ -571,7 +596,6 @@ BROWSER_ARGUMENT_MODELS = {
     "integration.browser.open": BrowserOpenArguments,
     "integration.browser.view": BrowserViewArguments,
     "integration.browser.close": BrowserIdArguments,
-    "integration.browser.reset": BrowserOwnerArguments,
     "integration.browser.execute": BrowserExecuteArguments,
     "integration.browser.file": BrowserFileArguments,
     "integration.browser.files": BrowserFilesArguments,

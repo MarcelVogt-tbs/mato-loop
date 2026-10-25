@@ -18,7 +18,6 @@ from matoloop_agent.browser_contracts import BrowserOpenArguments
 from matoloop_agent.browser_worker import BrowserWorker
 from matoloop_agent.config import AgentConfig
 from matoloop_agent.connection import MatoLoopAgent
-from matoloop_agent.filesystem import AgentError
 
 # Run the actual CLI and signal handling, replacing only pairing and test-specific I/O.
 CHILD = """
@@ -132,7 +131,7 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(process.returncode, 0, (await process.stderr.read()).decode())
 
     @unittest.skipUnless(os.environ.get("PLAYWRIGHT_BROWSERS_PATH"), "Bundled browser smoke test")
-    async def test_foreign_profile_singleton_is_preserved_and_classified(self):
+    async def test_old_profile_singleton_is_preserved_without_loading_it(self):
         owner = str(uuid4())
         manager = BrowserManager(self.config, None)
         manager.installation = Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"])
@@ -146,22 +145,17 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
         lock.symlink_to("previous-container-987654")
         original = lock.lstat()
         try:
-            with self.assertRaises(AgentError) as error:
-                await manager.dispatch(
-                    "integration.browser.open",
-                    BrowserOpenArguments(
-                        ownerId=owner,
-                        browserId=str(uuid4()),
-                    ),
-                )
-            self.assertEqual(error.exception.code, "browser.profileInUse")
+            await manager.dispatch(
+                "integration.browser.open",
+                BrowserOpenArguments(ownerId=owner, browserId=str(uuid4()), sessionId=str(uuid4())),
+            )
             self.assertEqual(os.readlink(lock), "previous-container-987654")
             self.assertEqual(lock.lstat().st_ino, original.st_ino)
         finally:
             await manager.close()
 
     @unittest.skipUnless(os.environ.get("PLAYWRIGHT_BROWSERS_PATH"), "Bundled browser smoke test")
-    async def test_active_profile_is_not_unlocked_by_second_browser(self):
+    async def test_closing_one_disposable_browser_keeps_the_other_alive(self):
         owner = str(uuid4())
         first, second = BrowserManager(self.config, None), BrowserManager(self.config, None)
         first.installation = second.installation = Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"])
@@ -171,22 +165,15 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
                 BrowserOpenArguments(
                     ownerId=owner,
                     browserId=str(uuid4()),
+                    sessionId=str(uuid4()),
                 ),
             )
-            profile = first.runtime_root(first.storage(owner)) / "profile"
-            lock = profile / "SingletonLock"
-            identity = lock.lstat().st_ino, os.readlink(lock)
-            with self.assertRaises(AgentError) as error:
-                await second.dispatch(
-                    "integration.browser.open",
-                    BrowserOpenArguments(
-                        ownerId=owner,
-                        browserId=str(uuid4()),
-                    ),
-                )
-            self.assertEqual(error.exception.code, "browser.profileInUse")
-            self.assertEqual((lock.lstat().st_ino, os.readlink(lock)), identity)
-            self.assertTrue((await first.rpc("health"))["ok"])
+            await second.dispatch(
+                "integration.browser.open",
+                BrowserOpenArguments(ownerId=owner, browserId=str(uuid4()), sessionId=str(uuid4())),
+            )
+            await second.close()
+            self.assertTrue((await next(iter(first.runtimes.values())).rpc("health"))["ok"])
         finally:
             await second.close()
             await first.close()
@@ -240,7 +227,7 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
                 view_cancelled.set()
                 await finished.wait()
 
-        manager.view_task = asyncio.create_task(view())
+        manager.view_tasks.add(asyncio.create_task(view()))
         await asyncio.sleep(0)
         with patch("matoloop_agent.browser.os.killpg") as kill:
             first = asyncio.create_task(manager.close())
@@ -285,8 +272,6 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
         worker = BrowserWorker(self.root)
         worker.context = SimpleNamespace(close=AsyncMock(side_effect=asyncio.Event().wait))
         worker.playwright = SimpleNamespace(stop=AsyncMock(side_effect=asyncio.Event().wait))
-        process = Mock()
-        worker.processes.append(process)
         wait_for = asyncio.wait_for
 
         async def short_wait_for(awaitable, timeout):
@@ -301,8 +286,6 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(sum(call.args[1] for call in bounded_wait.call_args_list), 10)
         worker.context.close.assert_awaited_once()
         worker.playwright.stop.assert_awaited_once()
-        process.kill.assert_called_once()
-        process.wait.assert_called_once()
 
     async def test_disconnect_closes_browser_before_waiting_for_cancelled_request(self):
         started, closed = asyncio.Event(), asyncio.Event()
@@ -348,7 +331,7 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
                     closed.set()
 
     @unittest.skipUnless(os.environ.get("PLAYWRIGHT_BROWSERS_PATH"), "Bundled browser smoke test")
-    async def test_real_entrypoint_sigterm_persists_cookie_and_removes_singletons(self):
+    async def test_real_entrypoint_sigterm_discards_browser_profile(self):
         cookies = []
         completed = asyncio.Queue()
         owner_id, browser_id = str(uuid4()), str(uuid4())
@@ -379,14 +362,20 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
                     json.dumps({"type": "welcome", "protocolVersion": 1, "agentId": self.agent_id})
                 )
                 for operation, arguments in (
-                    ("open", {"ownerId": owner_id, "browserId": browser_id, "allowNetwork": True}),
+                    (
+                        "open",
+                        {
+                            "ownerId": owner_id,
+                            "browserId": browser_id,
+                            "sessionId": str(uuid4()),
+                        },
+                    ),
                     (
                         "execute",
                         {
                             "browserId": browser_id,
                             "action": "navigate",
                             "url": url,
-                            "allowNetwork": True,
                         },
                     ),
                 ):
@@ -415,27 +404,19 @@ class ShutdownTests(unittest.IsolatedAsyncioTestCase):
             self.config.backend_url = (
                 f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/api/execution-agents/connect"
             )
-            manager = BrowserManager(self.config, None)
-            profile = manager.runtime_root(manager.storage(owner_id)) / "profile"
-            for restart in range(2):
+            for _restart in range(2):
                 cookies.clear()
                 process = await self.child("browser")
                 error = await asyncio.wait_for(completed.get(), 60)
                 if error:
                     raise error
-                self.assertTrue((profile / "SingletonLock").is_symlink())
-                if restart:
-                    self.assertIn(b"Cookie: shutdown=retained", cookies[0])
-                else:
-                    self.assertNotIn(b"Cookie: shutdown=retained", cookies[0])
+                self.assertNotIn(b"Cookie: shutdown=retained", cookies[0])
                 process.send_signal(signal.SIGTERM)
                 await asyncio.sleep(0.05)
                 with contextlib.suppress(ProcessLookupError):
                     process.send_signal(signal.SIGTERM)
                 await asyncio.wait_for(process.wait(), 20)
                 self.assertEqual(process.returncode, 0, (await process.stderr.read()).decode())
-                for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
-                    self.assertFalse(os.path.lexists(profile / name), name)
 
 
 if __name__ == "__main__":

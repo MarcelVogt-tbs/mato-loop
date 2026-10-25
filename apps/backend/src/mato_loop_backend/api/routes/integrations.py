@@ -1782,9 +1782,11 @@ async def get_integration_permissions(
     profiles = await load_effective_agent_profiles(db, user.id, include_integrations=False, include_personal=owner_id is not None)
     if profile_id is not None and not any(item.id == profile_id for item in profiles.profiles):
         raise ApiError(404, "agentProfile.notFound")
+    profile = next((item for item in profiles.profiles if item.id == profile_id), None)
     actions = tool_registry.integration_resource_actions(instance)
     resources = await api_integration_resources._integration_resources(db, instance) if actions else ()
     tools = await SettingsStore.load(db, ToolSettings)
+    tools._agent_profile = profile
     only = IntegrationSettings(instances=[instance])
     apply_integration_permissions(tools, only if profile_id is not None else IntegrationSettings())
     inherited = {
@@ -1792,7 +1794,6 @@ async def get_integration_permissions(
         for trust in TrustLevel
     } if actions else {}
     configured = instance.profile_permissions.get(profile_id, IntegrationPermissions()) if profile_id is not None else instance.permissions
-    profile = next((item for item in profiles.profiles if item.id == profile_id), None)
     inherited_available = True
     if profile is not None:
         inherited_instance = instance.model_copy(deep=True)

@@ -42,7 +42,6 @@ SUPPORTED_OPERATIONS = frozenset(
         "integration.browser.clipboard",
         "integration.browser.view",
         "integration.browser.close",
-        "integration.browser.reset",
         "integration.browser.execute",
         "integration.browser.file",
         "integration.browser.files",

@@ -2094,29 +2094,27 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
     assert "Copy returned links exactly" in prompt
 
 
-def test_webfetch_browser_fallback_prompt_matches_available_control() -> None:
+def test_webfetch_browser_fallback_prompt_matches_available_tools() -> None:
     attached = general_system_prompt(
         _session(),
         offered_tool_names=frozenset({
-            "webfetch", "browser_tabs", "browser_snapshot", "browser_release_control",
+            "webfetch", "browser_tabs", "browser_snapshot",
         }),
     )
     requestable = general_system_prompt(
         _session(),
-        offered_tool_names=frozenset({"webfetch", "browser_request_control"}),
+        offered_tool_names=frozenset({"webfetch", "browser_tabs"}),
     )
     unavailable = general_system_prompt(
         _session(),
         offered_tool_names=frozenset({"webfetch"}),
     )
 
-    assert "Use the attached browser when the task requires interaction" in attached
+    assert "Use this chat's browser when the task requires interaction" in attached
     assert "downloads that require page interaction" in attached
-    assert "Browser handoff contract:" in attached
-    assert "release browser control and wait for success" in attached
+    assert "works without an open viewer" in attached
     assert "wait for their reply; do not poll with browser tools" in attached
-    assert "request browser control with a concrete reason" in requestable
-    assert "tool with a _reason argument" in requestable
+    assert "Use this chat's browser" in requestable
     assert "attached browser" not in requestable
     assert "attached browser" not in unavailable
     assert "request browser control" not in unavailable

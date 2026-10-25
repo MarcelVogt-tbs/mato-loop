@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
-from matoloop_agent.browser import BrowserManager
+from matoloop_agent.browser import BrowserRuntime
 from matoloop_agent.browser_contracts import (
     BrowserFileArguments,
     BrowserPublishArguments,
@@ -54,7 +54,7 @@ class BrowserFileTests(unittest.IsolatedAsyncioTestCase):
         config._data_directory = self.root
         filesystem = Filesystem(config)
         terminal = TerminalManager(config, ProcessRunner(config, filesystem))
-        self.manager = BrowserManager(config, terminal, filesystem)
+        self.manager = BrowserRuntime(config, terminal, filesystem)
         self.browser_id = str(uuid4())
         self.manager.browser_id = self.browser_id
 

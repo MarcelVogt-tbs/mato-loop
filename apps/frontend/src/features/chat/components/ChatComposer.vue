@@ -134,15 +134,27 @@
               round
               dense
               class="composer-action"
-              :color="canSendDuringRun ? sendMode === 'queue' ? 'secondary' : 'primary' : 'negative'"
-              :icon="canSendDuringRun ? sendMode === 'queue' ? 'schedule_send' : 'arrow_upward' : 'stop'"
-              :aria-label="canSendDuringRun
-                ? voiceActivity ? voiceSendLabel : sendMode === 'queue' ? 'Nachricht vormerken' : 'Nachricht jetzt senden'
-                : 'Agent-Anfrage stoppen'"
+              color="negative"
+              icon="stop"
+              aria-label="Agent-Anfrage stoppen"
               type="button"
-              :loading="sendingRecording || starting || finalizing || (!canSendDuringRun && stopping)"
+              :loading="stopping"
+              :disable="stopping"
+              @click="$emit('stop')"
+            />
+            <q-btn
+              v-if="canSendDuringRun"
+              flat
+              round
+              dense
+              class="composer-action"
+              :color="sendMode === 'queue' ? 'secondary' : 'primary'"
+              :icon="sendMode === 'queue' ? 'schedule_send' : 'arrow_upward'"
+              :aria-label="voiceActivity ? voiceSendLabel : sendMode === 'queue' ? 'Nachricht vormerken' : 'Nachricht jetzt senden'"
+              type="button"
+              :loading="sendingRecording || starting || finalizing"
               :disable="stopping || (voiceActivity && !canFinishAndSend)"
-              @click="canSendDuringRun ? submit() : $emit('stop')"
+              @click="submit()"
             />
             <q-btn
               v-if="canSendDuringRun && (!voiceActivity || canFinishAndSend)"

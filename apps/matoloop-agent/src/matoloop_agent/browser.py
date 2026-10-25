@@ -46,7 +46,7 @@ def browser_command(command: str) -> list[str]:
     return [sys.executable, "-m", "matoloop_agent", command]
 
 
-class BrowserManager:
+class BrowserRuntime:
     def __init__(
         self, config, terminal: TerminalManager, filesystem: Filesystem | None = None
     ) -> None:
@@ -62,8 +62,9 @@ class BrowserManager:
             else config.data_dir.parent / "tools" / "browser"
         )
         self.browser_id = None
+        self.session_id = None
         self.owner_id = None
-        self.view_task = None
+        self.view_tasks: set[asyncio.Task] = set()
         self.setup = None
         self.setup_offset = 0
         self.setup_task = None
@@ -160,9 +161,6 @@ class BrowserManager:
             if os.getuid() == 0:
                 os.chown(runtime, uid, options["group"], follow_symlinks=False)
         self.directory(runtime, 0o700, uid)
-        profile = runtime / "profile"
-        if profile.is_symlink():
-            raise AgentError("browser.profileOwnerMismatch", "Browser profile is a symlink")
         return runtime
 
     def missing_python_packages(self) -> list[str]:
@@ -260,10 +258,8 @@ class BrowserManager:
                     stage = response.get("stage")
                     logger.warning(
                         "Browser startup failed: stage=%s profile=%s",
-                        stage
-                        if stage in {"storage", "display", "vnc", "chromium", "page", "resize"}
-                        else "unknown",
-                        "temporary" if values.get("probe") else "persistent",
+                        stage if stage in {"storage", "chromium", "page"} else "unknown",
+                        "temporary",
                     )
                 raise AgentError(code, "Browser worker operation failed")
             if op == "file":
@@ -323,11 +319,11 @@ class BrowserManager:
         closing = getattr(self, "_close_task", None)
         if closing is None or closing.done():
             process, self.worker = self.worker, None
-            view, self.view_task = self.view_task, None
+            views, self.view_tasks = self.view_tasks, set()
             self.browser_id = None
 
             async def close() -> None:
-                if view is not None:
+                for view in views:
                     view.cancel()
                 if process is not None:
                     try:
@@ -341,8 +337,8 @@ class BrowserManager:
                             os.killpg(process.pid, signal.SIGKILL)
                         with contextlib.suppress(TimeoutError):
                             await asyncio.wait_for(process.wait(), 1)
-                if view is not None:
-                    await asyncio.wait([view], timeout=1)
+                if views:
+                    await asyncio.wait(views, timeout=1)
 
             closing = self._close_task = asyncio.create_task(close())
         # RPC cancellation and connection teardown may close the same worker concurrently.
@@ -385,7 +381,7 @@ class BrowserManager:
         try:
             root = self.runtime_root(self.storage())
             await self.spawn(root)
-            self.last_status = BrowserStatus.model_validate(await self.rpc("start", probe=True))
+            self.last_status = BrowserStatus.model_validate(await self.rpc("start"))
         except KeyError:
             self.last_status = BrowserStatus(
                 state="missing", missing=["runtimeUser"], errorCode="browser.dependenciesMissing"
@@ -657,27 +653,17 @@ class BrowserManager:
                     raise AgentError("browser.unsupported", "Browser requires Linux")
                 if action == "setup":
                     return await self.start_setup(args.owner_id)
-                if action == "reset":
-                    root = self.storage(args.owner_id)
-                    if self.worker or (self.setup and self.setup.exit_code is None):
-                        raise AgentError("browser.busy", "Browser is active")
-                    runtime = self.runtime_root(root)
-                    # shutil.rmtree uses fd-relative, symlink-resistant traversal on Linux.
-                    if not shutil.rmtree.avoids_symlink_attacks:
-                        raise AgentError("browser.unsupported", "Safe reset is unavailable")
-                    shutil.rmtree(runtime)
-                    return {"ok": True}
                 if action == "open":
                     root = self.storage(args.owner_id)
-                    if not args.allow_network:
-                        raise AgentError(
-                            "browser.invalidTarget", "Browser network policy denies opening"
-                        )
                     if self.setup and self.setup.exit_code is None:
                         raise AgentError("browser.busy", "Browser setup is active")
                     if self.worker:
-                        if self.browser_id == args.browser_id and (await self.rpc("health"))["ok"]:
-                            return {"browserId": self.browser_id}
+                        if (
+                            self.browser_id == args.browser_id
+                            and self.session_id == args.session_id
+                            and (await self.rpc("health"))["ok"]
+                        ):
+                            return {"browserId": self.browser_id, "protocol": "chat-browser-v1"}
                         raise AgentError("browser.busy", "Another browser is active")
                     try:
                         self.publish_receipts.clear()
@@ -691,10 +677,11 @@ class BrowserManager:
                                 "Browser is not ready",
                             )
                         self.browser_id = args.browser_id
+                        self.session_id = args.session_id
                     except BaseException:
                         await self.close()
                         raise
-                    return {"browserId": self.browser_id}
+                    return {"browserId": self.browser_id, "protocol": "chat-browser-v1"}
                 if action == "close" and self.browser_id is None:
                     return {"ok": True}
                 if args.browser_id != self.browser_id:
@@ -703,28 +690,22 @@ class BrowserManager:
                     await self.close()
                     return {"ok": True}
                 if action == "view":
-                    if self.view_task:
-                        self.view_task.cancel()
-                        await asyncio.gather(self.view_task, return_exceptions=True)
                     result = await self.rpc("view")
                     ready = asyncio.get_running_loop().create_future()
-                    self.view_task = asyncio.create_task(
+                    view = asyncio.create_task(
                         self.relay(result["socket"], args.relay_id, args.relay_token, ready)
                     )
+                    self.view_tasks.add(view)
+                    view.add_done_callback(self.view_tasks.discard)
                     if not await ready:
                         raise AgentError("browser.notConnected", "Browser relay could not connect")
-                    return {"ok": True}
+                    return {"ok": True, "protocol": "page-stream-v1"}
                 if action == "files":
                     return await self.rpc("files")
                 if action == "publish":
                     return await self.publish(args)
                 if action == "upload":
                     return await self.stage_upload(args)
-                if action == "execute" and not args.allow_network:
-                    await self.close()
-                    raise AgentError(
-                        "browser.invalidTarget", "Browser network policy denies execution"
-                    )
                 if action in {"resize", "navigation"}:
                     # Drain the response under the same lock even if a viewer disappears.
                     # Cancelling this pipe RPC would otherwise close the live browser.
@@ -749,6 +730,52 @@ class BrowserManager:
         except Exception:
             logger.error("Browser operation failed")
             raise AgentError("browser.actionFailed", "Browser operation failed") from None
+
+
+class BrowserManager(BrowserRuntime):
+    """Route each chat's opaque browser ID to its own disposable worker."""
+
+    def __init__(self, config, terminal, filesystem=None):
+        super().__init__(config, terminal, filesystem)
+        self.runtimes: dict[str, BrowserRuntime] = {}
+
+    @property
+    def maintenance_busy(self) -> bool:
+        return bool(self.runtimes) or super().maintenance_busy
+
+    async def dispatch(self, operation: str, args) -> dict:
+        action = operation.rsplit(".", 1)[-1]
+        if action.startswith("setup") or action == "status":
+            if self.runtimes:
+                if action == "status":
+                    return await next(iter(self.runtimes.values())).dispatch(operation, args)
+                if action == "setup":
+                    raise AgentError("browser.busy", "Browser runtime is active")
+            return await super().dispatch(operation, args)
+        async with self.lock:
+            runtime = self.runtimes.get(args.browser_id)
+            if runtime is None:
+                if action == "close":
+                    return {"ok": True}
+                if action != "open":
+                    raise AgentError("browser.notConnected", "Browser identifier is unavailable")
+                if len(self.runtimes) >= 8 or (self.setup and self.setup.exit_code is None):
+                    raise AgentError("browser.busy", "Browser runtime capacity is unavailable")
+                runtime = BrowserRuntime(self.config, self.terminal, self.filesystem)
+                runtime.installation, runtime.container = self.installation, self.container
+                self.runtimes[args.browser_id] = runtime
+        try:
+            return await runtime.dispatch(operation, args)
+        finally:
+            if runtime.worker is None and self.runtimes.get(args.browser_id) is runtime:
+                self.runtimes.pop(args.browser_id, None)
+
+    async def close(self, *, stop_setup: bool = False) -> None:
+        runtimes, self.runtimes = self.runtimes, {}
+        await asyncio.gather(
+            super().close(stop_setup=stop_setup),
+            *(runtime.close() for runtime in runtimes.values()),
+        )
 
 
 async def finish_setup() -> int:
@@ -783,7 +810,7 @@ async def finish_setup() -> int:
             print("Chromium installation completed.", flush=True)
         print("Starting the browser runtime check.", flush=True)
         await manager.spawn(root)
-        status = BrowserStatus.model_validate(await manager.rpc("start", probe=True))
+        status = BrowserStatus.model_validate(await manager.rpc("start"))
         if status.state != "ready":
             raise AgentError(status.error_code or "browser.notReady", "Browser probe failed")
         print(f"Chromium: {status.browser_version}", flush=True)

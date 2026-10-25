@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 import pytest
 from browser_helpers import ORIGIN, file_url, open_view, other_session, view_url
 from browser_helpers import env as env
-from fastapi import UploadFile, WebSocketDisconnect
+from fastapi import WebSocketDisconnect
 from PIL import Image
 
 import mato_loop_backend.tools.access as mock_tools_access
@@ -28,8 +28,13 @@ from mato_loop_backend.models import (
     AgentRun,
     ExecutionAgent,
     LoginSession,
+    PermissionGrant,
 )
-from mato_loop_backend.permissions.policy import PermissionDecision
+from mato_loop_backend.permissions.policy import (
+    PermissionDecision,
+    PermissionPolicy,
+    integration_resource_scope,
+)
 from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
     IntegrationSettings,
@@ -38,6 +43,18 @@ from mato_loop_backend.settings import (
 )
 from mato_loop_backend.settings.models import IntegrationPermissions
 from mato_loop_backend.tools.context import ToolContext
+from mato_loop_backend.tools.registry import _model_revision
+
+
+@pytest.fixture
+def session_upload(monkeypatch):
+    with TemporaryFile() as handle:
+        handle.write(b"x")
+        handle.seek(0)
+        monkeypatch.setattr(routes, "RootFileService", lambda *_args, **_kwargs: SimpleNamespace(
+            open_file=lambda *_args: handle,
+        ))
+        yield handle
 
 
 @pytest.mark.parametrize("color_scheme", ["light", "dark"])
@@ -47,6 +64,17 @@ def test_new_browser_uses_frontend_color_scheme(env, color_scheme):
     ) as control:
         assert control.receive_json()["type"] == "state"
         assert env.calls[0][1]["colorScheme"] == color_scheme
+
+
+def test_different_chats_have_independent_browser_bindings(env):
+    session_b = other_session(env)
+    with env.client.websocket_connect(env.url, headers=ORIGIN) as a:
+        state_a = a.receive_json()
+        with env.client.websocket_connect(env.url.replace(str(env.session.id), str(session_b.id)), headers=ORIGIN) as b:
+            state_b = b.receive_json()
+            assert state_b["type"] == "state" and state_b["browserId"] != state_a["browserId"]
+            assert len(env.coordinator.connections) == 2
+            assert env.client.post(file_url(env, state_b, "clipboard/copy")).status_code >= 400
 
 
 @pytest.fixture
@@ -89,7 +117,7 @@ def wire(env, monkeypatch):
 
 @pytest.mark.parametrize("invalid", [
     "origin", "missing-origin", "login", "expired", "login-owner", "inactive", "missing-session",
-    "session-owner", "child", "automation", "agent-owner", "revoked", "binding", "tab", "tab-kind",
+    "session-owner", "child", "automation", "agent-owner", "revoked", "binding",
     "integration", "disabled", "global-disabled",
 ])
 def test_websocket_access_denied_before_any_rpc(env, monkeypatch, invalid):
@@ -147,82 +175,35 @@ def test_unavailable_agent_never_receives_open(env, unavailable):
     assert not env.coordinator.connections
 
 
-def test_exclusive_viewer_attachment_survives_viewer_and_control_disconnect(env):
+def test_views_share_one_runtime_without_takeover_and_survive_disconnect(env):
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
-        assert state["canAttach"] and not state["attached"]
-        control.send_json({"type": "attach"})
-        assert control.receive_json()["error"]["code"] == "browser.busy"
         with env.client.websocket_connect(env.url, headers=ORIGIN) as duplicate:
-            offer = duplicate.receive_json()
-            assert offer["status"] == "occupied" and offer["canTakeover"]
-            assert offer["browserId"] == state["browserId"] and offer["viewId"] == state["viewId"]
+            second = duplicate.receive_json()
+            assert second["browserId"] == state["browserId"] and second["viewId"] != state["viewId"]
+            with open_view(env, state), open_view(env, second):
+                assert len(env.coordinator.connections[(env.session.id, env.agent.id)].view_sockets) == 2
         with env.client.websocket_connect(view_url(env, state), headers=ORIGIN) as viewer:
-            control.send_json({"type": "attach"})
-            assert control.receive_json()["attached"]
-            connection = env.coordinator.connections[env.agent.id]
-            assert env.coordinator.attached_for(env.session.id, env.agent.id) is connection
+            connection = env.coordinator.connections[(env.session.id, env.agent.id)]
+            assert env.coordinator.current_for(env.session.id, env.agent.id) is connection
             viewer.close()
-            assert control.receive_json()["attached"]
             assert viewer.receive()["type"] == "websocket.close"
-    assert env.coordinator.attached_for(env.session.id, env.agent.id) is connection
-    assert connection.websocket is None and connection.view_socket is None
+    assert env.coordinator.current_for(env.session.id, env.agent.id) is connection
+    assert not connection.sockets and not connection.view_sockets
     with env.client.websocket_connect(env.url, headers=ORIGIN) as resumed:
         restored = resumed.receive_json()
-        assert restored["browserId"] == state["browserId"] and restored["attached"]
-        assert restored["viewId"] == state["viewId"]
-        assert env.coordinator.connections[env.agent.id] is connection
+        assert restored["browserId"] == state["browserId"]
+        assert restored["viewId"] != state["viewId"]
+        assert env.coordinator.connections[(env.session.id, env.agent.id)] is connection
         assert not connection.closed
         with open_view(env, restored):
-            assert env.coordinator.attached_for(env.session.id, env.agent.id) is connection
+            assert env.coordinator.current_for(env.session.id, env.agent.id) is connection
     assert sum(op == "integration.browser.open" for op, _ in env.calls) == 1
     assert not any(op == "integration.browser.setup" for op, _ in env.calls)
 
 
-def test_detach_resets_view_before_unlock_and_reopens_same_browser_without_attachment(env):
-    started, finish = asyncio.Event(), asyncio.Event()
-
-    async def reply(operation, arguments):
-        if operation == "integration.browser.control" and arguments["manual"] and env.coordinator.connections[env.agent.id].resetting_view:
-            assert env.coordinator.connections[env.agent.id].resetting_view
-            started.set()
-            await finish.wait()
-
-    env.reply = reply
-    with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
-        state = control.receive_json()
-        with open_view(env, state):
-            connection = env.coordinator.connections[env.agent.id]
-            control.send_json({"type": "attach"})
-            assert control.receive_json()["attached"] and not env.manual
-            control.send_json({"type": "detach"})
-            detached = control.receive_json()
-            assert detached["type"] == "state" and not detached["attached"]
-            assert detached["browserId"] == state["browserId"]
-            assert control.receive_json() == {"type": "view.reset"}
-            try:
-                env.client.portal.call(asyncio.wait_for, started.wait(), 1)
-                assert not env.manual and connection.resetting_view
-                assert env.coordinator.attached_for(env.session.id, env.agent.id) is None
-            finally:
-                env.client.portal.call(finish.set)
-            unlocked = control.receive_json()
-            assert unlocked["type"] == "state" and not unlocked["attached"] and not unlocked["busy"]
-            assert unlocked["browserId"] == state["browserId"] and env.manual
-            assert not connection.resetting_view and connection.view_socket is None
-        with open_view(env, state):
-            assert connection.browser_id == UUID(state["browserId"])
-            assert not connection.attached and env.manual
-            assert env.coordinator.attached_for(env.session.id, env.agent.id) is None
-            control.send_json({"type": "attach"})
-            assert control.receive_json()["attached"] and not env.manual
-        assert [args["manual"] for op, args in env.calls if op == "integration.browser.control"] == [True, False, True, False]
-        assert sum(op == "integration.browser.open" for op, _ in env.calls) == 1
-        assert sum(op == "integration.browser.view" for op, _ in env.calls) == 2
-
-
 @pytest.mark.parametrize("gate", ["default", "explicit", "missing-profile"])
-def test_profile_gate_allows_manual_view_but_never_attachment(env, monkeypatch, gate):
+def test_profile_gate_allows_manual_view_but_not_model_actions(env, monkeypatch, gate):
     if gate == "default":
         env.profile.integrations_enabled_by_default = False
     elif gate == "explicit":
@@ -231,15 +212,16 @@ def test_profile_gate_allows_manual_view_but_never_attachment(env, monkeypatch, 
         monkeypatch.setattr(execution, "load_agent_profile", AsyncMock(side_effect=execution.AgentProfileUnavailable))
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
-        assert not state["canAttach"] and state["attachReason"] == "tool.unavailable"
         with open_view(env, state):
-            control.send_json({"type": "attach"})
-            assert control.receive_json()["error"]["code"] == "tool.unavailable"
-            assert env.coordinator.attached_for(env.session.id, env.agent.id) is None
+            connection = env.coordinator.current_for(env.session.id, env.agent.id)
+            assert not connection.model_available
+            with pytest.raises(ExecutionClientError):
+                env.client.portal.call(env.coordinator.execute, env.session.id, env.agent.id, env.instance.id,
+                                       {"action": "tabs", "expectedBrowserId": state["browserId"]})
 
 
-@pytest.mark.parametrize("change", ["login", "expired", "tab", "binding", "disabled", "global-disabled", "generation", "profile"])
-def test_live_access_revocation_closes_or_detaches_viewer(env, monkeypatch, change):
+@pytest.mark.parametrize("change", ["binding", "disabled", "global-disabled", "generation"])
+def test_live_access_revocation_closes_browser(env, monkeypatch, change):
     watch = env.coordinator.watch
     watch_gate = asyncio.Event()
 
@@ -252,9 +234,6 @@ def test_live_access_revocation_closes_or_detaches_viewer(env, monkeypatch, chan
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            control.send_json({"type": "attach"})
-            attached = control.receive_json()
-            assert attached.get("attached"), attached
             if change == "login":
                 env.objects.pop((LoginSession, env.login.id))
             elif change == "expired":
@@ -273,19 +252,10 @@ def test_live_access_revocation_closes_or_detaches_viewer(env, monkeypatch, chan
                 env.instance.profile_permissions[env.profile.id] = IntegrationPermissions(available=False)
             env.client.portal.call(watch_gate.set)
             event = control.receive_json()
-            assert event["type"] == ("state" if change == "profile" else "error")
-            assert env.coordinator.attached_for(env.session.id, env.agent.id) is None
-
-    assert [
-        (call.kwargs["payload"]["reason"], call.kwargs["payload"]["errorCode"])
-        for call in env.diagnostics.call_args_list if call.args[1] == "browser.detached"
-    ] == [(
-        "accessRevoked" if change == "profile" else "agentDisconnected" if change == "generation" else "watchFailed",
-        "tool.unavailable" if change == "profile" else event["error"]["code"],
-    )]
+            assert event["type"] == "error"
 
 
-def test_detach_during_busy_action_is_immediate_and_does_not_cancel_rpc(env):
+def test_view_disconnect_during_action_does_not_cancel_rpc(env):
     started, finish = asyncio.Event(), asyncio.Event()
     cancelled = []
 
@@ -303,40 +273,67 @@ def test_detach_during_busy_action_is_immediate_and_does_not_cancel_rpc(env):
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            control.send_json({"type": "attach"})
-            control.receive_json()
-            connection = env.coordinator.connections[env.agent.id]
+            connection = env.coordinator.connections[(env.session.id, env.agent.id)]
             args = {"action": "navigate", "tabId": str(uuid4()), "url": "https://page.test/",
-                    "expectedBrowserId": state["browserId"], "expectedAttachmentRevision": connection.attachment_revision}
+                    "expectedBrowserId": state["browserId"]}
             task = env.client.portal.start_task_soon(env.coordinator.execute, env.session.id, env.agent.id, env.instance.id, args)
             try:
                 env.client.portal.call(asyncio.wait_for, started.wait(), 1)
                 assert control.receive_json()["busy"]
-                control.send_json({"type": "detach"})
-                detached = control.receive_json()
-                assert detached["busy"] and not detached["attached"]
+                control.send_json({"type": "release"})
+                assert control.receive()["type"] == "websocket.close"
                 assert not task.done() and not cancelled
             finally:
                 env.client.portal.call(finish.set)
             task.result(timeout=2)
-            assert control.receive_json()["busy"]  # Manual input stays locked until viewer rotation finishes.
-            assert control.receive_json() == {"type": "view.reset"}
-            detached = control.receive_json()
-            assert detached["type"] == "state" and not detached["busy"] and not detached["attached"]
-            assert detached["browserId"] == state["browserId"] and env.manual
+            assert not connection.busy and env.manual
+
+
+def test_session_cancel_interrupts_an_active_browser_command(env, wire, monkeypatch):
+    started = asyncio.Event()
+    run_id = uuid4()
+    monkeypatch.setattr(AgentRuntime, "_tasks", {})
+    monkeypatch.setattr(AgentRuntime, "_cancellable_runs", {run_id})
+    monkeypatch.setattr(AgentRuntime, "_user_cancelled_runs", set())
+
+    async def reply(operation, arguments):
+        if operation == "integration.browser.execute":
+            started.set()
+            await asyncio.Event().wait()
+
+    env.reply = reply
+    with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
+        state = control.receive_json()
+
+        async def cancel():
+            task = asyncio.create_task(env.coordinator.execute(
+                env.session.id, env.agent.id, env.instance.id,
+                {"action": "navigate", "tabId": str(uuid4()), "url": "https://page.test/", "expectedBrowserId": state["browserId"]},
+            ))
+            AgentRuntime._tasks[run_id] = task
+            try:
+                await asyncio.wait_for(started.wait(), 1)
+                AgentRuntime.cancel(run_id)
+            finally:
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, 2)
+
+        env.client.portal.call(cancel)
+        request = next(message for message in wire if message.get("operation") == "integration.browser.execute")
+        assert [message["id"] for message in wire if message["type"] == "cancel"] == [request["id"]]
 
 
 @pytest.mark.parametrize("action", ["click", "inspect"])
-def test_detach_during_locked_snapshot_prevents_approved_action_dispatch(env, action):
+def test_access_revoked_during_snapshot_prevents_approved_action_dispatch(env, action):
     started, finish = asyncio.Event(), asyncio.Event()
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            control.send_json({"type": "attach"})
-            control.receive_json()
-            connection = env.coordinator.connections[env.agent.id]
+            connection = env.coordinator.connections[(env.session.id, env.agent.id)]
             tab_id = str(uuid4())
             snapshot = env.client.portal.call(env.coordinator.snapshot, env.session.id, env.agent.id, env.instance.id, tab_id)
+            control.receive_json()
+            control.receive_json()
 
             async def reply(operation, arguments):
                 if operation == "integration.browser.execute" and arguments["action"] == "inspect":
@@ -345,41 +342,38 @@ def test_detach_during_locked_snapshot_prevents_approved_action_dispatch(env, ac
 
             env.reply = reply
             args = {"action": action, "tabId": tab_id, **({"selector": "button"} if action == "click" else {}), "expectedSnapshot": snapshot,
-                    "expectedBrowserId": state["browserId"], "expectedAttachmentRevision": connection.attachment_revision}
+                    "expectedBrowserId": state["browserId"]}
             task = env.client.portal.start_task_soon(env.coordinator.execute, env.session.id, env.agent.id, env.instance.id, args)
             try:
                 env.client.portal.call(asyncio.wait_for, started.wait(), 1)
                 assert control.receive_json()["busy"]
-                control.send_json({"type": "detach"})
-                assert not control.receive_json()["attached"]
+                connection.model_available = False
             finally:
                 env.client.portal.call(finish.set)
             with pytest.raises(ExecutionClientError, match="browser.bindingChanged"):
                 task.result(timeout=2)
-            assert control.receive_json()["busy"]
-            assert control.receive_json() == {"type": "view.reset"}
             detached = control.receive_json()
-            assert detached["type"] == "state" and not detached["busy"] and not detached["attached"]
+            assert detached["type"] == "state" and not detached["busy"]
             assert detached["browserId"] == state["browserId"] and env.manual
             assert not any(arguments.get("action") == "click" for _, arguments in env.calls)
 
 
 @pytest.mark.parametrize("action", ["click", "inspect", "upload"])
-@pytest.mark.parametrize("change", ["digest", "url", "tab", "missing", "revision"])
+@pytest.mark.parametrize("change", ["digest", "url", "tab", "missing", "binding"])
 def test_stale_snapshot_after_approval_never_dispatches_action(env, change, action, caplog):
     caplog.set_level("INFO", logger=execution.__name__)
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            control.send_json({"type": "attach"})
-            control.receive_json()
-            connection = env.coordinator.connections[env.agent.id]
+            connection = env.coordinator.connections[(env.session.id, env.agent.id)]
             tab_id = str(uuid4())
             snapshot = env.client.portal.call(env.coordinator.snapshot, env.session.id, env.agent.id, env.instance.id, tab_id)
+            control.receive_json()
+            control.receive_json()
             action_args = ({"selector": "button"} if action == "click" else
                            {"selector": "input", "uploadId": str(uuid4())} if action == "upload" else {})
             args = {"action": action, "tabId": tab_id, **action_args, "expectedSnapshot": snapshot,
-                    "expectedBrowserId": state["browserId"], "expectedAttachmentRevision": connection.attachment_revision}
+                    "expectedBrowserId": state["browserId"]}
 
             async def reply(operation, arguments):
                 if operation == "integration.browser.execute" and arguments["action"] == "inspect":
@@ -388,8 +382,8 @@ def test_stale_snapshot_after_approval_never_dispatches_action(env, change, acti
                             "data": {} if change == "missing" else {"snapshotSha256": ("b" if change == "digest" else "a") * 64}}
 
             env.reply = reply
-            if change == "revision":
-                connection.attachment_revision += 2
+            if change == "binding":
+                args["expectedBrowserId"] = str(uuid4())
             code = "browser.snapshotChanged" if change in {"digest", "url"} else "browser.bindingChanged"
             with pytest.raises(ExecutionClientError, match=code):
                 env.client.portal.call(env.coordinator.execute, env.session.id, env.agent.id, env.instance.id, args)
@@ -400,12 +394,11 @@ def test_stale_snapshot_after_approval_never_dispatches_action(env, change, acti
             assert record.args[0] == "execute" and record.args[2] == "error"
             timings = record.args[-1]
             assert "total_ms" in timings and "action_rpc_ms" not in timings
-            assert ("reinspection_rpc_ms" in timings) == (change != "revision")
+            assert ("reinspection_rpc_ms" in timings) == (change != "binding")
 
 
 @pytest.mark.parametrize("action", ["tabs", "inspect", "screenshot", "diagnostics"])
 def test_browser_auto_read_from_registry_through_coordinator(env, monkeypatch, action):
-    env.instance._browser_attached = True
     integrations = IntegrationSettings(instances=[env.instance])
     monkeypatch.setattr(execution, "browser_coordinator", env.coordinator)
     monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=integrations))
@@ -432,9 +425,7 @@ def test_browser_auto_read_from_registry_through_coordinator(env, monkeypatch, a
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            control.send_json({"type": "attach"})
-            assert control.receive_json()["attached"]
-            connection = env.coordinator.connections[env.agent.id]
+            connection = env.coordinator.connections[(env.session.id, env.agent.id)]
             name = {"tabs": "browser_tabs", "inspect": "browser_snapshot", "screenshot": "browser_take_screenshot", "diagnostics": "browser_diagnostics"}[action]
             arguments = {"tabId": env.navigation["activeTabId"]} if action in {"inspect", "screenshot"} else {"action": "list"} if action == "tabs" else {}
             call = ToolCall("browser-read", name, arguments)
@@ -446,11 +437,12 @@ def test_browser_auto_read_from_registry_through_coordinator(env, monkeypatch, a
             context.db.get.return_value = SimpleNamespace(
                 execution_agent_id=env.agent.id, execution_operations=["integration.browser.execute"],
             )
+            env.objects[AgentRun, context.run_id] = AgentRun(id=context.run_id, session_id=env.session.id, status="completed")
             registry = mock_tools_catalog.ToolRegistry([]).effective(integrations)
             result = env.client.portal.call(registry.execute, call, context)
             assert not result.is_error, result.content
             context.ask_handler.assert_awaited_once()
-            assert context.ask_handler.await_args.args[0].capability == "browser.read"
+            assert context.ask_handler.await_args.args[0].capability == "browser.use"
             calls = [args["action"] for op, args in env.calls if op == "integration.browser.execute"]
             assert calls == [action]
             inspections = [args for op, args in env.calls if op == "integration.browser.execute" and args["action"] == "inspect"]
@@ -465,7 +457,6 @@ def test_browser_auto_read_from_registry_through_coordinator(env, monkeypatch, a
 def test_structured_browser_upload_stages_revalidates_executes_and_cleans(
     env, monkeypatch, root, deny_after_transfer,
 ):
-    env.instance._browser_attached = True
     integrations = IntegrationSettings(instances=[env.instance])
     monkeypatch.setattr(execution, "browser_coordinator", env.coordinator)
     monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=integrations))
@@ -493,9 +484,7 @@ def test_structured_browser_upload_stages_revalidates_executes_and_cleans(
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            control.send_json({"type": "attach"})
-            assert control.receive_json()["attached"]
-            connection = env.coordinator.connections[env.agent.id]
+            connection = env.coordinator.connections[(env.session.id, env.agent.id)]
             connection.client.current_directory = "/home/user"
             call = ToolCall("browser-upload", "browser_upload", {
                 "root": root, "path": "sample.txt", "tabId": env.navigation["activeTabId"],
@@ -517,12 +506,13 @@ def test_structured_browser_upload_stages_revalidates_executes_and_cleans(
                 execution_agent_id=env.agent.id,
                 execution_operations=["integration.browser.execute"],
             )
+            env.objects[AgentRun, context.run_id] = AgentRun(id=context.run_id, session_id=env.session.id, status="completed")
             result = env.client.portal.call(
                 mock_tools_catalog.ToolRegistry([]).effective(integrations).execute, call, context,
             )
             assert result.is_error is deny_after_transfer
             requests = [item.args[0] for item in context.ask_handler.await_args_list]
-            expected = ["session.files.read" if root == "files" else "filesystem.read", "browser.write"]
+            expected = ["session.files.read" if root == "files" else "filesystem.read", "browser.use"]
             assert [request.capability for request in requests] == (
                 expected + expected[:1] if deny_after_transfer else expected * 2
             )
@@ -535,7 +525,6 @@ def test_structured_browser_upload_stages_revalidates_executes_and_cleans(
 
 @pytest.fixture
 def browser_tool(env, monkeypatch, wire):
-    env.instance._browser_attached = True
     integrations = IntegrationSettings(instances=[env.instance])
     monkeypatch.setattr(execution, "browser_coordinator", env.coordinator)
     monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=integrations))
@@ -556,9 +545,7 @@ def browser_tool(env, monkeypatch, wire):
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            control.send_json({"type": "attach"})
-            assert control.receive_json()["attached"]
-            connection = env.coordinator.connections[env.agent.id]
+            connection = env.coordinator.connections[(env.session.id, env.agent.id)]
             fields = [
                 {"name": "Name", "ref": "e1", "type": "textbox", "value": "Ada"},
                 {"name": "Active", "ref": "e2", "type": "checkbox", "value": "false"},
@@ -576,6 +563,7 @@ def browser_tool(env, monkeypatch, wire):
             context.db.get.return_value = SimpleNamespace(
                 execution_agent_id=env.agent.id, execution_operations=["integration.browser.execute"],
             )
+            env.objects[AgentRun, context.run_id] = AgentRun(id=context.run_id, session_id=env.session.id, status="completed")
             yield SimpleNamespace(
                 env=env, call=call, context=context, connection=connection, frames=wire,
                 registry=mock_tools_catalog.ToolRegistry([]).effective(integrations),
@@ -631,12 +619,11 @@ def test_fill_form_permission_wire_and_partial_prefix(browser_tool, observe, err
     else:
         assert "data" not in payload and "text" not in payload
     requests = [call.args[0] for call in case.context.ask_handler.await_args_list]
-    assert [request.capability for request in requests] == ["browser.write", *(["browser.read"] if observe else [])]
+    assert [request.capability for request in requests] == ["browser.use"]
     for request in requests:
         arguments = case.registry.tools[case.call.name].definition.validate_arguments(case.call.arguments).to_action().model_dump(mode="json")
         operation = {
             **arguments, "browserId": str(case.connection.browser_id),
-            "attachmentRevision": case.connection.attachment_revision,
             "capability": request.capability,
         }
         key = json.loads(request.resource_scope)["operationKey"]
@@ -649,16 +636,15 @@ def test_fill_form_permission_wire_and_partial_prefix(browser_tool, observe, err
     assert [call["settle"] for call in calls] == [False]
     assert all("snapshotSha256" not in call for call in calls)
     assert calls[-1] == {
-        **case.registry.tools[case.call.name].definition.validate_arguments(case.call.arguments).to_action().model_dump(mode="json", exclude={"snapshot_sha256", "code", "function", "slowly", "submit"}),
-        "browserId": str(case.connection.browser_id), "allowNetwork": True, "settle": False, "guard": False,
+        **case.registry.tools[case.call.name].definition.validate_arguments(case.call.arguments).to_action().model_dump(mode="json", exclude={"code", "function", "slowly", "submit"}),
+        "browserId": str(case.connection.browser_id), "settle": False, "guard": False,
     }
 
 
 @pytest.mark.parametrize("change,code", [
     ("source", "tool.invalidArguments"), ("digest", "browser.snapshotChanged"),
-    ("url", "browser.snapshotChanged"), ("revision", "browser.bindingChanged"),
-    ("binding", "browser.bindingChanged"), ("deny-write", "permission.denied"),
-    ("deny-read", "permission.denied"),
+    ("url", "browser.snapshotChanged"), ("access", "browser.notConnected"),
+    ("binding", "browser.bindingChanged"), ("deny-use", "permission.denied"),
 ])
 def test_fill_form_stale_or_denied_never_dispatches(browser_tool, change, code):
     case = browser_tool
@@ -673,8 +659,8 @@ def test_fill_form_stale_or_denied_never_dispatches(browser_tool, change, code):
             request, case.call, case.context.session,
             SimpleNamespace(execution_agent_id=case.env.agent.id), case.context.approval_resolution,
         )
-        if change == "revision":
-            case.connection.attachment_revision += 1
+        if change == "access":
+            case.connection.model_available = False
         elif change == "binding":
             case.connection.browser_id = uuid4()
         if change == f"deny-{request.capability.split('.')[-1]}":
@@ -788,8 +774,8 @@ def test_browser_inspection_reuse_and_latency_phases(env, monkeypatch, caplog, a
     monkeypatch.setattr(execution, "monotonic", lambda: clock[0])
     check_access = execution.BrowserConnection.check_access
 
-    async def access(connection):
-        await check_access(connection)
+    async def access(connection, **kwargs):
+        await check_access(connection, **kwargs)
         clock[0] += 0.2
 
     monkeypatch.setattr(execution.BrowserConnection, "check_access", access)
@@ -813,14 +799,14 @@ def test_browser_inspection_reuse_and_latency_phases(env, monkeypatch, caplog, a
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            control.send_json({"type": "attach"})
-            assert control.receive_json()["attached"]
-            connection = env.coordinator.connections[env.agent.id]
+            connection = env.coordinator.connections[(env.session.id, env.agent.id)]
             tab_id = str(uuid4())
             snapshot = env.client.portal.call(env.coordinator.snapshot, env.session.id, env.agent.id, env.instance.id, tab_id)
+            control.receive_json()
+            control.receive_json()
             args = {"action": action, "tabId": tab_id, "expectedSnapshot": snapshot,
                     **({"selector": "#private-selector"} if action == "click" else {}),
-                    "expectedBrowserId": state["browserId"], "expectedAttachmentRevision": connection.attachment_revision}
+                    "expectedBrowserId": state["browserId"]}
 
             async def execute_after_lock_wait():
                 await connection.action_lock.acquire()
@@ -862,23 +848,21 @@ def test_browser_inspection_reuse_and_latency_phases(env, monkeypatch, caplog, a
             assert "private" not in caplog.text and snapshot not in caplog.text
 
 
-@pytest.mark.parametrize("failure", [None, "missing", "id", "size", "empty", "offset", "complete", "detach", "detach-delete", "detach-state"])
+@pytest.mark.parametrize("failure", [None, "missing", "id", "size", "empty", "offset", "complete", "revoked", "revoked-delete", "revoked-state"])
 def test_screenshot_chunks_are_private_bounded_and_deleted(env, failure, monkeypatch):
     image = b"temporary screenshot bytes" * 30000
     screenshot_id = str(uuid4())
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            control.send_json({"type": "attach"})
-            control.receive_json()
-            connection = env.coordinator.connections[env.agent.id]
+            connection = env.coordinator.connections[(env.session.id, env.agent.id)]
             tab_id = str(uuid4())
             snapshot = env.client.portal.call(env.coordinator.snapshot, env.session.id, env.agent.id, env.instance.id, tab_id)
             send_state = execution.BrowserConnection.state
 
             async def changed_state(current):
-                if failure == "detach-state" and current is connection and not current.busy:
-                    current.detach()
+                if failure == "revoked-state" and current is connection and not current.busy:
+                    env.profile.integrations_enabled_by_default = False
                 await send_state(current)
 
             monkeypatch.setattr(execution.BrowserConnection, "state", changed_state)
@@ -894,8 +878,8 @@ def test_screenshot_chunks_are_private_bounded_and_deleted(env, failure, monkeyp
                     offset = arguments["offset"]
                     data = image[offset:offset + arguments["maxBytes"]]
                     assert len(data) <= 65536
-                    if failure == "detach":
-                        connection.detach()
+                    if failure == "revoked":
+                        env.profile.integrations_enabled_by_default = False
                     return {
                         "fileId": str(uuid4()) if failure == "id" else screenshot_id,
                         "size": len(image) + (failure == "size"),
@@ -903,12 +887,12 @@ def test_screenshot_chunks_are_private_bounded_and_deleted(env, failure, monkeyp
                         "complete": True if failure == "complete" else offset + len(data) == len(image),
                         "data": base64.b64encode(b"" if failure == "empty" else data).decode(),
                     }
-                if operation == "integration.browser.file" and arguments["action"] == "delete" and failure == "detach-delete":
-                    connection.detach()
+                if operation == "integration.browser.file" and arguments["action"] == "delete" and failure == "revoked-delete":
+                    env.profile.integrations_enabled_by_default = False
 
             env.reply = reply
             args = {"action": "screenshot", "tabId": tab_id, "expectedSnapshot": snapshot,
-                    "expectedBrowserId": state["browserId"], "expectedAttachmentRevision": connection.attachment_revision}
+                    "expectedBrowserId": state["browserId"]}
             if failure is None:
                 result = env.client.portal.call(env.coordinator.execute, env.session.id, env.agent.id, env.instance.id, args)
                 assert len(result._screenshot_bytes) > 500000
@@ -916,7 +900,7 @@ def test_screenshot_chunks_are_private_bounded_and_deleted(env, failure, monkeyp
                 assert "temporary screenshot bytes" not in result.model_dump_json()
                 assert len(result.model_dump_json()) < 1000
             else:
-                code = "browser.bindingChanged" if failure in {"detach", "detach-delete", "detach-state"} else "executionAgent.protocolError"
+                code = "browser.bindingChanged" if failure in {"revoked", "revoked-delete", "revoked-state"} else "executionAgent.protocolError"
                 with pytest.raises(ExecutionClientError, match=code):
                     env.client.portal.call(env.coordinator.execute, env.session.id, env.agent.id, env.instance.id, args)
             deletions = [args for op, args in env.calls if op == "integration.browser.file" and args["action"] == "delete"]
@@ -930,9 +914,6 @@ def test_snapshot_file_is_streamed_and_deleted(env):
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            control.send_json({"type": "attach"})
-            control.receive_json()
-            connection = env.coordinator.connections[env.agent.id]
             tab_id = str(uuid4())
 
             async def reply(operation, arguments):
@@ -967,7 +948,6 @@ def test_snapshot_file_is_streamed_and_deleted(env):
                     "action": "inspect",
                     "tabId": tab_id,
                     "expectedBrowserId": state["browserId"],
-                    "expectedAttachmentRevision": connection.attachment_revision,
                 },
             )
             with result._snapshot_stream as stream:
@@ -987,9 +967,7 @@ def test_cancelled_screenshot_drains_capture_and_deletes_staging(env, phase):
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            control.send_json({"type": "attach"})
-            control.receive_json()
-            connection = env.coordinator.connections[env.agent.id]
+            connection = env.coordinator.connections[(env.session.id, env.agent.id)]
             tab_id = str(uuid4())
             snapshot = env.client.portal.call(env.coordinator.snapshot, env.session.id, env.agent.id, env.instance.id, tab_id)
 
@@ -1006,7 +984,7 @@ def test_cancelled_screenshot_drains_capture_and_deletes_staging(env, phase):
 
             env.reply = reply
             args = {"action": "screenshot", "tabId": tab_id, "expectedSnapshot": snapshot,
-                    "expectedBrowserId": state["browserId"], "expectedAttachmentRevision": connection.attachment_revision}
+                    "expectedBrowserId": state["browserId"]}
 
             async def cancel():
                 task = asyncio.create_task(env.coordinator.execute(env.session.id, env.agent.id, env.instance.id, args))
@@ -1036,8 +1014,6 @@ def test_malformed_snapshot_is_rejected_before_becoming_approval_binding(env, di
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            control.send_json({"type": "attach"})
-            control.receive_json()
             with pytest.raises(ExecutionClientError, match="executionAgent.protocolError"):
                 env.client.portal.call(env.coordinator.snapshot, env.session.id, env.agent.id, env.instance.id, str(uuid4()))
 
@@ -1049,9 +1025,7 @@ def test_cancelled_inspect_never_returns_content_and_records_partial_latency(env
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            control.send_json({"type": "attach"})
-            assert control.receive_json()["attached"]
-            connection = env.coordinator.connections[env.agent.id]
+            connection = env.coordinator.connections[(env.session.id, env.agent.id)]
             tab_id = str(uuid4())
             snapshot = env.client.portal.call(env.coordinator.snapshot, env.session.id, env.agent.id, env.instance.id, tab_id)
 
@@ -1063,7 +1037,7 @@ def test_cancelled_inspect_never_returns_content_and_records_partial_latency(env
 
             env.reply = reply
             args = {"action": "inspect", "tabId": tab_id, "expectedSnapshot": snapshot,
-                    "expectedBrowserId": state["browserId"], "expectedAttachmentRevision": connection.attachment_revision}
+                    "expectedBrowserId": state["browserId"]}
 
             async def cancel():
                 if phase == "lock":
@@ -1220,7 +1194,7 @@ def test_malformed_setup_controls_never_start_installation(env, payload):
 def test_relay_token_is_one_use_and_bound_to_live_connection(env, invalid):
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         control.receive_json()
-        connection = env.coordinator.connections[env.agent.id]
+        connection = env.coordinator.connections[(env.session.id, env.agent.id)]
         relay = execution.BrowserRelay(connection)
         env.coordinator.relays[relay.relay_id] = relay
         token = relay.token
@@ -1249,7 +1223,7 @@ def test_real_binary_relay_bidirectional_bounded_and_one_use(env):
             async with asyncio.timeout(2):
                 while not relay.accepted:
                     await asyncio.sleep(0.001)
-            return {"ok": True}
+            return {"ok": True, "protocol": "page-stream-v1"}
 
     env.reply = reply
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
@@ -1261,8 +1235,8 @@ def test_real_binary_relay_bidirectional_bounded_and_one_use(env):
             headers = {"authorization": f"Bearer {relay.token}"}
             url = f"/browser-relay/{relay.relay_id}"
             with env.client.websocket_connect(url, headers=headers) as agent:
-                agent.send_bytes(b"RFB 003.008\n")
-                assert viewer.receive_bytes() == b"RFB 003.008\n"
+                agent.send_bytes(b"page-stream-frame")
+                assert viewer.receive_bytes() == b"page-stream-frame"
                 viewer.send_bytes(b"\x05\x01\x00\x01\x00\x02")
                 assert agent.receive_bytes() == b"\x05\x01\x00\x01\x00\x02"
                 with pytest.raises(WebSocketDisconnect) as error, env.client.websocket_connect(url, headers=headers):
@@ -1272,14 +1246,13 @@ def test_real_binary_relay_bidirectional_bounded_and_one_use(env):
                 assert len(viewer.receive_bytes()) == 1024 * 1024
                 agent.close()
                 assert viewer.receive()["type"] == "websocket.close"
-                assert not control.receive_json()["attached"]
     assert not env.coordinator.relays
 
 
 def test_relay_backpressure_blocks_until_queue_space_is_available(env):
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         control.receive_json()
-        relay = execution.BrowserRelay(env.coordinator.connections[env.agent.id])
+        relay = execution.BrowserRelay(env.coordinator.connections[(env.session.id, env.agent.id)])
         env.coordinator.relays[relay.relay_id] = relay
         with env.client.websocket_connect(f"/browser-relay/{relay.relay_id}",
                                           headers={"authorization": f"Bearer {relay.token}"}) as agent:
@@ -1301,13 +1274,13 @@ def test_relay_backpressure_blocks_until_queue_space_is_available(env):
             assert env.client.portal.call(drain) == [bytes([index]) for index in range(6)]
 
 
-async def test_rfb_requests_pass_while_browser_action_lock_is_held():
+async def test_page_stream_input_passes_transport_while_browser_action_lock_is_held():
     release = asyncio.Event()
 
     async def receive():
         if not release.is_set():
             release.set()
-            return {"type": "websocket.receive", "bytes": b"rfb-update-request"}
+            return {"type": "websocket.receive", "bytes": b"typed-input"}
         await asyncio.Event().wait()
 
     connection = SimpleNamespace(action_lock=asyncio.Lock(), closed=False)
@@ -1320,7 +1293,7 @@ async def test_rfb_requests_pass_while_browser_action_lock_is_held():
         )
     )
     try:
-        assert await asyncio.wait_for(outgoing.get(), 1) == b"rfb-update-request"
+        assert await asyncio.wait_for(outgoing.get(), 1) == b"typed-input"
         assert connection.action_lock.locked()
     finally:
         task.cancel()
@@ -1328,7 +1301,7 @@ async def test_rfb_requests_pass_while_browser_action_lock_is_held():
         connection.action_lock.release()
 
 
-@pytest.mark.parametrize("payload", ["text-not-rfb", b"x" * (1024 * 1024 + 1)])
+@pytest.mark.parametrize("payload", ["text-not-binary", b"x" * (1024 * 1024 + 1)])
 def test_viewer_rejects_nonbinary_and_oversized_frames_without_relaying(env, payload):
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
@@ -1351,22 +1324,22 @@ def test_clipboard_round_trip_preserves_text_and_utf8_byte_limit(env, text):
         url = file_url(env, state, "clipboard")
         written = env.client.put(url, json={"text": text})
         assert written.status_code == 200 and written.json() == {"text": text}
-        read = env.client.get(url)
+        read = env.client.post(file_url(env, state, "clipboard/copy"))
         assert read.status_code == 200 and read.json() == {"text": text}
         assert [args for op, args in env.calls if op == "integration.browser.clipboard"] == [
             {"browserId": state["browserId"], "action": "write", "text": text},
-            {"browserId": state["browserId"], "action": "read"},
+            {"browserId": state["browserId"], "action": "copy"},
         ]
 
 
-@pytest.mark.parametrize("method", ["GET", "PUT"])
+@pytest.mark.parametrize("method", ["POST", "PUT"])
 @pytest.mark.parametrize("invalid, code", [
     ("unauthenticated", "auth.notAuthenticated"), ("owner", "browser.notConnected"),
     ("session", "browser.notConnected"), ("browser", "browser.notConnected"),
     ("integration", "browser.notConnected"), ("expired", "auth.sessionExpired"),
     ("inactive", "auth.sessionExpired"), ("binding", "browser.bindingChanged"),
-    ("agent-owner", "executionAgent.notFound"), ("tab", "browser.notConnected"),
-    ("disabled", "browser.unavailable"), ("attached", "browser.busy"), ("busy", "browser.busy"),
+    ("agent-owner", "executionAgent.notFound"),
+    ("disabled", "browser.unavailable"), ("worker-locked", "browser.busy"), ("busy", "browser.busy"),
     ("view", "browser.notConnected"), ("login", "browser.notConnected"),
     ("global-disabled", "browser.unavailable"),
 ])
@@ -1374,8 +1347,8 @@ def test_clipboard_requires_live_authorized_manual_browser(env, monkeypatch, met
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            url = file_url(env, state, "clipboard")
-            connection = env.coordinator.connections[env.agent.id]
+            url = file_url(env, state, "clipboard" if method == "PUT" else "clipboard/copy")
+            connection = env.coordinator.connections[(env.session.id, env.agent.id)]
             if invalid == "unauthenticated":
                 monkeypatch.setattr(routes, "_browser_login", AsyncMock(return_value=None))
             elif invalid == "owner":
@@ -1408,16 +1381,15 @@ def test_clipboard_requires_live_authorized_manual_browser(env, monkeypatch, met
                 env.documents[UserIntegrationSettings, env.user.id].instances[0].enabled = False
             elif invalid == "global-disabled":
                 env.documents[IntegrationSettings, None].adapter_availability["browser"] = "disabled"
-            elif invalid == "attached":
-                control.send_json({"type": "attach"})
-                assert control.receive_json()["attached"] and not env.manual
+            elif invalid == "worker-locked":
+                connection.manual_enabled = False
             else:
                 connection.busy = True
             response = env.client.request(method, url, **({"json": {"text": "private clipboard"}} if method == "PUT" else {}))
             assert response.status_code >= 400 and response.json()["error"]["code"] == code
             if invalid == "unauthenticated":
                 assert response.status_code == 401
-            elif invalid in {"attached", "busy"}:
+            elif invalid in {"worker-locked", "busy"}:
                 assert response.status_code == 409
             assert "private clipboard" not in response.text
             assert not any(op == "integration.browser.clipboard" for op, _ in env.calls)
@@ -1439,7 +1411,7 @@ def test_invalid_clipboard_input_is_localized_and_never_dispatched(env, payload)
         assert not any(op == "integration.browser.clipboard" for op, _ in env.calls)
 
 
-@pytest.mark.parametrize("method", ["GET", "PUT"])
+@pytest.mark.parametrize("method", ["POST", "PUT"])
 @pytest.mark.parametrize("payload", [
     {}, {"text": 123}, {"text": "\u00e4" * 8193}, {"text": "private clipboard", "unexpected": "secret"},
 ], ids=["missing", "wrong-type", "unicode-overflow", "extra-field"])
@@ -1451,14 +1423,14 @@ def test_malformed_remote_clipboard_result_is_sanitized(env, method, payload):
     env.reply = reply
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
-        response = env.client.request(method, file_url(env, state, "clipboard"),
+        response = env.client.request(method, file_url(env, state, "clipboard" if method == "PUT" else "clipboard/copy"),
                                       **({"json": {"text": "value"}} if method == "PUT" else {}))
         assert response.status_code >= 400
         assert response.json()["error"]["code"] == "executionAgent.protocolError"
         assert "private clipboard" not in response.text and "secret" not in response.text
 
 
-@pytest.mark.parametrize("text", [None, "value"], ids=["read", "write"])
+@pytest.mark.parametrize("text", [None, "value"], ids=["copy", "write"])
 def test_clipboard_revalidates_login_after_waiting_for_action_lock(env, monkeypatch, text):
     checked, release = asyncio.Event(), asyncio.Event()
     original = env.coordinator.manual
@@ -1471,7 +1443,7 @@ def test_clipboard_revalidates_login_after_waiting_for_action_lock(env, monkeypa
     monkeypatch.setattr(env.coordinator, "manual", manual)
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
-        connection = env.coordinator.connections[env.agent.id]
+        connection = env.coordinator.connections[(env.session.id, env.agent.id)]
 
         async def hold_lock():
             async with connection.action_lock:
@@ -1498,12 +1470,11 @@ def test_clipboard_revalidates_login_after_waiting_for_action_lock(env, monkeypa
         assert not any(op == "integration.browser.clipboard" for op, _ in env.calls)
 
 
-@pytest.mark.parametrize("operation", ["integration.browser.clipboard", "integration.browser.file"])
-def test_pending_manual_mutation_blocks_attachment_until_it_finishes(env, operation):
+def test_pending_manual_mutation_serializes_model_action(env):
     started, finish = asyncio.Event(), asyncio.Event()
 
     async def reply(op, arguments):
-        if op == operation and arguments["action"] == ("write" if op.endswith("clipboard") else "finish"):
+        if op == "integration.browser.clipboard" and arguments["action"] == "write":
             started.set()
             await finish.wait()
 
@@ -1511,31 +1482,30 @@ def test_pending_manual_mutation_blocks_attachment_until_it_finishes(env, operat
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            connection = env.coordinator.connections[env.agent.id]
-            if operation.endswith("clipboard"):
-                task = env.client.portal.start_task_soon(routes._clipboard, connection, "value")
-            else:
-                upload = UploadFile(BytesIO(b"x"), size=1, filename="sample.txt")
-                task = env.client.portal.start_task_soon(routes.browser_upload, connection, upload)
+            connection = env.coordinator.connections[(env.session.id, env.agent.id)]
+            task = env.client.portal.start_task_soon(routes._clipboard, connection, "value")
             try:
                 env.client.portal.call(asyncio.wait_for, started.wait(), 1)
-                control.send_json({"type": "attach"})
-                assert control.receive_json()["error"]["code"] == "browser.busy"
-                assert env.manual and not env.coordinator.connections[env.agent.id].attached
+                model = env.client.portal.start_task_soon(env.coordinator.execute,
+                    env.session.id, env.agent.id, env.instance.id,
+                    {"action": "tabs", "expectedBrowserId": state["browserId"]})
+                assert not model.done() and env.manual
             finally:
                 env.client.portal.call(finish.set)
             task.result(timeout=2)
-            if operation.endswith("file"):
-                assert any(args.get("action") == "choose" for _, args in env.calls)
-            control.send_json({"type": "attach"})
-            assert control.receive_json()["attached"] and not env.manual
+            model.result(timeout=2)
+            assert env.manual
 
 
-def test_upload_chunks_are_bounded_and_finish_precedes_choose(env):
+def test_upload_chunks_are_bounded_and_finish_precedes_choose(env, session_upload):
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         data = b"x" * 65536 + b"end"
-        response = env.client.post(file_url(env, state, "upload"), files={"file": ("sample.txt", data)})
+        session_upload.write(data)
+        session_upload.seek(0)
+        response = env.client.post(file_url(env, state, "upload-source"), json={
+            "source": {"scope": "session", "path": "sample.txt"},
+        })
         assert response.status_code == 200 and response.json() == {"uploadId": env.file_id, "chosen": True}
         calls = [args for op, args in env.calls if op == "integration.browser.file"]
         assert [args["action"] for args in calls] == ["begin", "write", "write", "finish", "choose"]
@@ -1674,7 +1644,7 @@ def test_model_download_ask_stays_staged_for_foreground_tool(env, monkeypatch):
     env.reply = reply
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
-        connection = env.coordinator.connections[env.agent.id]
+        connection = env.coordinator.connections[(env.session.id, env.agent.id)]
         issued = connection.origin("model", run_id=uuid4())
         monkeypatch.setattr(env.coordinator, "_download_decision", AsyncMock(return_value=PermissionDecision.ASK))
         response = env.client.get(file_url(env, state, "downloads"))
@@ -1686,8 +1656,9 @@ def test_model_download_ask_stays_staged_for_foreground_tool(env, monkeypatch):
 @pytest.mark.parametrize("browser_decision,status", [
     (PermissionDecision.ASK, "permission_required"),
     (PermissionDecision.DENY, "failed"),
+    (PermissionDecision.ALLOW, "saved"),
 ])
-def test_model_download_requires_browser_read_for_background_publish(
+def test_model_download_requires_browser_use_for_background_publish(
     env, monkeypatch, browser_decision, status,
 ):
     run = AgentRun(
@@ -1700,11 +1671,17 @@ def test_model_download_requires_browser_read_for_background_publish(
     async def authorize(_db, _run, _session, _call, request, _root_files, *, check_only):
         assert check_only
         checked.append(request)
-        return browser_decision if request.capability == "browser.read" else PermissionDecision.ALLOW
+        if request.capability == "browser.use" and browser_decision == PermissionDecision.ALLOW:
+            return PermissionDecision.ALLOW if PermissionPolicy.grant_matches(grant, request, None) else PermissionDecision.ASK
+        return browser_decision if request.capability == "browser.use" else PermissionDecision.ALLOW
 
     monkeypatch.setattr(AgentRuntime, "_authorize", authorize)
 
-    async def reply(operation, _arguments):
+    issued = {}
+
+    async def reply(operation, arguments):
+        if operation == "integration.browser.control" and "origin" in arguments:
+            issued.update(arguments)
         if operation == "integration.browser.files":
             return {"downloads": [{
                 "id": env.file_id, "filename": "sample.txt", "status": "ready", "size": 1,
@@ -1714,14 +1691,22 @@ def test_model_download_requires_browser_read_for_background_publish(
     env.reply = reply
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
-        connection = env.coordinator.connections[env.agent.id]
-        issued = connection.origin("model", run_id=run.id)
+        connection = env.coordinator.connections[(env.session.id, env.agent.id)]
+        grant = PermissionGrant(
+            capability="category.write", resource_type="integration_resource",
+            resource_scope=integration_resource_scope(env.instance.id, _model_revision(env.instance), f"browser:{state['browserId']}"),
+        )
+        async def model_action():
+            async with env.coordinator._model_action(connection, run.id):
+                pass
+
+        env.client.portal.call(model_action)
         response = env.client.get(file_url(env, state, "downloads"))
         assert response.status_code == 200
         assert response.json()["downloads"][0]["status"] == status
-        assert [request.capability for request in checked] == ["browser.read", "filesystem.write"]
+        assert [request.capability for request in checked] == ["browser.use", "filesystem.write"]
         assert checked[0].policy_integration_id == env.instance.id
-        assert not any(op == "integration.browser.publish" for op, _args in env.calls)
+        assert any(op == "integration.browser.publish" for op, _args in env.calls) is (browser_decision == PermissionDecision.ALLOW)
 
 
 def test_model_download_authorizes_each_collision_candidate_before_publish(env, monkeypatch):
@@ -1737,7 +1722,7 @@ def test_model_download_authorizes_each_collision_candidate_before_publish(env, 
     env.reply = reply
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
-        connection = env.coordinator.connections[env.agent.id]
+        connection = env.coordinator.connections[(env.session.id, env.agent.id)]
         issued = connection.origin("model", run_id=uuid4())
         decision = AsyncMock(side_effect=[PermissionDecision.ALLOW, PermissionDecision.ASK])
         monkeypatch.setattr(env.coordinator, "_download_decision", decision)
@@ -1754,12 +1739,12 @@ def test_model_download_authorizes_each_collision_candidate_before_publish(env, 
 
 
 def test_foreground_download_freezes_candidate_and_never_retries_after_approval(env, monkeypatch):
-    env.instance._browser_attached = True
     integrations = IntegrationSettings(instances=[env.instance])
     monkeypatch.setattr(execution, "browser_coordinator", env.coordinator)
     monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=integrations))
     monkeypatch.setattr(mock_tools_access, 'profile_tool_settings', AsyncMock(return_value=ToolSettings()))
     run_id = uuid4()
+    env.objects[AgentRun, run_id] = AgentRun(id=run_id, session_id=env.session.id, status="completed")
 
     async def reply(operation, arguments):
         if operation == "integration.browser.files":
@@ -1778,16 +1763,21 @@ def test_foreground_download_freezes_candidate_and_never_retries_after_approval(
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            control.send_json({"type": "attach"})
-            assert control.receive_json()["attached"]
-            connection = env.coordinator.connections[env.agent.id]
+            connection = env.coordinator.connections[(env.session.id, env.agent.id)]
             issued = connection.origin("model", run_id=run_id)
             call = ToolCall("download", "browser_downloads", {"downloadId": env.file_id})
             context = ToolContext(
                 db=AsyncMock(), run_id=run_id, session=env.session, tool_call=call,
                 root_files=Mock(), integration_settings=integrations,
                 execution_client=connection.client,
-                ask_handler=AsyncMock(return_value=PermissionDecision.ALLOW),
+                ask_handler=AsyncMock(side_effect=lambda request, **_: (
+                    PermissionDecision.ALLOW if request.capability != "browser.use"
+                    or PermissionPolicy.grant_matches(grant, request, None) else PermissionDecision.DENY
+                )),
+            )
+            grant = PermissionGrant(
+                capability="category.write", resource_type="integration_resource",
+                resource_scope=integration_resource_scope(env.instance.id, _model_revision(env.instance), f"browser:{state['browserId']}"),
             )
 
             async def get(model, _key):
@@ -1810,21 +1800,20 @@ def test_foreground_download_freezes_candidate_and_never_retries_after_approval(
             ]
 
 
-@pytest.mark.parametrize("invalid", ["filename", "oversize"])
-def test_invalid_upload_rejected_before_rpc(env, monkeypatch, invalid):
-    monkeypatch.setattr(routes, "MAX_BROWSER_FILE_BYTES", 3)
+def test_oversized_upload_rejected_before_rpc(env, monkeypatch, session_upload):
+    monkeypatch.setattr(execution, "MAX_BROWSER_FILE_BYTES", 0)
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
-        response = env.client.post(file_url(env, state, "upload"), files={
-            "file": ("../secret" if invalid == "filename" else "sample.txt", b"x" if invalid == "filename" else b"xxxx"),
+        response = env.client.post(file_url(env, state, "upload-source"), json={
+            "source": {"scope": "session", "path": "sample.txt"},
         })
         assert response.status_code >= 400
-        assert response.json()["error"]["code"] == ("browser.invalidTarget" if invalid == "filename" else "browser.fileTooLarge")
+        assert response.json()["error"]["code"] == "browser.fileTooLarge"
         assert not any(op == "integration.browser.file" for op, _ in env.calls)
 
 
 @pytest.mark.parametrize("invalid", ["file-id", "offset", "size", "complete", "malformed", "finish"])
-def test_malformed_upload_reply_aborts_and_deletes_staging(env, invalid):
+def test_malformed_upload_reply_aborts_and_deletes_staging(env, invalid, session_upload):
     async def reply(operation, arguments):
         if operation == "integration.browser.file" and arguments["action"] == ("finish" if invalid == "finish" else "write"):
             return {"fileId": str(uuid4()) if invalid == "file-id" else env.file_id,
@@ -1834,7 +1823,9 @@ def test_malformed_upload_reply_aborts_and_deletes_staging(env, invalid):
     env.reply = reply
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
-        response = env.client.post(file_url(env, state, "upload"), files={"file": ("sample.txt", b"x")})
+        response = env.client.post(file_url(env, state, "upload-source"), json={
+            "source": {"scope": "session", "path": "sample.txt"},
+        })
         assert response.status_code >= 400
         assert response.json()["error"]["code"] == "executionAgent.protocolError"
         calls = [args for op, args in env.calls if op == "integration.browser.file"]
@@ -1842,20 +1833,22 @@ def test_malformed_upload_reply_aborts_and_deletes_staging(env, invalid):
         assert not any(args["action"] == "choose" for args in calls)
 
 
-@pytest.mark.parametrize("change", ["login", "tab"])
-def test_upload_revalidates_access_after_finish_before_choosing_file(env, change):
+@pytest.mark.parametrize("change", ["login", "binding"])
+def test_upload_revalidates_access_after_finish_before_choosing_file(env, change, session_upload):
     async def reply(operation, arguments):
         if operation == "integration.browser.file" and arguments["action"] == "finish":
             if change == "login":
                 env.objects.pop((LoginSession, env.login.id))
             else:
-                env.session.control_center = {"tabs": []}
+                env.session.preferred_execution_agent_id = uuid4()
 
     env.reply = reply
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            response = env.client.post(file_url(env, state, "upload"), files={"file": ("sample.txt", b"x")})
+            response = env.client.post(file_url(env, state, "upload-source"), json={
+                "source": {"scope": "session", "path": "sample.txt"},
+            })
             assert not any(args.get("action") == "choose" for _, args in env.calls)
             assert response.status_code >= 400
 
@@ -1920,20 +1913,16 @@ def test_download_aborts_on_malformed_later_chunk(env, invalid):
         assert [args["offset"] for op, args in env.calls if op == "integration.browser.file"] == [0, 1]
 
 
-@pytest.mark.parametrize("attached", [False, True])
-def test_desktop_resize_preserves_runtime_and_attachment(env, attached):
+def test_desktop_resize_preserves_runtime(env):
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            if attached:
-                control.send_json({"type": "attach"})
-                assert control.receive_json()["attached"]
             control.send_json({"type": "resize", "width": 1001, "height": 701})
             assert control.receive_json() == {
-                "type": "resized", "browserId": state["browserId"], "width": 1001, "height": 701,
+                "type": "resized", "browserId": state["browserId"], "viewId": state["viewId"], "width": 1001, "height": 701,
             }
-            connection = env.coordinator.connections[env.agent.id]
-            assert connection.attached is attached and str(connection.browser_id) == state["browserId"]
+            connection = env.coordinator.connections[(env.session.id, env.agent.id)]
+            assert str(connection.browser_id) == state["browserId"]
             assert sum(op == "integration.browser.open" for op, _ in env.calls) == 1
 
 
@@ -1982,18 +1971,17 @@ def test_resize_failure_is_scoped_and_does_not_close_browser(env):
         control.send_json({"type": "resize", "width": 640, "height": 480})
         event = control.receive_json()
         assert event["operation"] == "resize" and event["error"]["code"] == "browser.actionFailed"
-        assert not env.coordinator.connections[env.agent.id].closed
+        assert not env.coordinator.connections[(env.session.id, env.agent.id)].closed
 
 
-@pytest.mark.parametrize("blocked", [None, "attached", "login"])
+@pytest.mark.parametrize("blocked", [None, "busy", "login"])
 def test_copy_clipboard_uses_fixed_host_action_and_live_authorization(env, blocked):
     env.clipboard = "Grüße\n世界\n"
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            if blocked == "attached":
-                control.send_json({"type": "attach"})
-                control.receive_json()
+            if blocked == "busy":
+                env.coordinator.connections[(env.session.id, env.agent.id)].busy = True
             elif blocked == "login":
                 env.objects.pop((LoginSession, env.login.id))
             response = env.client.post(file_url(env, state, "clipboard/copy"))
@@ -2005,43 +1993,33 @@ def test_copy_clipboard_uses_fixed_host_action_and_live_authorization(env, block
                 assert calls == [{"browserId": state["browserId"], "action": "copy"}]
 
 
-@pytest.mark.parametrize("action", ["state", "new", "select", "close", "navigate", "back", "forward", "reload", "stop", "chrome"])
+@pytest.mark.parametrize("action", ["state", "new", "select", "close", "navigate", "back", "forward", "reload", "stop"])
 def test_navigation_commands_are_bound_and_acknowledged(env, action):
-    fields = {} if action in {"state", "new", "chrome"} else {"tabId": env.navigation["activeTabId"]}
+    fields = {} if action in {"state", "new"} else {"tabId": env.navigation["activeTabId"]}
     if action == "navigate":
         fields["url"] = "https://example.test/"
-    if action == "chrome":
-        fields["nativeChrome"] = True
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
             control.send_json({"type": "navigation", "action": action, **fields})
             response = control.receive_json()
             assert response == {"type": "navigation", "browserId": state["browserId"],
-                                "completed": True, **env.navigation}
+                                "viewId": state["viewId"], "completed": True, **env.navigation}
             calls = [args for op, args in env.calls if op == "integration.browser.navigation"]
             assert calls == [{"browserId": state["browserId"], "action": action, **fields}]
 
 
-@pytest.mark.parametrize("action", ["state", "new", "select", "navigate", "chrome"])
-def test_attached_browser_navigation_only_observes(env, action):
+@pytest.mark.parametrize("action", ["state", "new", "select", "navigate"])
+def test_idle_browser_allows_manual_navigation(env, action):
     fields = {"tabId": env.navigation["activeTabId"]} if action in {"select", "navigate"} else {}
     if action == "navigate":
         fields["url"] = "https://example.test/"
-    if action == "chrome":
-        fields["nativeChrome"] = True
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         with open_view(env, state):
-            control.send_json({"type": "attach"})
-            assert control.receive_json()["attached"]
             control.send_json({"type": "navigation", "action": action, **fields})
             response = control.receive_json()
-            if action == "state":
-                assert response["type"] == "navigation" and response["completed"]
-            else:
-                assert response["operation"] == "navigation" and response["error"]["code"] == "browser.busy"
-                assert not any(op == "integration.browser.navigation" for op, _ in env.calls)
+            assert response["type"] == "navigation" and response["completed"]
 
 
 @pytest.mark.parametrize("fields", [
@@ -2082,96 +2060,17 @@ def test_navigation_error_does_not_end_healthy_browser(env):
         control.send_json({"type": "navigation", "action": "state"})
         response = control.receive_json()
         assert response["operation"] == "navigation" and response["error"]["code"] == "executionAgent.protocolError"
-        assert not env.coordinator.connections[env.agent.id].closed
+        assert not env.coordinator.connections[(env.session.id, env.agent.id)].closed
 
 
-@pytest.mark.parametrize("attached", [False, True])
-def test_takeover_requires_explicit_offer_and_preserves_machine_but_never_old_view_authority(env, attached):
-    env.session.title = "Session A"
-    session_b = other_session(env)
-    url_b = env.url.replace(str(env.session.id), str(session_b.id))
-    with env.client.websocket_connect(env.url, headers=ORIGIN) as control_a:
-        state_a = control_a.receive_json()
-        with env.client.websocket_connect(view_url(env, state_a), headers=ORIGIN):
-            old = env.coordinator.connections[env.agent.id]
-            if attached:
-                control_a.send_json({"type": "attach"})
-                assert control_a.receive_json()["attached"]
-            before = list(env.calls)
-            with env.client.websocket_connect(url_b, headers=ORIGIN) as control_b:
-                offer = control_b.receive_json()
-                assert offer == {"type": "availability", "status": "occupied", "browserId": state_a["browserId"],
-                                 "viewId": state_a["viewId"], "ownerSession": {"id": str(env.session.id), "title": "Session A"},
-                                 "busy": False, "canTakeover": True}
-                assert env.calls == before and env.coordinator.connections[env.agent.id] is old
-                control_b.send_json({"type": "takeover", "browserId": offer["browserId"], "viewId": offer["viewId"]})
-                assert control_b.receive_json()["status"] == "takingOver"
-                state_b = control_b.receive_json()
-                current = env.coordinator.connections[env.agent.id]
-                assert current is not old and current.action_lock is old.action_lock and current.client is old.client
-                assert current.browser_id == old.browser_id and current.view_id != old.view_id
-                assert current.session_id == session_b.id and old.closed and not old.attached
-                assert state_b["type"] == "state" and not state_b["attached"] and not state_b["busy"]
-                assert control_a.receive_json() == {"type": "replaced"}
-                assert control_a.receive()["code"] == 4001
-                assert [args["manual"] for op, args in env.calls[len(before):] if op == "integration.browser.control"] == [False, True]
-                assert [args["rotateView"] for op, args in env.calls[len(before):] if op == "integration.browser.control"] == [True, False]
-                env.client.portal.call(env.coordinator.close, old)
-                env.client.portal.call(env.coordinator.release, old, old.websocket)
-                assert env.coordinator.connections[env.agent.id] is current and not current.closed
-
-                # Returning to A must not resurrect A's original URLs or B's retired URLs.
-                with env.client.websocket_connect(env.url, headers=ORIGIN) as returned:
-                    offer_b = returned.receive_json()
-                    assert offer_b["ownerSession"] == {"id": str(session_b.id), "title": "Session B"}
-                    returned.send_json({"type": "takeover", "browserId": state_b["browserId"], "viewId": state_b["viewId"]})
-                    assert returned.receive_json()["status"] == "takingOver"
-                    state_returned = returned.receive_json()
-                    assert state_returned["browserId"] == state_a["browserId"]
-                    assert len({state_a["viewId"], state_b["viewId"], state_returned["viewId"]}) == 3
-                    before_stale = list(env.calls)
-                    for stale, session in ((state_a, env.session), (state_b, session_b)):
-                        for method, suffix, kwargs in (
-                            ("GET", "clipboard", {}), ("PUT", "clipboard", {"json": {"text": "private clipboard"}}),
-                            ("POST", "clipboard/copy", {}), ("GET", "downloads", {}),
-                            ("POST", "upload", {"files": {"file": ("sample.txt", b"x")}}),
-                            ("POST", f"upload/{env.file_id}/choose", {}), ("GET", f"download/{env.file_id}", {}),
-                        ):
-                            url = file_url(env, stale, suffix).replace(str(env.session.id), str(session.id))
-                            response = env.client.request(method, url, **kwargs)
-                            assert response.status_code >= 400 and response.json()["error"]["code"] == "browser.notConnected"
-                            assert "private clipboard" not in response.text
-                        with pytest.raises(WebSocketDisconnect), env.client.websocket_connect(
-                            view_url(env, stale).replace(str(env.session.id), str(session.id)), headers=ORIGIN,
-                        ):
-                            pytest.fail("Retired view was accepted after returning to the original session")
-                    assert env.calls == before_stale
-                    assert env.client.get(file_url(env, state_returned, "clipboard")).status_code == 200
-    assert sum(op == "integration.browser.open" for op, _ in env.calls) == 1
-    assert not any(op in {"integration.browser.close", "integration.browser.setup"} for op, _ in env.calls)
-
-
-@pytest.mark.parametrize("owned", [False, True])
-def test_availability_never_discloses_foreign_session_title(env, owned):
-    async def scenario():
-        connection = await env.coordinator.open(env.user.id, env.instance.id, env.session.id, env.login.id, AsyncMock())
-        env.session.title = "Private title"
-        if not owned:
-            env.session.user_id = uuid4()
-        offer = await env.coordinator.availability(connection)
-        assert offer["ownerSession"]["title"] == ("Private title" if owned else "Session")
-
-    env.client.portal.call(scenario)
-
-
-@pytest.mark.parametrize("suffix,method", [("clipboard", "GET"), ("clipboard", "PUT"), ("clipboard/copy", "POST"),
-                                          ("downloads", "GET"), ("upload", "POST"),
+@pytest.mark.parametrize("suffix,method", [("clipboard", "PUT"), ("clipboard/copy", "POST"),
+                                          ("downloads", "GET"), ("upload-source", "POST"),
                                           ("upload/{file_id}/choose", "POST"), ("download/{file_id}", "GET")])
 def test_all_manual_http_routes_require_view_id_before_rpc(env, suffix, method):
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         before = list(env.calls)
-        kwargs = {"files": {"file": ("sample.txt", b"x")}} if suffix == "upload" else {}
+        kwargs = {"json": {"source": {"scope": "session", "path": "sample.txt"}}} if suffix == "upload-source" else {}
         if method == "PUT":
             kwargs = {"json": {"text": "private clipboard"}}
         response = env.client.request(method, file_url(env, state, suffix.format(file_id=env.file_id)).split("&viewId=")[0], **kwargs)
@@ -2179,178 +2078,31 @@ def test_all_manual_http_routes_require_view_id_before_rpc(env, suffix, method):
         assert "private clipboard" not in response.text and env.calls == before
 
 
-@pytest.mark.parametrize("action", ["navigate", "inspect"])
-def test_takeover_drains_active_ai_and_fences_queued_old_actions_without_wire_cancel(env, wire, action):
-    async def scenario():
-        started, finish, queued = asyncio.Event(), asyncio.Event(), asyncio.Event()
-        old = await env.coordinator.open(env.user.id, env.instance.id, env.session.id, env.login.id, AsyncMock())
-        old.view_socket = AsyncMock()
-        await env.coordinator.attachment(old, True)
-        tab_id = str(uuid4())
-        snapshot = await env.coordinator.snapshot(env.session.id, env.agent.id, env.instance.id, tab_id)
-
-        async def reply(operation, arguments):
-            if operation == "integration.browser.execute" and arguments["action"] == action:
-                started.set()
-                await finish.wait()
-
-        env.reply = reply
-        arguments = {"action": "navigate", "tabId": tab_id, "url": "https://page.test/",
-                     "expectedBrowserId": str(old.browser_id), "expectedAttachmentRevision": old.attachment_revision}
-        if action == "inspect":
-            arguments = {**arguments, "action": "click", "selector": "button", "expectedSnapshot": snapshot}
-            arguments.pop("url")
-        active = asyncio.create_task(env.coordinator.execute(env.session.id, env.agent.id, env.instance.id, arguments))
-        await asyncio.wait_for(started.wait(), 1)
-
-        async def queued_action():
-            queued.set()
-            return await env.coordinator.execute(env.session.id, env.agent.id, env.instance.id, arguments)
-
-        pending = asyncio.create_task(queued_action())
-        await asyncio.wait_for(queued.wait(), 1)
-        taking_over = asyncio.create_task(env.coordinator.open(
-            env.user.id, env.instance.id, other_session(env).id, env.login.id, AsyncMock(),
-            expected_browser_id=old.browser_id, expected_view_id=old.view_id,
-        ))
-        try:
-            async with asyncio.timeout(1):
-                while not old.closed:
-                    await asyncio.sleep(0)
-            assert not active.done() and not taking_over.done()
-            assert not old.attached and env.coordinator.attached_for(env.session.id, env.agent.id) is None
-            assert [args["manual"] for op, args in env.calls if op == "integration.browser.control"] == [True, False]
-            assert not any(item["type"] == "cancel" for item in wire)
-        finally:
-            finish.set()
-        results = await asyncio.wait_for(asyncio.gather(active, pending, taking_over, return_exceptions=True), 2)
-        if action == "inspect":
-            assert isinstance(results[0], ExecutionClientError) and results[0].code == "browser.bindingChanged"
-            assert not any(args.get("action") == "click" for _, args in env.calls)
-        else:
-            assert isinstance(results[0], execution.BrowserActionResult)
-            assert sum(args.get("action") == "navigate" for _, args in env.calls) == 1
-        assert isinstance(results[1], ExecutionClientError) and results[1].code == "browser.notConnected"
-        assert results[2] is env.coordinator.connections[env.agent.id] and results[2].ready
-        assert not results[2].attached and not any(item["type"] == "cancel" for item in wire)
-        assert [args["manual"] for op, args in env.calls if op == "integration.browser.control"] == [True, False, False, True]
-
-    env.client.portal.call(scenario)
-
-
-def test_concurrent_candidates_keep_waiting_for_explicit_current_offer(env, monkeypatch):
-    monkeypatch.setattr(routes, "ACCESS_INTERVAL", 0.02)
-    started, finish = asyncio.Event(), asyncio.Event()
-    session_b, session_c = other_session(env), other_session(env, "Session C")
-
-    async def reply(operation, arguments):
-        if operation == "integration.browser.control" and not arguments["manual"]:
-            started.set()
-            await finish.wait()
-
-    env.reply = reply
-    with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
-        state = control.receive_json()
-        with env.client.websocket_connect(env.url.replace(str(env.session.id), str(session_b.id)), headers=ORIGIN) as b:
-            offer = b.receive_json()
-            with env.client.websocket_connect(env.url.replace(str(env.session.id), str(session_c.id)), headers=ORIGIN) as c:
-                assert c.receive_json() == offer
-                takeover = {"type": "takeover", "browserId": state["browserId"], "viewId": state["viewId"]}
-                b.send_json(takeover)
-                assert b.receive_json()["status"] == "takingOver"
-                try:
-                    env.client.portal.call(asyncio.wait_for, started.wait(), 1)
-                    c.send_json(takeover)
-                    waiting = c.receive_json()
-                    assert waiting["status"] == "waiting" and not waiting["canTakeover"]
-                    assert waiting["ownerSession"]["id"] == str(session_b.id)
-                    assert env.coordinator.connections[env.agent.id].session_id == session_b.id
-                finally:
-                    env.client.portal.call(finish.set)
-                state_b = b.receive_json()
-                offer_b = c.receive_json()
-                assert offer_b["status"] == "occupied" and offer_b["canTakeover"]
-                assert offer_b["viewId"] == state_b["viewId"] != offer["viewId"]
-                before = list(env.calls)
-                c.send_json({"type": "release"})
-                assert c.receive()["type"] == "websocket.close"
-                assert env.calls == before and env.coordinator.connections[env.agent.id].session_id == session_b.id
-                assert [args["manual"] for op, args in env.calls if op == "integration.browser.control"] == [True, False, True]
-
-
-def test_waiting_candidate_never_opens_new_runtime_after_owner_closes(env, monkeypatch):
-    monkeypatch.setattr(routes, "ACCESS_INTERVAL", 0.01)
-    session_b = other_session(env)
-    with env.client.websocket_connect(env.url, headers=ORIGIN) as owner:
-        owner.receive_json()
-        with env.client.websocket_connect(env.url.replace(str(env.session.id), str(session_b.id)), headers=ORIGIN) as candidate:
-            assert candidate.receive_json()["status"] == "occupied"
-            owner.send_json({"type": "close"})
-            assert owner.receive()["type"] == "websocket.close"
-            assert candidate.receive_json()["error"]["code"] == "browser.notConnected"
-            assert candidate.receive()["type"] == "websocket.close"
-        assert not env.coordinator.connections
-        assert [op for op, _ in env.calls] == ["integration.browser.open", "integration.browser.control", "integration.browser.close"]
-
-
-@pytest.mark.parametrize("change,code", [("expired", "auth.sessionExpired"), ("global-disabled", "browser.unavailable"),
-                                        ("tab", "browser.notConnected"), ("binding", "browser.bindingChanged")])
-def test_waiting_takeover_rechecks_authorization_before_any_fence(env, change, code):
-    async def scenario():
-        old = await env.coordinator.open(env.user.id, env.instance.id, env.session.id, env.login.id, AsyncMock())
-        session_b = other_session(env)
-        await old.action_lock.acquire()
-        taking_over = asyncio.create_task(env.coordinator.open(
-            env.user.id, env.instance.id, session_b.id, env.login.id, AsyncMock(),
-            expected_browser_id=old.browser_id, expected_view_id=old.view_id,
-        ))
-        try:
-            async with asyncio.timeout(1):
-                while not old.closed:
-                    await asyncio.sleep(0)
-            if change == "expired":
-                env.login.expires_at = datetime.now(UTC) - timedelta(seconds=1)
-            elif change == "global-disabled":
-                env.documents[IntegrationSettings, None].adapter_availability["browser"] = "disabled"
-            elif change == "tab":
-                session_b.control_center = {"tabs": []}
-            else:
-                session_b.preferred_execution_agent_id = uuid4()
-        finally:
-            old.action_lock.release()
-        with pytest.raises(ExecutionClientError, match=code):
-            await asyncio.wait_for(taking_over, 2)
-        assert not env.coordinator.connections
-        assert [op for op, _ in env.calls] == ["integration.browser.open", "integration.browser.control", "integration.browser.close"]
-
-    env.client.portal.call(scenario)
-
-
 @pytest.mark.parametrize("change", ["expired", "global-disabled"])
-def test_candidate_periodic_access_check_revokes_only_requester(env, monkeypatch, change):
+def test_view_periodic_access_check_revokes_only_requester(env, monkeypatch, change):
     monkeypatch.setattr(routes, "ACCESS_INTERVAL", 0.01)
-    session_b = other_session(env)
+    session_b = env.session
     login_b = LoginSession(id=uuid4(), user_id=env.user.id, expires_at=env.login.expires_at)
     env.objects[LoginSession, login_b.id] = login_b
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         control.receive_json()
-        old = env.coordinator.connections[env.agent.id]
+        old = env.coordinator.connections[(env.session.id, env.agent.id)]
         monkeypatch.setattr(routes, "_browser_login", AsyncMock(return_value=_BrowserLogin(env.user, login_b.id, login_b.expires_at)))
         with env.client.websocket_connect(env.url.replace(str(env.session.id), str(session_b.id)), headers=ORIGIN) as candidate:
-            assert candidate.receive_json()["status"] == "occupied"
+            assert candidate.receive_json()["type"] == "state"
             if change == "expired":
                 login_b.expires_at = datetime.now(UTC) - timedelta(seconds=1)
             else:
                 env.documents[IntegrationSettings, None].adapter_availability["browser"] = "disabled"
             assert candidate.receive_json()["error"]["code"] == ("auth.sessionExpired" if change == "expired" else "browser.unavailable")
             assert candidate.receive()["type"] == "websocket.close"
-        assert env.coordinator.connections[env.agent.id] is old and not old.closed
+        assert env.coordinator.connections[(env.session.id, env.agent.id)] is old and not old.closed
         assert [op for op, _ in env.calls] == ["integration.browser.open", "integration.browser.control"]
 
 
 @pytest.mark.parametrize("cancelled", [False, True])
 @pytest.mark.parametrize("operation", ["copy", "upload-begin", "upload", "choose", "download", "download-later"])
-def test_native_helpers_drain_before_takeover_and_never_send_wire_cancel(env, wire, operation, cancelled):
+def test_native_helpers_drain_before_close_and_never_send_wire_cancel(env, wire, operation, cancelled, session_upload):
     async def scenario():
         started, finish = asyncio.Event(), asyncio.Event()
         old = await env.coordinator.open(env.user.id, env.instance.id, env.session.id, env.login.id, AsyncMock())
@@ -2369,13 +2121,13 @@ def test_native_helpers_drain_before_takeover_and_never_send_wire_cancel(env, wi
                         "offset": offset + 1, "complete": offset == 1, "data": "eA=="}
 
         env.reply = reply
-        upload = UploadFile(BytesIO(b"x"), size=1, filename="sample.txt")
-
         async def operation_task():
             if operation == "copy":
-                return await routes._clipboard(old, action="copy")
+                return await routes._clipboard(old)
             if operation in {"upload", "upload-begin"}:
-                return await routes.browser_upload(old, upload)
+                return await routes.browser_upload_source(old, routes.BrowserUploadRequest(
+                    source={"scope": "session", "path": "sample.txt"},
+                ))
             if operation == "choose":
                 return await routes.browser_choose(UUID(env.file_id), old)
             response = await routes.browser_download(UUID(env.file_id), old)
@@ -2389,15 +2141,12 @@ def test_native_helpers_drain_before_takeover_and_never_send_wire_cancel(env, wi
         if cancelled:
             active.cancel()
         await asyncio.sleep(0)
-        taking_over = asyncio.create_task(env.coordinator.open(
-            env.user.id, env.instance.id, other_session(env).id, env.login.id, AsyncMock(),
-            expected_browser_id=old.browser_id, expected_view_id=old.view_id,
-        ))
+        closing = asyncio.create_task(env.coordinator.close(old))
         try:
             async with asyncio.timeout(1):
                 while not old.closed:
                     await asyncio.sleep(0)
-            assert not active.done() and not taking_over.done() and old.action_lock.locked()
+            assert not active.done() and not closing.done() and old.action_lock.locked()
             assert [args["manual"] for op, args in env.calls if op == "integration.browser.control"] == [True]
             assert not any(message["type"] == "cancel" for message in wire)
         finally:
@@ -2406,58 +2155,36 @@ def test_native_helpers_drain_before_takeover_and_never_send_wire_cancel(env, wi
             await asyncio.wait_for(active, 2)
         if not cancelled:
             assert error.value.code == "browser.notConnected"
-        current = await asyncio.wait_for(taking_over, 2)
-        assert current.ready and not current.attached and not current.action_lock.locked()
+        await asyncio.wait_for(closing, 2)
+        assert old.closed and not old.action_lock.locked()
         assert not any(message["type"] == "cancel" for message in wire)
         if operation in {"upload", "upload-begin"}:
-            assert upload.file.closed
+            assert session_upload.closed
         if operation in {"upload", "upload-begin"}:
             expected = ["begin", "write", "delete"] if operation == "upload" else ["begin", "delete"]
             assert [args["action"] for op, args in env.calls if op == "integration.browser.file"] == expected
             assert next(i for i, (op, args) in enumerate(env.calls) if args.get("action") == "delete") < next(
                 i for i, (op, args) in enumerate(env.calls)
-                if op == "integration.browser.control" and not args["manual"]
+                if op == "integration.browser.close"
             )
-        else:
-            await upload.close()
-
-    env.client.portal.call(scenario)
-
-
-@pytest.mark.parametrize("mismatch", ["browser", "view", "retired"])
-def test_stale_takeover_offer_does_not_implicitly_accept_new_view(env, mismatch):
-    async def scenario():
-        old = await env.coordinator.open(env.user.id, env.instance.id, env.session.id, env.login.id, AsyncMock())
-        current = await env.coordinator.open(
-            env.user.id, env.instance.id, other_session(env).id, env.login.id, AsyncMock(),
-            expected_browser_id=old.browser_id, expected_view_id=old.view_id,
-        )
-        before = list(env.calls)
-        candidate = await env.coordinator.open(
-            env.user.id, env.instance.id, env.session.id, env.login.id, AsyncMock(),
-            expected_browser_id=uuid4() if mismatch == "browser" else current.browser_id,
-            expected_view_id=uuid4() if mismatch == "view" else old.view_id if mismatch == "retired" else current.view_id,
-        )
-        assert candidate is current and env.coordinator.connections[env.agent.id] is current
-        assert not current.closed and current.ready and env.calls == before
 
     env.client.portal.call(scenario)
 
 
 @pytest.mark.parametrize("operation", ["copy", "upload", "choose", "download", "downloads", "resize", "navigation"])
-def test_queued_old_manual_operations_fail_after_takeover_without_dispatch(env, operation):
+def test_queued_manual_operations_fail_after_close_without_dispatch(env, operation, session_upload):
     async def scenario():
         old = await env.coordinator.open(env.user.id, env.instance.id, env.session.id, env.login.id, AsyncMock())
-        old.view_socket = AsyncMock()
         entered = asyncio.Event()
-        upload = UploadFile(BytesIO(b"x"), size=1, filename="sample.txt")
 
         async def queued():
             entered.set()
             if operation == "copy":
-                return await routes._clipboard(old, action="copy")
+                return await routes._clipboard(old)
             if operation == "upload":
-                return await routes.browser_upload(old, upload)
+                return await routes.browser_upload_source(old, routes.BrowserUploadRequest(
+                    source={"scope": "session", "path": "sample.txt"},
+                ))
             if operation == "choose":
                 return await routes.browser_choose(UUID(env.file_id), old)
             if operation == "download":
@@ -2471,10 +2198,7 @@ def test_queued_old_manual_operations_fail_after_takeover_without_dispatch(env, 
         await old.action_lock.acquire()
         pending = asyncio.create_task(queued())
         await asyncio.wait_for(entered.wait(), 1)
-        taking_over = asyncio.create_task(env.coordinator.open(
-            env.user.id, env.instance.id, other_session(env).id, env.login.id, AsyncMock(),
-            expected_browser_id=old.browser_id, expected_view_id=old.view_id,
-        ))
+        closing = asyncio.create_task(env.coordinator.close(old))
         try:
             async with asyncio.timeout(1):
                 while not old.closed:
@@ -2484,112 +2208,24 @@ def test_queued_old_manual_operations_fail_after_takeover_without_dispatch(env, 
         with pytest.raises((routes.ApiError, ExecutionClientError)) as error:
             await asyncio.wait_for(pending, 1)
         assert error.value.code == "browser.notConnected"
-        await asyncio.wait_for(taking_over, 2)
+        await asyncio.wait_for(closing, 2)
         assert [op for op, _ in env.calls] == [
             "integration.browser.open", "integration.browser.control",
-            "integration.browser.control", "integration.browser.control",
+            "integration.browser.close",
         ]
         if operation == "upload":
-            assert upload.file.closed
-        else:
-            await upload.close()
+            assert session_upload.closed
 
     env.client.portal.call(scenario)
 
 
-def test_requester_cancellation_drains_takeover_then_expires_without_orphan_ai(env, wire, monkeypatch):
-    monkeypatch.setattr(execution, "IDLE_SECONDS", 0.02)
-
-    async def scenario():
-        started, finish = asyncio.Event(), asyncio.Event()
-        old = await env.coordinator.open(env.user.id, env.instance.id, env.session.id, env.login.id, AsyncMock())
-        old.view_socket = AsyncMock()
-        await env.coordinator.attachment(old, True)
-
-        async def reply(operation, _arguments):
-            if operation == "integration.browser.execute":
-                started.set()
-                await finish.wait()
-
-        env.reply = reply
-        active = asyncio.create_task(env.coordinator.execute(env.session.id, env.agent.id, env.instance.id, {
-            "action": "navigate", "tabId": str(uuid4()), "url": "https://page.test/",
-            "expectedBrowserId": str(old.browser_id), "expectedAttachmentRevision": old.attachment_revision,
-        }))
-        await asyncio.wait_for(started.wait(), 1)
-        session_b = other_session(env)
-        taking_over = asyncio.create_task(env.coordinator.open(
-            env.user.id, env.instance.id, session_b.id, env.login.id, AsyncMock(),
-            expected_browser_id=old.browser_id, expected_view_id=old.view_id,
-        ))
-        try:
-            async with asyncio.timeout(1):
-                while not old.closed:
-                    await asyncio.sleep(0)
-            current = env.coordinator.connections[env.agent.id]
-            taking_over.cancel()
-            await asyncio.sleep(0)
-            assert not taking_over.done() and not active.done()
-            assert current.action_lock.locked() and not current.attached
-            assert not any(message["type"] == "cancel" for message in wire)
-        finally:
-            finish.set()
-        await asyncio.wait_for(active, 1)
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(taking_over, 2)
-        assert current.websocket is None and not current.attached
-        assert env.coordinator.attached_for(session_b.id, env.agent.id) is None
-        with pytest.raises(ExecutionClientError, match="browser.notConnected"):
-            await env.coordinator.execute(session_b.id, env.agent.id, env.instance.id, {"action": "tabs"})
-        async with asyncio.timeout(1):
-            while env.coordinator.connections:
-                await asyncio.sleep(0.001)
-        assert sum(op == "integration.browser.open" for op, _ in env.calls) == 1
-        assert sum(op == "integration.browser.close" for op, _ in env.calls) == 1
-        assert not any(message["type"] == "cancel" for message in wire)
-
-    env.client.portal.call(scenario)
-
-
-def test_detach_and_disconnect_keep_one_cancellable_idle_timer(env, monkeypatch):
-    monkeypatch.setattr(execution, "IDLE_SECONDS", 0.02)
-
-    async def scenario():
-        websocket = AsyncMock()
-        connection = await env.coordinator.open(
-            env.user.id, env.instance.id, env.session.id, env.login.id, websocket,
-        )
-        connection.view_socket = AsyncMock()
-        await env.coordinator.attachment(connection, True)
-        await connection.action_lock.acquire()
-        detaching = asyncio.create_task(env.coordinator.attachment(connection, False))
-        try:
-            async with asyncio.timeout(1):
-                while connection.attached:
-                    await asyncio.sleep(0)
-            await env.coordinator.release(connection, websocket)
-            first_idle_task = connection.idle_task
-        finally:
-            connection.action_lock.release()
-        await asyncio.wait_for(detaching, 1)
-        assert first_idle_task.cancelled()
-
-        resumed = await env.coordinator.open(
-            env.user.id, env.instance.id, env.session.id, env.login.id, AsyncMock(),
-        )
-        assert resumed is connection and connection.idle_task is None
-        await asyncio.sleep(0.03)
-        assert env.coordinator.connections[env.agent.id] is connection
-
-    env.client.portal.call(scenario)
-
-
-def test_takeover_drains_cancelled_metadata_watch_without_publishing_retired_navigation(env, wire, monkeypatch):
+def test_close_drains_cancelled_metadata_watch_without_publishing_navigation(env, wire, monkeypatch):
     monkeypatch.setattr(execution, "ACCESS_INTERVAL", 0.01)
 
     async def scenario():
         started, finish = asyncio.Event(), asyncio.Event()
-        old = await env.coordinator.open(env.user.id, env.instance.id, env.session.id, env.login.id, AsyncMock())
+        socket = AsyncMock()
+        old = await env.coordinator.open(env.user.id, env.instance.id, env.session.id, env.login.id, socket)
         old.navigation = execution.BrowserNavigationResult.model_validate(env.navigation)
         old_watch = old.task
 
@@ -2597,25 +2233,22 @@ def test_takeover_drains_cancelled_metadata_watch_without_publishing_retired_nav
             if operation == "integration.browser.navigation":
                 started.set()
                 await finish.wait()
-                return {**env.navigation, "nativeChrome": True}
+                return {**env.navigation, "loading": True}
 
         env.reply = reply
         await asyncio.wait_for(started.wait(), 1)
-        taking_over = asyncio.create_task(env.coordinator.open(
-            env.user.id, env.instance.id, other_session(env).id, env.login.id, AsyncMock(),
-            expected_browser_id=old.browser_id, expected_view_id=old.view_id,
-        ))
+        closing = asyncio.create_task(env.coordinator.close(old))
         try:
             async with asyncio.timeout(1):
                 while not old.closed:
                     await asyncio.sleep(0)
-            assert not old_watch.done() and old.action_lock.locked() and not taking_over.done()
+            assert not old_watch.done() and old.action_lock.locked() and not closing.done()
             assert not any(message["type"] == "cancel" for message in wire)
         finally:
             finish.set()
-        current = await asyncio.wait_for(taking_over, 2)
-        assert old_watch.cancelled() and current.ready and current.navigation is None
-        assert not any(call.args[0]["type"] == "navigation" for call in old.websocket.send_json.await_args_list)
+        await asyncio.wait_for(closing, 2)
+        assert old_watch.cancelled() and old.closed
+        assert not any(call.args[0]["type"] == "navigation" for call in socket.send_json.await_args_list)
         assert not any(message["type"] == "cancel" for message in wire)
 
     env.client.portal.call(scenario)
@@ -2629,7 +2262,7 @@ def test_old_access_check_rechecks_closed_binding_after_await(env, monkeypatch):
 
         async def delayed(*args, **kwargs):
             result = await validate(*args, **kwargs)
-            if kwargs.get("session_id") == env.session.id:
+            if asyncio.current_task() is checking:
                 started.set()
                 await finish.wait()
             return result
@@ -2638,20 +2271,17 @@ def test_old_access_check_rechecks_closed_binding_after_await(env, monkeypatch):
         checking = asyncio.create_task(old.check_access())
         await asyncio.wait_for(started.wait(), 1)
         try:
-            current = await env.coordinator.open(
-                env.user.id, env.instance.id, other_session(env).id, env.login.id, AsyncMock(),
-                expected_browser_id=old.browser_id, expected_view_id=old.view_id,
-            )
+            await env.coordinator.close(old)
         finally:
             finish.set()
         with pytest.raises(ExecutionClientError, match="browser.bindingChanged"):
             await asyncio.wait_for(checking, 1)
-        assert current.ready and not current.closed
+        assert old.closed
 
     env.client.portal.call(scenario)
 
 
-def test_setup_start_remains_independent_of_takeover_and_browser_close(env, wire):
+def test_setup_start_remains_independent_of_views_and_browser_close(env, wire):
     started, finish = asyncio.Event(), asyncio.Event()
 
     async def reply(operation, _arguments):
@@ -2660,7 +2290,7 @@ def test_setup_start_remains_independent_of_takeover_and_browser_close(env, wire
             await finish.wait()
 
     env.reply = reply
-    session_b = other_session(env)
+    session_b = env.session
     with env.client.websocket_connect(env.setup_url, headers=ORIGIN) as setup:
         setup.send_json({"type": "start"})
         env.client.portal.call(asyncio.wait_for, started.wait(), 1)
@@ -2669,10 +2299,7 @@ def test_setup_start_remains_independent_of_takeover_and_browser_close(env, wire
             with env.client.websocket_connect(env.url, headers=ORIGIN) as a:
                 state_a = a.receive_json()
                 with env.client.websocket_connect(env.url.replace(str(env.session.id), str(session_b.id)), headers=ORIGIN) as b:
-                    assert b.receive_json()["status"] == "occupied"
-                    b.send_json({"type": "takeover", "browserId": state_a["browserId"], "viewId": state_a["viewId"]})
-                    assert b.receive_json()["status"] == "takingOver"
-                    assert b.receive_json()["type"] == "state"
+                    assert b.receive_json()["browserId"] == state_a["browserId"]
                     b.send_json({"type": "close"})
                     assert b.receive()["type"] == "websocket.close"
             assert not installer.done() and not env.coordinator.connections

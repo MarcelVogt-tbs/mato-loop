@@ -53,15 +53,15 @@ See [appearance and themes](../../docs/appearance.md) for branding, compiled the
 
 ## Browser Integration
 
-The feature store owns control and optional noVNC connections. Visible confirmed Browser-app activation opens the container viewer; hidden mounts do not start it. Native Linux agents automate headlessly. Model-requested control uses the backend approval/attachment path independently of a graphical viewer.
+The feature store owns control and optional page-stream connections. Native Linux and container agents use the same headless Chromium runtime and viewer. Visible confirmed Browser-app activation opens the viewer; hidden mounts do not start it. Model tools use normal backend permissions independently of a graphical viewer or an open Browser app.
 
-Website tabs and address/back/forward/reload controls accompany the file/clipboard toolbar. Panel collapse, remounts, and chat switches retain the original controlling browser and model attachment; another chat requires takeover. **Manuell übernehmen** revokes model control, and input stays locked until the server confirms the action has settled. Explicit close ends the runtime.
+Website tabs and address/back/forward/reload controls accompany the file toolbar. Each chat has an isolated disposable browser, with no inherited cookies or tabs. Views of the same chat share its browser without takeover. Model actions temporarily lock manual input and restore it afterward; there is no connection toggle. Explicit close requires confirmation and ends the runtime and its logins for all views.
 
-The bundled noVNC client is 1.5.0; 1.6.0's published CommonJS package contains a top-level `await` incompatible with this Vite setup. Desktop dimensions use bounded, coalesced control-socket resize requests rather than a fixed emulated viewport. Ctrl+Alt+Escape releases remote keyboard focus.
+The viewer reassembles bounded length-prefixed JSON/JPEG frames and sends only typed input for the displayed tab and current input epoch. Viewport dimensions use bounded, coalesced control-socket resize requests. Ctrl+Alt+Escape releases remote keyboard focus. Native Chromium menus and DevTools are not exposed; website JavaScript dialogs use Quasar.
 
-Manual upload picks an existing **Ablage** or **Computer-Dateien** file via `/upload-source`; local uploads first enter the ordinary file store. Completed downloads publish below the selected computer's `homeDirectory/browser/downloads`, with collision protection. Clipboard transfers are explicit/manual-only, bounded UTF-8, and revalidate current view/focus/control. They never persist clipboard content.
+Manual upload picks an existing **Ablage** or **Computer-Dateien** file via `/upload-source`; local uploads first enter the ordinary file store. Completed downloads publish below the selected computer's `homeDirectory/browser/downloads`, with collision protection. Select text directly and use Ctrl/Cmd+C or Ctrl/Cmd+V; no clipboard toolbar icons or right-click menu are needed. Clipboard transfers are explicit/manual-only, bounded UTF-8, and revalidate current view/focus/control. They never persist clipboard content. A dialog remains available when direct local clipboard access fails.
 
-The complete RPC, resize, clipboard, transfer, takeover, and security contract lives in [Browser architecture and operations](../../docs/browser.md), with agent-local details in [BROWSER.md](../matoloop-agent/BROWSER.md).
+The complete RPC, resize, clipboard, transfer, lifetime, and security contract lives in [Browser architecture and operations](../../docs/browser.md), with agent-local details in [BROWSER.md](../matoloop-agent/BROWSER.md).
 
 ## Validation
 

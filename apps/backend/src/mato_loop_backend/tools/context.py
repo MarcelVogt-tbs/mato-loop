@@ -128,18 +128,8 @@ class ToolContext:
             ),
         )
         if any(item.adapter_type == "browser" for item in settings.instances):
-            from mato_loop_backend.integrations.browser.adapter import (
-                attached_browser_integration_id,
-            )
-
-            integration_id = attached_browser_integration_id(
-                self.session.id,
-                self.execution_client.agent_id if self.execution_client else None,
-                self.session.user_id,
-            )
             for item in settings.instances:
                 if item.adapter_type == "browser":
-                    item._browser_attached = item.id == integration_id
                     item._execution_operations = self.execution_client.operations if self.execution_client else frozenset()
                     if self.execution_client is None or item.execution_agent_id != self.execution_client.agent_id:
                         item.enabled = False

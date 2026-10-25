@@ -1,6 +1,8 @@
 import asyncio
+import json
 import os
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -18,6 +20,7 @@ from matoloop_agent.browser_contracts import (
     BrowserBatchResult,
     BrowserExecuteArguments,
     BrowserFormField,
+    BrowserInput,
 )
 from matoloop_agent.browser_worker import BrowserWorker
 from matoloop_agent.filesystem import AgentError
@@ -212,6 +215,89 @@ class BrowserHeadedObservations(unittest.IsolatedAsyncioTestCase):
             dict(name=name, ref=ref, type="textbox", value=name + " value")
             for name, ref in re.findall(r'textbox "([ABC])" \[ref=([^\]]+)\]', result["text"])
         ]
+
+    async def test_viewer_can_join_and_dismiss_an_existing_website_dialog(self):
+        opened = asyncio.Event()
+        self.page.on("dialog", lambda _dialog: opened.set())
+        await self.page.evaluate("setTimeout(() => alert('Hello'), 0)")
+        await asyncio.wait_for(opened.wait(), 5)
+        await asyncio.wait_for(self.worker.resize(1000, 700), 5)
+        reader, writer = await asyncio.open_unix_connection(str(self.worker.live / "view"))
+        async with asyncio.timeout(5):
+            size = struct.unpack(">I", await reader.readexactly(4))[0]
+            await reader.readexactly(size)
+            writer.close()
+            await asyncio.gather(self.worker.view_task, return_exceptions=True)
+        reader, writer = await asyncio.open_unix_connection(str(self.worker.live / "view"))
+        self.addCleanup(writer.close)
+        async with asyncio.timeout(5):
+            size = struct.unpack(">I", await reader.readexactly(4))[0]
+            state = json.loads(await reader.readexactly(size))
+            payload = json.dumps(
+                {
+                    "kind": "dialog",
+                    "tabId": state["tabId"],
+                    "inputEpoch": state["inputEpoch"],
+                    "accept": True,
+                }
+            ).encode()
+            writer.write(struct.pack(">I", len(payload)) + payload)
+            await writer.drain()
+            while state.get("dialog") or state["type"] != "frame":
+                size = struct.unpack(">I", await reader.readexactly(4))[0]
+                state = json.loads(await reader.readexactly(size))
+        self.assertEqual(state["tabId"], self.tab_id)
+
+    async def test_stale_viewer_answer_cannot_accept_the_next_dialog(self):
+        first_viewer, second_viewer = object(), object()
+        self.worker.viewers.update((first_viewer, second_viewer))
+        async with self.page.expect_event("dialog"):
+            await self.page.evaluate(
+                "() => { setTimeout(() => { confirm('First'); confirm('Second'); }, 0); }"
+            )
+        answer = BrowserInput(
+            kind="dialog", tabId=self.tab_id, inputEpoch=self.worker.input_epoch, accept=True
+        )
+        async with self.page.expect_event("dialog") as opened:
+            await self.worker.input(answer, first_viewer)
+        second = await opened.value
+        await self.worker.input(answer, second_viewer)
+        self.assertIs(self.worker.dialogs.get(self.page), second)
+
+    async def test_mouse_modifiers_do_not_depend_on_prior_key_events(self):
+        await self.page.set_content(
+            "<body onclick='window.flags=[event.ctrlKey,event.shiftKey]'>Click</body>"
+        )
+        writer = object()
+        self.worker.viewers.add(writer)
+        self.addCleanup(self.worker.viewers.discard, writer)
+        for phase in ("down", "up"):
+            await self.worker.input(
+                BrowserInput(
+                    kind="mouse",
+                    event=phase,
+                    x=10,
+                    y=10,
+                    modifiers=10,
+                    tabId=self.tab_id,
+                    inputEpoch=self.worker.input_epoch,
+                ),
+                writer,
+            )
+        self.assertEqual(await self.page.evaluate("window.flags"), [True, True])
+
+    async def test_cross_origin_iframe_does_not_leave_navigation_loading(self):
+        await self.page.route(
+            "http://main.test/",
+            lambda route: route.fulfill(
+                body='<iframe src="http://iframe.test/"></iframe>', content_type="text/html"
+            ),
+        )
+        await self.page.route(
+            "http://iframe.test/", lambda route: route.fulfill(body="Frame ready")
+        )
+        await self.page.goto("http://main.test/", wait_until="load")
+        self.assertFalse((await self.worker.navigation_state())["loading"])
 
     async def test_scroll_uses_the_same_full_snapshot_as_other_actions(self):
         await self.page.set_content("""<style>

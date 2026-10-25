@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from matoloop_agent.browser import BrowserManager
+from matoloop_agent.browser import BrowserRuntime
 from matoloop_agent.browser_contracts import (
     BrowserExecuteArguments,
     BrowserFileArguments,
@@ -477,7 +477,7 @@ async def run(page):
 
     async def test_pipe_framing_script_failure_and_hard_block_closure(self):
         with tempfile.TemporaryDirectory() as root:
-            manager = BrowserManager(SimpleNamespace(data_dir=Path(root)), None)
+            manager = BrowserRuntime(SimpleNamespace(data_dir=Path(root)), None)
             try:
                 await manager.spawn(Path(root))
                 self.assertEqual((await manager.rpc("start"))["state"], "ready")

@@ -7,13 +7,14 @@ import hashlib
 import json
 import logging
 import secrets
-from contextlib import ExitStack, contextmanager, suppress
+from collections.abc import Awaitable, Callable
+from contextlib import ExitStack, asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from tempfile import SpooledTemporaryFile
 from time import monotonic
-from typing import TYPE_CHECKING, Any
+from typing import Any, BinaryIO
 from uuid import UUID, uuid4
 
 from anyio import CancelScope
@@ -24,6 +25,7 @@ from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.diagnostics.service import schedule_diagnostic_event
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.execution.browser_contracts import (
+    MAX_BROWSER_FILE_BYTES,
     BrowserActionArguments,
     BrowserActionResult,
     BrowserControlResult,
@@ -66,14 +68,67 @@ from mato_loop_backend.settings.effective import (
     load_agent_profile,
 )
 
-if TYPE_CHECKING:
-    from mato_loop_backend.execution.browser_control import ControlRequest
-
 ACCESS_INTERVAL = 2
-IDLE_SECONDS = 30
 MAX_BROWSERS = 32
 DOWNLOAD_COLLISION_LIMIT = 100
 logger = logging.getLogger(__name__)
+
+
+async def _file_request(connection, **arguments):
+    wire = BrowserFileArguments(browser_id=connection.browser_id, **arguments)
+    result = await connection.request(
+        "integration.browser.file", wire.model_dump(mode="json"),
+        BrowserControlResult if arguments["action"] in {"delete", "choose"} else BrowserFileResult,
+    )
+    if isinstance(result, BrowserFileResult) and arguments.get("file_id", result.file_id) != result.file_id:
+        raise ExecutionClientError("executionAgent.protocolError")
+    if isinstance(result, BrowserControlResult) and not result.ok:
+        raise ExecutionClientError("browser.actionFailed")
+    return result
+
+
+async def _stage_browser_file(
+    connection, file: BinaryIO, filename: str, size: int,
+    check_access: Callable[[], Awaitable[None]],
+) -> str:
+    """Stage a bounded upload while the caller holds the browser action lock."""
+    if not 0 <= size <= MAX_BROWSER_FILE_BYTES:
+        raise ExecutionClientError("browser.fileTooLarge")
+    file_id = None
+    completed = False
+    try:
+        await check_access()
+        beginning = asyncio.create_task(_file_request(connection, action="begin", filename=filename, size=size))
+        try:
+            result = await asyncio.shield(beginning)
+        except asyncio.CancelledError:
+            with CancelScope(shield=True), suppress(Exception):
+                file_id = (await beginning).file_id
+            raise
+        file_id = result.file_id
+        if result.offset != 0 or result.size != size or result.complete:
+            raise ExecutionClientError("executionAgent.protocolError")
+        offset = 0
+        while chunk := await asyncio.to_thread(file.read, 65536):
+            await check_access()
+            result = await _file_request(
+                connection, action="write", file_id=file_id, offset=offset,
+                data=base64.b64encode(chunk).decode("ascii"),
+            )
+            offset += len(chunk)
+            if result.offset != offset or result.size != size or result.complete:
+                raise ExecutionClientError("executionAgent.protocolError")
+        await check_access()
+        result = await _file_request(connection, action="finish", file_id=file_id)
+        if not result.complete or result.size != size or result.offset != size:
+            raise ExecutionClientError("executionAgent.protocolError")
+        await check_access()
+        completed = True
+        return file_id
+    finally:
+        if file_id is not None and not completed:
+            with CancelScope(shield=True), suppress(Exception):
+                await _file_request(connection, action="delete", file_id=file_id)
 
 
 def browser_download_path(home: PurePosixPath, filename: str, index: int) -> str:
@@ -148,7 +203,7 @@ async def validate_browser_access(
         instance = await load_browser_integration(
             db, owner_id, integration_id, require_enabled=require_enabled,
         )
-        can_attach = False
+        model_available = False
         if session_id is not None:
             session = await db.get(ChatSession, session_id)
             if (session is None or session.user_id != owner_id or session.session_type != "chat"
@@ -164,15 +219,12 @@ async def validate_browser_access(
                     apply_run_session_settings(session, run)
             if session.preferred_execution_agent_id != instance.execution_agent_id:
                 raise ExecutionClientError("browser.bindingChanged")
-            if not any(tab.get("app_id") == "browser" and tab.get("kind", "app") == "app"
-                       for tab in (session.control_center or {}).get("tabs", [])):
-                raise ExecutionClientError("browser.notConnected")
             try:
                 profile = await load_agent_profile(db, owner_id, session.agent_profile_id)
-                can_attach = integration_profile_available(instance, profile)
+                model_available = integration_profile_available(instance, profile)
             except AgentProfileUnavailable:
                 pass
-        return instance, can_attach
+        return instance, model_available
 
 
 @dataclass(slots=True)
@@ -181,28 +233,23 @@ class BrowserConnection:
     integration_id: UUID
     agent_id: UUID
     session_id: UUID
-    login_id: UUID | None
     client: ExecutionClient
     generation: int
     run_id: UUID | None = None
     browser_id: UUID = field(default_factory=uuid4)
     view_id: UUID = field(default_factory=uuid4)
-    websocket: WebSocket | None = None
-    view_socket: WebSocket | None = None
-    attached: bool = False
-    attachment_revision: int = 0
+    sockets: dict[UUID, tuple[WebSocket, UUID]] = field(default_factory=dict)
+    view_sockets: dict[UUID, WebSocket] = field(default_factory=dict)
     busy: bool = False
-    can_attach: bool = False
+    model_available: bool = False
     closed: bool = False
     ready: bool = False
-    resetting_view: bool = False
     manual_enabled: bool = True
     navigation: BrowserNavigationResult | None = None
     downloads: list[dict[str, Any]] = field(default_factory=list)
     origins: dict[str, tuple[BrowserOrigin, int]] = field(default_factory=dict)
     control_epoch: int = 0
     task: asyncio.Task | None = None
-    idle_task: asyncio.Task | None = None
     action_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -213,35 +260,32 @@ class BrowserConnection:
             payload={
                 "browserId": str(self.browser_id), "viewId": str(self.view_id),
                 "agentId": str(self.agent_id), "integrationId": str(self.integration_id),
-                "attachmentRevision": self.attachment_revision,
                 "reason": reason,
                 "errorCode": describe_error(error_code).code if error_code is not None else None,
             },
         )
 
-    def detach(self, reason: str = "manualTakeover", *, error_code: str | None = None) -> None:
-        was_attached = self.attached
-        self.attached = False
-        self.run_id = None
-        self.attachment_revision += 1
-        if was_attached:
-            self.diagnostic("detached", reason, error_code=error_code)
-
-    async def send(self, payload: dict) -> None:
-        async with self.send_lock:
-            if self.websocket is not None and not self.closed:
+    async def send(self, payload: dict, *, view_id: UUID | None = None) -> None:
+        async def send_view(key, socket):
+            try:
                 async with asyncio.timeout(3):
-                    await self.websocket.send_json(payload)
+                    await socket.send_json({**payload, "viewId": str(key)})
+            except Exception:
+                with suppress(Exception):
+                    await socket.close()
 
-    async def state(self) -> None:
+        async with self.send_lock:
+            await asyncio.gather(*(
+                send_view(key, socket) for key, (socket, _) in list(self.sockets.items())
+                if not self.closed and (view_id is None or key == view_id)
+            ))
+
+    async def state(self, *, view_id: UUID | None = None) -> None:
         await self.send({
             "type": "state", "browserId": str(self.browser_id), "viewId": str(self.view_id),
-            "attached": self.attached,
-            "busy": self.busy or self.resetting_view or (not self.attached and not self.manual_enabled),
-            "canAttach": self.can_attach,
-            "attachReason": None if self.can_attach else "tool.unavailable",
+            "busy": self.busy or not self.manual_enabled,
             "downloads": self.downloads,
-        })
+        }, view_id=view_id)
 
     def origin(self, kind: str, *, run_id: UUID | None = None) -> dict[str, Any]:
         origin = BrowserOrigin(
@@ -254,24 +298,33 @@ class BrowserConnection:
         self.origins[token] = (origin, self.control_epoch)
         return {"origin": token, "controlEpoch": self.control_epoch}
 
-    async def check_access(self) -> None:
+    async def check_access(self, *, login_id: UUID | None = None) -> None:
         if self.closed or execution_agent_connections.generation(self.agent_id) != self.generation:
             raise ExecutionClientError("browser.notConnected")
-        instance, self.can_attach = await validate_browser_access(
-            self.owner_id, self.integration_id, login_id=self.login_id, session_id=self.session_id,
-            run_id=self.run_id,
+        instance, self.model_available = await validate_browser_access(
+            self.owner_id, self.integration_id, session_id=self.session_id,
+            run_id=self.run_id, login_id=login_id,
         )
         if self.closed or instance.execution_agent_id != self.agent_id:
             raise ExecutionClientError("browser.bindingChanged")
-        if not self.can_attach and self.attached:
-            self.detach("accessRevoked", error_code="tool.unavailable")
 
-    async def check_manual(self) -> None:
-        await self.check_access()
-        if not self.ready or self.websocket is None:
+    async def check_manual(self, *, view_id: UUID | None = None) -> None:
+        if view_id is None:
+            await self.check_access()
+        else:
+            await self.check_view(view_id)
+        if not self.ready or not self.sockets:
             raise ExecutionClientError("browser.notConnected")
-        if self.attached or self.run_id is not None or self.busy or not self.manual_enabled:
+        if self.busy or not self.manual_enabled:
             raise ExecutionClientError("browser.busy")
+
+    async def check_view(self, view_id: UUID) -> None:
+        binding = self.sockets.get(view_id)
+        if binding is None:
+            raise ExecutionClientError("browser.notConnected")
+        await self.check_access(login_id=binding[1])
+        if self.closed or self.sockets.get(view_id) is not binding:
+            raise ExecutionClientError("browser.notConnected")
 
     async def request(self, *args, **kwargs):
         """Keep dispatched human operations alive until the shared action lock can pass."""
@@ -293,207 +346,123 @@ class BrowserRelay:
     outgoing: asyncio.Queue[bytes] = field(default_factory=lambda: asyncio.Queue(maxsize=4))
     ended: asyncio.Event = field(default_factory=asyncio.Event)
     accepted: bool = False
-    ready: bool = False
-    connected: bool = False
+
+
+@dataclass(slots=True)
+class BrowserViewAccess:
+    connection: BrowserConnection
+    view_id: UUID
+    login_id: UUID
+
+    def __getattr__(self, name):
+        return getattr(self.connection, name)
+
+    async def check_manual(self) -> None:
+        binding = self.connection.sockets.get(self.view_id)
+        if binding is None or binding[1] != self.login_id:
+            raise ExecutionClientError("browser.notConnected")
+        await self.connection.check_manual(view_id=self.view_id)
 
 
 class BrowserCoordinator:
     def __init__(self) -> None:
-        self.connections: dict[UUID, BrowserConnection] = {}
+        self.connections: dict[tuple[UUID, UUID], BrowserConnection] = {}
         self.relays: dict[UUID, BrowserRelay] = {}
         self.lock = asyncio.Lock()
 
-    def attached_for(self, session_id: UUID, agent_id: UUID) -> BrowserConnection | None:
-        connection = self.connections.get(agent_id)
+    def current_for(self, session_id: UUID, agent_id: UUID) -> BrowserConnection | None:
+        connection = self.connections.get((session_id, agent_id))
         return connection if (
             connection is not None and connection.session_id == session_id
-            and connection.attached and not connection.closed and connection.ready
+            and not connection.closed and connection.ready
             and connection.generation == execution_agent_connections.generation(agent_id)
         ) else None
 
-    async def open(self, owner_id, integration_id, session_id, login_id, websocket,
-                   *, expected_browser_id: UUID | None = None, expected_view_id: UUID | None = None,
-                   control_request: ControlRequest | None = None,
+    async def open(self, owner_id, integration_id, session_id, login_id=None, websocket=None,
+                   *, run_id: UUID | None = None,
                    color_scheme: str = "light") -> BrowserConnection:
-        instance, can_attach = await validate_browser_access(
+        instance, model_available = await validate_browser_access(
             owner_id, integration_id, login_id=login_id, session_id=session_id,
-            run_id=control_request.info.run_id if control_request is not None else None,
+            run_id=run_id,
         )
         agent_id = instance.execution_agent_id
         async with self.lock:
-            if control_request is not None:
-                await control_request.validate()
-            previous = self.connections.get(agent_id)
+            previous = self.connections.get((session_id, agent_id))
             if previous is not None:
                 if previous.integration_id != integration_id or previous.owner_id != owner_id:
                     raise ExecutionClientError("browser.busy")
-                requested = expected_view_id is not None
-                if (not requested and previous.websocket is None and previous.session_id == session_id
-                        and previous.ready and not previous.closed):
-                    previous.login_id = login_id
-                    previous.websocket = websocket
-                    previous.can_attach = can_attach
-                    if control_request is not None:
-                        previous.run_id = control_request.info.run_id
-                    if previous.idle_task is not None:
-                        previous.idle_task.cancel()
-                        previous.idle_task = None
-                    return previous
-                resume = (not requested and previous.websocket is None
-                          and previous.session_id == session_id and previous.login_id == login_id)
-                if (previous.closed or not previous.ready or (not requested and not resume)
-                        or (requested and (previous.view_id != expected_view_id or previous.browser_id != expected_browser_id))):
-                    return previous
-            elif expected_view_id is not None:
-                raise ExecutionClientError("browser.notConnected")
-            if previous is None and len(self.connections) >= MAX_BROWSERS:
-                raise ExecutionClientError("browser.busy")
-            connection = BrowserConnection(
-                owner_id, integration_id, agent_id, session_id, login_id, browser_client(agent_id),
-                execution_agent_connections.generation(agent_id), websocket=websocket,
-                run_id=control_request.info.run_id if control_request is not None else None,
-                can_attach=can_attach,
-            )
-            if previous is not None:
-                # Retire the immutable view binding, not the Chromium runtime it controlled.
-                previous.closed = True
-                previous.detach("takeover")
-                for task in (previous.task, previous.idle_task):
-                    if task is not None:
-                        task.cancel()
-                connection.browser_id = previous.browser_id
-                connection.client = previous.client
-                connection.generation = previous.generation
-                connection.action_lock = previous.action_lock
-                connection.attachment_revision = previous.attachment_revision
-                connection.manual_enabled = False
-                connection.origins = previous.origins
-                connection.control_epoch = previous.control_epoch
-            from mato_loop_backend.execution.browser_control import browser_control_requests
-
-            browser_control_requests.invalidate_agent(agent_id, control_request)
-            self.connections[agent_id] = connection
-            if control_request is not None:
-                control_request.bind(connection)
-        opening = asyncio.create_task(self._start(connection, previous, control_request, color_scheme))
-        connection.task = opening
-        try:
-            return await asyncio.shield(opening)
-        except asyncio.CancelledError:
-            with CancelScope(shield=True):
-                await asyncio.gather(opening, return_exceptions=True)
-                await self.release(connection, websocket)
-            raise
-
-    async def _start(self, connection: BrowserConnection, previous: BrowserConnection | None,
-                     control_request: ControlRequest | None = None,
-                     color_scheme: str = "light") -> BrowserConnection:
-        try:
-            if control_request is not None:
-                await control_request.validate()
-            if previous is None:
-                result = await connection.request(
-                    "integration.browser.open",
-                    {
-                        "ownerId": str(connection.owner_id),
-                        "browserId": str(connection.browser_id),
-                        "colorScheme": color_scheme,
-                    },
-                    BrowserOpenResult, timeout=60,
-                )
-                if result.browser_id != connection.browser_id:
-                    raise ExecutionClientError("executionAgent.protocolError")
-                if control_request is not None:
-                    await control_request.validate()
-                result = await connection.request(
-                    "integration.browser.control",
-                    {"browserId": str(connection.browser_id), "manual": True,
-                     **connection.origin("human")},
-                    BrowserControlResult,
-                )
-                if not result.ok:
-                    raise ExecutionClientError("browser.actionFailed")
+                connection = previous
             else:
-                await connection.send({"type": "availability", "status": "takingOver",
-                                       "browserId": str(connection.browser_id)})
-                async with connection.action_lock:
-                    await connection.check_access()
-                    # Always fence manual-to-manual handoffs too, releasing held keys/buttons.
-                    for manual in (False, True):
-                        if control_request is not None:
-                            await control_request.validate()
-                        if manual and previous.websocket is not None:
-                            with suppress(Exception):
-                                async with previous.send_lock, asyncio.timeout(2):
-                                    await previous.websocket.send_json({"type": "replaced"})
-                            if control_request is not None:
-                                await control_request.validate()
-                        result = await connection.request(
-                            "integration.browser.control",
-                            {"browserId": str(connection.browser_id), "manual": manual,
-                             "rotateView": not manual, **connection.origin(
-                                 "model" if not manual and control_request is not None else "human",
-                                 run_id=control_request.info.run_id if not manual and control_request is not None else None,
-                             )},
-                            BrowserControlResult,
-                        )
-                        if not result.ok:
-                            raise ExecutionClientError("browser.actionFailed")
-                    await connection.check_access()
-                    connection.manual_enabled = True
+                if len(self.connections) >= MAX_BROWSERS:
+                    raise ExecutionClientError("browser.busy")
+                connection = BrowserConnection(
+                    owner_id, integration_id, agent_id, session_id, browser_client(agent_id),
+                    execution_agent_connections.generation(agent_id), run_id=run_id,
+                    model_available=model_available,
+                )
+                self.connections[(session_id, agent_id)] = connection
+                connection.task = asyncio.create_task(self._start(connection, color_scheme))
+            opening = connection.task if not connection.ready else None
+        if opening is not None:
+            await asyncio.shield(opening)
+        if run_id is not None:
+            connection.run_id = run_id
+        await connection.check_access()
+        if websocket is not None:
+            connection.sockets[uuid4()] = (websocket, login_id)
+        return connection
+
+    async def _start(self, connection: BrowserConnection,
+                      color_scheme: str = "light") -> BrowserConnection:
+        try:
+            result = await connection.request(
+                "integration.browser.open",
+                {
+                    "ownerId": str(connection.owner_id),
+                    "browserId": str(connection.browser_id),
+                    "sessionId": str(connection.session_id),
+                    "colorScheme": color_scheme,
+                },
+                BrowserOpenResult, timeout=60,
+            )
+            if result.browser_id != connection.browser_id:
+                raise ExecutionClientError("executionAgent.protocolError")
             await connection.check_access()
-            if control_request is not None:
-                await control_request.validate()
+            result = await connection.request(
+                "integration.browser.control",
+                {"browserId": str(connection.browser_id), "manual": True,
+                 **connection.origin("human")},
+                BrowserControlResult,
+            )
+            if not result.ok:
+                raise ExecutionClientError("browser.actionFailed")
+            await connection.check_access()
             connection.ready = True
-            connection.diagnostic("opened", "takeover" if previous is not None else "start")
+            connection.diagnostic("opened", "start")
             connection.task = asyncio.create_task(self.watch(connection))
             return connection
         except BaseException as exc:
-            code = (control_request.error if control_request is not None else None) or (
+            code = (
                 exc.code if isinstance(exc, ExecutionClientError) else "browser.unavailable"
             )
             if isinstance(exc, Exception):
                 with suppress(Exception):
                     await connection.send({"type": "error", "error": describe_error(code).payload()})
             await self.close(
-                connection, reason="controlTimeout" if code == "browser.controlTimeout" else "startupFailed",
+                connection, reason="startupFailed",
                 error_code=code,
             )
             raise
-        finally:
-            if previous is not None:
-                for relay_id, relay in list(self.relays.items()):
-                    if relay.connection is previous:
-                        relay.ended.set()
-                        self.relays.pop(relay_id, None)
-                for socket in (previous.view_socket, previous.websocket):
-                    if socket is not None:
-                        with suppress(Exception):
-                            async with asyncio.timeout(1):
-                                await socket.close(code=4001)
-
-    async def availability(self, connection: BrowserConnection) -> dict:
-        async with AsyncSessionFactory() as db:
-            session = await db.get(ChatSession, connection.session_id)
-            title = session.title if session is not None and session.user_id == connection.owner_id else None
-        available = connection.ready and not connection.closed
-        return {"type": "availability", "status": "occupied" if available else "waiting",
-                "browserId": str(connection.browser_id), "viewId": str(connection.view_id),
-                "ownerSession": {"id": str(connection.session_id), "title": title or "Session"},
-                "busy": connection.busy or connection.action_lock.locked(), "canTakeover": available}
 
     async def watch(self, connection: BrowserConnection) -> None:
         try:
             while not connection.closed:
                 await asyncio.sleep(ACCESS_INTERVAL)
-                previous = connection.can_attach, connection.attached
                 await connection.check_access()
-                if (not connection.attached and not connection.manual_enabled
+                if (not connection.manual_enabled
                         and not connection.action_lock.locked()):
-                    await self.attachment(connection, False)
-                if previous != (connection.can_attach, connection.attached):
-                    await connection.state()
-                if connection.websocket is not None and connection.navigation is not None and not connection.action_lock.locked():
+                    raise ExecutionClientError("browser.actionFailed")
+                if connection.sockets and connection.navigation is not None and not connection.action_lock.locked():
                     try:
                         await self.navigate(connection, BrowserNavigationArguments(action="state"))
                     except ExecutionClientError:
@@ -519,35 +488,22 @@ class BrowserCoordinator:
             )
 
     async def release(self, connection: BrowserConnection, websocket: WebSocket) -> None:
-        if connection.closed or connection.websocket is not websocket:
-            return
-        connection.websocket = None
-        for relay in list(self.relays.values()):
-            if relay.connection is connection:
-                relay.ended.set()
-        if connection.view_socket is not None:
-            with suppress(Exception):
-                await connection.view_socket.close()
-            connection.view_socket = None
-        if not connection.closed and not connection.attached:
-            connection.detach("controlDisconnected")
-            if connection.idle_task is not None:
-                connection.idle_task.cancel()
-            async def expire():
-                await asyncio.sleep(IDLE_SECONDS)
-                await self.close(connection, reason="idleTimeout")
-            connection.idle_task = asyncio.create_task(expire())
+        for view_id, (socket, _) in list(connection.sockets.items()):
+            if socket is websocket:
+                connection.sockets.pop(view_id, None)
+                viewer = connection.view_sockets.get(view_id)
+                if viewer is not None:
+                    with suppress(Exception):
+                        await viewer.close()
 
     async def close(self, connection: BrowserConnection, *, reason: str = "manualClose",
                     error_code: str | None = None) -> None:
         if connection.closed:
             return
         connection.closed = True
-        connection.detach(reason, error_code=error_code)
         connection.diagnostic("closed", reason, error_code=error_code)
-        for task in (connection.task, connection.idle_task):
-            if task is not None and task is not asyncio.current_task():
-                task.cancel()
+        if connection.task is not None and connection.task is not asyncio.current_task():
+            connection.task.cancel()
         for relay_id, relay in list(self.relays.items()):
             if relay.connection is connection:
                 relay.ended.set()
@@ -560,99 +516,13 @@ class BrowserCoordinator:
                         BrowserControlResult, timeout=15,
                     )
         finally:
-            for socket in (connection.view_socket, connection.websocket):
+            for socket in [*connection.view_sockets.values(), *(item[0] for item in connection.sockets.values())]:
                 if socket is not None:
                     with suppress(Exception):
                         async with asyncio.timeout(1):
                             await socket.close()
-            if self.connections.get(connection.agent_id) is connection:
-                self.connections.pop(connection.agent_id)
-
-    async def attachment(self, connection: BrowserConnection, attached: bool,
-                         *, control_request: ControlRequest | None = None,
-                         reason: str | None = None) -> None:
-        if control_request is not None:
-            await control_request.validate()
-            connection.run_id = control_request.info.run_id
-        await connection.check_access()
-        if attached:
-            if not connection.can_attach:
-                raise ExecutionClientError("tool.unavailable")
-            if connection.busy or (control_request is None and (
-                connection.action_lock.locked() or connection.view_socket is None
-            )):
-                raise ExecutionClientError("browser.busy")
-            async with connection.action_lock:
-                await connection.check_access()
-                if control_request is not None:
-                    await control_request.validate()
-                    control_request.binding_ready()
-                result = await connection.request(
-                    "integration.browser.control", {"browserId": str(connection.browser_id), "manual": False,
-                    **connection.origin(
-                        "model" if control_request is not None else "human",
-                        run_id=control_request.info.run_id if control_request is not None else None,
-                    )},
-                    BrowserControlResult,
-                )
-                if not result.ok:
-                    raise ExecutionClientError("browser.actionFailed")
-                connection.manual_enabled = False
-                await connection.check_access()
-                if not connection.can_attach or (
-                    control_request is None and connection.view_socket is None
-                ):
-                    raise ExecutionClientError("browser.bindingChanged")
-                if control_request is not None:
-                    await control_request.validate()
-                    control_request.binding_ready()
-                connection.detach("attachmentReplaced")
-                connection.attached = True
-                connection.run_id = control_request.info.run_id if control_request is not None else None
-                connection.diagnostic("attached", "modelRequest" if control_request is not None else "manualAttach")
-                if control_request is not None:
-                    from mato_loop_backend.execution.browser_control import browser_control_requests
-
-                    browser_control_requests.finish(control_request)
-                await connection.state()
-        else:
-            connection.detach(reason or "manualTakeover")
-            await connection.state()
-            # Revoke queued actions immediately, but let a dispatched action settle.
-            async with connection.action_lock:
-                if connection.closed:
-                    return
-                if connection.manual_enabled:
-                    await connection.state()
-                    return
-                connection.resetting_view = True
-                try:
-                    await connection.send({"type": "view.reset"})
-                    result = await connection.request(
-                        "integration.browser.control", {"browserId": str(connection.browser_id), "manual": True,
-                         **connection.origin("human")},
-                        BrowserControlResult,
-                    )
-                    if not result.ok:
-                        raise ExecutionClientError("browser.actionFailed")
-                    connection.manual_enabled = True
-                    old_view, connection.view_socket = connection.view_socket, None
-                    for relay in list(self.relays.values()):
-                        if relay.connection is connection:
-                            relay.ended.set()
-                    if old_view is not None:
-                        with suppress(Exception):
-                            await old_view.close()
-                finally:
-                    connection.resetting_view = False
-                await connection.state()
-                if connection.websocket is None and not connection.closed:
-                    if connection.idle_task is not None:
-                        connection.idle_task.cancel()
-                    async def expire():
-                        await asyncio.sleep(IDLE_SECONDS)
-                        await self.close(connection, reason="idleTimeout")
-                    connection.idle_task = asyncio.create_task(expire())
+            if self.connections.get((connection.session_id, connection.agent_id)) is connection:
+                self.connections.pop((connection.session_id, connection.agent_id))
 
     async def _snapshot(self, connection: BrowserConnection, tab_id: str, *, settle: bool = False) -> tuple[str, BrowserActionResult]:
         result = await connection.client.request(
@@ -673,11 +543,52 @@ class BrowserCoordinator:
             "data": {**result.data, "snapshotSha256": digest},
         })
 
-    async def resize(self, connection: BrowserConnection, width: int, height: int) -> BrowserResizeResult:
+    @asynccontextmanager
+    async def _model_action(self, connection: BrowserConnection, run_id: UUID | None = None):
+        run_id = run_id or connection.run_id
+        failed = False
+        connection.busy = True
+        try:
+            await connection.state()
+            connection.manual_enabled = False
+            result = await connection.request(
+                "integration.browser.control",
+                {"browserId": str(connection.browser_id), "manual": False,
+                 **(connection.origin("model", run_id=run_id) if run_id is not None else {})}, BrowserControlResult,
+            )
+            if not result.ok:
+                raise ExecutionClientError("browser.actionFailed")
+            yield
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            try:
+                with CancelScope(shield=True):
+                    result = await connection.request(
+                        "integration.browser.control",
+                        # Delayed model effects remain subject to file permissions after unlocking.
+                        {"browserId": str(connection.browser_id), "manual": True}, BrowserControlResult,
+                    )
+                    if not result.ok:
+                        raise ExecutionClientError("browser.actionFailed")
+                    connection.manual_enabled = True
+            except Exception:
+                if not failed:
+                    raise
+            finally:
+                connection.busy = False
+                with suppress(Exception):
+                    await connection.state()
+
+    async def resize(self, connection: BrowserConnection, width: int, height: int,
+                     *, view_id: UUID | None = None) -> BrowserResizeResult:
         dimensions = BrowserResizeResult(width=width, height=height)
         async with connection.action_lock:
             await connection.check_access()
-            if self.connections.get(connection.agent_id) is not connection or connection.websocket is None:
+            if view_id is not None:
+                await connection.check_view(view_id)
+            if self.connections.get((connection.session_id, connection.agent_id)) is not connection or not connection.sockets:
                 raise ExecutionClientError("browser.notConnected")
             result = await connection.request(
                 "integration.browser.resize", {"browserId": str(connection.browser_id), **dimensions.model_dump()},
@@ -688,14 +599,16 @@ class BrowserCoordinator:
             return result
 
     async def navigate(self, connection: BrowserConnection, arguments: BrowserNavigationArguments,
-                       *, completed: bool = False) -> BrowserNavigationResult:
+                       *, completed: bool = False, view_id: UUID | None = None) -> BrowserNavigationResult:
         async with connection.action_lock:
             await connection.check_access()
-            if self.connections.get(connection.agent_id) is not connection or connection.websocket is None:
+            if view_id is not None:
+                await connection.check_view(view_id)
+            if self.connections.get((connection.session_id, connection.agent_id)) is not connection or not connection.sockets:
                 raise ExecutionClientError("browser.notConnected")
             if arguments.action != "state" and (
-                connection.attached or connection.busy or not connection.manual_enabled
-                or connection.view_socket is None
+                connection.busy or not connection.manual_enabled
+                or (view_id is not None and view_id not in connection.view_sockets)
             ):
                 raise ExecutionClientError("browser.busy")
             result = await connection.request(
@@ -706,13 +619,15 @@ class BrowserCoordinator:
             )
             if result != connection.navigation or completed:
                 connection.navigation = result
-                await connection.send({"type": "navigation", "browserId": str(connection.browser_id),
-                                       "completed": completed, **result.model_dump(mode="json")})
+                for key in list(connection.sockets):
+                    await connection.send({"type": "navigation", "browserId": str(connection.browser_id),
+                                           "completed": completed and key == view_id,
+                                           **result.model_dump(mode="json")}, view_id=key)
             return result
 
     async def snapshot(self, session_id, agent_id, integration_id, tab_id) -> str:
         with _browser_latency("snapshot", session_id) as timings:
-            connection = self.attached_for(session_id, agent_id)
+            connection = self.current_for(session_id, agent_id)
             if connection is None or connection.integration_id != integration_id:
                 raise ExecutionClientError("browser.notConnected")
             timings["browser_id"] = str(connection.browser_id)
@@ -722,21 +637,21 @@ class BrowserCoordinator:
                     waiting.close()
                     with _browser_timing(timings, "access_ms"):
                         await connection.check_access()
-                    if self.attached_for(session_id, agent_id) is not connection:
+                    if self.current_for(session_id, agent_id) is not connection or not connection.model_available:
                         raise ExecutionClientError("browser.bindingChanged")
-                    with _browser_timing(timings, "reinspection_rpc_ms"):
-                        digest, _ = await self._snapshot(connection, tab_id, settle=True)
+                    async with self._model_action(connection):
+                        with _browser_timing(timings, "reinspection_rpc_ms"):
+                            digest, _ = await self._snapshot(connection, tab_id, settle=True)
                     return digest
 
     async def execute(self, session_id, agent_id, integration_id, arguments: dict[str, Any]) -> BrowserActionResult:
         with _browser_latency("execute", session_id) as timings:
-            connection = self.attached_for(session_id, agent_id)
+            connection = self.current_for(session_id, agent_id)
             if connection is None or connection.integration_id != integration_id:
                 raise ExecutionClientError("browser.notConnected")
             timings["browser_id"] = str(connection.browser_id)
             payload = dict(arguments)
             expected_id = payload.pop("expectedBrowserId", None)
-            expected_revision = payload.pop("expectedAttachmentRevision", None)
             expected_snapshot = payload.pop("expectedSnapshot", None)
             expected_run_id = payload.pop("expectedRunId", None)
             run_id = UUID(expected_run_id) if expected_run_id is not None else None
@@ -749,99 +664,84 @@ class BrowserCoordinator:
                     with _browser_timing(timings, "access_ms"):
                         await connection.check_access()
                     def check_binding():
-                        if (self.attached_for(session_id, agent_id) is not connection
+                        if (self.current_for(session_id, agent_id) is not connection
                                 or str(connection.browser_id) != expected_id
-                                or connection.attachment_revision != expected_revision):
+                                or not connection.model_available):
                             raise ExecutionClientError("browser.bindingChanged")
                     check_binding()
-                    connection.busy = True
                     result = None
                     try:
-                        await connection.state()
-                        if run_id is not None:
-                            controlled = await connection.request(
-                                "integration.browser.control",
-                                {"browserId": str(connection.browser_id), "manual": False,
-                                 **connection.origin("model", run_id=run_id)},
-                                BrowserControlResult,
-                            )
-                            if not controlled.ok:
-                                raise ExecutionClientError("browser.actionFailed")
-                        if expected_snapshot is not None:
-                            try:
-                                BrowserInspectionData(snapshotSha256=expected_snapshot)
-                            except ValidationError as exc:
-                                raise ExecutionClientError("browser.bindingChanged") from exc
-                            with _browser_timing(timings, "reinspection_rpc_ms"):
-                                digest, inspection = await self._snapshot(connection, action.tab_id)
+                        async with self._model_action(connection, run_id):
+                            if expected_snapshot is not None:
+                                try:
+                                    BrowserInspectionData(snapshotSha256=expected_snapshot)
+                                except ValidationError as exc:
+                                    raise ExecutionClientError("browser.bindingChanged") from exc
+                                with _browser_timing(timings, "reinspection_rpc_ms"):
+                                    digest, inspection = await self._snapshot(connection, action.tab_id)
+                                check_binding()
+                                if expected_snapshot != digest:
+                                    raise ExecutionClientError("browser.snapshotChanged")
+                                if (
+                                    action.action == "inspect"
+                                    and action.selector is None
+                                    and action.depth is None
+                                    and BrowserInspectionData.model_validate(
+                                        inspection.data
+                                    ).snapshot_characters
+                                    <= 32_768
+                                ):
+                                    return inspection
                             check_binding()
-                            if expected_snapshot != digest:
-                                raise ExecutionClientError("browser.snapshotChanged")
-                            if (
-                                action.action == "inspect"
-                                and action.selector is None
-                                and action.depth is None
-                                and BrowserInspectionData.model_validate(
-                                    inspection.data
-                                ).snapshot_characters
-                                <= 32_768
-                            ):
-                                return inspection
-                        check_binding()
-                        read_action = action.action in {"tabs", "inspect", "screenshot", "diagnostics"}
-                        wire = BrowserExecuteArguments(
-                            browser_id=connection.browser_id,
-                            settle=action.action == "inspect",
-                            **action.model_dump(
-                                by_alias=False, exclude={"observe"} if read_action else set()
-                            ),
-                        )
-                        excluded = {"snapshot_sha256"} | ({"observe"} if read_action else set())
-                        if action.action != "run_code":
-                            excluded.add("code")
-                        if action.action != "evaluate":
-                            excluded.add("function")
-                        if action.action != "fill":
-                            excluded.update({"slowly", "submit"})
-                        wire_payload = wire.model_dump(mode="json", exclude=excluded)
-                        with _browser_timing(timings, "action_rpc_ms"):
-                            if action.action == "screenshot":
-                                result = await self._screenshot(connection, wire_payload, check_binding)
-                            else:
-                                result = await connection.client.request(
-                                    "integration.browser.execute", wire_payload, BrowserActionResult,
-                                    timeout=160 if action.action in {"run_code", "evaluate"} else 60,
-                                )
-                        if not result.matches_action(action):
-                            raise ExecutionClientError("executionAgent.protocolError")
-                        if result.snapshot_file is not None:
-                            raise ExecutionClientError("executionAgent.protocolError")
-                        if action.action == "inspect" and result.tab_id != action.tab_id:
-                            raise ExecutionClientError("browser.bindingChanged")
-                        if result.data is not None and "snapshotSha256" in result.data:
-                            try:
-                                observation = BrowserInspectionData.model_validate(result.data)
-                            except ValidationError as exc:
-                                raise ExecutionClientError("executionAgent.protocolError") from exc
-                            digest = hashlib.sha256(
-                                f"{result.url}\n{observation.snapshot_sha256}".encode()
-                            ).hexdigest()
-                            result = result.model_copy(update={
-                                "data": {**result.data, "snapshotSha256": digest},
-                            })
-                        if result.snapshot is not None:
-                            result._snapshot_stream = await self._read_browser_file(
-                                connection, result.snapshot, check_binding
+                            read_action = action.action in {"tabs", "inspect", "screenshot", "diagnostics"}
+                            wire = BrowserExecuteArguments(
+                                browser_id=connection.browser_id,
+                                settle=action.action == "inspect",
+                                **action.model_dump(
+                                    by_alias=False, exclude={"observe"} if read_action else set()
+                                ),
                             )
-                    finally:
-                        connection.busy = False
-                        try:
-                            with suppress(Exception):
-                                await connection.state()
-                        except BaseException:
-                            if result is not None and result._snapshot_stream is not None:
-                                result._snapshot_stream.close()
-                            raise
+                            excluded = {"observe"} if read_action else set()
+                            if action.action != "run_code":
+                                excluded.add("code")
+                            if action.action != "evaluate":
+                                excluded.add("function")
+                            if action.action != "fill":
+                                excluded.update({"slowly", "submit"})
+                            wire_payload = wire.model_dump(mode="json", exclude=excluded)
+                            with _browser_timing(timings, "action_rpc_ms"):
+                                if action.action == "screenshot":
+                                    result = await self._screenshot(connection, wire_payload, check_binding)
+                                else:
+                                    result = await connection.client.request(
+                                        "integration.browser.execute", wire_payload, BrowserActionResult,
+                                        timeout=160 if action.action in {"run_code", "evaluate"} else 60,
+                                    )
+                            if not result.matches_action(action):
+                                raise ExecutionClientError("executionAgent.protocolError")
+                            if result.snapshot_file is not None:
+                                raise ExecutionClientError("executionAgent.protocolError")
+                            if action.action == "inspect" and result.tab_id != action.tab_id:
+                                raise ExecutionClientError("browser.bindingChanged")
+                            if result.data is not None and "snapshotSha256" in result.data:
+                                try:
+                                    observation = BrowserInspectionData.model_validate(result.data)
+                                except ValidationError as exc:
+                                    raise ExecutionClientError("executionAgent.protocolError") from exc
+                                digest = hashlib.sha256(
+                                    f"{result.url}\n{observation.snapshot_sha256}".encode()
+                                ).hexdigest()
+                                result = result.model_copy(update={
+                                    "data": {**result.data, "snapshotSha256": digest},
+                                })
+                            if result.snapshot is not None:
+                                result._snapshot_stream = await self._read_browser_file(
+                                    connection, result.snapshot, check_binding
+                                )
+                    except BaseException:
+                        if result is not None and result._snapshot_stream is not None:
+                            result._snapshot_stream.close()
+                        raise
                     if action.action == "screenshot":
                         await connection.check_access()
                         check_binding()
@@ -949,12 +849,13 @@ class BrowserCoordinator:
             }
             requests = (
                 integration_operation_permission(
-                    capability="browser.read",
+                    capability="browser.use",
                     integration_id=origin.integration_id,
                     binding_revision=_model_revision(instance),
                     operation_key=hashlib.sha256(
                         json.dumps(operation, sort_keys=True).encode()
                     ).hexdigest(),
+                    grant_resource_key=f"browser:{connection.browser_id}",
                     title="Browser-Downloads lesen?",
                     summary="Der Agent möchte den Status eines Browser-Downloads lesen.",
                     resource_display=destination,
@@ -1070,24 +971,26 @@ class BrowserCoordinator:
                     )
 
     async def manual(self, owner_id, integration_id, session_id, browser_id,
-                     view_id: UUID, login_id: UUID) -> BrowserConnection:
+                     view_id: UUID, login_id: UUID) -> BrowserViewAccess:
         connection = next((item for item in self.connections.values() if item.browser_id == browser_id), None)
         if (connection is None or connection.owner_id != owner_id
                 or connection.integration_id != integration_id or connection.session_id != session_id
-                or connection.view_id != view_id or connection.login_id != login_id):
+                or view_id not in connection.sockets or connection.sockets[view_id][1] != login_id):
             raise ExecutionClientError("browser.notConnected")
-        await connection.check_manual()
-        return connection
+        access = BrowserViewAccess(connection, view_id, login_id)
+        await access.check_manual()
+        return access
 
     async def viewer(self, owner_id, integration_id, session_id, browser_id,
                      view_id: UUID, login_id: UUID) -> BrowserConnection:
         connection = next((item for item in self.connections.values() if item.browser_id == browser_id), None)
         if (connection is None or connection.owner_id != owner_id
                 or connection.integration_id != integration_id or connection.session_id != session_id
-                or connection.view_id != view_id or connection.login_id != login_id
+                or view_id not in connection.sockets or connection.sockets[view_id][1] != login_id
                 or connection.closed or not connection.ready):
             raise ExecutionClientError("browser.notConnected")
         await connection.check_access()
+        await connection.check_view(view_id)
         return connection
 
     async def shutdown(self) -> None:

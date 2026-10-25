@@ -55,7 +55,7 @@ def env(monkeypatch):
     case.navigation = {
         "tabs": [{"id": str(uuid4()), "url": "about:blank", "title": "", "loading": False}],
         "activeTabId": None, "canGoBack": False, "canGoForward": False,
-        "loading": False, "nativeChrome": False,
+        "loading": False,
     }
     case.navigation["activeTabId"] = case.navigation["tabs"][0]["id"]
     case.diagnostics = Mock()
@@ -88,18 +88,13 @@ def env(monkeypatch):
         result = await case.reply(operation, arguments) if case.reply else None
         if result is None:
             if operation == "integration.browser.open":
-                result = {"browserId": arguments["browserId"]}
+                result = {"browserId": arguments["browserId"], "protocol": "chat-browser-v1"}
             elif operation == "integration.browser.view":
                 coordinator.relays[UUID(arguments["relayId"])].accepted = True
-                coordinator.relays[UUID(arguments["relayId"])].connected = True
-                result = {"ok": True}
+                result = {"ok": True, "protocol": "page-stream-v1"}
             elif operation == "integration.browser.control":
-                assert arguments["browserId"] == str(coordinator.connections[agent_id].browser_id)
+                assert any(arguments["browserId"] == str(item.browser_id) for item in coordinator.connections.values())
                 assert type(arguments["manual"]) is bool
-                if arguments["manual"] and not case.manual:
-                    for relay in list(coordinator.relays.values()):
-                        relay.ended.set()
-                    await asyncio.sleep(0)
                 case.manual = arguments["manual"]
                 result = {"ok": True}
             elif operation == "integration.browser.clipboard":
@@ -107,7 +102,7 @@ def env(monkeypatch):
                     assert case.manual, "Clipboard write reached an agent locked against manual input"
                     case.clipboard = arguments["text"]
                 else:
-                    assert arguments["action"] in {"read", "copy"} and "text" not in arguments
+                    assert arguments["action"] == "copy" and "text" not in arguments
                 result = {"text": case.clipboard}
             elif operation == "integration.browser.resize":
                 result = {"width": arguments["width"], "height": arguments["height"]}
@@ -197,7 +192,8 @@ def open_view(env, state):
         try:
             async def wait_until_ready():
                 async with asyncio.timeout(3):
-                    while not any(relay.ready for relay in env.coordinator.relays.values()):
+                    while not any(relay.accepted and not relay.connection.action_lock.locked()
+                                  for relay in env.coordinator.relays.values()):
                         await asyncio.sleep(0)
 
             env.client.portal.call(wait_until_ready)

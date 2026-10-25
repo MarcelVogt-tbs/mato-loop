@@ -14,6 +14,29 @@ def _migration_module(filename="601278fe1db7_unify_tool_policy_defaults.py"):
     return migration
 
 
+def test_browser_policy_reset_reaches_profiles_connections_and_resources():
+    migration = _migration_module("6b6ce77be67f_browser_permissions.py")
+    assert migration._document({
+        "profiles": [{"overrides": {"privatePermissions": {"policies": {"browser.read": "auto", "filesystem.read": "disabled"}}}}],
+        "instances": [{"profile_permissions": {"build": {"public_permissions": {
+            "policies": {"browser.write": "ask", "browser.use": "auto"},
+            "resource_policies": {"page": {"browser.read": "disabled"}},
+        }}}}],
+        "builtin_access_overrides": {"build": {"private_permissions": {
+            "integration_policies": {"connection": {"browser.write": "auto", "browser.code": "ask"}},
+        }}},
+    }) == {
+        "profiles": [{"overrides": {"privatePermissions": {"policies": {"filesystem.read": "disabled"}}}}],
+        "instances": [{"profile_permissions": {"build": {"public_permissions": {
+            "policies": {},
+            "resource_policies": {"page": {}},
+        }}}}],
+        "builtin_access_overrides": {"build": {"private_permissions": {
+            "integration_policies": {"connection": {}},
+        }}},
+    }
+
+
 def test_shell_delete_split_preserves_explicit_overrides_only():
     migration = _migration_module("fae8e3fac872_split_shell_delete.py")
     assert migration._copy_shell_delete_policy({

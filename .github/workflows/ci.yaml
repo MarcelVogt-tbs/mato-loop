@@ -111,7 +111,7 @@ jobs:
         working-directory: apps/matoloop-agent
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y ripgrep
+          sudo apt-get install --no-install-recommends -y openscad ripgrep xauth xvfb
           python -m pip install uv==0.10.9
           uv sync --frozen
       - name: Check MatoLoop Agent

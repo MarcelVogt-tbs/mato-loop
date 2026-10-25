@@ -122,8 +122,6 @@ def effective_execution_integration_settings(
     settings: IntegrationSettings,
     execution_agent_id: UUID | None,
     execution_operations: set[str] | frozenset[str],
-    *,
-    browser_integration_id: UUID | None = None,
 ) -> IntegrationSettings:
     effective = settings.model_copy(deep=True)
     for instance in effective.instances:
@@ -142,8 +140,6 @@ def effective_execution_integration_settings(
             continue
         if instance.execution_agent_id != execution_agent_id:
             instance.enabled = False
-        if instance.adapter_type == "browser":
-            instance._browser_attached = instance.id == browser_integration_id
         instance._execution_operations = frozenset(execution_operations)
     return effective
 
@@ -183,8 +179,6 @@ def effective_integration_contributions(
                 ),
             )
             for tool in contribution.tools
-            if instance.adapter_type != "browser" or instance._browser_attached
-            or (tool.name == "browser_request_control" and instance._execution_operations is not None)
         )
         options.extend(contribution.tool_options)
         prompt_fragments.extend(contribution.prompt_fragments)

@@ -76,12 +76,14 @@ class BrowserIdArguments(WireModel):
 
 
 class BrowserOpenArguments(BrowserOwnerArguments, BrowserIdArguments):
-    allow_network: bool = True
+    session_id: UUID = Field(strict=False)
     color_scheme: Literal["light", "dark"] = "light"
 
 
 class BrowserOpenResult(BrowserResult):
+    upgrade_fields = frozenset({"protocol"})
     browser_id: UUID = Field(strict=False)
+    protocol: Literal["chat-browser-v1"]
 
 
 class BrowserViewArguments(BrowserIdArguments):
@@ -91,6 +93,11 @@ class BrowserViewArguments(BrowserIdArguments):
 
 class BrowserControlResult(BrowserResult):
     ok: bool
+
+
+class BrowserStreamResult(BrowserControlResult):
+    upgrade_fields = frozenset({"protocol"})
+    protocol: Literal["page-stream-v1"]
 
 
 class BrowserResizeResult(BrowserResult):
@@ -177,10 +184,8 @@ class BrowserActionArguments(WireModel):
     fields: list[BrowserFormField] | None = Field(default=None, min_length=1, max_length=20, description="Ordered independent native fields for fill_form only. Unique refs from one snapshot; at most 32768 value characters in total. The whole list is authorized once, not each field separately.")
     key: str | None = Field(default=None, min_length=1, max_length=100, description="Playwright key or key chord for press only, such as Enter or Control+A.")
     direction: Literal["up", "down"] | None = Field(default=None, description="Scroll direction; required for scroll only.")
-    download_id: BrowserOpaqueId | None = Field(default=None, description="Reserved; leave null. Downloads are transferred by the human browser UI.")
     upload_id: BrowserOpaqueId | None = Field(default=None, description="Opaque file staging id supplied by the human browser UI; required for upload. Never a filesystem path.")
     observe: bool = Field(default=True, description="Return the resulting accessibility snapshot after a write action. Set false when browser reading is unavailable. Ignored for tabs, inspect, screenshot, and diagnostics.")
-    snapshot_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$", min_length=64, max_length=64, description="Optional legacy inspection token for host-controlled ref actions. Public browser tools do not accept it.")
 
     @model_validator(mode="after")
     def validate_action(self) -> Self:
@@ -202,7 +207,7 @@ class BrowserActionArguments(WireModel):
         )
         supplied = {
             name for name in BrowserActionArguments.model_fields
-            if name not in {"action", "observe", "snapshot_sha256", "slowly", "submit"} and getattr(self, name) is not None
+            if name not in {"action", "observe", "slowly", "submit"} and getattr(self, name) is not None
         }
         if not required <= supplied or not supplied <= allowed:
             raise ValueError("fields do not match browser action")
@@ -221,8 +226,6 @@ class BrowserActionArguments(WireModel):
         uses_ref = has_ref and re.fullmatch(r"aria-ref=(?:f[0-9]+)?e[0-9]+", self.selector) is not None
         if has_ref and not uses_ref:
             raise ValueError("aria-ref selectors must contain exactly one inspection ref")
-        if self.snapshot_sha256 is not None and not (uses_ref or self.action == "fill_form"):
-            raise ValueError("snapshot tokens require a ref action")
         if self.fields is not None and (
             len({field.ref for field in self.fields}) != len(self.fields)
             or sum(len(field.value) for field in self.fields) > 32768
@@ -232,7 +235,6 @@ class BrowserActionArguments(WireModel):
 
 
 class BrowserExecuteArguments(BrowserActionArguments, BrowserIdArguments):
-    allow_network: bool = True
     settle: bool = False
     guard: bool = False
 
@@ -244,16 +246,15 @@ class BrowserTab(BrowserResult):
 
 
 class BrowserNavigationArguments(WireModel):
-    action: Literal["state", "select", "new", "close", "navigate", "back", "forward", "reload", "stop", "chrome"]
+    action: Literal["state", "select", "new", "close", "navigate", "back", "forward", "reload", "stop"]
     tab_id: BrowserOpaqueId | None = None
     url: str | None = Field(default=None, min_length=1, max_length=4096)
-    native_chrome: bool | None = None
 
     @model_validator(mode="after")
     def action_fields(self) -> Self:
-        fields = {"state": set(), "new": {"url"}, "chrome": {"native_chrome"},
+        fields = {"state": set(), "new": {"url"},
                   "navigate": {"tab_id", "url"}}.get(self.action, {"tab_id"})
-        supplied = self.model_fields_set & {"tab_id", "url", "native_chrome"}
+        supplied = self.model_fields_set & {"tab_id", "url"}
         if supplied - fields or (self.action != "new" and supplied != fields):
             raise ValueError("fields do not match navigation action")
         if any(getattr(self, name) is None for name in supplied):
@@ -275,7 +276,6 @@ class BrowserNavigationResult(BrowserResult):
     can_go_back: bool
     can_go_forward: bool
     loading: bool
-    native_chrome: bool
 
     @model_validator(mode="after")
     def valid_active_tab(self) -> Self:

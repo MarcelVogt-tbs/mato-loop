@@ -91,17 +91,8 @@ def select_turn_tools(
         run_support._effective_execution_operations(run)
         if run.execution_agent_id is not None else frozenset()
     )
-    from mato_loop_backend.integrations.browser.adapter import attached_browser_integration_id
-
     integration_settings = effective_execution_integration_settings(
         integration_settings, run.execution_agent_id, execution_operations,
-        browser_integration_id=(
-            attached_browser_integration_id(
-                session.id, run.execution_agent_id, session.user_id,
-            )
-            if any(item.adapter_type == "browser" for item in integration_settings.instances)
-            else None
-        ),
     )
     toolset = (
         tool_registry.effective(
@@ -123,7 +114,7 @@ def select_turn_tools(
     if toolset is not None:
         if (session.session_type != "chat" or session.parent_session_id is not None
                 or run.parent_run_id is not None):
-            toolset = toolset.without("browser_request_control", "select_execution_agent")
+            toolset = toolset.without("select_execution_agent", *(name for name in toolset.tools if name.startswith("browser_")))
         if ceiling is not None:
             toolset = toolset.only(*ceiling["toolNames"]).without("task")
         elif active_profile is None or not active_profile.delegation_enabled:

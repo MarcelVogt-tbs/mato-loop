@@ -415,7 +415,7 @@ describe('voice attachment composer', () => {
     expect(root.querySelector('button[aria-label="Nachricht vormerken"]')).toBeTruthy()
   })
 
-  it('shows one stop button without a draft and sends text or attachment drafts instead', async () => {
+  it('keeps Stop available alongside sending text or attachment drafts', async () => {
     chat.selectedSessionId = 'session-1'
     chat.running = true
     chat.runId = 'run-1'
@@ -429,7 +429,7 @@ describe('voice attachment composer', () => {
 
     chat.setDraft('Kurs ändern')
     await nextTick()
-    expect(root.querySelector('button[aria-label="Agent-Anfrage stoppen"]')).toBeNull()
+    expect(root.querySelector('button[aria-label="Agent-Anfrage stoppen"]')).toBeTruthy()
     expect(root.querySelector('button[aria-label="Nachricht jetzt senden"]').dataset.icon).toBe('arrow_upward')
     expect(root.querySelector('button[aria-label="Versandart auswählen"]')).toBeTruthy()
 

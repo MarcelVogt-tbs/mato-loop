@@ -643,13 +643,13 @@ async def test_builtin_access_inherits_per_entry_and_respects_scope(monkeypatch)
     instance = AgentProfilesSettings(profiles=[child], builtin_access_overrides={PLAN_PROFILE_ID:
         AgentProfileAccessOverrides(integrationsEnabledByDefault=True,
             privatePermissions={"policies": {"filesystem.read": "ask"},
-                "integrationPolicies": {integration_id: {"browser.read": "auto", "browser.write": "ask"}},
-                "resourcePolicies": {integration_id: {"page": {"browser.read": "ask"}}}})})
+                "integrationPolicies": {integration_id: {"browser.use": "auto", "browser.code": "ask"}},
+                "resourcePolicies": {integration_id: {"page": {"browser.use": "ask"}}}})})
     personal = UserAgentProfilesSettings(profiles=[CustomAgentProfile(
         name="Personal", description="", baseProfileId=PLAN_PROFILE_ID,
         overrides={"integrationsEnabledByDefault": False, "privatePermissions": {
             "policies": {"shell.read": "ask"},
-            "integrationPolicies": {integration_id: {"browser.read": "disabled"}}}},
+            "integrationPolicies": {integration_id: {"browser.use": "disabled"}}}},
     )])
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=IntegrationSettings()))
     monkeypatch.setattr(SettingsStore, "load_optional", AsyncMock(side_effect=lambda db, kind, **kw:
@@ -665,8 +665,8 @@ async def test_builtin_access_inherits_per_entry_and_respects_scope(monkeypatch)
     assert effective.private_permissions.policies["filesystem.read"] == ToolExecutionPolicy.ASK
     assert effective.private_permissions.policies["shell.read"] == ToolExecutionPolicy.ASK
     assert effective.private_permissions.integration_policies[integration_id] == {
-        "browser.read": ToolExecutionPolicy.DISABLED, "browser.write": ToolExecutionPolicy.ASK}
-    assert effective.private_permissions.resource_policies[integration_id]["page"]["browser.read"] == ToolExecutionPolicy.ASK
+        "browser.use": ToolExecutionPolicy.DISABLED, "browser.code": ToolExecutionPolicy.ASK}
+    assert effective.private_permissions.resource_policies[integration_id]["page"]["browser.use"] == ToolExecutionPolicy.ASK
     assert (await get(False)).integrations_enabled_by_default is True
     instance.builtin_access_overrides[PLAN_PROFILE_ID].private_permissions.policies["filesystem.read"] = ToolExecutionPolicy.AUTO
     assert (await get()).private_permissions.policies["filesystem.read"] == ToolExecutionPolicy.AUTO

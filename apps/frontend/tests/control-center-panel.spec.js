@@ -32,6 +32,7 @@ import { useQuestionStore } from '../src/stores/questions'
 import { useInAppNotificationStore } from '../src/stores/in-app-notifications'
 import { useTerminalStore } from '../src/stores/terminal'
 import { useBrowserStore } from '../src/stores/browser'
+import { useChatStore } from '../src/features/chat/store'
 import { FakeWebSocket } from './terminal-websocket'
 import { api } from 'src/boot/axios'
 
@@ -86,6 +87,19 @@ function notificationButton() {
 }
 
 describe('control center panel', () => {
+  it('keeps session cancel available in the mobile panel while the browser is busy', async () => {
+    await draftApp('browser')
+    const chat = useChatStore()
+    chat.running = true
+    useBrowserStore().busy = true
+    const stop = vi.spyOn(chat, 'stop').mockImplementation(() => {})
+    await mountPanel()
+    app.config.globalProperties.$q.screen.lt.md = true
+    await nextTick()
+    root.querySelector('[aria-label="Agent-Anfrage stoppen"]').click()
+    expect(stop).toHaveBeenCalledOnce()
+  })
+
   it('shows the Browser footer only while its viewer is connected', async () => {
     controlCenter.syncSession({ id: 'session-1', controlCenter: { tabs: [{ appId: 'browser' }], activeAppId: 'browser', open: true } })
     const browser = useBrowserStore()

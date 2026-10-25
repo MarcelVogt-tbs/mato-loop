@@ -1,7 +1,12 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from mato_loop_backend.settings.models import ToolExecutionPolicy, ToolPermissionPreset
+from mato_loop_backend.settings.models import (
+    BUILD_PROFILE_ID,
+    AgentProfile,
+    ToolExecutionPolicy,
+    ToolPermissionPreset,
+)
 from mato_loop_backend.tools.actions import ToolAction, ToolActionCategory
 
 
@@ -37,11 +42,16 @@ AUTOMATIC_CAPABILITIES = frozenset(capability for group in AUTOMATIC_ACTION_GROU
 
 CONFIRMATION_ACTION_GROUPS = {
     "Variablen und Secrets verwenden": ("secrets.access",),
+    "Browser verwenden (außer im Build-Profil)": ("browser.use",),
+    "Browser-Python ausführen": ("browser.code",),
 }
 CONFIRMATION_CAPABILITIES = frozenset(capability for group in CONFIRMATION_ACTION_GROUPS.values() for capability in group)
 
 
-def preset_policy(preset: ToolPermissionPreset, category: ToolActionCategory, capability: str | None = None) -> ToolExecutionPolicy:
+def preset_policy(preset: ToolPermissionPreset, category: ToolActionCategory, capability: str | None = None, *, profile: AgentProfile | None = None) -> ToolExecutionPolicy:
+    if capability == "browser.use":
+        build = profile is not None and (profile.base_profile_id or profile.id) == BUILD_PROFILE_ID
+        return ToolExecutionPolicy.AUTO if build and preset != "ask_all" else ToolExecutionPolicy.ASK
     if capability in CONFIRMATION_CAPABILITIES:
         return ToolExecutionPolicy.ASK
     automatic = category in PRESETS[preset].automatic_categories or (
@@ -51,6 +61,9 @@ def preset_policy(preset: ToolPermissionPreset, category: ToolActionCategory, ca
 
 
 def preset_catalog(actions: Mapping[str, ToolAction]) -> list[dict]:
+    from mato_loop_backend.integrations.registry import integration_adapters
+
+    actions = {**{action.capability: action for adapter in integration_adapters() for action in adapter.resource_actions}, **actions}
     return [
         {
             "value": key, "label": preset.label,

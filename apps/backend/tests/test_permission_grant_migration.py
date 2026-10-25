@@ -1,9 +1,59 @@
 import importlib.util
+import json
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
+
+
+def test_browser_reset_removes_only_browser_consent(monkeypatch):
+    path = Path(__file__).parents[1] / "alembic/versions/6b6ce77be67f_browser_permissions.py"
+    spec = importlib.util.spec_from_file_location("browser_permissions_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    metadata = sa.MetaData()
+    settings = sa.Table("settings", metadata, sa.Column("id", sa.Uuid(), primary_key=True), sa.Column("key", sa.String()), sa.Column("data", sa.JSON()))
+    grants = sa.Table("permission_grants", metadata, sa.Column("id", sa.Uuid(), primary_key=True), sa.Column("capability", sa.String()), sa.Column("resource_type", sa.String()), sa.Column("resource_scope", sa.String()))
+    approvals = sa.Table("approval_requests", metadata, sa.Column("request_type", sa.String()), sa.Column("capability", sa.String()), sa.Column("status", sa.String()), sa.Column("resolved_at", sa.DateTime()))
+    browser_id, other_id = str(uuid4()), str(uuid4())
+    engine = sa.create_engine("sqlite://")
+    metadata.create_all(engine)
+    try:
+        with engine.begin() as connection:
+            connection.execute(settings.insert(), [{"id": uuid4(), "key": "integrations", "data": {"instances": [{
+                "id": browser_id, "integration_type": "browser", "adapter_type": "browser",
+                "permissions": {"private_permissions": {"policies": {"browser.use": "auto"}}},
+            }]}}])
+            connection.execute(grants.insert(), [
+                {"id": uuid4(), "capability": capability, "resource_type": resource, "resource_scope": json.dumps({"integrationId": integration})}
+                for capability, resource, integration in [
+                    ("browser.code", "integration_operation", browser_id),
+                    ("category.write", "integration_resource", browser_id),
+                    ("category.read", "integration_resource", browser_id),
+                    ("category.write", "integration_resource", other_id),
+                    ("category.write", "execution_path", browser_id),
+                ]
+            ])
+            connection.execute(approvals.insert(), [
+                {"request_type": "agent_action", "capability": capability, "status": "pending"}
+                for capability in ("browser.read", "browser.write", "browser.use", "browser.code", "filesystem.write")
+            ])
+            monkeypatch.setattr(migration.op, "get_bind", lambda: connection)
+            monkeypatch.setattr(migration.op, "execute", connection.execute)
+            migration.upgrade()
+            migration.downgrade()
+            assert (
+                connection.execute(sa.select(settings.c.data)).scalar_one()["instances"][0]["permissions"],
+                connection.execute(sa.select(grants.c.resource_type)).scalars().all(),
+                connection.execute(sa.select(approvals.c.status)).scalars().all(),
+            ) == (
+                {"private_permissions": {"policies": {}}},
+                ["integration_resource", "execution_path"],
+                ["expired", "expired", "expired", "expired", "pending"],
+            )
+    finally:
+        engine.dispose()
 
 
 def test_unified_grant_migration_removes_only_approval_created_grants(monkeypatch) -> None:

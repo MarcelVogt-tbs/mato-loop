@@ -11,9 +11,8 @@ from urllib.parse import quote
 from uuid import UUID
 
 from anyio import CancelScope
-from fastapi import APIRouter, Depends, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Query, Request, WebSocket, WebSocketDisconnect
 from pydantic import Field, TypeAdapter, ValidationError
-from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.responses import StreamingResponse
 
 from mato_loop_backend.api.browser_errors import browser_api_error
@@ -24,10 +23,8 @@ from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.execution.browser_contracts import (
-    MAX_BROWSER_FILE_BYTES,
     BrowserClipboard,
     BrowserControlResult,
-    BrowserFileArguments,
     BrowserFileResult,
     BrowserNavigationArguments,
     BrowserResizeResult,
@@ -35,15 +32,14 @@ from mato_loop_backend.execution.browser_contracts import (
     BrowserSetupResizeArguments,
     BrowserSetupWriteArguments,
     BrowserStatusResult,
-)
-from mato_loop_backend.execution.browser_control import (
-    ControlRequestResponse,
-    browser_control_requests,
+    BrowserStreamResult,
 )
 from mato_loop_backend.execution.browsers import (
     ACCESS_INTERVAL,
-    BrowserConnection,
     BrowserRelay,
+    BrowserViewAccess,
+    _file_request,
+    _stage_browser_file,
     browser_coordinator,
     validate_browser_access,
 )
@@ -63,18 +59,7 @@ _setup_starts: dict[UUID, asyncio.Task] = {}
 
 
 class BrowserControl(WireModel):
-    type: Literal["attach", "detach", "close", "release"]
-
-
-class BrowserTakeover(WireModel):
-    type: Literal["takeover"]
-    browser_id: UUID = Field(strict=False)
-    view_id: UUID = Field(strict=False)
-
-
-class BrowserRequestedAttachment(WireModel):
-    type: Literal["attach.requested"]
-    request_id: UUID = Field(strict=False)
+    type: Literal["close", "release"]
 
 
 class BrowserResize(BrowserResizeResult):
@@ -94,7 +79,7 @@ class BrowserUploadRequest(WireModel):
     source: BrowserUploadSource
 
 
-_BROWSER_CONTROL = TypeAdapter(Annotated[BrowserControl | BrowserResize | BrowserNavigation | BrowserTakeover | BrowserRequestedAttachment, Field(discriminator="type")])
+_BROWSER_CONTROL = TypeAdapter(Annotated[BrowserControl | BrowserResize | BrowserNavigation, Field(discriminator="type")])
 
 
 class SetupControl(WireModel):
@@ -151,22 +136,10 @@ async def _close_socket(websocket: WebSocket, code: int = 1000) -> None:
             await websocket.close(code=code)
 
 
-@router.get("/browsers/control-requests", response_model=ControlRequestResponse)
-async def browser_pending_control(request: Request, session_id: SessionId):
-    login = await _browser_login(request)
-    if login is None:
-        raise ApiError(401, "auth.notAuthenticated")
-    try:
-        return ControlRequestResponse(request=await browser_control_requests.active(login.user.id, session_id))
-    except ExecutionClientError as exc:
-        raise browser_api_error(exc) from exc
-
-
 @router.websocket("/browsers/{integration_id}")
 async def browser_control(websocket: WebSocket, integration_id: UUID) -> None:
     connection = None
     tasks = []
-    attachment_task = None
     resize_pending = None
     resize_changed = asyncio.Event()
     try:
@@ -177,73 +150,30 @@ async def browser_control(websocket: WebSocket, integration_id: UUID) -> None:
             session_id = UUID(websocket.query_params.get("sessionId", ""))
         except ValueError as exc:
             raise ExecutionClientError("session.notFound") from exc
-        try:
-            control_request_id = UUID(websocket.query_params["controlRequestId"]) if "controlRequestId" in websocket.query_params else None
-        except ValueError as exc:
-            raise ExecutionClientError("browser.invalidTarget") from exc
         color_scheme = websocket.query_params.get("colorScheme", "light")
         if color_scheme not in {"light", "dark"}:
             raise ExecutionClientError("browser.invalidTarget")
-        instance, _ = await validate_browser_access(login.user.id, integration_id, login_id=login.login_id, session_id=session_id)
+        await validate_browser_access(login.user.id, integration_id, login_id=login.login_id, session_id=session_id)
         await websocket.accept()
-        if control_request_id is not None:
-            candidate = await browser_control_requests.claim(
-                control_request_id, login.user.id, session_id, integration_id, login.login_id,
-                websocket, color_scheme=color_scheme,
-            )
-        else:
-            candidate = await browser_coordinator.open(
-                login.user.id, integration_id, session_id, login.login_id, websocket,
-                color_scheme=color_scheme,
-            )
-        last_offer = None
-        while candidate.websocket is not websocket:
-            offer = await browser_coordinator.availability(candidate)
-            if offer != last_offer:
-                await websocket.send_json(offer)
-                last_offer = offer
-            try:
-                message = await asyncio.wait_for(_receive_control(websocket, _BROWSER_CONTROL), ACCESS_INTERVAL)
-            except TimeoutError:
-                await validate_browser_access(login.user.id, integration_id, login_id=login.login_id, session_id=session_id)
-                candidate = browser_coordinator.connections.get(instance.execution_agent_id)
-                if candidate is None:
-                    raise ExecutionClientError("browser.notConnected") from None
-                continue
-            if isinstance(message, BrowserControl) and message.type in {"close", "release"}:
-                return
-            if not isinstance(message, BrowserTakeover):
-                raise ExecutionClientError("browser.invalidTarget")
-            candidate = await browser_coordinator.open(
-                login.user.id, integration_id, session_id, login.login_id, websocket,
-                expected_browser_id=message.browser_id, expected_view_id=message.view_id,
-                color_scheme=color_scheme,
-            )
-        connection = candidate
-        await connection.state()
+        connection = await browser_coordinator.open(
+            login.user.id, integration_id, session_id, login.login_id, websocket,
+            color_scheme=color_scheme,
+        )
+        view_id = next(key for key, (socket, _) in connection.sockets.items() if socket is websocket)
+        await connection.check_view(view_id)
+        await connection.state(view_id=view_id)
 
-        def control_pending():
-            return control_request_id in browser_control_requests.requests or (
-                attachment_task is not None and not attachment_task.done()
-            )
-
-        async def requested_attachment(request_id):
-            try:
-                await browser_control_requests.attach(request_id, connection, websocket)
-            except Exception as exc:
-                if not connection.closed:
-                    await _error(websocket, exc, operation="control")
+        async def check_login():
+            while True:
+                await asyncio.sleep(ACCESS_INTERVAL)
+                await connection.check_view(view_id)
 
         async def controls():
-            nonlocal resize_pending, attachment_task
-            while not connection.closed and connection.websocket is websocket:
+            nonlocal resize_pending
+            while not connection.closed:
                 message = await _receive_control(websocket, _BROWSER_CONTROL)
                 if connection.closed:
                     return False
-                if isinstance(message, (BrowserResize, BrowserNavigation)) and control_pending():
-                    await _error(websocket, ExecutionClientError("browser.busy"),
-                                 operation="resize" if isinstance(message, BrowserResize) else "navigation")
-                    continue
                 if isinstance(message, BrowserResize):
                     resize_pending = message
                     resize_changed.set()
@@ -252,38 +182,13 @@ async def browser_control(websocket: WebSocket, integration_id: UUID) -> None:
                         arguments = BrowserNavigationArguments.model_validate(
                             message.model_dump(exclude={"type"}, exclude_unset=True),
                         )
-                        await browser_coordinator.navigate(connection, arguments, completed=True)
+                        await browser_coordinator.navigate(connection, arguments, completed=True, view_id=view_id)
                     except ExecutionClientError as exc:
-                        await connection.send({"type": "error", "operation": "navigation",
-                                               "error": describe_error(exc.code).payload()})
+                        await _error(websocket, exc, operation="navigation")
                 elif message.type == "close":
-                    browser_control_requests.cancel_socket(websocket)
                     return True
                 elif message.type == "release":
-                    browser_control_requests.cancel_socket(websocket)
                     return False
-                elif isinstance(message, BrowserTakeover):
-                    raise ExecutionClientError("browser.invalidTarget")
-                else:
-                    try:
-                        if isinstance(message, BrowserRequestedAttachment):
-                            if message.request_id != control_request_id:
-                                raise ExecutionClientError("browser.bindingChanged")
-                            if attachment_task is not None and not attachment_task.done():
-                                raise ExecutionClientError("browser.busy")
-                            # Keep reading close/detach while the attachment RPC is in flight.
-                            attachment_task = asyncio.create_task(requested_attachment(message.request_id))
-                        else:
-                            pending = control_request_id in browser_control_requests.requests
-                            browser_control_requests.cancel_socket(websocket)
-                            if pending and message.type == "attach":
-                                raise ExecutionClientError("browser.bindingChanged")
-                            await browser_coordinator.attachment(connection, message.type == "attach")
-                    except ExecutionClientError as exc:
-                        if not connection.closed:
-                            await _error(websocket, exc, operation=(
-                                "control" if isinstance(message, BrowserRequestedAttachment) else None
-                            ))
 
         async def resizes():
             nonlocal resize_pending
@@ -293,14 +198,12 @@ async def browser_control(websocket: WebSocket, integration_id: UUID) -> None:
                 resize_changed.clear()
                 message, resize_pending = resize_pending, None
                 try:
-                    if control_pending():
-                        raise ExecutionClientError("browser.busy")
-                    result = await browser_coordinator.resize(connection, message.width, message.height)
-                    await connection.send({"type": "resized", "browserId": str(connection.browser_id), **result.model_dump()})
+                    result = await browser_coordinator.resize(connection, message.width, message.height, view_id=view_id)
+                    await connection.send({"type": "resized", "browserId": str(connection.browser_id), **result.model_dump()}, view_id=view_id)
                 except ExecutionClientError as exc:
-                    await connection.send({"type": "error", "operation": "resize", "error": describe_error(exc.code).payload()})
+                    await _error(websocket, exc, operation="resize")
 
-        tasks = [asyncio.create_task(controls()), asyncio.create_task(resizes())]
+        tasks = [asyncio.create_task(controls()), asyncio.create_task(resizes()), asyncio.create_task(check_login())]
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
             task.result()
@@ -313,16 +216,12 @@ async def browser_control(websocket: WebSocket, integration_id: UUID) -> None:
             await _error(websocket, exc)
     finally:
         with CancelScope(shield=True):
-            browser_control_requests.cancel_socket(websocket)
-            if attachment_task is not None:
-                tasks.append(attachment_task)
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             if connection is not None:
                 await browser_coordinator.release(connection, websocket)
-            current = browser_coordinator.connections.get(connection.agent_id) if connection is not None else None
-            await _close_socket(websocket, 4001 if current is not None and current is not connection else 1000)
+            await _close_socket(websocket)
 
 
 async def _pump_socket(websocket: WebSocket, incoming, outgoing, *, connection=None, relay=None) -> None:
@@ -379,26 +278,22 @@ async def browser_view(websocket: WebSocket, integration_id: UUID) -> None:
         connection = await browser_coordinator.viewer(
             login.user.id, integration_id, session_id, browser_id, view_id, login.login_id
         )
-        if connection.login_id != login.login_id or connection.view_socket is not None:
+        if view_id in connection.view_sockets:
             raise ExecutionClientError("browser.busy")
-        connection.view_socket = websocket
+        connection.view_sockets[view_id] = websocket
         await websocket.accept()
         relay = BrowserRelay(connection)
         browser_coordinator.relays[relay.relay_id] = relay
         async with connection.action_lock:
-            if connection.attached:
-                await connection.check_access()
-            else:
-                await connection.check_manual()
+            await connection.check_access()
             result = await connection.request(
                 "integration.browser.view",
                 {"browserId": str(browser_id), "relayId": str(relay.relay_id), "relayToken": relay.token},
-                BrowserControlResult, timeout=20,
+                BrowserStreamResult, timeout=20,
             )
             await connection.check_access()
         if not result.ok or not relay.accepted:
             raise ExecutionClientError("browser.notConnected")
-        relay.ready = True
         tasks = [
             asyncio.create_task(_pump_socket(websocket, relay.incoming, relay.outgoing, connection=connection)),
             asyncio.create_task(relay.ended.wait()),
@@ -409,7 +304,7 @@ async def browser_view(websocket: WebSocket, integration_id: UUID) -> None:
     except WebSocketDisconnect:
         pass
     except Exception as exc:
-        # The RFB socket must contain only protocol bytes, never JSON errors.
+        # The page stream must contain only framed protocol bytes, never API errors.
         if connection is not None:
             with suppress(Exception):
                 await connection.send({"type": "error", "error": describe_error(
@@ -422,15 +317,8 @@ async def browser_view(websocket: WebSocket, integration_id: UUID) -> None:
         if relay is not None:
             relay.ended.set()
             browser_coordinator.relays.pop(relay.relay_id, None)
-        if connection is not None and not connection.closed and connection.view_socket is websocket:
-            if not connection.attached and connection.websocket is not None:
-                browser_control_requests.cancel_socket(connection.websocket)
-            connection.view_socket = None
-            if not connection.attached:
-                connection.detach("viewerDisconnected")
-            if not connection.resetting_view:
-                with suppress(Exception):
-                    await connection.state()
+        if connection is not None and connection.view_sockets.get(view_id) is websocket:
+            connection.view_sockets.pop(view_id, None)
         await _close_socket(websocket)
 
 
@@ -449,7 +337,6 @@ async def browser_relay(websocket: WebSocket, relay_id: UUID) -> None:
         if relay.ended.is_set():
             raise ExecutionClientError("browser.notConnected")
         await websocket.accept()
-        relay.connected = True
         tasks = [asyncio.create_task(_pump_socket(websocket, relay.outgoing, relay.incoming, relay=relay)),
                  asyncio.create_task(relay.ended.wait())]
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -597,21 +484,8 @@ async def browser_setup(websocket: WebSocket, integration_id: UUID) -> None:
             await _close_socket(websocket)
 
 
-async def _file_request(connection, **arguments):
-    wire = BrowserFileArguments(browser_id=connection.browser_id, **arguments)
-    result = await connection.request(
-        "integration.browser.file", wire.model_dump(mode="json"),
-        BrowserControlResult if arguments["action"] in {"delete", "choose"} else BrowserFileResult,
-    )
-    if isinstance(result, BrowserFileResult) and arguments.get("file_id", result.file_id) != result.file_id:
-        raise ExecutionClientError("executionAgent.protocolError")
-    if isinstance(result, BrowserControlResult) and not result.ok:
-        raise ExecutionClientError("browser.actionFailed")
-    return result
-
-
 async def _manual_browser(request: Request, integration_id: UUID, session_id: SessionId,
-                          browser_id: BrowserId, view_id: ViewId) -> BrowserConnection:
+                          browser_id: BrowserId, view_id: ViewId) -> BrowserViewAccess:
     login = await _browser_login(request)
     if login is None:
         raise ApiError(401, "auth.notAuthenticated")
@@ -623,12 +497,7 @@ async def _manual_browser(request: Request, integration_id: UUID, session_id: Se
         raise browser_api_error(exc) from exc
 
 
-ManualBrowser = Annotated[BrowserConnection, Depends(_manual_browser)]
-
-
-@router.get("/browsers/{integration_id}/clipboard")
-async def read_browser_clipboard(connection: ManualBrowser):
-    return await _clipboard(connection)
+ManualBrowser = Annotated[BrowserViewAccess, Depends(_manual_browser)]
 
 
 @router.put("/browsers/{integration_id}/clipboard")
@@ -638,14 +507,14 @@ async def write_browser_clipboard(connection: ManualBrowser, payload: BrowserCli
 
 @router.post("/browsers/{integration_id}/clipboard/copy")
 async def copy_browser_clipboard(connection: ManualBrowser):
-    return await _clipboard(connection, action="copy")
+    return await _clipboard(connection)
 
 
-async def _clipboard(connection, text=None, action=None):
+async def _clipboard(connection, text=None):
     try:
         async with connection.action_lock:
             await connection.check_manual()
-            arguments = {"browserId": str(connection.browser_id), "action": action or ("read" if text is None else "write")}
+            arguments = {"browserId": str(connection.browser_id), "action": "copy" if text is None else "write"}
             if text is not None:
                 arguments["text"] = text
             result = await connection.request("integration.browser.clipboard", arguments, BrowserClipboard)
@@ -660,36 +529,11 @@ async def browser_downloads(connection: ManualBrowser):
     try:
         async with connection.action_lock:
             await connection.check_manual()
-            await browser_coordinator.poll_downloads(connection)
+            await browser_coordinator.poll_downloads(connection.connection)
             await connection.check_manual()
             return {"downloads": connection.downloads}
     except ExecutionClientError as exc:
         raise browser_api_error(exc) from exc
-
-
-@router.post("/browsers/{integration_id}/upload")
-async def browser_upload(connection: ManualBrowser, request: Request):
-    file = request if isinstance(request, UploadFile) else None
-    try:
-        if file is None and request.headers.get("content-type", "").split(";", 1)[0].strip().lower() == "multipart/form-data":
-            candidate = (await request.form()).get("file")
-            if not isinstance(candidate, StarletteUploadFile):
-                raise ApiError(422, "validation.invalid")
-            file = candidate
-        if file is not None:
-            return await _upload_stream(connection, file, file.filename or "upload", file.size)
-        try:
-            payload = BrowserUploadRequest.model_validate(await request.json())
-        except (ValidationError, ValueError) as exc:
-            raise ApiError(422, "validation.invalid") from exc
-        return await _browser_upload_source(connection, payload)
-    except ValidationError as exc:
-        raise ApiError(400, "browser.invalidTarget") from exc
-    except ExecutionClientError as exc:
-        raise browser_api_error(exc) from exc
-    finally:
-        if file is not None:
-            await file.close()
 
 
 @router.post("/browsers/{integration_id}/upload-source")
@@ -702,7 +546,7 @@ async def browser_upload_source(connection: ManualBrowser, payload: BrowserUploa
         raise browser_api_error(exc) from exc
 
 
-async def _browser_upload_source(connection: BrowserConnection, payload: BrowserUploadRequest):
+async def _browser_upload_source(connection: BrowserViewAccess, payload: BrowserUploadRequest):
     if payload.source.scope == "filesystem":
         path = _normalize_agent_path(payload.source.path)
         async with connection.action_lock:
@@ -734,57 +578,18 @@ async def _browser_upload_source(connection: BrowserConnection, payload: Browser
         )
 
 
-async def _upload_stream(connection: BrowserConnection, file, filename: str, size: int | None):
-    file_id = None
-    completed = False
-    if size is None or not 0 <= size <= MAX_BROWSER_FILE_BYTES:
-        raise ExecutionClientError("browser.fileTooLarge")
+async def _upload_stream(connection: BrowserViewAccess, file, filename: str, size: int):
     async with connection.action_lock:
+        file_id = await _stage_browser_file(connection, file, filename, size, connection.check_manual)
+        chosen = False
         try:
-            await connection.check_manual()
-            beginning = asyncio.create_task(_file_request(
-                connection, action="begin", filename=filename, size=size,
-            ))
-            try:
-                result = await asyncio.shield(beginning)
-            except asyncio.CancelledError:
-                with CancelScope(shield=True), suppress(Exception):
-                    file_id = (await beginning).file_id
+            await _file_request(connection, action="choose", file_id=file_id)
+            chosen = True
+        except ExecutionClientError as exc:
+            if exc.code != "browser.invalidTarget":
                 raise
-            file_id = result.file_id
-            if result.offset != 0 or result.size != size or result.complete:
-                raise ExecutionClientError("executionAgent.protocolError")
-            offset = 0
-            while chunk := (
-                await file.read(65536)
-                if isinstance(file, StarletteUploadFile)
-                else await asyncio.to_thread(file.read, 65536)
-            ):
-                await connection.check_manual()
-                result = await _file_request(connection, action="write", file_id=file_id, offset=offset,
-                                             data=base64.b64encode(chunk).decode("ascii"))
-                offset += len(chunk)
-                if result.offset != offset or result.size != size or result.complete:
-                    raise ExecutionClientError("executionAgent.protocolError")
-            await connection.check_manual()
-            result = await _file_request(connection, action="finish", file_id=file_id)
-            if not result.complete or result.size != size or result.offset != size:
-                raise ExecutionClientError("executionAgent.protocolError")
-            completed = True
-            chosen = False
-            try:
-                await connection.check_manual()
-                await _file_request(connection, action="choose", file_id=file_id)
-                chosen = True
-            except ExecutionClientError as exc:
-                if exc.code != "browser.invalidTarget":
-                    raise
-            await connection.check_manual()
-            return {"uploadId": file_id, "chosen": chosen}
-        finally:
-            if file_id is not None and not completed:
-                with CancelScope(shield=True), suppress(Exception):
-                    await _file_request(connection, action="delete", file_id=file_id)
+        await connection.check_manual()
+        return {"uploadId": file_id, "chosen": chosen}
 
 
 @router.post("/browsers/{integration_id}/upload/{upload_id}/choose")

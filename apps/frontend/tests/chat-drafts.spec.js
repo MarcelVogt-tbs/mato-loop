@@ -17,7 +17,6 @@ vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 import { useChatStore } from '../src/features/chat/store'
 import { buildAttachmentFormData, MAX_ATTACHMENT_DRAFT_BYTES } from '../src/features/chat/attachments'
 import { useControlCenterStore } from '../src/stores/control-center'
-import { useBrowserStore } from '../src/stores/browser'
 import { controlCenterIntegrationIds } from 'src/app/control-center/manifest'
 import { useQuestionStore } from '../src/stores/questions'
 import { useWorkspaceStore } from '../src/stores/workspace'
@@ -1301,29 +1300,6 @@ describe('chat drafts', () => {
       suppressErrorToast: true
     }))
     expect(chat.eventSource.url).toBe('/api/sessions/session-1/runs/run-1/events')
-  })
-
-  it('reconciles browser requests from live SSE and refresh recovery without awaiting the browser handshake', async () => {
-    global.EventSource = EventSourceMock
-    const chat = useChatStore()
-    chat.current = { id: 'session-1', messages: [], contextSummaries: [] }
-    chat.selectedSessionId = 'session-1'
-    const reconcile = vi.spyOn(useBrowserStore(), 'reconcileControlRequest').mockImplementation(() => new Promise(() => {}))
-    chat.watchRun('session-1', 'run-1', { status: 'running' })
-    const source = EventSourceMock.instances[0]
-    source.onopen()
-    source.emit('browser.control.requested', { id: 'notification-only', sessionId: 'untrusted' })
-    expect(reconcile.mock.calls).toEqual([['session-1'], ['session-1']])
-    api.get.mockResolvedValueOnce({ data: { ...chat.current, activeRun: { id: 'run-1', status: 'running' } } })
-    await chat.refreshSession('session-1')
-    expect(reconcile).toHaveBeenCalledTimes(3)
-    chat.watchRun('session-1', 'run-2', { status: 'running' })
-    source.emit('browser.control.requested', {})
-    expect(reconcile).toHaveBeenCalledTimes(3)
-    chat.current = { id: 'session-2' }
-    EventSourceMock.instances[1].emit('browser.control.requested', {})
-    expect(reconcile).toHaveBeenCalledTimes(3)
-    reconcile.mockRestore()
   })
 
   it('streams and promotes a canonical context summary', async () => {

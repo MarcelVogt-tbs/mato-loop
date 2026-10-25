@@ -10,8 +10,8 @@ Standalone agent with a portable connection and dispatch core. Linux provides bo
 
 Platform adapters compose host operations behind the common core. Linux uses normalized absolute POSIX paths; Windows uses forward-slash drive-letter paths such as `C:/Users/Ada/workspace` on the wire. Native Windows paths are converted at the Windows adapter boundary. Unsupported capabilities are not advertised.
 
-The [Linux browser runtime](BROWSER.md) provides persistent owner-bound Chromium,
-headless native automation, optional container graphical viewing, interactive prerequisite setup, and bounded browser actions.
+The [Linux browser runtime](BROWSER.md) provides disposable per-chat Chromium profiles,
+isolated per-chat headless automation and graphical viewing on native/container agents, interactive prerequisite setup, and bounded browser actions.
 
 ## Configuration
 

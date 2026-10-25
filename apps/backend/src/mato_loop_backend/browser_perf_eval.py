@@ -11,6 +11,7 @@ from unittest.mock import patch
 from uuid import UUID
 
 from cryptography.fernet import Fernet
+from pydantic import Field, model_validator
 from sqlalchemy import text
 
 from mato_loop_backend.config import get_runtime_config
@@ -83,10 +84,22 @@ class Blocked(Exception):
     pass
 
 
+class LegacyBrowserArguments(BrowserActionArguments):
+    snapshot_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$", min_length=64, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_snapshot(self):
+        if self.snapshot_sha256 is not None and not (
+            (self.selector is not None and self.selector.startswith("aria-ref=")) or self.action == "fill_form"
+        ):
+            raise ValueError("snapshot tokens require a ref action")
+        return self
+
+
 def schema(baseline):
     tool = ToolDefinition(
         name="browser", description=LEGACY_DESCRIPTION,
-        arguments_model=BrowserActionArguments, handler=execute_browser,
+        arguments_model=LegacyBrowserArguments, handler=execute_browser,
         requires_permission_reason=True,
     ).schema()
     parameters = tool["parameters"]
@@ -142,7 +155,7 @@ def simulate(state, call, baseline, interface="legacy"):
             tool = next(tool for tool in NARROW_TOOLS if tool.name == call.name)
             args = tool.arguments_model.model_validate(call.arguments).to_action()
         else:
-            args = BrowserActionArguments.model_validate(call.arguments)
+            args = LegacyBrowserArguments.model_validate(call.arguments)
             if args.action not in offered["parameters"]["properties"]["action"]["enum"]:
                 raise ValueError
             if args.action in {"fill", "fill_form"} and args.snapshot_sha256 is None:

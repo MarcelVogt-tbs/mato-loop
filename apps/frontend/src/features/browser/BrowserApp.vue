@@ -1,6 +1,6 @@
 <template>
   <section class="browser-app column full-height no-wrap" aria-label="Browser" @keydown.capture="browserShortcut">
-    <div v-if="!browserStateMessage" class="row items-center no-wrap col-auto q-px-sm" aria-label="Webseiten">
+    <div class="row items-center no-wrap col-auto q-px-sm" aria-label="Webseiten">
       <q-tabs :model-value="navigation?.activeTabId" class="col" dense no-caps inline-label align="left" :breakpoint="0" mobile-arrows indicator-color="transparent"
         @update:model-value="browser.navigate('select', { tabId: $event })">
         <AppClosableTab v-for="tab in navigation?.tabs || []" :key="tab.id" :name="tab.id"
@@ -8,14 +8,15 @@
           :active="navigation.activeTabId === tab.id" :disable="!browser.canNavigate"
           @close="browser.navigate('close', { tabId: tab.id })" />
       </q-tabs>
-      <q-btn flat round dense icon="add" aria-label="Neuer Tab" :disable="!browser.canNavigate || navigation.tabs.length >= 32" @click="browser.navigate('new')"><q-tooltip>Neuer Tab</q-tooltip></q-btn>
+      <div class="col-auto text-caption app-muted text-no-wrap q-mx-xs" role="status" aria-live="polite"><span :class="{ invisible: !browser.ownsDisplay || !browser.busy }"><q-icon name="circle" size="8px" class="q-mr-xs" />Agent aktiv</span></div>
+       <q-btn flat round dense icon="add" aria-label="Neuer Tab" :disable="!browser.canNavigate || navigation?.tabs.length >= 32" @click="browser.navigate('new')"><q-tooltip>Neuer Tab</q-tooltip></q-btn>
     </div>
-    <q-toolbar v-if="!browserStateMessage" class="q-px-sm no-wrap" aria-label="Browsersteuerung">
-      <q-btn v-if="['closed', 'replaced'].includes(browser.displayStatus)" flat round dense icon="refresh" aria-label="Browser erneut verbinden" :disable="!available || !confirmed" @click="open">
+    <q-toolbar class="q-px-sm no-wrap" aria-label="Browsersteuerung">
+      <q-btn v-if="browser.displayStatus === 'closed'" flat round dense icon="refresh" aria-label="Browser erneut verbinden" :disable="!available || !confirmed" @click="open">
         <q-tooltip>Browser erneut verbinden</q-tooltip>
       </q-btn>
-      <q-btn flat round dense icon="arrow_back" aria-label="Zurück" :disable="!browser.canNavigate || !navigation.canGoBack" @click="browser.navigate('back')"><q-tooltip>Zurück</q-tooltip></q-btn>
-      <q-btn flat round dense icon="arrow_forward" aria-label="Vorwärts" :disable="!browser.canNavigate || !navigation.canGoForward" @click="browser.navigate('forward')"><q-tooltip>Vorwärts</q-tooltip></q-btn>
+      <q-btn flat round dense icon="arrow_back" aria-label="Zurück" :disable="!browser.canNavigate || !navigation?.canGoBack" @click="browser.navigate('back')"><q-tooltip>Zurück</q-tooltip></q-btn>
+      <q-btn flat round dense icon="arrow_forward" aria-label="Vorwärts" :disable="!browser.canNavigate || !navigation?.canGoForward" @click="browser.navigate('forward')"><q-tooltip>Vorwärts</q-tooltip></q-btn>
       <q-btn flat round dense :icon="navigation?.loading ? 'close' : 'refresh'" :aria-label="navigation?.loading ? 'Laden stoppen' : 'Neu laden'"
         :disable="!browser.canNavigate || !browser.activeTab" @click="browser.navigate(navigation.loading ? 'stop' : 'reload')"><q-tooltip>{{ navigation?.loading ? 'Laden stoppen' : 'Neu laden' }}</q-tooltip></q-btn>
       <q-input ref="addressInput" v-model="addressDraft" class="col q-mx-xs" outlined dense aria-label="Webadresse" placeholder="Webadresse" inputmode="url" autocomplete="off" autocapitalize="off" :spellcheck="false"
@@ -32,56 +33,49 @@
               <q-item v-for="action in fileActions" :key="action.label" clickable v-close-popup :disable="!browser.manual" @click="action.run"><q-item-section avatar><q-icon :name="action.icon" /></q-item-section><q-item-section>{{ action.label }}</q-item-section></q-item>
               <q-separator />
             </template>
-            <q-item><q-item-section><q-toggle :model-value="navigation?.nativeChrome === true" dense label="Browseroberfläche anzeigen" :disable="!browser.canNavigate"
-              @update:model-value="browser.navigate('chrome', { nativeChrome: $event })" /></q-item-section></q-item>
             <q-item v-if="options.length > 1"><q-item-section>
               <AppSelect v-model="selectedId" outlined dense emit-value map-options label="Browser-Integration"
-                :options="options" :disable="browser.ownsDisplay && !['closed', 'replaced'].includes(browser.status)" />
+                :options="options" :disable="browser.ownsDisplay && browser.status !== 'closed'" />
             </q-item-section></q-item>
             <q-item><q-item-section><q-item-label>{{ options.find((item) => item.value === selectedId)?.label || 'Browser' }}</q-item-label><q-item-label caption role="status">{{ browserStatusLabel(status) }}</q-item-label></q-item-section></q-item>
             <q-item clickable v-close-popup :disable="!available || checking" @click="checkStatus"><q-item-section avatar><q-icon name="refresh" /></q-item-section><q-item-section>Status prüfen</q-item-section></q-item>
             <q-item clickable v-close-popup :disable="!browser.ready" @click="retryResize"><q-item-section avatar><q-icon name="aspect_ratio" /></q-item-section><q-item-section>Auflösung an Fenster anpassen</q-item-section></q-item>
             <q-item clickable v-close-popup :disable="!browser.ready" @click="browser.toggleViewportScale()"><q-item-section avatar><q-icon :name="browser.scaleViewport ? 'zoom_in' : 'fit_screen'" /></q-item-section><q-item-section>{{ browser.scaleViewport ? 'Skalierung ausschalten (1:1)' : 'Ansicht einpassen' }}</q-item-section></q-item>
             <q-item clickable v-close-popup :to="{ name: 'settings-integrations', query: { scope: 'personal' } }"><q-item-section avatar><q-icon name="settings" /></q-item-section><q-item-section>Einrichtung</q-item-section></q-item>
-            <q-item clickable v-close-popup :disable="!browser.ownsDisplay || browser.status !== 'open'" @click="browser.release({ close: true })"><q-item-section avatar><q-icon name="link_off" /></q-item-section><q-item-section>Browser schließen</q-item-section></q-item>
+            <q-item clickable v-close-popup :disable="!browser.ownsDisplay || browser.status !== 'open'" @click="closeBrowser"><q-item-section avatar><q-icon name="link_off" /></q-item-section><q-item-section>Browser schließen</q-item-section></q-item>
           </q-list>
         </AppMenu>
       </q-btn>
     </q-toolbar>
-    <AppStateMessage
-      v-if="browserStateMessage"
-      class="col q-pa-xl"
-      role="status"
-      icon="language"
-      :title="browserStateMessage.title"
-      :description="browserStateMessage.description"
-    >
-      <template v-if="['occupied', 'replaced'].includes(browser.displayStatus)" #actions>
-        <q-btn v-if="browser.displayStatus === 'occupied'" color="primary" no-caps label="Browser hier übernehmen" :disable="!available || !confirmed || (Boolean(browser.displayOffer) && !browser.displayOffer.canTakeover)" @click="takeover" />
-        <q-btn v-else unelevated no-caps color="primary" icon="refresh" label="Neu verbinden" :disable="!available || !confirmed" @click="open" />
-      </template>
-    </AppStateMessage>
-    <q-linear-progress v-if="browser.displayStatus === 'takingOver'" indeterminate aria-label="Browser wird hier übernommen" />
-    <q-linear-progress v-else-if="browser.displayStatus === 'connecting' || (browser.displayStatus === 'open' && !browser.ready)" indeterminate aria-label="Browser wird verbunden" />
-    <div v-show="!browserStateMessage" ref="host" class="browser-app__view col overflow-hidden" @pointerdown.capture="focusViewer" @keydown.capture="viewerKey" @keyup.capture="viewerKey" @paste.capture="nativePaste" @focusout="leaveViewer" />
+    <q-linear-progress v-if="browser.displayStatus === 'connecting' || (browser.displayStatus === 'open' && !browser.ready)" indeterminate aria-label="Browser wird verbunden" />
+    <div ref="host" class="browser-app__view col overflow-hidden" @pointerdown.capture="focusViewer" @keydown.capture="viewerKey" @keyup.capture="viewerKey" @paste.capture="nativePaste" @focusout="leaveViewer" />
 
     <q-dialog v-model="clipboardOpen" :maximized="$q.screen.lt.sm">
       <q-card class="integration-dialog app-surface column no-wrap">
-        <q-card-section class="text-h6">{{ clipboardMode === 'copy' ? 'Browsertext kopieren' : 'Text in den Browser übertragen' }}</q-card-section>
+        <q-card-section class="text-h6">Text in den Browser übertragen</q-card-section>
         <q-card-section class="col scroll">
-          <p>{{ clipboardMode === 'copy' ? 'Browsertext lokal kopieren oder im Textfeld markieren und manuell kopieren.' : 'Text hier einfügen oder die lokale Zwischenablage ausdrücklich lesen. Der UTF-8-Text muss kleiner als 16 KiB sein.' }}</p>
-          <q-input dense v-model="clipboardText" outlined type="textarea" label="Text" :readonly="clipboardMode === 'copy'" :loading="browser.transferring" :disable="browser.transferring" :error="!clipboardFits(clipboardText)" error-message="Der UTF-8-Text muss kleiner als 16 KiB sein." />
-          <p v-if="clipboardMode === 'paste'" class="text-caption q-mt-sm">„Zwischenablage setzen“ überträgt den Text unverändert. Wähle anschließend im Kontextmenü des entfernten Browsers „Einfügen“. Strg+V würde stattdessen erneut deine lokale Zwischenablage übertragen.</p>
+          <p>Text hier einfügen oder die lokale Zwischenablage ausdrücklich lesen. Der UTF-8-Text muss kleiner als 16 KiB sein.</p>
+          <q-input dense v-model="clipboardText" outlined type="textarea" label="Text" :loading="browser.transferring" :disable="browser.transferring" :error="!clipboardFits(clipboardText)" error-message="Der UTF-8-Text muss kleiner als 16 KiB sein." />
+          <p class="text-caption q-mt-sm">Der Text wird in das zuvor ausgewählte Eingabefeld der Webseite eingefügt.</p>
           <div v-if="clipboardNotice" role="status">{{ clipboardNotice }}</div>
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat no-caps label="Schließen" v-close-popup />
-          <q-btn v-if="clipboardMode === 'copy'" flat no-caps label="Browsertext lesen" :disable="!browser.manual" @click="loadClipboard" />
-          <q-btn v-if="clipboardMode === 'copy'" color="primary" no-caps label="Lokal kopieren" :disable="!clipboardReady || !browser.manual || !clipboardFits(clipboardText)" @click="copyLocal" />
-          <template v-else>
             <q-btn flat no-caps label="Lokal lesen" :disable="!browser.manual" @click="readLocal" />
-            <q-btn color="primary" no-caps label="Zwischenablage setzen" :loading="browser.transferring" :disable="!browser.manual || !clipboardFits(clipboardText)" @click="paste" />
-          </template>
+            <q-btn color="primary" no-caps label="Text einfügen" :loading="browser.transferring" :disable="!browser.manual || !clipboardFits(clipboardText)" @click="paste" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+    <q-dialog :model-value="Boolean(browser.dialog) && browser.manual" persistent :maximized="$q.screen.lt.sm">
+      <q-card class="integration-dialog app-surface">
+        <q-card-section class="text-h6">Webseiten-Dialog</q-card-section>
+        <q-card-section class="scroll">
+          <p class="text-pre-wrap">{{ browser.dialog?.message }}</p>
+          <q-input v-if="browser.dialog?.type === 'prompt'" v-model="dialogText" outlined label="Antwort" maxlength="16384" />
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn v-if="browser.dialog?.type !== 'alert'" flat no-caps label="Abbrechen" @click="respondDialog(false)" />
+          <q-btn color="primary" no-caps label="OK" @click="respondDialog(true)" />
         </q-card-actions>
       </q-card>
     </q-dialog>
@@ -151,10 +145,9 @@
 import AppMenu from 'src/shared/ui/AppMenu.vue'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useQuasar } from 'quasar'
+import { copyToClipboard, useQuasar } from 'quasar'
 import { useRoute } from 'vue-router'
 import AppClosableTab from 'src/shared/ui/AppClosableTab.vue'
-import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import { useBrowserStore } from 'stores/browser'
 import { useChatStore } from 'src/features/chat/store'
 import { useControlCenterStore } from 'stores/control-center'
@@ -164,9 +157,11 @@ import { browserNavigationUrl, browserStatusLabel, clipboardFits } from 'src/uti
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { notifyError } from 'src/utils/notifications'
 import { useInstanceLimitsStore } from 'stores/instance-limits'
+import { useConfirm } from 'src/composables/confirm'
 
 const browser = useBrowserStore()
 const $q = useQuasar()
+const { confirm } = useConfirm()
 const chat = useChatStore()
 const controlCenter = useControlCenterStore()
 const route = useRoute()
@@ -176,20 +171,6 @@ const instanceLimits = useInstanceLimitsStore()
 const navigation = computed(() => browser.displayNavigation)
 const selectedAgent = computed(() => agents.byId(chat.current?.preferredExecutionAgentId))
 const viewAvailable = computed(() => selectedAgent.value?.operations?.includes('integration.browser.view') !== false)
-const headlessBrowser = computed(() => selectedAgent.value?.connected === true
-  && selectedAgent.value?.operations?.includes('integration.browser.execute') === true && !viewAvailable.value)
-const browserStateMessage = computed(() => headlessBrowser.value ? {
-  title: 'Browser läuft im Hintergrund',
-  description: 'Der Agent steuert diesen Browser ohne grafische Ansicht.'
-} : ({
-  occupied: {
-    title: 'In einer anderen Ansicht geöffnet',
-    description: `Der Browser wird bereits in ${browser.displayOffer?.ownerSession?.title || 'einer anderen Ansicht'} verwendet.${browser.displayOffer?.busy ? ' Eine laufende Aktion wird vor der Übernahme beendet.' : ''}`
-  },
-  waiting: { title: 'Browser wird vorbereitet', description: 'Der Browser wird gerade geöffnet oder geschlossen. Bitte warten.' },
-  takingOver: { title: 'Browser wird hier übernommen', description: 'Eine laufende Aktion wird zuerst beendet.' },
-  replaced: { title: 'In einer anderen Ansicht geöffnet', description: 'Der Browser wurde in einer anderen Ansicht übernommen. Du kannst ihn bei Bedarf erneut verbinden.' }
-})[browser.displayStatus] || null)
 const selectedId = ref(browser.integrationId)
 const host = ref(null)
 const controlsButton = ref(null)
@@ -199,17 +180,14 @@ let addressEditing = false
 let addressTabId = null
 const checking = ref(false)
 const clipboardOpen = ref(false)
-const clipboardMode = ref('copy')
 const clipboardText = ref('')
 const clipboardNotice = ref('')
-const clipboardReady = ref(false)
+const dialogText = ref('')
 let clipboardDialog = 0
 const filesOpen = ref(false)
 const uploadInput = ref(null)
 let uploadTrigger = null
 const fileActions = [
-  { label: 'Text kopieren', icon: 'content_copy', run: () => openClipboard('copy') },
-  { label: 'Text einfügen', icon: 'content_paste', run: () => openClipboard('paste') },
   { label: 'Datei hochladen', icon: 'upload_file', run: () => openFiles() },
   { label: 'Downloads', icon: 'download', run: showDownloads }
 ]
@@ -242,17 +220,15 @@ let contentSize = { width: 0, height: 0 }
 let pasteTimer
 let inputGeneration = 0
 let copying = false
-const heldControls = new Set()
 
 watch(options, (value) => { if (!value.some((item) => item.value === selectedId.value)) selectedId.value = value[0]?.value ?? null }, { immediate: true })
-watch(() => [browser.authorizedRequest, browser.ownsDisplay, browser.integrationId], () => {
-  if (browser.authorizedRequest?.sessionId === chat.current?.id) selectedId.value = browser.authorizedRequest.integrationId
-  else if (browser.ownsDisplay) selectedId.value = browser.integrationId
+watch(() => [browser.ownsDisplay, browser.integrationId], () => {
+  if (browser.ownsDisplay) selectedId.value = browser.integrationId
 })
 watch(() => route.name === 'chat' && route.query.session === chat.current?.id ? chat.current?.id : null,
   (id) => browser.setDisplayedSession(id), { immediate: true, flush: 'sync' })
 watch(() => [visible.value, confirmed.value, selectedId.value, available.value, chat.current?.id, chat.current?.preferredExecutionAgentId,
-  browser.authorizedRequest, browser.requestOpening, browser.requestRefresh, controlCenter.saving, viewAvailable.value], activate, { flush: 'post' })
+   controlCenter.saving, viewAvailable.value], activate, { flush: 'post' })
 watch(() => [visible.value, browser.ownsDisplay, browser.browserId, browser.viewId, browser.ready, host.value], refreshView, { flush: 'post' })
 watch(() => [browser.generation, browser.displayGeneration], () => {
   resetAddress()
@@ -261,10 +237,10 @@ watch(() => [browser.generation, browser.displayGeneration], () => {
   clipboardText.value = ''
 }, { flush: 'sync' })
 watch(clipboardOpen, () => { clipboardDialog += 1 }, { flush: 'sync' })
+watch(() => JSON.stringify(browser.dialog), () => { dialogText.value = browser.dialog?.defaultValue || '' })
 watch(filesOpen, (open) => { if (!open) browser.resetPicker() }, { flush: 'sync' })
-watch(() => [visible.value, browser.viewGeneration, browser.attached, browser.busy, browser.submitting, browser.navigationPending], invalidateInput, { flush: 'sync' })
+watch(() => [visible.value, browser.viewGeneration, browser.busy, browser.navigationPending], invalidateInput, { flush: 'sync' })
 watch(() => browser.activeTab, () => { if (!addressEditing) resetAddress() }, { immediate: true })
-watch(() => browser.attached, (attached) => { if (attached) resetAddress() })
 
 onMounted(() => {
   observer = new ResizeObserver(([entry]) => {
@@ -306,6 +282,12 @@ async function refreshView() {
 function visibilityChanged() { invalidateInput(); activate(); void refreshView() }
 function retryResize() { if (browser.ownsDisplay) { browser.resizeLast = null; void refreshView() } }
 
+async function closeBrowser() {
+  const browserId = browser.browserId
+  if (!await confirm('Den Browser für alle Ansichten dieses Chats schließen? Webseiten-Anmeldungen und ungespeicherte Eingaben gehen verloren.', 'Browser schließen', { okLabel: 'Schließen' })) return
+  if (browser.ownsDisplay && browser.browserId === browserId) browser.release({ close: true })
+}
+
 function editAddress() {
   if (!browser.canNavigate || addressEditing) return
   addressEditing = true
@@ -325,13 +307,16 @@ function submitAddress(event) {
 }
 function browserShortcut(event) {
   const key = event.key.toLowerCase()
-  if (!event.ctrlKey || event.altKey || event.shiftKey || event.metaKey || !['l', 't', 'w'].includes(key)
+  const modified = (event.ctrlKey || event.metaKey) && !event.altKey
+  const cycle = event.ctrlKey && !event.metaKey && !event.altKey && ['tab', 'pageup', 'pagedown'].includes(key)
+  const reload = key === 'f5' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
+  if ((!cycle && !reload && (!modified || event.shiftKey || !['l', 't', 'w', 'r'].includes(key)))
     || !measurable() || clipboardOpen.value || filesOpen.value) return
   const target = event.target
   const address = target === addressInput.value?.nativeEl
-  const canvas = target.tagName === 'CANVAS' && target === document.activeElement
+  const canvas = target === browser.viewer?.input && target === document.activeElement
     && browser.viewParent === host.value && host.value.contains(target)
-  if (!address && (key === 'l' ? target.closest?.('input, textarea, select, [contenteditable]')
+  if (!address && !canvas && (key === 'l' ? target.closest?.('input, textarea, select, [contenteditable]')
     : !canvas)) return
   // A held shortcut must not escape to the local browser while its request is pending.
   if (!browser.canNavigate && !(event.repeat && browser.navigationPending)) return
@@ -340,22 +325,22 @@ function browserShortcut(event) {
   event.stopImmediatePropagation()
   if (event.repeat) return
   invalidateInput()
-  if (key === 'l') {
+  if (cycle) {
+    const tabs = navigation.value.tabs
+    const direction = key === 'pageup' || (key === 'tab' && event.shiftKey) ? -1 : 1
+    const index = tabs.findIndex((tab) => tab.id === browser.activeTab.id)
+    browser.navigate('select', { tabId: tabs[(index + direction + tabs.length) % tabs.length].id })
+  } else if (key === 'l') {
     addressInput.value?.focus()
     addressInput.value?.select()
   } else {
     resetAddress()
-    browser.navigate(key === 't' ? 'new' : 'close')
+    browser.navigate({ t: 'new', w: 'close', r: 'reload', f5: 'reload' }[key])
   }
 }
 
 function open() {
   if (available.value && confirmed.value && visible.value) browser.connect({ integrationId: selectedId.value, sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId })
-}
-function takeover() {
-  if (!available.value || !confirmed.value || !visible.value) return
-  if (browser.displayOffer) browser.takeover()
-  else browser.connect({ integrationId: selectedId.value, sessionId: chat.current.id, agentId: chat.current.preferredExecutionAgentId }, { takeover: true })
 }
 function focusedViewer() {
   return measurable() && browser.manual && browser.viewParent === host.value && host.value.contains(document.activeElement)
@@ -364,63 +349,37 @@ function focusViewer(event) {
   if (event.target.tagName !== 'CANVAS' || !browser.manual || !measurable()) return
   resetAddress()
   addressInput.value?.blur()
-  browser.rfb?.focus()
+  browser.viewer?.focus()
 }
 function invalidateInput() {
   inputGeneration += 1
   if (!visible.value) browser.activate(null, null, false)
   if (!visible.value || document.hidden) browser.viewVisible = false
   browser.updateViewOnly()
-  heldControls.clear()
-  browser.releaseControlKeys()
+  browser.viewer?.releaseInput()
   clearTimeout(pasteTimer)
 }
 function leaveViewer(event) { if (!host.value?.contains(event.relatedTarget)) invalidateInput() }
 function viewerKey(event) {
-  if (event.key === 'F12' && event.target.tagName === 'CANVAS' && event.target === document.activeElement && focusedViewer()
-    && !event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey) {
-    event.preventDefault()
-    event.stopImmediatePropagation()
-    if (event.type === 'keydown' && !event.repeat) browser.devToolsChord()
-    return
-  }
-  if (event.key === 'Control' && (focusedViewer() || heldControls.has(event.code))) {
-    // noVNC's Windows AltGr timer must not forward a delayed Ctrl during a clipboard transfer.
-    event.stopImmediatePropagation()
-    if (event.type === 'keydown') heldControls.add(event.code)
-    else heldControls.delete(event.code)
-    browser.controlKey(event.code, event.type === 'keydown')
-    return
-  }
   if (!focusedViewer()) return
-  if (event.key === 'AltGraph') {
-    // Windows may precede AltGr with a synthetic Ctrl; leave AltGraph itself to noVNC.
-    heldControls.clear()
-    browser.releaseControlKeys()
-  }
   if (event.ctrlKey && event.altKey && event.key === 'Escape' && event.type === 'keydown') {
     event.preventDefault()
     event.stopImmediatePropagation()
-    browser.rfb.sendKey(0xffe9, 'AltLeft', false)
-    browser.rfb.sendKey(0xffea, 'AltRight', false)
     invalidateInput()
     controlsButton.value?.$el.focus()
     return
   }
   const key = event.key.toLowerCase()
-  if (event.ctrlKey && event.type === 'keydown' && !['c', 'v'].includes(key)) {
-    for (const code of heldControls) if (!browser.controlKeys.includes(code)) browser.controlKey(code, true)
-  }
-  if (!event.ctrlKey || event.altKey || event.shiftKey || !['c', 'v'].includes(key)) return
+  if ((!event.ctrlKey && !event.metaKey) || event.altKey || event.shiftKey || !['c', 'v'].includes(key)) return
   event.stopImmediatePropagation()
   if (key === 'c') event.preventDefault()
   if (event.type !== 'keydown' || event.repeat) return
-  browser.releaseControlKeys()
+  browser.viewer?.releaseInput()
   if (key === 'c') void shortcutCopy()
   else {
     // Keep the native default: only the trusted paste event may supply local text.
     clearTimeout(pasteTimer)
-    pasteTimer = setTimeout(() => { if (focusedViewer()) void openClipboard('paste') }, 1000)
+    pasteTimer = setTimeout(() => { if (focusedViewer()) openClipboard() }, 1000)
   }
 }
 async function nativePaste(event) {
@@ -431,23 +390,21 @@ async function nativePaste(event) {
   const data = event.clipboardData
   const text = data?.getData('text/plain')
   if (data?.files.length || !Array.from(data?.types || []).includes('text/plain') || !clipboardFits(text)) {
-    await openClipboard('paste')
+    openClipboard()
     clipboardNotice.value = 'Nur reiner Text kleiner als 16 KiB ist möglich. Dateien bitte über „Datei hochladen“ übertragen.'
     return
   }
   const generation = inputGeneration
   try {
-    const result = await browser.transferClipboard(text)
-    if (result && generation === inputGeneration && focusedViewer()) {
-      browser.clipboardChord('v')
-      for (const code of heldControls) browser.controlKey(code, true)
-    }
+    if (generation === inputGeneration && focusedViewer()) await browser.transferClipboard(text)
   } catch { /* Central API toast. */ }
 }
 async function shortcutCopy() {
   if (copying || !focusedViewer()) return
   copying = true
   const generation = inputGeneration
+  const binding = browser.generation
+  const fallbackInput = navigator.clipboard === undefined ? browser.viewer?.input : null
   let text = null
   const selection = browser.copyClipboard().then((result) => {
     if (!result || generation !== inputGeneration || !focusedViewer()) throw new Error('Browser clipboard is unavailable.')
@@ -457,30 +414,23 @@ async function shortcutCopy() {
   // Attach a rejection handler even if constructing ClipboardItem throws synchronously.
   void selection.catch(() => {})
   try {
-    if (!window.isSecureContext) throw new Error('Clipboard writing is unavailable.')
     if (globalThis.ClipboardItem && navigator.clipboard?.write) {
       await navigator.clipboard.write([new ClipboardItem({ 'text/plain': selection })])
     } else {
       // Best effort: writeText may reject after the request consumes user activation.
       await selection
       if (generation !== inputGeneration || !focusedViewer()) return
-      await navigator.clipboard.writeText(text)
+      await copyToClipboard(text)
     }
   } catch {
     await selection.catch(() => {})
-    if (generation === inputGeneration && focusedViewer()) {
-      void openClipboard('copy', false)
-      if (text !== null) {
-        clipboardText.value = text
-        clipboardReady.value = true
-        clipboardNotice.value = 'Lokaler Zugriff nicht möglich. Bitte „Lokal kopieren“ wählen oder den Text manuell kopieren.'
-      } else clipboardNotice.value = 'Kopieren nicht möglich. Du kannst die Browser-Zwischenablage mit „Browsertext lesen“ abrufen.'
+    if (text !== null && binding === browser.generation && browser.ownsDisplay) {
+      notifyError({}, 'Der Text konnte nicht in die Zwischenablage kopiert werden.')
     }
   } finally {
+    if (fallbackInput?.isConnected && binding === browser.generation && browser.viewVisible
+      && document.activeElement === document.body) fallbackInput.focus()
     copying = false
-    if (generation === inputGeneration && focusedViewer()) {
-      for (const code of heldControls) browser.controlKey(code, true)
-    }
   }
 }
 async function checkStatus() {
@@ -488,29 +438,11 @@ async function checkStatus() {
   try { await integrations.browserStatus(selectedId.value) } catch { /* Central API toast. */ }
   finally { checking.value = false }
 }
-async function openClipboard(mode, read = true) {
+function openClipboard() {
   if (!browser.manual) return
-  clipboardMode.value = mode
   clipboardText.value = ''
   clipboardNotice.value = ''
-  clipboardReady.value = false
   clipboardOpen.value = true
-  if (mode === 'copy' && read) await loadClipboard()
-}
-async function loadClipboard() {
-  if (!browser.manual) return
-  clipboardReady.value = false
-  const dialog = clipboardDialog
-  try {
-    const result = await browser.transferClipboard()
-    if (dialog !== clipboardDialog || !clipboardOpen.value) return
-    if (result) {
-      clipboardText.value = result.text
-      clipboardReady.value = true
-    } else clipboardNotice.value = 'Browsertext nicht verfügbar. Bitte den Dialog erneut öffnen.'
-  } catch {
-    if (dialog === clipboardDialog) clipboardNotice.value = 'Browsertext konnte nicht geladen werden. Bitte den Dialog erneut öffnen.'
-  }
 }
 async function readLocal() {
   if (!browser.manual) return
@@ -523,27 +455,20 @@ async function readLocal() {
     if (dialog === clipboardDialog) clipboardNotice.value = 'Zugriff nicht möglich. Bitte den Text manuell in das Feld einfügen.'
   }
 }
-async function copyLocal() {
-  if (!clipboardReady.value || !browser.manual || !clipboardFits(clipboardText.value)) return
-  const dialog = clipboardDialog
-  try {
-    await navigator.clipboard.writeText(clipboardText.value)
-    if (dialog === clipboardDialog) clipboardNotice.value = 'Text wurde lokal kopiert.'
-  } catch {
-    if (dialog === clipboardDialog) clipboardNotice.value = 'Zugriff nicht möglich. Bitte den Text im Feld markieren und manuell kopieren.'
-  }
-}
 async function paste() {
   const dialog = clipboardDialog
   try {
     const result = await browser.transferClipboard(clipboardText.value)
     if (result && dialog === clipboardDialog && clipboardOpen.value) {
-      $q.notify({ type: 'positive', message: 'Text in die Browser-Zwischenablage übertragen.' })
+      $q.notify({ type: 'positive', message: 'Text in den Browser eingefügt.' })
       clipboardOpen.value = false
     }
   } catch { /* Central API toast. */ }
 }
 async function refreshDownloads() { try { await browser.transfer('downloads') } catch { /* Central API toast. */ } }
+function respondDialog(accept) {
+  if (browser.manual && clipboardFits(dialogText.value)) browser.viewer?.send({ kind: 'dialog', accept, text: dialogText.value })
+}
 function openFiles(downloads = false) {
   if (!browser.openPicker(pickerContext.value)) return
   filesOpen.value = true
@@ -621,4 +546,5 @@ async function download(file) { try { await browser.download(file) } catch { /* 
 .browser-app, .browser-app__view { min-height: 0; min-width: 0; }
 .browser-app__view:focus-within { outline: 2px solid var(--q-primary); outline-offset: -2px; }
 .browser-file-picker { min-height: 14rem; }
+.browser-app__view :deep(.browser-view-input) { width: 1px; height: 1px; opacity: 0; }
 </style>

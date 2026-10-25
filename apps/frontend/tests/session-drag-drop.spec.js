@@ -99,7 +99,7 @@ vi.mock('stores/terminal', () => ({ useTerminalStore: () => terminal }))
 vi.mock('stores/browser', async () => {
   const { reactive } = await import('vue')
   const store = reactive({ sessionId: null, agentId: null, integrationId: null,
-    syncContext: vi.fn(), release: vi.fn(), setDisplayedSession: vi.fn(), reconcileControlRequest: vi.fn() })
+    syncContext: vi.fn(), release: vi.fn(), setDisplayedSession: vi.fn() })
   return { useBrowserStore: () => store }
 })
 vi.mock('stores/integrations', async () => {

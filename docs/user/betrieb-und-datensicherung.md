@@ -75,7 +75,7 @@ Der Agent-Container läuft derzeit als root und setzt `seccomp:unconfined` sowie
 
 Kopieren Sie den Linux-Befehl aus den Computereinstellungen oder starten Sie aus einem Checkout `./scripts/install-matoloop-agent.sh` als normalen Benutzer. Privates uv/Python liegt unter `~/.local/share/matoloop-agent`, ohne Shellprofiländerung. Der systemweite systemd-Dienst startet beim Booten mit den Rechten des installierenden Benutzers. sudo wird nur für Dienstverwaltung und bestätigte Systempakete benötigt.
 
-Standalone-Setup und Updates installieren den exakten Commit des laufenden Backends. Lokales `install` übernimmt ausdrücklich den Checkout. `matoloop-agent` bietet `pair`, `install`, `update`, `status`, `uninstall` und `uninstall --purge`. Ohne Purge bleiben Zugangsdaten erhalten; Workspaces bleiben auch mit Purge erhalten. Browser-Setup ist optional und separat; native Browserautomatisierung ist headless. Interaktives Terminal und OpenSCAD erfordern ihre Hostvoraussetzungen.
+Standalone-Setup und Updates installieren den exakten Commit des laufenden Backends. Lokales `install` übernimmt ausdrücklich den Checkout. `matoloop-agent` bietet `pair`, `install`, `update`, `status`, `uninstall` und `uninstall --purge`. Ohne Purge bleiben Zugangsdaten erhalten; Workspaces bleiben auch mit Purge erhalten. Browser-Setup ist optional und separat; Container- und native Linux-Agents verwenden denselben headless Browser mit optionaler Webansicht. Interaktives Terminal und OpenSCAD erfordern ihre Hostvoraussetzungen.
 
 ### Nativen Agent unter Windows installieren
 
@@ -92,7 +92,7 @@ Eine vollständige Wiederherstellung braucht einen gemeinsamen Stand von:
 - Agent-Konfiguration und vollständigem dauerhaften Datenverzeichnis sowie benötigten Home-/Workspaces.
 - `.env`, gewählter Compose-Konfiguration, Proxykonfiguration und tatsächlich eingesetzten Image-Tags.
 
-Provider-, OAuth- und persönliche Variable-Zugangsdaten liegen verschlüsselt in der Datenbank. Ohne passenden Fernet-Schlüssel sind sie nicht entschlüsselbar. Browserprofile enthalten zusätzlich sensible unverschlüsselte Websitecookies/-zustände im Agent-Datenverzeichnis; schließen Sie Browser vor der Sicherung und bewahren Sie die Backend-/Agent-/Eigentümerbindung.
+Provider-, OAuth- und persönliche Variable-Zugangsdaten liegen verschlüsselt in der Datenbank. Ohne passenden Fernet-Schlüssel sind sie nicht entschlüsselbar. Aktuelle Chat-Browserprofile sind flüchtig und werden nach Laufzeitende nicht wiederhergestellt. Ältere persistente Browserprofile können weiterhin sensible unverschlüsselte Websitecookies im Agent-Datenverzeichnis enthalten; sie werden weder geladen noch automatisch gelöscht. Behandeln Sie solche Altbestände und ihre Sicherungen entsprechend vertraulich.
 
 Infinity-Modellcache und wegwerfbarer Agent-Sessioncache sind reproduzierbar. Agent-Zugangsdaten sind dagegen für eine Wiederherstellung ohne neue Kopplung erforderlich. Linux verwendet `<config-parent>/agent-state/credential.json` mit Dateimodus `0600` und eigentümergebundenem Verzeichnis `0700`. Windows verwendet DPAPI-gebundenes `agent-state/credential.dat`: eine Kopie ist ohne denselben entschlüsselbaren Windows-Benutzerkontext nicht portabel. Fehlt dieser Kontext, installieren Sie die Tasks neu und koppeln Sie erneut.
 

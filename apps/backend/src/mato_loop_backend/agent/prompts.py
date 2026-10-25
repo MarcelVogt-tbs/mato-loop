@@ -432,29 +432,22 @@ def general_system_prompt(
             "Use a browser only for page interaction or browser-authenticated access. Verify saved "
             "downloads before claiming success."
         )
-    browser_tools = offered_tool_names - {"browser_request_control"}
     if "webfetch" in offered_tool_names and any(
-        name.startswith("browser_") for name in browser_tools
+        name.startswith("browser_") for name in offered_tool_names
     ):
         research_instructions.append(
-            "Use the attached browser when the task requires interaction with a specific page or "
+            "Use this chat's browser when the task requires interaction with a specific page or "
             "browser-authenticated access. This includes downloads that require page interaction."
         )
-    elif {"webfetch", "browser_request_control"} <= offered_tool_names:
-        research_instructions.append(
-            "If the task requires interaction with a specific page or browser-authenticated access, "
-            "request browser control with a concrete reason."
-        )
-    if "browser_request_control" in offered_tool_names:
+    if any(name.startswith("browser_") for name in offered_tool_names):
         parts.append(
             "If a browser tool returns browser.dependenciesMissing, tell the user to open the Browser "
             "integration on the selected computer and complete setup before retrying."
         )
-    if "browser_release_control" in offered_tool_names:
         parts.append(
-            "Browser handoff contract: Before asking the human to interact with the browser, release "
-            "browser control and wait for success. Then ask the human to complete the interaction and wait "
-            "for their reply; do not poll with browser tools."
+            "The browser is isolated to this chat and works without an open viewer. Human input is "
+            "available between tool actions. For sign-in or other human interaction, ask the user "
+            "and wait for their reply; do not poll with browser tools."
         )
     if {"web_search", "webfetch"} <= offered_tool_names:
         research_instructions.append(
