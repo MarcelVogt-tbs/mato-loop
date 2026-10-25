@@ -33,9 +33,9 @@
         </q-card-section>
         <q-separator />
         <q-card-section class="row q-col-gutter-md">
-          <q-input dense v-model.number="form.maxUploadMib" class="col-12 col-sm-6" outlined type="number" label="Maximale Uploadgröße (MiB)" :rules="[range(1, 256)]" />
+          <q-input dense v-model.number="form.maxUploadMib" class="col-12 col-sm-6" outlined type="number" label="Maximale Uploadgröße (MiB)" :rules="[range(1, 1024)]" />
           <q-input dense v-model.number="form.maxAttachmentsPerMessage" class="col-12 col-sm-6" outlined type="number" label="Anhänge pro Nachricht" :rules="[range(1, 16)]" />
-          <q-input dense v-model.number="form.maxMessageUploadMib" class="col-12 col-sm-6" outlined type="number" label="Gesamtgröße pro Nachricht (MiB)" :rules="[range(1, 512)]" />
+          <q-input dense v-model.number="form.maxMessageUploadMib" class="col-12 col-sm-6" outlined type="number" label="Gesamtgröße pro Nachricht (MiB)" :rules="[range(1, 1024)]" />
           <q-input dense v-model.number="form.userQuotaMib" class="col-12 col-sm-6" outlined clearable type="number" label="Benutzer-Speicherlimit (MiB)" hint="Leer lassen für unbegrenzten Speicher." :rules="[optionalQuota]" />
         </q-card-section>
       </q-card>

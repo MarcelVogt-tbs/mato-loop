@@ -1819,6 +1819,7 @@ def test_general_system_prompt_reports_selected_offline_computer() -> None:
 
 def test_computer_identity_changes_prompt_only_when_binding_changes() -> None:
     agent_id = uuid4()
+    session = _session()
     options = {
         "execution_agent_id": agent_id,
         "execution_agent_name": "Workstation",
@@ -1830,15 +1831,15 @@ def test_computer_identity_changes_prompt_only_when_binding_changes() -> None:
         "include_local_time": False,
         "offered_tool_names": frozenset({"list_execution_agents", "select_execution_agent"}),
     }
-    first = general_system_prompt(_session(), **options)
+    first = general_system_prompt(session, **options)
 
-    assert first == general_system_prompt(_session(), **options)
-    without_temporary = general_system_prompt(_session(), **{**options, "temporary_files_enabled": False})
+    assert first == general_system_prompt(session, **options)
+    without_temporary = general_system_prompt(session, **{**options, "temporary_files_enabled": False})
     assert first.split("Selected computer context:")[0] == without_temporary.split("Selected computer context:")[0]
-    assert '"temporaryDirectory": "/tmp/mato-loop"' in first
-    assert '"temporaryDirectory"' not in without_temporary
+    assert '"temporaryDirectory": "/tmp/mato-loop/' in first
+    assert '"temporaryDirectoryWritable": false' in without_temporary
     assert f'"id": "{agent_id}"' in first
-    assert first != general_system_prompt(_session(), **{**options, "execution_agent_id": uuid4()})
+    assert first != general_system_prompt(session, **{**options, "execution_agent_id": uuid4()})
     assert "available MatoLoop Agents" not in first
     assert f"Selected MatoLoop Agent ID: {agent_id}" in general_system_prompt(
         _session(), execution_agent_id=agent_id,

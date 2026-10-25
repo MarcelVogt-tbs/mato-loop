@@ -406,14 +406,14 @@ async def _shell_run(arguments: ShellRunArguments, context: ToolContext) -> Tool
         **({"environment": environment} if environment else {}),
     }
     info = execution_agent_connections.system_info(client.agent_id)
-    if info is not None and info.temporary_directory is not None:
+    if info is not None and info.temporary_directory is not None and info.session_temporary_directory_supported:
         from mato_loop_backend.sessions.service import execution_filesystem_policy
 
         settings = await tools_access.profile_tool_settings(context)
         if settings._temporary_files_enabled:
             agent = await context.db.get(ExecutionAgent, client.agent_id)
             if agent is not None and execution_filesystem_policy(agent, info.temporary_directory) != "deny":
-                process_arguments["useTemporaryDirectory"] = True
+                process_arguments["temporarySessionId"] = str(context.session.id)
     request = RequestMessage(
         id=uuid4(), operation="shell.run", arguments=process_arguments
     )

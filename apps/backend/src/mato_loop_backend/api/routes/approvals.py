@@ -23,7 +23,13 @@ from mato_loop_backend.models import (
     UserAccount,
 )
 from mato_loop_backend.permissions.decisions import ApprovalDecisionError, decide_agent_action
-from mato_loop_backend.permissions.policy import SessionGrantScope
+from mato_loop_backend.permissions.policy import (
+    PermissionDecision,
+    PermissionPolicy,
+    SessionGrantScope,
+    execution_directory_permission,
+    temporary_file_grants,
+)
 from mato_loop_backend.security import require_user
 from mato_loop_backend.sessions.service import (
     ACTIVE_RUN_STATUSES,
@@ -31,8 +37,10 @@ from mato_loop_backend.sessions.service import (
     get_owned_session,
 )
 from mato_loop_backend.settings import (
+    AgentProfileUnavailable,
     TrustLevel,
     effective_model_trust,
+    load_agent_profile_tools,
     load_effective_ai,
 )
 from mato_loop_backend.settings.effective import apply_session_ai
@@ -164,6 +172,9 @@ async def _permission_binding(db: AsyncSession, session: ChatSession) -> tuple[U
         AgentRun.session_id == session.id, AgentRun.status.in_(ACTIVE_RUN_STATUSES),
     ).order_by(AgentRun.created_at.desc()).limit(1))
     if run is not None:
+        from mato_loop_backend.agent.session_settings import apply_run_session_settings
+
+        apply_run_session_settings(session, run)
         return run.agent_profile_id or session.agent_profile_id, TrustLevel(run.trust_level or "public")
     ai = apply_session_ai(await load_effective_ai(db, session.user_id), session)
     model = next((item for item in ai.models if item.id == ai.default_model_id), None)
@@ -332,7 +343,34 @@ async def list_permissions(
             if item.source_approval_id is not None
             else None
         )
-        payloads.append(await _permission_payload(db, user, item, source, session, binding))
+        payloads.append({**await _permission_payload(db, user, item, source, session, binding),
+                         "sessionId": str(session.id), "source": "approval", "scope": "session"})
+    from mato_loop_backend.execution.manager import execution_agent_connections
+    from mato_loop_backend.files.service import RootFileService
+
+    agent = await db.get(ExecutionAgent, session.preferred_execution_agent_id) if session.preferred_execution_agent_id else None
+    info = execution_agent_connections.system_info(agent.id) if agent is not None else None
+    if agent is not None and agent.user_id == user.id and agent.revoked_at is None and info is not None and info.temporary_directory:
+        try:
+            settings, _ = await load_agent_profile_tools(db, user.id, binding[0], binding[1])
+        except AgentProfileUnavailable:
+            return payloads
+        for grant in temporary_file_grants(session, agent.id, info.temporary_directory, writable=settings._temporary_files_enabled):
+            category = grant.capability.removeprefix("category.")
+            path = json.loads(grant.resource_scope)["path"]
+            request = execution_directory_permission(agent.id, path, capability=f"filesystem.{category}", action_kind="temporary_files")
+            decision = await PermissionPolicy.evaluate(
+                db, session, request, RootFileService(session.id, project_id=session.project_id),
+                temporary_files_enabled=settings._temporary_files_enabled,
+            )
+            payloads.append({
+                "id": f"temporary:{session.id}:{category}", "sessionId": str(session.id),
+                "capability": grant.capability, "resourceType": grant.resource_type,
+                "resourceScope": grant.resource_scope, "resourceDisplay": path, "recursive": True,
+                "executionAgentId": str(agent.id), "executionAgentName": agent.display_name,
+                "source": "default" if category == "read" else "profile", "scope": "session",
+                "derived": True, "applicable": decision == PermissionDecision.ALLOW,
+            })
     return payloads
 
 

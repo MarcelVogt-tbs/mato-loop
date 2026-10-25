@@ -2,9 +2,9 @@ import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 
 export const INSTANCE_LIMIT_DEFAULTS = {
-  maxUploadMib: 64,
+  maxUploadMib: 1024,
   maxAttachmentsPerMessage: 8,
-  maxMessageUploadMib: 512,
+  maxMessageUploadMib: 1024,
   userQuotaMib: null,
   maxImagePreviewMib: 5,
   maxEditableTextMib: 1,

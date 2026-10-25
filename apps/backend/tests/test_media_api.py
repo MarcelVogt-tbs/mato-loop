@@ -20,6 +20,7 @@ from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import sessions as sessions_route
 from mato_loop_backend.api.routes.media import create_transcription
+from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.media.attachments import AttachmentError, AttachmentInput, AttachmentService
 from mato_loop_backend.models import AgentRun, ChatSession, Message, UserAccount
@@ -384,6 +385,54 @@ async def test_session_attachment_processing_limit_returns_413(monkeypatch) -> N
 
     assert exc_info.value.status_code == 413
     assert exc_info.value.code == "attachment.textTooLarge"
+
+
+async def test_large_attachment_is_streamed_without_media_processing(tmp_path, monkeypatch):
+    class Chunked(BytesIO):
+        def read(self, size=-1):
+            assert 0 < size <= 1024 * 1024
+            return super().read(size)
+
+    session = ChatSession(id=uuid4(), user_id=uuid4())
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(session.id, user_id=session.user_id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = session
+    service = AttachmentService(storage, settings=InstanceLimits())
+    source = Chunked(b"raw file")
+    monkeypatch.setattr(sessions_route, "_mutable_session", AsyncMock(return_value=session))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=InstanceLimits()))
+
+    async def send(_id, _payload, _user, db, inputs):
+        item = inputs[0]
+        result = await service.create_attachment(db, Message(id=uuid4(), session_id=session.id), item.data, item.mime_type, kind=item.kind, filename=item.filename, position=0)
+        return {"path": result.file_path}
+
+    monkeypatch.setattr(sessions_route, "_send_message", send)
+    result = await sessions_route.send_message_with_attachments(
+        session.id, json.dumps({"content": "Datei"}), [UploadFile(source, filename="large.bin")],
+        UserAccount(id=session.user_id), db,
+    )
+    assert (RootFileService(session.id, session_storage=storage).read_bytes("session", result["path"], limit=100), source.closed) == (b"raw file", True)
+
+
+async def test_attachment_processing_has_no_additional_file_size_ceiling(tmp_path, monkeypatch):
+    monkeypatch.setattr("mato_loop_backend.media.attachments.MAX_FILE_ATTACHMENT_BYTES", 4)
+    settings = InstanceLimits()
+    inputs = await sessions_route._attachment_uploads([
+        upload(),
+    ], settings)
+    session = ChatSession(id=uuid4(), user_id=uuid4())
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(session.id, user_id=session.user_id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = session
+    item = inputs[0]
+    result = await AttachmentService(storage, settings=settings).create_attachment(
+        db, Message(id=uuid4(), session_id=session.id),
+        item.data, item.mime_type, kind=item.kind, filename=item.filename, position=0,
+    )
+    assert result.kind == "audio"
 
 
 async def test_attachment_upload_count_is_bounded() -> None:

@@ -823,8 +823,8 @@ describe('chat drafts', () => {
     expect(chat.addAttachmentFiles([{
       name: 'gross.pdf',
       type: 'application/pdf',
-      size: 64 * 1024 * 1024 + 1
-    }]).error).toContain('64 MiB')
+      size: 1024 * 1024 * 1024 + 1
+    }]).error).toContain('1024 MiB')
     expect(chat.addAttachmentFiles([{ name: 'notizen.txt', type: 'text/plain', size: 10 }]))
       .toMatchObject({ added: 1, error: null })
     expect(chat.activeAttachmentDraft[0]).toMatchObject({ kind: 'file', mimeType: 'text/plain' })
@@ -851,7 +851,7 @@ describe('chat drafts', () => {
     }
     chat.current = { id: 'session-4' }
     expect(chat.addAttachmentFiles([{ name: 'zwei.wav', type: 'audio/wav', size: 1 }]).error)
-      .toContain('256 MiB')
+      .toContain('1024 MiB')
     expect(createObjectURL).toHaveBeenCalledTimes(4)
   })
 

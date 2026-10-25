@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, BinaryIO, ClassVar, Literal, Self
 from uuid import UUID
 
+from anyio import CancelScope
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -453,18 +456,30 @@ class ExecutionClient:
     async def write_bytes(
         self, path: str, source: BinaryIO, *, limit: int
     ) -> WorkspaceWriteResult:
+        staging = asyncio.create_task(asyncio.to_thread(stage_file, source, max_bytes=limit))
         try:
-            staged, size, digest = stage_file(source, max_bytes=limit)
+            staged, size, digest = await asyncio.shield(staging)
+        except asyncio.CancelledError:
+            while not staging.done():
+                try:
+                    with CancelScope(shield=True):
+                        await asyncio.shield(staging)
+                except (asyncio.CancelledError, Exception):
+                    continue
+            with suppress(Exception):
+                staging.result()[0].close()
+            raise
         except TransferError as exc:
             raise ExecutionClientError(
                 "file.tooLarge"
                 if exc.code == "transfer.tooLarge"
                 else "executionAgent.protocolError"
             ) from exc
-        grant, _ = transfer_tickets.create_download(
-            self.agent_id, staged, size=size, sha256=digest
-        )
+        grant = None
         try:
+            grant, _ = transfer_tickets.create_download(
+                self.agent_id, staged, size=size, sha256=digest
+            )
             result = await self.request(
                 "filesystem.import",
                 {
@@ -480,13 +495,16 @@ class ExecutionClient:
                     "overwrite": False,
                 },
                 WorkspaceWriteResult,
+                timeout=EXPORT_TIMEOUT_SECONDS,
             )
             assert isinstance(result, WorkspaceWriteResult)
             if result.path != path or result.size != size or result.sha256 != digest:
                 raise ExecutionClientError("executionAgent.protocolError")
             return result
         finally:
-            transfer_tickets.revoke(grant.ticket_id)
+            if grant is not None:
+                transfer_tickets.revoke(grant.ticket_id)
+            staged.close()
 
     async def request(
         self,

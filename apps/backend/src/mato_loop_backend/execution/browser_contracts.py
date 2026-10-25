@@ -37,7 +37,9 @@ BROWSER_SNAPSHOT_ACTIONS = frozenset({
 })
 BrowserOpaqueId = Annotated[str, Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")]
 _ShortText = Annotated[str, Field(max_length=4096)]
-MAX_BROWSER_FILE_BYTES = 64 * 1024 * 1024
+MAX_BROWSER_FILE_BYTES = 1024 * 1024 * 1024
+MAX_OBSERVATION_BYTES = 64 * 1024 * 1024
+BROWSER_TRANSFER_TIMEOUT = 60 + MAX_BROWSER_FILE_BYTES / (256 * 1024)
 
 
 class BrowserConfig(WireModel):
@@ -345,6 +347,9 @@ class BrowserFileListResult(BrowserResult):
 
 
 class BrowserPublishedDownloadResult(BrowserResult):
+    root: Literal["files"]
+    file_id: UUID = Field(strict=False)
+    revision: int = Field(ge=1)
     path: str = Field(min_length=1, max_length=4096)
     size: int = Field(ge=0, le=MAX_BROWSER_FILE_BYTES)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -352,7 +357,7 @@ class BrowserPublishedDownloadResult(BrowserResult):
 
 class BrowserScreenshot(BrowserResult):
     file_id: BrowserOpaqueId
-    size: int = Field(ge=0, le=MAX_BROWSER_FILE_BYTES)
+    size: int = Field(ge=0, le=MAX_OBSERVATION_BYTES)
 
 
 class BrowserSnapshot(BrowserScreenshot):
@@ -362,7 +367,7 @@ class BrowserSnapshot(BrowserScreenshot):
 class BrowserSnapshotFile(BrowserResult):
     root: Literal["files"] = "files"
     path: str = Field(min_length=1, max_length=255)
-    size_bytes: int = Field(ge=1, le=MAX_BROWSER_FILE_BYTES)
+    size_bytes: int = Field(ge=1, le=MAX_OBSERVATION_BYTES)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 

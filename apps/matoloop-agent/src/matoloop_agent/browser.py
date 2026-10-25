@@ -11,7 +11,6 @@ import shutil
 import signal
 import stat
 import sys
-import tempfile
 from pathlib import Path
 from time import monotonic
 from uuid import uuid4
@@ -28,13 +27,12 @@ from .browser_contracts import (
     BrowserFilesResult,
     BrowserIdArguments,
     BrowserNavigationResult,
-    BrowserPublishResult,
     BrowserResizeResult,
     BrowserSetupReadResult,
     BrowserStatus,
 )
 from .errors import AgentError
-from .filesystem import Filesystem, _parts
+from .filesystem import Filesystem
 from .terminal import MAX_BUFFER_BYTES, TerminalManager
 
 logger = logging.getLogger(__name__)
@@ -69,7 +67,6 @@ class BrowserRuntime:
         self.setup_offset = 0
         self.setup_task = None
         self.last_status = BrowserStatus(state="missing")
-        self.publish_receipts: dict[str, tuple[str, str, dict]] = {}
 
     @property
     def maintenance_busy(self) -> bool:
@@ -205,7 +202,15 @@ class BrowserRuntime:
                     "evaluate",
                 }
             )
-            rpc_timeout = 140 if code_execution else 55
+            uploading = isinstance(arguments, dict) and (
+                op == "execute"
+                and arguments.get("action") == "upload"
+                or op == "file"
+                and arguments.get("action") == "choose"
+            )
+            rpc_timeout = (
+                60 + MAX_FILE_BYTES / (256 * 1024) if uploading else 140 if code_execution else 55
+            )
             async with asyncio.timeout(rpc_timeout):
                 started = monotonic()
                 self.worker.stdin.write(json.dumps({"op": op, **values}).encode() + b"\n")
@@ -519,75 +524,6 @@ class BrowserRuntime:
             if not ready.done():
                 ready.set_result(False)
 
-    async def publish(self, args) -> dict:
-        cached = self.publish_receipts.get(args.file_id)
-        if cached is not None:
-            if cached[:2] != (args.expected_origin, args.path):
-                raise AgentError("browser.invalidTarget", "Download publication differs")
-            return cached[2]
-        if self.filesystem is None:
-            raise AgentError("browser.actionFailed", "Filesystem is unavailable")
-        root = self.config.home_directory / "browser" / "downloads"
-        root_parts, destination_parts = _parts(os.fspath(root)), _parts(args.path)
-        if destination_parts[:-1] != root_parts or len(destination_parts) != len(root_parts) + 1:
-            raise AgentError("browser.invalidTarget", "Download destination is invalid")
-        listing = await self.rpc("files")
-        entry = next((item for item in listing["downloads"] if item["id"] == args.file_id), None)
-        if (
-            entry is None
-            or entry["status"] != "ready"
-            or entry.get("origin") != args.expected_origin
-        ):
-            raise AgentError("browser.invalidTarget", "Download is not publishable")
-        self.filesystem.mkdir(os.fspath(root), True)
-        with tempfile.TemporaryDirectory(
-            prefix="browser-publish-", dir=self.config.data_dir
-        ) as temporary:
-            source = Path(temporary) / "download"
-            digest = hashlib.sha256()
-            offset = 0
-            with source.open("xb") as handle:
-                while offset < entry["size"]:
-                    chunk = await self.rpc(
-                        "file",
-                        args={
-                            "browserId": args.browser_id,
-                            "action": "read",
-                            "fileId": args.file_id,
-                            "offset": offset,
-                        },
-                    )
-                    data = base64.b64decode(chunk["data"], validate=True)
-                    if (
-                        chunk["fileId"] != args.file_id
-                        or chunk["size"] != entry["size"]
-                        or chunk["offset"] != offset + len(data)
-                        or not data
-                    ):
-                        raise AgentError("browser.actionFailed", "Download chunk is invalid")
-                    offset = chunk["offset"]
-                    if chunk["complete"] != (offset == entry["size"]):
-                        raise AgentError("browser.actionFailed", "Download completion is invalid")
-                    digest.update(data)
-                    handle.write(data)
-            if offset != entry["size"] or digest.hexdigest() != entry["sha256"]:
-                raise AgentError("browser.actionFailed", "Download content is invalid")
-            result = self.filesystem.import_file(
-                args.path, source, False, entry["size"], entry["sha256"]
-            )
-        receipt = BrowserPublishResult.model_validate(result).model_dump()
-        self.publish_receipts[args.file_id] = (args.expected_origin, args.path, receipt)
-        with contextlib.suppress(AgentError):
-            await self.rpc(
-                "file",
-                args={
-                    "browserId": args.browser_id,
-                    "action": "delete",
-                    "fileId": args.file_id,
-                },
-            )
-        return receipt
-
     async def stage_upload(self, args) -> dict:
         if self.filesystem is None:
             raise AgentError("browser.actionFailed", "Filesystem is unavailable")
@@ -666,7 +602,6 @@ class BrowserRuntime:
                             return {"browserId": self.browser_id, "protocol": "chat-browser-v1"}
                         raise AgentError("browser.busy", "Another browser is active")
                     try:
-                        self.publish_receipts.clear()
                         await self.spawn(self.runtime_root(root))
                         self.last_status = BrowserStatus.model_validate(
                             await self.rpc("start", colorScheme=args.color_scheme)
@@ -702,8 +637,6 @@ class BrowserRuntime:
                     return {"ok": True, "protocol": "page-stream-v1"}
                 if action == "files":
                     return await self.rpc("files")
-                if action == "publish":
-                    return await self.publish(args)
                 if action == "upload":
                     return await self.stage_upload(args)
                 if action in {"resize", "navigation"}:

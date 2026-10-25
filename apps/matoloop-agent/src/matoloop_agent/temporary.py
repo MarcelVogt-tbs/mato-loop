@@ -15,9 +15,11 @@ def temporary_directory() -> str:
     return (base / "mato-loop").as_posix()
 
 
-def temporary_environment(filesystem, environment: dict[str, str] | None = None) -> dict[str, str]:
+def temporary_environment(
+    filesystem, session_id: str, environment: dict[str, str] | None = None
+) -> dict[str, str]:
     try:
-        path = temporary_directory()
+        path = f"{temporary_directory()}/{session_id}"
         filesystem.mkdir(path, True, inherit_ownership=False)
     except (AgentError, OSError):
         logger.warning(

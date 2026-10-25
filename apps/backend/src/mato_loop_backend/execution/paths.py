@@ -2,10 +2,15 @@
 
 import re
 from pathlib import PurePosixPath
+from uuid import UUID
 
 _DRIVE = re.compile(r"^[A-Z]:/(?:[^/]+(?:/[^/]+)*)?$")
 _INVALID_WINDOWS = set('<>:"|?*')
 _RESERVED = re.compile(r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$", re.I)
+
+
+def session_temporary_directory(base: str, session_id: UUID) -> str:
+    return absolute_path(f"{base.rstrip('/')}/{session_id}")
 
 
 def absolute_path(value: str) -> str:

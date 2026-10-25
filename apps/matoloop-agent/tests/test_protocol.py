@@ -182,7 +182,10 @@ class ProtocolTests(unittest.TestCase):
             Hello.model_validate({**hello.model_dump(by_alias=True), "roots": []})
 
     def test_system_info_fields_are_nullable_strict_and_bounded(self) -> None:
-        self.assertTrue(all(value is None for value in SystemInfo().model_dump().values()))
+        self.assertEqual(
+            SystemInfo().model_dump(exclude_none=True),
+            {"session_temporary_directory_supported": False},
+        )
         for field, maximum in (
             ("operatingSystem", 80),
             ("distribution", 255),

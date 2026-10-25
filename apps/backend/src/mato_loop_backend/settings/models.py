@@ -601,9 +601,7 @@ def cap_agent_profile_policy(
             ),
             profile_policy,
         )
-        if settings._temporary_files_enabled and capability in {
-            "filesystem.read", "filesystem.write", "filesystem.delete",
-        } and profile_policy == ToolExecutionPolicy.DISABLED:
+        if (capability == "filesystem.read" or settings._temporary_files_enabled and capability == "filesystem.write") and profile_policy == ToolExecutionPolicy.DISABLED:
             # Offer existing file tools; concrete temporary paths are authorized separately.
             profile_policy = ToolExecutionPolicy.ASK
     if profile_policy is None:
@@ -1174,9 +1172,9 @@ class InstanceLimits(SettingsDocument):
         extra="forbid",
     )
 
-    max_upload_mib: int = Field(default=64, ge=1, le=256)
+    max_upload_mib: int = Field(default=1024, ge=1, le=1024)
     max_attachments_per_message: int = Field(default=8, ge=1, le=16)
-    max_message_upload_mib: int = Field(default=512, ge=1, le=512)
+    max_message_upload_mib: int = Field(default=1024, ge=1, le=1024)
     user_quota_mib: int | None = Field(default=None, ge=1, le=102_400)
     max_image_preview_mib: int = Field(default=5, ge=1, le=64)
     max_editable_text_mib: int = Field(default=10, ge=1, le=16)

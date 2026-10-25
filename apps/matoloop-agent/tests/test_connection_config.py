@@ -101,6 +101,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                         "cpuModel": f"Test CPU {number}",
                         "logicalCpuCount": number,
                         "totalMemoryBytes": number * 1024,
+                        "sessionTemporaryDirectorySupported": True,
                     }
                     for number in (1, 2)
                 ]
@@ -226,6 +227,7 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
                         "logicalCpuCount": 8,
                         "totalMemoryBytes": 8192 * 1024,
                         "temporaryDirectory": "/tmp/mato-loop",
+                        "sessionTemporaryDirectorySupported": True,
                     },
                 )
                 live = agent.system_info(temporary)
@@ -264,7 +266,10 @@ class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
             ):
                 self.assertEqual(
                     json.loads(serialize_message(agent.hello()))["systemInfo"],
-                    {"temporaryDirectory": "/tmp/mato-loop"},
+                    {
+                        "temporaryDirectory": "/tmp/mato-loop",
+                        "sessionTemporaryDirectorySupported": True,
+                    },
                 )
             files = {
                 "/etc/os-release": 'PRETTY_NAME="unterminated\n',

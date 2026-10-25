@@ -131,7 +131,7 @@
           </q-list>
         </q-card-section>
         <q-card-actions align="right">
-          <q-btn v-if="downloadsDirectory" flat no-caps icon="folder_open" label="Downloads öffnen" :disable="controlCenter.saving" @click="openDownloads" />
+          <q-btn flat no-caps icon="folder_open" label="Ablage öffnen" :disable="controlCenter.saving" @click="openDownloads" />
           <q-space />
           <q-btn flat no-caps label="Schließen" v-close-popup />
           <q-btn color="primary" no-caps label="Datei verwenden" :loading="browser.transferring" :disable="!browser.pickerSelected || !browser.manual" @click="useSelectedFile" />
@@ -206,9 +206,6 @@ const pickerDirectory = computed(() => browser.pickerDirectories[browser.pickerS
 const pickerAtRoot = computed(() => pickerDirectory.value === (browser.pickerScope === 'session' ? '.' : '/'))
 const pickerCanUpload = computed(() => browser.pickerScope === 'session' || pickerContext.value.filesystemImport)
 const pickerError = computed(() => apiErrorMessage(browser.pickerError, 'Die Dateien konnten nicht geladen werden.'))
-const downloadsDirectory = computed(() => pickerContext.value.filesystemList && selectedAgent.value?.homeDirectory
-  ? `${selectedAgent.value.homeDirectory.replace(/\/$/u, '')}/browser/downloads`
-  : null)
 const status = computed(() => integrations.browserStatuses[selectedId.value])
 const visible = computed(() => route.name === 'chat' && route.query.session === chat.current?.id
   && controlCenter.sessionId === chat.current?.id && controlCenter.ready
@@ -520,22 +517,20 @@ function downloadPath(file) { return file.path || null }
 function downloadState(file) { return file.status || 'ready' }
 function downloadLabel(file) {
   const labels = {
-    saved: 'Automatisch gespeichert', ready: `${file.size} Bytes`, pending: 'Download läuft ...',
+    saved: 'In der Session-Ablage gespeichert', ready: `${file.size} Bytes`, pending: 'Download läuft ...',
     permission_required: 'Berechtigung zum Speichern erforderlich', failed: 'Speichern fehlgeschlagen'
   }
   return labels[downloadState(file)] || `${file.size} Bytes`
 }
 function downloadIcon(file) { return ({ saved: 'check_circle', permission_required: 'lock', failed: 'error' })[downloadState(file)] || 'download' }
 function downloadColor(file) { return ({ saved: 'positive', permission_required: 'warning', failed: 'negative' })[downloadState(file)] }
-function downloadCanFetch(file) { return Boolean(file.id) && ['ready', 'permission_required'].includes(downloadState(file)) }
+function downloadCanFetch(file) { return Boolean(file.id) && ['saved', 'ready', 'permission_required'].includes(downloadState(file)) }
 async function openDownloads() {
-  if (!downloadsDirectory.value) return
   try {
     await controlCenter.setFileView({
-      scope: 'filesystem', selectedPath: downloadsDirectory.value, selectedKind: 'directory', viewedFilePath: null,
-      executionAgentId: selectedAgent.value.id, currentDirectory: selectedAgent.value.homeDirectory
+      scope: 'session', selectedPath: '.', selectedKind: 'directory', viewedFilePath: null
     })
-    await controlCenter.openApp('computer-files')
+    await controlCenter.openApp('files')
     filesOpen.value = false
   } catch { /* Central API toast. */ }
 }

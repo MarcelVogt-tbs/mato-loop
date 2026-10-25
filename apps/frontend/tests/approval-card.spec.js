@@ -121,26 +121,31 @@ describe('approval card', () => {
     }))
   })
 
-  it('shows session grants with their exact shell context', async () => {
+  it('shows explicit and derived session rights with revocation only for explicit grants', async () => {
     const chat = useChatStore()
     chat.current = { id: 'session-1', activeRun: { id: 'run' } }
     chat.running = true
-    responses['/approvals/permissions'] = [{
+    responses['/approvals/sessions/session-1/permissions'] = [{
       id: 'grant-1', sessionId: 'session-1', applicable: false,
       capability: 'category.write', resourceType: 'shell_action', resourceDisplay: '/opt/project',
       executionAgentName: 'Notebook', currentDirectory: '/opt/project',
       command: 'printf reviewed > output.txt', elevated: true
+    }, {
+      id: 'temporary:read', sessionId: 'session-1', capability: 'category.read',
+      resourceType: 'execution_path', resourceDisplay: '/tmp/mato-loop/session-1', derived: true, source: 'default'
     }]
     await mountView(() => h(SessionApp))
     expect(root.querySelector('[aria-label="Memory-Modus auswählen"]').classList.contains('q-field--disabled')).toBe(false)
     await vi.waitFor(() => expect(root.querySelector('[aria-labelledby="session-permissions-title"]')?.textContent).toMatch(
       /Exakter Shell-Befehl · Lesen und Schreiben.*Notebook.*\/opt\/project.*printf reviewed > output.txt.*Mit Administratorrechten.*Inaktiv/s
     ))
+    const derived = [...root.querySelectorAll('.q-item')].find(item => item.textContent.includes('/tmp/mato-loop/session-1'))
+    expect([derived.textContent.includes('Herkunft: Standard'), derived.querySelector('button')]).toEqual([true, null])
   })
 
   it('hides stale grant binding claims after a failed refresh on computer change', async () => {
     useChatStore().current = { id: 'session-1', preferredExecutionAgentId: 'old' }
-    responses['/approvals/permissions'] = [{
+    responses['/approvals/sessions/session-1/permissions'] = [{
       id: 'grant-1', sessionId: 'session-1', applicable: true,
       capability: 'category.read', resourceType: 'execution_path', resourceDisplay: '/work/file'
     }]
@@ -157,7 +162,7 @@ describe('approval card', () => {
     const chat = useChatStore()
     chat.runId = nextRunId ? null : 'run'
     chat.current = { id: 'session-1', sessionProfile: { agentIds: ['plan'] }, activeRun: chat.runId ? { id: chat.runId } : null }
-    responses['/approvals/permissions'] = [{ id: 'grant-1', sessionId: 'session-1', resourceDisplay: '/work/file' }]
+    responses['/approvals/sessions/session-1/permissions'] = [{ id: 'grant-1', sessionId: 'session-1', resourceDisplay: '/work/file' }]
     await mountView(() => h(SessionApp))
     const section = root.querySelector('[aria-labelledby="session-permissions-title"]')
     const list = await vi.waitUntil(() => section.querySelector('.q-list'))
@@ -168,7 +173,7 @@ describe('approval card', () => {
     await nextTick()
     expect([section.querySelector('.q-list'), section.querySelector('[aria-label="Session-Freigaben aktualisieren"]').disabled])
       .toEqual([list, false])
-    finishRefresh({ data: responses['/approvals/permissions'] })
+    finishRefresh({ data: responses['/approvals/sessions/session-1/permissions'] })
     await vi.waitFor(() => expect(useApprovalStore().grantsLoading).toBe(false))
   })
 

@@ -6,12 +6,13 @@ from collections.abc import Awaitable, Callable
 from starlette.types import Message, Receive, Scope, Send
 
 from mato_loop_backend.error_contract import error_payload
+from mato_loop_backend.execution.transfers import MAX_TRANSFER_BYTES
 from mato_loop_backend.media.attachments import ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES
 
 _MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 TRANSCRIPTION_REQUEST_LIMIT = ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES + _MULTIPART_OVERHEAD_BYTES
-SESSION_ATTACHMENTS_REQUEST_LIMIT = 512 * 1024 * 1024 + _MULTIPART_OVERHEAD_BYTES
-WORKSPACE_UPLOAD_REQUEST_LIMIT = ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES + _MULTIPART_OVERHEAD_BYTES
+SESSION_ATTACHMENTS_REQUEST_LIMIT = MAX_TRANSFER_BYTES + _MULTIPART_OVERHEAD_BYTES
+WORKSPACE_UPLOAD_REQUEST_LIMIT = MAX_TRANSFER_BYTES + _MULTIPART_OVERHEAD_BYTES
 MAIL_UPLOAD_REQUEST_LIMIT = ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES + _MULTIPART_OVERHEAD_BYTES
 # JSON escapes each ASCII control byte as up to six bytes.
 WORKSPACE_FILE_EDIT_REQUEST_LIMIT = 6 * 16 * 1024 * 1024 + 64 * 1024
@@ -102,9 +103,10 @@ def _request_limit(scope: Scope) -> int | None:
     if path == "/api/workspace/files":
         return WORKSPACE_UPLOAD_REQUEST_LIMIT
     if (
-        len(parts) == 6
+        len(parts) in {6, 8}
         and parts[1:3] == ["api", "sessions"]
-        and parts[4:] == ["messages", "with-attachments"]
+        and parts[-2:] == ["messages", "with-attachments"]
+        and (len(parts) == 6 or (parts[4] == "runs" and parts[5]))
         and parts[3]
     ):
         return SESSION_ATTACHMENTS_REQUEST_LIMIT

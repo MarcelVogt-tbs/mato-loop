@@ -148,15 +148,22 @@ menu are added. Text is not persisted or logged and is limited to 16 KiB.
 
 Manual upload selects an ordinary **Ablage** or **Computer-Dateien** file after clicking the
 website's file input. Playwright intercepts the chooser; a staged file can be retried without
-transferring it again. Completed downloads publish below `<homeDirectory>/browser/downloads`
-without overwriting existing files. Download events retain controller-origin attribution.
+transferring it again. Completed downloads stream into the existing backend session files
+with a generated filename, under the owner's upload limit and storage quota. Their SHA-256
+is verified before storage; worker staging is deleted only after successful storage and
+the saved result is remembered before cancellation can propagate. Failed transfers retain
+staging for an explicit retry, not repeated automatic large transfers. Download events retain controller-origin attribution.
 Unlocking input does not clear model attribution: subsequent downloads in that runtime conservatively
-retain the latest model origin and its file-permission checks, including downloads clicked manually.
-Published downloads survive browser close; temporary transfers do not.
+retain the latest model origin and its browser-use checks, including downloads clicked manually.
+Saving an authorized browser result needs no arbitrary computer-file write permission.
+Published downloads survive browser close; temporary transfers do not. Existing computer
+downloads are neither moved nor deleted. No workspace synchronization is performed.
 
-Existing limits remain: 32 tabs, 64 MiB per managed file, 32 staging entries, 256 MiB staging,
+Limits: 32 tabs, 1 GiB per transferred file, 32 staging entries, 2 GiB aggregate staging,
 64 KiB transfer chunks, bounded diagnostics and code. Screenshots for the model remain scaled,
-ephemeral observations, separate from viewer frames; neither is a persistent session image.
+ephemeral observations with a separate 64 MiB ceiling, separate from viewer frames;
+neither is a persistent session image. Uploads use private local file paths rather than
+whole-file Python buffers and preserve the website filename.
 
 ## API and Troubleshooting
 

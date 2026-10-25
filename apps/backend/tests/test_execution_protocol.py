@@ -104,6 +104,7 @@ def test_hello_system_info_is_optional_bounded_and_strict() -> None:
         "kernel": "6.12", "architecture": "x86_64", "cpuModel": "AMD Ryzen 9 7950X",
         "logicalCpuCount": 32, "totalMemoryBytes": 64 * 1024**3,
         "temporaryDirectory": "/tmp/mato-loop",
+        "sessionTemporaryDirectorySupported": True,
     }
     payload["systemInfo"] = info
     assert HelloMessage.model_validate(payload).system_info.model_dump(by_alias=True) == info
@@ -205,7 +206,6 @@ def test_supported_operations_match_the_execution_agent() -> None:
         "integration.browser.execute",
         "integration.browser.file",
         "integration.browser.files",
-        "integration.browser.publish",
         "integration.browser.upload",
         "maintenance.start",
         "maintenance.update",

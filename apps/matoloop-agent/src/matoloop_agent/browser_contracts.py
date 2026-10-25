@@ -11,7 +11,8 @@ from pydantic import Field, JsonValue, TypeAdapter, field_validator, model_valid
 from .protocol import UUID_PATTERN, StrictModel
 
 Id = Annotated[str, Field(pattern=UUID_PATTERN)]
-MAX_FILE_BYTES = 64 * 1024 * 1024
+MAX_FILE_BYTES = 1024 * 1024 * 1024
+MAX_OBSERVATION_BYTES = 64 * 1024 * 1024
 MAX_CHUNK_BYTES = 65_536
 MAX_CLIPBOARD_BYTES = 16 * 1024
 BrowserErrorCode = Literal[
@@ -334,12 +335,6 @@ class BrowserFilesArguments(BrowserIdArguments):
     pass
 
 
-class BrowserPublishArguments(BrowserIdArguments):
-    file_id: Id = Field(alias="fileId")
-    path: str = Field(min_length=1, max_length=4096)
-    expected_origin: str = Field(alias="expectedOrigin", min_length=1, max_length=255)
-
-
 class BrowserUploadArguments(BrowserIdArguments):
     path: str = Field(min_length=1, max_length=4096)
 
@@ -454,12 +449,6 @@ class BrowserFilesResult(StrictModel):
     downloads: list[BrowserDownloadStatus] = Field(max_length=32)
 
 
-class BrowserPublishResult(StrictModel):
-    path: str = Field(min_length=1, max_length=4096)
-    size: int = Field(ge=0, le=MAX_FILE_BYTES)
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-
-
 class BrowserNavigationTab(BrowserTab):
     loading: bool
 
@@ -474,7 +463,7 @@ class BrowserNavigationResult(StrictModel):
 
 class BrowserScreenshot(StrictModel):
     file_id: Id = Field(alias="fileId")
-    size: int = Field(ge=0, le=MAX_FILE_BYTES)
+    size: int = Field(ge=0, le=MAX_OBSERVATION_BYTES)
 
 
 class BrowserBatchResult(StrictModel):
@@ -599,7 +588,6 @@ BROWSER_ARGUMENT_MODELS = {
     "integration.browser.execute": BrowserExecuteArguments,
     "integration.browser.file": BrowserFileArguments,
     "integration.browser.files": BrowserFilesArguments,
-    "integration.browser.publish": BrowserPublishArguments,
     "integration.browser.upload": BrowserUploadArguments,
     "integration.browser.control": BrowserControlArguments,
     "integration.browser.resize": BrowserResizeArguments,

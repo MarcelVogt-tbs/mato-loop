@@ -1,8 +1,10 @@
+import asyncio
 import base64
 import hashlib
 import json
 from dataclasses import replace
 from io import BytesIO
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -271,7 +273,8 @@ async def test_execution_client_imports_absolute_path_with_transfer_ticket(monke
         lambda _agent_id, ticket_id: f"https://backend.test/transfers/{ticket_id}",
     )
 
-    async def request(selected_agent_id, _operation, arguments, **_kwargs):
+    async def request(selected_agent_id, _operation, arguments, **kwargs):
+        assert kwargs["timeout"] == EXPORT_TIMEOUT_SECONDS
         ticket_id = next(
             ticket_id
             for ticket_id in transfer_tickets._tickets
@@ -304,6 +307,31 @@ async def test_execution_client_imports_absolute_path_with_transfer_ticket(monke
         "/tmp/snapshot.bin", BytesIO(data), limit=len(data)
     )
     assert result.path == "/tmp/snapshot.bin"
+
+
+async def test_cancelled_import_drains_staging_before_releasing_source(monkeypatch):
+    started = asyncio.Event()
+    release = Event()
+    loop = asyncio.get_running_loop()
+    staged = BytesIO(b"staged")
+
+    def stage(source, **_kwargs):
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(5) and not source.closed
+        return staged, 6, hashlib.sha256(b"staged").hexdigest()
+
+    monkeypatch.setattr("mato_loop_backend.execution.client.stage_file", stage)
+    with BytesIO(b"source") as source:
+        pending = asyncio.create_task(ExecutionClient(uuid4(), frozenset()).write_bytes("/tmp/file", source, limit=10))
+        try:
+            await asyncio.wait_for(started.wait(), 5)
+            pending.cancel()
+            await asyncio.sleep(0)
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+    assert staged.closed
 
 
 def test_upload_ticket_ttl_override_is_bounded_and_keeps_default(monkeypatch) -> None:
@@ -1868,8 +1896,9 @@ async def test_shell_policy_covers_incomplete_analysis(
         [],
     ),
 ])
+@pytest.mark.parametrize("session_temp_supported", [False, True])
 async def test_shell_dispatches_with_inspection_classification(
-    tmp_path, monkeypatch, command, commands, prefixes,
+    tmp_path, monkeypatch, command, commands, prefixes, session_temp_supported,
 ) -> None:
     call = ToolCall("shell", "shell_run", {"command": command})
     client = FakeExecutionClient(
@@ -1898,7 +1927,10 @@ async def test_shell_dispatches_with_inspection_classification(
     context = _context(tmp_path, call, client)
     context.tool_settings._temporary_files_enabled = True
     monkeypatch.setattr("mato_loop_backend.tools.access.profile_tool_settings", AsyncMock(return_value=context.tool_settings))
-    monkeypatch.setattr("mato_loop_backend.tools.computer.execution_agent_connections.system_info", lambda _id: SystemInfo(temporary_directory="/tmp/mato-loop"))
+    monkeypatch.setattr("mato_loop_backend.tools.computer.execution_agent_connections.system_info", lambda _id: SystemInfo.model_validate({
+        "temporaryDirectory": "/tmp/mato-loop",
+        **({"sessionTemporaryDirectorySupported": True} if session_temp_supported else {}),
+    }))
     context.db.get.return_value = ExecutionAgent(home_directory="/home/user", external_filesystem_policy="ask")
 
     result = await _tools(client.operations).execute(call, context)
@@ -1913,7 +1945,7 @@ async def test_shell_dispatches_with_inspection_classification(
         "currentDirectory": client.current_directory,
         "timeoutSeconds": None,
         "expectedInspectionRevision": "a" * 64,
-        "useTemporaryDirectory": True,
+        **({"temporarySessionId": str(context.session.id)} if session_temp_supported else {}),
     }
     request = context.ask_handler.await_args.args[0]
     assert request.capability == "shell.read"

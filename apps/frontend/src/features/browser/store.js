@@ -477,9 +477,12 @@ export const useBrowserStore = defineStore('browser', {
       this.transferring = true
       this.updateViewOnly()
       try {
-        const data = await this.request((config) => api.get(`/browsers/${this.integrationId}/download/${encodeURIComponent(file.id)}`, {
-          ...config, responseType: 'blob'
-        }))
+        const data = await this.request((config) => file.status === 'saved'
+          ? api.get('/workspace/files/download', { ...config, responseType: 'blob',
+            params: { scope: 'session', session_id: this.sessionId, path: file.path } })
+          : api.get(`/browsers/${this.integrationId}/download/${encodeURIComponent(file.id)}`, {
+            ...config, responseType: 'blob'
+          }))
         if (!data || generation !== this.generation || viewGeneration !== this.viewGeneration || displayGeneration !== this.displayGeneration) return
         const url = URL.createObjectURL(data)
         const link = document.createElement('a')

@@ -709,6 +709,7 @@ async def test_current_directory_is_the_auto_workspace_boundary(tmp_path) -> Non
     ("temporary", PermissionDecision.ALLOW),
     ("outside", PermissionDecision.DENY),
     ("prefix", PermissionDecision.DENY),
+    ("other_session", PermissionDecision.DENY),
     ("disabled", PermissionDecision.DENY),
     ("other_computer", PermissionDecision.DENY),
     ("hard_deny", PermissionDecision.DENY),
@@ -723,7 +724,12 @@ async def test_profile_temporary_grant_is_bound_to_selected_computer_and_path(
                            home_directory=workspace, home_filesystem_policy="auto",
                            external_filesystem_policy="deny" if case == "hard_deny" else "ask")
     monkeypatch.setattr(execution_agent_connections, "system_info", lambda _id: SystemInfo(temporary_directory=temporary_directory))
-    path = {"outside": f"{workspace}/source.py", "prefix": f"{temporary_directory}-other/file", "sensitive": f"{temporary_directory}/.env"}.get(case, f"{temporary_directory}/check.py")
+    own = f"{temporary_directory}/{session.id}"
+    path = {"outside": f"{workspace}/source.py", "prefix": f"{own}-other/file", "other_session": f"{temporary_directory}/{uuid4()}/file", "sensitive": f"{own}/.env"}.get(case, f"{own}/check.py")
+    if capability == "filesystem.delete":
+        expected = PermissionDecision.DENY
+    elif case == "disabled" and capability == "filesystem.read":
+        expected = PermissionDecision.ALLOW
     if case == "other_computer":
         session.preferred_execution_agent_id = uuid4()
     db = _db_with_grants()
@@ -1982,6 +1988,23 @@ def test_missing_delegated_capability_disables_external_working_directory() -> N
     assert mock_agent_run_support._external_working_directory_policy(
         settings, snapshot=snapshot
     ) == ToolExecutionPolicy.DISABLED
+
+
+@pytest.mark.parametrize("offered", [False, True])
+async def test_scratch_read_cannot_restore_missing_frozen_capability(tmp_path, monkeypatch, offered):
+    session = _session(user_id=uuid4(), preferred_execution_agent_id=uuid4())
+    snapshot = permission_snapshot(ToolSettings(), {"read"})
+    if offered:
+        snapshot["offeredCeiling"] = permission_snapshot(ToolSettings(), {"read"})
+    (snapshot["offeredCeiling"] if offered else snapshot)["actionDefaults"].pop("filesystem.read")
+    monkeypatch.setattr(mock_agent_runtime, "permission_origin", AsyncMock(return_value=session))
+    monkeypatch.setattr(mock_agent_runtime, "delegation_snapshot", AsyncMock(return_value=snapshot))
+    assert await AgentRuntime._authorize(
+        _db_with_grants(), AgentRun(id=uuid4(), session_id=session.id), session,
+        ToolCall("read", "read", {}),
+        execution_directory_permission(session.preferred_execution_agent_id, f"/tmp/mato-loop/{session.id}/file", capability="filesystem.read"),
+        _root_files(tmp_path, session),
+    ) == PermissionDecision.DENY
 
 
 async def test_other_session_read_requires_approval_without_matching_grant(tmp_path) -> None:

@@ -25,7 +25,8 @@ export const useApprovalStore = defineStore('approvals', {
     grantsLoading: false,
     grantsLoaded: false,
     grantsLoadFailed: false,
-    grantRevision: 0
+    grantRevision: 0,
+    grantSessionId: null
   }),
   getters: {
     pendingCount: (state) => state.pending.length,
@@ -107,12 +108,13 @@ export const useApprovalStore = defineStore('approvals', {
         this.submittingId = null
       }
     },
-    async fetchGrants(config = {}) {
+    async fetchGrants(config = {}, sessionId = this.grantSessionId) {
+      this.grantSessionId = sessionId
       const revision = ++this.grantRevision
       this.grantsLoading = true
       this.grantsLoadFailed = false
       try {
-        const { data } = await api.get('/approvals/permissions', config)
+        const { data } = await api.get(sessionId ? `/approvals/sessions/${sessionId}/permissions` : '/approvals/permissions', config)
         if (revision !== this.grantRevision || !Array.isArray(data)) return
         this.grants = data
         this.grantsLoaded = true
@@ -132,7 +134,7 @@ export const useApprovalStore = defineStore('approvals', {
     async revokeAll(sessionId) {
       await api.delete(`/approvals/sessions/${sessionId}/permissions`)
       this.grantRevision += 1
-      this.grants = this.grants.filter((item) => item.sessionId !== sessionId || item.runId)
+      this.grants = this.grants.filter((item) => item.sessionId !== sessionId || item.runId || item.derived)
       this.grantsLoading = false
     }
   }

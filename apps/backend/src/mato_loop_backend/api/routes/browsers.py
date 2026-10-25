@@ -23,6 +23,7 @@ from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.execution.browser_contracts import (
+    BROWSER_TRANSFER_TIMEOUT,
     BrowserClipboard,
     BrowserControlResult,
     BrowserFileResult,
@@ -529,7 +530,7 @@ async def browser_downloads(connection: ManualBrowser):
     try:
         async with connection.action_lock:
             await connection.check_manual()
-            await browser_coordinator.poll_downloads(connection.connection)
+            await browser_coordinator.poll_downloads(connection.connection, retry=True)
             await connection.check_manual()
             return {"downloads": connection.downloads}
     except ExecutionClientError as exc:
@@ -555,6 +556,7 @@ async def _browser_upload_source(connection: BrowserViewAccess, payload: Browser
                 "integration.browser.upload",
                 {"browserId": str(connection.browser_id), "path": path},
                 BrowserFileResult,
+                timeout=BROWSER_TRANSFER_TIMEOUT,
             )
             if not result.complete or result.offset != result.size:
                 raise ExecutionClientError("executionAgent.protocolError")

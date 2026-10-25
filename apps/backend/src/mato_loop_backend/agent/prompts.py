@@ -7,6 +7,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from mato_loop_backend.agent.model_prompt_profiles import build_model_instructions
+from mato_loop_backend.execution.paths import session_temporary_directory
 from mato_loop_backend.execution.protocol import SystemInfo
 from mato_loop_backend.models import ChatSession
 from mato_loop_backend.settings.models import (
@@ -629,8 +630,9 @@ def general_system_prompt(
                     "status": "connected" if execution_agent_connected else "offline",
                     "platform": execution_agent_platform,
                     "currentDirectory": current_directory,
-                    **({"temporaryDirectory": execution_agent_system_info.temporary_directory}
-                       if temporary_files_enabled and execution_agent_connected
+                    **({"temporaryDirectory": session_temporary_directory(execution_agent_system_info.temporary_directory, chat_session.id),
+                        "temporaryDirectoryWritable": temporary_files_enabled}
+                       if execution_agent_connected
                        and execution_agent_system_info is not None
                        and execution_agent_system_info.temporary_directory is not None else {}),
                     **(
@@ -647,10 +649,9 @@ def general_system_prompt(
             "MatoLoop Agent, not the backend. Use commands appropriate for its reported OS; "
             "do not assume installed programs or container resource limits. Missing values are unknown. "
             "System information does not grant tool permissions."
-            " When temporaryDirectory is reported, the profile permits scratch files there, subject to normal restrictions. "
-            "Use a session-specific subdirectory for checks; other sessions may reuse this shared area. "
-            "Create the directory with create_directory if missing. Do not overwrite or remove another "
-            "session's files without a request. File access does not authorize shell effects."
+            " temporaryDirectory is this session's scratch path. Reading is permitted subject to normal restrictions; "
+            "writing requires temporaryDirectoryWritable or a separate file permission. Other session paths have no "
+            "implicit access. Create the directory if authorized and missing. File access does not authorize shell effects."
             + ("\nNo live computer operations are available." if not execution_agent_connected else "")
         )
     elif execution_agent_id is not None:

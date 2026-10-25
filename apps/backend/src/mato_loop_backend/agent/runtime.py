@@ -1618,6 +1618,15 @@ class AgentRuntime:
         ceiling = await delegation_snapshot(db, run, chat_session)
         if ceiling is not None and (call.name == "task" or call.name not in ceiling["toolNames"]):
             return PermissionDecision.DENY
+        snapshot = ceiling
+        while snapshot is not None:
+            defaults = (
+                snapshot["integrationDefaults"].get(str(request.policy_integration_id), {})
+                if request.policy_integration_id is not None else snapshot["actionDefaults"]
+            )
+            if request.capability not in defaults:
+                return PermissionDecision.DENY
+            snapshot = snapshot.get("offeredCeiling")
         permission_namespace = (
             {"permission_session_id": origin.id} if origin.id != chat_session.id else {}
         )

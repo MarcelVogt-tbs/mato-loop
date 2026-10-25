@@ -2,16 +2,25 @@
 
 ## Tool-Rechte
 
-Direkt im **Agentenprofil**, neben dem Session-Ablagezugriff, steuert **Temporäre Dateien erlauben** den zusätzlichen
-Lese-, Schreib- und Löschzugriff auf den gemeinsamen Tempbereich des ausgewählten Computers
-(`/tmp/mato-loop` unter Linux, der Unterordner `mato-loop` im Tempverzeichnis des Agent-Benutzers unter Windows).
+Direkt im **Agentenprofil**, neben dem Session-Ablagezugriff, steuert **Temporären Arbeitsordner automatisch freigeben** den zusätzlichen
+Schreibzugriff auf den eigenen Session-Tempordner des ausgewählten Computers.
+Unter Linux liegt er unter `/tmp/mato-loop/<session-id>/`, unter Windows im entsprechenden
+Unterordner `mato-loop/<session-id>` des Tempverzeichnisses des Agent-Benutzers. Lesen ist standardmäßig erlaubt;
+Löschen und andere Sessionordner benötigen normale Dateirechte.
 Plan und Build aktivieren ihn standardmäßig. Eigene Profile wählen **Erben**, **An** oder **Aus**;
 mitgelieferte Profile zeigen den wirksamen Wert schreibgeschützt wie die übrigen Profilfelder.
 Gespeicherte eigene Werte bleiben erhalten. Die Einstellung gehört nicht zu den Tool-Anpassungen.
-Der Bereich ist nicht pro Session isoliert: Unterordner dienen nur der Ordnung. Andere
-Worktrees werden dadurch nicht zugänglich. Werkzeugverbote, harte Computersperren,
+Die Regel gilt für alle Sessions mit diesem Profil, der konkrete Pfadzugriff jedoch nur für die jeweilige Session.
+Interne Tool-Zwischendateien und normale Ergebnisse freigegebener Tools sind von der Option unabhängig.
+Andere Worktrees werden dadurch nicht zugänglich. Werkzeugverbote, harte Computersperren,
 vertrauliche Daten und Delegationsgrenzen gelten weiterhin. Shell-Rechte bleiben unverändert.
 Ältere Agents ohne gemeldeten Tempbereich erhalten diese zusätzliche Freigabe nicht.
+
+Dateiübertragungen und normale Chat-Anhänge unterstützen bis zu 1 GiB, soweit Instanzlimits
+und Speicherkontingent es erlauben. Für die automatische Verarbeitung von Chat-Anhängen
+gilt dieselbe Dateigrößengrenze, keine zusätzliche allgemeine 64-MiB-Grenze.
+Bestehende Vorschau-, Format- und Providergrenzen gelten weiterhin. Die Verarbeitung
+großer Dateien kann deutlich mehr Arbeitsspeicher als ihre Dateigröße benötigen.
 
 Das globale Freigabeverhalten und eingebaute Profil-Presets konfigurieren Administratoren unter **Administration > Tools**. Erlaubte eigene Profilrechte stehen unter **Einstellungen > Tools**. Arbeitsanweisungen bleiben am Profil; Modellwahl gehört zu **Standardmodelle** und **Sessionvorlagen**, Persona-Zuordnungen zu **Personas**. Integrations- und Ressourcenrechte bearbeiten Sie an der Verbindung. Rechte haben getrennte Werte für private und öffentliche Modelle:
 
@@ -284,7 +293,7 @@ Legen Sie unter **Einstellungen > Integrationen** eine persönliche Browserverbi
 
 Container- und native Linux-Agents bieten denselben Browser unter **Control Center > Browser** mit Tabs, Adressfeld und manueller Steuerung. Jeder Chat erhält einen eigenen Browser ohne Cookies, Anmeldungen oder Tabs anderer Chats. Mensch und KI teilen nur innerhalb dieses Chats denselben Browser. Browser-Tools funktionieren auch ohne geöffnete Browser-App und starten den Browser bei Bedarf. Mehrere Ansichten desselben Chats zeigen denselben Browser ohne Übernahme; verschiedene Chats können gleichzeitig unabhängig browsen. Nur während einer laufenden Agent-Browseraktion sind manuelle Eingaben kurz gesperrt und neben den Tabs steht dezent **Agent aktiv**. Danach können Sie sofort wieder selbst bedienen. **Browser verwenden** umfasst Lesen, Navigation, Bedienung und JavaScript innerhalb der Webseite. Build und darauf basierende Profile dürfen dies standardmäßig automatisch, außer bei **Alles bestätigen**; Allgemein, Plan und Sysadmin fragen standardmäßig nach. **Browser-Python ausführen** behält seine zusätzliche Bestätigung. Ausdrückliche Verbindungs- und Profilregeln gelten weiterhin. Browsermenüs und native DevTools sind nicht enthalten.
 
-Manueller Upload: erst das Website-Dateifeld anklicken, dann **Datei hochladen** aus Ablage/Computer-Dateien wählen. Bei fehlendem offenen Websitefeld bleibt **Datei einsetzen** für den erneuten Versuch. Downloads landen unter `homeDirectory/browser/downloads` ohne Überschreiben und sind über Computer-Dateien erreichbar. **Browser schließen** verwirft Website-Anmeldungen und Browserzustand, nicht veröffentlichte Downloads. Auch nach Agent-Neustart ist eine erneute Anmeldung nötig. Das Schließen der Browser-App beendet die Laufzeit dagegen nicht. Kopieren liest die markierte Website-Auswahl; Einfügen überträgt Text in das zuvor ausgewählte Websitefeld. Eigene Kopierfunktionen einer Website werden nicht emuliert.
+Manueller Upload: erst das Website-Dateifeld anklicken, dann **Datei hochladen** aus Ablage/Computer-Dateien wählen. Bei fehlendem offenen Websitefeld bleibt **Datei einsetzen** für den erneuten Versuch. Downloads landen in der bestehenden **Session-Ablage**; **Ablage öffnen** führt dorthin. Temporäre Download-Dateien werden erst nach erfolgreicher, geprüfter Übertragung entfernt. Übertragungen unterstützen bis zu 1 GiB pro Datei; niedrigere gespeicherte Instanzlimits und das Speicherkontingent gelten weiterhin. Vorschau- und Verarbeitungslimits bleiben getrennt. Bestehende Computer-Dateien werden weder verschoben noch gelöscht, Arbeitsverzeichnisse nicht automatisch synchronisiert. **Browser schließen** verwirft Website-Anmeldungen und Browserzustand, nicht gespeicherte Downloads. Auch nach Agent-Neustart ist eine erneute Anmeldung nötig. Das Schließen der Browser-App beendet die Laufzeit dagegen nicht. Kopieren liest die markierte Website-Auswahl; Einfügen überträgt Text in das zuvor ausgewählte Websitefeld. Eigene Kopierfunktionen einer Website werden nicht emuliert.
 
 Markieren Sie Text direkt mit Maus oder Tastatur und kopieren bzw. fügen Sie mit **Strg/Cmd+C** und **Strg/Cmd+V** ein. **Strg/Cmd+A** markiert alles im fokussierten Websitefeld. Dafür gibt es keine zusätzlichen Toolbar-Symbole und kein Rechtsklick-Menü. Kopieren schreibt ohne Dialog direkt in die lokale Zwischenablage und nutzt bei fehlender Clipboard-API einen HTTP-kompatiblen Fallback. Scheitert das Kopieren, erscheint eine Fehlermeldung. Nur Einfügen bietet weiterhin einen Ausweichdialog. Übertragen wird ausschließlich Text mit weniger als 16 KiB; Bilder und Dateien verwenden weiterhin den Upload.
 

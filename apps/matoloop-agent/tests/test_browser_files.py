@@ -9,12 +9,11 @@ from uuid import uuid4
 from matoloop_agent.browser import BrowserRuntime
 from matoloop_agent.browser_contracts import (
     BrowserFileArguments,
-    BrowserPublishArguments,
     BrowserUploadArguments,
 )
 from matoloop_agent.browser_worker import BrowserWorker
 from matoloop_agent.config import AgentConfig
-from matoloop_agent.filesystem import AgentError, Filesystem
+from matoloop_agent.filesystem import Filesystem
 from matoloop_agent.process import ProcessRunner
 from matoloop_agent.terminal import TerminalManager
 
@@ -86,111 +85,6 @@ class BrowserFileTests(unittest.IsolatedAsyncioTestCase):
         dots = Download(source, "..")
         await worker.download(dots, None, None)
         self.assertEqual(worker.file_status()["downloads"][2]["filename"], "download")
-
-    async def test_publish_checks_content_destination_origin_and_is_idempotent(self):
-        data = b"persistent download"
-        file_id = str(uuid4())
-        digest = hashlib.sha256(data).hexdigest()
-        destination = self.root / "browser" / "downloads" / "result.bin"
-        calls = []
-
-        async def rpc(op, **values):
-            calls.append((op, values))
-            if op == "files":
-                return {
-                    "downloads": [
-                        {
-                            "id": file_id,
-                            "filename": "result.bin",
-                            "status": "ready",
-                            "origin": "request-1",
-                            "controlEpoch": 4,
-                            "size": len(data),
-                            "sha256": digest,
-                        }
-                    ]
-                }
-            if values["args"]["action"] == "read":
-                return {
-                    "fileId": file_id,
-                    "filename": "result.bin",
-                    "size": len(data),
-                    "offset": len(data),
-                    "complete": True,
-                    "data": base64.b64encode(data).decode(),
-                }
-            self.assertIn(file_id, self.manager.publish_receipts)
-            return {"ok": True}
-
-        self.manager.rpc = AsyncMock(side_effect=rpc)
-        args = BrowserPublishArguments(
-            browserId=self.browser_id,
-            fileId=file_id,
-            path=str(destination),
-            expectedOrigin="request-1",
-        )
-        result = await self.manager.publish(args)
-        self.assertEqual(destination.read_bytes(), data)
-        self.assertEqual(result, {"path": str(destination), "size": len(data), "sha256": digest})
-        self.assertEqual(await self.manager.publish(args), result)
-        self.assertEqual(len(calls), 3)
-
-        with self.assertRaises(AgentError):
-            await self.manager.publish(args.model_copy(update={"path": str(self.root / "other")}))
-
-        other_id = str(uuid4())
-        self.manager.publish_receipts.clear()
-        with self.assertRaises(AgentError) as error:
-            await self.manager.publish(
-                args.model_copy(update={"file_id": other_id, "path": str(self.root / "outside")})
-            )
-        self.assertEqual(error.exception.code, "browser.invalidTarget")
-
-    async def test_publish_existing_destination_preserves_collision_code(self):
-        data = b"new"
-        file_id = str(uuid4())
-        digest = hashlib.sha256(data).hexdigest()
-        destination = self.root / "browser" / "downloads" / "result.bin"
-        destination.parent.mkdir(parents=True)
-        destination.write_bytes(b"existing")
-
-        async def rpc(op, **values):
-            if op == "files":
-                return {
-                    "downloads": [
-                        {
-                            "id": file_id,
-                            "filename": destination.name,
-                            "status": "ready",
-                            "origin": "request-1",
-                            "controlEpoch": 1,
-                            "size": len(data),
-                            "sha256": digest,
-                        }
-                    ]
-                }
-            return {
-                "fileId": file_id,
-                "filename": destination.name,
-                "size": len(data),
-                "offset": len(data),
-                "complete": True,
-                "data": base64.b64encode(data).decode(),
-            }
-
-        self.manager.rpc = AsyncMock(side_effect=rpc)
-        with self.assertRaises(AgentError) as error:
-            await self.manager.dispatch(
-                "integration.browser.publish",
-                BrowserPublishArguments(
-                    browserId=self.browser_id,
-                    fileId=file_id,
-                    path=str(destination),
-                    expectedOrigin="request-1",
-                ),
-            )
-        self.assertEqual(error.exception.code, "path.exists")
-        self.assertEqual(destination.read_bytes(), b"existing")
 
     async def test_failed_downloads_release_capacity_and_status_stays_bounded(self):
         worker = BrowserWorker(self.root)

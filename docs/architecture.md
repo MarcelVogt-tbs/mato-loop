@@ -190,25 +190,47 @@ profile editor, enabled by default for Plan and Build. Personal profiles follow 
 personal-profile gate, not the personal-tool gate. Tool permission endpoints do not
 expose or edit this field. Existing custom and built-in values remain in their current
 profile JSON documents, so no schema or data migration is needed. Built-in values are
-displayed read-only like other protected workflow fields. For the
-selected owner-bound computer, its advertised `temporaryDirectory` (`/tmp/mato-loop` on
-Linux, the OS temporary directory's `mato-loop` child on Windows) supplies implicit
-read/write/delete path grants through the existing category/resource matchers. These
-grants are evaluated in memory, not persisted as session grants, and exempt only that
-subtree from ordinary profile filesystem and external-working-directory restrictions.
+displayed read-only like other protected workflow fields. The selected owner-bound
+computer advertises a temporary base (`/tmp/mato-loop` on Linux, the OS temporary
+directory's `mato-loop` child on Windows). The host appends the session UUID and exposes
+that concrete path as `temporaryDirectory`, with `temporaryDirectoryWritable` in model
+context. Its subtree has default read access; the profile option adds write access,
+not deletion. These grants use existing category/resource matchers, are evaluated in
+memory rather than persisted, and exempt only that session subtree from ordinary profile
+filesystem and external-working-directory restrictions. Session settings display their
+source and scope alongside explicit grants, without individual or bulk revocation.
 Tool disablement, hard computer zones, sensitive-data policy, no-follow filesystem
 operations, and frozen delegation ceilings remain binding. Older Agents without the
-metadata receive no implicit grant. Session subdirectories organize files but do not
-isolate sessions; no other worktree receives automatic access. Plan permits analysis
+metadata receive no implicit grant. Other sessions' scratch directories and ordinary
+working directories require normal computer-file permissions. This is an authorization
+boundary, not an OS sandbox. Plan permits analysis
 check files there, not project implementation. Shell policy is unchanged; authorized
 normal shell execution may prepare the directory and receive host-controlled
-`TMPDIR`/`TEMP`/`TMP` defaults without replacing explicit process values. Failed
+`TMPDIR`/`TEMP`/`TMP` defaults from the host-supplied UUID-validated `temporarySessionId`
+without replacing explicit process values. Failed
 scratch preparation logs a controlled warning and leaves the ordinary process
 environment unchanged, without following or taking over unsafe paths.
 Tool schemas remain static; the path appears only in dynamic
 computer context. Managed worktree checkout directories retain Agent-process ownership
 instead of inheriting a potentially foreign data-directory owner, preserving Git's
 unsafe-repository checks elsewhere.
+
+Storage has three distinct locations: persistent backend session files/revisions, the
+Agent's per-session scratch subtree, and an explicitly selected ordinary working directory.
+The backend Ablage is not recreated or synchronized on the Agent. Authorized tool staging
+and normal tool results are independent of the scratch-write option; arbitrary model-selected
+file targets still require normal authorization. Browser downloads are transferred chat
+results, while ordinary working-directory files remain local. There is no blanket scratch
+cleanup or automatic migration/deletion of existing computer files. File transfers support
+1 GiB using bounded streams; new instance upload and per-message defaults/maxima are 1024 MiB,
+but explicitly saved lower limits remain unchanged. Preview, text, archive, provider,
+and observation limits remain separate. Ordinary chat files are streamed; recognized media
+and documents use the upload limit without an additional general processing-size ceiling.
+Request-owned upload streams stay open until storage completes, including cancellation cleanup.
+Processing can use more RAM than the input size; this change adds no RAM sandbox.
+Session-scoped shell temporary directories are enabled only when the Agent advertises
+`sessionTemporaryDirectorySupported`; older Agents receive no new shell argument or shared-temp grants.
+Native Windows browser support is not introduced.
 
 `Allgemein`, `Plan`, `Build`, and `Sysadmin` have stable IDs and protected names and workflow definitions. Their tool rights, availability, shell prefixes, and default integration selection accept administrative overrides without modifying the shipped baseline. Agent profiles have no model fields. Both global and personal custom profiles inherit one core base and allow separately managed tool rights and settings. Removing action rules preserves tool availability and shell prefixes. Built-ins and custom profiles may be disabled. The configured instance default must always be active. Session templates choose a start agent and constrain the session's available agents without overriding instance availability. Deletion switches affected sessions to the current default and removes their old grants; session agent selections may then require adjustment. Disabled profiles remain stored and historical runs retain their provenance. Personal settings show only the owner's explicit profiles.
 
@@ -385,7 +407,7 @@ User uploads, processing companions, and durable byte-valued backend tool output
 
 Image editing reuses managed file identity only when exactly one generated artifact is edited. Editing an uploaded or downloaded image, or combining multiple sources, creates a new managed artifact and leaves every source unchanged.
 
-Validated image originals use the global file limit (64 MiB by default). `InstanceLimits` controls upload count, aggregate/quota, preview/editing, media duration, extraction, and archive bounds; all users can read effective limits and only administrators can update them. Fixed parser/provider/Agent ceilings remain independent. Lower limits affect new intake/growth, not existing-file readability. Transport converts images above 5 MiB or 2048 pixels per edge into bounded transient JPEGs, preserving originals; requests carry at most eight images/20 MiB. PDF text remains relational content, explicitly rendered pages become managed files. Projection uses current or explicitly referenced media for capable models. Configured vision/video/transcription helpers use their own model-default selection as the release decision. Canonical chronology and non-file results stay in PostgreSQL.
+Original file uploads and automatic attachment processing use the global file limit (1 GiB by default), without a separate general processing-size ceiling. `InstanceLimits` controls upload count, aggregate/quota, preview/editing, media duration, extraction, and archive bounds; all users can read effective limits and only administrators can update them. Fixed parser/provider/Agent ceilings remain independent. Lower limits affect new intake/growth, not existing-file readability. Transport converts processed images above 5 MiB or 2048 pixels per edge into bounded transient JPEGs, preserving originals; requests carry at most eight images/20 MiB. PDF text remains relational content, explicitly rendered pages become managed files. Projection uses current or explicitly referenced media for capable models. Configured vision/video/transcription helpers use their own model-default selection as the release decision. Canonical chronology and non-file results stay in PostgreSQL.
 
 The always-available `generate_qr_code` and `read_qr_code` tools run locally and never call a media provider. Generation encodes at most 2,000 UTF-8 bytes exactly into a deterministic PNG managed file, and the tool message references its exact revision; persisted tool-call history redacts the encoded content. Reading accepts a validated image file through `root` and `path`, returns up to 16 text payloads, and retains source trust when attachment metadata exists. Protected artifacts remain unavailable as media-tool inputs. Empty scan results are normal successful results. Generic image generation explicitly excludes QR and other machine-readable codes.
 

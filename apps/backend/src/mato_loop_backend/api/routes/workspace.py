@@ -1037,7 +1037,7 @@ async def content_file_revision(
         suffix = PurePosixPath(metadata.path if metadata else path).suffix.casefold()
         max_bytes = (
             _STL_PREVIEW_BYTES if suffix == ".stl"
-            else context.instance_limits.max_upload_bytes if suffix in _AUDIO_MIME_TYPES or suffix == ".pdf"
+            else min(context.instance_limits.max_upload_bytes, MAX_FILE_ATTACHMENT_BYTES) if suffix in _AUDIO_MIME_TYPES or suffix == ".pdf"
             else context.instance_limits.max_image_preview_bytes
         )
         handle = await asyncio.to_thread(
@@ -1158,7 +1158,7 @@ async def preview_image(
     image_preview_bytes = context.instance_limits.max_image_preview_bytes
     max_bytes = _STL_PREVIEW_BYTES if suffix in {".stl", ".off"} else image_preview_bytes
     if suffix in _AUDIO_MIME_TYPES or suffix in _VIDEO_MIME_TYPES or suffix == ".pdf":
-        max_bytes = context.instance_limits.max_upload_bytes
+        max_bytes = min(context.instance_limits.max_upload_bytes, MAX_FILE_ATTACHMENT_BYTES)
     if suffix == ".svg":
         max_bytes = min(max_bytes, MAX_SAFE_SVG_BYTES)
     try:

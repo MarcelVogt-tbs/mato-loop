@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.approvals import (
     _permission_payload,
     all_permissions,
+    list_permissions,
     pending_approvals,
     revoke_permissions,
 )
@@ -26,7 +28,7 @@ from mato_loop_backend.permissions.policy import (
     execution_directory_scope,
     shell_action_scope,
 )
-from mato_loop_backend.settings import TrustLevel
+from mato_loop_backend.settings import ToolSettings, TrustLevel
 
 
 def _approval(user_id, session_id, created_at: datetime, *, request_type="agent_action") -> ApprovalRequest:
@@ -48,6 +50,27 @@ def _approval(user_id, session_id, created_at: datetime, *, request_type="agent_
         status="pending",
         created_at=created_at,
     )
+
+
+@pytest.mark.parametrize("writable,denied", [(False, False), (True, False), (True, True)])
+async def test_permissions_include_effective_session_scratch_rights(monkeypatch, writable, denied):
+    user = UserAccount(id=uuid4(), username="owner")
+    agent = ExecutionAgent(id=uuid4(), user_id=user.id, alias="Computer", external_filesystem_policy="deny" if denied else "ask")
+    session = ChatSession(id=uuid4(), user_id=user.id, preferred_execution_agent_id=agent.id)
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = lambda model, _id: session if model is ChatSession else agent
+    db.scalar.return_value = agent
+    db.scalars.return_value = MagicMock(all=lambda: [])
+    settings = ToolSettings()
+    settings._temporary_files_enabled = writable
+    monkeypatch.setattr("mato_loop_backend.api.routes.approvals._permission_binding", AsyncMock(return_value=(None, TrustLevel.PRIVATE)))
+    monkeypatch.setattr("mato_loop_backend.api.routes.approvals.load_agent_profile_tools", AsyncMock(return_value=(settings, None)))
+    monkeypatch.setattr("mato_loop_backend.execution.manager.execution_agent_connections.system_info", lambda _id: SimpleNamespace(temporary_directory="/tmp/mato-loop"))
+    result = await list_permissions(session.id, user, db)
+    assert [(item["source"], item["resourceDisplay"], item["applicable"], item["derived"]) for item in result] == [
+        (source, f"/tmp/mato-loop/{session.id}", not denied, True)
+        for source in (["default", "profile"] if writable else ["default"])
+    ]
 
 
 async def test_pending_approval_payload_includes_request_and_source_session() -> None:

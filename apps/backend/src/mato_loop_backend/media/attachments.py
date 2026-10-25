@@ -12,14 +12,16 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
-from typing import Literal
+from typing import BinaryIO, Literal
 from uuid import UUID, uuid4
 
+from anyio import CancelScope
 from PIL import Image
 from sqlalchemy import String, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, joinedload, selectinload
 
+from mato_loop_backend.files.archives import MAX_EXPORT_BYTES
 from mato_loop_backend.files.service import (
     FileRevision,
     FileRoot,
@@ -134,7 +136,7 @@ class ValidatedAudio:
 
 @dataclass(frozen=True)
 class AttachmentInput:
-    data: bytes
+    data: bytes | BinaryIO
     mime_type: str
     filename: str | None = None
     kind: str = "file"
@@ -314,6 +316,22 @@ def processing_limits(settings: InstanceLimits) -> AttachmentProcessingLimits:
         max_zip_compression_ratio=settings.max_archive_compression_ratio,
         max_audio_duration_seconds=settings.max_audio_duration_seconds,
         max_video_duration_seconds=settings.max_video_duration_seconds,
+    )
+
+
+def attachment_processing_candidate(data: bytes, browser_mime_type: str, filename: str | None) -> bool:
+    claimed = browser_mime_type.split(";", 1)[0].strip().lower()
+    suffix = Path(safe_filename(filename)).suffix.lower()
+    return bool(
+        _magic_mime_type(data)
+        or signed_audio_format(data)
+        or claimed_audio_format(claimed, suffix)
+        or video_container_candidate(data, claimed, suffix)
+        or b"%PDF-" in data[:1024]
+        or data.startswith(b"PK\x03\x04")
+        or claimed_document_format(claimed, suffix)
+        or claimed.startswith("text/")
+        or suffix in _TEXT_EXTENSIONS
     )
 
 
@@ -502,7 +520,7 @@ class AttachmentService:
 
     @staticmethod
     def _create_file(
-        root_files: RootFileService, path: str, data: bytes
+        root_files: RootFileService, path: str, data: bytes | BinaryIO
     ) -> tuple[FileRevision | WorkingFileRevision, list[str]]:
         parts = PurePosixPath(path).parts
         created_directories: list[str] = []
@@ -521,8 +539,8 @@ class AttachmentService:
             root_files.create_file(
                 FileRoot.SESSION,
                 path,
-                BytesIO(data),
-                max_bytes=RootFileService.MAX_OPERATION_BYTES,
+                BytesIO(data) if isinstance(data, bytes) else data,
+                max_bytes=MAX_EXPORT_BYTES,
             )
         except BaseException:
             for directory in reversed(created_directories):
@@ -682,7 +700,7 @@ class AttachmentService:
         self,
         db: AsyncSession,
         message: Message,
-        data: bytes,
+        data: bytes | BinaryIO,
         mime_type: str,
         *,
         kind: str,
@@ -695,7 +713,12 @@ class AttachmentService:
         source_file_root_id: UUID | None = None,
         file_id: UUID | None = None,
     ) -> MessageAttachment | SimpleNamespace:
-        if not data:
+        if not isinstance(data, bytes) and (kind != "file" or purpose != "attachment" or file_id is not None or source_file_root_id is not None):
+            raise AttachmentError("attachment.unsupportedType")
+        size = len(data) if isinstance(data, bytes) else data.seek(0, 2)
+        if not isinstance(data, bytes):
+            data.seek(0)
+        if not size:
             raise AttachmentError("attachment.empty")
         max_bytes = (
             self.settings.max_upload_bytes
@@ -707,7 +730,7 @@ class AttachmentService:
             if self.settings is not None and purpose == "attachment"
             else None
         )
-        if len(data) > max_bytes:
+        if size > max_bytes:
             raise AttachmentError("attachment.tooLarge")
         if purpose not in {"attachment", "artifact"}:
             raise AttachmentError("attachment.invalidPurpose")
@@ -864,7 +887,13 @@ class AttachmentService:
         try:
             written = await asyncio.shield(write_task)
         except asyncio.CancelledError:
-            written = await write_task
+            while not write_task.done():
+                try:
+                    with CancelScope(shield=True):
+                        await asyncio.shield(write_task)
+                except asyncio.CancelledError:
+                    continue
+            written = write_task.result()
             if root_files.run_id is None:
                 await asyncio.to_thread(self._discard_write, root_files, written)
             raise
@@ -887,8 +916,8 @@ class AttachmentService:
             purpose=purpose,
             processing_status=processing_status,
             mime_type=mime_type,
-            size_bytes=len(data),
-            sha256=hashlib.sha256(data).hexdigest(),
+            size_bytes=written.source.size_bytes,
+            sha256=written.source.sha256,
             file_root_id=root_id,
             file_id=written.source.file_id,
             file_revision=written.source.revision,

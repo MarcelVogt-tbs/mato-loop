@@ -171,6 +171,20 @@ it('keeps setup independent of chat/browser authority and never starts installat
   expect(setup.socket).toBe(connection)
 })
 
+
+it('downloads saved browser results from the session files rather than worker staging', async () => {
+  await open()
+  vi.useFakeTimers()
+  vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:download'), revokeObjectURL: vi.fn() })
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  api.get.mockResolvedValue({ data: new Blob(['result']) })
+  await browser.download({ id: 'download-1', status: 'saved', path: 'result.txt', filename: 'result.txt' })
+  expect(api.get).toHaveBeenCalledWith('/workspace/files/download', {
+    signal: expect.any(AbortSignal), suppressErrorToast: true, responseType: 'blob',
+    params: { scope: 'session', session_id: 'session-1', path: 'result.txt' }
+  })
+})
+
 it('validates navigation and UTF-8 transfer boundaries without accepting arbitrary endpoints', () => {
   expect(browserNavigationUrl('example.com')).toBe('https://example.com/')
   expect(browserNavigationUrl('javascript:alert(1)')).toBeNull()

@@ -20,6 +20,7 @@ from mato_loop_backend.api.websocket_access import _BrowserLogin
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.execution import browsers as execution
 from mato_loop_backend.execution.protocol import SUPPORTED_OPERATIONS, ResponseMessage
+from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.models import ChatSession, ExecutionAgent, LoginSession, UserAccount
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
@@ -34,7 +35,7 @@ ORIGIN = {"origin": "https://ui.test"}
 
 
 @pytest.fixture
-def env(monkeypatch):
+def env(monkeypatch, tmp_path):
     user = UserAccount(id=uuid4(), username="owner", is_active=True)
     agent = ExecutionAgent(id=uuid4(), user_id=user.id, alias="Computer", home_directory="/home/user")
     session = ChatSession(id=uuid4(), user_id=user.id, session_type="chat",
@@ -47,6 +48,14 @@ def env(monkeypatch):
                  (UserIntegrationSettings, user.id): UserIntegrationSettings(instances=[instance])}
     profile = AgentProfile(name="Test", instructions="Test profile")
     coordinator = execution.BrowserCoordinator()
+    storage = SessionStorage(tmp_path / "sessions")
+    root_service = execution.RootFileService
+
+    def root_files(session_id, **kwargs):
+        storage.provision(session_id, kwargs.get("project_id"), user_id=kwargs.get("user_id"))
+        return root_service(session_id, session_storage=storage, **kwargs)
+
+    monkeypatch.setattr(execution, "RootFileService", root_files)
     case = SimpleNamespace(user=user, agent=agent, session=session, login=login, instance=instance,
                            objects=objects, documents=documents, profile=profile, coordinator=coordinator,
                            calls=[], reply=None, generation=1, operations=SUPPORTED_OPERATIONS,
@@ -122,6 +131,9 @@ def env(monkeypatch):
                 action = arguments["action"]
                 if action in {"choose", "delete"}:
                     result = {"ok": True}
+                elif action == "read":
+                    result = {"fileId": arguments["fileId"], "offset": 1, "size": 1,
+                              "complete": True, "data": "eA==", "filename": "sample.txt"}
                 else:
                     if action == "begin":
                         case.file_size, case.file_offset = arguments["size"], 0
@@ -133,8 +145,6 @@ def env(monkeypatch):
                 result = {"downloads": []}
             elif operation == "integration.browser.upload":
                 result = {"fileId": case.file_id, "offset": 1, "size": 1, "complete": True}
-            elif operation == "integration.browser.publish":
-                result = {"path": arguments["path"], "size": 1, "sha256": "a" * 64}
             elif operation in {"integration.browser.close", "integration.browser.setupwrite", "integration.browser.setupresize"}:
                 result = {"ok": True}
             else:

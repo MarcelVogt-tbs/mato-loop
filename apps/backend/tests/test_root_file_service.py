@@ -40,6 +40,20 @@ def revision_preconditions(service: RootFileService, path: str) -> dict:
     }
 
 
+@pytest.mark.parametrize("run_bound", [False, True])
+def test_output_stream_never_reads_the_entire_input(tmp_path, run_bound):
+    class Chunked(BytesIO):
+        def read(self, size=-1):
+            assert 0 < size <= 1024 * 1024
+            return super().read(size)
+
+    service, _ = make_service(tmp_path)
+    if run_bound:
+        service = RootFileService(service.session_id, session_storage=service.session_storage, run_id=uuid4())
+    output = service.create_output_stream("ä" * 118 + ".bin", Chunked(b"result"), max_bytes=1024)
+    assert service.read_bytes("session", output.path, limit=1024) == b"result"
+
+
 @pytest.mark.parametrize(
     "path",
     ["", "/etc/passwd", "../secret", "files/../secret", "files\\secret", "a//b", "a/./b", "a\x00b"],

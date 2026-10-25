@@ -128,6 +128,7 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
             filesystem = Filesystem(configuration(root))
             runner = ProcessRunner(configuration(root), filesystem)
             scratch = root / "scratch"
+            session_id = "11111111-1111-4111-8111-111111111111"
             chunks = []
 
             async def stream(channel, data):
@@ -139,9 +140,9 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                     command='test -d "$TMPDIR" && printf %s "$TMPDIR"',
                     timeout=2,
                     stream=stream,
-                    use_temporary_directory=True,
+                    temporary_session_id=session_id,
                 )
-                self.assertEqual("".join(chunks), str(scratch))
+                self.assertEqual("".join(chunks), str(scratch / session_id))
                 chunks.clear()
                 await runner.exec(
                     current_directory=str(root),
@@ -153,7 +154,7 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                         "TEMP": "explicit-temp",
                         "TMP": "explicit-tmp",
                     },
-                    use_temporary_directory=True,
+                    temporary_session_id=session_id,
                 )
                 self.assertEqual("".join(chunks), "explicit-dir|explicit-temp|explicit-tmp")
             link = root / "link"
@@ -165,7 +166,7 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                     command='test -z "${TMPDIR+x}" && pwd',
                     timeout=2,
                     stream=stream,
-                    use_temporary_directory=True,
+                    temporary_session_id=session_id,
                 )
                 self.assertEqual("".join(chunks), str(root) + "\n")
 

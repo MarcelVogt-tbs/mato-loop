@@ -48,7 +48,7 @@ def test_missing_settings_fields_use_defaults() -> None:
     assert WebPushSettings().model_dump() == {"enabled": False, "contact_email": None}
     assert InstanceLimits.settings_key == "instance-limits"
     assert GeneralSettings().public_base_url is None
-    assert InstanceLimits().max_upload_mib == 64
+    assert InstanceLimits().max_upload_mib == 1024
     assert InstanceLimits().user_quota_mib is None
 
 

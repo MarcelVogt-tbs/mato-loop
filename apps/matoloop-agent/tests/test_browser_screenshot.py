@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from matoloop_agent.browser_contracts import (
     MAX_CHUNK_BYTES,
     MAX_FILE_BYTES,
+    MAX_OBSERVATION_BYTES,
     BrowserActionResult,
     BrowserExecuteArguments,
     BrowserFileArguments,
@@ -69,7 +70,7 @@ class BrowserScreenshotTests(unittest.IsolatedAsyncioTestCase):
 
     def test_descriptor_is_strict_and_bounded(self):
         self.assertIsNone(BrowserActionResult().screenshot)
-        descriptor = {"fileId": str(uuid4()), "size": MAX_FILE_BYTES}
+        descriptor = {"fileId": str(uuid4()), "size": MAX_OBSERVATION_BYTES}
         self.assertEqual(
             BrowserActionResult(screenshot=descriptor).model_dump(by_alias=True)["screenshot"],
             descriptor,
@@ -77,7 +78,7 @@ class BrowserScreenshotTests(unittest.IsolatedAsyncioTestCase):
         for invalid in (
             "base64",
             {**descriptor, "fileId": "../private"},
-            {**descriptor, "size": MAX_FILE_BYTES + 1},
+            {**descriptor, "size": MAX_OBSERVATION_BYTES + 1},
             {**descriptor, "size": -1},
             {**descriptor, "size": True},
             {**descriptor, "size": "1"},
@@ -174,7 +175,7 @@ class BrowserScreenshotTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.worker.files, {})
             self.assertEqual(list(self.worker.live.iterdir()), [])
             self.page.screenshot.side_effect = None
-        with patch.object(self.worker, "total_size", return_value=256 * 1024 * 1024):
+        with patch.object(self.worker, "total_size", return_value=2 * MAX_FILE_BYTES):
             with self.assertRaises(AgentError) as error:
                 await self.capture()
             self.assertEqual(error.exception.code, "browser.fileTooLarge")

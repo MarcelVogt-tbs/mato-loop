@@ -45,7 +45,6 @@ SUPPORTED_OPERATIONS = frozenset(
         "integration.browser.execute",
         "integration.browser.file",
         "integration.browser.files",
-        "integration.browser.publish",
         "integration.browser.upload",
         "maintenance.start",
         "maintenance.update",
@@ -102,6 +101,7 @@ class WireModel(BaseModel):
 
 class SystemInfo(WireModel):
     temporary_directory: str | None = Field(default=None, max_length=4096)
+    session_temporary_directory_supported: bool = False
 
     _temporary_is_absolute = field_validator("temporary_directory")(
         lambda value: _absolute_path(value) if value is not None else None

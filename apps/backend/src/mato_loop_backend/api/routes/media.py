@@ -5,7 +5,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.media.attachments import AttachmentError, processing_limits, validate_audio
+from mato_loop_backend.media.attachments import (
+    MAX_AUDIO_ATTACHMENT_BYTES,
+    AttachmentError,
+    processing_limits,
+    validate_audio,
+)
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.media import MediaService
@@ -46,7 +51,8 @@ async def create_transcription(
         await audio.close()
         raise ApiError(409, "tool.unavailable")
     try:
-        data = await audio.read(instance_limits.max_upload_bytes + 1)
+        max_bytes = min(instance_limits.max_upload_bytes, MAX_AUDIO_ATTACHMENT_BYTES)
+        data = await audio.read(max_bytes + 1)
     finally:
         await audio.close()
     mime_type = (audio.content_type or "").split(";", 1)[0].strip().lower()
@@ -54,7 +60,7 @@ async def create_transcription(
         validate_audio(
             data,
             mime_type,
-            max_bytes=instance_limits.max_upload_bytes,
+            max_bytes=max_bytes,
             limits=processing_limits(instance_limits),
         )
     except AttachmentError as exc:

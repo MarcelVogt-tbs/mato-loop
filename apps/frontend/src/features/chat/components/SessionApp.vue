@@ -26,7 +26,7 @@
         <q-separator />
         <section class="q-pa-md" aria-labelledby="session-permissions-title">
           <div class="row items-center no-wrap q-mb-md">
-            <div id="session-permissions-title" class="text-subtitle2">Session-Freigaben</div>
+            <div id="session-permissions-title" class="text-subtitle2">Freigaben</div>
             <q-space />
             <q-btn
               flat
@@ -41,7 +41,7 @@
               <q-tooltip>Aktualisieren</q-tooltip>
             </q-btn>
             <q-btn
-              v-if="sessionGrants.length && loadedGrantContext === grantContext && !approvals.grantsLoadFailed"
+              v-if="explicitGrants.length && loadedGrantContext === grantContext && !approvals.grantsLoadFailed"
               flat
               round
               dense
@@ -81,9 +81,11 @@
                     <pre class="tool-call__details q-py-none">{{ grant.command }}</pre>
                   </template>
                   <q-item-label v-if="grant.elevated || grant.resourceType === 'administrator_path'" caption>Mit Administratorrechten</q-item-label>
+                  <q-item-label caption>Geltungsbereich: Diese Session · Herkunft: {{ grant.source === 'default' ? 'Standard' : grant.source === 'profile' ? 'Profiloption (sessionübergreifende Regel)' : 'Erteilte Freigabe' }}</q-item-label>
+                  <q-item-label v-if="grant.derived" caption>{{ grant.source === 'profile' ? 'Über die Temp-Option im Agentenprofil ändern.' : 'Automatisch abgeleiteter Lesezugriff auf den eigenen temporären Arbeitsordner.' }}</q-item-label>
                   <q-item-label v-if="grant.applicable === false" caption class="text-warning">Inaktiv</q-item-label>
                 </q-item-section>
-                <q-item-section side>
+                <q-item-section v-if="!grant.derived" side>
                   <q-btn
                     flat
                     round
@@ -127,6 +129,7 @@ const $q = useQuasar()
 const { confirm } = useConfirm()
 const revokingId = ref(null)
 const sessionGrants = computed(() => approvals.grantsForSession(chat.current?.id))
+const explicitGrants = computed(() => sessionGrants.value.filter(grant => !grant.derived))
 const grantContext = computed(() => JSON.stringify([
   chat.current?.id, chat.current?.agentProfileId, chat.current?.modelId, chat.current?.sessionProfile,
   chat.current?.preferredExecutionAgentId, chat.current?.currentDirectory
@@ -145,7 +148,7 @@ async function loadGrants() {
   if (!chat.current?.id) return
   const context = grantContext.value
   try {
-    await approvals.fetchGrants({ suppressErrorToast: true })
+    await approvals.fetchGrants({ suppressErrorToast: true }, chat.current.id)
     if (context === grantContext.value && !approvals.grantsLoadFailed) loadedGrantContext.value = context
   } catch { /* The retry state is displayed inline. */ }
 }
@@ -171,9 +174,9 @@ async function revoke(grant) {
 
 async function revokeAll() {
   const sessionId = chat.current?.id
-  if (!sessionId || !sessionGrants.value.length) return
+  if (!sessionId || !explicitGrants.value.length) return
   const accepted = await confirm(
-    `Sollen alle ${sessionGrants.value.length} Session-Freigaben widerrufen werden? Lauf-Freigaben und automatische Regeln gelten weiterhin.`,
+    `Sollen alle ${explicitGrants.value.length} Session-Freigaben widerrufen werden? Lauf-Freigaben und automatische Regeln gelten weiterhin.`,
     'Alle Session-Freigaben widerrufen',
     { okLabel: 'Alle widerrufen', okColor: 'negative' }
   )

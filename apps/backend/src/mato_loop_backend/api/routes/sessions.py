@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 from dataclasses import replace
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -46,6 +48,7 @@ from mato_loop_backend.media.attachments import (
     AttachmentError,
     AttachmentInput,
     AttachmentService,
+    attachment_processing_candidate,
     classify_attachment,
     image_mime_type,
     processing_limits,
@@ -447,10 +450,12 @@ async def _attachment_uploads(
     files: list[UploadFile], settings: InstanceLimits | None = None,
     voice_attachment_indices: list[int] | None = None,
 ) -> list[AttachmentInput]:
+    """Return processed inputs or borrowed upload streams, closed by the route."""
     settings = settings or InstanceLimits()
     if not files:
         raise ApiError(422, "validation.required", field="attachments")
     attachments = []
+    retained = set()
     try:
         indices = voice_attachment_indices or []
         if len(set(indices)) != len(indices) or any(
@@ -467,11 +472,23 @@ async def _attachment_uploads(
         total_bytes = 0
         limits = processing_limits(settings)
         for index, upload in enumerate(files):
-            data = await upload.read(settings.max_upload_bytes + 1)
-            total_bytes += len(data)
-            if total_bytes > settings.max_message_upload_bytes:
+            size = await asyncio.to_thread(upload.file.seek, 0, os.SEEK_END)
+            await upload.seek(0)
+            total_bytes += size
+            if size > settings.max_upload_bytes or total_bytes > settings.max_message_upload_bytes:
                 raise ApiError(413, "attachment.tooLarge")
+            header = await upload.read(64 * 1024)
+            await upload.seek(0)
             mime_type = (upload.content_type or "").split(";", 1)[0].strip().lower()
+            if size and not attachment_processing_candidate(header, mime_type, upload.filename):
+                if index in indices:
+                    raise ApiError(422, "validation.invalid", field="voiceAttachmentIndices")
+                attachments.append(AttachmentInput(
+                    upload.file, "application/octet-stream", safe_filename(upload.filename), "file",
+                ))
+                retained.add(id(upload))
+                continue
+            data = await upload.read(settings.max_upload_bytes + 1)
             try:
                 attachments.append(
                     classify_attachment(
@@ -505,9 +522,13 @@ async def _attachment_uploads(
                         exc.diagnostic,
                     )
                 raise _attachment_api_error(exc) from exc
+    except BaseException:
+        retained.clear()
+        raise
     finally:
         for upload in files:
-            await upload.close()
+            if id(upload) not in retained:
+                await upload.close()
     return attachments
 
 
@@ -726,6 +747,9 @@ async def create_session_with_attachments(
         )
     except AttachmentError as exc:
         raise _attachment_api_error(exc) from exc
+    finally:
+        for upload in attachments:
+            await upload.close()
 
 
 @router.post("/defaults")
@@ -1217,6 +1241,9 @@ async def send_message_with_attachments(
         )
     except AttachmentError as exc:
         raise _attachment_api_error(exc) from exc
+    finally:
+        for upload in attachments:
+            await upload.close()
 
 
 async def _continue_run_message(
@@ -1272,6 +1299,9 @@ async def continue_run_message_with_attachments(
         )
     except AttachmentError as exc:
         raise _attachment_api_error(exc) from exc
+    finally:
+        for upload in attachments:
+            await upload.close()
 
 
 @router.get("/{session_id}/runs/{run_id}")

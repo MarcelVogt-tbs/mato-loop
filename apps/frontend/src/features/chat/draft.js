@@ -209,7 +209,7 @@ export const draftActions = {
       if (draftBytes + incomingBytes > MAX_ATTACHMENT_DRAFT_BYTES) {
         return {
           added: 0,
-          error: 'Dateianhänge dürfen über alle Sessions zusammen höchstens 256 MiB belegen.'
+          error: 'Dateianhänge dürfen über alle Sessions zusammen höchstens 1024 MiB belegen.'
         }
       }
       if (sessionId) this.attachmentDrafts.sessionMessages[sessionId] = existing

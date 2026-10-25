@@ -1,5 +1,5 @@
 export const MAX_WORKSPACE_UPLOADS = 4
-export const MAX_WORKSPACE_UPLOAD_BYTES = 64 * 1024 * 1024
+export const MAX_WORKSPACE_UPLOAD_BYTES = 1024 * 1024 * 1024
 
 export function absoluteComputerPath(path) {
   return typeof path === 'string' && (path.startsWith('/') || /^[A-Z]:\//u.test(path))

@@ -197,16 +197,17 @@ async def test_cancelled_managed_image_write_keeps_last_completed_run_bytes(
     db.scalar.return_value = session
     completed, release = Event(), Event()
     written = []
-    write = RootFileService._write_run_file
+    method = "_write_run_file" if existing else "_create_run_file_stream"
+    write = getattr(RootFileService, method)
 
     def paused(files, *args, **kwargs):
         revision = write(files, *args, **kwargs)
-        written.append(revision)
+        written.append(revision if existing else files.working_revision(revision.path))
         completed.set()
         assert release.wait(10)
         return revision
 
-    monkeypatch.setattr(RootFileService, "_write_run_file", paused)
+    monkeypatch.setattr(RootFileService, method, paused)
     task = asyncio.create_task(
         service.create_image(
             db,

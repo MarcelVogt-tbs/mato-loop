@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import errno
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
@@ -1564,23 +1565,26 @@ def test_upload_source_rejects_redundant_body_binding_before_agent_rpc(env):
         assert env.calls == before
 
 
-def test_human_download_is_automatically_published_to_agent_home(env):
+def test_human_download_is_saved_in_session_files_before_deleting_staging(env):
     async def reply(operation, arguments):
         if operation == "integration.browser.files":
             origin = next(args for op, args in env.calls if op == "integration.browser.control" and args["manual"])
             return {"downloads": [{
                 "id": env.file_id, "filename": "sample.txt", "status": "ready", "size": 1,
-                "sha256": "a" * 64, "origin": origin["origin"], "controlEpoch": origin["controlEpoch"],
+                "sha256": hashlib.sha256(b"x").hexdigest(), "origin": origin["origin"], "controlEpoch": origin["controlEpoch"],
             }]}
 
     env.reply = reply
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
+        changed = env.client.portal.call(env.coordinator.poll_downloads, env.coordinator.connections[(env.session.id, env.agent.id)])
         response = env.client.get(file_url(env, state, "downloads"))
         assert response.status_code == 200
         assert response.json()["downloads"][0]["status"] == "saved"
-        publish = next(args for op, args in env.calls if op == "integration.browser.publish")
-        assert publish["path"] == "/home/user/browser/downloads/sample.txt"
+        saved = response.json()["downloads"][0]
+        assert changed and saved["root"] == "files" and saved["path"].startswith("sample-")
+        assert execution.RootFileService(env.session.id).read_bytes("session", saved["path"], limit=10) == b"x"
+        assert [args["action"] for op, args in env.calls if op == "integration.browser.file"] == ["read", "delete"]
 
 
 def test_saved_download_remains_after_worker_removes_staging_record(env):
@@ -1595,7 +1599,7 @@ def test_saved_download_remains_after_worker_removes_staging_record(env):
             origin = next(args for op, args in env.calls if op == "integration.browser.control" and args["manual"])
             return {"downloads": [{
                 "id": env.file_id, "filename": "sample.txt", "status": "ready", "size": 1,
-                "sha256": "a" * 64, "origin": origin["origin"], "controlEpoch": origin["controlEpoch"],
+                "sha256": hashlib.sha256(b"x").hexdigest(), "origin": origin["origin"], "controlEpoch": origin["controlEpoch"],
             }]}
 
     env.reply = reply
@@ -1604,10 +1608,42 @@ def test_saved_download_remains_after_worker_removes_staging_record(env):
         first = env.client.get(file_url(env, state, "downloads")).json()["downloads"]
         second = env.client.get(file_url(env, state, "downloads")).json()["downloads"]
         assert second == first and second[0]["status"] == "saved"
-        assert sum(op == "integration.browser.publish" for op, _args in env.calls) == 1
+        assert sum(op == "integration.browser.file" and args["action"] == "read" for op, args in env.calls) == 1
 
 
-def test_human_download_retries_only_path_collisions(env):
+async def test_cancelled_download_save_remembers_result_and_does_not_duplicate_it(env, monkeypatch):
+    from mato_loop_backend.execution.browser_contracts import BrowserDownloadState
+    from mato_loop_backend.files import access
+
+    connection = SimpleNamespace(
+        session_id=env.session.id, owner_id=env.user.id, browser_id=uuid4(), downloads=[],
+        check_access=AsyncMock(), request=AsyncMock(return_value=execution.BrowserControlResult(ok=True)),
+    )
+    download = BrowserDownloadState(id=env.file_id, filename="result.txt", status="ready", size=1, sha256=hashlib.sha256(b"x").hexdigest())
+    monkeypatch.setattr(env.coordinator, "_read_browser_file", AsyncMock(return_value=BytesIO(b"x")))
+    started, release = asyncio.Event(), asyncio.Event()
+    create = access.create_output_stream
+
+    async def paused(*args):
+        started.set()
+        await release.wait()
+        return await create(*args)
+
+    monkeypatch.setattr(access, "create_output_stream", paused)
+    task = asyncio.create_task(env.coordinator.save_download(connection, download, authorize=AsyncMock()))
+    await asyncio.wait_for(started.wait(), 5)
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    saved = await env.coordinator.save_download(connection, download, authorize=AsyncMock())
+    files = execution.RootFileService(env.session.id)
+    assert (len(files.list_entries("session", ".").entries), files.read_bytes("session", saved["path"], limit=10), connection.request.await_count) == (1, b"x", 1)
+
+
+def test_download_hash_mismatch_retains_staging(env):
     async def reply(operation, arguments):
         if operation == "integration.browser.files":
             origin = next(args for op, args in env.calls if op == "integration.browser.control" and args["manual"])
@@ -1615,22 +1651,14 @@ def test_human_download_retries_only_path_collisions(env):
                 "id": env.file_id, "filename": "sample.txt", "status": "ready", "size": 1,
                 "sha256": "a" * 64, "origin": origin["origin"], "controlEpoch": origin["controlEpoch"],
             }]}
-        if operation == "integration.browser.publish" and arguments["path"].endswith((
-            "/sample.txt", "/sample (1).txt",
-        )):
-            raise ExecutionClientError("file.pathAlreadyExists")
 
     env.reply = reply
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         response = env.client.get(file_url(env, state, "downloads"))
         assert response.status_code == 200
-        assert response.json()["downloads"][0]["path"] == "/home/user/browser/downloads/sample (2).txt"
-        assert [args["path"] for op, args in env.calls if op == "integration.browser.publish"] == [
-            "/home/user/browser/downloads/sample.txt",
-            "/home/user/browser/downloads/sample (1).txt",
-            "/home/user/browser/downloads/sample (2).txt",
-        ]
+        assert response.json()["downloads"][0]["errorCode"] == "executionAgent.protocolError"
+        assert not any(op == "integration.browser.file" and args["action"] == "delete" for op, args in env.calls)
 
 
 def test_model_download_ask_stays_staged_for_foreground_tool(env, monkeypatch):
@@ -1650,7 +1678,7 @@ def test_model_download_ask_stays_staged_for_foreground_tool(env, monkeypatch):
         response = env.client.get(file_url(env, state, "downloads"))
         assert response.status_code == 200
         assert response.json()["downloads"][0]["status"] == "permission_required"
-        assert not any(op == "integration.browser.publish" for op, _ in env.calls)
+        assert not any(op == "integration.browser.file" for op, _ in env.calls)
 
 
 @pytest.mark.parametrize("browser_decision,status", [
@@ -1685,7 +1713,7 @@ def test_model_download_requires_browser_use_for_background_publish(
         if operation == "integration.browser.files":
             return {"downloads": [{
                 "id": env.file_id, "filename": "sample.txt", "status": "ready", "size": 1,
-                "sha256": "a" * 64, "origin": issued["origin"], "controlEpoch": issued["controlEpoch"],
+                "sha256": hashlib.sha256(b"x").hexdigest(), "origin": issued["origin"], "controlEpoch": issued["controlEpoch"],
             }]}
 
     env.reply = reply
@@ -1704,41 +1732,39 @@ def test_model_download_requires_browser_use_for_background_publish(
         response = env.client.get(file_url(env, state, "downloads"))
         assert response.status_code == 200
         assert response.json()["downloads"][0]["status"] == status
-        assert [request.capability for request in checked] == ["browser.use", "filesystem.write"]
+        assert [request.capability for request in checked] == ["browser.use"] * (2 if browser_decision == PermissionDecision.ALLOW else 1)
         assert checked[0].policy_integration_id == env.instance.id
-        assert any(op == "integration.browser.publish" for op, _args in env.calls) is (browser_decision == PermissionDecision.ALLOW)
+        assert any(op == "integration.browser.file" and args["action"] == "delete" for op, args in env.calls) is (browser_decision == PermissionDecision.ALLOW)
 
 
-def test_model_download_authorizes_each_collision_candidate_before_publish(env, monkeypatch):
+@pytest.mark.parametrize("failure,code", [
+    (routes.RootFileError("file.tooLarge", "Storage limit exceeded"), "file.tooLarge"),
+    (OSError(errno.ENOSPC, "No space left on device"), "browser.actionFailed"),
+    (TimeoutError(), "browser.actionFailed"),
+])
+def test_backend_storage_failure_does_not_delete_download(env, monkeypatch, failure, code):
     async def reply(operation, arguments):
         if operation == "integration.browser.files":
             return {"downloads": [{
                 "id": env.file_id, "filename": "sample.txt", "status": "ready", "size": 1,
-                "sha256": "a" * 64, "origin": issued["origin"], "controlEpoch": issued["controlEpoch"],
+                "sha256": hashlib.sha256(b"x").hexdigest(), "origin": issued["origin"], "controlEpoch": issued["controlEpoch"],
             }]}
-        if operation == "integration.browser.publish":
-            raise ExecutionClientError("file.pathAlreadyExists")
 
     env.reply = reply
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
         state = control.receive_json()
         connection = env.coordinator.connections[(env.session.id, env.agent.id)]
         issued = connection.origin("model", run_id=uuid4())
-        decision = AsyncMock(side_effect=[PermissionDecision.ALLOW, PermissionDecision.ASK])
+        decision = AsyncMock(return_value=PermissionDecision.ALLOW)
         monkeypatch.setattr(env.coordinator, "_download_decision", decision)
+        monkeypatch.setattr("mato_loop_backend.files.access.create_output_stream", AsyncMock(side_effect=failure))
         response = env.client.get(file_url(env, state, "downloads"))
         assert response.status_code == 200
-        assert response.json()["downloads"][0]["path"] == "/home/user/browser/downloads/sample (1).txt"
-        assert [call.args[2] for call in decision.await_args_list] == [
-            "/home/user/browser/downloads/sample.txt",
-            "/home/user/browser/downloads/sample (1).txt",
-        ]
-        assert [args["path"] for op, args in env.calls if op == "integration.browser.publish"] == [
-            "/home/user/browser/downloads/sample.txt",
-        ]
+        assert response.json()["downloads"][0]["errorCode"] == code
+        assert not any(op == "integration.browser.file" and args["action"] == "delete" for op, args in env.calls)
 
 
-def test_foreground_download_freezes_candidate_and_never_retries_after_approval(env, monkeypatch):
+def test_foreground_download_revalidates_metadata_after_approval(env, monkeypatch):
     integrations = IntegrationSettings(instances=[env.instance])
     monkeypatch.setattr(execution, "browser_coordinator", env.coordinator)
     monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=integrations))
@@ -1746,18 +1772,16 @@ def test_foreground_download_freezes_candidate_and_never_retries_after_approval(
     run_id = uuid4()
     env.objects[AgentRun, run_id] = AgentRun(id=run_id, session_id=env.session.id, status="completed")
 
+    polls = 0
+
     async def reply(operation, arguments):
+        nonlocal polls
         if operation == "integration.browser.files":
+            polls += 1
             return {"downloads": [{
                 "id": env.file_id, "filename": "sample.txt", "status": "ready", "size": 1,
-                "sha256": "a" * 64, "origin": issued["origin"], "controlEpoch": issued["controlEpoch"],
+                "sha256": ("a" if polls == 1 else "b") * 64, "origin": issued["origin"], "controlEpoch": issued["controlEpoch"],
             }]}
-        if operation == "filesystem.stat":
-            if arguments["path"].endswith("/sample.txt"):
-                return {"path": arguments["path"], "kind": "file", "size": 1, "modifiedAt": 1}
-            raise ExecutionClientError("file.pathNotFound")
-        if operation == "integration.browser.publish":
-            raise ExecutionClientError("file.pathAlreadyExists")
 
     env.reply = reply
     with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
@@ -1793,11 +1817,8 @@ def test_foreground_download_freezes_candidate_and_never_retries_after_approval(
             result = env.client.portal.call(
                 mock_tools_catalog.ToolRegistry([]).effective(integrations).execute, call, context,
             )
-            assert result.is_error and result.metadata["errorCode"] == "file.pathAlreadyExists"
-            assert context.bound_options["download_destination"] == "/home/user/browser/downloads/sample (1).txt"
-            assert [args["path"] for op, args in env.calls if op == "integration.browser.publish"] == [
-                "/home/user/browser/downloads/sample (1).txt",
-            ]
+            assert result.is_error and result.metadata["errorCode"] == "browser.bindingChanged"
+            assert not any(op == "integration.browser.file" for op, _ in env.calls)
 
 
 def test_oversized_upload_rejected_before_rpc(env, monkeypatch, session_upload):
@@ -1870,6 +1891,24 @@ def test_malformed_download_rejected_before_streaming(env, invalid):
         response = env.client.get(file_url(env, state, f"download/{download_id}"))
         assert response.status_code >= 400
         assert response.json()["error"]["code"] == "executionAgent.protocolError"
+
+
+async def test_browser_file_checks_binding_per_chunk_without_reloading_access(monkeypatch):
+    monkeypatch.setattr(execution, "monotonic", lambda: 0.0)
+    file_id = str(uuid4())
+    connection = SimpleNamespace(
+        browser_id=uuid4(), agent_id=uuid4(), generation=None, closed=False,
+        check_access=AsyncMock(),
+        request=AsyncMock(side_effect=[
+            execution.BrowserFileResult(file_id=file_id, offset=offset, size=3, complete=offset == 3, data="eA==")
+            for offset in (1, 2, 3)
+        ]),
+    )
+    binding = Mock()
+    descriptor = execution.BrowserFileResult(file_id=file_id, offset=3, size=3, complete=True)
+    with await execution.BrowserCoordinator()._read_browser_file(connection, descriptor, binding, delete=False):
+        pass
+    assert (connection.check_access.await_count, binding.call_count) == (2, 4)
 
 
 def test_download_stream_uses_exact_offsets_and_safe_headers(env):

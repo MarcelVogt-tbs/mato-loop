@@ -2,8 +2,8 @@ import { api } from 'src/boot/axios'
 import { safeAttachmentUrl } from 'src/utils/attachments'
 
 export const MAX_ATTACHMENT_DRAFTS = 8
-export const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024
-export const MAX_ATTACHMENT_DRAFT_BYTES = 256 * 1024 * 1024
+export const MAX_ATTACHMENT_BYTES = 1024 * 1024 * 1024
+export const MAX_ATTACHMENT_DRAFT_BYTES = 1024 * 1024 * 1024
 
 export function normalizedMimeType(file) {
   return String(file?.type || '').split(';', 1)[0].trim().toLowerCase()

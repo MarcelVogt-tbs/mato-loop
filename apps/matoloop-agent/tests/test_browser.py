@@ -128,6 +128,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AgentError):
             await file("write", fileId=file_id, offset=3, data="ZA==")
         self.assertTrue((await file("finish", fileId=file_id))["complete"])
+        self.assertEqual(Path(worker.upload_payload(file_id)).name, "test.txt")
         with self.assertRaises(AgentError):
             await file("read", fileId=file_id)
         worker.files[file_id]["download"] = True

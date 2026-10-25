@@ -14,7 +14,6 @@ import hashlib
 import hmac
 import inspect
 import json
-import mimetypes
 import os
 import resource
 import signal
@@ -39,6 +38,7 @@ from pydantic import ValidationError
 
 from .browser_contracts import (
     MAX_FILE_BYTES,
+    MAX_OBSERVATION_BYTES,
     BrowserActionResult,
     BrowserClipboardArguments,
     BrowserClipboardResult,
@@ -895,7 +895,7 @@ class BrowserWorker:
     async def download(self, download, origin: str | None, control_epoch: int | None) -> None:
         file_id = None
         try:
-            if not self.make_file_room() or self.total_size() + MAX_FILE_BYTES > 256 * 1024 * 1024:
+            if not self.make_file_room() or self.total_size() + MAX_FILE_BYTES > 2 * MAX_FILE_BYTES:
                 await download.cancel()
                 return
             file_id = str(uuid4())
@@ -985,7 +985,7 @@ class BrowserWorker:
             ]
         }
 
-    def upload_payload(self, file_id: str) -> dict:
+    def upload_payload(self, file_id: str) -> str:
         entry = self.files.get(file_id)
         if (
             not entry
@@ -997,18 +997,22 @@ class BrowserWorker:
             raise fail("invalidTarget")
         fd = os.open(self.live / file_id, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(fd, "rb") as handle:
-            data = handle.read(MAX_FILE_BYTES + 1)
-        if len(data) > MAX_FILE_BYTES:
-            raise fail("fileTooLarge")
-        return {
-            "name": entry["filename"],
-            "mimeType": mimetypes.guess_type(entry["filename"])[0] or "application/octet-stream",
-            "buffer": data,
-        }
+            if os.fstat(handle.fileno()).st_size > MAX_FILE_BYTES:
+                raise fail("fileTooLarge")
+            # Playwright streams paths; a private hard link preserves the website filename.
+            target = self.live / "uploads" / file_id / entry["filename"]
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if not target.exists():
+                os.link(self.live / file_id, target, follow_symlinks=False)
+            if target.is_symlink() or not os.path.samestat(
+                os.fstat(handle.fileno()), target.stat(follow_symlinks=False)
+            ):
+                raise fail("invalidTarget")
+        return str(target)
 
     async def file(self, args: BrowserFileArguments) -> dict:
         if args.action == "begin":
-            if not self.make_file_room() or self.total_size() + args.size > 256 * 1024 * 1024:
+            if not self.make_file_room() or self.total_size() + args.size > 2 * MAX_FILE_BYTES:
                 raise fail("fileTooLarge")
             file_id = str(uuid4())
             fd = os.open(
@@ -1040,7 +1044,9 @@ class BrowserWorker:
                 if self.pending_choosers.get(page) is not chooser:
                     raise fail("invalidTarget")
                 try:
-                    await chooser.set_files(payload, timeout=8000)
+                    await chooser.set_files(
+                        payload, timeout=8000 + entry["size"] / (256 * 1024) * 1000
+                    )
                     return {"ok": True}
                 except PlaywrightError:
                     raise fail("invalidTarget") from None
@@ -1052,6 +1058,10 @@ class BrowserWorker:
         path = self.live / args.file_id
         if args.action == "delete":
             path.unlink(missing_ok=True)
+            upload = self.live / "uploads" / args.file_id / entry["filename"]
+            if upload.parent.exists():
+                upload.unlink(missing_ok=True)
+                upload.parent.rmdir()
             del self.files[args.file_id]
             return {"ok": True}
         fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
@@ -1111,7 +1121,7 @@ class BrowserWorker:
     async def stage_generated_file(
         self, data: bytes, browser_id: str, filename: str, kind: str
     ) -> dict:
-        if not data or len(data) > MAX_FILE_BYTES:
+        if not data or len(data) > MAX_OBSERVATION_BYTES:
             raise fail("fileTooLarge")
         self.discard_generated_files(kind)
         staged = await self.file(
@@ -1239,7 +1249,10 @@ class BrowserWorker:
                     if args.submit:
                         await step(f"await {target}.press('Enter')", locator.press, "Enter")
                 else:
-                    await locator.set_input_files(self.upload_payload(args.upload_id))
+                    await locator.set_input_files(
+                        self.upload_payload(args.upload_id),
+                        timeout=8000 + self.files[args.upload_id]["size"] / (256 * 1024) * 1000,
+                    )
             elif action == "press":
                 if args.selector:
                     await step(
@@ -1775,7 +1788,7 @@ class BrowserWorker:
         if not isinstance(text, str):
             raise fail("fileTooLarge")
         encoded = text.encode("utf-8")
-        if len(encoded) > MAX_FILE_BYTES:
+        if len(encoded) > MAX_OBSERVATION_BYTES:
             raise fail("fileTooLarge")
         if self.document_ids.get(page) != document_id:
             raise fail("invalidTarget")

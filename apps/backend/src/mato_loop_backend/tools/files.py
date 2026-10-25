@@ -4,9 +4,9 @@ import asyncio
 import hashlib
 import logging
 import posixpath
-from io import BytesIO
 from uuid import UUID
 
+from anyio import CancelScope
 from pydantic import ValidationError
 from sqlalchemy import and_, select
 
@@ -25,6 +25,7 @@ from mato_loop_backend.execution import (
     WorkspaceStatResult,
     WorkspaceWriteResult,
 )
+from mato_loop_backend.files.archives import MAX_EXPORT_BYTES
 from mato_loop_backend.files.search import RootFileSearch
 from mato_loop_backend.files.service import (
     FileRoot,
@@ -1023,16 +1024,22 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
         destination = files_access.file_path(context, arguments.destination_root, arguments.destination_path)
         client = files_access.workspace_client(context)
         if arguments.source_root == "workspace":
-            data = await files_access.read_bytes(
-                context, arguments.source_root, source, limit=context.root_files.MAX_OPERATION_BYTES
-            )
-            copied = await asyncio.to_thread(
-                context.root_files.create_file,
-                FileRoot.SESSION,
-                destination,
-                BytesIO(data),
-                max_bytes=context.root_files.MAX_OPERATION_BYTES,
-            )
+            with await client.open_export(source, limit=MAX_EXPORT_BYTES) as stream:
+                copying = asyncio.create_task(asyncio.to_thread(
+                    context.root_files.create_file, FileRoot.SESSION, destination, stream,
+                    max_bytes=MAX_EXPORT_BYTES,
+                ))
+                try:
+                    copied = await asyncio.shield(copying)
+                except asyncio.CancelledError:
+                    while not copying.done():
+                        try:
+                            with CancelScope(shield=True):
+                                await asyncio.shield(copying)
+                        except asyncio.CancelledError:
+                            continue
+                    copying.result()
+                    raise
             return ToolResult.json(
                 {"root": arguments.destination_root, "copied": copied.path},
                 file_actions=files_access.regular_file_action(
@@ -1044,7 +1051,7 @@ async def _copy_path(arguments: CopyPathArguments, context: ToolContext) -> Tool
             copied = await client.write_bytes(
                 destination,
                 handle,
-                limit=context.root_files.MAX_OPERATION_BYTES,
+                limit=MAX_EXPORT_BYTES,
             )
         return ToolResult.json(
             {"root": arguments.destination_root, "copied": copied.path},

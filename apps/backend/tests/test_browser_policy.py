@@ -178,7 +178,7 @@ def test_browser_catalog_uses_the_profile_and_selected_base_preset(browser_polic
     actions = mock_tools_catalog.tool_registry.integration_resource_actions(case.instance)
     assert {action.capability for action in actions} == {
         "browser.use", "browser.code",
-        "filesystem.read", "session.files.read", "filesystem.write",
+        "filesystem.read", "session.files.read",
     }
     for action in actions:
         for integration_id in (None, case.instance.id):

@@ -2,13 +2,15 @@
 
 ## Session-Freigaben
 
-Die Profiloption **Temporäre Dateien erlauben** ergänzt Dateirechte im gemeinsamen
-Tempbereich des ausgewählten Computers. Plan und Build aktivieren sie standardmäßig.
-Sie erzeugt keine Einträge unter Session-Freigaben und erlaubt keine anderen Worktrees.
+Der eigene Session-Tempordner ist standardmäßig lesbar. Die Profiloption
+**Temporären Arbeitsordner automatisch freigeben** ergänzt den Schreibzugriff;
+Plan und Build aktivieren sie standardmäßig. Löschen und fremde Sessionordner benötigen normale Dateirechte.
+Unter **Session > Freigaben** sind diese abgeleiteten Rechte mit Herkunft und konkretem Pfad sichtbar,
+ohne zusätzliche gespeicherte Freigaben oder Widerruf-Buttons. Den Schreibzugriff ändern Sie am Profil.
 Auch dort gelten Computersperren, Werkzeugverbote und die Prüfung vertraulicher Daten.
-Unterordner verschiedener Sessions sind keine Zugriffsgrenzen; legen Sie dort keine Secrets ab.
+Der eigene Pfad ist eine Zugriffsgrenze der Dateitools, keine Betriebssystem-Sandbox; legen Sie dort keine Secrets ab.
 
-Unter **Session > Session-Freigaben** sehen Sie die erteilten Sessionrechte. Computer und Arbeitsverzeichnis wählen Sie in den eigenen Feldern des Sessionbereichs. Eine Ordnerwahl erlaubt Navigation, keine Datei- oder Shell-Aktionen. Automatische Regeln und konfigurierte Shell-Präfixe gelten auch bei leerer Freigabeliste. Eine Freigabe überstimmt keine deaktivierte Aktion oder harte Grenze.
+Unter **Session > Freigaben** sehen Sie erteilte und abgeleitete Sessionrechte mit Herkunft und Geltungsbereich. Computer und Arbeitsverzeichnis wählen Sie in den eigenen Feldern des Sessionbereichs. Eine Ordnerwahl erlaubt Navigation, keine Datei- oder Shell-Aktionen. Weitere automatische Regeln und konfigurierte Shell-Präfixe gelten auch bei leerer Freigabeliste. Eine Freigabe überstimmt keine deaktivierte Aktion oder harte Grenze.
 
 ## Freigabeanfragen
 
@@ -28,7 +30,7 @@ Der Haken **Für diese Session merken** ändert den Hauptbutton zur Session-Frei
 
 Reine Rechteanfragen heißen **Zugriff freigeben** beziehungsweise **Shell-Zugriff freigeben**. Sie erteilen die angezeigten Rechte für spätere Aktionen und führen jetzt keine Aktion aus.
 
-Unter **Session > Session-Freigaben** sehen Sie Kategorie, Computer und Ressource. Alle Einträge sind einzeln oder gemeinsam widerrufbar. Laufrechte erscheinen dort nicht und bleiben von **Alle Session-Freigaben widerrufen** unberührt. Die Einträge sind keine offenen Anfragen und zählen nicht zum Benachrichtigungszähler. Reload beendet eine Freigabe nicht. Profil, Vertrauenslevel, Computer/Ressource, Kategorie und gegebenenfalls Integrationsrevision grenzen sie weiterhin ein. **Inaktiv** kennzeichnet eine nicht mehr passende Bindung oder einen nicht mehr unterstützten alten Freigabetyp. Ein Subagenten-Laufrecht überträgt sich nicht auf andere Läufe.
+Unter **Session > Freigaben** sehen Sie Kategorie, Computer und Ressource. Explizit erteilte Sessionrechte sind einzeln oder gemeinsam widerrufbar; abgeleitete Rechte bleiben davon unberührt. Laufrechte erscheinen dort nicht und bleiben von **Alle Session-Freigaben widerrufen** unberührt. Die Einträge sind keine offenen Anfragen und zählen nicht zum Benachrichtigungszähler. Reload beendet eine Freigabe nicht. Profil, Vertrauenslevel, Computer/Ressource, Kategorie und gegebenenfalls Integrationsrevision grenzen sie weiterhin ein. **Inaktiv** kennzeichnet eine nicht mehr passende Bindung, Computersperre oder einen nicht mehr unterstützten alten Freigabetyp. Ein Subagenten-Laufrecht überträgt sich nicht auf andere Läufe.
 
 Eine Freigabe besteht aus **Zugriffsrecht, Ressourcenbereich und Laufzeit**. **Lesen und Schreiben** erlaubt auch normales Lesen desselben Bereichs, etwa zur Kontrolle einer Änderung. **Lesen**, **Löschen** und **Vertrauliche Daten lesen** bleiben ansonsten unabhängig. Diese Regel gilt für Dateien, Shell und Integrationen. Die effektiven Profil- und Integrationsregeln bleiben maßgeblich: Eine Freigabe erfüllt eine Nachfrage, überstimmt aber kein Verbot. Schon automatisch erlaubte Aktionen benötigen keine Zustimmung.
 

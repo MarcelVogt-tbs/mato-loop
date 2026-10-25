@@ -296,7 +296,7 @@ export function providedFileAttachments(actions, { maxImagePreviewBytes = PROVID
     const mimeType = archive ? 'application/zip' : PROVIDED_IMAGE_MIME_TYPES.get(suffix) || PROVIDED_MEDIA_MIME_TYPES.get(suffix)
     const limit = mimeType?.startsWith('image/')
       ? suffix === '.svg' ? Math.min(maxImagePreviewBytes, PROVIDED_IMAGE_MAX_BYTES) : maxImagePreviewBytes
-      : mimeType?.startsWith('model/') ? 64 * 1024 * 1024 : maxUploadBytes
+      : mimeType?.startsWith('model/') ? 64 * 1024 * 1024 : Math.min(maxUploadBytes, 64 * 1024 * 1024)
     const preview = Boolean(!archive && mimeType && action.sizeBytes != null && action.sizeBytes <= limit)
     return {
       id: action.downloadUrl,

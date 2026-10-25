@@ -11,7 +11,6 @@ from collections.abc import Awaitable, Callable
 from contextlib import ExitStack, asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import PurePosixPath
 from tempfile import SpooledTemporaryFile
 from time import monotonic
 from typing import Any, BinaryIO
@@ -25,6 +24,7 @@ from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.diagnostics.service import schedule_diagnostic_event
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.execution.browser_contracts import (
+    BROWSER_TRANSFER_TIMEOUT,
     MAX_BROWSER_FILE_BYTES,
     BrowserActionArguments,
     BrowserActionResult,
@@ -38,16 +38,14 @@ from mato_loop_backend.execution.browser_contracts import (
     BrowserNavigationResult,
     BrowserOpenResult,
     BrowserOrigin,
-    BrowserPublishedDownloadResult,
     BrowserResizeResult,
 )
 from mato_loop_backend.execution.client import (
     ExecutionClient,
     ExecutionClientError,
-    WorkspaceStatResult,
 )
 from mato_loop_backend.execution.manager import execution_agent_connections
-from mato_loop_backend.files.service import RootFileService
+from mato_loop_backend.files.service import RootFileError, RootFileService
 from mato_loop_backend.integrations.browser.adapter import browser_client, load_browser_integration
 from mato_loop_backend.models import (
     AgentRun,
@@ -58,7 +56,6 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.permissions.policy import (
     PermissionDecision,
-    execution_directory_permission,
     integration_operation_permission,
 )
 from mato_loop_backend.providers.base import ToolCall
@@ -70,7 +67,6 @@ from mato_loop_backend.settings.effective import (
 
 ACCESS_INTERVAL = 2
 MAX_BROWSERS = 32
-DOWNLOAD_COLLISION_LIMIT = 100
 logger = logging.getLogger(__name__)
 
 
@@ -79,6 +75,7 @@ async def _file_request(connection, **arguments):
     result = await connection.request(
         "integration.browser.file", wire.model_dump(mode="json"),
         BrowserControlResult if arguments["action"] in {"delete", "choose"} else BrowserFileResult,
+        **({"timeout": BROWSER_TRANSFER_TIMEOUT} if arguments["action"] == "choose" else {}),
     )
     if isinstance(result, BrowserFileResult) and arguments.get("file_id", result.file_id) != result.file_id:
         raise ExecutionClientError("executionAgent.protocolError")
@@ -129,35 +126,6 @@ async def _stage_browser_file(
         if file_id is not None and not completed:
             with CancelScope(shield=True), suppress(Exception):
                 await _file_request(connection, action="delete", file_id=file_id)
-
-
-def browser_download_path(home: PurePosixPath, filename: str, index: int) -> str:
-    if index == 0:
-        name = filename
-    else:
-        suffix = PurePosixPath(filename).suffix
-        marker = f" ({index})"
-        if len(suffix) + len(marker) >= 255:
-            suffix = ""
-        stem = filename[:-len(suffix)] if suffix else filename
-        name = f"{stem[:255 - len(marker) - len(suffix)]}{marker}{suffix}"
-    return str(home / "browser" / "downloads" / name)
-
-
-async def available_browser_download_path(connection: Any, home: PurePosixPath, filename: str) -> str:
-    for index in range(DOWNLOAD_COLLISION_LIMIT):
-        candidate = browser_download_path(home, filename, index)
-        try:
-            result = await connection.request(
-                "filesystem.stat", {"path": candidate}, WorkspaceStatResult,
-            )
-        except ExecutionClientError as exc:
-            if exc.code == "file.pathNotFound":
-                return candidate
-            raise
-        if result.path != candidate:
-            raise ExecutionClientError("executionAgent.protocolError")
-    raise ExecutionClientError("file.pathAlreadyExists")
 
 
 @contextmanager
@@ -715,7 +683,7 @@ class BrowserCoordinator:
                                 else:
                                     result = await connection.client.request(
                                         "integration.browser.execute", wire_payload, BrowserActionResult,
-                                        timeout=160 if action.action in {"run_code", "evaluate"} else 60,
+                                        timeout=160 if action.action in {"run_code", "evaluate"} else BROWSER_TRANSFER_TIMEOUT if action.action == "upload" else 60,
                                     )
                             if not result.matches_action(action):
                                 raise ExecutionClientError("executionAgent.protocolError")
@@ -747,56 +715,44 @@ class BrowserCoordinator:
                         check_binding()
                     return result
 
-    async def poll_downloads(self, connection: BrowserConnection) -> bool:
+    async def poll_downloads(self, connection: BrowserConnection, *, retry: bool = False) -> bool:
         listed = await connection.request(
             "integration.browser.files", {"browserId": str(connection.browser_id)}, BrowserFileListResult,
         )
         statuses = []
-        previous = {item["id"]: item for item in connection.downloads}
+        previous_downloads = connection.downloads
+        previous = {item["id"]: item for item in previous_downloads}
         for download in listed.downloads:
             captured = connection.origins.get(download.origin or "")
             if captured is None or captured[1] != download.control_epoch:
                 continue
             origin = captured[0]
             status = download.model_dump(mode="json")
-            if download.status == "ready" and previous.get(download.id, {}).get("status") == "saved":
+            if download.status == "ready" and previous.get(download.id, {}).get("status") in ({"saved"} if retry else {"saved", "failed"}):
                 statuses.append(previous[download.id])
                 continue
             if download.status == "ready":
-                home = await self._agent_home(connection)
-                for index in range(DOWNLOAD_COLLISION_LIMIT):
-                    destination = browser_download_path(home, download.filename, index)
-                    decision = await self._download_decision(connection, origin, destination)
-                    if decision == PermissionDecision.ASK:
-                        status.update(
-                            status="permission_required",
-                            errorCode="browser.downloadPermissionRequired",
-                            path=destination,
-                        )
-                        break
-                    if decision != PermissionDecision.ALLOW:
-                        status.update(status="failed", errorCode="permission.denied")
-                        break
-                    try:
-                        published = await connection.request(
-                            "integration.browser.publish",
-                            {"browserId": str(connection.browser_id), "fileId": download.id,
-                             "path": destination, "expectedOrigin": download.origin},
-                            BrowserPublishedDownloadResult, timeout=60,
-                        )
-                        if (
-                            published.path != destination or published.size != download.size
-                            or published.sha256 != download.sha256
-                        ):
-                            raise ExecutionClientError("executionAgent.protocolError")
-                        status.update(status="saved", path=published.path, sha256=published.sha256)
-                        break
-                    except ExecutionClientError as exc:
-                        if exc.code != "file.pathAlreadyExists":
-                            status.update(status="failed", errorCode=exc.code)
-                            break
+                decision = await self._download_decision(connection, origin, download.filename)
+                if decision == PermissionDecision.ASK:
+                    status.update(status="permission_required", errorCode="browser.downloadPermissionRequired")
+                elif decision != PermissionDecision.ALLOW:
+                    status.update(status="failed", errorCode="permission.denied")
                 else:
-                    status.update(status="failed", errorCode="file.pathAlreadyExists")
+                    async def reauthorize(download=download, captured=captured, origin=origin):
+                        if connection.origins.get(download.origin or "") != captured:
+                            raise ExecutionClientError("browser.bindingChanged")
+                        if await self._download_decision(connection, origin, download.filename) != PermissionDecision.ALLOW:
+                            raise ExecutionClientError("permission.denied")
+
+                    try:
+                        status = await self.save_download(connection, download, authorize=reauthorize)
+                    except (ExecutionClientError, RootFileError, OSError) as exc:
+                        code = exc.code if isinstance(exc, (ExecutionClientError, RootFileError)) else "browser.actionFailed"
+                        if isinstance(exc, OSError):
+                            logger.warning("Browser download could not be stored", exc_info=True)
+                        status = next((item for item in connection.downloads if item["id"] == download.id and item.get("status") == "saved"), {
+                            **status, "status": "failed", "errorCode": code,
+                        })
             statuses.append(status)
         listed_ids = {download.id for download in listed.downloads}
         statuses.extend(
@@ -804,16 +760,62 @@ class BrowserCoordinator:
             if item.get("status") == "saved" and item.get("id") not in listed_ids
         )
         statuses = statuses[:32]
-        changed = statuses != connection.downloads
+        changed = statuses != previous_downloads
         connection.downloads = statuses
         return changed
 
-    async def _agent_home(self, connection: BrowserConnection) -> PurePosixPath:
+    async def save_download(
+        self, connection: BrowserConnection, download, *, authorize: Callable[[], Awaitable[None]],
+    ) -> dict:
+        from mato_loop_backend.files.access import create_output_stream
+        from mato_loop_backend.settings import InstanceLimits, SettingsStore
+
+        previous = next((item for item in connection.downloads if item["id"] == download.id and item.get("status") == "saved"), None)
+        if previous is not None:
+            return previous
+        await connection.check_access()
         async with AsyncSessionFactory() as db:
-            agent = await db.get(ExecutionAgent, connection.agent_id)
-            if agent is None or agent.user_id != connection.owner_id or not agent.home_directory:
-                raise ExecutionClientError("executionAgent.unavailable")
-            return PurePosixPath(agent.home_directory)
+            session = await db.get(ChatSession, connection.session_id)
+            if session is None or session.user_id != connection.owner_id:
+                raise ExecutionClientError("session.notFound")
+            limits = await SettingsStore.load(db, InstanceLimits)
+            root_files = RootFileService(
+                session.id, project_id=session.project_id, user_id=connection.owner_id,
+                user_quota_bytes=limits.user_quota_bytes,
+            )
+        if download.size > limits.max_upload_bytes:
+            raise ExecutionClientError("browser.fileTooLarge")
+        descriptor = BrowserFileResult(file_id=download.id, offset=download.size, size=download.size, complete=True)
+        with await self._read_browser_file(
+            connection, descriptor, lambda: None, delete=False, expected_sha256=download.sha256,
+        ) as stream:
+            await connection.check_access()
+            await authorize()
+
+            async def store():
+                revision = await create_output_stream(root_files, download.filename, stream)
+                status = {
+                    **download.model_dump(mode="json"), "status": "saved", "root": "files",
+                    "path": revision.path, "fileId": str(revision.file_id), "revision": revision.revision,
+                }
+                connection.downloads = [item for item in connection.downloads if item["id"] != download.id] + [status]
+                await connection.check_access()
+                with suppress(Exception):
+                    await _file_request(connection, action="delete", file_id=download.id)
+                return status
+
+            saving = asyncio.create_task(store())
+            try:
+                return await asyncio.shield(saving)
+            except asyncio.CancelledError:
+                while not saving.done():
+                    try:
+                        with CancelScope(shield=True):
+                            await asyncio.shield(saving)
+                    except asyncio.CancelledError:
+                        continue
+                saving.result()
+                raise
 
     async def _download_decision(
         self, connection: BrowserConnection, origin: BrowserOrigin, destination: str,
@@ -839,7 +841,6 @@ class BrowserCoordinator:
                 or run.execution_agent_id != connection.agent_id or agent.user_id != origin.owner_id
                 or origin.integration_id != connection.integration_id
                 or instance.execution_agent_id != connection.agent_id
-                or not agent.home_directory
             ):
                 return PermissionDecision.DENY
             operation = {
@@ -860,11 +861,6 @@ class BrowserCoordinator:
                     summary="Der Agent möchte den Status eines Browser-Downloads lesen.",
                     resource_display=destination,
                     action_kind="browser_download_status",
-                ),
-                execution_directory_permission(
-                    connection.agent_id, destination, capability="filesystem.write",
-                    action_kind="browser_download", title="Browser-Download speichern?",
-                    summary="Der Agent möchte einen Browser-Download auf dem ausgewählten Computer speichern.",
                 ),
             )
             call = ToolCall(
@@ -914,14 +910,21 @@ class BrowserCoordinator:
                     )
 
     async def _read_browser_file(
-        self, connection: BrowserConnection, descriptor, check_binding, *, delete: bool = True
+        self, connection: BrowserConnection, descriptor, check_binding, *, delete: bool = True,
+        expected_sha256: str | None = None,
     ):
         output = SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b")
+        digest = hashlib.sha256()
         try:
             async with asyncio.timeout(60 + descriptor.size / (256 * 1024)):
                 offset = 0
+                next_access_check = 0.0
                 while offset < descriptor.size:
-                    await connection.check_access()
+                    if monotonic() >= next_access_check:
+                        await connection.check_access()
+                        next_access_check = monotonic() + ACCESS_INTERVAL
+                    if connection.closed or execution_agent_connections.generation(connection.agent_id) != connection.generation:
+                        raise ExecutionClientError("browser.notConnected")
                     check_binding()
                     wire = BrowserFileArguments(
                         browser_id=connection.browser_id,
@@ -941,15 +944,19 @@ class BrowserCoordinator:
                     if (
                         chunk.file_id != descriptor.file_id
                         or chunk.size != descriptor.size
+                        or chunk.offset > descriptor.size
                         or chunk.offset != offset + len(data)
                         or not data
                         or chunk.complete != (chunk.offset == chunk.size)
                     ):
                         raise ExecutionClientError("executionAgent.protocolError")
                     output.write(data)
+                    digest.update(data)
                     offset = chunk.offset
                 await connection.check_access()
                 check_binding()
+            if expected_sha256 is not None and digest.hexdigest() != expected_sha256:
+                raise ExecutionClientError("executionAgent.protocolError")
             output.seek(0)
             return output
         except BaseException:

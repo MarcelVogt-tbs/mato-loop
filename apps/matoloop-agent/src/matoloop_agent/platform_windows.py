@@ -227,6 +227,7 @@ class WindowsPlatform:
 
         result = {
             "temporaryDirectory": temporary_directory(),
+            "sessionTemporaryDirectorySupported": True,
             "agentVersion": get_version(),
             "platform": self.platform_id,
             "operatingSystem": "Windows",

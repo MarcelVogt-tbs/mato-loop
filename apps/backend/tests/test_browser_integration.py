@@ -359,7 +359,7 @@ def test_browser_schema_is_available_without_viewer_and_preserves_profile_exclus
         settings, instance.execution_agent_id,
         {
             "integration.browser.execute", "integration.browser.file", "integration.browser.upload",
-            "integration.browser.files", "integration.browser.publish", "filesystem.stat",
+            "integration.browser.files",
         },
     )
     assert [tool.name for tool in effective_integration_contributions(active).tools] == [
@@ -1100,7 +1100,7 @@ async def test_profile_disabled_browser_actions_are_not_offered():
     assert not set(BROWSER_TOOL_ACTIONS) & effective.tools.keys()
     assert {action.capability for action in mock_tools_catalog.tool_registry.integration_resource_actions(instance)} == {
         "browser.use", "browser.code",
-        "filesystem.read", "session.files.read", "filesystem.write",
+        "filesystem.read", "session.files.read",
     }
 
 

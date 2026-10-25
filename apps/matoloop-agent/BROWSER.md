@@ -26,7 +26,10 @@ old `browser/profile` directories are not loaded or deleted automatically.
 Worker shutdown has a 10-second cleanup budget, runtime termination 12 seconds, and
 Agent shutdown retains its existing overall deadline. Browser workers close concurrently.
 Temporary profiles and staging are removed on orderly close; abrupt host failure cannot
-guarantee cleanup. Published downloads remain ordinary computer files.
+guarantee cleanup. Completed downloads stream to backend session files with SHA-256
+verification; worker staging is deleted only after successful backend storage. Existing
+computer downloads are not moved or removed. Transfers support 1 GiB per file and 2 GiB
+aggregate staging, while observations retain their separate 64 MiB limit.
 
 ## Viewer Protocol
 

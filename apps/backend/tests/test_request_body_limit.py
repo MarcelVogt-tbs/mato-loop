@@ -1,7 +1,10 @@
 import json
 
+import pytest
+
 from mato_loop_backend.api import request_body_limit
 from mato_loop_backend.api.request_body_limit import MediaRequestBodyLimitMiddleware
+from mato_loop_backend.execution.transfers import MAX_TRANSFER_BYTES
 
 
 def scope(path: str, headers=(), *, method: str = "POST"):
@@ -11,6 +14,16 @@ def scope(path: str, headers=(), *, method: str = "POST"):
         "path": path,
         "headers": list(headers),
     }
+
+
+@pytest.mark.parametrize("path", [
+    "/api/workspace/files",
+    "/api/sessions/with-attachments",
+    "/api/sessions/session/messages/with-attachments",
+    "/api/sessions/session/runs/run/messages/with-attachments",
+])
+def test_file_upload_body_limit_allows_one_gib_and_multipart_overhead(path):
+    assert request_body_limit._request_limit(scope(path)) == MAX_TRANSFER_BYTES + 1024 * 1024
 
 
 async def test_content_length_is_rejected_before_body_read(monkeypatch) -> None:

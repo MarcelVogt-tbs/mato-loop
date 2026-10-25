@@ -139,6 +139,7 @@ class MatoLoopAgent:
                 {
                     field.alias or name: info.get(field.alias or name)
                     for name, field in SystemInfo.model_fields.items()
+                    if (field.alias or name) in info
                 }
             ),
         )
@@ -435,7 +436,7 @@ class MatoLoopAgent:
                 stream=stream,
                 expected_inspection_revision=arguments.expected_inspection_revision,
                 environment=arguments.environment,
-                use_temporary_directory=arguments.use_temporary_directory,
+                temporary_session_id=arguments.temporary_session_id,
             )
         if isinstance(arguments, ShellInspectArguments):
             return await asyncio.to_thread(
@@ -581,10 +582,6 @@ class MatoLoopAgent:
                         request.operation in BROWSER_ARGUMENT_MODELS
                         and code != "maintenance.busy"
                         and not code.startswith("browser.")
-                        and not (
-                            request.operation == "integration.browser.publish"
-                            and code == "path.exists"
-                        )
                     ):
                         code = (
                             "browser.fileTooLarge"

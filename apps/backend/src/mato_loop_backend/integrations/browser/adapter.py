@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.execution.browser_contracts import (
     BROWSER_SNAPSHOT_ACTIONS,
+    BROWSER_TRANSFER_TIMEOUT,
     BrowserActionArguments,
     BrowserActionResult,
     BrowserConfig,
@@ -305,7 +306,6 @@ class BrowserUploadArguments(_BrowserPageArguments):
 
 async def _downloads_authorization(arguments: BrowserDownloadsArguments, context: Any):
     from mato_loop_backend.permissions.policy import (
-        execution_directory_permission,
         integration_operation_permission,
     )
 
@@ -319,30 +319,21 @@ async def _downloads_authorization(arguments: BrowserDownloadsArguments, context
             BrowserFileListResult,
         )
         await connection.check_access()
-    download = next((item for item in listed.downloads if item.id == arguments.download_id), None)
-    captured = connection.origins.get(download.origin or "") if download is not None else None
+    download = next((item.model_dump(mode="json") for item in listed.downloads if item.id == arguments.download_id), None)
+    download = next((item for item in connection.downloads if item["id"] == arguments.download_id and item.get("status") == "saved"), download)
+    captured = connection.origins.get(download.get("origin") or "") if download is not None else None
     origin = captured[0] if captured is not None else None
     if (
-        download is None or download.status != "ready" or captured is None
-        or captured[1] != download.control_epoch
+        download is None or download["status"] not in {"ready", "saved"} or captured is None
+        or captured[1] != download["controlEpoch"]
         or origin.kind != "model" or origin.owner_id != context.session.user_id
         or origin.session_id != context.session.id or origin.run_id != context.run_id
     ):
         raise ExecutionClientError("browser.invalidTarget")
-    agent = await context.db.get(ExecutionAgent, connection.agent_id)
-    if agent is None or agent.user_id != context.session.user_id or not agent.home_directory:
-        raise ExecutionClientError("tool.unavailable")
-    from mato_loop_backend.execution.browsers import available_browser_download_path
-
-    destination = await available_browser_download_path(
-        connection, PurePosixPath(agent.home_directory), download.filename,
-    )
     await connection.check_access()
-    context.bound_options.update(
-        download=download.model_dump(mode="json"), download_destination=destination,
-    )
+    context.bound_options["download"] = download
     operation = {
-        "browserId": str(connection.browser_id), "downloadId": download.id,
+        "browserId": str(connection.browser_id), "downloadId": download["id"],
         "originId": str(origin.id),
     }
     requests = (
@@ -353,12 +344,7 @@ async def _downloads_authorization(arguments: BrowserDownloadsArguments, context
             grant_resource_key=f"browser:{connection.browser_id}",
             title="Browser-Downloads lesen?",
             summary="Der Agent möchte den Status eines Browser-Downloads lesen.",
-            resource_display=download.filename, action_kind="browser_download_status",
-        ),
-        execution_directory_permission(
-            connection.agent_id, destination, capability="filesystem.write",
-            action_kind="browser_download", title="Browser-Download speichern?",
-            summary="Der Agent möchte einen Browser-Download auf dem ausgewählten Computer speichern.",
+            resource_display=download["filename"], action_kind="browser_download_status",
         ),
     )
     context.bound_options["browser_download_permissions"] = requests
@@ -366,6 +352,7 @@ async def _downloads_authorization(arguments: BrowserDownloadsArguments, context
 
 
 async def _publish_download(arguments: BrowserDownloadsArguments, context: Any):
+    from mato_loop_backend.execution.browsers import browser_coordinator
     from mato_loop_backend.tools.contracts import ToolResult
 
     connection = _bound_browser(context)
@@ -381,30 +368,26 @@ async def _publish_download(arguments: BrowserDownloadsArguments, context: Any):
             BrowserFileListResult,
         )
         download = next((item for item in listed.downloads if item.id == arguments.download_id), None)
-        if download is None or download.model_dump(mode="json") != context.bound_options.get("download"):
+        saved = next((item for item in connection.downloads if item["id"] == arguments.download_id and item.get("status") == "saved"), None)
+        current = saved if saved is not None else download.model_dump(mode="json") if download is not None else None
+        if current is None or current != context.bound_options.get("download"):
             raise ExecutionClientError("browser.bindingChanged")
-        captured = connection.origins.get(download.origin or "")
-        if captured is None or captured[1] != download.control_epoch or captured[0].run_id != context.run_id:
+        captured = connection.origins.get(current.get("origin") or "")
+        if captured is None or captured[1] != current["controlEpoch"] or captured[0].run_id != context.run_id:
             raise ExecutionClientError("browser.bindingChanged")
         from mato_loop_backend.permissions.policy import PermissionDecision
 
-        for request in context.bound_options["browser_download_permissions"]:
-            if await context.ask_handler(request, check_only=True) != PermissionDecision.ALLOW:
-                return ToolResult.error("permission.denied")
-        destination = context.bound_options["download_destination"]
-        result = await connection.request(
-            "integration.browser.publish",
-            {"browserId": str(connection.browser_id), "fileId": download.id,
-             "path": destination, "expectedOrigin": download.origin},
-            BrowserPublishedDownloadResult, timeout=60,
-        )
+        async def reauthorize():
+            if _bound_browser(context) is not connection or connection.origins.get(current.get("origin") or "") != captured:
+                raise ExecutionClientError("browser.bindingChanged")
+            for request in context.bound_options["browser_download_permissions"]:
+                if await context.ask_handler(request, check_only=True) != PermissionDecision.ALLOW:
+                    raise ExecutionClientError("permission.denied")
+
+        await reauthorize()
+        result = saved if saved is not None else await browser_coordinator.save_download(connection, download, authorize=reauthorize)
         await connection.check_access()
-    if (
-        result.path != destination or result.size != download.size
-        or result.sha256 != download.sha256
-    ):
-        raise ExecutionClientError("executionAgent.protocolError")
-    return ToolResult.json({"path": result.path, "size": result.size, "sha256": result.sha256})
+    return ToolResult.json({key: result[key] for key in ("root", "path", "fileId", "revision", "size", "sha256")})
 
 
 async def _upload_authorization(arguments: BrowserUploadArguments, context: Any):
@@ -448,6 +431,7 @@ async def _stage_browser_upload(arguments: BrowserUploadArguments, context: Any,
                     "integration.browser.upload",
                     {"browserId": str(connection.browser_id), "path": path},
                     BrowserFileResult,
+                    timeout=BROWSER_TRANSFER_TIMEOUT,
                 )
                 if not result.complete or result.offset != result.size:
                     raise ExecutionClientError("executionAgent.protocolError")
@@ -731,7 +715,6 @@ async def execute_browser(arguments: BrowserActionArguments | _BrowserArguments,
 
 _USE = ToolAction("browser.use", "Browser verwenden", category="write", mutates=True)
 _CODE = ToolAction("browser.code", "Browser-Python ausführen", category="write", mutates=True)
-_FILESYSTEM_WRITE = ToolAction("filesystem.write", "Workspace schreiben", category="write", mutates=True)
 _FILESYSTEM_READ = ToolAction("filesystem.read", "Computer-Dateien lesen", category="read")
 _SESSION_FILES_READ = ToolAction("session.files.read", "Session-Dateien lesen", category="read")
 BROWSER_TOOLS = tuple(
@@ -774,14 +757,14 @@ BROWSER_TOOL_ACTIONS = {tool.name: tool.arguments_model.internal_action for tool
 BROWSER_DOWNLOADS = ToolContribution(
     name="browser_downloads", label="Browser-Download speichern", icon="download",
     description=(
-        "Publish one completed download from this chat's browser to "
-        "<computer home>/browser/downloads. Use the exact downloadId returned by a browser action."
+        "Save one completed download from this chat's browser in this session's backend files. "
+        "Use the exact downloadId returned by a browser action. The result provides root=files and its path."
     ),
     arguments_model=BrowserDownloadsArguments, handler=_publish_download,
-    actions=(_USE, _FILESYSTEM_WRITE), authorization_factory=_downloads_authorization,
+    actions=(_USE,), authorization_factory=_downloads_authorization,
     execution_operation="integration.browser.execute", result_model=BrowserPublishedDownloadResult,
     required_execution_operations=(
-        "integration.browser.files", "integration.browser.publish", "filesystem.stat",
+        "integration.browser.files", "integration.browser.file",
     ),
 )
 BROWSER_UPLOAD = ToolContribution(
@@ -810,6 +793,6 @@ BROWSER_ADAPTER = IntegrationAdapterDefinition(
     ),
     resource_actions=(
         _USE, _CODE,
-        _FILESYSTEM_READ, _SESSION_FILES_READ, _FILESYSTEM_WRITE,
+        _FILESYSTEM_READ, _SESSION_FILES_READ,
     ),
 )

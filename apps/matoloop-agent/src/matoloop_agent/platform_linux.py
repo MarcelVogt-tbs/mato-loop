@@ -292,6 +292,7 @@ class LinuxPlatform:
 
         result: dict[str, Any] = {
             "temporaryDirectory": temporary_directory(),
+            "sessionTemporaryDirectorySupported": True,
             "agentVersion": get_version(),
             "platform": self.platform_id[:80],
             "operatingSystem": None,

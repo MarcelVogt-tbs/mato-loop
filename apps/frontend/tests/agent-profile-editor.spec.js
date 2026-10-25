@@ -102,7 +102,7 @@ it('round-trips profile content without sending permissions through the profile 
   const page = await mountEditor()
   page.setModelValue('todoEnabled', false)
   page.setModelValue('repositoryInstructionsEnabled', true)
-  const temporaryFiles = [...root.querySelectorAll('.q-field')].find(field => field.querySelector('.q-field__label')?.textContent === 'Temporäre Dateien erlauben')
+  const temporaryFiles = [...root.querySelectorAll('.q-field')].find(field => field.querySelector('.q-field__label')?.textContent === 'Temporären Arbeitsordner automatisch freigeben')
   temporaryFiles.querySelector('[role="combobox"]').focus()
   temporaryFiles.querySelector('[role="combobox"]').click()
   const enabled = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find(item => item.querySelector('.q-item__label')?.textContent === 'An'))

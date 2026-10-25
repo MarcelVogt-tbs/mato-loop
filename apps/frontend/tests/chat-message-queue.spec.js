@@ -1066,6 +1066,6 @@ describe('chat message queue', () => {
     const result = chat.addAttachmentFiles([{ name: 'bild.png', type: 'image/png', size: 1024 }])
 
     expect(result.added).toBe(0)
-    expect(result.error).toContain('256 MiB')
+    expect(result.error).toContain('1024 MiB')
   })
 })

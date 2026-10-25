@@ -116,7 +116,7 @@ if _RENAME_AT2 is not None:
     _RENAME_AT2.restype = ctypes.c_int
 
 
-def validate_upload_filename(filename: str | None) -> str:
+def validate_upload_filename(filename: str | None, *, max_bytes: int | None = 240) -> str:
     value = unicodedata.normalize("NFKC", filename or "")
     if (
         value in {"", ".", ".."}
@@ -124,7 +124,7 @@ def validate_upload_filename(filename: str | None) -> str:
         or "\\" in value
         or value.endswith((" ", "."))
         or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
-        or len(value.encode("utf-8")) > 240
+        or (max_bytes is not None and len(value.encode("utf-8")) > max_bytes)
     ):
         raise RootFileError("file.invalidName", "Invalid file name")
     return value
@@ -1468,13 +1468,17 @@ class RootFileService:
             index = {**index, "runReceipts": {key: revision for key, revision in index["runReceipts"].items() if revision in retained}}
         return json.dumps(index, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
 
-    def _stage_initial_history(self, path: str, data: bytes, *, baseline: bool = False) -> tuple[Path, Path, dict]:
+    def _stage_initial_history(self, path: str, data: bytes | BinaryIO, *, baseline: bool = False) -> tuple[Path, Path, dict]:
         revisions = self._revisions_path()
         file_id = uuid4()
         target = revisions / str(file_id)
         staged = revisions / f".{file_id}.{uuid4().hex}.tmp"
-        staged.mkdir(mode=0o700)
-        item = self._revision_item(1, data)
+        if isinstance(data, bytes):
+            item = self._revision_item(1, data)
+        else:
+            size = data.seek(0, os.SEEK_END)
+            data.seek(0)
+            item = self._revision_metadata(1, size, hashlib.file_digest(data, "sha256").hexdigest())
         index = {
             "fileId": str(file_id),
             "path": path,
@@ -1485,11 +1489,15 @@ class RootFileService:
         if self.run_id is not None and not baseline:
             index.update(currentRevision=None, maxRevision=0, revisions=[], run={
                 "sessionId": str(self.session_id), "runId": str(self.run_id),
-                "state": "pending", "initialSha256": None, "reserveBytes": len(data) + 1024,
+                "state": "pending", "initialSha256": None, "reserveBytes": item["sizeBytes"] + 1024,
             })
+        staged.mkdir(mode=0o700)
         try:
             if self.run_id is None or baseline:
-                self._write_private_file(staged / "1", data)
+                if isinstance(data, bytes):
+                    self._write_private_file(staged / "1", data)
+                else:
+                    self._copy_private_file(data, staged / "1", item["sizeBytes"], item["sha256"])
             self._write_private_file(staged / "index.json", self._index_bytes(index))
         except BaseException:
             shutil.rmtree(staged, ignore_errors=True)
@@ -1636,29 +1644,20 @@ class RootFileService:
             )
 
     def create_output_file(self, filename: str, data: bytes) -> FileRevision | WorkingFileRevision:
-        name = validate_upload_filename(filename)
-        stem = PurePosixPath(name).stem or "output"
-        suffix = PurePosixPath(name).suffix
-        path = f"{stem}-{uuid4().hex[:8]}{suffix}"
-        self.create_file(
-            FileRoot.SESSION,
-            path,
-            BytesIO(data),
-            max_bytes=self.MAX_OPERATION_BYTES,
+        return self.create_output_stream(
+            filename, BytesIO(data), max_bytes=self.MAX_OPERATION_BYTES,
         )
-        revision = self.working_revision(path)
-        return revision
 
     def create_output_stream(
         self, filename: str, source: BinaryIO, *, max_bytes: int
     ) -> FileRevision | WorkingFileRevision:
-        name = validate_upload_filename(filename)
+        name = validate_upload_filename(filename, max_bytes=None)
         stem = PurePosixPath(name).stem or "output"
-        suffix = PurePosixPath(name).suffix
+        # Reserve nine bytes for uniqueness and at least one byte for the stem.
+        suffix = PurePosixPath(name).suffix.encode("utf-8")[:230].decode("utf-8", errors="ignore").rstrip(" .")
+        stem = stem.encode("utf-8")[:231 - len(suffix.encode("utf-8"))].decode("utf-8", errors="ignore") or "o"
         path = f"{stem}-{uuid4().hex[:8]}{suffix}"
-        if self.run_id is None:
-            raise RootFileError("file.changed", "A run-bound output is required")
-        self._create_run_file_stream(path, source, max_bytes=max_bytes)
+        self.create_file(FileRoot.SESSION, path, source, max_bytes=max_bytes)
         return self.working_revision(path)
 
     def discard_run_output(self, file_id: UUID) -> None:
@@ -2173,14 +2172,7 @@ class RootFileService:
             raise RootFileError("file.rootMutationForbidden", "A file root is immutable")
         if self.run_id is not None:
             source.seek(0)
-            data = source.read(max_bytes + 1)
-            if len(data) > max_bytes:
-                raise RootFileError("file.tooLarge", "File is too large")
-            working = self._write_run_file(self._relative_path(parts), data)
-            return RootFileEntry(
-                parts[-1], working.path, "file", len(data),
-                datetime.fromisoformat(working.created_at).timestamp(),
-            )
+            return self._create_run_file_stream(self._relative_path(parts), source, max_bytes=max_bytes)
         with self._session_operation_lock(selected_root, quota_check=True):
             self._assert_available(self._relative_path(parts))
             try:
@@ -2202,10 +2194,9 @@ class RootFileService:
                             temporary, descriptor_flags, dir_fd=descriptor
                         )
                         with os.fdopen(content_descriptor, "rb") as content_handle:
-                            content = content_handle.read()
-                        staged_history, history, _index = self._stage_initial_history(
-                            self._relative_path(parts), content
-                        )
+                            staged_history, history, _index = self._stage_initial_history(
+                                self._relative_path(parts), content_handle
+                            )
                         self._assert_user_quota(0)
                         staged_history.rename(history)
                         metadata = _publish_upload(

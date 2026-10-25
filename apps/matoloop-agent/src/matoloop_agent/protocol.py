@@ -106,6 +106,9 @@ class StrictModel(BaseModel):
 
 
 class SystemInfo(StrictModel):
+    session_temporary_directory_supported: bool = Field(
+        default=False, alias="sessionTemporaryDirectorySupported"
+    )
     temporary_directory: str | None = Field(
         default=None, alias="temporaryDirectory", max_length=4096
     )
@@ -366,7 +369,9 @@ class HostDirectoryArguments(StrictModel):
 
 
 class ShellArguments(HostDirectoryArguments):
-    use_temporary_directory: bool = Field(default=False, alias="useTemporaryDirectory")
+    temporary_session_id: str | None = Field(
+        default=None, alias="temporarySessionId", pattern=UUID_PATTERN
+    )
     command: str = Field(min_length=1, max_length=256 * 1024)
     timeout_seconds: float | None = Field(default=None, alias="timeoutSeconds", gt=0, le=3600)
     expected_inspection_revision: str | None = Field(
