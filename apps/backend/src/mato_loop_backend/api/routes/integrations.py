@@ -1724,7 +1724,7 @@ class ProfileIntegrationAvailabilityRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     integrations_enabled_by_default: bool | None = Field(default=None, alias="integrationsEnabledByDefault")
-    integration_tool_loading: Literal["on_demand", "all"] | None = Field(default=None, alias="integrationToolLoading")
+    integration_tool_loading: Literal["on_demand", "native", "all"] | None = Field(default=None, alias="integrationToolLoading")
 
 
 @router.get("/profiles/{profile_id}/availability")

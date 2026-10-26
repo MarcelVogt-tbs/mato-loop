@@ -257,7 +257,8 @@ async def test_builtin_access_overrides_can_be_changed_and_removed(monkeypatch):
 
 
 @pytest.mark.parametrize("scope", ["instance", "personal"])
-async def test_profile_integration_default_preserves_tool_overrides(monkeypatch, scope):
+@pytest.mark.parametrize("loading", ["on_demand", "native", "all"])
+async def test_profile_integration_default_preserves_tool_overrides(monkeypatch, scope, loading):
     user = UserAccount(id=uuid4(), username="owner", password_hash="hash", is_admin=scope == "instance")
     integration = IntegrationInstance(name="Calendar", integration_type="calendar", adapter_type="caldav")
     profile = CustomAgentProfile(name="Own", description="", base_profile_id=GENERAL_PROFILE_ID,
@@ -270,16 +271,17 @@ async def test_profile_integration_default_preserves_tool_overrides(monkeypatch,
     }
     db = settings_db(monkeypatch, documents)
     profile_id = profile.id
-    await update_profile_integration_availability(profile_id, ProfileIntegrationAvailabilityRequest(
-        integrationsEnabledByDefault=False, integrationToolLoading="all",
+    saved = await update_profile_integration_availability(profile_id, ProfileIntegrationAvailabilityRequest(
+        integrationsEnabledByDefault=False, integrationToolLoading=loading,
     ), user, db, scope)
+    assert saved["integrationToolLoading"] == loading
     await update_profile_integration_availability(profile_id, ProfileIntegrationAvailabilityRequest(
         integrationToolLoading=None,
     ), user, db, scope)
     response = await get_profile_integration_availability(profile_id, user, db, scope)
     tools, _ = await load_agent_profile_tools(db, user.id, profile_id, TrustLevel.PUBLIC)
     assert (response["integrationsEnabledByDefault"], response["integrationToolLoading"],
-            response["inheritedIntegrationToolLoading"], tool_execution_policy(tools, "shell.write")) == (False, None, "on_demand", "auto")
+            response["inheritedIntegrationToolLoading"], tool_execution_policy(tools, "shell.write")) == (False, None, "native", "auto")
 
 
 def test_profile_integration_default_rejects_removed_connection_assignments():

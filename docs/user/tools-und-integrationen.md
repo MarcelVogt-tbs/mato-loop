@@ -134,8 +134,11 @@ Der aktuelle Einstellungsbereich bestimmt den Eigentümer neuer Verbindungen. Gl
 
 Im **Agentenprofil > Weitere Einstellungen > Integrationen** legt **Integrations-Tool-Verfügbarkeit** fest, wann Werkzeuge in den Modellkontext gelangen:
 
-- **Bei Bedarf** ist die Vorgabe. Der Agent erhält eine kurze Integrationsübersicht und sucht passende Werkzeuge über **Integrationswerkzeuge suchen**. Gefundene Werkzeuge werden für folgende Modellaufrufe nachgeladen und bleiben über weitere Nachrichten hinweg verfügbar.
+- **Bei Bedarf**: Der Agent erhält eine kurze Integrationsübersicht und sucht passende Werkzeuge über **Integrationswerkzeuge suchen**. Gefundene Werkzeuge werden für folgende Modellaufrufe nachgeladen und bleiben über weitere Nachrichten hinweg verfügbar.
+- **Native sofort** ist die mitgelieferte Vorgabe für **Allgemein**. Native Integrationen werden direkt geladen, allgemeine MCP-Server weiterhin bei Bedarf. Entscheidend ist der registrierte Adapter, nicht das intern verwendete Protokoll; SonoBin zählt beispielsweise als native Integration.
 - **Alle** lädt sämtliche erlaubten Integrationswerkzeuge sofort. Das spart Suchschritte, kann aber bei großen MCP-Katalogen viel Kontext belegen.
+
+Alle Profile bieten diese drei Optionen innerhalb der bestehenden Bearbeitungsrechte. Andere mitgelieferte Profile behalten **Bei Bedarf** als Vorgabe. Eigene Profile erben den Wert ihres Basisprofils; ausdrücklich gespeicherte Werte bleiben erhalten. Ein eigener Verbindungswert **Bei Bedarf** kann auch das Vorabladen einer nativen Integration abschalten, ohne sie zu deaktivieren.
 
 An einer **Integration beziehungsweise einem MCP-Server** kann **Tool-Ladeverhalten anpassen** einen eigenen Wert **Bei Bedarf** oder **Sofort** setzen, sowohl als Verbindungsstandard als auch für ein ausgewähltes Agentenprofil. Ohne eigenen Wert gilt die Vorgabe. Profilspezifische Verbindungswerte gehen vor Werten des Basisprofils, dann folgt der Verbindungsstandard und schließlich die Profilvorgabe. Entfernen stellt die Vererbung wieder her; **Übernehmen** ändert zunächst das Formular, **Speichern** übernimmt es dauerhaft. Persönliche Verbindungen können so auch für öffentliche Profile sofort geladen werden, ohne das öffentliche Profil zu verändern.
 

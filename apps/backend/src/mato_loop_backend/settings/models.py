@@ -193,7 +193,7 @@ class AgentProfileAccessOverrides(BaseModel):
     model_config = ConfigDict(alias_generator=lambda value: _camel_case(value), populate_by_name=True, extra="forbid")
 
     integrations_enabled_by_default: StrictBool | None = None
-    integration_tool_loading: Literal["on_demand", "all"] | None = None
+    integration_tool_loading: Literal["on_demand", "native", "all"] | None = None
     temporary_files_enabled: StrictBool | None = None
     private_permissions: AgentProfilePermissions | None = None
     public_permissions: AgentProfilePermissions | None = None
@@ -240,7 +240,7 @@ class AgentProfile(BaseModel):
     todo_enabled: StrictBool = False
     repository_instructions_enabled: StrictBool = False
     integrations_enabled_by_default: StrictBool = True
-    integration_tool_loading: Literal["on_demand", "all"] = "on_demand"
+    integration_tool_loading: Literal["on_demand", "native", "all"] = "on_demand"
     temporary_files_enabled: StrictBool = False
     private_permissions: AgentProfilePermissions = Field(
         default_factory=AgentProfilePermissions
@@ -300,7 +300,7 @@ class AgentProfileOverrides(BaseModel):
     todo_enabled: StrictBool | None = None
     repository_instructions_enabled: StrictBool | None = None
     integrations_enabled_by_default: StrictBool | None = None
-    integration_tool_loading: Literal["on_demand", "all"] | None = None
+    integration_tool_loading: Literal["on_demand", "native", "all"] | None = None
     temporary_files_enabled: StrictBool | None = None
     private_permissions: AgentProfilePermissions | None = None
     public_permissions: AgentProfilePermissions | None = None
@@ -405,6 +405,7 @@ def general_profile() -> AgentProfile:
         name=CORE_PROFILE_NAMES[GENERAL_PROFILE_ID],
         description="Standardagent für Sessions ohne ausgewähltes Profil.",
         instructions="Follow the user's request and the selected persona.",
+        integration_tool_loading="native",
         delegation_enabled=False,
         session_write_paths=None,
     )

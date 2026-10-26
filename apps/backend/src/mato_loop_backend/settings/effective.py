@@ -276,7 +276,13 @@ def integration_tool_loading(instance: IntegrationInstance, profile: AgentProfil
             override = instance.profile_permissions.get(profile_id)
             if override is not None and override.tool_loading is not None:
                 return override.tool_loading
-    return instance.permissions.tool_loading or (profile.integration_tool_loading if profile else "on_demand")
+    mode = instance.permissions.tool_loading or (profile.integration_tool_loading if profile else "on_demand")
+    if mode == "native":
+        from mato_loop_backend.integrations.registry import integration_adapter
+
+        adapter = integration_adapter(instance.integration_type, instance.adapter_type)
+        return "all" if adapter is not None and adapter.integration_type != "mcp" else "on_demand"
+    return mode
 
 
 def integration_profile_available(instance: IntegrationInstance, profile: AgentProfile) -> bool:

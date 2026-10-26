@@ -14,6 +14,7 @@ vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm }) }))
 import ToolPage from '../src/features/settings/ToolSettingsPage.vue'
 import IntegrationPage from '../src/features/integrations/IntegrationAccessPage.vue'
 import IntegrationPermissionEditor from '../src/features/integrations/IntegrationPermissionEditor.vue'
+import ProfileIntegrationDefault from '../src/features/integrations/ProfileIntegrationDefault.vue'
 import GeneralPage from '../src/features/settings/GeneralSettingsPage.vue'
 import { api } from 'src/boot/axios'
 import { useAuthStore } from '../src/stores/auth'
@@ -44,6 +45,20 @@ async function mount(Page, props, path, name, pinia = createPinia()) {
   return { page: () => page, pinia }
 }
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); vi.clearAllMocks() })
+
+it.each([[builtinId, 'instance'], [ownId, 'personal']])('saves native loading through the existing profile override for %s', async (profileId, scope) => {
+  const data = { integrationToolLoading: null, inheritedIntegrationToolLoading: 'native' }
+  api.get.mockResolvedValue({ data })
+  api.put.mockResolvedValue({ data: { ...data, integrationToolLoading: 'native' } })
+  await mount(ProfileIntegrationDefault, { profileId, scope }, '/tools', 'settings-tools')
+  await vi.waitUntil(() => root.textContent.includes('Vorgabe: Native sofort'))
+  const control = await vi.waitUntil(() => [...root.querySelectorAll('.q-field')].find(field => field.querySelector('.q-field__label')?.textContent === 'Integrations-Tool-Verfügbarkeit')?.querySelector('[role="combobox"]:not([disabled])'))
+  control.focus()
+  control.click()
+  const native = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find(item => item.querySelector('.q-item__label')?.textContent === 'Native sofort'))
+  native.click()
+  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith(`/integrations/profiles/${profileId}/availability`, { integrationToolLoading: 'native' }, { params: { scope } }))
+})
 
 it('saves the public address and agent updates and links to provider and tool settings', async () => {
   const current = { publicBaseUrl: null, effectivePublicBaseUrl: 'https://mato.test', publicUrlSource: 'automatic', modelTrustEnabled: true, agentAutoUpdateEnabled: false }

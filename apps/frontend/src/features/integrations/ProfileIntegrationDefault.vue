@@ -2,7 +2,7 @@
   <q-banner v-if="failed" rounded class="app-surface-tonal">Die Integrationsvorgabe konnte nicht geladen werden.<template #action><q-btn flat label="Erneut laden" @click="load" /></template></q-banner>
   <div v-else class="q-gutter-md">
     <AppSelect :model-value="value?.integrationsEnabledByDefault ?? null" outlined emit-value map-options label="Integrationen standardmäßig verfügbar" :options="[{ label: `Vorgabe: ${value?.inheritedIntegrationsEnabledByDefault ? 'Verfügbar' : 'Nicht verfügbar'}`, value: null }, { label: 'Verfügbar', value: true }, { label: 'Nicht verfügbar', value: false }]" :disable="busy || !value" @update:model-value="save('integrationsEnabledByDefault', $event)" />
-    <AppSelect :model-value="value?.integrationToolLoading ?? null" outlined emit-value map-options label="Integrations-Tool-Verfügbarkeit" :options="[{ label: `Vorgabe: ${value?.inheritedIntegrationToolLoading === 'all' ? 'Alle' : 'Bei Bedarf'}`, value: null }, { label: 'Bei Bedarf', value: 'on_demand' }, { label: 'Alle', value: 'all' }]" hint="Bei Bedarf werden Integrationswerkzeuge über die Tool-Suche nachgeladen. Eigene Lade-Einstellungen der Integrationen gehen vor; Zugriffsrechte bleiben unverändert." :disable="busy || !value" @update:model-value="save('integrationToolLoading', $event)" />
+    <AppSelect :model-value="value?.integrationToolLoading ?? null" outlined emit-value map-options label="Integrations-Tool-Verfügbarkeit" :options="[{ label: `Vorgabe: ${loadingOptions.find(option => option.value === value?.inheritedIntegrationToolLoading)?.label || 'Bei Bedarf'}`, value: null }, ...loadingOptions]" hint="Native sofort lädt native Integrationen direkt und allgemeine MCP-Server bei Bedarf. Eigene Lade-Einstellungen der Integrationen gehen vor; Zugriffsrechte bleiben unverändert." :disable="busy || !value" @update:model-value="save('integrationToolLoading', $event)" />
   </div>
 </template>
 
@@ -15,6 +15,7 @@ import { useIntegrationStore } from 'stores/integrations'
 const props = defineProps({ profileId: { type: String, required: true }, scope: { type: String, required: true } })
 const integrations = useIntegrationStore()
 const $q = useQuasar()
+const loadingOptions = [{ label: 'Bei Bedarf', value: 'on_demand' }, { label: 'Native sofort', value: 'native' }, { label: 'Alle', value: 'all' }]
 const value = ref(null)
 const busy = ref(false)
 const failed = ref(false)

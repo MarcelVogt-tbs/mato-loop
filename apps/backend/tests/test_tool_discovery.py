@@ -18,6 +18,7 @@ from mato_loop_backend.settings.models import (
     IntegrationPermissions,
     IntegrationSettings,
     ToolSettings,
+    general_profile,
 )
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.contracts import ToolResult
@@ -54,6 +55,9 @@ def discovery(result):
     ("on_demand", "all", "on_demand", None, "on_demand"),
     ("all", "all", "all", "on_demand", "on_demand"),
     ("on_demand", None, None, "all", "all"),
+    ("native", None, None, None, "all"),
+    ("native", "on_demand", None, None, "on_demand"),
+    ("native", None, None, "on_demand", "on_demand"),
 ])
 def test_loading_uses_existing_connection_and_profile_override_precedence(profile_mode, connection_mode, base_mode, own_mode, expected):
     instance = calendar()
@@ -65,6 +69,17 @@ def test_loading_uses_existing_connection_and_profile_override_precedence(profil
         profile.id: IntegrationPermissions(tool_loading=own_mode),
     }
     assert integration_tool_loading(instance, profile) == expected
+
+
+@pytest.mark.parametrize("kind,adapter,expected", [
+    ("calendar", "caldav", "all"),
+    ("browser", "browser", "all"),
+    ("music", "sonobin", "all"),
+    ("mcp", "mcp_streamable_http", "on_demand"),
+])
+def test_general_profile_native_default_uses_registered_adapter_not_transport(kind, adapter, expected):
+    instance = IntegrationInstance(name="Any name", integration_type=kind, adapter_type=adapter)
+    assert integration_tool_loading(instance, general_profile()) == expected
 
 
 async def test_search_reloads_persisted_tools_without_changing_initial_prefix():
