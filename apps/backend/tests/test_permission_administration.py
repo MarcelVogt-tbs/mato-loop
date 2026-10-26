@@ -178,9 +178,10 @@ async def test_global_profile_permissions_override_default_availability(monkeypa
     await update_profile_integration_availability(own.id, ProfileIntegrationAvailabilityRequest(integrationsEnabledByDefault=False), user, db, "instance")
     page = await get_integration_permissions(integration.id, user, db, "instance", own.id)
     assert page["inheritedAvailable"] is False
-    await update_integration_permissions(integration.id, IntegrationPermissions(available=True, publicPermissions={"policies": {"calendar.write": "auto"}}), user, db, "instance", own.id)
+    await update_integration_permissions(integration.id, IntegrationPermissions(available=True, toolLoading="all", publicPermissions={"policies": {"calendar.write": "auto"}}), user, db, "instance", own.id)
     tools, profile = await load_agent_profile_tools(db, user.id, own.id, TrustLevel.PUBLIC)
     stored = documents[IntegrationSettings, None].instances[0]
+    assert stored.profile_permissions[own.id].tool_loading == "all"
     assert (integration_profile_available(stored, profile), tool_execution_policy(tools, "calendar.write", integration_id=stored.id)) == (True, "auto")
 
 
@@ -270,11 +271,15 @@ async def test_profile_integration_default_preserves_tool_overrides(monkeypatch,
     db = settings_db(monkeypatch, documents)
     profile_id = profile.id
     await update_profile_integration_availability(profile_id, ProfileIntegrationAvailabilityRequest(
-        integrationsEnabledByDefault=False,
+        integrationsEnabledByDefault=False, integrationToolLoading="all",
+    ), user, db, scope)
+    await update_profile_integration_availability(profile_id, ProfileIntegrationAvailabilityRequest(
+        integrationToolLoading=None,
     ), user, db, scope)
     response = await get_profile_integration_availability(profile_id, user, db, scope)
     tools, _ = await load_agent_profile_tools(db, user.id, profile_id, TrustLevel.PUBLIC)
-    assert (response["integrationsEnabledByDefault"], tool_execution_policy(tools, "shell.write")) == (False, "auto")
+    assert (response["integrationsEnabledByDefault"], response["integrationToolLoading"],
+            response["inheritedIntegrationToolLoading"], tool_execution_policy(tools, "shell.write")) == (False, None, "on_demand", "auto")
 
 
 def test_profile_integration_default_rejects_removed_connection_assignments():

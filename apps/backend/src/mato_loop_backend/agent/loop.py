@@ -7,6 +7,7 @@ from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.agent.run_support as agent_run_support
@@ -14,6 +15,7 @@ from mato_loop_backend.agent.media_model_helpers import media_model_handlers
 from mato_loop_backend.agent.memory_context import MemoryCache, prepare_memory_context
 from mato_loop_backend.agent.model_turn import complete_model_turn, persist_model_response
 from mato_loop_backend.agent.pdf_attachments import prepare_pdf_attachments
+from mato_loop_backend.agent.projection import ContextError
 from mato_loop_backend.agent.prompts import general_system_prompt
 from mato_loop_backend.agent.repository_instructions import repository_instructions_prompt
 from mato_loop_backend.agent.run_contracts import AgentRunError, _VisibleResponse
@@ -50,6 +52,7 @@ from mato_loop_backend.message_content import canonical_assistant_content
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
+    ContextSummary,
     ExecutionAgent,
     Message,
     Project,
@@ -76,6 +79,7 @@ from mato_loop_backend.settings import (
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
 from mato_loop_backend.settings.models import ReasoningEffort, TrustLevel
 from mato_loop_backend.skills import RunSkillState, SkillService
+from mato_loop_backend.tools.discovery import expire_discoveries
 from mato_loop_backend.tools.display import tool_display
 from mato_loop_backend.tools.snapshots import collect_tool_snapshots
 from mato_loop_backend.user_profile import user_profile_content_hashes, user_profile_runtime_payload
@@ -307,6 +311,12 @@ async def execute_loop_body(
         if delegated:
             memory_state = memory_policy.EffectiveMemory(False, False, False)
         records = await cls._records(db, chat_session.id)
+        summary = None
+        if any((item.provider_data or {}).get("_matoloop", {}).get("toolDiscovery") for item in records):
+            summary = await db.scalar(select(ContextSummary).where(ContextSummary.session_id == chat_session.id)
+                                      .order_by(ContextSummary.created_at.desc(), ContextSummary.id.desc()).limit(1))
+        summary_boundary = next((index + 1 for index, item in enumerate(records)
+                                 if summary is not None and item.id == summary.covered_through_message_id), 0)
         root_files = RootFileService(
             chat_session.id,
             run_id=run.id,
@@ -344,6 +354,7 @@ async def execute_loop_body(
             render_pending=openscad_render_pending,
             tool_budget_exhausted=tool_budget_exhausted,
             remaining_tool_calls=(None if tool_call_limit is None else max(0, tool_call_limit - tool_calls_used)),
+            discovery_records=records[summary_boundary:],
         )
         integration_settings = turn_tools.integration_settings
         execution_client = turn_tools.execution_client
@@ -480,32 +491,44 @@ async def execute_loop_body(
             supports_images=model.supports_image_input,
             trust=model_trust_level, handler=pdf_handler,
         )
-        projection, injected_memory_count, injected_episode_count = await build_turn_context(
-            cls, db, run, chat_session,
-            ai_settings=ai_settings,
-            model=model,
-            trust_level=model_trust_level,
-            settings=runtime_settings,
-            instance_limits=instance_limits,
-            records=records,
-            system_prompt=system_prompt,
-            pdf_context=pdf_context,
-            runtime_instructions=(prompt_agent_profile.runtime_instructions if prompt_agent_profile else ""),
-            schemas=schemas,
-            offered_tool_names=frozenset(effective_toolset.tools if effective_toolset else ()),
-            tool_snapshots=collect_tool_snapshots(
-                records, effective_toolset.tools if effective_toolset else {},
-                tool_settings, chat_session.id,
-            ),
-            memory_turn=memory_turn,
-            memory_read_enabled=memory_state.read_enabled,
-            request_options=request_options,
-            live_tool_calls=live_tool_calls,
-            ephemeral_images=ephemeral_images,
-            attachment_service=AttachmentService,
-            session_automations=await AutomationService.session_definitions(db, chat_session) if not delegated else None,
-            repository_context_loader=repository_context_loader,
-        )
+        try:
+            projection, injected_memory_count, injected_episode_count = await build_turn_context(
+                cls, db, run, chat_session,
+                ai_settings=ai_settings,
+                model=model,
+                trust_level=model_trust_level,
+                settings=runtime_settings,
+                instance_limits=instance_limits,
+                records=records,
+                system_prompt=system_prompt,
+                pdf_context=pdf_context,
+                runtime_instructions=(prompt_agent_profile.runtime_instructions if prompt_agent_profile else ""),
+                schemas=schemas,
+                offered_tool_names=frozenset(effective_toolset.tools if effective_toolset else ()),
+                tool_snapshots=collect_tool_snapshots(
+                    records, effective_toolset.tools if effective_toolset else {},
+                    tool_settings, chat_session.id,
+                ),
+                memory_turn=memory_turn,
+                memory_read_enabled=memory_state.read_enabled,
+                request_options=request_options,
+                live_tool_calls=live_tool_calls,
+                ephemeral_images=ephemeral_images,
+                attachment_service=AttachmentService,
+                session_automations=await AutomationService.session_definitions(db, chat_session) if not delegated else None,
+                repository_context_loader=repository_context_loader,
+            )
+        except ContextError as exc:
+            if exc.code != "agent.contextWindowExceeded" or not expire_discoveries(records[summary_boundary:], _active_agent_profile):
+                raise
+            await db.commit()
+            continue
+        if projection.compacted and projection.context_summary is not None:
+            boundary = next((index + 1 for index, item in enumerate(records)
+                             if item.id == projection.context_summary.covered_through_message_id), 0)
+            if any((item.provider_data or {}).get("_matoloop", {}).get("toolDiscovery")
+                   for item in records[summary_boundary:boundary]):
+                continue
 
         hold_response = (
             tool_budget_exhausted
@@ -688,7 +711,7 @@ async def execute_loop_body(
         if not normalized_calls and (
             openscad_render_pending
             or (
-                "render_openscad" in offered_tool_names
+                "render_openscad" in turn_tools.available_names
                 and _OPENSCAD_FENCE_PATTERN.search(assistant_content)
             )
         ):
@@ -739,6 +762,7 @@ async def execute_loop_body(
             batch = await execute_tool_batch(
                 cls, db, run, chat_session, assistant, normalized_calls, serialized_calls,
                 toolset=effective_toolset, offered_names=offered_tool_names,
+                delegation_tool_names=turn_tools.available_names,
                 root_files=root_files, memory_state=memory_state,
                 model=model, provider=provider, ai_settings=ai_settings,
                 runtime_settings=runtime_settings, tool_settings=tool_settings,

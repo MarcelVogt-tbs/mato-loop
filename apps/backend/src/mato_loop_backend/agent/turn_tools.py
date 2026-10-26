@@ -13,7 +13,7 @@ from mato_loop_backend.execution import ExecutionClient
 from mato_loop_backend.integrations.registry import (
     effective_execution_integration_settings,
 )
-from mato_loop_backend.models import AgentRun, ChatSession, Project, WebSearchPolicy
+from mato_loop_backend.models import AgentRun, ChatSession, Message, Project, WebSearchPolicy
 from mato_loop_backend.providers.media import available_media_capabilities
 from mato_loop_backend.settings import AiSettings, IntegrationSettings, ToolSettings
 from mato_loop_backend.settings.models import (
@@ -27,6 +27,7 @@ from mato_loop_backend.tools.catalog import (
     effective_tool_capabilities,
     tool_registry,
 )
+from mato_loop_backend.tools.discovery import offer_integration_tools
 from mato_loop_backend.tools.registry import EffectiveToolSet
 
 
@@ -41,6 +42,7 @@ class TurnTools:
     schema_tokens: int
     inactive_groups: tuple[str, ...]
     search_pending: bool
+    available_names: frozenset[str]
 
 
 def select_turn_tools(
@@ -67,6 +69,7 @@ def select_turn_tools(
     render_pending: bool,
     tool_budget_exhausted: bool,
     remaining_tool_calls: int | None = None,
+    discovery_records: list[Message] | None = None,
 ) -> TurnTools:
     capabilities = effective_tool_capabilities(
         tool_settings,
@@ -135,6 +138,10 @@ def select_turn_tools(
         toolset = toolset.without("load_skill", "edit_skill")
     if (project is None or project.coding_integration_id is None) and toolset is not None:
         toolset = toolset.without(*PROJECT_CODING_TOOL_NAMES)
+    available_names = frozenset(toolset.tools if toolset else ())
+    if toolset is not None:
+        toolset = offer_integration_tools(toolset, integration_settings, active_profile, discovery_records or [],
+                                         required_names=frozenset({"render_openscad"}) if render_pending else frozenset())
     search_pending = required_search and not required_search_completed and not tool_budget_exhausted
     if search_pending and toolset is not None:
         toolset = toolset.only("web_search") if skill_state.active else toolset.only("load_skill", "edit_skill", "web_search")
@@ -147,7 +154,7 @@ def select_turn_tools(
         toolset = with_media_prompt_profiles(toolset, ai_settings, active_model_id=model.id)
     inactive_groups = tool_registry.inactive_capability_groups(
         integration_settings,
-        frozenset(toolset.tools if toolset else ())
+        available_names
         | ({"load_skill", "edit_skill"} if hide_skill_catalog_tools else set()),
         webfetch_enabled=web_fetch_enabled,
         web_search_enabled=session.web_search_policy != WebSearchPolicy.DISABLED,
@@ -186,5 +193,5 @@ def select_turn_tools(
     return TurnTools(
         integration_settings, execution_client, toolset, schemas,
         {schema["name"] for schema in schemas}, effective_count,
-        schema_tokens, inactive_groups, search_pending,
+        schema_tokens, inactive_groups, search_pending, available_names,
     )

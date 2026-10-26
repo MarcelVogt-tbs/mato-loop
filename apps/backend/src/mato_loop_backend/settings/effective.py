@@ -270,6 +270,15 @@ async def load_effective_integrations(
     return instance
 
 
+def integration_tool_loading(instance: IntegrationInstance, profile: AgentProfile | None) -> str:
+    if profile is not None:
+        for profile_id in (profile.id, profile.base_profile_id):
+            override = instance.profile_permissions.get(profile_id)
+            if override is not None and override.tool_loading is not None:
+                return override.tool_loading
+    return instance.permissions.tool_loading or (profile.integration_tool_loading if profile else "on_demand")
+
+
 def integration_profile_available(instance: IntegrationInstance, profile: AgentProfile) -> bool:
     override = instance.profile_permissions.get(profile.id)
     if override is not None and override.available is not None:

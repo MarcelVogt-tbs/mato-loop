@@ -419,7 +419,7 @@ class ToolRegistry:
             "temporary": [],
         }
         for name, definition in installed_definitions.items():
-            if name in {"memory_retrieve", "session_search"}:
+            if name in {"memory_retrieve", "session_search", "search_tools"}:
                 continue
             if name in offered_names:
                 continue

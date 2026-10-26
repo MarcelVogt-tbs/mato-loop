@@ -24,6 +24,7 @@ TOOL_GROUPS = (
 _GROUPS = {item["id"]: item for item in TOOL_GROUPS}
 
 TOOL_ACTIVITY_LABELS = {
+    "search_tools": "Integrationswerkzeuge suchen",
     "coding_analyze": "Projekt analysieren", "coding_create_plan": "Plan speichern",
     "coding_list_plans": "Pläne anzeigen", "coding_enqueue": "Pläne ausführen",
     "question": "Rückfrage stellen", "todo_write": "Aufgaben aktualisieren", "read": "Pfad lesen", "glob": "Dateien suchen",

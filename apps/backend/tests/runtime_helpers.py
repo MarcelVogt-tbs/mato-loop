@@ -92,6 +92,7 @@ async def _runtime_setup(
     model_id: str = "local-model",
     safety_reserve_tokens: int = 4_096,
     input_budget_tokens: int = 1_000,
+    integration_tool_loading: str = "all",
 ):
     provider = LlmProviderConfig(
         name="Local",
@@ -226,6 +227,13 @@ async def _runtime_setup(
         }[settings_type]
 
     async def load_optional(_db, settings_type, **_kwargs):
+        from mato_loop_backend.settings.models import GENERAL_PROFILE_ID, AgentProfilesSettings
+
+        if settings_type is AgentProfilesSettings:
+            # Existing scripted calls test execution workflows, not discovery.
+            return AgentProfilesSettings(builtin_access_overrides={GENERAL_PROFILE_ID: {
+                "integration_tool_loading": integration_tool_loading,
+            }})
         return model_defaults if settings_type is ModelDefaultsSettings else None
 
     projections = []

@@ -319,6 +319,7 @@ it('sets profile resource availability after finding an MCP tool by technical na
 })
 
 it('saves a personal integration override for a global profile without a tool ceiling', async () => {
+  vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   const pinia = createPinia()
   const integrations = useIntegrationStore(pinia)
   integrations.catalog = [{ adapterType: 'caldav', availability: 'full', executionLocation: 'backend' }]
@@ -340,11 +341,20 @@ it('saves a personal integration override for a global profile without a tool ce
   await nextTick()
   expect([page().permissions.resourceAvailability['calendar:work'], page().permissions.privatePermissions.resourcePolicies]).toEqual([false, { 'calendar:work': { 'calendar.write': 'ask' } }])
   await page().selectProfile(builtinId)
+  ;[...root.querySelectorAll('button')].find(item => item.textContent.includes('Tool-Ladeverhalten anpassen')).click()
+  const loadingField = await vi.waitUntil(() => document.querySelector('.q-dialog [role="combobox"]'))
+  loadingField.focus()
+  loadingField.click()
+  const immediate = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find(item => item.querySelector('.q-item__label')?.textContent === 'Sofort'))
+  immediate.click()
+  await vi.waitUntil(() => !document.querySelector('[role="option"]'))
+  ;[...document.querySelectorAll('.q-dialog button')].find(item => item.textContent.includes('Übernehmen')).click()
+  await vi.waitUntil(() => !document.querySelector('.q-dialog'))
   page().permissions.privatePermissions.policies['calendar.write'] = 'auto'
   await nextTick()
   expect(root.textContent).toContain('Automatisch')
   await page().save()
-  expect(api.put).toHaveBeenCalledWith('/integrations/calendar/permissions', expect.objectContaining({ privatePermissions: expect.objectContaining({ policies: { 'calendar.write': 'auto' } }) }), { params: { scope: 'personal', profile_id: builtinId } })
+  expect(api.put).toHaveBeenCalledWith('/integrations/calendar/permissions', expect.objectContaining({ toolLoading: 'all', privatePermissions: expect.objectContaining({ policies: { 'calendar.write': 'auto' } }) }), { params: { scope: 'personal', profile_id: builtinId } })
   root.querySelector('.q-expansion-item .q-item').click()
   await nextTick()
   root.querySelector('[aria-label="Arbeit: Schreiben, Private Modelle entfernen"]').click()

@@ -29,11 +29,11 @@ ToolSettingsDocument = ToolSettings | UserToolSettings
 
 
 def _clear_integration_policies(instance: IntegrationInstance) -> None:
-    instance.permissions = IntegrationPermissions()
+    instance.permissions = IntegrationPermissions(tool_loading=instance.permissions.tool_loading)
     instance.profile_permissions = {
-        profile_id: IntegrationPermissions(available=permissions.available)
+        profile_id: IntegrationPermissions(available=permissions.available, tool_loading=permissions.tool_loading)
         for profile_id, permissions in instance.profile_permissions.items()
-        if permissions.available is not None
+        if permissions.available is not None or permissions.tool_loading is not None
     }
 
 

@@ -6,6 +6,7 @@ import mato_loop_backend.tools.automations as tools_automations
 import mato_loop_backend.tools.coding as tools_coding
 import mato_loop_backend.tools.computer as tools_computer
 import mato_loop_backend.tools.context_search as tools_context_search
+import mato_loop_backend.tools.discovery as tools_discovery
 import mato_loop_backend.tools.files as tools_files
 import mato_loop_backend.tools.identity as tools_identity
 import mato_loop_backend.tools.interaction as tools_interaction
@@ -127,6 +128,7 @@ PROJECT_CODING_TOOL_NAMES = (
 
 tool_registry = ToolRegistry(
     [
+        tools_discovery.SEARCH_TOOLS,
         tools_coding.CODING_ANALYZE,
         tools_coding.CODING_CREATE_PLAN,
         tools_coding.CODING_LIST_PLANS,

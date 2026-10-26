@@ -3,6 +3,7 @@
   <div class="row justify-end q-gutter-sm q-mb-md">
     <q-btn v-if="profileId" flat round dense icon="delete_outline" aria-label="Alle eigenen Regeln und Einstellungen entfernen" color="negative" :disable="disabled || !hasOverrides" @click="removeAll" />
     <q-btn v-if="profileId && permissions.available == null" flat no-caps icon="tune" color="primary" label="Verfügbarkeit anpassen" :disable="disabled" @click="edit('', 'availability')" />
+    <q-btn v-if="permissions.toolLoading == null" flat no-caps icon="manage_search" color="primary" label="Tool-Ladeverhalten anpassen" :disable="disabled" @click="edit('', 'tool_loading')" />
     <q-btn v-if="groups.private[0].actions.length" flat no-caps icon="add" color="primary" label="Eigene Regel hinzufügen" :disable="disabled" @click="edit()" />
   </div>
   <q-card v-if="profileId && permissions.available != null" flat class="app-surface q-mb-md">
@@ -12,6 +13,13 @@
       <q-btn flat round dense icon="delete_outline" aria-label="Eigene Verfügbarkeit entfernen" :disable="disabled" @click="removeAvailability()" />
     </q-card-section>
   </q-card>
+  <q-card v-if="permissions.toolLoading != null" flat class="app-surface q-mb-md">
+    <q-card-section class="row items-center q-gutter-sm">
+      <AppSelect v-model="permissions.toolLoading" class="col" outlined emit-value map-options label="Tool-Ladeverhalten" :options="loadingOptions" :hint="`Vorgabe: ${data.inheritedToolLoading === 'all' ? 'Sofort' : 'Bei Bedarf'}. Ändert keine Zugriffsrechte.`" :disable="disabled" />
+      <q-btn flat round dense icon="delete_outline" aria-label="Eigenes Tool-Ladeverhalten entfernen" :disable="disabled" @click="removeLoading()" />
+    </q-card-section>
+  </q-card>
+  <div v-else class="text-caption app-muted q-mb-md">Tool-Ladeverhalten – Vorgabe: {{ data.inheritedToolLoading === 'all' ? 'Sofort' : 'Bei Bedarf' }}.</div>
   <q-card v-if="!hasVisibleOverrides" flat class="app-surface q-mb-md"><q-card-section class="app-muted">Keine eigenen Regeln. Es gelten die Vorgaben.</q-card-section></q-card>
   <PermissionFields v-model="permissions" :groups-by-trust="groups" :resources="visibleResources" :model-trust-enabled="modelTrustEnabled" overrides-only resource-overrides-only>
     <template #policy="{ action, audience, resource }">
@@ -39,11 +47,11 @@
   <q-dialog v-model="open" :maximized="$q.screen.lt.sm" aria-labelledby="integration-rule-title">
     <q-card class="app-surface column no-wrap full-width">
       <q-card-section class="row items-center">
-        <div id="integration-rule-title" class="text-h6 col">{{ draft.capability === 'availability' ? 'Verfügbarkeit anpassen' : editing ? 'Eigene Regel bearbeiten' : 'Eigene Regel hinzufügen' }}</div>
+        <div id="integration-rule-title" class="text-h6 col">{{ draft.capability === 'tool_loading' ? 'Tool-Ladeverhalten anpassen' : draft.capability === 'availability' ? 'Verfügbarkeit anpassen' : editing ? 'Eigene Regel bearbeiten' : 'Eigene Regel hinzufügen' }}</div>
         <q-btn v-close-popup flat round dense icon="close" aria-label="Dialog schließen" />
       </q-card-section>
       <q-card-section class="col scroll q-gutter-md">
-        <template v-if="draft.capability !== 'availability' || draft.resource">
+        <template v-if="draft.capability !== 'tool_loading' && (draft.capability !== 'availability' || draft.resource)">
           <AppSelect v-model="draft.resource" label="Bereich" outlined emit-value map-options use-input :input-debounce="0" :options="targetOptions" :disable="editing || disabled" @filter="filterTargets" @update:model-value="draft.capability = null" />
           <div v-if="selectedResource?.toolName" class="text-body2 app-muted">
             <div v-if="selectedResource.toolName !== selectedResource.label" class="text-caption settings-list-name">{{ selectedResource.toolName }}</div>
@@ -53,6 +61,7 @@
           <AppSelect v-model="draft.capability" label="Aktion" outlined emit-value map-options :options="actionOptions" :disable="editing || disabled" />
         </template>
         <q-toggle v-if="draft.capability === 'availability'" v-model="draft.available" :label="draft.resource ? 'Ressource verfügbar' : 'Integration für dieses Profil verfügbar'" :disable="disabled" />
+        <AppSelect v-else-if="draft.capability === 'tool_loading'" v-model="draft.toolLoading" label="Tool-Ladeverhalten" outlined emit-value map-options :options="loadingOptions" hint="Lädt nur erlaubte Werkzeuge. Berechtigungen und Freigaben bleiben unverändert." :disable="disabled" />
         <template v-else-if="draft.capability">
           <AppSelect v-if="modelTrustEnabled" v-model="draft.trust" outlined emit-value map-options label="Modellbereich" :options="audiences.map(audience => ({ ...audience, disable: !editing && ownPolicy(audience.value, draft.resource, draft.capability) !== 'inherit' }))" :disable="editing || disabled" />
           <AppSelect v-model="draft.policy" outlined emit-value map-options label="Berechtigung" :options="policyOptions" :disable="disabled" />
@@ -77,15 +86,16 @@ const props = defineProps({ data: { type: Object, required: true }, profileId: {
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const policyLabels = { auto: 'Automatisch', ask: 'Nachfragen', disabled: 'Deaktiviert' }
+const loadingOptions = [{ label: 'Bei Bedarf', value: 'on_demand' }, { label: 'Sofort', value: 'all' }]
 const audiences = computed(() => props.modelTrustEnabled ? [{ value: 'private', label: 'Private Modelle' }, { value: 'public', label: 'Öffentliche Modelle' }] : [{ value: 'private', label: 'Alle Modelle' }])
 const branch = trust => permissions.value[`${trust}Permissions`]
 const groups = computed(() => Object.fromEntries(['private', 'public'].map(trust => [trust, [{ id: 'integration', label: 'Berechtigungen', icon: 'security', tools: [], actions: (props.data.inherited[trust]?.actions || []).map(action => ({ ...action, available: !props.profileId || (permissions.value.available ?? props.data.inheritedAvailable) })) }]])))
 const resources = computed(() => props.data.inherited.private?.resources || [])
 const inheritedResources = computed(() => Object.fromEntries(['private', 'public'].map(trust => [trust, props.data.inherited[trust]?.resources || []])))
-const hasOverrides = computed(() => permissions.value.available != null || Object.keys(permissions.value.resourceAvailability).length || ['private', 'public'].some(trust => Object.keys(branch(trust).policies).length || Object.keys(branch(trust).resourcePolicies).length))
+const hasOverrides = computed(() => permissions.value.toolLoading != null || permissions.value.available != null || Object.keys(permissions.value.resourceAvailability).length || ['private', 'public'].some(trust => Object.keys(branch(trust).policies).length || Object.keys(branch(trust).resourcePolicies).length))
 const resourceOverridden = key => permissions.value.resourceAvailability[key] != null || audiences.value.some(({ value }) => Object.keys(branch(value).resourcePolicies[key] || {}).length)
 const visibleResources = computed(() => resources.value.filter(resource => !props.profileId || resourceOverridden(resource.key)).map(resource => ({ ...resource, available: permissions.value.resourceAvailability[resource.key] ?? resource.available ?? true })))
-const hasVisibleOverrides = computed(() => permissions.value.available != null || resources.value.some(resource => resourceOverridden(resource.key)) || audiences.value.some(({ value }) => Object.keys(branch(value).policies).length))
+const hasVisibleOverrides = computed(() => permissions.value.toolLoading != null || permissions.value.available != null || resources.value.some(resource => resourceOverridden(resource.key)) || audiences.value.some(({ value }) => Object.keys(branch(value).policies).length))
 const open = ref(false)
 const editing = ref(false)
 const draft = ref({ resource: '', capability: null, available: true, trust: 'private', policy: 'ask' })
@@ -109,8 +119,8 @@ function inheritedPolicy(trust) {
 }
 function edit(resource = '', capability = null, trust = 'private') {
   search.value = ''
-  editing.value = Boolean(capability) && capability !== 'availability' && ownPolicy(trust, resource, capability) !== 'inherit'
-  draft.value = { resource, capability, trust, available: permissions.value.available ?? props.data.inheritedAvailable ?? true, policy: 'ask' }
+  editing.value = Boolean(capability) && !['availability', 'tool_loading'].includes(capability) && ownPolicy(trust, resource, capability) !== 'inherit'
+  draft.value = { resource, capability, trust, available: permissions.value.available ?? props.data.inheritedAvailable ?? true, toolLoading: permissions.value.toolLoading ?? props.data.inheritedToolLoading ?? 'on_demand', policy: 'ask' }
   const own = ownPolicy(trust, resource, capability)
   draft.value.policy = own === 'inherit' ? inheritedPolicy(trust) : own
   open.value = true
@@ -118,7 +128,8 @@ function edit(resource = '', capability = null, trust = 'private') {
 function apply() {
   if (props.disabled || !draft.value.capability) return
   const { resource, capability, available, trust, policy } = draft.value
-  if (capability === 'availability') {
+  if (capability === 'tool_loading') permissions.value.toolLoading = draft.value.toolLoading
+  else if (capability === 'availability') {
     if (resource) permissions.value.resourceAvailability[resource] = available
     else permissions.value.available = available
   }
@@ -134,12 +145,16 @@ async function removeAvailability(resource = '') {
   if (resource) delete permissions.value.resourceAvailability[resource]
   else permissions.value.available = null
 }
+async function removeLoading() {
+  if (!await confirm('Das Tool-Ladeverhalten wieder von der Vorgabe übernehmen?', 'Eigene Einstellung entfernen?', { okLabel: 'Entfernen' })) return
+  permissions.value.toolLoading = null
+}
 async function removeAll() {
   if (!await confirm('Alle eigenen Regeln und Einstellungen dieses Profils für diese Integration entfernen, einschließlich Ressourcen und öffentlicher Werte?', 'Eigene Regeln und Einstellungen entfernen?', { okLabel: 'Entfernen' })) return
   permissions.value = { available: null, resourceAvailability: {}, privatePermissions: { policies: {}, resourcePolicies: {} }, publicPermissions: { policies: {}, resourcePolicies: {} } }
 }
 watch(() => [draft.value.resource, draft.value.capability, draft.value.trust], ([resource, capability, trust]) => {
-  if (!capability) return
+  if (!capability || capability === 'tool_loading') return
   if (capability === 'availability') {
     if (resource) draft.value.available = permissions.value.resourceAvailability[resource] ?? selectedResource.value?.available ?? true
     return

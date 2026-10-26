@@ -1,6 +1,9 @@
 <template>
   <q-banner v-if="failed" rounded class="app-surface-tonal">Die Integrationsvorgabe konnte nicht geladen werden.<template #action><q-btn flat label="Erneut laden" @click="load" /></template></q-banner>
-  <AppSelect v-else :model-value="value?.integrationsEnabledByDefault ?? null" outlined emit-value map-options label="Integrationen standardmäßig verfügbar" :options="[{ label: `Vorgabe: ${value?.inheritedIntegrationsEnabledByDefault ? 'Verfügbar' : 'Nicht verfügbar'}`, value: null }, { label: 'Verfügbar', value: true }, { label: 'Nicht verfügbar', value: false }]" :disable="busy || !value" @update:model-value="save" />
+  <div v-else class="q-gutter-md">
+    <AppSelect :model-value="value?.integrationsEnabledByDefault ?? null" outlined emit-value map-options label="Integrationen standardmäßig verfügbar" :options="[{ label: `Vorgabe: ${value?.inheritedIntegrationsEnabledByDefault ? 'Verfügbar' : 'Nicht verfügbar'}`, value: null }, { label: 'Verfügbar', value: true }, { label: 'Nicht verfügbar', value: false }]" :disable="busy || !value" @update:model-value="save('integrationsEnabledByDefault', $event)" />
+    <AppSelect :model-value="value?.integrationToolLoading ?? null" outlined emit-value map-options label="Integrations-Tool-Verfügbarkeit" :options="[{ label: `Vorgabe: ${value?.inheritedIntegrationToolLoading === 'all' ? 'Alle' : 'Bei Bedarf'}`, value: null }, { label: 'Bei Bedarf', value: 'on_demand' }, { label: 'Alle', value: 'all' }]" hint="Bei Bedarf werden Integrationswerkzeuge über die Tool-Suche nachgeladen. Eigene Lade-Einstellungen der Integrationen gehen vor; Zugriffsrechte bleiben unverändert." :disable="busy || !value" @update:model-value="save('integrationToolLoading', $event)" />
+  </div>
 </template>
 
 <script setup>
@@ -27,11 +30,11 @@ async function load() {
   } catch { if (token === revision) failed.value = true }
   finally { if (token === revision) busy.value = false }
 }
-async function save(enabled) {
+async function save(field, setting) {
   const token = ++revision
   busy.value = true
   try {
-    const data = await integrations.saveProfileAvailability(props.profileId, props.scope, { integrationsEnabledByDefault: enabled })
+    const data = await integrations.saveProfileAvailability(props.profileId, props.scope, { [field]: setting })
     if (token === revision) value.value = data
     $q.notify({ type: 'positive', message: 'Integrationsvorgabe gespeichert' })
   } catch { /* Central API toast. */ }

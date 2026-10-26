@@ -104,6 +104,9 @@ async def persist_tool_result(
                 **({"userEditedArguments": True} if metadata.get("userEdited") is True else {}),
                 **({"errorCode": metadata["errorCode"]} if isinstance(metadata.get("errorCode"), str) else {}),
                 **({"toolSnapshot": metadata["toolSnapshot"]} if isinstance(metadata.get("toolSnapshot"), dict) else {}),
+                **({"toolDiscovery": metadata["toolDiscovery"]}
+                   if call.name == "search_tools" and not metadata.get("errorCode")
+                   and isinstance(metadata.get("toolDiscovery"), dict) else {}),
                 **({"computerRead": metadata["computerRead"]} if isinstance(metadata.get("computerRead"), dict) else {}),
                 **({"repositoryInstructionTargets": metadata["repositoryInstructionTargets"]}
                    if isinstance(metadata.get("repositoryInstructionTargets"), dict) else {}),
@@ -303,6 +306,7 @@ async def execute_tool_batch(
     openscad_source_review_pending: tuple[str, str] | None,
     openscad_source_review_retries: int,
     repository_entries: dict[str, dict] | None = None,
+    delegation_tool_names: frozenset[str] | None = None,
     repository_authorize: Callable[[PermissionRequest], Awaitable[PermissionDecision]] | None = None,
 ) -> ToolBatchResult:
     state = ToolBatchResult(
@@ -501,7 +505,7 @@ async def execute_tool_batch(
                 task_handler=(
                     partial(
                         run_tasks, runtime, db, run, session, tool_call_id=call.id,
-                        tool_settings=tool_settings, tool_names=offered_names,
+                        tool_settings=tool_settings, tool_names=delegation_tool_names if delegation_tool_names is not None else offered_names,
                         integration_settings=integration_settings, max_tool_calls=max_tool_calls,
                     ) if not delegated else None
                 ),

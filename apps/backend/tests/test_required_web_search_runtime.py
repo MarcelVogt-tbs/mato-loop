@@ -479,7 +479,8 @@ async def test_runtime_replays_exact_tool_calls_without_persisting_them(monkeypa
     )["message"]["toolCalls"][0]["toolDisplay"] == display
 
 
-async def test_generated_openscad_source_requires_a_successful_render(monkeypatch) -> None:
+@pytest.mark.parametrize("integration_tool_loading", ["all", "on_demand"])
+async def test_generated_openscad_source_requires_a_successful_render(monkeypatch, integration_tool_loading) -> None:
     agent_id = uuid4()
     integration = IntegrationInstance(
         name="OpenSCAD",
@@ -563,6 +564,7 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
         ],
         search_policy=WebSearchPolicy.AVAILABLE,
         integration_settings=IntegrationSettings(instances=[integration]),
+        integration_tool_loading=integration_tool_loading,
         execution_agent_id=agent_id,
         execution_operations=("integration.openscad.render", "cache.export"),
     )

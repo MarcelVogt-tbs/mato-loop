@@ -1724,6 +1724,7 @@ class ProfileIntegrationAvailabilityRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     integrations_enabled_by_default: bool | None = Field(default=None, alias="integrationsEnabledByDefault")
+    integration_tool_loading: Literal["on_demand", "all"] | None = Field(default=None, alias="integrationToolLoading")
 
 
 @router.get("/profiles/{profile_id}/availability")
@@ -1737,6 +1738,8 @@ async def get_profile_integration_availability(
     return {
         "integrationsEnabledByDefault": overrides.integrations_enabled_by_default,
         "inheritedIntegrationsEnabledByDefault": baseline.integrations_enabled_by_default,
+        "integrationToolLoading": overrides.integration_tool_loading,
+        "inheritedIntegrationToolLoading": baseline.integration_tool_loading,
     }
 
 
@@ -1749,9 +1752,12 @@ async def update_profile_integration_availability(
     scope: SettingsApiScope = "personal",
 ) -> dict:
     settings, owner_id, overrides, _, _ = await _load_profile_access(db, user, profile_id, scope, for_update=True)
-    values = overrides.model_dump(exclude_unset=True, exclude={"integrations_enabled_by_default"})
-    if payload.integrations_enabled_by_default is not None:
-        values["integrations_enabled_by_default"] = payload.integrations_enabled_by_default
+    values = overrides.model_dump(exclude_unset=True)
+    for field in payload.model_fields_set:
+        if getattr(payload, field) is None:
+            values.pop(field, None)
+        else:
+            values[field] = getattr(payload, field)
     if isinstance(overrides, AgentProfileAccessOverrides):
         settings.builtin_access_overrides[profile_id] = AgentProfileAccessOverrides.model_validate(values)
     else:
@@ -1795,15 +1801,20 @@ async def get_integration_permissions(
     } if actions else {}
     configured = instance.profile_permissions.get(profile_id, IntegrationPermissions()) if profile_id is not None else instance.permissions
     inherited_available = True
+    from mato_loop_backend.settings.effective import integration_tool_loading
+
+    inherited_instance = instance.model_copy(deep=True)
     if profile is not None:
-        inherited_instance = instance.model_copy(deep=True)
         inherited_instance.profile_permissions.pop(profile.id, None)
         inherited_available = integration_profile_available(inherited_instance, profile)
+    else:
+        inherited_instance.permissions.tool_loading = None
     return {
         "integrationId": str(instance.id), "name": instance.name, "providerType": instance.adapter_type,
         "permissions": configured.model_dump(mode="json", by_alias=True),
         "inherited": inherited,
         "inheritedAvailable": inherited_available,
+        "inheritedToolLoading": integration_tool_loading(inherited_instance, profile),
         "profiles": [{"id": str(item.id), "name": item.name, "scope": "personal" if item.owner_id == user.id else "instance"} for item in profiles.profiles],
     }
 
@@ -1852,7 +1863,7 @@ async def update_integration_permissions(
         raise ApiError(409, "integration.changed")
     if profile_id is None:
         current.permissions = payload
-    elif payload.available is not None or payload.resource_availability or any(branch.policies or branch.resource_policies for branch in (payload.private_permissions, payload.public_permissions)):
+    elif payload.available is not None or payload.tool_loading is not None or payload.resource_availability or any(branch.policies or branch.resource_policies for branch in (payload.private_permissions, payload.public_permissions)):
         current.profile_permissions[profile_id] = payload
     else:
         current.profile_permissions.pop(profile_id, None)

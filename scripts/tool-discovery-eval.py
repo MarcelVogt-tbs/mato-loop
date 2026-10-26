@@ -13,6 +13,7 @@ from collections import Counter
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID
 
 from jsonschema import FormatChecker, ValidationError
@@ -21,9 +22,12 @@ from sqlalchemy import select, text
 
 from mato_loop_backend.db.session import AsyncSessionFactory, engine
 from mato_loop_backend.integrations.mcp.adapter import mcp_model_tool_name
-from mato_loop_backend.models import ChatSession, DiagnosticEvent
+from mato_loop_backend.models import ChatSession, DiagnosticEvent, Message
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.settings.effective import load_effective_ai, load_effective_integrations
+from mato_loop_backend.settings.models import effective_model_trust
+from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.tools.discovery import SearchToolsArguments, offer_integration_tools
 
 ROOT = Path("/workspace")
 VARIANTS = ("all", "load", "dispatch")
@@ -119,6 +123,9 @@ def passed(case, state, content):
 
 
 def check(catalog, original_names):
+    assert runtime_flow_passed([("get_ticket", 4712)], [("get_ticket", 4712)], "Done")
+    assert not runtime_flow_passed([("get_ticket", 4711)], [("get_ticket", 4712)], "Done")
+    assert not runtime_flow_passed([("ha_get_state", "light.kitchen")], [("ha_get_state", "light.office")], "Done")
     deferred = {name: tool for name, tool in catalog.items() if name not in CORE}
     assert any(original_names.get(name) == "get_ticket" for name in search("read ticket", deferred, original_names))
     assert "tasks_create" in search("create task", deferred, original_names)
@@ -247,6 +254,81 @@ def summary(report):
     return "\n".join(lines) + "\n"
 
 
+async def runtime_flow(output, integrations, tool_settings, profile, provider, model):
+    """Exercise the implemented selector and search handler; simulate business tools only."""
+    complete = tool_registry.effective(integrations, tool_settings=tool_settings, webfetch_enabled=True)
+    names = {mcp_model_tool_name(item.id, tool["name"]): tool["name"] for item in integrations.instances for tool in item.config.get("tools", [])}
+    messages = [{"role": "system", "content": SYSTEM}]
+    records, rows = [], []
+    report = {"model": model.model_id, "provider": provider.name, "fullCatalogCount": len(complete.tools),
+              "method": "Implemented runtime selector/search with in-memory canonical-shaped records and simulated business effects; no full agent or permission-loop benchmark.",
+              "records": rows}
+    previous_schemas = None
+
+    async def current_integrations():
+        return integrations
+
+    context = SimpleNamespace(current_integrations=current_integrations)
+    for case, user, expected in (
+        ("greeting", "Guten Tag!", []),
+        ("first_ticket", "Lies Ticket 4711 aus tbs.Desk und nenne die Ursache.", [("get_ticket", 4711)]),
+        ("next_ticket", "Lies jetzt auch Ticket 4712 aus tbs.Desk und nenne die Ursache.", [("get_ticket", 4712)]),
+        ("first_hass", "Lies in Home Assistant den aktuellen Zustand von light.kitchen. Ändere nichts.", [("ha_get_state", "light.kitchen")]),
+        ("next_hass", "Lies jetzt in Home Assistant auch den aktuellen Zustand von light.office. Ändere nichts.", [("ha_get_state", "light.office")]),
+    ):
+        messages.append({"role": "user", "content": user})
+        row = {"case": case, "steps": [], "passed": False}
+        rows.append(row)
+        began, actions = time.monotonic(), []
+        for _ in range(6):
+            offered = offer_integration_tools(complete, integrations, profile, records)
+            schemas = offered.schemas()
+            system = SYSTEM + "\n\n" + "\n\n".join(offered.prompt_fragments)
+            current = [{"role": "system", "content": system}, *messages[1:]]
+            step = {"toolCount": len(schemas), "schemasUnchanged": previous_schemas == schemas}
+            previous_schemas = schemas
+            started = time.monotonic()
+            async with AsyncSessionFactory() as db:
+                await db.execute(text("SET TRANSACTION READ ONLY"))
+                result = await ProviderService.complete(db, provider=provider, model=model, messages=current, tools=schemas,
+                    max_output_tokens=4096, reasoning_effort="medium", pseudonymization_enabled=False, timeout=90)
+            step.update(seconds=round(time.monotonic()-started, 3), usage=result.usage, content=result.content,
+                        calls=[asdict(call) for call in result.tool_calls])
+            row["steps"].append(step)
+            if not result.tool_calls:
+                row["passed"] = runtime_flow_passed(actions, expected, result.content)
+                messages.append({"role": "assistant", "content": result.content})
+                break
+            messages.append({"role": "assistant", "content": result.content, "tool_calls": step["calls"]})
+            for call in result.tool_calls:
+                validate(next(tool for tool in schemas if tool["name"] == call.name), call.arguments)
+                if call.name == "search_tools":
+                    found = await offered.tools[call.name].definition.handler(SearchToolsArguments.model_validate({key: value for key, value in call.arguments.items() if key != "_reason"}), context)
+                    # Rehydrate plain JSON metadata as after a canonical tool-result reload.
+                    records.append(Message(role="tool", provider_data=json.loads(json.dumps({"_matoloop": {"toolName": "search_tools", **found.metadata}}))))
+                    payload = json.loads(found.content)
+                else:
+                    name = names.get(call.name, call.name)
+                    actions.append((name, call.arguments.get("ticket_id") if name == "get_ticket" else call.arguments.get("entity_id")))
+                    if name == "get_ticket":
+                        payload = {"id": call.arguments["ticket_id"], "entries": [{"text": "Ursache: defektes Netzteil."}]}
+                    elif name == "ha_get_state":
+                        payload = {"entity_id": call.arguments["entity_id"], "state": "on"}
+                    else:
+                        payload = {"error": {"code": "evaluation.unexpectedAction"}}
+                messages.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps(payload, ensure_ascii=False)})
+        row.update(seconds=round(time.monotonic()-began, 3), actions=actions)
+        output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+        print(json.dumps({key: value for key, value in row.items() if key != "steps"}), flush=True)
+    await engine.dispose()
+    if not all(row["passed"] for row in rows):
+        raise SystemExit("Runtime discovery flow failed")
+
+
+def runtime_flow_passed(actions, expected, content):
+    return bool(content.strip()) and actions == expected
+
+
 async def run(args):
     if args.output.exists() or args.output.with_suffix(".md").exists():
         raise SystemExit("Refusing to overwrite prior results")
@@ -260,6 +342,9 @@ async def run(args):
         provider = next(item for item in ai.providers if item.enabled and item.name == "R9700")
         model = next(item for item in ai.models if item.enabled and item.provider_id == provider.id and item.model_id == "qwen3.8-27b-mxfp4")
         model = model.model_copy(update={"config": {**model.config, "temperature": 0}})
+        if args.runtime_flow:
+            from mato_loop_backend.settings.effective import load_agent_profile_tools
+            tool_settings, profile = await load_agent_profile_tools(db, session.user_id, session.agent_profile_id, effective_model_trust(provider, model))
         discovered = await ProviderService.discover_models(db, provider=provider, timeout=15)
         live_model = next(item for item in discovered if item.id == model.model_id)
         event = await db.scalar(select(DiagnosticEvent).where(
@@ -271,6 +356,10 @@ async def run(args):
             raise SystemExit("Source catalog or hass integration not found")
         catalog = {tool["name"]: tool for tool in event.payload["tools"] if not any(tool["name"].startswith(prefix) for prefix in excluded)}
         names = {mcp_model_tool_name(item.id, tool["name"]): tool["name"] for item in integrations.instances for tool in item.config.get("tools", [])}
+    if args.runtime_flow:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        await runtime_flow(args.output, integrations, tool_settings, profile, provider, model)
+        return
     check(catalog, names)
     print(f"Offline checks passed; {len(catalog)} tools; no tool handlers are invoked.", flush=True)
     if args.check:
@@ -322,6 +411,7 @@ if __name__ == "__main__":
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--budget-seconds", type=int, default=1800)
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--runtime-flow", action="store_true")
     arguments = parser.parse_args()
     if arguments.repetitions < 1 or arguments.budget_seconds < 1:
         parser.error("Repetitions and time budget must be positive")

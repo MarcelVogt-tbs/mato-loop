@@ -14,7 +14,9 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
     ToolSettings,
 )
+from mato_loop_backend.settings.models import AgentProfile
 from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.tools.discovery import offer_integration_tools
 
 
 def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
@@ -61,6 +63,9 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
         tool_capabilities=capabilities,
         tool_settings=settings,
     )
+    effective = offer_integration_tools(effective, integrations, AgentProfile(
+        name="All", instructions="Task", integration_tool_loading="all",
+    ), [])
     inactive = tool_registry.inactive_capability_groups(
         integrations,
         frozenset(effective.tools),
