@@ -19,7 +19,7 @@ from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.media.attachments import AttachmentService, validate_image
 from mato_loop_backend.models import ChatSession, Message
-from mato_loop_backend.providers import lemonade
+from mato_loop_backend.providers import lemonade, token_counting
 from mato_loop_backend.providers import service as service_module
 from mato_loop_backend.providers.base import (
     ProviderError,
@@ -56,6 +56,53 @@ from mato_loop_backend.settings.models import (
 )
 
 pytestmark = pytest.mark.usefixtures("mock_db_settings")
+
+
+@pytest.mark.parametrize("outcome", ["supported", "unsupported", "timeout", "invalid"])
+async def test_server_token_count_uses_protected_request_and_caches_failures(monkeypatch, outcome):
+    provider = LlmProviderConfig(
+        name="Local", adapter_type="openai-compatible", config={"base_url": "http://local.test/v1"},
+    )
+    model = ModelConfig(provider_id=provider.id, model_id="model-alias")
+    prepared = await ProviderService.prepare_request(
+        provider=provider, model=model, messages=[{"role": "user", "content": "anna@example.com"}],
+        tools=[{"name": "read", "parameters": {"type": "object"}}],
+        pseudonymization_enabled=True, pseudonymization_key=b"r" * 32,
+    )
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if outcome == "timeout":
+            raise httpx.ReadTimeout("Unavailable")
+        return httpx.Response(404 if outcome == "unsupported" else 200, json={"count": True if outcome == "invalid" else 123})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    monkeypatch.setattr(token_counting.httpx, "AsyncClient", lambda **kwargs: client)
+    first = await ProviderService.count_input_tokens(AsyncMock(spec=AsyncSession), provider=provider, prepared=prepared)
+    if outcome == "supported":
+        assert (first, str(requests[0].url), json.loads(requests[0].content)) == (
+            123, "http://local.test/tokenize",
+            {key: _chat_body(prepared.request)[key] for key in ("model", "messages", "tools")},
+        )
+    else:
+        second = await ProviderService.count_input_tokens(AsyncMock(spec=AsyncSession), provider=provider, prepared=prepared)
+        assert (first, second, len(requests)) == (None, None, 1)
+
+
+async def test_stale_server_count_cannot_bypass_final_budget():
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False)
+    model = ModelConfig(provider_id=provider.id, model_id="test", context_window_tokens=2_048, max_output_tokens=100)
+    prepared = await ProviderService.prepare_request(
+        provider=provider, model=model, messages=[{"role": "user", "content": "Hello"}], tools=[],
+    )
+    with pytest.raises(ProviderError) as error:
+        await ProviderService.complete(
+            AsyncMock(spec=AsyncSession), provider=provider, model=model, tools=[],
+            messages=[{"role": "user", "content": "x" * 10_000}], estimated_input_tokens=100,
+            counted_input_fingerprint=prepared.input_token_fingerprint, safety_reserve_tokens=0,
+        )
+    assert error.value.code == "agent.contextWindowExceeded"
 
 
 def _png_bytes() -> bytes:

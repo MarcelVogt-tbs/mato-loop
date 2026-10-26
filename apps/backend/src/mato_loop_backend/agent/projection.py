@@ -90,6 +90,8 @@ class ContextProjection:
     compacted: bool = False
     context_summary: ContextSummary | None = None
     reserved_output_tokens: int = 2_048
+    input_token_source: str = "estimate"
+    counted_input_fingerprint: str | None = None
 
 
 def compaction_messages(source: str) -> list[dict[str, str]]:
@@ -641,6 +643,7 @@ def _projection_messages(
     live_tool_calls: dict[UUID, list[dict[str, Any]]] | None = None,
     pdf_context: dict[str, dict] | None = None,
     attachment_text_characters: int = MAX_ATTACHMENT_EXCERPT_CHARACTERS,
+    omitted_tool_result_ids: set[UUID] | None = None,
 ) -> list[dict[str, Any]]:
     records = [item for item in records if item.error_code is None]
     if available_records is not None:
@@ -714,17 +717,6 @@ def _projection_messages(
              != continuation_run_id),
             0,
         )
-    previous_tool_index = next(
-        (index for index in range(latest_user_index - 1, -1, -1) if records[index].role == "tool"),
-        -1,
-    )
-    previous_run_id = (
-        (records[previous_tool_index].provider_data or {}).get("_matoloop", {}).get("runId")
-        if previous_tool_index >= 0 else None
-    )
-    previous_turn_start = max(
-        (index for index in range(previous_tool_index) if records[index].role == "user"), default=-1,
-    )
     projected_attachment_ids: set[str] = set()
     snapshot_message = snapshot_context(
         tool_snapshots or [],
@@ -800,14 +792,16 @@ def _projection_messages(
             projected["content"] = _sanitize_tool_result_reference_fields(
                 str(projected.get("content") or "")
             )
-            if record_index < latest_user_index:
+            omitted = (
+                item.id in (omitted_tool_result_ids or ())
+                or (item.provider_data or {}).get("_matoloop", {}).get("contextOutputOmitted") is True
+            )
+            if not omitted and tool_name in {"browser", "browser_snapshot"} and item.tool_call_id in browser_inspect_calls:
+                projected["content"] = _model_browser_inspection(projected["content"])
+            if record_index < latest_user_index or omitted:
                 original_content = str(projected.get("content") or "")
                 fallback = _omitted_tool_result(item.id, original_content, original_references.get(item.id))
-                recent = (
-                    (item.provider_data or {}).get("_matoloop", {}).get("runId") == previous_run_id
-                    if previous_run_id else previous_turn_start < record_index <= previous_tool_index
-                )
-                if recent and tool_name != "secret_input":
+                if not omitted and tool_name != "secret_input":
                     projected[_HOST_RETAINED_TOOL_RESULT] = fallback
                     current_tool_indices.append(len(messages))
                 else:
@@ -820,11 +814,6 @@ def _projection_messages(
             else:
                 if tool_name == "todo_write":
                     projected[_HOST_CHECKLIST_RESULT] = True
-                if (
-                    latest_user_index >= 0 and tool_name in {"browser", "browser_snapshot"}
-                    and item.tool_call_id in browser_inspect_calls
-                ):
-                    projected["content"] = _model_browser_inspection(projected["content"])
                 current_tool_indices.append(len(messages))
             if tool_name == "webfetch":
                 original_content = str(projected.get("content") or "")

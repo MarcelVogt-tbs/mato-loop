@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -75,98 +76,145 @@ async def build_turn_context(
             runtime_settings=settings, on_update=on_update,
         )
 
-    async def estimate_request(messages: list[dict[str, Any]]) -> int:
+    token_ratio = 1.0
+    server_counts: dict[str, int] = {}
+    counting_available: bool | None = None
+
+    async def prepare(messages: list[dict[str, Any]]):
         messages, images = run_support._project_ephemeral_images(
             model_browser_observations(messages), ephemeral_images,
             model=model, target_trust_level=trust_level,
         )
-        prepared = await ProviderService.prepare_request(
+        return await ProviderService.prepare_request(
             messages=messages, image_inputs=images, **request_options
         )
-        return prepared.estimated_input_tokens
+
+    async def count_request(prepared) -> int | None:
+        nonlocal token_ratio
+        fingerprint = prepared.input_token_fingerprint
+        if fingerprint in server_counts:
+            return server_counts[fingerprint]
+        counted = await ProviderService.count_input_tokens(
+            db, provider=request_options["provider"], prepared=prepared,
+        )
+        if counted is not None and fingerprint is not None:
+            server_counts[fingerprint] = counted
+            token_ratio = counted / max(1, prepared.estimated_input_tokens)
+        return counted
+
+    async def estimate_request(messages: list[dict[str, Any]]) -> int:
+        nonlocal counting_available
+        prepared = await prepare(messages)
+        if counting_available is None:
+            counted = await count_request(prepared)
+            counting_available = counted is not None
+            if counted is not None:
+                return counted
+        if counting_available:
+            fingerprint = prepared.input_token_fingerprint
+            if fingerprint in server_counts:
+                return server_counts[fingerprint]
+        return math.ceil(prepared.estimated_input_tokens * token_ratio)
 
     scope_payload = (
         {"total": memory_turn.scope.total, "pinned": memory_turn.scope.pinned}
         if memory_turn.scope is not None else None
     )
-    projection = None
-    memory_count = 0
-    episode_count = 0
-    for candidate_index, (candidate_text, candidate_memory_count, candidate_episode_count) in enumerate(memory_turn.candidates):
-        memory_context = memory_context_prompt(
-            memory_text=candidate_text,
-            memory_read_enabled=memory_read_enabled,
-            memory_read_scope=trust_level,
-            memory_scope=scope_payload,
-            injected_memory_count=candidate_memory_count,
-            injected_episode_count=candidate_episode_count,
-            memory_overview_prefetched=memory_turn.overview_prefetched,
-            memory_overview_has_more=memory_turn.overview_has_more,
-            offered_tool_names=offered_tool_names,
-        )
-        try:
-            projection = await ContextManager.build(
-                db,
-                chat_session=session,
-                records=records,
-                system_prompt=system_prompt,
-                runtime_instructions=runtime_instructions,
-                memory_context=memory_context,
-                tool_snapshots=tool_snapshots,
-                tool_schemas=schemas,
-                model=model,
-                target_trust_level=trust_level,
-                settings=settings,
-                attachment_service=attachment_service(settings=instance_limits, run_id=run.id),
-                pdf_context=pdf_context,
-                summarize=summarize,
-                estimate_request=estimate_request,
-                live_tool_calls=live_tool_calls,
+    compacted_summary = None
+    for attempt in range(2):
+        projection = None
+        memory_count = 0
+        episode_count = 0
+        for candidate_index, (candidate_text, candidate_memory_count, candidate_episode_count) in enumerate(memory_turn.candidates):
+            memory_context = memory_context_prompt(
+                memory_text=candidate_text,
+                memory_read_enabled=memory_read_enabled,
+                memory_read_scope=trust_level,
+                memory_scope=scope_payload,
+                injected_memory_count=candidate_memory_count,
+                injected_episode_count=candidate_episode_count,
+                memory_overview_prefetched=memory_turn.overview_prefetched,
+                memory_overview_has_more=memory_turn.overview_has_more,
+                offered_tool_names=offered_tool_names,
             )
-            memory_count = candidate_memory_count
-            episode_count = candidate_episode_count
-            break
-        except ContextError as exc:
-            if exc.code != "agent.contextWindowExceeded" or candidate_index == len(memory_turn.candidates) - 1:
-                raise
-    if projection is None:
-        raise ContextError("agent.contextWindowExceeded")
-    candidate_tokens = projection.estimated_input_tokens
+            try:
+                projection = await ContextManager.build(
+                    db,
+                    chat_session=session,
+                    records=records,
+                    system_prompt=system_prompt,
+                    runtime_instructions=runtime_instructions,
+                    memory_context=memory_context,
+                    tool_snapshots=tool_snapshots,
+                    tool_schemas=schemas,
+                    model=model,
+                    target_trust_level=trust_level,
+                    settings=settings,
+                    attachment_service=attachment_service(settings=instance_limits, run_id=run.id),
+                    pdf_context=pdf_context,
+                    summarize=summarize,
+                    estimate_request=estimate_request,
+                    live_tool_calls=live_tool_calls,
+                )
+                memory_count = candidate_memory_count
+                episode_count = candidate_episode_count
+                break
+            except ContextError as exc:
+                if exc.code != "agent.contextWindowExceeded" or candidate_index == len(memory_turn.candidates) - 1:
+                    raise
+        if projection is None:
+            raise ContextError("agent.contextWindowExceeded")
+        if projection.compacted:
+            compacted_summary = projection.context_summary
+        candidate_tokens = projection.estimated_input_tokens
 
-    async def fits_context(context: str) -> bool:
-        nonlocal candidate_tokens
-        messages = [{**projection.messages[0], "content": projection.messages[0]["content"] + "\n\n" + context},
-                    *projection.messages[1:]]
-        candidate_tokens = await estimate_request(messages)
-        return candidate_tokens <= projection.input_budget_tokens
+        async def fits_context(context: str, projection: ContextProjection = projection) -> bool:
+            nonlocal candidate_tokens
+            messages = [{**projection.messages[0], "content": projection.messages[0]["content"] + "\n\n" + context},
+                        *projection.messages[1:]]
+            candidate_tokens = await estimate_request(messages)
+            return candidate_tokens <= projection.input_budget_tokens
 
-    if session_automations is not None:
-        context = automation_context_prompt(session_automations)
-        if not await fits_context(context):
-            entries = [{
-                **{key: item[key] for key in ("id", "name", "revision", "enabled", "triggers", "nextRunAt") if key in item},
-                "taskExcerpt": item.get("task", "")[:240], "scheduleCount": len(item.get("schedules", [])),
-            } for item in session_automations]
-            context = automation_context_prompt(entries)
-            while not await fits_context(context):
-                if not entries:
-                    context = ""
-                    break
-                # ponytail: halve the optional catalog; use prefix binary search if tighter budget utilization matters.
-                entries = entries[:len(entries) // 2]
-                context = automation_context_prompt(entries, omitted_count=len(session_automations) - len(entries))
-        if context:
-            projection.messages[0]["content"] += "\n\n" + context
-            projection.estimated_input_tokens = candidate_tokens
+        if session_automations is not None:
+            context = automation_context_prompt(session_automations)
+            if not await fits_context(context):
+                entries = [{
+                    **{key: item[key] for key in ("id", "name", "revision", "enabled", "triggers", "nextRunAt") if key in item},
+                    "taskExcerpt": item.get("task", "")[:240], "scheduleCount": len(item.get("schedules", [])),
+                } for item in session_automations]
+                context = automation_context_prompt(entries)
+                while not await fits_context(context):
+                    if not entries:
+                        context = ""
+                        break
+                    # ponytail: halve the optional catalog; use prefix binary search if tighter budget utilization matters.
+                    entries = entries[:len(entries) // 2]
+                    context = automation_context_prompt(entries, omitted_count=len(session_automations) - len(entries))
+            if context:
+                projection.messages[0]["content"] += "\n\n" + context
+                projection.estimated_input_tokens = candidate_tokens
 
-    if repository_context_loader is not None:
-        repository_context = await repository_context_loader(fits_context=fits_context)
-        if repository_context:
-            projection.messages[0]["content"] += "\n\n" + repository_context
-            projection.estimated_input_tokens = candidate_tokens
-    if projection.compacted:
-        summary = projection.context_summary
-        assert summary is not None
+        if repository_context_loader is not None:
+            repository_context = await repository_context_loader(fits_context=fits_context)
+            if repository_context:
+                projection.messages[0]["content"] += "\n\n" + repository_context
+                projection.estimated_input_tokens = candidate_tokens
+        if counting_available:
+            prepared = await prepare(projection.messages)
+            final_count = await count_request(prepared)
+            projection.input_token_source = "server-calibrated"
+            if final_count is not None:
+                if final_count > projection.input_budget_tokens:
+                    if attempt == 0:
+                        continue
+                    raise ContextError("agent.contextWindowExceeded")
+                projection.estimated_input_tokens = final_count
+                projection.input_token_source = "server"
+                projection.counted_input_fingerprint = prepared.input_token_fingerprint
+        break
+    if compacted_summary is not None:
+        projection.compacted = True
+        projection.context_summary = summary = compacted_summary
         await run_events.publish(run.id, {
             "type": "context.compacted",
             "estimatedInputTokens": projection.estimated_input_tokens,

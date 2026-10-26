@@ -572,6 +572,7 @@ async def execute_loop_body(
             "offeredToolNames": [schema["name"] for schema in schemas],
             "toolSchemaTokens": tool_schema_tokens,
             "estimatedInputTokens": projection.estimated_input_tokens,
+            "inputTokenSource": projection.input_token_source,
             "inputBudgetTokens": projection.input_budget_tokens,
             "reservedOutputTokens": projection.reserved_output_tokens,
             "safetyReserveTokens": runtime_settings.safety_reserve_tokens,

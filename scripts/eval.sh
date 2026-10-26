@@ -15,6 +15,7 @@ usage() {
         "  prompts              Run serial live prompt evaluations" \
         "  automation-permissions Compare automation permission prompts (20-minute limit)" \
         "  tool-contracts       Compare OpenCode names, reason fields, and permission behavior" \
+        "  tool-discovery       Compare full schemas, selective loading, and a stable dispatcher" \
         "  context-search       Evaluate implemented cross-session recall tools" \
         "  session-cache        Evaluate cache reuse across real sessions" \
         "  coding-comparison    Compare persisted coding-run artifacts" \
@@ -25,6 +26,7 @@ usage() {
 }
 
 case "${1:-}" in
+    tool-discovery) shift; compose run --rm --no-deps --env MATO_LOOP_EVAL_COMMIT="$(git -C "$PROJECT_ROOT" rev-parse HEAD)" backend uv run python /workspace/scripts/tool-discovery-eval.py "$@" ;;
     tool-contracts) shift; compose run --rm --no-deps --env MATO_LOOP_EVAL_COMMIT="$(git -C "$PROJECT_ROOT" rev-parse HEAD)" backend uv run python /workspace/scripts/tool-contracts-eval.py "$@" ;;
     context-search) shift; compose run --rm --no-deps --env MATO_LOOP_EVAL_COMMIT="$(git -C "$PROJECT_ROOT" rev-parse HEAD)" backend uv run python /workspace/scripts/context-search-eval.py "$@" ;;
     automation-permissions) shift; compose run --rm --no-deps backend uv run python /workspace/scripts/automation-permissions-eval.py "$@" ;;

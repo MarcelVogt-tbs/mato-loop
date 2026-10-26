@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import math
@@ -67,6 +68,7 @@ from mato_loop_backend.providers.output_budget import (
     output_token_limit,
 )
 from mato_loop_backend.providers.reasoning import reasoning_profile
+from mato_loop_backend.providers.token_counting import chat_token_count_payload, count_chat_tokens
 from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings.models import (
     AgentRuntimeSettings,
@@ -484,8 +486,33 @@ class _PreparedRequest:
     pseudonymizer: RequestPseudonymizer | None
     estimated_input_tokens: int
 
+    @property
+    def input_token_fingerprint(self) -> str | None:
+        if self.adapter.adapter_type != "openai-compatible" or self.api_type != "chat_completions" or self.request.media:
+            return None
+        payload = [self.request.continuation_scope, chat_token_count_payload(self.request)]
+        return hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+
 
 class ProviderService:
+    @staticmethod
+    async def count_input_tokens(
+        db: AsyncSession, *, provider: LlmProviderConfig, prepared: _PreparedRequest,
+    ) -> int | None:
+        if (
+            provider.adapter_type != "openai-compatible"
+            or prepared.api_type != "chat_completions"
+            or not provider.config.get("base_url")
+            or prepared.request.media
+        ):
+            return None
+        credential = (
+            await load_credential(db, provider.credential_id, owner_id=provider.owner_id, populate_existing=True)
+            if provider.credential_id else None
+        )
+        payload = read_credential(credential) if credential else {}
+        return await count_chat_tokens(provider, prepared.request, api_key=payload.get("api_key"))
+
     @staticmethod
     async def discover_models(
         db: AsyncSession,
@@ -680,6 +707,7 @@ class ProviderService:
         timeout: float = 300,
         max_output_tokens: int | None = None,
         estimated_input_tokens: int | None = None,
+        counted_input_fingerprint: str | None = None,
         reserved_output_tokens: int | None = None,
         safety_reserve_tokens: int | None = None,
         target_trust_level: TrustLevel | None = None,
@@ -696,6 +724,7 @@ class ProviderService:
         estimated_input_tokens is an optional raw projection estimate, without
         proportional slack or fixed safety. Diagnostics are returned separately
         from provider usage in provider_data["output_budget"].
+        A matching counted_input_fingerprint uses the server count instead of the heuristic.
         An omitted safety reserve uses the stored global runtime setting; an
         explicit value preserves the caller's snapshot without another lookup.
         """
@@ -724,6 +753,9 @@ class ProviderService:
             # Validate before max(), which could otherwise conceal invalid negative inputs.
             guarded_input_tokens(estimated_input_tokens)
         input_tokens = max(final_input_tokens, estimated_input_tokens or 0)
+        if (estimated_input_tokens is not None and counted_input_fingerprint is not None
+                and counted_input_fingerprint == prepared.input_token_fingerprint):
+            input_tokens = final_input_tokens = estimated_input_tokens
         unknown_media = any(item.modality in {"audio", "video"} for item in request.media)
         limit = output_token_limit(model, max_output_tokens)
         reserve = (

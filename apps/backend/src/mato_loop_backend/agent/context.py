@@ -123,6 +123,19 @@ class ContextManager:
                 latest = None
 
         characters_per_token = model.characters_per_token
+        omitted_tool_result_ids: set[UUID] = set()
+        pending_summary: ContextSummary | None = None
+
+        async def persist_omissions() -> None:
+            for item in active_records:
+                if item.id in omitted_tool_result_ids:
+                    data = item.provider_data or {}
+                    item.provider_data = {
+                        **data,
+                        "_matoloop": {**data.get("_matoloop", {}), "contextOutputOmitted": True},
+                    }
+            if omitted_tool_result_ids or pending_summary is not None:
+                await db.commit()
 
         async def project(
             summary: ContextSummary | None, selected: list[Message]
@@ -152,6 +165,7 @@ class ContextManager:
                     characters_per_token=characters_per_token,
                     historical_tool_output_tokens=settings.historical_tool_output_tokens,
                     live_tool_calls=live_tool_calls,
+                    omitted_tool_result_ids=omitted_tool_result_ids,
                 )
                 total = await estimate_request(messages)
                 if not pdf_context or total <= input_budget or attachment_characters == 0:
@@ -191,6 +205,20 @@ class ContextManager:
         )
         prefix = active_records[:protected_start]
         suffix = active_records[protected_start:]
+        # Clear an old batch only under budget pressure, and never expand it on a later run.
+        omitted_tool_result_ids.update(
+            item.id for item in prefix if item.role == "tool"
+            and not (item.provider_data or {}).get("_matoloop", {}).get("contextOutputOmitted")
+        )
+        if omitted_tool_result_ids:
+            messages, estimated = await project(latest, active_records)
+            if estimated <= trigger_tokens:
+                await persist_omissions()
+                agent_projection._strip_projection_metadata(messages)
+                return ContextProjection(
+                    messages, estimated, input_budget,
+                    reserved_output_tokens=reserved_output_tokens,
+                )
         current_tool_indices = agent_projection._current_tool_output_indices(messages)
         minimum_request_tokens = await estimate_minimum_request(current_tool_indices)
         protected_tool_call_ids = {
@@ -210,7 +238,6 @@ class ContextManager:
             else await estimate_minimum_request(protected_tool_indices)
         )
         compacted = False
-        pending_summary: ContextSummary | None = None
         if (prefix or latest is not None) and compaction_request_tokens > trigger_tokens:
             target_tokens = max(256, int(input_budget * settings.compaction_target_ratio))
             summary_limit = max(256, min(2_048, target_tokens // 3))
@@ -289,7 +316,8 @@ class ContextManager:
             raise ContextError("agent.contextWindowExceeded")
         if pending_summary is not None:
             db.add(pending_summary)
-            await db.commit()
+            omitted_tool_result_ids.clear()
+        await persist_omissions()
         agent_projection._strip_projection_metadata(messages)
         return ContextProjection(
             messages,

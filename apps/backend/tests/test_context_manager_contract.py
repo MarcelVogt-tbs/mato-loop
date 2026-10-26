@@ -835,6 +835,8 @@ async def test_historical_reader_reference_targets_original_page_and_keeps_compu
     page.tool_call_id = "reader"
     records += [source_call, source, reader, page, _message(session.id, "user", "Other work")]
     records += [*_tool_segment(session.id, 0), _message(session.id, "user", "Continue")]
+    source.provider_data["_matoloop"]["contextOutputOmitted"] = True
+    page.provider_data = {"_matoloop": {"contextOutputOmitted": True}}
     projected = _projection_messages("System", None, records, TrustLevel.PRIVATE)
     projected, _ = await service_module._provider_projection(
         projected, supports_image_input=False, target_trust_level=TrustLevel.PRIVATE,
@@ -842,7 +844,9 @@ async def test_historical_reader_reference_targets_original_page_and_keeps_compu
     payload = json.loads(next(item["content"] for item in projected if item.get("tool_call_id") == "reader"))
     assert payload["toolResultReference"]["arguments"] == {"message_id": str(source.id), "offset": 5}
     payload = json.loads(next(item["content"] for item in projected if item.get("tool_call_id") == "source"))
-    assert payload["hostSelectedComputer"] == source.provider_data["_matoloop"]
+    assert payload["hostSelectedComputer"] == {
+        key: source.provider_data["_matoloop"][key] for key in ("executionAgentId", "executionAgentAlias")
+    }
 
 
 @pytest.mark.parametrize("stage", ["fair_share", "sequential", "pruning"])
@@ -910,7 +914,7 @@ async def test_recorded_computers_preserve_provider_request_prefix(serialize, hi
     assert {**bodies[1], history_key: bodies[1][history_key][:len(bodies[0][history_key])]} == bodies[0]
 
 
-def test_projection_compacts_tool_outputs_before_latest_user_turn() -> None:
+def test_projection_preserves_tool_outputs_across_user_turns() -> None:
     session = _session()
     first_user = _message(session.id, "user", "Recherchiere das Thema")
     search_call = _message(session.id, "assistant", "")
@@ -949,42 +953,20 @@ def test_projection_compacts_tool_outputs_before_latest_user_turn() -> None:
     recent_result.tool_call_id = "recent"
     latest_user = _message(session.id, "user", "Erzähle mehr")
 
-    projected = _projection_messages(
-        "System",
-        None,
-        [
-            first_user,
-            search_call,
-            search_result,
-            fetch_call,
-            fetch_result,
-            answer,
-            recent_user, recent_call, recent_result,
-            latest_user,
-        ],
-        TrustLevel.PRIVATE,
-    )
+    records = [
+        first_user,
+        search_call,
+        search_result,
+        fetch_call,
+        fetch_result,
+        answer,
+        recent_user, recent_call, recent_result,
+    ]
+    previous = _projection_messages("System", None, records, TrustLevel.PRIVATE)
+    projected = _projection_messages("System", None, [*records, latest_user], TrustLevel.PRIVATE)
 
     tool_results = [item["content"] for item in projected if item["role"] == "tool"]
-    search_payload = json.loads(tool_results[0])
-    fetch_payload = json.loads(tool_results[1])
-    assert search_payload["historicalSources"][0]["url"] == "https://example.test/source"
-    assert "content" not in search_payload["historicalSources"][0]
-    assert search_payload["toolResultReference"]["arguments"] == {
-        "message_id": str(search_result.id),
-        "offset": 0,
-    }
-    assert fetch_payload["toolResultOmitted"] is True
-    assert fetch_payload["toolResultReference"] == {
-        "tool": "session_tool_result_read",
-        "arguments": {"message_id": str(fetch_result.id), "offset": 0},
-        "totalCharacters": len(fetch_result.content),
-    }
-    assert "x" * 1_000 not in str(projected)
-    assert "y" * 1_000 not in str(projected)
-    assert len(search_result.content) > 5_000
-    assert len(fetch_result.content) == 10_000
-    assert tool_results[-1] == "services: monario"
+    assert tool_results == [item["content"] for item in previous if item["role"] == "tool"]
     summary_source = _summary_source(
         None,
         [first_user, search_call, search_result, fetch_call, fetch_result, answer],
@@ -1136,7 +1118,7 @@ def test_browser_inspection_projection_is_lossless_and_append_stable() -> None:
         assert type(compacted["text"]["elements"][0]["index"]) is int
         assert len(by_id[tool.id]["content"]) < len(tool.content)
     assert all(by_id[item.id]["content"] == item.content for item in unchanged)
-    assert by_id[historical.id]["content"] == original
+    assert by_id[historical.id]["content"] == by_id[first.id]["content"]
     assert by_id[latest_user.id] == message_dict(latest_user)
     assert [item["provider_data"] for item in projected[1:]] == [
         message_dict(item)["provider_data"] for item in records
@@ -2628,6 +2610,66 @@ async def test_repository_instructions_fit_small_model_request_budget(monkeypatc
     assert deferred == changed
 
 
+@pytest.mark.parametrize("counted", [777, None])
+async def test_turn_context_uses_server_count_with_local_fallback(monkeypatch, counted):
+    session = _session()
+    model = _model(context_window_tokens=2_048)
+    provider = LlmProviderConfig(id=model.provider_id, name="Test", adapter_type="openai-compatible",
+                                 pseudonymization_enabled=False, config={"base_url": "http://local.test/v1"})
+    counter = AsyncMock(return_value=counted)
+    monkeypatch.setattr(ProviderService, "count_input_tokens", counter)
+    monkeypatch.setattr(service_module, "chat_completions", AsyncMock(return_value=ProviderResult(content="OK")))
+    call = _message(session.id, "assistant", "")
+    call.tool_calls = [{"id": "read", "name": "read", "arguments": {}}]
+    tool = _message(session.id, "tool", "file text")
+    tool.tool_call_id = "read"
+    records = [_message(session.id, "user", "x" * 10_000 if counted else "Hello"),
+               call, tool, _message(session.id, "user", "Continue")]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    projection, _, _ = await build_turn_context(
+        None, db, AgentRun(id=uuid4(), session_id=session.id), session,
+        ai_settings=AiSettings(), model=model, trust_level=TrustLevel.PRIVATE, settings=_settings(),
+        instance_limits=InstanceLimits(), records=records,
+        system_prompt="System", runtime_instructions="", schemas=[], offered_tool_names=frozenset(),
+        memory_turn=MemoryTurn(candidates=[(None, 0, 0)]), memory_read_enabled=False,
+        request_options={"provider": provider, "model": model, "tools": []},
+        live_tool_calls={}, ephemeral_images={}, attachment_service=AttachmentService,
+    )
+    prepared = await ProviderService.prepare_request(provider=provider, model=model, messages=projection.messages, tools=[])
+    result = await ProviderService.complete(
+        db, provider=provider, model=model, messages=projection.messages, tools=[],
+        estimated_input_tokens=projection.estimated_input_tokens, counted_input_fingerprint=projection.counted_input_fingerprint,
+        reserved_output_tokens=100, safety_reserve_tokens=0,
+    )
+    assert (result.provider_data["output_budget"]["estimatedInputTokens"], projection.input_token_source,
+            counter.await_count, result.content) == (
+        counted if counted is not None else prepared.estimated_input_tokens, "server" if counted is not None else "estimate",
+        1, "OK",
+    )
+
+
+async def test_final_server_count_refits_optional_automation_context(monkeypatch):
+    session = _session()
+    model = _model(context_window_tokens=4_096).model_copy(update={"characters_per_token": 4})
+    provider = LlmProviderConfig(id=model.provider_id, name="Test", adapter_type="openai-compatible", pseudonymization_enabled=False)
+    monkeypatch.setattr(ProviderService, "count_input_tokens", AsyncMock(side_effect=[1_000, 5_000, 1_000]))
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    projection, _, _ = await build_turn_context(
+        None, db, AgentRun(id=uuid4(), session_id=session.id), session,
+        ai_settings=AiSettings(), model=model, trust_level=TrustLevel.PRIVATE, settings=_settings(),
+        instance_limits=InstanceLimits(), records=[_message(session.id, "user", "x" * 8_000)],
+        system_prompt="System", runtime_instructions="", schemas=[], offered_tool_names=frozenset(),
+        memory_turn=MemoryTurn(candidates=[(None, 0, 0)]), memory_read_enabled=False,
+        request_options={"provider": provider, "model": model, "tools": []},
+        live_tool_calls={}, ephemeral_images={}, attachment_service=AttachmentService,
+        session_automations=[{"id": str(uuid4()), "task": "q" * 6_000}],
+    )
+    catalog = json.loads(projection.messages[0]["content"].splitlines()[-1])
+    assert (catalog["automations"][0]["taskExcerpt"], projection.estimated_input_tokens) == ("q" * 240, 1_000)
+
+
 @pytest.mark.parametrize("count,task_length", [(3, 39_000), (300, 1)])
 async def test_session_automations_fit_model_budget_with_compact_catalog(count, task_length) -> None:
     session = _session()
@@ -2698,7 +2740,7 @@ async def test_current_tool_output_budget_scales_with_model_context(continuing) 
             system_prompt="System",
             tool_schemas=[],
             model=_model(context_window_tokens=context_window_tokens),
-            settings=_settings(),
+            settings=_settings(protected_recent_turns=2),
             summarize=AsyncMock(),
         )
 
@@ -2822,14 +2864,14 @@ async def test_auto_context_trigger_applies_slack_once_without_recompacting_fitt
 
 
 @pytest.mark.parametrize(
-    ("sizes", "compacted"),
+    ("sizes", "cleared"),
     [
         pytest.param((500, 500, 6_000), False, id="protected-output"),
         pytest.param((6_000, 500, 500), True, id="compactable-output"),
     ],
 )
-async def test_first_turn_compacts_only_for_large_compactable_tool_output(
-    sizes, compacted,
+async def test_first_turn_shortens_tool_output_before_compaction(
+    sizes, cleared,
 ) -> None:
     session = _session()
     records = [_message(session.id, "user", "Analysiere die Seite")]
@@ -2869,12 +2911,12 @@ async def test_first_turn_compacts_only_for_large_compactable_tool_output(
         summarize=summarize,
     )
 
-    assert projection.compacted is compacted
-    assert summarize.await_count == int(compacted)
+    assert not projection.compacted
+    summarize.assert_not_awaited()
     assert projection.estimated_input_tokens <= raw_input_budget(3_900)
     assert [item.content for item in records] == original_contents
-    if compacted:
-        assert projection.context_summary.covered_through_message_id == records[2].id
+    if cleared:
+        assert json.loads(projection.messages[3]["content"])["toolResultOmitted"] is True
     else:
         assert len(projection.messages[-1]["content"]) < len(records[-1].content)
         db.add.assert_not_called()
@@ -3203,7 +3245,7 @@ async def test_large_old_tool_output_is_pruned_without_mutating_message_history(
         system_prompt="System",
         tool_schemas=[],
         model=_model(context_window_tokens=3_000),
-        settings=_settings(protected_recent_turns=2),
+        settings=_settings(protected_recent_turns=1),
         summarize=summarize,
     )
 
@@ -3219,6 +3261,11 @@ async def test_large_old_tool_output_is_pruned_without_mutating_message_history(
     assert records[0].content == original_content
     assert projection.estimated_input_tokens <= projection.input_budget_tokens
     summarize.assert_not_awaited()
+    later = await _build_context(
+        db, chat_session=session, records=records, system_prompt="System", tool_schemas=[],
+        model=_model(context_window_tokens=16_384), settings=_settings(), summarize=summarize,
+    )
+    assert next(message["content"] for message in later.messages if message["role"] == "tool") == projected_tool["content"]
 
 
 async def test_context_window_must_leave_an_input_budget() -> None:
