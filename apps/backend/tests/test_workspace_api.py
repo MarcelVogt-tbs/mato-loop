@@ -125,6 +125,16 @@ async def test_git_changes_hides_foreign_session() -> None:
     assert error.value.code == "session.notFound"
 
 
+def test_git_diff_response_accepts_256_kib_per_side() -> None:
+    before, after = "a" * (256 * 1024), "b" * (256 * 1024)
+    result = workspace_route.GitFileDiffResponse.model_validate({
+        "repository": "/repo",
+        "file": {"path": "large.txt", "status": "modified", "additions": 1, "deletions": 1},
+        "before": before, "after": after, "reason": None,
+    })
+    assert (result.before, result.after) == (before, after)
+
+
 @pytest.mark.parametrize("path", ["../secret", "/etc/passwd", ".git/config", "a/../../secret"])
 async def test_git_changes_rejects_invalid_paths_before_dispatch(path) -> None:
     with pytest.raises(ApiError) as error:

@@ -102,7 +102,7 @@ const width = ref(0)
 const splitDiff = computed(() => width.value >= 720)
 const diffReason = computed(() => ({
   binary: 'Binärdateien und Dateien ohne UTF-8-Kodierung haben keine Textvorschau.',
-  tooLarge: 'Die Datei überschreitet die Grenze von 64 KiB je Vergleichsseite.',
+  tooLarge: 'Der Textvergleich überschreitet die Grenze von 256 KiB je Vergleichsseite oder das Übertragungslimit.',
   unsupported: 'Für diesen Dateityp ist kein Textvergleich verfügbar.',
   unchanged: 'Für diese Datei liegt kein aktueller Git-Diff vor.'
 })[props.comparison?.reason])
