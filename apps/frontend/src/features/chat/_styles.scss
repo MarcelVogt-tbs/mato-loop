@@ -583,6 +583,11 @@
   }
 }
 
+.chat-transcript__item {
+  // Include message margins in the height measured by QVirtualScroll.
+  display: flow-root;
+}
+
 .chat-message {
   margin-bottom: var(--chat-message-gap, 22px);
 }
