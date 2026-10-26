@@ -60,6 +60,7 @@ async function click(label) {
 
 beforeEach(async () => {
   mocks.mobile = false
+  mocks.scrollTarget = null
   setActivePinia(createPinia())
   chat = useChatStore()
   sentMessages = []
@@ -145,10 +146,11 @@ beforeEach(async () => {
   app.directive('close-popup', {})
   app.component('QPage', { render() { return h('div', this.$slots.default?.()) } })
   app.component('QSplitter', { render() { return h('div', this.$slots.before?.()) } })
-  app.component('QScrollArea', { methods: { getScrollTarget() { return null } }, render() { return h('div', this.$slots.default?.()) } })
+  app.component('QScrollArea', { methods: { getScrollTarget() { return mocks.scrollTarget } }, render() { return h('div', this.$slots.default?.()) } })
   app.component('QVirtualScroll', {
     props: ['items'],
-    methods: { reset: mocks.resetMessageSizes, refresh() {} },
+    emits: ['virtual-scroll'],
+    methods: { reset: mocks.resetMessageSizes, refresh() { this.$emit('virtual-scroll', { from: 0, direction: 'decrease' }) } },
     render() { return h('div', this.items.map((item) => this.$slots.default?.({ item }))) }
   })
   app.component('QSkeleton', { render: () => null })
@@ -162,11 +164,47 @@ afterEach(() => {
   chat.cancelQueueDrain()
   chat.clearAllAttachmentDrafts()
   root?.remove()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.clearAllMocks()
 })
 
 describe('voice attachment composer', () => {
+  it('keeps the final touch-scroll position when a transcript update was deferred during the gesture', async () => {
+    mocks.api.get.mockResolvedValue({ data: { items: [] } })
+    await router.push('/')
+    const target = document.createElement('div')
+    Object.defineProperties(target, {
+      clientHeight: { value: 400 },
+      scrollHeight: { value: 1400 }
+    })
+    target.getBoundingClientRect = () => ({ top: 0, bottom: 400 })
+    mocks.scrollTarget = target
+    showPage.value = true
+    await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
+    vi.useFakeTimers()
+    chat.current = { id: 'session-1', messages: [{ id: 'message', role: 'user', content: 'Text' }] }
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(32)
+    root.querySelector('[data-message-id="message"]').getBoundingClientRect = () => ({
+      top: 100 - target.scrollTop, bottom: 1100 - target.scrollTop
+    })
+    target.dispatchEvent(new Event('scroll'))
+    target.dispatchEvent(new Event('touchstart'))
+    target.dispatchEvent(new Event('touchmove'))
+    target.scrollTop = 600
+    target.dispatchEvent(new Event('scroll'))
+    chat.current.messages.push({ id: 'reply', role: 'assistant', content: 'Antwort' })
+    await nextTick()
+    target.dispatchEvent(new Event('touchend'))
+    await vi.advanceTimersByTimeAsync(100)
+    target.scrollTop = 300
+    target.dispatchEvent(new Event('scroll'))
+    await vi.advanceTimersByTimeAsync(250)
+
+    expect(target.scrollTop).toBe(300)
+  })
+
   it('shows the saved command prompt instead of its invocation in the user message', async () => {
     mocks.api.get.mockResolvedValue({ data: { items: [] } })
     await router.push('/')

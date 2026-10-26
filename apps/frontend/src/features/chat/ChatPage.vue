@@ -110,8 +110,8 @@
             </q-banner>
           </template>
           <template #default="{ item: message }">
+            <div :key="message.liveMessageId || message.id" class="chat-transcript__item">
             <div
-              :key="message.liveMessageId || message.id"
               :class="[
                 'chat-message',
                 `chat-message--${message.role}`,
@@ -309,6 +309,7 @@
               >
                 <q-tooltip>Erneut versuchen</q-tooltip>
               </q-btn>
+            </div>
             </div>
             </div>
           </template>
@@ -1213,6 +1214,7 @@ function addAttachmentFiles(files, done, options) {
 function scheduleVirtualScrollRefresh(preservePosition = true, resetSizes = false) {
   if (!virtualScroll.value || displayMessages.value.length === 0) return
   const request = {
+    preservePosition,
     anchor: preservePosition && !followingBottom.value
       ? readingAnchor || captureReadingAnchor()
       : null,
@@ -1233,6 +1235,14 @@ function startVirtualScrollRefresh(request) {
   virtualScrollRefreshFrame = window.requestAnimationFrame(() => {
     virtualScrollRefreshFrame = null
     if (virtualScrollRefreshRequest !== request) return
+    if (userScrollActive) {
+      virtualScrollRefreshPending = {
+        ...(virtualScrollRefreshPending || request),
+        resetSizes: request.resetSizes || virtualScrollRefreshPending?.resetSizes
+      }
+      finishVirtualScrollRefresh(request)
+      return
+    }
     if (request.resetSizes) virtualScroll.value?.reset()
     else virtualScroll.value?.refresh(-1)
   })
@@ -1272,9 +1282,18 @@ function finishVirtualScrollRefresh(request) {
   if (request !== virtualScrollRefreshRequest) return
   virtualScrollRefreshRequest = null
   virtualScrollRefreshInProgress = false
+  resumePendingVirtualScrollRefresh()
+}
+
+function resumePendingVirtualScrollRefresh() {
   if (userScrollActive || !virtualScrollRefreshPending) return
   const pending = virtualScrollRefreshPending
   virtualScrollRefreshPending = null
+  // A deferred layout update must preserve where the gesture ended, not where it began.
+  pending.anchor = pending.preservePosition && !followingBottom.value
+    ? captureReadingAnchor()
+    : null
+  pending.version = ++virtualScrollRefreshVersion
   startVirtualScrollRefresh(pending)
 }
 
@@ -1329,7 +1348,7 @@ function updateFollowState() {
   const scrollTop = scrollTarget.scrollTop
   const movedUp = scrollTop < lastScrollTop
   lastScrollTop = scrollTop
-  if (virtualScrollRefreshInProgress) return
+  if (virtualScrollRefreshInProgress && !userScrollActive) return
   const atBottom = chatBottomDistance(scrollTarget) <= bottomThreshold
   const shouldFollow = chatShouldFollowBottom(
     followingBottom.value,
@@ -1367,17 +1386,14 @@ function scheduleUserScrollEnd() {
   userScrollTimer = setTimeout(() => {
     userScrollTimer = null
     userScrollActive = false
-    if (!virtualScrollRefreshInProgress && virtualScrollRefreshPending) {
-      const pending = virtualScrollRefreshPending
-      virtualScrollRefreshPending = null
-      startVirtualScrollRefresh(pending)
-    }
+    if (!virtualScrollRefreshInProgress) resumePendingVirtualScrollRefresh()
     scheduleFollowScroll()
   }, 180)
 }
 
 function handleTouchStart() {
   touchActive = true
+  beginUserScroll()
 }
 
 function handleTouchMove() {

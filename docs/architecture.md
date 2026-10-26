@@ -668,6 +668,10 @@ Session switching updates navigation immediately, closes the mobile drawer, and 
 
 Session detail loads the latest 20 complete user-anchored conversation turns. Approaching the top of the virtual transcript automatically prepends older cursor pages while preserving the visible scroll anchor. Refreshes merge the latest page into already loaded history, and message deep links continue loading older pages until their target is available. Canonical database history remains complete; pagination limits only browser transfer and reactive state.
 
+Touch contact pauses automatic following immediately. Explicit virtual transcript refreshes wait until the gesture and momentum scrolling settle, then capture the current reading anchor rather than restoring a position recorded earlier in the gesture.
+
+Each virtual transcript item establishes its own block formatting context so message margins contribute to the measured item height. Virtual padding must include these gaps when earlier messages leave the rendered slice.
+
 The UI must remain usable on desktop and mobile in both light and dark mode.
 
 ## Runtime Data
