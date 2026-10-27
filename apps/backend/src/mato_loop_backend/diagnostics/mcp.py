@@ -28,6 +28,7 @@ from mato_loop_backend.diagnostics.logs import read_backend_logs
 from mato_loop_backend.diagnostics.service import RETENTION_DAYS
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.execution.manager import execution_agent_connections
+from mato_loop_backend.integrations.registry import effective_execution_integration_settings
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
@@ -402,6 +403,11 @@ def create_debug_mcp() -> tuple[FastMCP, Any]:
             )
             integrations = filter_agent_profile_integrations(
                 await load_effective_integrations(db, user_id), profile
+            )
+            workspace = await session_service.workspace_context(db, session)
+            integrations = effective_execution_integration_settings(
+                integrations, session.preferred_execution_agent_id,
+                frozenset(workspace["operations"]),
             )
             groups = tool_registry.catalog(tools, integrations)
         return {

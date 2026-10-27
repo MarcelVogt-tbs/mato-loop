@@ -767,16 +767,15 @@ class ToolRegistry:
     def policy_actions(
         self, integration_settings: IntegrationSettings | None = None
     ) -> tuple[ToolAction, ...]:
-        definitions = (
-            {
-                **self._combined_definitions(integration_settings)[0],
-                **self._operation_definitions,
-            }
-            if integration_settings is not None
-            else {**self._definitions, **self._operation_definitions}
-        )
+        # Policy metadata may include the same static tools on different computers.
+        definitions = [*self._definitions.values(), *self._operation_definitions.values()]
+        if integration_settings is not None:
+            definitions.extend(
+                self._contributed_definition(contribution)
+                for contribution in self._contributions_resolver(integration_settings).tools
+            )
         actions = (
-            *(action for definition in definitions.values() for action in definition.actions),
+            *(action for definition in definitions for action in definition.actions),
             *(action for actions in self._group_actions.values() for action in actions),
         )
         categories = {}

@@ -1466,13 +1466,16 @@ async def test_runtime_discovery_uses_integration_baseline_not_resource_policy(
     integration.permissions.public_permissions.resource_policies = {"calendar:work": {"calendar.read": "disabled"}}
     if global_policy is not None:
         integration.permissions.public_permissions.policies["calendar.read"] = global_policy
+    integrations = IntegrationSettings(instances=[integration, *(
+        IntegrationInstance(
+            name="Browser", integration_type="browser", adapter_type="browser",
+            execution_agent_id=uuid4(),
+        )
+        for _ in range(2)
+    )])
 
     async def load_settings(_db, settings_type, **_kwargs):
-        return (
-            IntegrationSettings(instances=[integration])
-            if settings_type is IntegrationSettings
-            else tools
-        )
+        return integrations if settings_type is IntegrationSettings else tools
 
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
     monkeypatch.setattr(

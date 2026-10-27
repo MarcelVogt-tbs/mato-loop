@@ -53,6 +53,7 @@ from mato_loop_backend.execution import (
 )
 from mato_loop_backend.files.service import RootFileError, RootFileService
 from mato_loop_backend.files.storage import SessionStorageError
+from mato_loop_backend.integrations.registry import effective_execution_integration_settings
 from mato_loop_backend.media.attachments import (
     AttachmentError,
     AttachmentInput,
@@ -1785,7 +1786,10 @@ class AgentRuntime:
 
         request = await prepare_file_grants(request, root_files)
         definition = (
-            tool_registry._combined_definitions(integration_settings)[0].get(call.name)
+            tool_registry._combined_definitions(effective_execution_integration_settings(
+                integration_settings, run.execution_agent_id,
+                agent_run_support._effective_execution_operations(run),
+            ))[0].get(call.name)
             or tool_registry._operation_definitions.get(call.name)
         )
         resolution = await cls._request_approval(
