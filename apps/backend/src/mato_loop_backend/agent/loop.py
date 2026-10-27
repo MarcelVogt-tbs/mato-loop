@@ -16,7 +16,10 @@ from mato_loop_backend.agent.memory_context import MemoryCache, prepare_memory_c
 from mato_loop_backend.agent.model_turn import complete_model_turn, persist_model_response
 from mato_loop_backend.agent.pdf_attachments import prepare_pdf_attachments
 from mato_loop_backend.agent.projection import ContextError
-from mato_loop_backend.agent.prompts import general_system_prompt
+from mato_loop_backend.agent.prompts import (
+    agent_profile_runtime_instructions,
+    general_system_prompt,
+)
 from mato_loop_backend.agent.repository_instructions import repository_instructions_prompt
 from mato_loop_backend.agent.run_contracts import AgentRunError, _VisibleResponse
 from mato_loop_backend.agent.run_support import (
@@ -154,6 +157,9 @@ async def execute_loop_body(
     provider = agent_run_support._provider_for_model(ai_settings, model)
     if provider is None:
         raise AgentRunError("provider.notFound")
+    profile_instructions = agent_profile_runtime_instructions(
+        prompt_agent_profile, model_id=model.model_id, delegated=delegated,
+    )
     model_reasoning_profile = reasoning_profile(
         model.model_id, model.discovery_metadata
     )
@@ -311,6 +317,15 @@ async def execute_loop_body(
         if delegated:
             memory_state = memory_policy.EffectiveMemory(False, False, False)
         records = await cls._records(db, chat_session.id)
+        current_user = next((item for item in reversed(records) if item.role == "user"), None)
+        if current_user is not None:
+            data = current_user.provider_data or {}
+            metadata = data.get("_matoloop", {})
+            if metadata.get("agentProfileInstructions", "") != profile_instructions:
+                current_user.provider_data = {
+                    **data, "_matoloop": {**metadata, "agentProfileInstructions": profile_instructions},
+                }
+                await db.commit()
         summary = None
         if any((item.provider_data or {}).get("_matoloop", {}).get("toolDiscovery") for item in records):
             summary = await db.scalar(select(ContextSummary).where(ContextSummary.session_id == chat_session.id)
@@ -387,7 +402,6 @@ async def execute_loop_body(
         render_system_prompt = partial(
             general_system_prompt,
             chat_session,
-            model_id=model.model_id,
             delegated=delegated,
             agent_identity=agent_identity,
             persona=agent_identity.persona,
@@ -502,7 +516,7 @@ async def execute_loop_body(
                 records=records,
                 system_prompt=system_prompt,
                 pdf_context=pdf_context,
-                runtime_instructions=(prompt_agent_profile.runtime_instructions if prompt_agent_profile else ""),
+                runtime_instructions=profile_instructions,
                 schemas=schemas,
                 offered_tool_names=frozenset(effective_toolset.tools if effective_toolset else ()),
                 tool_snapshots=collect_tool_snapshots(

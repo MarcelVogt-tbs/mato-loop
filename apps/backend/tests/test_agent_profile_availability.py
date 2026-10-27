@@ -32,6 +32,7 @@ from mato_loop_backend.settings.models import (
     IntegrationInstance,
     IntegrationPermissions,
     IntegrationSettings,
+    ToolExecutionPolicy,
     ToolSettings,
     TrustLevel,
     UserIntegrationSettings,
@@ -63,16 +64,23 @@ def test_todo_tool_follows_profile_availability(profile, enabled):
 
 
 @pytest.mark.parametrize("temporary,available", [(False, True), (True, True), (True, False)])
-def test_temporary_file_tools_keep_their_schema_and_respect_availability(temporary, available):
+def test_coding_profiles_share_file_schemas_and_respect_availability(temporary, available):
     tools = ToolSettings(tool_availability={"write_file": available})
     tools._agent_permissions = plan_profile().private_permissions
     tools._temporary_files_enabled = temporary
     first = tool_registry.effective(IntegrationSettings(), tool_settings=tools)
+    tools._agent_permissions = build_profile().private_permissions
     second = tool_registry.effective(IntegrationSettings(), tool_settings=tools)
     assert first.schemas() == second.schemas()
-    assert ("write_file" in first.tools) is (temporary and available)
-    if temporary and available:
+    assert ("write_file" in first.tools) is available
+    if available:
         assert first.tools["write_file"].schema() == tool_registry._definitions["write_file"].schema()
+    tools._agent_permissions.policies.update({
+        "filesystem.write": ToolExecutionPolicy.DISABLED,
+        "session.files.write": ToolExecutionPolicy.DISABLED,
+    })
+    restricted = tool_registry.effective(IntegrationSettings(), tool_settings=tools)
+    assert ("write_file" in restricted.tools) is (temporary and available)
 
 
 @pytest.mark.parametrize("model", [AgentProfile, AgentProfileOverrides])

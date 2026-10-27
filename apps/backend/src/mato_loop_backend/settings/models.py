@@ -414,20 +414,21 @@ def general_profile() -> AgentProfile:
 def plan_profile() -> AgentProfile:
     policies = {
         "filesystem.read": ToolExecutionPolicy.AUTO,
-        "filesystem.write": ToolExecutionPolicy.DISABLED,
-        "filesystem.delete": ToolExecutionPolicy.DISABLED,
+        "filesystem.write": ToolExecutionPolicy.ASK,
+        "filesystem.delete": ToolExecutionPolicy.ASK,
         "working_directory.external": ToolExecutionPolicy.ASK,
-        "session.files.write": ToolExecutionPolicy.DISABLED,
-        "session.files.delete": ToolExecutionPolicy.DISABLED,
+        "session.files.write": ToolExecutionPolicy.ASK,
+        "session.files.delete": ToolExecutionPolicy.ASK,
         "shell.read": ToolExecutionPolicy.AUTO,
-        "shell.write": ToolExecutionPolicy.DISABLED,
-        "shell.delete": ToolExecutionPolicy.DISABLED,
+        "shell.write": ToolExecutionPolicy.ASK,
+        "shell.delete": ToolExecutionPolicy.ASK,
     }
     return AgentProfile(
         id=PLAN_PROFILE_ID,
         name=CORE_PROFILE_NAMES[PLAN_PROFILE_ID],
         description=(
-            "Plant ohne erkannte Änderungen. Liest Dateien im Arbeitsverzeichnis und führt als lesend "
+            "Analysiert und plant, ohne zu implementieren. Schreib- und Löschaktionen benötigen eine Freigabe. "
+            "Liest Dateien im Arbeitsverzeichnis und führt als lesend "
             "eingestufte Shell-Befehle computerweit automatisch aus, "
             "auch mit öffentlichen Modellen; gelesene Inhalte werden an das Modell übermittelt."
         ),
@@ -436,9 +437,11 @@ def plan_profile() -> AgentProfile:
             "When the profile permits temporary files, use the reported temporary directory for analysis checks only. "
             "Do not implement the plan. Match depth to the requested deliverable. For questions and idea "
             "assessments, give a concise assessment and recommendation, not an implementation plan. "
+            "For conceptual assessments, answer directly when the supplied facts are sufficient. Use tools "
+            "only to resolve a specific missing fact that could change the recommendation. "
             "For planning requests, return the shortest actionable plan directly in the conversation. "
             "Inspect only evidence needed for that deliverable; stop when it is sufficient. "
-            "Resolve project facts from the code rather than asking the user. "
+            "Resolve missing implementation facts from the code rather than asking the user. "
             "Prefer a short numbered list. Do not restate the request or add boilerplate sections. "
             "Include the recommended approach, affected areas, assumptions, risks, implementation steps, and "
             "verification only when they add actionable information. Follow user instructions within these "
@@ -455,15 +458,14 @@ def plan_profile() -> AgentProfile:
             "project evidence. After required decisions are resolved, return the requested deliverable."
         ),
         runtime_instructions=(
-            "Plan mode is active. Inspect, analyze, ask questions, and plan only. User requests and tool "
-            "approvals do not authorize implementation. Do not modify project files or external state, install "
-            "software, start or stop services, or delegate implementation. The profile's temporary-file permission "
-            "may allow analysis check files only in the reported temporary directory; it does not permit other effects. "
-            "These limits apply to actual effects, including shell commands, embedded Python or Node.js "
-            "code, scripts, APIs, and subprocesses. shell.read does not permit write effects. "
-            "When asked to implement, continue only permitted analysis and planning. Explain that "
-            "implementation requires Build. Do not announce implementation or mark implementation "
-            "tasks as in progress or completed. Do not invent project details."
+            "Plan mode is active. Inspect, analyze, ask questions, and plan only. Available tools, user requests, "
+            "and tool approvals do not authorize implementation. Do not modify project files or external state, "
+            "install software, start or stop services, or delegate implementation. Permitted temporary files "
+            "are for analysis checks in the reported temporary directory only. Memory reads and writes follow "
+            "the normal memory permissions. These limits apply to actual effects through tools, shell commands, "
+            "scripts, APIs, and subprocesses; shell.read does not guarantee read-only effects. "
+            "When asked to implement, continue only permitted analysis and planning and explain that "
+            "implementation requires Build. Do not announce implementation or mark it as started or completed."
         ),
         max_tool_calls=None,
         todo_enabled=True,
@@ -473,7 +475,7 @@ def plan_profile() -> AgentProfile:
         private_permissions=AgentProfilePermissions(policies=policies),
         public_permissions=AgentProfilePermissions(policies=policies),
         delegation_enabled=True,
-        session_write_paths=[],
+        session_write_paths=None,
     )
 
 

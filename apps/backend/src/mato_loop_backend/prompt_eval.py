@@ -30,6 +30,7 @@ from mato_loop_backend.agent.projection import (
 from mato_loop_backend.agent.prompts import (
     MEMORY_CONTEXT_CONTRACT,
     _local_time_prompt,
+    agent_profile_runtime_instructions,
     general_system_prompt,
     memory_context_prompt,
 )
@@ -912,7 +913,11 @@ CASES = (
         system_options={"agent_profile": plan_profile(), "execution_agent_name": "Evaluator", "execution_agent_connected": True, "current_directory": "/workspace/project"},
         tools=("read", "grep", "glob"),
         expected_tool="read",
-        expected_arguments={"root": "computer", "path": "apps/frontend/src/css/chat.scss"},
+        expected_arguments={"root": "computer"},
+        argument_options={"path": (
+            "apps/frontend/src/css/chat.scss",
+            "/workspace/project/apps/frontend/src/css/chat.scss",
+        )},
     ),
     PromptCase(
         id="plan_assessment_matches_requested_feature",
@@ -952,8 +957,7 @@ CASES = (
         user=(
             "Report only the two entry points and the relevant routing risk, at most 80 words. "
             "Evidence: manifest.json:8 has start_url '/'; ChatPage.vue:830 loads a new draft "
-            "when session query is absent. Evidence is sufficient; return findings now.\n\n"
-            "<system-reminder>" + plan_profile().runtime_instructions + "</system-reminder>"
+            "when session query is absent. Evidence is sufficient; return findings now."
         ),
         system_options={"agent_profile": plan_profile(), "delegated": True},
         tools=("read", "glob", "grep"), expected_no_tools=True,
@@ -6395,7 +6399,6 @@ def _general_case(
     tools = slimming_tool_schemas(tools, slimming_variant)
     offered_names = frozenset(tool["name"] for tool in narrow_tools)
     system_options = dict(case.system_options)
-    system_options["model_id"] = model_id
     if offered_names & set(tool_registry._operation_definitions):
         system_options.setdefault("execution_agent_name", "Evaluator")
         system_options.setdefault("execution_agent_platform", "linux")
@@ -6575,6 +6578,12 @@ def _general_case(
         }
         else case.user
     )
+    profile_instructions = agent_profile_runtime_instructions(
+        system_options.get("agent_profile"), model_id=model_id,
+        delegated=bool(system_options.get("delegated")),
+    )
+    if profile_instructions:
+        user_content += "\n\n<system-reminder>\n" + profile_instructions + "\n</system-reminder>"
     messages.append(
         {
             "role": "user",

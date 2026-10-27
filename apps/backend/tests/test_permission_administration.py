@@ -246,14 +246,14 @@ async def test_builtin_access_overrides_can_be_changed_and_removed(monkeypatch):
         publicPermissions={"policies": {"shell.write": "ask"}}, toolAvailability={"read": False}, shellPrefixes={"read": [["git", "status"]]},
     ), user, db, "instance")
     actions = [action for group in response["groupsByTrust"]["public"] for tool in group["tools"] for action in tool["actions"]]
-    assert (response["publicPermissions"]["policies"]["shell.write"], next(action["policy"] for action in actions if action["capability"] == "shell.write"), response["inheritedToolAvailability"].get("read", True), response["inheritedShellPrefixes"]) == ("ask", "disabled", True, {"read": [], "write": []})
+    assert (response["publicPermissions"]["policies"]["shell.write"], next(action["policy"] for action in actions if action["capability"] == "shell.write"), response["inheritedToolAvailability"].get("read", True), response["inheritedShellPrefixes"]) == ("ask", "ask", True, {"read": [], "write": []})
     await update_profile_tool_permissions(PLAN_PROFILE_ID, ProfileToolPermissionsRequest(
         publicPermissions={}, toolAvailability={}, shellPrefixes=None,
     ), user, db, "instance")
     await update_profile_integration_availability(PLAN_PROFILE_ID, ProfileIntegrationAvailabilityRequest(integrationsEnabledByDefault=None), user, db, "instance")
     tools, profile = await load_agent_profile_tools(db, user.id, PLAN_PROFILE_ID, TrustLevel.PUBLIC)
     assert tools._temporary_files_enabled is False
-    assert (tool_execution_policy(tools, "shell.write"), tools.tool_availability.get("read", True), tools.shell_prefixes.read, profile.integrations_enabled_by_default) == ("disabled", True, [], False)
+    assert (tool_execution_policy(tools, "shell.write"), tools.tool_availability.get("read", True), tools.shell_prefixes.read, profile.integrations_enabled_by_default) == ("ask", True, [], False)
 
 
 @pytest.mark.parametrize("scope", ["instance", "personal"])

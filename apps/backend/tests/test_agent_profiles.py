@@ -65,14 +65,14 @@ def test_builtin_agent_profile_defaults() -> None:
     assert plan.private_permissions == plan.public_permissions
     assert plan.private_permissions.policies == {
         "filesystem.read": ToolExecutionPolicy.AUTO,
-        "filesystem.write": ToolExecutionPolicy.DISABLED,
-        "filesystem.delete": ToolExecutionPolicy.DISABLED,
+        "filesystem.write": ToolExecutionPolicy.ASK,
+        "filesystem.delete": ToolExecutionPolicy.ASK,
         "working_directory.external": ToolExecutionPolicy.ASK,
-        "session.files.write": ToolExecutionPolicy.DISABLED,
-        "session.files.delete": ToolExecutionPolicy.DISABLED,
+        "session.files.write": ToolExecutionPolicy.ASK,
+        "session.files.delete": ToolExecutionPolicy.ASK,
         "shell.read": ToolExecutionPolicy.AUTO,
-        "shell.write": ToolExecutionPolicy.DISABLED,
-        "shell.delete": ToolExecutionPolicy.DISABLED,
+        "shell.write": ToolExecutionPolicy.ASK,
+        "shell.delete": ToolExecutionPolicy.ASK,
     }
     assert build.private_permissions == build.public_permissions
     assert build.private_permissions.policies == {
@@ -103,7 +103,7 @@ def test_builtin_agent_profile_defaults() -> None:
     assert default.delegation_enabled is False
     assert default.session_write_paths is None
     assert plan.delegation_enabled is True
-    assert plan.session_write_paths == []
+    assert plan.session_write_paths is None
     assert build.delegation_enabled is True
     assert build.session_write_paths is None
     assert sysadmin.max_tool_calls is None
@@ -117,7 +117,7 @@ def test_builtin_agent_profile_defaults() -> None:
     assert "not an implementation plan" in plan.instructions
     assert "do not substitute a simpler but different feature" in plan.instructions
     assert "Do not restate the request or add boilerplate sections" in plan.instructions
-    assert "Resolve project facts from the code rather than asking the user" in plan.instructions
+    assert "Resolve missing implementation facts from the code rather than asking the user" in plan.instructions
     assert "Do not turn such choices into assumptions" in plan.instructions
     assert "do not call any tool" not in plan.instructions
     assert "continue only permitted analysis and planning" in plan.runtime_instructions
@@ -331,7 +331,7 @@ def test_agent_profile_payload_marks_only_builtins_as_protected() -> None:
     assert builtin_payload["baseProfileId"] is None
     assert "overrides" not in builtin_payload
     assert builtin_payload["delegationEnabled"] is True
-    assert builtin_payload["sessionWritePaths"] == []
+    assert builtin_payload["sessionWritePaths"] is None
     custom = CustomAgentProfile(
         name="Custom", description="", baseProfileId=GENERAL_PROFILE_ID,
         overrides={"todoEnabled": False, "sessionWritePaths": []},
@@ -661,7 +661,7 @@ async def test_builtin_access_inherits_per_entry_and_respects_scope(monkeypatch)
 
     effective = await get()
     assert effective.integrations_enabled_by_default is False
-    assert effective.private_permissions.policies["filesystem.write"] == ToolExecutionPolicy.DISABLED
+    assert effective.private_permissions.policies["filesystem.write"] == ToolExecutionPolicy.ASK
     assert effective.private_permissions.policies["filesystem.read"] == ToolExecutionPolicy.ASK
     assert effective.private_permissions.policies["shell.read"] == ToolExecutionPolicy.ASK
     assert effective.private_permissions.integration_policies[integration_id] == {

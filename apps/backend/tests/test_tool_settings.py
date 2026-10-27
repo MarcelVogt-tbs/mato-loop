@@ -265,7 +265,7 @@ def test_agent_profile_missing_capability_inherits_live_default() -> None:
 
 
 @pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])
-def test_plan_profile_disables_computer_changes(trust: TrustLevel) -> None:
+def test_plan_profile_asks_for_changes(trust: TrustLevel) -> None:
     profile = plan_profile()
     settings = ToolSettings().select_trust(trust)
     settings._agent_permissions = (
@@ -278,15 +278,14 @@ def test_plan_profile_disables_computer_changes(trust: TrustLevel) -> None:
         "filesystem.write",
         "filesystem.delete",
         "shell.write",
+        "shell.delete",
+        "session.files.write",
+        "session.files.delete",
     ):
         assert (
             resolve_tool_execution_policy(settings, capability).policy
-            == ToolExecutionPolicy.DISABLED
+            == ToolExecutionPolicy.ASK
         )
-    assert (
-        resolve_tool_execution_policy(settings, "session.files.write").policy
-        == ToolExecutionPolicy.DISABLED
-    )
 
 
 @pytest.mark.parametrize("trust", [TrustLevel.PRIVATE, TrustLevel.PUBLIC])

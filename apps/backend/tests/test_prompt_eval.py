@@ -55,9 +55,12 @@ def test_scoped_plan_and_child_cases_use_real_profiles_and_reject_extra_work() -
         assert evaluate(case, ProviderResult(content="word " * 500))
         assert evaluate(case, ProviderResult(tool_calls=[ToolCall("extra", "read", {})]))
         if name.startswith("plan_"):
-            assert "Match depth to the requested deliverable" in messages[0]["content"]
+            assert "Match depth to the requested deliverable" in messages[-1]["content"]
         else:
             assert "Do not expand research into a full plan unless assigned one" in messages[0]["content"]
+    assert not evaluate(_case("plan_checks_source_before_font_recommendation"), ProviderResult(tool_calls=[
+        ToolCall("read-style", "read", {"root": "computer", "path": "/workspace/project/apps/frontend/src/css/chat.scss"}),
+    ]))
 
 
 def _source_constants(path: Path) -> set[str]:

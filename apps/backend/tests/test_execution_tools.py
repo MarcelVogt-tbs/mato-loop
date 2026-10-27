@@ -1860,8 +1860,9 @@ async def test_shell_policy_covers_incomplete_analysis(
         snapshot=permission_snapshot(settings, {"shell_run"}),
     )
     if profile_factory == plan_profile and classification == "write":
-        assert policy == ToolExecutionPolicy.DISABLED
-        expected = PermissionDecision.DENY
+        assert policy == ToolExecutionPolicy.ASK
+        if expected == PermissionDecision.ALLOW:
+            expected = PermissionDecision.ASK
     elif profile_factory is None and (classification == "write" or trust == TrustLevel.PUBLIC):
         assert policy == ToolExecutionPolicy.ASK
         if expected == PermissionDecision.ALLOW:
@@ -2424,7 +2425,7 @@ async def test_shell_metadata_only_paths_preserve_profile_and_trust_policies(
             profile.public_permissions if trust == TrustLevel.PUBLIC else profile.private_permissions
         )
     expected_policy = (
-        ToolExecutionPolicy.DISABLED
+        ToolExecutionPolicy.ASK
         if profile_factory == plan_profile and classification == "write"
         else ToolExecutionPolicy.ASK
         if profile is None and (classification == "write" or trust == TrustLevel.PUBLIC)

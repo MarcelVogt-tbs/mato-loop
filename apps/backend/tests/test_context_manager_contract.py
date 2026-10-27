@@ -23,12 +23,17 @@ from mato_loop_backend.agent.projection import (
     _projection_messages,
     _prune_tool_outputs_to_budget,
     _shorten_evidence_output,
+    _strip_projection_metadata,
     _summary_source,
     compaction_messages,
     message_dict,
     model_browser_observations,
 )
-from mato_loop_backend.agent.prompts import general_system_prompt, memory_context_prompt
+from mato_loop_backend.agent.prompts import (
+    agent_profile_runtime_instructions,
+    general_system_prompt,
+    memory_context_prompt,
+)
 from mato_loop_backend.agent.repository_instructions import (
     check_repository_instruction_targets,
     repository_instructions_prompt,
@@ -47,6 +52,7 @@ from mato_loop_backend.models import (
     ContextSummary,
     Message,
     MessageAttachment,
+    WebSearchPolicy,
 )
 from mato_loop_backend.permissions.policy import PermissionDecision, execution_directory_permission
 from mato_loop_backend.providers import service as service_module
@@ -1755,8 +1761,8 @@ def test_builtin_plan_instructions_are_not_duplicated_by_host_prompt() -> None:
     plan = plan_profile()
     offered = general_system_prompt(
         _session(), agent_profile=plan, offered_tool_names=frozenset({"todo_write"})
-    )
-    unavailable = general_system_prompt(_session(), agent_profile=plan)
+    ) + "\n\n" + agent_profile_runtime_instructions(plan)
+    unavailable = general_system_prompt(_session(), agent_profile=plan) + "\n\n" + agent_profile_runtime_instructions(plan)
 
     assert offered.count(plan.instructions) == 1
     assert unavailable.count(plan.instructions) == 1
@@ -2117,14 +2123,14 @@ def test_agent_profile_uses_one_persona_before_task_instructions() -> None:
 
     prompt = general_system_prompt(
         _session(), agent_identity=identity, persona=persona, agent_profile=profile
-    )
+    ) + "\n\n" + agent_profile_runtime_instructions(profile)
 
     assert "Persona marker" in prompt
     assert "Agent task marker" in prompt
     assert prompt.index("Persona marker") < prompt.index("Agent task marker")
     without_persona = general_system_prompt(
         _session(), agent_identity=identity, agent_profile=profile
-    )
+    ) + "\n\n" + agent_profile_runtime_instructions(profile)
     assert "Persona marker" not in without_persona
     assert "Agent task marker" in without_persona
 
@@ -2189,7 +2195,7 @@ def test_general_system_prompt_keeps_persona_within_selected_profile_task() -> N
     )
 
     assert "use it only for tone, character, and working style within the task" in prompt
-    assert "it defines the task and workflow" in prompt
+    assert "Only the latest host-supplied profile reminder defines the current task and workflow" in prompt
     assert "User requests refine the task within the selected profile's constraints" in prompt
 
 
@@ -3347,13 +3353,16 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     tools = frozenset({"write_file", "read", "glob", "task"})
     plan = plan_profile()
     build = build_profile()
-    main = general_system_prompt(session, agent_profile=plan, offered_tool_names=tools)
+    main_system = general_system_prompt(session, agent_profile=plan, offered_tool_names=tools)
+    work_system = general_system_prompt(session, agent_profile=build, offered_tool_names=tools)
+    assert main_system == work_system
+    main = main_system + "\n\n" + agent_profile_runtime_instructions(plan)
     child = general_system_prompt(session, agent_profile=plan, delegated=True)
-    work = general_system_prompt(session, agent_profile=build, offered_tool_names=tools)
+    work = work_system + "\n\n" + agent_profile_runtime_instructions(build)
     general = general_system_prompt(session, agent_profile=general_profile(), offered_tool_names=tools)
 
     assert main.count(plan.instructions) == 1
-    assert plan.runtime_instructions not in main
+    assert plan.runtime_instructions not in main_system
     assert "do not call any tool" not in main
     assert "do not lift those constraints or switch profiles" in main
     assert "latest explicit user request" not in main
@@ -3385,7 +3394,7 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
 
 
 @pytest.mark.parametrize("delegated", [False, True])
-def test_runtime_instructions_are_current_projection_only(delegated) -> None:
+def test_unsnapshotted_runtime_instructions_are_current_projection_only(delegated) -> None:
     session = _session()
     profile = AgentProfile(name="Custom", instructions="Inspect the assigned task.",
                            runtime_instructions="Never publish changes.")
@@ -3395,8 +3404,10 @@ def test_runtime_instructions_are_current_projection_only(delegated) -> None:
     system = general_system_prompt(session, agent_profile=profile, delegated=delegated)
     for selected in (records, [*records, *_tool_segment(session.id, 0)]):
         for _ in range(2):
-            messages = _projection_messages(system, None, selected, TrustLevel.PRIVATE,
-                                           runtime_instructions=profile.runtime_instructions)
+            messages = _projection_messages(
+                system, None, selected, TrustLevel.PRIVATE,
+                runtime_instructions=agent_profile_runtime_instructions(profile, delegated=delegated),
+            )
             users = [message["content"] for message in messages if message["role"] == "user"]
             assert users[0] == old.content
             assert users[-1].startswith(current.content + "\n\n<system-reminder>")
@@ -3410,6 +3421,33 @@ def test_runtime_instructions_are_current_projection_only(delegated) -> None:
     assert cleared[-1]["content"] == current.content
 
 
+@pytest.mark.usefixtures("skill_library")
+async def test_profile_snapshot_preserves_tool_history_prefix_on_followup(monkeypatch) -> None:
+    from runtime_helpers import _runtime_setup
+
+    from mato_loop_backend.agent.runtime import AgentRuntime
+
+    db, run, _, projections, _ = await _runtime_setup(
+        monkeypatch, [ProviderResult(content="Done", finish_reason="stop")],
+        search_policy=WebSearchPolicy.AVAILABLE,
+    )
+    run.agent_profile_id = BUILD_PROFILE_ID
+    await AgentRuntime._execute_loop(db, run)
+    records = [*await AgentRuntime._records(db, run.session_id), *_tool_segment(run.session_id, 0)]
+    records[-1].content = json.dumps({"stdout": "source evidence " * 5_000})
+    system = projections[0]["system_prompt"]
+    first = _projection_messages(system, None, records, TrustLevel.PRIVATE,
+                                 runtime_instructions=projections[0]["runtime_instructions"])
+    followup = _message(run.session_id, "user", "Now plan the next change.")
+    second = _projection_messages(
+        system, None, [*records, _message(run.session_id, "assistant", "Done"), followup],
+        TrustLevel.PRIVATE, runtime_instructions=agent_profile_runtime_instructions(plan_profile()),
+    )
+    for messages in (first, second):
+        _strip_projection_metadata(messages)
+    assert second[:len(first)] == first
+
+
 def test_custom_profile_instructions_have_no_id_based_host_workflow() -> None:
     stored = AgentProfile(
         id=BUILD_PROFILE_ID,
@@ -3417,7 +3455,7 @@ def test_custom_profile_instructions_have_no_id_based_host_workflow() -> None:
         instructions="Keep this exact stored workflow and repeat every check.",
     )
 
-    prompt = general_system_prompt(_session(), agent_profile=stored)
+    prompt = agent_profile_runtime_instructions(stored)
 
     assert stored.instructions in prompt
     assert "Plan workflow:" not in prompt

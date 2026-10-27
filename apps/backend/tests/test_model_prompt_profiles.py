@@ -1,10 +1,7 @@
-from uuid import uuid4
-
 import pytest
 
 from mato_loop_backend.agent.model_prompt_profiles import build_model_instructions
-from mato_loop_backend.agent.prompts import general_system_prompt
-from mato_loop_backend.models import ChatSession
+from mato_loop_backend.agent.prompts import agent_profile_runtime_instructions
 from mato_loop_backend.settings import (
     AgentProfileOverrides,
     CustomAgentProfile,
@@ -42,12 +39,10 @@ def test_base_model_and_named_variants_share_one_instruction(model_id):
     ],
 )
 def test_prompt_scope_and_model_switch(profile, delegated, expected):
-    prompt = general_system_prompt(
-        ChatSession(id=uuid4()),
+    prompt = agent_profile_runtime_instructions(
+        profile,
         model_id="Qwen3.8-27B",
-        agent_profile=profile,
         delegated=delegated,
-        include_local_time=False,
     )
 
     assert (build_model_instructions("Qwen3.8-27B") in prompt) is expected
@@ -65,11 +60,9 @@ def test_custom_profile_inherits_build_model_instructions():
         None,
     )
 
-    prompt = general_system_prompt(
-        ChatSession(id=uuid4()),
+    prompt = agent_profile_runtime_instructions(
+        profile,
         model_id="Qwen3.8-27B",
-        agent_profile=profile,
-        include_local_time=False,
     )
 
     assert build_model_instructions("Qwen3.8-27B") in prompt

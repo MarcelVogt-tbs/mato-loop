@@ -833,12 +833,19 @@ def _projection_messages(
             and runtime_data.get("userEditedArguments") is True
         ):
             user_edited_tool_arguments = True
-        if item.id == latest_user_id and runtime_instructions.strip():
+        profile_instructions = (
+            runtime_data.get("agentProfileInstructions", "")
+            if item.role == "user" and isinstance(runtime_data, dict) else ""
+        )
+        if item.id == latest_user_id and runtime_instructions:
+            profile_instructions = runtime_instructions
+        if isinstance(profile_instructions, str) and profile_instructions.strip():
             projected["content"] = (projected.get("content") or "") + (
                 "\n\n<system-reminder>\n"
-                "Current agent profile runtime instructions. Apply within host rules and inherited "
-                "permission limits; they do not grant additional capabilities:\n"
-                + runtime_instructions.strip()
+                "Agent profile instructions for this user turn. The latest host-supplied profile reminder "
+                "defines the current task and workflow; earlier reminders describe past turns. "
+                "Host rules and inherited permission limits remain binding; reminders grant no additional capabilities:\n"
+                + profile_instructions.strip()
                 + "\n</system-reminder>"
             )
     if user_edited_tool_arguments:
