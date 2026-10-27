@@ -610,11 +610,23 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_preview_limits_and_symlinks_do_not_expose_external_contents(self):
         self.git("init")
+        before = "a" * (256 * 1024)
+        after = "b" * (256 * 1024)
+        (self.root / "boundary.txt").write_text(before)
+        self.git("add", "boundary.txt")
+        self.git("commit", "-m", "Initial")
+        (self.root / "boundary.txt").write_text(after)
+        result = await changes(self.fs, str(self.root), "boundary.txt")
+        self.assertEqual(
+            (result["reason"], result["before"], result["after"]), (None, before, after)
+        )
         (self.root / "large.txt").write_bytes(b"a" * (MAX_TEXT_BYTES + 1))
+        (self.root / "escaped.txt").write_bytes(b"\x01" * MAX_TEXT_BYTES)
         (self.root / "binary").write_bytes(b"a\0b")
         (self.root / "link").symlink_to("/etc/passwd")
         for file, reason in [
             ("large.txt", "tooLarge"),
+            ("escaped.txt", "tooLarge"),
             ("binary", "binary"),
             ("link", "unsupported"),
         ]:

@@ -223,8 +223,8 @@ class GitFileDiffResponse(BaseModel):
 
     repository: str = Field(min_length=1, max_length=4096)
     file: GitChangedFile
-    before: str = Field(max_length=65_536)
-    after: str = Field(max_length=65_536)
+    before: str = Field(max_length=262_144)
+    after: str = Field(max_length=262_144)
     reason: Literal["binary", "tooLarge", "unsupported"] | None
 
 

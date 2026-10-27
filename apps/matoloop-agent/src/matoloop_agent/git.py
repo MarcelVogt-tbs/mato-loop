@@ -21,7 +21,8 @@ from .errors import AgentError
 from .platform import FilesystemAdapter
 from .protocol import GitWorktreeArguments, GitWorktreeRemoveArguments, _relative_path
 
-MAX_TEXT_BYTES = 64 * 1024
+MAX_TEXT_BYTES = 256 * 1024
+MAX_PREVIEW_BYTES = 768 * 1024
 MAX_OUTPUT_BYTES = 512 * 1024
 MAX_FILES = 500
 _worktree_lock = asyncio.Lock()
@@ -214,10 +215,10 @@ def _text(data: bytes) -> str:
         raise AgentError("file.invalidEncoding", "File is not UTF-8 text") from exc
 
 
-async def _working(filesystem: FilesystemAdapter, root: str, path: str) -> bytes:
-    return await asyncio.to_thread(
-        filesystem._read_bytes, f"{root.rstrip('/')}/{path}", MAX_TEXT_BYTES
-    )
+async def _working(
+    filesystem: FilesystemAdapter, root: str, path: str, limit: int = MAX_TEXT_BYTES
+) -> bytes:
+    return await asyncio.to_thread(filesystem._read_bytes, f"{root.rstrip('/')}/{path}", limit)
 
 
 async def changes(filesystem: FilesystemAdapter, directory: str, file: str | None = None) -> dict:
@@ -279,6 +280,9 @@ async def changes(filesystem: FilesystemAdapter, directory: str, file: str | Non
                 result["before"] = _text(before)
             if item["status"] != "deleted":
                 result["after"] = _text(await _working(filesystem, root, file))
+            # Leave room for the response envelope within the 1 MiB transport limit.
+            if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > MAX_PREVIEW_BYTES:
+                raise AgentError("operation.tooLarge", "Git preview exceeds the transport budget")
         except AgentError as exc:
             reasons = {
                 "file.tooLarge": "tooLarge",
@@ -299,7 +303,7 @@ async def changes(filesystem: FilesystemAdapter, directory: str, file: str | Non
             break
         if path in extra:
             try:
-                text = _text(await _working(filesystem, root, path))
+                text = _text(await _working(filesystem, root, path, limit=64 * 1024))
                 item.update(
                     additions=text.count("\n") + int(bool(text) and not text.endswith("\n")),
                     deletions=0,
