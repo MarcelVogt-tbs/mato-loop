@@ -1757,6 +1757,13 @@ def test_general_system_prompt_requires_supported_factual_claims() -> None:
     assert "otherwise omit the claim" in prompt
 
 
+def test_general_system_prompt_requires_explicit_git_mutation_request() -> None:
+    assert (
+        "Do not stage, commit, or push changes unless explicitly requested by the user."
+        in general_system_prompt(_session())
+    )
+
+
 def test_builtin_plan_instructions_are_not_duplicated_by_host_prompt() -> None:
     plan = plan_profile()
     offered = general_system_prompt(

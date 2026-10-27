@@ -117,8 +117,8 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     assert {"load_skill", "save_skill", "edit_skill", "request_session_permissions", "notify", "silence"} <= {
         schema["name"] for schema in schemas
     }
-    # Includes task continuation, progress updates, grounding, media, permission failures, automation scope, and computer provenance.
-    assert prompt_tokens <= 9_300, prompt_tokens
+    # Includes task continuation, explicit Git consent, progress updates, grounding, media, permission failures, automation scope, and computer provenance.
+    assert prompt_tokens <= 9_330, prompt_tokens
     assert schema_tokens <= 13_300, schema_tokens
     # Includes both Arcane project tool names in inactive integration guidance.
-    assert prompt_tokens + schema_tokens <= 22_420, prompt_tokens + schema_tokens
+    assert prompt_tokens + schema_tokens <= 22_450, prompt_tokens + schema_tokens
