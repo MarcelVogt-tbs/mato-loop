@@ -1632,20 +1632,21 @@ class AgentRuntime:
             {"permission_session_id": origin.id} if origin.id != chat_session.id else {}
         )
         agent_profile_id = run.agent_profile_id or chat_session.agent_profile_id
+        integration_settings = await load_effective_integrations(
+            db, chat_session.user_id
+        )
         try:
             tool_settings, _profile = await load_agent_profile_tools(
                 db,
                 chat_session.user_id,
                 agent_profile_id,
                 TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
+                integrations=integration_settings,
             )
         except AgentProfileUnavailable:
             return PermissionDecision.DENY
         if not _tool_available(call.name, tool_settings):
             return PermissionDecision.DENY
-        integration_settings = await load_effective_integrations(
-            db, chat_session.user_id
-        )
         integration_settings = filter_agent_profile_integrations(
             integration_settings, _profile, allowed_ids=integration_ceiling_ids(ceiling)
         )
@@ -1825,20 +1826,21 @@ class AgentRuntime:
             approval_resolution["expected_revision"] = resolution.expected_revision
         await db.refresh(chat_session)
         apply_run_session_settings(chat_session, run)
+        integration_settings = await load_effective_integrations(
+            db, chat_session.user_id
+        )
         try:
             tool_settings, _profile = await load_agent_profile_tools(
                 db,
                 chat_session.user_id,
                 agent_profile_id,
                 TrustLevel(run.trust_level or TrustLevel.PUBLIC.value),
+                integrations=integration_settings,
             )
         except AgentProfileUnavailable:
             return PermissionDecision.DENY
         if not _tool_available(call.name, tool_settings):
             return PermissionDecision.DENY
-        integration_settings = await load_effective_integrations(
-            db, chat_session.user_id
-        )
         integration_settings = filter_agent_profile_integrations(
             integration_settings, _profile, allowed_ids=integration_ceiling_ids(ceiling)
         )

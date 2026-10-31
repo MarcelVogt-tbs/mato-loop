@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import posixpath
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
+from uuid import UUID
 
 from mato_loop_backend.execution import (
     ExecutionClient,
@@ -25,6 +27,8 @@ from mato_loop_backend.permissions.policy import (
 MAX_INSTRUCTION_BYTES = 32 * 1024
 MAX_CONTEXT_BYTES = 64 * 1024
 MAX_DIRECTORIES = 64
+MAX_CACHED_TARGETS = 4096
+_TARGET_DIRECTORIES: OrderedDict[tuple[UUID, UUID, UUID, str, UUID, str], str] = OrderedDict()
 INCOMPLETE_INSTRUCTIONS_NOTICE = (
     "Some repository instructions could not be loaded. "
     "Do not assume the supplied rules are complete."
@@ -39,6 +43,7 @@ async def repository_instructions_prompt(
     fits_context: Callable[[str], Awaitable[bool]] | None = None,
     target_paths: tuple[str, ...] = (),
     checked_entries: dict[str, dict] | None = None,
+    discovery_scope: tuple[UUID, UUID] | None = None,
 ) -> str:
     cwd = client.current_directory
     if not cwd:
@@ -82,6 +87,7 @@ async def repository_instructions_prompt(
     directories = set(ancestors if boundary_status == "found" else [cwd])
     paths = list(target_paths)
     inspected_paths = set(target_paths)
+    target_sources: dict[str, UUID] = {}
     for record in records:
         metadata = (record.provider_data or {}).get("_matoloop", {})
         if record.role != "tool" or record.error_code or not isinstance(metadata, dict) or metadata.get("errorCode"):
@@ -99,13 +105,29 @@ async def repository_instructions_prompt(
             paths.extend(bound_paths)
             if inspect:
                 inspected_paths.update(bound_paths)
+                target_sources.update((path, record.id) for path in bound_paths)
     for path in dict.fromkeys(paths):
         directory = parent(path)
         if path in inspected_paths and within(path, cwd):
-            info, status = await stat(path)
-            # An unreadable target can still have independently authorized local rules.
-            if (info is not None and info.kind == "directory") or (info is None and status != "missing"):
-                directory = path
+            cache_key = (
+                (*discovery_scope, client.agent_id, cwd, target_sources[path], path)
+                if discovery_scope is not None and path not in target_paths else None
+            )
+            cached_directory = _TARGET_DIRECTORIES.get(cache_key) if cache_key is not None else None
+            if cached_directory is not None:
+                directory = cached_directory
+                _TARGET_DIRECTORIES.move_to_end(cache_key)
+            else:
+                info, status = await stat(path)
+                # An unreadable target can still have independently authorized local rules.
+                if (info is not None and info.kind == "directory") or (info is None and status != "missing"):
+                    directory = path
+                if cache_key is not None and (status == "missing" or info is not None and info.kind in {"file", "directory"}):
+                    # shortcut: External target-kind changes refresh on new tool evidence or eviction; add revisions if needed.
+                    _TARGET_DIRECTORIES[cache_key] = directory
+                    _TARGET_DIRECTORIES.move_to_end(cache_key)
+                    if len(_TARGET_DIRECTORIES) > MAX_CACHED_TARGETS:
+                        _TARGET_DIRECTORIES.popitem(last=False)
         while directory != cwd and within(directory, cwd):
             directories.add(directory)
             directory = parent(directory)
@@ -184,6 +206,8 @@ async def check_repository_instruction_targets(
     authorize: Callable[[PermissionRequest], Awaitable[PermissionDecision]],
     checked_entries: dict[str, dict],
     target_paths: tuple[str, ...] = (),
+    *,
+    discovery_scope: tuple[UUID, UUID] | None = None,
 ) -> tuple[dict | None, bool]:
     """Check host-resolved targets before effects, using the existing read policy."""
     if request.capability not in {"filesystem.write", "filesystem.delete", "shell.read", "shell.write", "shell.delete"} and not (
@@ -212,8 +236,10 @@ async def check_repository_instruction_targets(
     if not paths:
         return None, False
     current_entries: dict[str, dict] = {}
+    # Preserve the model snapshot's aggregate file budget when comparing instruction state.
     await repository_instructions_prompt(
         client, records, authorize, target_paths=paths, checked_entries=current_entries,
+        discovery_scope=discovery_scope,
     )
     changed = any(
         (entry["status"] != "missing" or checked_entries.get(path, {}).get("status") == "loaded")

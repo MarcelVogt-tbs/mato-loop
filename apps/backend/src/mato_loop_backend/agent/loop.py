@@ -312,6 +312,7 @@ async def execute_loop_body(
                 chat_session.user_id,
                 agent_profile_id,
                 model_trust_level,
+                integrations=integration_settings,
             )
         except AgentProfileUnavailable as exc:
             raise AgentRunError("agentProfile.selectedUnavailable") from exc
@@ -409,6 +410,7 @@ async def execute_loop_body(
                 repository_instructions_prompt,
                 execution_client, records, repository_authorize,
                 checked_entries=repository_entries,
+                discovery_scope=(chat_session.user_id, chat_session.id),
             )
         render_system_prompt = partial(
             general_system_prompt,

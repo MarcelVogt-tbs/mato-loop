@@ -347,6 +347,7 @@ async def execute_tool_batch(
             targets, changed = await check_repository_instruction_targets(
                 request, execution_client, records, repository_authorize, repository_entries,
                 target_paths=context.repository_target_paths,
+                discovery_scope=(session.user_id, session.id),
             )
             if targets is not None:
                 context.repository_target_paths = tuple(targets["paths"])

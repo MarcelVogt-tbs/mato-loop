@@ -17,7 +17,10 @@ from sqlalchemy.orm import Session
 
 import mato_loop_backend.tools.interaction as mock_tools_interaction
 from mato_loop_backend.agent.question_decisions import answer_question
-from mato_loop_backend.agent.repository_instructions import repository_instructions_prompt
+from mato_loop_backend.agent.repository_instructions import (
+    check_repository_instruction_targets,
+    repository_instructions_prompt,
+)
 from mato_loop_backend.agent.run_contracts import ApprovalResolution
 from mato_loop_backend.agent.run_support import _external_working_directory_policy, _tool_policy
 from mato_loop_backend.agent.runtime import AgentRuntime
@@ -448,15 +451,79 @@ async def test_workspace_read_dispatches_absolute_filesystem_path(tmp_path) -> N
 
 @pytest.mark.parametrize("decision", [PermissionDecision.ASK, PermissionDecision.DENY])
 async def test_repository_prefetch_does_not_access_unapproved_paths(decision) -> None:
-    client = FakeExecutionClient({}, {"filesystem.stat", "filesystem.read"}, "/work")
+    def stat(arguments):
+        path = arguments["path"]
+        if path.endswith("AGENTS.md"):
+            raise ExecutionClientError("file.pathNotFound")
+        return WorkspaceStatResult(path=path, kind="directory" if path.endswith(".git") else "file", size=1, modified_at=0.0)
+
+    client = FakeExecutionClient({"filesystem.stat": stat}, {"filesystem.stat", "filesystem.read"}, "/work")
+    records = [SimpleNamespace(id=uuid4(), role="tool", error_code=None, provider_data={"_matoloop": {
+        "repositoryInstructionTargets": {"executionAgentId": str(client.agent_id), "currentDirectory": "/work", "paths": ["/work/src/main.py"]},
+    }})]
+    scope = (uuid4(), uuid4())
+    await repository_instructions_prompt(client, records, AsyncMock(return_value=PermissionDecision.ALLOW), discovery_scope=scope)
+    client.requests.clear()
     checked = {}
-    prompt = await repository_instructions_prompt(client, [], AsyncMock(return_value=decision), checked_entries=checked)
+    prompt = await repository_instructions_prompt(client, records, AsyncMock(return_value=decision), checked_entries=checked, discovery_scope=scope)
     assert client.requests == []
     assert "Some repository instructions could not be loaded." in prompt
     assert list(checked.values()) == [{
-        "path": "/work/AGENTS.md", "directory": "/work",
+        "path": directory + "/AGENTS.md", "directory": directory,
         "status": "approval_required" if decision == PermissionDecision.ASK else "denied",
-    }]
+    } for directory in ("/work", "/work/src")]
+
+
+async def test_repository_prefetch_reuses_historical_target_discovery() -> None:
+    def stat(arguments):
+        path = arguments["path"]
+        if path.endswith("AGENTS.md"):
+            raise ExecutionClientError("file.pathNotFound")
+        return WorkspaceStatResult(path=path, kind="directory" if path.endswith(".git") else "file", size=1, modified_at=0.0)
+
+    client = FakeExecutionClient({"filesystem.stat": stat}, {"filesystem.stat", "filesystem.read"}, "/work")
+    records = [SimpleNamespace(id=uuid4(), role="tool", error_code=None, provider_data={"_matoloop": {
+        "repositoryInstructionTargets": {"executionAgentId": str(client.agent_id), "currentDirectory": "/work", "paths": [f"/work/src/file-{index}.svg"]},
+    }}) for index in range(200)]
+    authorize = AsyncMock(return_value=PermissionDecision.ALLOW)
+    scope = (uuid4(), uuid4())
+    checked = {}
+    await repository_instructions_prompt(client, records, authorize, discovery_scope=scope)
+    client.requests.clear()
+    await repository_instructions_prompt(client, records, authorize, discovery_scope=scope, checked_entries=checked)
+    warm_requests = len(client.requests)
+    await check_repository_instruction_targets(
+        execution_directory_permission(client.agent_id, "/work/src/new.svg", capability="filesystem.write"),
+        client, records, authorize, checked, discovery_scope=scope,
+    )
+    assert (warm_requests, len(client.requests) - warm_requests) == (3, 4)
+
+
+async def test_repository_prefetch_does_not_defer_unchanged_aggregate_size_omissions() -> None:
+    content = "Follow project conventions.\n" * 1100
+
+    def stat(arguments):
+        path = arguments["path"]
+        return WorkspaceStatResult(path=path, kind="directory" if path.endswith(".git") else "file",
+                                   size=len(content), modified_at=0.0)
+
+    client = FakeExecutionClient({
+        "filesystem.stat": stat,
+        "filesystem.read": WorkspaceReadResult(content=content, lines_read=1100, has_more=False,
+                                               truncated_lines=[], sha256="a" * 64),
+    }, {"filesystem.stat", "filesystem.read"}, "/work")
+    records = [SimpleNamespace(id=uuid4(), role="tool", error_code=None, provider_data={"_matoloop": {
+        "repositoryInstructionTargets": {"executionAgentId": str(client.agent_id), "currentDirectory": "/work", "paths": [f"/work/{directory}/file.py"]},
+    }}) for directory in ("a", "z")]
+    authorize = AsyncMock(return_value=PermissionDecision.ALLOW)
+    scope = (uuid4(), uuid4())
+    checked = {}
+    await repository_instructions_prompt(client, records, authorize, checked_entries=checked, discovery_scope=scope)
+    _, deferred = await check_repository_instruction_targets(
+        execution_directory_permission(client.agent_id, "/work/z/new.py", capability="filesystem.write"),
+        client, records, authorize, checked, discovery_scope=scope,
+    )
+    assert not deferred
 
 
 @pytest.mark.parametrize("kind,size,status", [

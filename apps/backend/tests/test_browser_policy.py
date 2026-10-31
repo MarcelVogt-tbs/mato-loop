@@ -86,7 +86,7 @@ def browser_policy_case(request, monkeypatch):
         SimpleNamespace(browser_coordinator=coordinator),
     )
 
-    async def load_tools(*_args):
+    async def load_tools(*_args, **_kwargs):
         return settings, settings._agent_profile
 
     for module in (runtime_module, tools_module):

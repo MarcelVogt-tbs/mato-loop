@@ -474,6 +474,8 @@ async def load_agent_profile_tools(
     user_id: UUID,
     profile_id: UUID | None,
     trust_level: TrustLevel,
+    *,
+    integrations: IntegrationSettings | None = None,
 ) -> tuple[ToolSettings, AgentProfile]:
     from mato_loop_backend.tools.catalog import tool_registry
 
@@ -497,5 +499,7 @@ async def load_agent_profile_tools(
     })
     tools._agent_profile = profile
     tools._temporary_files_enabled = profile.temporary_files_enabled
-    apply_integration_permissions(tools, await load_effective_integrations(db, user_id), profile.id)
+    apply_integration_permissions(
+        tools, integrations if integrations is not None else await load_effective_integrations(db, user_id), profile.id,
+    )
     return tools, profile
