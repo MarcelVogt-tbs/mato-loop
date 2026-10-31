@@ -507,6 +507,21 @@ async def test_codex_sync_adds_discovered_models(monkeypatch, limits, expected_c
     }
 
 
+async def test_sync_maps_manual_codex_alias_to_base_model_and_tier() -> None:
+    provider = LlmProviderConfig(name="Codex", adapter_type="openai-codex", pseudonymization_enabled=False)
+    model = ModelConfig(provider_id=provider.id, model_id="openai-codex/gpt-6.1-sol-ultrafast")
+    settings = AiSettings(providers=[provider], models=[model])
+    ProviderSettingsService._reconcile_discovered_models(settings, provider, [DiscoveredModel(
+        id=model.model_id, api_model_id="gpt-6.1-sol", service_tier="ultrafast",
+    )])
+
+    prepared = await ProviderService.prepare_request(
+        provider=provider, model=model, messages=[{"role": "user", "content": "Hi"}], tools=[],
+    )
+
+    assert (prepared.request.model, prepared.request.service_tier) == ("gpt-6.1-sol", "ultrafast")
+
+
 @pytest.mark.parametrize("follow_provider", [True, False])
 async def test_codex_rediscovery_updates_context_without_replacing_override(
     monkeypatch, follow_provider,
@@ -1328,12 +1343,13 @@ async def test_sync_refreshes_manual_model_output_metadata_without_overwriting_s
         assert result["models"][0]["maxOutputTokens"] == manual_cap
 
 
-async def test_model_rename_clears_only_discovered_output_cap(monkeypatch) -> None:
+async def test_model_rename_clears_discovered_request_metadata(monkeypatch) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(
         provider_id=provider.id, model_id="A", discovered_max_output_tokens=512,
         max_output_tokens=64_000, context_window_tokens=8_192,
         config={"temperature": 0.7}, reasoning_effort=ReasoningEffort.HIGH,
+        discovery_metadata={"api_model_id": "A", "service_tier": "ultrafast", "name": "Kept"},
     )
     settings = AiSettings(providers=[provider], models=[model])
     _mock_settings(monkeypatch, settings)
@@ -1341,6 +1357,7 @@ async def test_model_rename_clears_only_discovered_output_cap(monkeypatch) -> No
     await update_model(model.id, ModelRequest(modelId="B"), _db())
     assert settings.models[0].model_dump() == {
         **before, "model_id": "B", "discovered_max_output_tokens": None,
+        "discovery_metadata": {"name": "Kept"},
     }
 
 

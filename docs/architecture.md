@@ -147,6 +147,10 @@ Provider adapters transport model messages, tool schemas, tool choice, text delt
 
 ChatGPT Codex forwards the existing session cache key as both the Responses API `prompt_cache_key` and the `session-id` routing header. Other provider adapters do not receive this Codex-specific header.
 
+Codex discovery exposes Fast and Ultrafast service tiers as separate `-fast` and `-ultrafast` model aliases, preserving the base model's capabilities, context limits, and reasoning choices. The adapter reads `service_tiers`, falling back to legacy `additional_speed_tiers`; unknown tiers are ignored. GPT-6 Astra and GPT-6.1 Sol also receive Ultrafast aliases when the account catalog omits that supported mode, matching OpenCode's models.dev-backed selection. Catalog omission is not proof of missing account access; execution remains subject to the provider's authorization. Alias discovery metadata retains the API model slug and selected tier. Requests send the base slug with `service_tier="priority"` for Fast or `service_tier="ultrafast"`, never the alias ID. Existing base models keep their request behavior; new aliases start disabled and require explicit synchronization and enablement. There is no separate speed setting or automatic tier upgrade or fallback.
+
+Synchronization also merges these two routing metadata values into matching manual Codex aliases without changing their IDs, enabled state, or runtime settings. Changing a model's external ID or provider binding clears this routing metadata so later requests cannot keep using the previous alias target.
+
 - `openai-codex` uses the ChatGPT device-code flow suitable for self-hosted interfaces and isolated Codex Responses and image-generation transports. Login requires neither a public callback URL nor a local callback port.
 - `openai-compatible` supports Chat Completions and Responses API.
 - `lemonade` uses Chat Completions and the native image, speech, audio, and transcription endpoints of a Lemonade server.

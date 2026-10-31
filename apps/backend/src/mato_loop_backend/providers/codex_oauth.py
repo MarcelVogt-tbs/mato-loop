@@ -79,6 +79,12 @@ class _CodexReasoningLevel(BaseModel):
     effort: str = Field(min_length=1, max_length=20)
 
 
+class _CodexServiceTier(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = Field(min_length=1, max_length=50)
+
+
 class _CodexModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -93,6 +99,8 @@ class _CodexModel(BaseModel):
     supported_reasoning_levels: list[_CodexReasoningLevel] = Field(
         default_factory=list, max_length=16
     )
+    service_tiers: list[_CodexServiceTier] | None = None
+    additional_speed_tiers: list[str] = Field(default_factory=list)
 
 
 class _CodexModelsResponse(BaseModel):
@@ -331,6 +339,7 @@ async def discover_models(
             code="provider.invalidResponse",
         ) from exc
     models = []
+    catalog_ids = {f"openai-codex/{model.slug}" for model in parsed.models}
     for model in parsed.models:
         if model.visibility != "list":
             continue
@@ -347,6 +356,30 @@ async def discover_models(
                 reasoning_efforts=efforts or None,
             )
         )
+        base_model = models[-1]
+        tiers = (
+            {tier.id for tier in model.service_tiers}
+            if model.service_tiers is not None
+            else set(model.additional_speed_tiers)
+        )
+        # The account catalog can omit Ultrafast for these supported models.
+        if model.slug in {"gpt-6-astra", "gpt-6.1-sol"}:
+            tiers.add("ultrafast")
+        for suffix, service_tier, label in (
+            ("fast", "priority", "Fast"),
+            ("ultrafast", "ultrafast", "Ultrafast"),
+        ):
+            alias_id = f"{base_model.id}-{suffix}"
+            if not tiers.intersection({suffix, service_tier}) or alias_id in catalog_ids:
+                continue
+            models.append(
+                base_model.model_copy(update={
+                    "id": alias_id,
+                    "name": f"{model.display_name or model.slug} {label}",
+                    "api_model_id": model.slug,
+                    "service_tier": service_tier,
+                })
+            )
     models.append(
         DiscoveredModel(
             id=CODEX_IMAGE_MODEL_ID,

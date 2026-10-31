@@ -651,7 +651,8 @@ class ProviderService:
                 raise _pseudonymization_provider_error(exc) from exc
         request = ProviderRequest(
             model=(
-                model.model_id.removeprefix(adapter.model_prefix)
+                model.discovery_metadata.get("api_model_id")
+                or model.model_id.removeprefix(adapter.model_prefix)
                 if adapter.model_prefix
                 else model.model_id
             ),
@@ -688,6 +689,9 @@ class ProviderService:
                 else None
             ),
             prompt_cache_key=prompt_cache_key if adapter.supports_prompt_cache else None,
+            service_tier=(
+                model.discovery_metadata.get("service_tier") if adapter.codex_auth else None
+            ),
             continuation_scope=continuation_scope,
             media=media,
         )

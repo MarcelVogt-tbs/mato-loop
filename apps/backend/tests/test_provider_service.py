@@ -649,7 +649,12 @@ async def _append_async(items: list, value) -> None:
     items.append(value)
 
 
-async def test_codex_complete_uses_subscription_compatible_responses_payload(monkeypatch) -> None:
+@pytest.mark.parametrize("suffix, service_tier", [
+    ("", None), ("-fast", "priority"), ("-ultrafast", "ultrafast"),
+])
+async def test_codex_complete_uses_subscription_compatible_responses_payload(
+    monkeypatch, suffix, service_tier,
+) -> None:
     credential_id = uuid4()
     credential = SimpleNamespace(user_id=None)
     provider = LlmProviderConfig(
@@ -659,11 +664,12 @@ async def test_codex_complete_uses_subscription_compatible_responses_payload(mon
     )
     model = ModelConfig(
         provider_id=provider.id,
-        model_id="openai-codex/gpt-5.6-sol",
+        model_id=f"openai-codex/gpt-6.1-sol{suffix}",
         supports_parallel_tool_calls=True,
         discovery_metadata={
             "default_reasoning_effort": "low",
             "reasoning_efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+            **({"api_model_id": "gpt-6.1-sol", "service_tier": service_tier} if suffix else {}),
         },
         config={"temperature": 0.5},
     )
@@ -702,7 +708,10 @@ async def test_codex_complete_uses_subscription_compatible_responses_payload(mon
 
     request = captured["request"]
     assert result.content == "OK"
-    assert request.model == "gpt-5.6-sol"
+    assert captured["body"]["model"] == "gpt-6.1-sol"
+    assert {key: value for key, value in captured["body"].items() if key == "service_tier"} == (
+        {"service_tier": service_tier} if service_tier else {}
+    )
     assert request.max_output_tokens is None
     budget = result.provider_data["output_budget"]
     assert budget["allocatedOutputTokens"] == 1_024

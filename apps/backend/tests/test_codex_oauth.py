@@ -137,9 +137,11 @@ async def test_codex_model_discovery_filters_and_normalizes_models(
 
     assert [model.id for model in models] == [
         "openai-codex/gpt-6-astra",
+        "openai-codex/gpt-6-astra-ultrafast",
         "openai-codex/gpt-6-sol",
         "openai-codex/gpt-6-luna",
         "openai-codex/gpt-6.1-sol",
+        "openai-codex/gpt-6.1-sol-ultrafast",
         "openai-codex/gpt-image-2",
     ]
     assert models[0].metadata == {
@@ -150,13 +152,46 @@ async def test_codex_model_discovery_filters_and_normalizes_models(
         "default_reasoning_effort": "medium",
         "reasoning_efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
     }
-    assert models[4].capabilities == {"image_generation", "image_editing"}
-    assert models[4].metadata == {
+    assert models[-1].capabilities == {"image_generation", "image_editing"}
+    assert models[-1].metadata == {
         "name": "GPT Image 2",
         "supports_tools": False,
         "capabilities_authoritative": True,
         "native_for_chat_provider": True,
     }
+
+
+@pytest.mark.parametrize("tiers", [
+    {"service_tiers": [{"id": "priority"}, {"id": "ultrafast"}, {"id": "future"}]},
+    {"service_tiers": [{"id": "fast"}, {"id": "ultrafast"}]},
+    {"service_tiers": [{"id": "priority"}]},
+    {"additional_speed_tiers": ["fast", "ultrafast", "future"]},
+])
+async def test_codex_discovery_exposes_speed_tiers_as_model_aliases(monkeypatch, tiers):
+    monkeypatch.setattr(
+        codex_oauth.httpx, "AsyncClient", _client_with(lambda _request: httpx.Response(
+            200, json={"models": [{
+                "slug": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "visibility": "list",
+                "context_window": 500_000, "supports_parallel_tool_calls": True,
+                "input_modalities": ["text", "image"], "default_reasoning_level": "high",
+                "supported_reasoning_levels": [{"effort": "high"}], **tiers,
+            }]},
+        )),
+    )
+
+    models = await codex_oauth.discover_models(access_token="access", account_id=None)
+
+    assert [(model.id, model.metadata) for model in models[:-1]] == [
+        ("openai-codex/gpt-6.1-sol", models[0].metadata),
+        ("openai-codex/gpt-6.1-sol-fast", {
+            **models[0].metadata, "name": "GPT-6.1 Sol Fast",
+            "api_model_id": "gpt-6.1-sol", "service_tier": "priority",
+        }),
+        ("openai-codex/gpt-6.1-sol-ultrafast", {
+            **models[0].metadata, "name": "GPT-6.1 Sol Ultrafast",
+            "api_model_id": "gpt-6.1-sol", "service_tier": "ultrafast",
+        }),
+    ]
 
 
 @pytest.mark.parametrize(

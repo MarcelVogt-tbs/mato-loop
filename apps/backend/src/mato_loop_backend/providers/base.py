@@ -215,6 +215,7 @@ class ProviderRequest:
     reasoning_effort: ReasoningEffort | None = None
     enable_thinking: bool | None = None
     prompt_cache_key: str | None = None
+    service_tier: str | None = None
     continuation_scope: dict[str, str | None] = field(default_factory=dict)
     media: list[ProviderMedia] = field(default_factory=list)
 

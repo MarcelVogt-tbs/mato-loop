@@ -8,6 +8,8 @@
 
 MatoLoop zeigt einen einmaligen Gerätecode und die ChatGPT-Anmeldeseite. Bestätigen Sie ihn mit einem geeigneten Konto. OAuth-Zugangsdaten werden verschlüsselt gespeichert; ein lokaler Callback-Port ist nicht nötig. Danach können Modelle synchronisiert werden.
 
+**Fast** und **Ultrafast** erscheinen als eigene Modelle, zum Beispiel **GPT-6.1 Sol Fast**. Fast folgt dem Codex-Katalog; für GPT-6 Astra und GPT-6.1 Sol wird Ultrafast auch angeboten, wenn der Katalog diesen Modus nicht aufführt. Synchronisieren und aktivieren Sie die gewünschten Varianten; die Reasoning-Stufe wählen Sie weiterhin unabhängig davon. Bestehende Modelle werden nicht umgestellt. Ob die Ausführung erlaubt ist und wie viel Kontingent oder Guthaben sie verbraucht, hängt von Ihrem ChatGPT-Tarif und den Workspace-Freigaben ab.
+
 ### OpenAI-kompatibel
 
 Verwenden Sie Basis-URL, optionalen API-Schlüssel und entweder Chat Completions oder Responses. Modelle werden möglichst über `/models` erkannt; bei fehlender Erkennung ist eine manuelle Modell-ID möglich.

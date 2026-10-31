@@ -107,6 +107,8 @@ class DiscoveredModel(BaseModel):
             "native_for_chat_provider",
             "default_reasoning_effort",
             "reasoning_efforts",
+            "api_model_id",
+            "service_tier",
         }
         metadata: dict[str, Any] = {}
         for key, value in self.model_dump(
@@ -527,6 +529,8 @@ def _responses_body(
         body["reasoning"] = reasoning
     if request.prompt_cache_key:
         body["prompt_cache_key"] = request.prompt_cache_key
+    if request.service_tier is not None:
+        body["service_tier"] = request.service_tier
     body["include"] = ["reasoning.encrypted_content"]
     if extra_body:
         body.update(extra_body)
