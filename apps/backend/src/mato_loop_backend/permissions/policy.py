@@ -91,6 +91,7 @@ class PermissionRequest:
     policy_resource_key: str | None = None
     policy_hard_unavailable_capabilities: frozenset[str] = frozenset()
     approval_details: dict[str, Any] | None = None
+    approval_edit_defaults: dict[str, str] | None = None
     display_items: tuple[PermissionDisplayItem, ...] = ()
     sensitive_access: bool = False
     available_decisions: tuple[str, ...] = (

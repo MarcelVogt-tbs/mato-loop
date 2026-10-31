@@ -84,6 +84,8 @@ Task-list tools still fill fully omitted targets with the configured complete pa
 
 One IMAP/SMTP account stores non-secret endpoints/sender in configuration and an encrypted password. Only verified implicit TLS or mandatory STARTTLS is supported. Bounded blocking clients run outside the event loop. Account actions distinguish reading, drafts, sending and deletion; folders are navigation targets, not policy resources.
 
+An optional account signature becomes editable plain text in new messages. Signature-only settings updates preserve permission rules. Send approvals expose editable subject/body defaults to the owner without copying server-loaded draft text into model history; only approved owner edits enter the tool arguments.
+
 UID-based message/draft tokens and pagination bind account revision, folder, query and `UIDVALIDITY`. Special-use flags, not folder names, define Sent/Drafts/Trash. Short model references resolve back to authorized session results before normal token checks. Forks remap recognized references, never arbitrary message text.
 
 The Control Center reads live mail without a local synchronization database, suppresses remote HTML content and preserves attachments when editing drafts. Lossy/unsupported draft edits are rejected; UID-scoped deletion is required and global `EXPUNGE` is never used.

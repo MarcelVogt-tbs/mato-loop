@@ -67,6 +67,8 @@ Bei einem aktiven Konto erscheint **E-Mail** im Control Center. Wähle einen Ord
 
 Die Kontorechte unterscheiden Lesen, Entwürfe verwalten, Senden und Löschen. IMAP-Ordner besitzen keine eigenen Rechte.
 
+Hinterlege bei Bedarf in den Kontoeinstellungen eine **Signatur (optional)**. Sie wird beim Erstellen einer neuen E-Mail einmal in den Mailtext eingefügt. Du kannst sie dort ändern oder entfernen; gespeicherte Entwürfe bekommen keine zusätzliche Signatur. Bei einer Versandfreigabe kannst du über **Argumente bearbeiten** den Betreff und den gesamten Mailtext einschließlich Signatur ändern. Empfänger und Anhänge bleiben dabei unverändert.
+
 !!! warning "Versand nicht blind wiederholen"
     Die Annahme durch SMTP bestätigt keine Zustellung beim Empfänger. Fehlt die Bestätigung der Kopie unter **Gesendet**, zeigt MatoLoop eine Warnung und erhält den Entwurf. Die Nachricht wurde trotzdem bereits an den Mailserver übergeben. Sende den Entwurf nicht erneut; prüfe zuerst den Mailserver. Bei einem unklaren Versand erfolgt ebenfalls keine automatische Wiederholung.
 

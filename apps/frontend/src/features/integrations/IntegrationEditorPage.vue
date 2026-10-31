@@ -59,6 +59,7 @@
               </div>
               <q-input dense v-model="form.username" outlined label="Benutzername" lazy-rules :rules="[requiredRule]" />
               <q-input dense v-model="form.from_address" outlined type="email" label="Fester Absender" hint="Diese Absenderadresse wird für ausgehende E-Mails verwendet." lazy-rules :rules="[requiredRule, emailRule]" />
+              <q-input dense v-model="form.signature" outlined type="textarea" autogrow maxlength="10000" label="Signatur (optional)" hint="Wird bei neuen E-Mails einmal als bearbeitbarer Mailtext eingefügt." />
               <q-input dense
                 v-model="form.password"
                 outlined
@@ -364,6 +365,7 @@ function defaultForm() {
     smtp_port: 465,
     smtp_security: 'tls',
     from_address: '',
+    signature: '',
     token_id: '',
     token_secret: '',
     token: '',
@@ -491,6 +493,7 @@ async function save() {
         smtp_security: form.smtp_security,
         username: form.username.trim(),
         from_address: form.from_address.trim(),
+        signature: form.signature,
         password: form.password,
         enabled: form.enabled
       }
@@ -606,6 +609,7 @@ function assignForm(value = null) {
     smtp_port: value.config?.smtpPort || 465,
     smtp_security: value.config?.smtpSecurity || 'tls',
     from_address: value.config?.fromAddress || '',
+    signature: value.config?.signature || '',
     password: '',
     removePassword: false,
     token_id: '',

@@ -402,7 +402,7 @@ function openCompose(draft = null) {
     to: recipients(draft.to), cc: recipients(draft.cc), bcc: recipients(draft.bcc),
     subject: draft.subject || '', body: draft.text || draft.bodyText || draft.body || '',
     existingAttachments: draft.attachments || []
-  } : {})
+  } : { body: activeAccount.value?.signature ? `\n\n${activeAccount.value.signature}` : '' })
   composeOpen.value = true
 }
 

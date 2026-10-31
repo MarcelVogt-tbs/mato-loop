@@ -1807,11 +1807,17 @@ class AgentRuntime:
                 agent_run_support._safe_tool_arguments(call.name, call.arguments),
                 definition,
             ),
-            argument_edit=agent_run_support._argument_edit_payload(definition, call.arguments),
+            argument_edit=agent_run_support._argument_edit_payload(
+                definition, {**call.arguments, **(request.approval_edit_defaults or {})},
+            ),
         )
         if isinstance(resolution, ApprovalResolution) and resolution.argument_edits:
+            edits = {
+                (name,): value for name, value in (request.approval_edit_defaults or {}).items()
+            }
+            edits.update(resolution.argument_edits)
             raise ToolArgumentsEdited(
-                resolution.argument_edits,
+                tuple(edits.items()),
                 agent_run_support._argument_edit_permission_binding(request),
             )
         approval_decision = (

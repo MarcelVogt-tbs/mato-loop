@@ -318,6 +318,24 @@ def _draft_body_part(message: Message) -> Message:
     return part
 
 
+def edit_message(raw: bytes, *, subject: str, body: str) -> bytes:
+    try:
+        message = BytesParser(policy=policy.default).parsebytes(raw)
+        _draft_body_part(message).set_content(body)
+        if message.get("Subject") is not None:
+            message.replace_header("Subject", subject)
+        else:
+            message["Subject"] = subject
+        edited = message.as_bytes(policy=policy.SMTP)
+    except MailError:
+        raise
+    except Exception as exc:
+        raise MailError("mail.invalidMessage") from exc
+    if len(edited) > MAX_MESSAGE_BYTES:
+        raise MailError("mail.responseTooLarge")
+    return edited
+
+
 def _patch_draft(
     raw: bytes, replacement: bytes, replace_attachments: bool = False
 ) -> bytes:

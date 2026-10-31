@@ -185,6 +185,7 @@ class MailIntegrationRequest(BaseModel):
     smtp_security: Literal["tls", "starttls"]
     username: str = Field(min_length=1, max_length=320)
     from_address: str = Field(min_length=3, max_length=320)
+    signature: str = Field(default="", max_length=10_000)
     password: str | None = Field(default=None, max_length=10_000)
     enabled: bool = True
 
@@ -204,6 +205,7 @@ class MailIntegrationRequest(BaseModel):
                 "smtp_security",
                 "username",
                 "from_address",
+                "signature",
             }
         )
 
@@ -424,6 +426,7 @@ def _provider_payload(provider: IntegrationInstance) -> dict:
                 "smtpSecurity": provider.config.get("smtp_security"),
                 "username": provider.config.get("username"),
                 "fromAddress": provider.config.get("from_address"),
+                "signature": provider.config.get("signature", ""),
             }
             if provider.integration_type == "mail"
             else {

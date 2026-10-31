@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent.run_support import _argument_edit_payload
 from mato_loop_backend.api.request_body_limit import _request_limit
 from mato_loop_backend.api.routes import mail as mail_routes
 from mato_loop_backend.error_contract import error_payload
@@ -23,6 +24,7 @@ from mato_loop_backend.integrations.mail.adapter import (
     MailCreateDraftArguments,
     MailIntegrationArguments,
     MailSearchArguments,
+    MailSendDraftArguments,
     MailSendMessageArguments,
     MailTokenArguments,
     _permission,
@@ -50,9 +52,11 @@ from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
     SettingsStore,
+    ToolExecutionPolicy,
 )
 from mato_loop_backend.tools.catalog import ToolRegistry
 from mato_loop_backend.tools.context import ToolContext
+from mato_loop_backend.tools.contracts import ToolArgumentsEdited
 
 
 def _account() -> IntegrationInstance:
@@ -75,7 +79,7 @@ def _account() -> IntegrationInstance:
 
 def _client() -> MailClient:
     return MailClient(
-        **MailConfig.model_validate(_account().config).model_dump(), password="secret"
+        **MailConfig.model_validate(_account().config).model_dump(exclude={"signature"}), password="secret"
     )
 
 
@@ -400,6 +404,86 @@ async def test_mail_send_rejects_incomplete_approval_preview(
     assert error.value.code == "mail.responseTooLarge"
 
 
+@pytest.mark.parametrize("channel", ["message", "draft", "changed_draft", "denied_draft"])
+async def test_mail_approval_edits_send_exact_content(mail_binding, monkeypatch, channel) -> None:
+    account, binding = mail_binding
+    account.config["signature"] = "--\nTeam"
+    locator = MessageLocator("Drafts", 17, 42)
+    message = parse_message(build_message(
+        from_address="user@example.com", to=("recipient@example.com",),
+        cc=("copy@example.com",), bcc=("hidden@example.com",),
+        subject="Original", body="Hello\n\n--\nTeam",
+        attachments=(("note.txt", "text/plain", b"attachment"),),
+    ), locator)
+    client = SimpleNamespace(get_message=AsyncMock(return_value=message), delete_draft=AsyncMock())
+    monkeypatch.setattr(mail_adapter, "_selected_client", AsyncMock(
+        return_value=(client, account, binding_revision(account)),
+    ))
+    monkeypatch.setattr(mail_adapter, "send_status", AsyncMock(return_value=None))
+    sent = AsyncMock(return_value=MailSendResult(sent_copy_confirmed=True))
+    monkeypatch.setattr(mail_adapter, "send_once", sent)
+    is_draft = channel != "message"
+    arguments = (
+        {"message_token": token_for(account.id, binding_revision(account), locator)}
+        if is_draft else {
+            "to": ["recipient@example.com"], "cc": ["copy@example.com"],
+            "bcc": ["hidden@example.com"], "subject": "Original", "body": "Hello",
+        }
+    )
+    call = ToolCall("send", "mail_send_draft" if is_draft else "mail_send_message", {
+        "integration_id": str(account.id), **arguments,
+    })
+    previews = []
+
+    async def approve(request, *, check_only=False):
+        if check_only:
+            return PermissionDecision.ASK
+        previews.append({item.label: item.value for item in request.display_items})
+        if len(previews) == 1:
+            payload = _argument_edit_payload(
+                effective.tools[call.name].definition,
+                {**call.arguments, **request.approval_edit_defaults},
+            )
+            assert [(field["path"], field["value"].replace("\r\n", "\n").rstrip("\n")) for field in payload["fields"]] == [
+                (["subject"], "Original"), (["body"], "Hello\n\n--\nTeam"),
+            ]
+            if channel == "denied_draft":
+                return PermissionDecision.USER_DENIED
+            if channel == "changed_draft":
+                client.get_message.return_value = replace(message, raw=message.raw + b"\r\n")
+            raise ToolArgumentsEdited(((('subject',), "Edited"), (('body',), "Without signature")))
+        return PermissionDecision.ALLOW
+
+    context = ToolContext(
+        db=AsyncMock(spec=AsyncSession), run_id=uuid4(),
+        session=ChatSession(id=uuid4(), user_id=uuid4()), tool_call=call,
+        root_files=Mock(), integration_settings=binding.integration_settings, ask_handler=approve,
+        arguments_edited_handler=AsyncMock(),
+    )
+    monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=binding.integration_settings))
+    monkeypatch.setattr("mato_loop_backend.tools.access.profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    effective = ToolRegistry([]).effective(binding.integration_settings)
+
+    result = await effective.execute(call, context)
+
+    if channel == "denied_draft":
+        assert "body" not in call.arguments
+        context.arguments_edited_handler.assert_not_awaited()
+        sent.assert_not_awaited()
+    elif channel == "changed_draft":
+        assert result.metadata["errorCode"] == "mail.staleReference"
+        sent.assert_not_awaited()
+    else:
+        delivered = parse_message(sent.await_args.kwargs["raw"], locator)
+        assert (
+            delivered.summary.subject, delivered.body.strip(), delivered.summary.recipients,
+            delivered.cc, delivered.bcc, tuple(item.filename for item in delivered.attachments),
+        ) == (
+            "Edited", "Without signature", ("recipient@example.com",),
+            ("copy@example.com",), ("hidden@example.com",), ("note.txt",) if is_draft else (),
+        )
+
+
 def test_mail_drafts_allow_missing_recipients_but_sending_does_not() -> None:
     integration_id = uuid4()
     assert MailCreateDraftArguments(integration_id=integration_id).to == ()
@@ -447,6 +531,20 @@ async def test_mail_service_stores_only_encrypted_password_credential(monkeypatc
         "payload": {"password": "secret"},
     }
     db.commit.assert_awaited_once()
+
+
+async def test_signature_update_preserves_mail_permissions(monkeypatch) -> None:
+    account = _account()
+    account.permissions.public_permissions.policies["mail.send"] = ToolExecutionPolicy.DISABLED
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=IntegrationSettings(instances=[account])))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+
+    updated = await MailIntegrationService.update(
+        AsyncMock(spec=AsyncSession), account.id, name=account.name,
+        config=account.config | {"signature": "Team"}, password=None, enabled=True,
+    )
+
+    assert updated.instances[0].permissions.public_permissions.policies["mail.send"] == ToolExecutionPolicy.DISABLED
 
 
 def test_message_and_attachment_tokens_are_opaque_and_revision_bound() -> None:
@@ -633,7 +731,7 @@ async def test_sent_draft_cleanup_requires_confirmed_copy(monkeypatch, channel, 
     if channel == "agent":
         monkeypatch.setattr(module, "_selected_client", AsyncMock(return_value=(client, account, revision)))
         await module.mail_send_draft(
-            MailTokenArguments(integration_id=account.id, message_token=token),
+            MailSendDraftArguments(integration_id=account.id, message_token=token),
             SimpleNamespace(run_id=uuid4(), tool_call=SimpleNamespace(id="call"), session=SimpleNamespace(user_id=user.id), bound_options={}),
         )
     else:

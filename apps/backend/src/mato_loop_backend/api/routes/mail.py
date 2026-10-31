@@ -227,6 +227,7 @@ async def list_accounts(
                 "integrationId": str(item.id),
                 "name": item.name,
                 "fromAddress": item.config.get("from_address"),
+                "signature": item.config.get("signature", ""),
             }
             for item in settings.instances
             if item.enabled

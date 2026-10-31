@@ -25,7 +25,7 @@ from mato_loop_backend.integrations.mail.send import send_once, send_status
 from mato_loop_backend.models import Credential
 from mato_loop_backend.security import CredentialCipher, load_credential, read_credential
 from mato_loop_backend.settings import IntegrationInstance
-from mato_loop_backend.tools.actions import ToolAction
+from mato_loop_backend.tools.actions import ApprovalEditField, ToolAction
 from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 MAIL_CREDENTIAL_KIND = "mail.password"
@@ -74,6 +74,7 @@ class MailConfig(BaseModel):
     smtp_security: Literal["tls", "starttls"]
     username: str = Field(min_length=1, max_length=320)
     from_address: str = Field(min_length=3, max_length=320)
+    signature: str = Field(default="", max_length=10_000)
 
     @field_validator("imap_host", "smtp_host")
     @classmethod
@@ -165,6 +166,16 @@ class MailSendMessageArguments(MailComposeArguments):
         return self
 
 
+class MailSendDraftArguments(MailTokenArguments):
+    subject: str | None = Field(default=None, max_length=1_000)
+    body: str | None = Field(default=None, max_length=100_000)
+
+    @field_validator("subject")
+    @classmethod
+    def validate_subject(cls, value: str | None) -> str | None:
+        return MailComposeArguments.validate_subject(value) if value is not None else None
+
+
 class _MailToken(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -222,7 +233,7 @@ def _credential_payload(record: Credential | None) -> dict[str, str]:
 
 def client_for(instance: IntegrationInstance, password: str) -> MailClient:
     config = MailConfig.model_validate(instance.config)
-    return MailClient(password=password, **config.model_dump())
+    return MailClient(password=password, **config.model_dump(exclude={"signature"}))
 
 
 def _binding(context: Any, integration_id: UUID) -> tuple[IntegrationInstance, str]:
@@ -555,7 +566,7 @@ async def mail_delete_draft(arguments: MailTokenArguments, context: Any):
         return _error(exc)
 
 
-async def mail_send_draft(arguments: MailTokenArguments, context: Any):
+async def mail_send_draft(arguments: MailSendDraftArguments, context: Any):
     try:
         client, _instance, revision = await _selected_client(
             arguments.integration_id, context
@@ -582,11 +593,25 @@ async def mail_send_draft(arguments: MailTokenArguments, context: Any):
         expected = context.bound_options.get("mail_approved_raw_hash")
         if expected is not None and hashlib.sha256(message.raw).hexdigest() != expected:
             raise MailError("mail.staleReference")
+        raw = message.raw
+        subject = arguments.subject
+        body = arguments.body
+        if (
+            subject is not None and subject != message.summary.subject
+            or body is not None and body != message.body
+        ):
+            from mato_loop_backend.integrations.mail.client import edit_message
+
+            raw = edit_message(
+                raw,
+                subject=subject if subject is not None else message.summary.subject,
+                body=body if body is not None else message.body,
+            )
         result = await send_once(
             user_id=context.session.user_id,
             integration_id=arguments.integration_id,
             idempotency_key=key,
-            raw=message.raw,
+            raw=raw,
             client=client,
             draft_reference=draft_reference,
         )
@@ -722,6 +747,14 @@ async def _permission(capability: str, operation: str, arguments: Any, context: 
     ):
         return (request,)
     display_items = ()
+    prepared = getattr(context, "prepared_arguments", {})
+    if operation in {"mail_create_draft", "mail_send_message"} and not prepared:
+        signature = MailConfig.model_validate(instance.config).signature.strip("\r\n")
+        if signature and not arguments.body.rstrip().endswith(signature.rstrip()):
+            arguments.body += ("\n\n" if arguments.body else "") + signature
+        if len(arguments.body) > 100_000:
+            raise MailError("mail.responseTooLarge")
+        prepared["body"] = arguments.body
     if capability == "mail.send":
         if locator is not None:
             client, _instance, _revision = await _selected_client(
@@ -730,15 +763,17 @@ async def _permission(capability: str, operation: str, arguments: Any, context: 
             message = await client.get_message(locator)
             if message.body_truncated or message.attachments_truncated:
                 raise MailError("mail.responseTooLarge")
-            context.bound_options["mail_approved_raw_hash"] = hashlib.sha256(
-                message.raw
-            ).hexdigest()
+            raw_hash = hashlib.sha256(message.raw).hexdigest()
+            if prepared.get("draft_hash", raw_hash) != raw_hash:
+                raise MailError("mail.staleReference")
+            prepared["draft_hash"] = raw_hash
+            context.bound_options["mail_approved_raw_hash"] = raw_hash
             values = {
                 "An": message.summary.recipients,
                 "Cc": message.cc,
                 "Bcc": message.bcc,
-                "Betreff": message.summary.subject,
-                "Nachricht": message.body,
+                "Betreff": arguments.subject if arguments.subject is not None else message.summary.subject,
+                "Nachricht": arguments.body if arguments.body is not None else message.body,
                 "Anhänge": tuple(item.filename for item in message.attachments),
             }
         else:
@@ -773,7 +808,12 @@ async def _permission(capability: str, operation: str, arguments: Any, context: 
             ),
             PermissionDisplayItem("Von", message.summary.sender),
         )
-    return (replace(request, display_items=display_items),)
+    return (replace(
+        request,
+        display_items=display_items,
+        approval_edit_defaults={"subject": values["Betreff"], "body": values["Nachricht"]}
+        if capability == "mail.send" else None,
+    ),)
 
 
 def _accounts_permission(_arguments: Any, _context: Any):
@@ -823,6 +863,10 @@ def _tool(
         ),
         releases_private_data=action is _READ,
         snapshot_policy=snapshot_policy,
+        approval_edit_fields=(
+            ApprovalEditField(("subject",), "Betreff", max_length=1_000),
+            ApprovalEditField(("body",), "Mailtext", "textarea", max_length=100_000),
+        ) if action is _SEND else (),
     )
 
 
@@ -893,8 +937,9 @@ MAIL_SHARED_TOOLS = (
         "mail_send_draft",
         "Send a previously returned email draft without automatic retries. sent means SMTP "
         "accepted the message, not recipient delivery. sentCopyConfirmed reports whether "
-        "the Sent copy was confirmed; false or null must not trigger another send.",
-        MailTokenArguments,
+        "the Sent copy was confirmed; false or null must not trigger another send. "
+        "Optional subject and body replace only the draft's subject and plain-text body.",
+        MailSendDraftArguments,
         mail_send_draft,
         _SEND,
         "mail_send_draft",

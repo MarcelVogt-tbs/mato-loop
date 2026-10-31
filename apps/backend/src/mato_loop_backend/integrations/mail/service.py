@@ -4,7 +4,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.integrations.mail.adapter import MAIL_CREDENTIAL_KIND
+from mato_loop_backend.integrations.mail.adapter import MAIL_CREDENTIAL_KIND, MailConfig
 from mato_loop_backend.integrations.registry import validate_integration
 from mato_loop_backend.integrations.service import (
     IntegrationSettingsDocument,
@@ -130,7 +130,10 @@ class MailIntegrationService:
         if instance is None:
             raise IntegrationSettingsError("integration.notFound")
         cls._ensure_unique(settings, config, excluding=integration_id)
-        connection_changed = instance.config != config
+        connection_changed = (
+            MailConfig.model_validate(instance.config).model_dump(exclude={"signature"})
+            != MailConfig.model_validate(config).model_dump(exclude={"signature"})
+        )
         old_credential_id = instance.credential_id
         instance.name = name
         instance.config = config
