@@ -6,7 +6,7 @@ Eine Session entsteht beim ersten Senden oder beim Öffnen einer sessiongebunden
 
 ## Warum kann der Agent nicht auf meinen Arbeitsordner zugreifen?
 
-Prüfen Sie, ob ein verbundener Computer und ein absoluter aktueller Ordner gewählt sind und die Dateizugriffsrichtlinie für Home- oder externe Pfade die Modellaktion erlaubt. Backend-Dateien bleiben auch ohne Computer verfügbar.
+Prüfe, ob ein verbundener Computer und ein absoluter aktueller Ordner gewählt sind und die Dateizugriffsrichtlinie für Home- oder externe Pfade die Modellaktion erlaubt. Backend-Dateien bleiben auch ohne Computer verfügbar.
 
 ## Warum wird ein Modell nicht im Chat angeboten?
 

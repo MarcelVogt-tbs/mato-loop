@@ -2,7 +2,7 @@
 
 ## Anmeldung
 
-MatoLoop verwendet eine lokale Cookie-Anmeldung. Geschützte Seiten leiten zur Anmeldung weiter; **Abmelden** beendet sie. Externe SSO-Anmeldung ist nicht implementiert. Das erste Konto ist Administrator. Unter **Konto** ändern Sie Ihr Passwort; dadurch werden bestehende Anmeldungen dieses Kontos beendet.
+MatoLoop verwendet eine lokale Cookie-Anmeldung. Geschützte Seiten leiten zur Anmeldung weiter; **Abmelden** beendet sie. Externe SSO-Anmeldung ist nicht implementiert. Das erste Konto ist Administrator. Unter **Konto** änderst du dein Passwort; dadurch werden bestehende Anmeldungen dieses Kontos beendet.
 
 Unter **Administration > Benutzer** können Administratoren Konten anlegen, Passwörter zurücksetzen, Konten aktivieren/deaktivieren und Rollen vergeben. Ein Konto muss vor dem Löschen deaktiviert sein. Das eigene Konto und der letzte aktive Administrator sind geschützt.
 
@@ -20,15 +20,15 @@ Die Suche findet eigene Projekte, Sessions und Nachrichten ab zwei Zeichen. **St
 
 ### Archiv
 
-Über das Menü einer Session oder eines Projekts archivieren Sie Unterhaltungen. **Archiv** ermöglicht Lesen und Wiederherstellen. Ein archiviertes Projekt archiviert seine Sessions wirksam mit; einzeln archivierte Sessions bleiben nach der Projektwiederherstellung archiviert. Neue Aufträge benötigen die Wiederherstellung, bestehende Arbeit darf noch enden. Mehr zu Zeitplänen unter [Automationen](automationen.md).
+Über das Menü einer Session oder eines Projekts archivierst du Unterhaltungen. **Archiv** ermöglicht Lesen und Wiederherstellen. Ein archiviertes Projekt archiviert seine Sessions wirksam mit; einzeln archivierte Sessions bleiben nach der Projektwiederherstellung archiviert. Neue Aufträge benötigen die Wiederherstellung, bestehende Arbeit darf noch enden. Mehr zu Zeitplänen unter [Automationen](automationen.md).
 
 ## Verwaltungslisten
 
-In den Listen für Skills, Agenten, Provider, Modelle, Integrationen und MCP-Server steht der Ein-/Ausschalter rechts, getrennt von den Aktionen. Eine Hauptaktion ist direkt erreichbar; weitere Aktionen wie Testen, Aktualisieren oder Löschen finden Sie im Drei-Punkte-Menü. Auf schmalen Bildschirmen steht diese Bediengruppe unter dem Text. Beschriftete Schalter behalten ihre Bedeutung: **Erlaubt** steuert eine Anbieterfreigabe, **Verfügbar** die Tool-Verfügbarkeit und **Admin** die Benutzerrolle. Benutzerkonten aktivieren oder deaktivieren Sie im zugehörigen Drei-Punkte-Menü.
+In den Listen für Skills, Agenten, Provider, Modelle, Integrationen und MCP-Server steht der Ein-/Ausschalter rechts, getrennt von den Aktionen. Eine Hauptaktion ist direkt erreichbar; weitere Aktionen wie Testen, Aktualisieren oder Löschen findest du im Drei-Punkte-Menü. Auf schmalen Bildschirmen steht diese Bediengruppe unter dem Text. Beschriftete Schalter behalten ihre Bedeutung: **Erlaubt** steuert eine Anbieterfreigabe, **Verfügbar** die Tool-Verfügbarkeit und **Admin** die Benutzerrolle. Benutzerkonten aktivierst oder deaktivierst du im zugehörigen Drei-Punkte-Menü.
 
 ## Control Center
 
-Die schwebende Schaltfläche öffnet das Control Center. **Session** ist der feste Einstellungsbereich. Neue Sessions haben außerdem die App **Ablage**; **Computer-Dateien**, **Automationen**, **Terminal**, **Browser** und andere verfügbare Apps fügen Sie über den Launcher hinzu. Sessiongebundene Apps können einen Entwurf als leere Session speichern.
+Die schwebende Schaltfläche öffnet das Control Center. **Session** ist der feste Einstellungsbereich. Neue Sessions haben außerdem die App **Ablage**; **Computer-Dateien**, **Automationen**, **Terminal**, **Browser** und andere verfügbare Apps fügst du über den Launcher hinzu. Sessiongebundene Apps können einen Entwurf als leere Session speichern.
 
 Apps lassen sich umordnen und schließen. Das Schließen eines App-Tabs löscht seine Daten oder Konfiguration nicht; eine Automation läuft beispielsweise weiter. Das Zuklappen des Panels erhält Tabs und Dateientwürfe. Nur beim Schließen einer Datei mit ungespeicherten Änderungen ist eine Entscheidung erforderlich. Der feste Sessionbereich kann nicht entfernt werden.
 
@@ -40,7 +40,16 @@ Der globale Bereich **Benachrichtigungen** zeigt eine chronologische Liste. Sein
 
 Hinweise auf Freigaben und Rückfragen öffnen die Quell-Session; Dreaming-Vorschläge öffnen **Memory > Dreaming > Offene Vorschläge**. Normale Antworten und Laufzeitfehler erzeugen ebenfalls Hinweise, sofern ihre Session nicht sichtbar und fokussiert ist. Antwort- und Sessionanfrage-Hinweise verschwinden nach dem Lesen; andere Hinweise können einen gelesenen Verlauf behalten. Lesen oder Löschen entscheidet niemals die zugrunde liegende Anfrage.
 
-Session-Freigaben verwalten Sie unter **Session > Session-Freigaben**. Computer und Arbeitsverzeichnis haben eigene Auswahlfelder im Sessionbereich. Push aktivieren Sie pro Gerät im Benachrichtigungsbereich, nachdem die Instanz dafür eingerichtet wurde; siehe [Betrieb](betrieb-und-datensicherung.md#app-und-push-benachrichtigungen).
+Session-Freigaben verwaltest du unter **Session > Session-Freigaben**. Computer und Arbeitsverzeichnis haben eigene Auswahlfelder im Sessionbereich.
+
+## App und Push verwenden
+
+Die Produktionsanwendung lässt sich über deinen Browser als Web-App installieren. Verwende vertrauenswürdiges HTTPS. Für Push muss ein Administrator zuerst [die Instanz einrichten](betrieb-und-datensicherung.md#app-und-push-benachrichtigungen). Aktiviere anschließend Push pro Browser oder installierter App im Benachrichtigungsbereich. Auf iOS/iPadOS benötigst du mindestens Version 16.4 und die Installation über **Zum Home-Bildschirm**.
+
+Bei fokussiertem MatoLoop wird Push für dein Konto auf allen Geräten unterdrückt. Zustellung ist bestmöglich; gespeicherte Hinweise und Chatverlauf bleiben maßgeblich. Die App hält nur ihre Anwendungshülle offline bereit, keine Chats, Dateien oder Anmeldedaten.
+
+!!! warning "Vor einem App-Update speichern"
+    Ein von dir bestätigtes App-Update lädt offene Appfenster neu. Ungespeicherte Editorzustände und andere Eingaben im Arbeitsspeicher können verloren gehen.
 
 ## Desktop und Mobilgeräte
 
@@ -54,8 +63,8 @@ Das Benutzermenü schaltet den Farbmodus um. Die Dokumentation hat einen eigenen
 
 Unter **Administration > Darstellung** ändern Administratoren Name und Beschreibung der Anwendung sowie Logo und Theme. **Anpassung** erlaubt einen Namen bis 80 Zeichen, Beschreibung bis 500 Zeichen und ein PNG-, JPEG- oder WebP-Logo bis 1 MiB; das Logo wird als quadratisches 512-Pixel-PNG normalisiert. Speichern und Zurücksetzen wirken auf die Instanz, einschließlich der Anmeldung.
 
-Unter **Themes** wählen Sie ein aktiviertes Standardtheme. Der aktuelle Standard kann erst deaktiviert werden, wenn ein anderer gewählt wird. Derzeit ist nur MatoLoop mitgeliefert; eigene Theme-Auswahl je Benutzer oder Uploads gibt es nicht. Theme, Hell/Dunkel-Modus und Name/Persona des Assistenten sind getrennte Einstellungen. Andere geöffnete Browser laden die neue Darstellung beim nächsten Seitenaufruf.
+Unter **Themes** wählst du ein aktiviertes Standardtheme. Der aktuelle Standard kann erst deaktiviert werden, wenn ein anderer gewählt wird. Derzeit ist nur MatoLoop mitgeliefert; eigene Theme-Auswahl je Benutzer oder Uploads gibt es nicht. Theme, Hell/Dunkel-Modus und Name/Persona des Assistenten sind getrennte Einstellungen. Andere geöffnete Browser laden die neue Darstellung beim nächsten Seitenaufruf.
 
 ## Ungespeicherte Änderungen
 
-Ungespeicherte Dateiänderungen lösen vor Verlassen oder Verwerfen eine Rückfrage aus. Panelzuklappen und Tabwechsel erhalten sie. Ein Neuladen kann browserlokale Editorzustände verlieren; speichern Sie wichtige Änderungen. Die Dokumentation öffnet in einem eigenen Tab.
+Ungespeicherte Dateiänderungen lösen vor Verlassen oder Verwerfen eine Rückfrage aus. Panelzuklappen und Tabwechsel erhalten sie. Ein Neuladen kann browserlokale Editorzustände verlieren; speichere wichtige Änderungen. Die Dokumentation öffnet in einem eigenen Tab.

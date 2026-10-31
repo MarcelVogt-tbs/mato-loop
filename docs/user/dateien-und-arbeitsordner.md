@@ -1,80 +1,55 @@
-# Dateien und Arbeitsordner
+# Dateien und Arbeitsordner verwenden
 
-## Getrennte Bereiche
+MatoLoop trennt gespeicherte Session-Dateien von den Dateien deines Computers:
 
 | Bereich | Zweck |
 | --- | --- |
-| Computer-Dateien | Gewöhnliche absolute Pfade auf dem gewählten Computer |
-| Arbeitsordner | Aktueller absoluter Ordner auf dem gewählten Computer |
-| Ablage | Verwaltete Dateien und Versionen einer Session |
+| Ablage | Verwaltete Dateien und Versionen einer Session; auch ohne Computer verfügbar |
+| Computer-Dateien | Gewöhnliche Pfade auf dem ausgewählten Computer |
+| Arbeitsordner | Aktueller Ordner des Agents auf diesem Computer |
 
-Der interne Session-Speicher ist kein Workspace. Ein Workspace ist ein gewöhnlicher absoluter Pfad auf dem gewählten MatoLoop Agent. Neue Sessions übernehmen ihn nur durch ausdrückliche Auswahl oder Projektvorgaben. Ohne Computer und aktuellen Ordner bleiben normaler Chat und Ablage verfügbar; Plan und Build benötigen dagegen einen verbundenen Computer und zugänglichen Arbeitsordner.
+Dateien werden zwischen Ablage und Computer nur ausdrücklich kopiert, nicht automatisch synchronisiert. Computerdateien haben keine MatoLoop-Versionshistorie.
 
-Unter **Control Center > Session** stehen Computer und Arbeitsverzeichnis nebeneinander, bei wenig Platz untereinander. Das Ordnersymbol im Verzeichnisfeld öffnet die vorhandene Ordnerauswahl auf dem verbundenen Computer. **Diesen Ordner auswählen** übernimmt den Pfad für die Session. Beim Computerwechsel wird dessen Home-Verzeichnis übernommen. **Computer-Dateien** öffnet ebenfalls dessen Home oder einen absoluten Pfad und kann einen ausgewählten Ordner als Arbeitsordner übernehmen. Der Agent meldet Home und verfügbare Operationen, keine Wurzel-IDs. Ein Modell-Computerwechsel folgt dem Tool-Recht **Computer übernehmen** und gilt ab dem nächsten Modellschritt: **Automatisch** wechselt ohne Nachfrage, **Nachfragen** verwendet passende Lauf-/Session-Freigaben oder fragt nach, **Deaktiviert** blockiert den Wechsel. Verbindungsverlust löst weder automatischen Wechsel noch Wiederholung aus. Linux verwendet POSIX-Pfade, Windows Pfade wie `C:/Users/Ada/workspace`.
+## Arbeitsordner auswählen
 
-Computer gehören genau einem Benutzer und können nicht von anderen Konten ausgewählt werden. Diese Anwendungsgrenze ersetzt keine Trennung auf dem Betriebssystem. MatoLoop Agent arbeitet mit den Rechten seines Betriebssystembenutzers und ist keine Sandbox. Dateien auf dem Computer werden beim Löschen des MatoLoop-Kontos nicht automatisch entfernt.
+1. Wähle unter **Control Center > Session** den verbundenen Computer.
+2. Öffne über das Ordnersymbol die Ordnerauswahl.
+3. Wähle **Diesen Ordner auswählen**. Alternativ übernimm einen Ordner aus **Computer-Dateien**.
 
-## Backend-Dateien
+Neue Sessions haben ohne ausdrückliche Auswahl oder Projektvorgabe keinen Arbeitsordner. Beim Computerwechsel wird dessen Home übernommen. Plan und Build benötigen einen zugänglichen Arbeitsordner. Unter Linux verwendest du absolute POSIX-Pfade, unter Windows etwa `C:/Users/Ada/workspace`.
 
-`root=files` zeigt den revisionierten Dateibereich einer Session; Pfade enthalten keinen vorangestellten Wurzelnamen. Eine Session ohne Projekt verwendet `/data/sessions/<session-id>/files` und `/data/sessions/<session-id>/revisions`. Eine Projekt-Session verwendet `/data/projects/<projekt-id>/sessions/<session-id>/files` und `/data/projects/<projekt-id>/sessions/<session-id>/revisions`. Die Session-ID bleibt immer die Wurzelidentität.
+Eine Ordnerauswahl erlaubt Navigation im gewählten Baum, keine Datei- oder Shell-Aktionen. Diese unterliegen ihren eigenen [Rechten und Freigaben](freigaben-und-datenfreigabe.md). Computerwechsel des Modells benötigen ebenfalls passende Rechte. Bei Verbindungsverlust erfolgt kein automatischer Wechsel oder erneuter Versuch.
 
-Uploads, daraus erzeugte Begleitdateien und dauerhafte Binärausgaben von Backend-Tools sind normale verwaltete Dateien mit gespeicherten Vollversionen. Nachrichten speichern dafür Wurzel, Datei-ID, Version und Pfad.
+!!! warning "Keine Betriebssystem-Sandbox"
+    Der Agent arbeitet mit den Rechten seines Betriebssystembenutzers. Deine direkten Aktionen in Computer-Dateien umgehen absichtlich Modellrichtlinien und können auf dessen erreichbare Pfade zugreifen. Eigentümer- und technische Linkprüfungen bleiben bestehen. Das Löschen deines MatoLoop-Kontos entfernt keine Computerdateien.
 
-Beim Verschieben einer Session in ein anderes Projekt oder aus einem Projekt verschiebt MatoLoop ihren vollständigen Dateibaum samt Versionsverlauf. Datei-IDs, Versionen und Nachrichtenverweise bleiben erhalten. Solange eine andere Session auf ihre Dateien verweist, kann die besitzende Session weder verschoben noch gelöscht werden.
+## Dateien hochladen und verwalten
 
-Im Dateibrowser ist zunächst die aktuelle Session ausgewählt. Innerhalb eines Projekts können Sie unter **Dateien aus Session** ausdrücklich die Dateien einer anderen eigenen Session desselben Projekts öffnen und bearbeiten. Andere Projekte und Benutzer bleiben ausgeschlossen. Eine dort geöffnete Datei wird nicht als aktive Datei an eine Nachricht der aktuellen Session angehängt.
+Öffne **Ablage** für Session-Dateien oder **Computer-Dateien** für den Rechner. Dort kannst du Ordner öffnen, filtern und durchsuchen, Dateien hoch- und herunterladen, anlegen, umbenennen oder löschen. Home- und absolute Pfadauswahl gehören nur zu Computer-Dateien. **Ordner als ZIP herunterladen** lädt einen Ordner samt Inhalt; große oder unsichere Dateibäume können abgelehnt werden.
 
-## Dateien im Control Center
+Bis zu vier Dateien lassen sich gemeinsam auswählen und nacheinander hochladen. Transfers und normale Chat-Anhänge unterstützen bis zu 1 GiB, soweit Instanzlimits und Speicherkontingent es erlauben. Vorschau-, Format-, Medien- und Providergrenzen bleiben getrennt. Große Dateien können bei der Verarbeitung mehr Arbeitsspeicher als ihre Dateigröße benötigen.
 
-**Ablage** verwaltet Session-Dateien; **Computer-Dateien** zeigt den Dateibaum des gewählten Computers. In beiden Apps können Sie je nach verfügbarem Zugriff:
+In einem Projekt kannst du über **Dateien aus Session** ausdrücklich die Ablage einer anderen eigenen Session desselben Projekts öffnen. Diese Datei wird nicht automatisch als aktive Datei an deine aktuelle Nachricht angehängt. Beim Verschieben einer Session bleibt ihr vollständiger Dateiverlauf erhalten. Verweisen andere Sessions darauf, kann die besitzende Session nicht verschoben oder gelöscht werden.
 
-- Ordner öffnen, filtern und weitere Einträge nachladen
-- den Home- oder einen anderen absoluten Ordner des Computers öffnen
-- einen markierten Ordner als aktuellen Ordner der Session verwenden
-- den gewählten Computerpfad durchsuchen
-- Dateien hochladen und herunterladen
-- leere Text-, Markdown- oder OpenSCAD-Dateien anlegen
-- Ordner anlegen
-- Dateien und Ordner umbenennen oder löschen
-- Dateiversionen anzeigen, herunterladen oder wiederherstellen
+## Text und Markdown bearbeiten
 
-Versionen gelten nur für verwaltete Dateien. **Ordner als ZIP herunterladen** lädt einen Ordner samt Inhalt; große oder unsichere Dateibäume können die Transfergrenzen überschreiten. Home-, absolute Pfad- und Arbeitsordneraktionen gehören ausschließlich zu **Computer-Dateien**.
+Öffne eine unterstützte Textdatei im Editor und speichere ausdrücklich. Markdown bietet Quelltext und eine bereinigte Vorschau, keinen WYSIWYG-Editor; externe Vorschau-Bilder bleiben deaktiviert. Für gespeichertes Markdown öffnet **Als PDF speichern** die Druckansicht deines Browsers. Ungespeicherte Änderungen werden nicht exportiert.
 
-Session-Freigaben zeigen und widerrufen Sie unter **Session > Session-Freigaben**, nicht in der Datei-App oder im Benachrichtigungsbereich. Laufrechte erscheinen dort nicht. Ordnernavigation ist von Datei- und Shell-Rechten getrennt. Neue Freigaben für einzelne Dateien gelten je Kategorie exakt für den angezeigten Pfad. Ordnerfreigaben schließen Unterpfade ein; die Liste nennt diesen Umfang ausdrücklich, ohne `/**` an den Pfad anzuhängen. Ob Dateizugriffe außerhalb des Arbeitsordners nachfragen, bestimmt das Agentenprofil. Normale Shell-Freigaben gelten dagegen je Kategorie für den Computer, ohne Workspace-Begrenzung. Bestehende Freigaben behalten ihren bisherigen Umfang; siehe [Freigaben](freigaben-und-datenfreigabe.md).
+Tabs behalten Entwurf, Auswahl und Undo-Verlauf im Browser-Arbeitsspeicher. Tabwechsel und Zuklappen erhalten sie, ein Reload nicht. Bei einem Speicherkonflikt vergleichst du den Serverstand und entscheidest, welchen Stand du behältst; keine Auswahl speichert oder mischt automatisch.
 
-### Navigation im Ordnerbaum
+Wenn du bei geöffneter Datei eine Nachricht sendest, erhält der Agent nur einen Dateiverweis und den Status ungespeicherter Änderungen, nicht automatisch den Inhalt. Solange der übermittelte Stand als ungespeichert markiert ist, werden passende Modell-Schreibzugriffe blockiert.
 
-- Eine Navigationsfreigabe gilt für den angezeigten Ordner und seine Unterordner auf demselben Computer.
-- Wechsel zwischen Unterordnern und zurück zum freigegebenen Ausgangsordner benötigen keine neue Navigationsfreigabe, sofern keine zusätzliche Sperre greift.
-- **Lauffreigabe:** gilt nur im aktuellen Lauf. Ein Ordnerwechsel macht daraus keine Session-Freigabe.
-- **Session-Freigabe:** gilt auch für spätere Läufe bis zum Widerruf. Eine ausdrückliche Ordnerauswahl in der Oberfläche erteilt diese Freigabe für die aktuelle Profil-/Modellvertrauensbindung.
-- Nachbarordner und übergeordnete Ordner außerhalb des freigegebenen Baums sind nicht eingeschlossen.
-- Dateiaktionen, Shell-Befehle, sensible Zugriffe und Computer-Sperren werden weiterhin separat geprüft. Symlinks umgehen diese Grenzen nicht.
-- Beim Update werden bisherige Navigationsfreigaben einmalig zurückgesetzt. Wählen Sie den Ordner erneut aus oder bestätigen Sie die nächste Navigationsanfrage. Datei- und Shell-Freigaben bleiben erhalten.
+## Versionen ansehen und wiederherstellen
 
-Nachrichten verweisen bei Uploads und dauerhaften Binärausgaben auf die exakte Dateiversion. Normales Bearbeiten, Umbenennen und Verschieben erhalten diese Verweise. Löschen entfernt Datei und vollständigen Versionsverlauf; die Nachricht zeigt die Datei danach als nicht mehr verfügbar. Reine Text-, JSON-, Status- und Fehlerergebnisse bleiben Teil der Nachricht.
+Nur Dateien der **Ablage** besitzen gespeicherte Vollversionen. Öffne deren Versionsansicht zum Anzeigen, Herunterladen oder Aktivieren einer älteren Version. Aktivieren ersetzt den aktuellen Inhalt, erhält aber alle gespeicherten Versionen. Umbenennen und Verschieben erhalten Dateiidentität und Verlauf; Kopieren erzeugt eine eigenständige Datei.
 
-Bestätigte Dateiaktionen erscheinen als **Dateiänderungen** an der Antwort; ausdrücklich bereitgestellte Dateien haben Öffnen-/Downloadaktionen. Öffentliche Ausgabeverweise und endgültige Versionen erscheinen erst am Laufende. Bereits geöffnete aktuelle Dateien werden aktualisiert, ohne Ihre zwischenzeitliche Navigation zu überschreiben. **Kopieren** erzeugt eine eigenständige Zieldatei mit eigenem Verlauf. Während eines Laufs sind geänderte verwaltete Dateien sichtbar, aber für konkurrierende Änderungen gesperrt; am Ende entsteht je tatsächlich geänderter Datei eine endgültige Vollversion.
+Während eines Agentenlaufs siehst du bereits geänderte aktuelle Dateien, kannst betroffene Dateien aber nicht gleichzeitig ändern oder wiederherstellen. Am Laufende wird je tatsächlich geänderter Datei eine endgültige Version veröffentlicht. Bestätigte Aktionen erscheinen als **Dateiänderungen**; sie sind kein vollständiges Dateisystem-Audit. Für Repositoryvergleiche verwendest du [Git](git-und-worktrees.md#anderungen-ansehen).
 
-`root=files` bezeichnet den verwalteten Dateibereich. `root=computer` bezeichnet den aktuellen absoluten Ordner des für den Lauf gewählten, dem Benutzer gehörenden MatoLoop Agent. Ohne Computer ist nur dieser Zugriff nicht verfügbar. Änderungen dort bleiben Eigentum des MatoLoop Agent; importierte Bytes werden zu verwalteten Dateien. Zwischen beiden Bereichen wird nur kopiert, nicht verschoben; MatoLoop prüft Größe und SHA-256.
+!!! danger "Löschen entfernt den Verlauf"
+    Das Löschen einer Datei entfernt ihren gesamten Versionsverlauf. Löschen eines Ordners wirkt rekursiv. Verweise in alten Nachrichten sind danach nicht mehr verfügbar. Prüfe den Pfad vor der Bestätigung.
 
-Direkte Aktionen in **Computer-Dateien** sind an Eigentümer und Computer gebunden. Sie umgehen absichtlich Modell-Richtlinien und können auf alles zugreifen, was dessen Betriebssystembenutzer erlaubt. Linux-No-Follow- bzw. Windows-No-Reparse-Prüfungen gelten weiter. Direkte Aktionen in **Ablage** bleiben auf den ausgewählten eigenen Sessionbereich begrenzt.
+## Speicherlimit prüfen
 
-Benötigt eine vom Modell angeforderte Computeraktion zwingend einen aktuellen Ordner und wurde keiner gewählt, fragt der Agent nach einem absoluten Pfad. Der anschließende Verzeichniswechsel folgt der Dateizugriffsrichtlinie für das Home-Verzeichnis oder externe Pfade und kann eine widerrufbare Session-Freigabe erzeugen. Für spätere Modellaktionen außerhalb dieses Arbeitsverzeichnisses gilt zusätzlich die Profilberechtigung **Zugriff außerhalb des Arbeitsverzeichnisses**; Aktionsrechte für Lesen, Schreiben und Löschen bleiben davon getrennt.
+**Administration > Instanzlimits** legt Upload-, Vorschau- und optionale **Benutzer-Speicherlimits (MiB)** fest. Der Dateibrowser zeigt deinen Gesamtverbrauch. Zum Benutzerlimit zählen Dateien, Vollversionen und reservierte endgültige Laufausgaben aller eigenen Sessions, auch archivierter oder automatisierter.
 
-Bis zu vier Dateien können gemeinsam ausgewählt und nacheinander hochgeladen werden. Uploadgröße und das optionale **Benutzer-Speicherlimit (MiB)** legen Administratoren unter **Administration > Instanzlimits** fest. Das Limit gilt für jeden Benutzer separat und umfasst die Dateien und gespeicherten Vollversionen aller eigenen Sessions, einschließlich Projekt-, archivierter und Automations-Sessions. Laufende Ausgaben reservieren zusätzlich Platz für ihre endgültige Version. Ohne eingetragenes Limit ist der Speicher unbegrenzt; das gilt auch nach dem Umstieg von der bisherigen Sessionquote. Der Dateibrowser zeigt den Gesamtverbrauch des Benutzers. Wird das Limit nachträglich unter den Verbrauch gesenkt, bleiben vorhandene Dateien lesbar, herunterladbar und löschbar; zusätzlicher Verbrauch wird blockiert. Neue Dateien überschreiben keine vorhandenen Pfade.
-
-## Vorschau und Bearbeitung
-
-Die Vorschaugrößen für unterstützte Bilder sowie geeignete UTF-8-Text- und Markdown-Dateien werden global festgelegt; das Textlimit gilt auch für den integrierten Editor. Sichere SVG-Vorschauen bleiben unabhängig davon auf 5 MiB begrenzt. Andere Formate stehen zum Download bereit. Eine neue Datei beginnt mit einer vollständigen Version. Normales Ersetzen hängt nach Prüfung des erwarteten SHA-256-Werts eine Vollversion an; Umbenennen und Verschieben behalten Identität und Verlauf.
-
-Das Löschen einer Datei entfernt ihren gesamten Versionsverlauf. Beim Aktivieren wird die gewählte ältere Version zur aktuellen Version; alle gespeicherten Versionen bleiben erhalten.
-
-Beim Senden einer Nachricht übermittelt MatoLoop für die aktuell geöffnete Datei nur Wurzel, Wurzelidentität, Pfad, SHA-256 und den Status ungespeicherter Änderungen. Dateiinhalte werden dadurch nicht automatisch an den Agenten gesendet.
-
-Text und Markdown öffnen im Quelltexteditor; Markdown bietet zusätzlich eine sanitierte Vorschau, keine visuelle WYSIWYG-Bearbeitung. Externe Bilder bleiben in Dateivorschauen deaktiviert. Code und Mermaid lassen sich kopieren oder herunterladen. Dateitabs bewahren Auswahl, Undo-Verlauf und Entwurf im Browser-Arbeitsspeicher; ein Reload stellt diese Entwürfe nicht wieder her. Bei einem Speicherkonflikt können Sie den Serverstand vergleichen und bewusst übernehmen oder Ihren Entwurf gegen den geprüften Stand behalten; keine Auswahl speichert automatisch.
-
-Gespeicherte Markdown-Dateien können über **Als PDF speichern** in einer hellen Druckansicht geöffnet werden. Nach dem Rendern von Formeln und Mermaid-Diagrammen erscheint der Druckdialog des Browsers; dort kann das Dokument als PDF gespeichert werden. Ungespeicherte Änderungen werden nicht exportiert.
-
-!!! warning "Löschen"
-    Das Löschen eines Ordners wirkt rekursiv. Das Löschen einer Datei entfernt ihren vollständigen Versionsverlauf. Prüfen Sie den Pfad vor der Bestätigung.
+Ohne Limit ist der Speicher unbegrenzt. Wird es unter den vorhandenen Verbrauch gesenkt, bleiben Dateien lesbar, herunterladbar und löschbar; zusätzlicher Verbrauch wird blockiert. Neue Dateien überschreiben keine vorhandenen Pfade. Andere Dateiformate oder zu große Vorschauen bleiben, soweit zulässig, zum Download verfügbar.

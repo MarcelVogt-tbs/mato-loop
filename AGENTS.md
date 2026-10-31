@@ -30,6 +30,7 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 
 - Write repository documentation, `AGENTS.md`, READMEs, code comments, docstrings, logs, internal exception messages, technical identifiers, and static host-controlled LLM text in English.
 - Exception: write the user and administrator handbook under `docs/user/` in German, matching the application UI. Keep its MkDocs navigation and UI labels German. Technical documentation and READMEs remain English.
+- Address handbook readers informally with lowercase `du`/`dein` and singular imperatives. Preserve exact UI labels, commands, and quoted source text.
 - Static host-controlled LLM text includes system and repair prompts, prompt fragments, tool and schema descriptions, and model-facing host markers.
 - Write visible UI text in German. Backend-generated labels and messages that are rendered directly by the German UI are UI text.
 - Dynamic user, persona, memory, source, and tool data may use any language.
@@ -38,7 +39,19 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Prefer small, vertical, verifiable changes.
 - Prefer Quasar components and existing utilities over new custom CSS or abstractions.
 - Support desktop, mobile, light mode, and dark mode.
-- Document new architecture decisions in `docs/architecture.md` or a small topical file under `docs`.
+- Keep `docs/architecture.md` an overview of system boundaries. Document detailed decisions in the existing topical document under `docs` and link it from the documentation index.
+
+## Documentation
+
+- Write for one audience and reader task at a time. Keep getting started, procedures, reference, and explanation distinct; do not impose a directory or page for each type.
+- Lead with the recommended path and expected result. Link optional setup, background, and uncommon cases instead of interrupting the main procedure.
+- Use task-based headings, short paragraphs, numbered steps for procedures, and tables only for comparisons or lookup. Avoid UI inventories and prose that merely restates code.
+- Maintain one authoritative explanation per audience and topic. Link to it instead of repeating it; user instructions and developer contracts may explain the same feature at different depths.
+- Update an existing page before adding one. Split only when readers have distinct tasks or a section needs substantial independent reference material; keep short related topics together.
+- Describe current behavior. Put release-specific migrations and compatibility instructions in the linked upgrade guide; keep dated evaluations and proposals explicitly historical, outside the current contract map.
+- Keep actionable security, privacy, irreversible-effect, and data-loss warnings beside the affected step. Never shorten away prerequisites, validation, recovery steps, or known limits needed for safe use.
+- Update documentation with behavior changes and remove obsolete or redundant text. Do not append a change narrative to architecture or handbook pages.
+- Review changed pages for correctness against code/configuration, brevity, navigation, and links/anchors. Preserve useful external entry points when moving sections. Follow `docs/development.md#documentation` for handbook validation.
 
 ## Development Environment
 
@@ -78,6 +91,17 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Actions requiring approval create persistent requests with `allow_once`, `allow_session`, or `deny`. Hard policy denials do not become overridable approval requests.
 - Never expose unfiltered external provider responses or exception text as API errors or toasts.
 - `shell.read` means no recognized mutation, not guaranteed side-effect-free execution. Unknown effects and incomplete analysis are an accepted workflow tradeoff, not an unresolved sandbox requirement. Follow the decision in `docs/architecture.md`; review enforcement regressions, and revisit the tradeoff only with new evidence or a changed threat model.
+
+### Prompt construction and cache stability
+
+- Follow `docs/harness.md#prompt-construction-and-cache-stability`. Keep stable host contracts before changing context; do not prepend changing counters, timestamps, or inventories to the reusable prefix.
+- Preserve turn-local history: replay profile reminders, Memory envelopes, reasoning, and tool images at their original user turn or source exchange. Do not rebuild old turns from today's state merely for presentation.
+- Serialize equivalent provider input deterministically, including sorted tool-argument JSON keys across live and database-loaded history. Keep host-only projection metadata out of wire payloads.
+- Keep eligible tool schemas in stable order and Plan/Build's shared focused defaults aligned. Do not churn schemas merely for budgeting or tool selection; required workflows and live security/availability checks may narrow them.
+- Reuse identical request preparation only within its validated input/provider binding. Never cache permission decisions, skip post-approval checks, or revive revoked sources to preserve a prefix.
+- Keep privacy markers owner/session-isolated and protection caches bounded. Restoration authority stays request-local; never share restoration maps or log/persist cache originals.
+- Keep session cache routing stable in the provider adapter; retain Codex's matching `prompt_cache_key` and `session-id` mapping without leaking that header to other adapters.
+- Correctness, current instructions, privacy, revocation, and context limits take precedence over cache reuse. Use existing prefix/serialization/isolation regression coverage for behavior changes; distinguish historical measurements from new validation and never promise cache hits.
 
 ## Error Contract
 

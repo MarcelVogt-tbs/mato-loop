@@ -1,20 +1,20 @@
 # Automationen
 
-Eine Automation ist ein gespeicherter Agentenauftrag in einer gewöhnlichen sichtbaren Session. Ein Klick auf einen Eintrag unter **Automationen** in der Seitenleiste öffnet die zugehörige Unterhaltung und wählt die Automation in der Control-Center-App **Automationen** aus. Das Eintragsmenü bietet **Automation bearbeiten** und **Automation löschen**; Sessionaktionen finden Sie in der Projekt- oder Sessionliste.
+Eine Automation ist ein gespeicherter Agentenauftrag in einer gewöhnlichen sichtbaren Session. Ein Klick auf einen Eintrag unter **Automationen** in der Seitenleiste öffnet die zugehörige Unterhaltung und wählt die Automation in der Control-Center-App **Automationen** aus. Das Eintragsmenü bietet **Automation bearbeiten** und **Automation löschen**; Sessionaktionen findest du in der Projekt- oder Sessionliste.
 
 ## Erstellen und bearbeiten
 
-Öffnen Sie **Control Center > App hinzufügen > Automationen** in einer Session. Für eine neue Unterhaltung verwenden Sie die Plusaktion bei Automationen. Das Öffnen der App legt bei Bedarf eine leere Session an.
+Öffne **Control Center > App hinzufügen > Automationen** in einer Session. Für eine neue Unterhaltung verwende die Plusaktion bei Automationen. Das Öffnen der App legt bei Bedarf eine leere Session an.
 
-Die App listet alle Aufgaben der Session. **Neu** legt eine Definition mit Name und Auftrag an. Fügen Sie einen Zeitplan oder einen Ereignisauslöser hinzu und speichern Sie. Ohne beides läuft die Aufgabe nur auf Anforderung. Eine Session darf mehrere Aufgaben enthalten; das Schließen des App-Tabs stoppt oder löscht sie nicht.
+Die App listet alle Aufgaben der Session. **Neu** legt eine Definition mit Name und Auftrag an. Füge einen Zeitplan oder einen Ereignisauslöser hinzu und speichere. Ohne beides läuft die Aufgabe nur auf Anforderung. Eine Session darf mehrere Aufgaben enthalten; das Schließen des App-Tabs stoppt oder löscht sie nicht.
 
-Zeitplanzeilen zeigen lesbare Beschreibungen; öffnen Sie eine Zeile zum Bearbeiten. Lange Aufträge können über **Vollständigen Auftrag anzeigen** und **Bearbeiten** geöffnet werden. **Zeitregel bearbeiten** erhält ungewöhnliche bestehende Regeln.
+Zeitplanzeilen zeigen lesbare Beschreibungen; öffne eine Zeile zum Bearbeiten. Lange Aufträge können über **Vollständigen Auftrag anzeigen** und **Bearbeiten** geöffnet werden. **Zeitregel bearbeiten** erhält ungewöhnliche bestehende Regeln.
 
-Modell, Agent, Computer, Arbeitsordner und Rechte stammen bei der Ausführung aus den aktuellen Sessionvorgaben. Benötigte Skills nennen Sie im Auftrag ausdrücklich; eine zusätzliche Automations-Skillzuordnung gibt es nicht. Normale Chatnachrichten ändern die gespeicherte Definition nicht, können aber den Kontext späterer Läufe beeinflussen.
+Modell, Agent, Computer, Arbeitsordner und Rechte stammen bei der Ausführung aus den aktuellen Sessionvorgaben. Benötigte Skills nennst du im Auftrag ausdrücklich; eine zusätzliche Automations-Skillzuordnung gibt es nicht. Normale Chatnachrichten ändern die gespeicherte Definition nicht, können aber den Kontext späterer Läufe beeinflussen.
 
 ## Ausführen und interagieren
 
-- **Jetzt ausführen** reiht den gespeicherten Auftrag ein; speichern oder verwerfen Sie Änderungen zuerst.
+- **Jetzt ausführen** reiht den gespeicherten Auftrag ein; speichere oder verwirf Änderungen zuerst.
 - **Deaktivieren** stoppt automatische Starts, nicht laufende Arbeit. Manuelle Starts bleiben möglich.
 - Der Chat-Stoppknopf beendet den aktuellen Agentenlauf.
 - Tools, Ergebnisse, Fehler, Freigaben und Fragen erscheinen im normalen Gespräch.
@@ -36,18 +36,18 @@ Vorlagen bieten täglich, werktags, wöchentlich und monatlich. **Eigener Rhythm
 
 Einmalige Termine und optionale Endzeitpunkte werden in der lokalen Gerätezeitzone eingegeben. Das Ende eines wiederkehrenden Plans ist einschließlich. Während Serverstillstand verpasste Termine werden nicht nachgeholt; gleichzeitig fällige Pläne werden gebündelt. Fehlgeschlagene oder unterbrochene Arbeit wird nicht automatisch wiederholt.
 
-## Entfernen und Migration
+## Archivieren und entfernen
 
 Archivieren betrifft die Session oder ihr Projekt, nicht die Automationsdefinition. Archivierte Sessions bleiben lesbar, neue Starts benötigen Wiederherstellung. Eingereihte Arbeit wird abgebrochen, aktive Arbeit darf enden. Die Aktivierungseinstellung bleibt gespeichert; verpasste Auslösungen werden nicht nachgeholt. Details stehen unter [Archiv](anmeldung-und-oberflaeche.md#archiv).
 
 **Automation entfernen** in der App oder **Automation löschen** im Seitenleistenmenü löscht nach Bestätigung Definition, Zeitpläne und Auslösungsverlauf; Session, Dateien, Rechte und bereits laufender Agent bleiben erhalten. Das Löschen der Session oder ihres Projekts entfernt nach Bestätigung auch die abhängigen Automationen.
 
-Früher verborgene Ausführungssessions bleiben mit IDs, Verlauf und Dateien als normale Chats erhalten. Alte Ausgabekopien bleiben historisch; neue Ergebnisse erscheinen nur in der Ausführungssession. Alte Konfigurations-/Lauflinks öffnen diese Session bzw. die Nachricht. Ehemals archivierte Aufgaben werden deaktiviert; frühere Skillbindungen werden ausdrückliche Auftragsanweisungen.
+Hinweise zu früheren Ausführungssessions und Ausgabekopien stehen im [Upgrade-Guide](aktualisierung.md#automationen-und-aufnahmen).
 
 ## Ereignisauslöser und Rechte
 
-**Agent hat geantwortet** und **Agent-Auftrag fehlgeschlagen** reagieren auf abgeschlossene normale Läufe Ihrer eigenen Sessions. Streaming und fremde Konten lösen nichts aus. Automationsbedingte Läufe, ihre Retries und Subagenten erzeugen keine weiteren Automationsauslösungen.
+**Agent hat geantwortet** und **Agent-Auftrag fehlgeschlagen** reagieren auf abgeschlossene normale Läufe deiner eigenen Sessions. Streaming und fremde Konten lösen nichts aus. Automationsbedingte Läufe, ihre Retries und Subagenten erzeugen keine weiteren Automationsauslösungen.
 
 Optionale Bedingungen gehören in den Auftrag und werden vom ausgelösten Agenten beurteilt. Ereigniskontext enthält Session-/Nachrichtenverweise; Lesen folgt weiterhin den Sessionrechten. Eine bereits beschäftigte Aufgabe protokolliert weitere Auslösungen als übersprungen.
 
-Bitten Sie bei der Einrichtung um Vorbereitung von Session-Freigaben. `request_session_permissions` prüft unterstützte Datei-, Shell-, Session- und Integrationsaktionen ohne deren Ausführung und nutzt vorhandene Freigabekarten. Deaktivierte Aktionen bleiben blockiert, einmalige oder nicht vorab prüfbare Rechte werden bei der tatsächlichen Ausführung angefragt. Das Speichern einer Automation erlaubt deren spätere Aktionen nicht automatisch.
+Bitte bei der Einrichtung um Vorbereitung von Session-Freigaben. `request_session_permissions` prüft unterstützte Datei-, Shell-, Session- und Integrationsaktionen ohne deren Ausführung und nutzt vorhandene Freigabekarten. Deaktivierte Aktionen bleiben blockiert, einmalige oder nicht vorab prüfbare Rechte werden bei der tatsächlichen Ausführung angefragt. Das Speichern einer Automation erlaubt deren spätere Aktionen nicht automatisch.

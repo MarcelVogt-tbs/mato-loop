@@ -71,7 +71,7 @@ The stack includes PostgreSQL with pgvector, Infinity for local retrieval embedd
 
 For a deployment without the bundled Agent, use `docker compose -f docker-compose.no-agent.yaml` for all deployment commands. Add `--remove-orphans` to `up -d` when switching an existing stack.
 
-See [operations, updates, and backup/restore](docs/user/betrieb-und-datensicherung.md) for the complete procedure, including cleanup required when upgrading installations that used the removed Git integration. Computer Agents execute with their operating-system user's rights; the bundled container currently runs as root.
+See [operations and backup/restore](docs/user/betrieb-und-datensicherung.md) and the [upgrade guide](docs/user/aktualisierung.md) for complete procedures and required cleanup of older installations. Computer Agents execute with their operating-system user's rights; the bundled container currently runs as root.
 
 ### First use
 
@@ -84,10 +84,10 @@ Chat and backend-managed files work without a computer. Personal providers and i
 
 ## Documentation
 
-The [documentation index](docs/index.md) links the current contracts, operations guides, and historical evaluation reports.
+Choose by task in the [documentation index](docs/index.md); historical reports are separate from current contracts.
 
 - [User handbook (German)](docs/user/index.md) — also served at `/docs/` by MatoLoop.
-- [Operations and backup/restore](docs/user/betrieb-und-datensicherung.md).
+- [Operations and backup/restore](docs/user/betrieb-und-datensicherung.md) and [updates](docs/user/aktualisierung.md).
 - [Architecture](docs/architecture.md) and [agent harness](docs/harness.md).
 - [Integrations](docs/integrations.md), [browser](docs/browser.md), and [computer maintenance](docs/computer-maintenance.md).
 - [Backend](apps/backend/README.md), [frontend](apps/frontend/README.md), and [standalone Agent](apps/matoloop-agent/README.md).
@@ -112,18 +112,7 @@ The stack uses FastAPI, Pydantic v2, async SQLAlchemy, PostgreSQL/pgvector, Infi
 
 `.env.dev` is ready to use. Put local settings in the gitignored `.env.dev.override`; start from `.env.dev.override.example`. **Parallel checkouts need distinct Compose project names, ports, and Agent state bind paths**; see [development and documentation maintenance](docs/development.md).
 
-```bash
-./scripts/dev.sh status
-./scripts/dev.sh logs backend
-./scripts/dev.sh doctor
-./scripts/dev.sh check backend
-./scripts/dev.sh test frontend
-./scripts/dev.sh test matoloop-agent
-./scripts/dev.sh db current
-./scripts/dev.sh stop
-```
-
-`check` and `test` without a target run all component checks or tests. `test rag` opts into real PostgreSQL/Infinity retrieval tests. Evaluations use `./scripts/eval.sh`; see the development guide for targets and data storage.
+Use the [development guide](docs/development.md) for checks, migrations, logs, data storage and evaluations. `check` and `test` accept a component target; without one they run all components. Never use `reset-storage` as routine cleanup: it deletes persistent development data.
 
 ## Contributing
 

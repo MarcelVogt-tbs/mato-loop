@@ -69,6 +69,12 @@ Evaluator arguments are forwarded unchanged. Browser-performance uses the runnin
 
 ## Documentation
 
+Follow the [documentation rules in AGENTS.md](../AGENTS.md#documentation). Choose the reader's task before editing: learning the first workflow, completing a procedure, looking up a contract, or understanding a decision. Do not mix all four into a feature page.
+
+The handbook owns German usage and operations instructions; technical topic pages own English developer contracts. `architecture.md` explains system boundaries and links to those contracts. Keep release-specific instructions in the handbook's [upgrade guide](user/aktualisierung.md), and link dated evidence separately from current contracts in [the index](index.md). A new page is justified by an independent reader task, not by every new feature or code change.
+
+These rules apply [Diátaxis](https://diataxis.fr/), Google's [minimum viable documentation](https://google.github.io/styleguide/docguide/best_practices.html), and [progressive disclosure](https://developers.google.com/tech-writing/two/large-docs). They are not word-count targets: complete reference and recovery instructions may be longer than an introduction.
+
 README and technical documentation are English. The handbook in `docs/user/`, its navigation, and application UI are German. Quote actual German UI labels in technical documents. Keep dated reports historical and compare current operational claims with code and configuration before changing them.
 
 MkDocs builds only `docs/user/`; technical documents and component READMEs are repository documentation. The normal backend check includes a strict handbook build. For handbook-only changes, use the narrower build:

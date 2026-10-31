@@ -1,6 +1,6 @@
 # Changelog
 
-Hier finden Sie die veröffentlichten Änderungen für jede MatoLoop-Version. Die Release Notes selbst werden in Englisch geführt.
+Hier findest du die veröffentlichten Änderungen für jede MatoLoop-Version. Die Release Notes selbst werden in Englisch geführt.
 
 ## Versionen
 

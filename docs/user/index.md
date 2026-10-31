@@ -1,37 +1,36 @@
-# MatoLoop Dokumentation
+# MatoLoop verwenden
 
-MatoLoop ist eine selbst gehostete Arbeitsumgebung für KI-Chats und Agenten. Sessions, Nachrichten, Dateien, Freigaben und Erinnerungen bleiben in MatoLoop gespeichert; unterschiedliche Modellanbieter übernehmen die Modellverarbeitung. Die Oberfläche und dieses Handbuch sind deutschsprachig.
+MatoLoop ist eine selbst gehostete Anwendung für KI-Chats und Agenten. Wähle hier die Aufgabe, die du erledigen möchtest. Das Handbuch muss nicht der Reihe nach gelesen werden.
 
-## Einstieg und tägliche Arbeit
+## Zum ersten Mal hier?
 
-- [Schnellstart](schnellstart.md): Konto, Provider, Modell und erste Session.
-- [Anmeldung und Oberfläche](anmeldung-und-oberflaeche.md): Navigation, Suche, Archiv, Control Center und Darstellung.
-- [Chat und Sessions](chat-und-sessions.md): Sessionvorlagen, laufende Aufträge, Nachrichtenwarteschlange und Subagenten.
-- [Dateien und Arbeitsordner](dateien-und-arbeitsordner.md): Ablage, Computer-Dateien, Bearbeitung und Versionen.
-- [Anhänge, Diktat und Medien](anhaenge-und-medien.md): Uploads, Sprachnachrichten und Medienverarbeitung.
-- [Webrecherche und Quellen](webrecherche-und-quellen.md): Suche, Webseiten und Untertitel.
-- [Freigaben und Datenfreigabe](freigaben-und-datenfreigabe.md): Aktionsrechte, Modellwahl und Rückfragen.
-- [Variablen und Secrets](variablen-und-secrets.md): geschützte Eingaben und gespeicherte Werte.
-- [Automationen](automationen.md): Aufgaben, Zeitpläne und Ereignisauslöser.
-- [Kanäle](kanaele.md): persönliche Telegram-Bots verbinden.
+Mit dem [Schnellstart](schnellstart.md) verbindest du ein Modell und beginnst deinen ersten Chat. Läuft MatoLoop noch nicht, beginne mit der [Installation](betrieb-und-datensicherung.md#erstinstallation).
 
-## Einstellungen und Administration
+## Was möchtest du tun?
 
-- [Provider und Modelle](provider-und-modelle.md): Verbindungen, Standardmodelle und Sessionvorlagen.
-- [Tools und Integrationen](tools-und-integrationen.md): Rechte und Einrichtung der verfügbaren Dienste.
-- [Personalisierung](persona.md): Personas, Zuordnungen und Agentenname.
-- [Skills](skills.md): wiederverwendbare Anweisungen verwenden, erstellen und verwalten.
-- [Memory und Dreaming](memory-und-dreaming.md): Erinnerungen und frühere Sessions nutzen.
-- [Betrieb und Datensicherung](betrieb-und-datensicherung.md): Installation, Computer, Updates und Wiederherstellung.
-- [Debug-Zugang](debug-zugang.md): persönlicher schreibgeschützter Diagnosezugang für Administratoren.
-- [Häufige Fragen](haeufige-fragen.md) und [Changelog](changelog.md).
+| Aufgabe | Anleitung |
+| --- | --- |
+| Chats und Projekte organisieren | [Chat und Sessions](chat-und-sessions.md) |
+| Dateien hochladen, bearbeiten oder wiederherstellen | [Dateien und Arbeitsordner](dateien-und-arbeitsordner.md) |
+| Am eigenen Rechner arbeiten lassen | [Computer und Terminal](computer-und-terminal.md) |
+| Mit Git und getrennten Arbeitskopien arbeiten | [Git und Worktrees](git-und-worktrees.md) |
+| Im Web recherchieren | [Webrecherche und Quellen](webrecherche-und-quellen.md) |
+| Webseiten gemeinsam mit dem Agenten bedienen | [Browser verwenden](browser.md) |
+| Eine Freigabe prüfen oder widerrufen | [Freigaben und Datenfreigabe](freigaben-und-datenfreigabe.md) |
+| Kalender, E-Mail oder andere Dienste verbinden | [Integrationen einrichten](integrationen.md) |
+| Wiederkehrende Aufgaben starten | [Automationen](automationen.md) |
+| Antworten und Arbeitsweise anpassen | [Personalisierung](persona.md), [Skills](skills.md), [Memory](memory-und-dreaming.md) |
 
-**Einstellungen** verwaltet Ihre persönlichen Einträge. **Administration** verwaltet gemeinsame Instanzressourcen und die Freigabe persönlicher Konfiguration. Bereiche mit **Einstellungen / Verwaltung** öffnen zuerst die Einstellungen; **Verwaltung** enthält die jeweiligen Einträge. Agentenprofile beschreiben Arbeitsweise und Rechte, **Standardmodelle** und **Sessionvorlagen** die Modellwahl. Integrationsrechte gehören zur jeweiligen Verbindung.
+Weitere Themen findest du in der Navigation und über die Suche.
 
-Persönliche Sessions, Dateien, Erinnerungen, Kanäle, Zugangsdaten und Computer sind nach Benutzer getrennt. Instanzprovider und -integrationen stehen dagegen absichtlich allen Benutzern nach ihren Richtlinien zur Verfügung. Administratorrechte erlauben keinen Zugriff auf persönliche Inhalte anderer Konten.
+## Administration
 
-Persönliche Provider und eigene Tool-Rechte sind für gewöhnliche Benutzer anfangs deaktiviert; persönliche Personas, Skills und Agentenprofile sind aktiviert. Administratoren behalten ihre Ausnahme für persönliche Einstellungen. Kommunikationskanäle müssen unter **Administration > Kanäle > Einstellungen** auch für Administratoren global aktiviert werden; Telegram ist als Anbieter standardmäßig erlaubt. Ausdrücklich gespeicherte Einstellungen bleiben erhalten.
+- [Provider und Modelle](provider-und-modelle.md) verbinden und auswählen.
+- [Tool-Rechte konfigurieren](tools-und-integrationen.md).
+- MatoLoop [sichern und wiederherstellen](betrieb-und-datensicherung.md#zu-sichernde-daten) oder [aktualisieren](aktualisierung.md).
+- Bei Problemen mit den [häufigen Fragen](haeufige-fragen.md) oder dem [Debug-Zugang](debug-zugang.md) beginnen.
 
-## Grundprinzip
+**Einstellungen** betrifft deine persönlichen Einträge, **Administration** die gemeinsamen Ressourcen der Instanz. Administratorrechte erlauben keinen Zugriff auf persönliche Chats, Dateien oder Zugangsdaten anderer Konten.
 
-Provider transportieren Modellnachrichten und Antworten. MatoLoop kontrolliert Tool-Ausführung, Dateizugriff, Webzugriff, Memory und Freigaben. Eine erfolgreiche Tool-Ausführung ist kein Beweis dafür, dass das gewünschte Ergebnis richtig ist; prüfen Sie wichtige Ergebnisse anhand der tatsächlichen Daten.
+!!! warning "Modell und Rechte bewusst wählen"
+    Bereits autorisierte Inhalte können an den gewählten Modellanbieter übertragen werden. Prüfe Freigaben und wichtige Ergebnisse. Geheimnisse gehören in [geschützte Eingaben](variablen-und-secrets.md), nicht in Chatnachrichten.

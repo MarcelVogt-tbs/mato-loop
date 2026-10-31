@@ -39,13 +39,16 @@ extra_css:
 nav:
   - Startseite: index.md
   - Einstieg:
-      - Schnellstart: schnellstart.md
+      - Ersten Chat starten: schnellstart.md
       - Anmeldung und Oberfläche: anmeldung-und-oberflaeche.md
   - Arbeiten mit MatoLoop:
       - Chat und Sessions: chat-und-sessions.md
       - Dateien und Arbeitsordner: dateien-und-arbeitsordner.md
+      - Computer und Terminal: computer-und-terminal.md
+      - Git und Worktrees: git-und-worktrees.md
       - Anhänge, Diktat und Medien: anhaenge-und-medien.md
       - Webrecherche und Quellen: webrecherche-und-quellen.md
+      - Browser verwenden: browser.md
       - Freigaben und Datenfreigabe: freigaben-und-datenfreigabe.md
       - Variablen und Secrets: variablen-und-secrets.md
       - Automationen: automationen.md
@@ -56,9 +59,11 @@ nav:
       - Memory und Dreaming: memory-und-dreaming.md
   - Konfiguration:
       - Provider und Modelle: provider-und-modelle.md
-      - Tools und Integrationen: tools-und-integrationen.md
+      - Tool-Rechte: tools-und-integrationen.md
+      - Integrationen einrichten: integrationen.md
   - Administration und Betrieb:
       - Betrieb und Datensicherung: betrieb-und-datensicherung.md
+      - Aktualisierung und Upgrade-Hinweise: aktualisierung.md
       - Debug-Zugang: debug-zugang.md
   - Hilfe:
       - Häufige Fragen: haeufige-fragen.md

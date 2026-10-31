@@ -1,35 +1,45 @@
 # Documentation
 
-The German [user and administrator handbook](user/index.md) is published by MatoLoop at `/docs/`. Technical documentation is in English and available here in the repository.
+Choose the document for your task. The German [user and administrator handbook](user/index.md) is served at `/docs/`; English developer references stay in the repository.
 
-## Development and operations
+## Start or operate MatoLoop
 
-- [Development and documentation maintenance](development.md)
-- [Installation, updates, backup, and recovery](user/betrieb-und-datensicherung.md) (German)
+- [First chat](user/schnellstart.md), [installation and backup/recovery](user/betrieb-und-datensicherung.md), and [updates/upgrade notes](user/aktualisierung.md) (German)
+- [Development setup, checks and documentation maintenance](development.md)
+- [Computer installation/update lifecycle](computer-maintenance.md) and [Windows acceptance procedure](windows-agent-acceptance.md)
 - [CI and releases](ci-and-releases.md)
-- [Computer installation and maintenance](computer-maintenance.md)
-- [Windows Agent acceptance](windows-agent-acceptance.md)
-- [Backend](../apps/backend/README.md), [frontend](../apps/frontend/README.md), and [Agent](../apps/matoloop-agent/README.md)
 
-## Current technical contracts
+## Understand or change the implementation
 
-- [Architecture](architecture.md), [module ownership](modularity.md), and [harness](harness.md)
-- [Agent identity](agent-identity.md), [session templates](session-templates.md), and [run continuations](run-continuations.md)
-- [Questions](questions.md) and [protected tool text](protected-tool-text.md)
-- [Tool permission declarations and categories](tool-permissions.md)
-- [Integrations](integrations.md), [Webfetch](webfetch.md), and [browser](browser.md)
-- [Agent browser runtime](../apps/matoloop-agent/BROWSER.md)
-- [Skills](skills.md), [memory and Dreaming](memory.md), and [appearance](appearance.md)
+Begin with the [architecture overview](architecture.md) and [module ownership](modularity.md). Then use the authoritative topic reference:
 
-## Evaluation evidence and plans
+| Topic | Reference |
+| --- | --- |
+| Runtime, profiles, execution, files and context budgets | [Agent harness](harness.md) |
+| Tool actions, policy defaults and consent scopes | [Tool permissions](tool-permissions.md) |
+| Product adapters, resources, tool loading and MCP | [Integrations](integrations.md) |
+| Commands, Git management and worktrees | [Commands](commands.md) |
+| Model assignment and session initialization | [Session templates](session-templates.md) |
+| Direct input, retries and elevated environments | [Run continuations](run-continuations.md) |
+| Memory, retrieval and Dreaming | [Memory](memory.md) |
+| Personas and assistant identity | [Agent identity](agent-identity.md) |
+| Reusable instruction packages | [Skills](skills.md) |
+| Questions and secret-bearing tool input | [Questions](questions.md), [protected tool text](protected-tool-text.md) |
+| Web retrieval and networking | [Webfetch](webfetch.md) |
+| Browser isolation, permissions and viewer | [Browser](browser.md), [Agent browser runtime](../apps/matoloop-agent/BROWSER.md) |
+| Instance branding and themes | [Appearance](appearance.md) |
 
-These documents describe measurements or proposals at the recorded point in time. They are not promises about the current implementation or evidence of a new validation run.
+Component entry points: [backend](../apps/backend/README.md), [frontend](../apps/frontend/README.md), [MatoLoop Agent](../apps/matoloop-agent/README.md). Repository contribution rules, including documentation style, live in [AGENTS.md](../AGENTS.md).
 
-- [Browser performance](browser-performance.md)
-- [Prompt evaluation, July 2026](prompt-evaluation-2026-07.md)
-- [Prompt slimming, August 2026](prompt-slimming-evaluation-2026-08.md)
-- [Reason contract, September 2026](reason-contract-evaluation-2026-09.md)
-- [Qwen bounded evaluation](qwen38-bounded-evaluation-2026-09.md) and [prompt countermeasures](qwen38-prompt-countermeasures-2026-09.md)
-- [Tool contracts, October 2026](tool-contracts-evaluation-2026-10.md)
-- [Shell-decider CPU evaluation](shell-decider-cpu-evaluation-2026-10.md), [classifier comparison](shell-classifier-qwen-vs-jevk5-2026-10.md), and [inspector hardening](shell-inspector-hardening-2026-10.md)
-- [Memory approval plan](plans/memory-dreaming-approvals.md) and [project plan](plans/opencode-projects.md)
+## Historical evidence and proposals
+
+These are dated measurements or proposals, **not current contracts or evidence of a new validation run**. Preserve their recorded results; use the references above for current behavior. They remain separate from the published user handbook.
+
+- July 2026: [prompt evaluation](prompt-evaluation-2026-07.md).
+- August 2026: [prompt slimming](prompt-slimming-evaluation-2026-08.md).
+- September 2026: [reason contract](reason-contract-evaluation-2026-09.md), [bounded Qwen evaluation](qwen38-bounded-evaluation-2026-09.md), [prompt countermeasures](qwen38-prompt-countermeasures-2026-09.md).
+- October 2026, context/tools: [tool contracts](tool-contracts-evaluation-2026-10.md), [context search](context-search-evaluation-2026-10.md), [session caching](session-cache-evaluation-2026-10.md), [file routing/delegation](file-routing-delegation-evaluation-2026-10.md).
+- October 2026, profiles: [authority](profile-authority-evaluation-2026-10.md), [continuation](profile-continuation-evaluation-2026-10.md), [message metadata](profile-message-metadata-evaluation-2026-10.md), [roles](profile-role-evaluation-2026-10.md), [switching](profile-switch-evaluation-2026-10.md), [temporal follow-ups](profile-temporal-followup-evaluation-2026-10.md).
+- October 2026, shell: [CPU decider](shell-decider-cpu-evaluation-2026-10.md), [classifier comparison](shell-classifier-qwen-vs-jevk5-2026-10.md), [inspector hardening](shell-inspector-hardening-2026-10.md).
+- [Browser performance measurements](browser-performance.md).
+- Proposals: [Memory approvals](plans/memory-dreaming-approvals.md), [projects](plans/opencode-projects.md).

@@ -1,219 +1,70 @@
-# Chat und Sessions
+# Chats und Sessions organisieren
 
-## Neue und vorhandene Sessions
+Eine Session ist eine gespeicherte Unterhaltung mit eigenen Einstellungen, Dateien und Verlauf. Projekte gruppieren Sessions, teilen aber nicht deren Dateiablage.
 
-Die Startseite und eine leere neue Unterhaltung sind zunächst Browserentwürfe. Eine erste Nachricht oder das Öffnen einer sessiongebundenen Control-Center-App legt die Session samt internem Speicher an. Die feste Session-Einstellungsansicht, die Git-Ansicht und globale Benachrichtigungen allein erzeugen keine Session.
+## Eine Session starten und organisieren
 
-Sessions können angepinnt, umbenannt, zwischen Projekten verschoben, archiviert und gelöscht werden. Projekte gruppieren Sessions, teilen aber nicht deren Dateiablage. Ein Projekt kann Sessionvorlage, Computer und Arbeitsordner als Vorgaben für neue Sessions speichern; spätere Projektänderungen schreiben bestehende Sessions nicht um. Beim Projektwechsel wird ein Entwurf nur in einen leeren Zielentwurf übernommen, nie über vorhandene Inhalte oder eine Warteschlange geschrieben.
+Öffne Home oder eine neue Unterhaltung, wähle die Startvorgaben und sende eine Nachricht. Erst das Senden oder Öffnen einer sessiongebundenen Control-Center-App speichert die Session. Die feste Sessionansicht, Git-Ansicht und globale Benachrichtigungen allein erzeugen keine Session.
 
-## Session-Einstellungen
+Über das Sessionmenü kannst du anpinnen, umbenennen, einem Projekt zuordnen, archivieren oder löschen. Projektvorgaben für Vorlage, Computer und Arbeitsordner gelten für neue Sessions, nicht rückwirkend. Ein Projektwechsel übernimmt einen Entwurf nur in ein leeres Ziel, niemals über dortige Eingaben oder Warteschlangen.
 
-| Einstellung | Bedeutung |
+## Session-Einstellungen ändern
+
+Unter **Control Center > Session** bearbeitest du die Vorgaben; Agent, Modell und Reasoning sind auch am Eingabefeld auswählbar.
+
+| Einstellung | Zweck |
 | --- | --- |
-| Sessionvorlage | Verfügbare Agenten, Startagent, Memory, Worktree-Unterstützung, Nachrichtengröße und optionale Modell-/Reasoning-Vorgaben |
+| Sessionvorlage | Verfügbare Agenten, Startagent, Memory, Nachrichtengröße, Worktree-Unterstützung und optionale Modellvorgaben |
 | Agent | Arbeitsweise, Tool-Rechte und Integrationsauswahl |
-| Modell und Reasoning | Effektive Modellwahl und unterstützte Reasoning-Stufe |
+| Modell und Reasoning | Modell und unterstützte Reasoning-Stufe |
 | Memory | Voll, nur lesen oder deaktiviert |
 | Websuche | Erzwingen, verfügbar oder deaktiviert |
 | Computer und Arbeitsordner | Optionaler lokaler Ausführungsort |
 
-Unter **Control Center > Session** ändern Sie die Sessionwerte. Die Vorlagen **Allgemein** und **Coding** bieten Allgemein/Sysadmin bzw. Plan/Build. Eine Vorlagenauswahl ersetzt Agentenauswahl, Memory, Nachrichtengröße und Modell-/Reasoning-Vorgaben; Projekt, Computer, Arbeitsordner und Websuche bleiben unabhängig. Spätere Änderungen einer gespeicherten Vorlage wirken nicht rückwirkend.
+**Allgemein** bietet Allgemein und Sysadmin, **Coding** Plan und Build. Plan und Build benötigen einen verbundenen Computer mit zugänglichem Arbeitsordner. Eine Vorlagenauswahl ersetzt deren Sessionwerte, aber nicht Projekt, Computer, Arbeitsordner oder Websuche. Spätere Vorlagenänderungen wirken nicht rückwirkend.
 
-Modell und Reasoning gehören nicht zum Agentenprofil. Ein agentenspezifischer Sessionwert hat Vorrang vor dem sessionweiten Wert, dann persönlichen und globalen **Standardmodellen**; beim Reasoning folgt zuletzt der Modellstandard. Nicht verfügbare Modellreferenzen werden bei der Auflösung übersprungen. Ohne ausdrückliches Agentmodell kann das erste verfügbare toolfähige Chatmodell dienen. Hilfsmodelle verwenden Standardmodelle und ihre jeweiligen Fallbacks.
+Modellvorgaben gehören zu [Standardmodellen und Sessionvorlagen](provider-und-modelle.md#standardmodelle-und-sessionvorlagen), nicht ins Agentenprofil. Ein laufender Auftrag behält sein Startprofil und seinen Modellkontext; Änderungen gelten für spätere Läufe. Instanzweite Verfügbarkeit und Rechte bleiben wirksam.
 
-Plan und Build brauchen einen verbundenen Computer und zugänglichen Arbeitsordner. Allgemeiner Chat und Backend-Tools funktionieren ohne Computer. Fehlende Laufvoraussetzungen erscheinen als gespeicherte Host-Antwort, die Sie nach einer Korrektur erneut versuchen können.
+## Befehle verwenden
 
-### Befehle
+Gib `/` ins Eingabefeld ein. Tippen filtert die Befehlspalette; Pfeiltasten, Klick, Enter oder Tab wählen einen Eintrag. Ergänze Argumente und sende anschließend den Befehl. Auswahl allein startet nichts; Escape schließt die Palette. Vorhandene Argumente und Anhänge bleiben erhalten.
 
-Geben Sie `/` ins Eingabefeld ein. Die Befehlspalette
-erscheint oberhalb des Composers. Tippen filtert die Einträge; Pfeiltasten wechseln
-die Auswahl. Ein Klick, Enter oder Tab setzt `/befehl ` ins Eingabefeld. Ergänzen Sie
-Argumente und senden Sie anschließend ab, um den Auftrag zu starten. Escape schließt
-die Palette. Vorhandene Argumente und Anhänge bleiben bei der Auswahl erhalten.
-Die Palette ist allgemein; Git-Befehle werden passend zum gewählten Workspace angeboten.
-Nicht verfügbare Aktionen erklären ihre Voraussetzungen.
-Nach dem Absenden zeigt die Benutzernachricht den aufgelösten Befehls-Prompt samt
-Argumenten. Dieser Text lässt sich wie gewöhnlicher Nachrichtentext markieren und
-kopieren. Rückgängig stellt den ursprünglichen Befehlsaufruf wieder her. Ältere
-Befehlsnachrichten ohne gespeicherten Prompt zeigen weiterhin ihr Kürzel.
+Die Benutzernachricht zeigt den aufgelösten Auftrag. Rückgängig stellt den ursprünglichen Befehlsaufruf wieder her. Nicht verfügbare Aktionen nennen ihre Voraussetzungen.
 
-Mit `/fork` kopieren Sie die gespeicherte Unterhaltung und schreiben in einer neuen
-Session weiter. Projekt-Sessions bleiben im selben Projekt. Zunächst heißt die Kopie
-„Kopie: Originaltitel“. Nach Ihrer ersten neuen Nachricht wird einmal ein eigener
-Titel ohne diesen Zusatz erzeugt. Manuelles Umbenennen hat Vorrang; bei Fehlern bleibt
-der Übergangstitel erhalten. Verlauf, Einstellungen,
-Kontextzusammenfassungen, textuelle Tool-Ergebnisse, interne Dateien samt Revisionen
-und Anhänge werden kopiert. Änderungen oder Löschungen an Dateien der Kopie wirken
-sich nicht auf das Original aus. Auch Anhänge aus anderen Projekt-Sessions erhalten
-eigene Dateien in der Kopie. „Rückgängig“ funktioniert für übernommene und neue
-Nachrichten wie gewohnt; bereits ausgeführte Datei- und Tool-Aktionen werden dadurch
-nicht rückgängig gemacht. Es gibt keinen zusätzlichen Fork-Eintrag oder dauerhaften
-Banner. Große Dateibestände benötigen entsprechend Speicherplatz und Kopierzeit;
-das Speicherlimit gilt auch für Kopien. Das Original bleibt unverändert. Der Befehl startet
-keinen Modellaufruf und nimmt keine Argumente oder neuen Anhänge entgegen. Warten Sie
-vorher, bis laufende Aufträge und vorgemerkte Nachrichten abgeschlossen sind.
-Freigaben, offene Fragen, Automationen und Subagent-Sessions werden nicht übernommen.
-Computer und Arbeitsordner bleiben gleich: Die Kopie isoliert keine Computer-Dateien
-und erzeugt weder Git-Branch noch Worktree. Ein vorhandener Worktree wird nur als
-lokaler Arbeitsordner verwendet; die Kopie übernimmt nicht dessen Verwaltung.
+### Eine Unterhaltung kopieren
+
+Mit `/fork` kopierst du eine ruhende gespeicherte Session und schreibst unabhängig weiter. Warte zuvor auf laufende und vorgemerkte Aufträge; der Befehl nimmt keine Argumente oder neuen Anhänge an und startet keinen Modellaufruf.
+
+Verlauf, Einstellungen, interne Dateien samt Versionen und Anhänge werden kopiert. Änderungen an den kopierten Session-Dateien wirken nicht aufs Original. Freigaben, offene Fragen, Automationen und Subagenten werden nicht übernommen. Kopien brauchen zusätzlichen Speicher und unterliegen deinem Speicherlimit.
+
+!!! warning "Computerdateien werden nicht isoliert"
+    Computer und Arbeitsordner bleiben gleich. Die Kopie erzeugt weder Branch noch Worktree und übernimmt keine Worktree-Verwaltung. Bereits ausgeführte Tool-Aktionen werden auch durch Rückgängig nicht zurückgenommen.
 
 ### Git-Projekte und Worktrees
 
-**Projekt bearbeiten** prüft das ausgewählte Verzeichnis auf ein Git-Repository.
-Auch ein nachträglich angelegtes Repository wird beim erneuten Öffnen oder über
-die Schaltfläche zum erneuten Prüfen erkannt. Bei einem Repository speichern Sie
-**Standard-Zielbranch** und **Standard-Arbeitsbereich**. Bereits gespeicherte Werte werden nicht durch erkannte
-Vorschläge überschrieben. Verwenden Sie die Repository-Wurzel als Projektverzeichnis.
+Einrichtung, Diffs, Branches und getrennte Arbeitskopien stehen unter [Git und Worktrees](git-und-worktrees.md).
 
-Vor dem Sessionstart wählen Sie unter **Arbeitsbereich** zwischen **Lokal**,
-**Neuer Worktree** und einem bestehenden Worktree des Projekt-Repositorys.
-Ohne Computer oder Workspace steht dort **Nicht verfügbar**. Die Projektvorgabe
-liefert den Startmodus. Worktrees benötigen den im Projekt eingerichteten Computer
-und Repositorypfad und stehen nur Projekt-Sessions zur Verfügung.
-In der Sessionvorlage steuert **Worktrees verwenden** die Verfügbarkeit. Bei **Coding** ist die Option standardmäßig aktiviert, bei **Allgemein** und neuen eigenen Vorlagen deaktiviert. Ohne diese Option starten neue Sessions unabhängig von der Projektvorgabe lokal; normale Git-Funktionen bleiben nutzbar.
-Lokal bleibt einschließlich eigener Änderungen alles im vorhandenen Verzeichnis.
-Nur **Neuer Worktree** erzeugt eine neue Arbeitskopie mit eigenem Arbeitsbranch
-vom letzten Commit des lokalen Zielbranches. Es findet kein Fetch statt; ein Remote
-ist nicht erforderlich. Uncommittete Änderungen bleiben im ursprünglichen Verzeichnis.
-**Lokal** und die Auswahl eines bestehenden Worktrees erzeugen keinen Branch.
+## Während einer Antwort eingreifen
 
-Unter **Control Center > Git > Einstellungen** öffnen die Bearbeiten-Symbole Dialoge
-für Arbeitsbereich, Branches und Remote. Im Arbeitsbereich-Dialog können Sie wechseln,
-einen neuen Worktree erstellen oder jeden registrierten Worktree direkt entfernen,
-ohne ihn vorher auszuwählen. Alle bei Git registrierten Worktrees des Repositorys
-werden gleich behandelt. Mehrere Sessions können denselben Worktree verwenden; sie
-teilen dann Dateien und Änderungen.
-Die Verwaltung bestehender Arbeitsbereiche folgt dem Computer und Repository der Session,
-auch nach Änderungen an Projektvorgaben. **Lokal** bezeichnet den Haupt-Checkout von Git;
-neue Worktrees benötigen weiterhin die passenden Projektvorgaben.
-Ein Wechsel verschiebt weder Dateien noch Gesprächsverlauf. Laufende Aufträge der
-Session und ungespeicherte Editoränderungen müssen vorher abgeschlossen sein.
-Der Worktree ist der normale Arbeitspfad der Session. Die Auswahl bestätigt die
-Navigation dorthin; Datei- und Shell-Aktionen folgen unverändert den eingestellten
-Berechtigungen. Freigaben des bisherigen Pfads werden nicht kopiert.
-Im Arbeitsbereich-Dialog markiert **Geändert** Worktrees mit uncommitteten Änderungen,
-einschließlich neuer, nicht ignorierter Dateien. Die Prüfung erfolgt beim Öffnen und
-über **Aktualisieren**; nicht prüfbare Zustände werden nicht als sauber ausgegeben.
-Die Listen zeigen kompakte Namen. Beim Arbeitsbereich steht das übergeordnete Verzeichnis
-gedimmt darunter; ein Standort-Symbol kennzeichnet den aktiven Arbeitsbereich ohne blaue
-Hervorhebung. Den aktuellen Branch kennzeichnet ein Häkchen.
-Über das Suchfeld filtern Sie Arbeitsbereiche oder Branches. Ein Klick auf eine Zeile
-markiert den Eintrag und zeigt darunter den vollständigen Pfad beziehungsweise Branchnamen.
-Arbeitsbereiche aktivieren Sie über **⋮ > Aktivieren**, auch **Lokal**. Bei Branches übernimmt
-erst **Wechseln** die Auswahl. Der aktuelle Arbeitsbereich beziehungsweise Branch
-steht zuerst; die übrigen Einträge behalten ihre Reihenfolge. Erstellen erreichen Sie über
-**+**, Entfernen beziehungsweise Umbenennen über das Menü **⋮** des jeweiligen Eintrags.
-Sessionnamen erscheinen im Detailbereich des markierten Arbeitsbereichs als klickbare Chips mit gekürzter Anzeige. Sie öffnen die
-jeweilige Session, ohne ein Arbeitsverzeichnis zu ändern. Die Liste wird aus Computer
-und aktuellem Arbeitspfad abgeleitet, auch für Unterverzeichnisse; es gibt keine feste
-Session-Zuweisung. Der Wechsel über die Git-Einstellungen bleibt möglich und setzt
-einfach den Arbeitspfad auf den gewählten Worktree.
-Die Branch-Verwaltung bietet Erstellen, Wechseln, Umbenennen und sicheres Löschen.
-Sie zeigt alle lokalen Branches des gemeinsamen Repositorys. Bei belegten Branches steht
-der zugehörige Arbeitsbereich direkt unter dem Namen, etwa **in Lokal** oder **in 42427136**.
-Sie können solche Branches markieren und den vollständigen Worktree-Pfad im Detailbereich
-lesen; **Wechseln** bleibt deaktiviert. Den Zielbranch bearbeiten Sie separat über dessen
-Bearbeiten-Symbol in den Git-Einstellungen.
-Bei Blockern hält die Aktion an, ohne Änderungen automatisch zu committen, zu stashen
-oder zu verwerfen. Ein Branchwechsel betrifft alle Sessions dieses Arbeitsbereichs.
-Der Zielbranch ist separat pro Session einstellbar; die Projektvorgabe bleibt der Standard.
+**Jetzt senden** ergänzt den laufenden Auftrag um deine Nachricht. Eine Modellanfrage wird neu aufgebaut; aktive Tool-Arbeit darf zuerst enden. Überholte Freigaben und Rückfragen werden ohne unfertige Antworten geschlossen. Wartende Subagenten enden ebenfalls; der Hauptagent plant mit deiner Anweisung weiter. Neue Anweisungen erlauben keine gesperrten Aktionen.
 
-Die Git-Einstellungen zeigen Arbeitsbereich, kopierbaren Pfad, Branch, Zielbranch und Remote. **Änderungen** enthält
-die Dateiliste und Agentenaufträge; ein Klick auf eine Datei öffnet ihren Diff im Editor.
-Ein eindeutiger Remote oder `origin`
-wird vorgeschlagen. Über **Einrichten** beziehungsweise **Bearbeiten** wählen Sie
-einen vorhandenen Remote oder beauftragen den Agenten, seine Adresse hinzuzufügen
-oder zu ändern. Verwenden Sie eine HTTPS-/SSH-Adresse ohne Zugangsdaten; die Anmeldung
-wird auf dem Computer eingerichtet. Eine Adressänderung betrifft alle Worktrees des
-Repositorys. Bestehende Sessions müssen das geänderte Ziel vor weiteren Veröffentlichungen
-über **Ziel übernehmen** ausdrücklich bestätigen. Projektvorgaben werden dabei nur
-für den zugehörigen Computer und Repositorypfad aktualisiert.
+**Nach dem Lauf senden** reiht eine Nachricht für einen anschließenden Auftrag ein. Der Browser-Postausgang erhält Nachrichten und Anhänge in Reihenfolge. Fehlerhafte Sendungen bleiben für einen erneuten Versuch oder die Übernahme in den Entwurf erhalten. Abmelden oder Kontowechsel entfernt den bisherigen Postausgang dieses Browsers.
 
-Ohne Repository bietet die Git-App **Git-Repository anlegen** (`/git-init`). Der
-Agent initialisiert nur den gewählten Workspace und legt weder Commit noch Remote
-an. Die Git-Ansicht lässt sich im Browserentwurf öffnen, ohne eine Session oder einen
-Worktree anzulegen. Erst ein Agentenauftrag oder der Sessionstart erzeugt sie;
-Repository- und Remote-Einrichtung starten zunächst lokal.
+Der Stoppknopf beendet den Agentenlauf. Ein Browserdisconnect beendet ihn nicht; beim Wiederverbinden lädt MatoLoop den gespeicherten Zustand nach. Reasoning-Zusammenfassungen zeigen Modellangaben, keine garantiert vollständigen internen Gedankengänge.
 
-Ein Worktree benötigt keinen Remote. Erst Veröffentlichung, Pull Requests und
-Remote-Synchronisierung benötigen ihn. Einen später hinzugefügten Remote übernehmen
-Sie in der Git-App ausdrücklich als Sessionziel; der vorhandene Worktree bleibt erhalten.
-Git-Hooks und Checkout-Filter werden bei der Vorbereitung nicht ausgeführt.
-Unvollständige oder nachträglich vertauschte Arbeitskopien werden nicht automatisch
-übernommen oder zurückgesetzt; prüfen Sie solche Fälle vor einem erneuten Start.
+## Rückfragen und delegierte Aufgaben
 
-Die Arbeitskopie liegt dauerhaft unter
-`<Agent-Datenverzeichnis>/worktrees/<kurze-Projekt-ID>/<kurze-Worktree-ID>`.
-Beide IDs bestehen aus acht Hex-Zeichen. Ist der Projektordner bereits anderweitig
-belegt, erhält er `-2`, `-3` usw. Weitere Worktrees desselben Projekts verwenden
-denselben Projektordner. Vorhandene Arbeitskopien werden nicht verschoben.
-Der Anfangsbranch heißt `worktree-<kurze-Worktree-ID>`. Ist ein Name belegt, wird
-eine andere kurze ID gewählt, ohne Nummerierung. Nach zehn belegten Kandidaten
-bricht die Erstellung ab.
-Der technische Name und Pfad bleiben beim Umbenennen des Branches unverändert.
-Bestehende Worktrees behalten ihre bisherigen Pfade und Branches, auch im älteren
-Projekt-/Session-Verzeichnislayout.
-Auch Vorlagen ohne Worktree-Unterstützung bleiben für bestehende Sessions auswählbar;
-die Option steuert nur die Worktree-Auswahl und -Erstellung. Ein Worktree ist ein normales
-Arbeitsverzeichnis: Computer und Verzeichnis können Sie über die Session-Einstellungen
-oder freigegebene Agentenwerkzeuge wechseln, auch wenn das bisherige Verzeichnis fehlt.
-Bestehende Sessions werden durch Änderungen an Vorlagen weder umgestellt noch von ihrem
-Arbeitsverzeichnis gelöst. Das ursprüngliche Repository muss für Git-Operationen erreichbar
-bleiben; Worktrees teilen dessen Git-Metadaten. Lokale `.env`-Dateien, Abhängigkeiten,
-laufende Dienste und Datenbanken werden nicht automatisch kopiert oder getrennt.
-Archivieren und Löschen einer Session entfernen den Worktree nicht und benötigen weder
-einen verbundenen Computer noch ein vorhandenes externes Arbeitsverzeichnis. Entfernen Sie
-ihn ausdrücklich in der Git-App. Branch, Commits und Gesprächsverläufe bleiben erhalten.
-Beim Entfernen werden nicht committete Änderungen sowie zusätzliche und ignorierte
-Dateien wie `.env` unwiderruflich gelöscht. Der Bestätigungsdialog warnt ausdrücklich
-davor. Laufende Aufträge verhindern die Entfernung. Bei Detached HEAD muss zuerst
-ein Branch angelegt und ausgewählt werden, damit Commits erhalten bleiben.
-Betroffene Sessions wechseln nach erfolgreicher Prüfung des lokalen Projektverzeichnisses
-automatisch dorthin; das gilt auch für ihre Unterverzeichnisse im entfernten Worktree.
-Es gibt keine automatische Löschung.
+Strukturierte Rückfragen erscheinen direkt im Chat. **Weiter** navigiert, **Fertig** sendet auch unvollständige Antworten, **Ablehnen** verwirft den Entwurf. Mit **Jetzt senden** kannst du stattdessen nachfragen oder die Richtung ändern. Geheimnisse gehören nur in [geschützte Eingabefelder](variablen-und-secrets.md).
 
-Die allgemeine Befehlspalette und **Git** bieten die
-[Git-Befehle](kanaele.md#coding-befehle) für Review, ausdrückliches Committen,
-lokale Übernahme, Veröffentlichung, PR, Synchronisierung und Einrichtung mit den vorhandenen Tools und Rechten.
-Die Palette setzt den Befehl zunächst ein; die Aktionsliste in der Git-App startet
-den gewählten Auftrag direkt und erhält den vorhandenen Nachrichtenentwurf samt Anhängen. Merge-Review und
-Tests sind Teil des Agentenauftrags; ein positives Review garantiert keine Fehlerfreiheit.
+Aufgabenlisten zeigen gemeldeten Fortschritt. Delegierte Aufgaben erscheinen mit Titel und Status; ein Klick öffnet ihren schreibgeschützten Verlauf. Fragen und Freigaben beantwortest du in der Hauptsession. Kinder teilen den Computer-Arbeitsbereich, sind also nicht dateiseitig isoliert. Ein Stopp des Elternlaufs stoppt auch offene delegierte Arbeit.
 
-## Laufende Antworten
+## Nachrichten erneut versuchen oder zurücknehmen
 
-MatoLoop zeigt Antworttext, aktuelle Aktivität, Tool-Ergebnisse, Laufzeit und gegebenenfalls Reasoning-Zusammenfassungen. Diese Zusammenfassungen sind keine vollständigen internen Gedankengänge. Bei Verbindungsunterbrechung lädt die Oberfläche den gespeicherten Zustand nach; ein Browserdisconnect stoppt den Agenten nicht. Der Stoppknopf beendet den Lauf, ohne abgeschlossene Wirkungen rückgängig zu machen.
-
-### Während eines Laufs senden
-
-**Jetzt senden** ergänzt den aktuellen Lauf um Ihre neue Nachricht. Eine laufende Modellanfrage wird neu aufgebaut; aktive Tool-Arbeit darf zuerst enden. Eine überholte Freigabe oder Rückfrage des Laufs wird geschlossen und der Agent plant mit Ihrer neuen Anweisung weiter. Das erlaubt keine zuvor gesperrte Aktion.
-
-**Nach dem Lauf senden** reiht die Nachricht für einen anschließenden Lauf ein. Der ownergebundene Browser-Postausgang bewahrt eingereihte Nachrichten und Anhänge in Reihenfolge. Fehlgeschlagene Sendungen bleiben für einen erneuten Versuch oder die Übernahme in den Entwurf erhalten. Abmelden oder ein Kontowechsel entfernt den bisherigen Postausgang dieses Browsers.
-
-Bei **Jetzt senden** werden auch Subagenten beendet, die auf eine Freigabe oder Rückfrage warten. Bereits laufende Arbeit darf zuerst enden. Danach setzt der Hauptagent mit Ihrer neuen Nachricht fort; eine spätere Rückfrage aus der alten delegierten Arbeit blockiert ihn nicht erneut.
-
-Der laufende Auftrag behält sein Startprofil und seinen Modell-/Vertrauenskontext. Neue Profilauswahlen gelten für spätere Läufe. Für Details zu wirksamen Rechten siehe [Freigaben](freigaben-und-datenfreigabe.md).
-
-### Aufgaben und Subagenten
-
-**Agent-Coding** im Control Center bündelt Einstiege zu Git, Ablage, Computer-Dateien, Terminal, Browser und OpenCode, soweit verfügbar. Die App öffnet bestehende Werkzeuge; sie gewährt keine zusätzlichen Rechte und erzeugt keine automatische Workspace-Isolation.
-
-Geeignete Profile können eine Aufgabenliste oberhalb des Eingabefelds anzeigen. Sie lässt sich zuklappen; der Status dokumentiert gemeldeten Fortschritt und ist kein unabhängiger Erfolgsnachweis.
-
-Delegierte Aufgaben erscheinen mit anklickbarem Titel und Status in der Aktivität. Der Subagenteninspektor zeigt deren eigenen Verlauf schreibgeschützt. Fragen und Freigaben beantworten Sie in der Hauptsession. Kinder teilen den Computer-Arbeitsbereich; unterschiedliche Sessions bieten dort keine Dateisolation. Ein Stopp des Elternlaufs stoppt auch offene delegierte Arbeit.
-
-## Rückfragen
-
-Eine strukturierte Rückfrage erscheint direkt im Chat beim zugehörigen Tool-Aufruf. Das Eingabefeld bleibt verfügbar: Mit **Jetzt senden** können Sie nachfragen oder die Richtung ändern, ohne vorher **Fertig** oder **Ablehnen** zu wählen. Die offene Rückfrage des Laufs wird dabei ohne Übernahme unfertiger Antworten geschlossen; falls nötig, fragt der Agent erneut. **Weiter** navigiert; **Fertig** sendet den bisherigen Antwortstand auch vor der letzten Frage. Fragen dürfen unbeantwortet bleiben. **Ablehnen** verwirft den Entwurf. Geschützte Felder behandeln ausgelassene Werte ausdrücklich als fehlend; Geheimnisse gehören weiterhin nur in diese Felder, nicht in Chatnachrichten. Siehe [Variablen und Secrets](variablen-und-secrets.md).
-
-## Nachrichtenaktionen
-
-- **Erneut versuchen** startet für die letzte fehlgeschlagene Host-Antwort einen neuen Versuch. Vor-Ausführungsfehler werden mit aktuellen Sessionvorgaben erneut geprüft; bereits gestartete Läufe behalten ihren Retry-Kontext.
-- **Rückgängig** entfernt eine Benutzernachricht und den folgenden Verlauf, nachdem Text und Anhänge wieder in den Entwurf übernommen wurden.
-- **Kopieren** übernimmt Nachrichteninhalte in die Zwischenablage.
+- **Erneut versuchen** startet einen neuen Versuch der letzten fehlgeschlagenen Host-Antwort. Voraussetzungen werden erneut geprüft; bereits gestartete Läufe behalten ihren Retry-Kontext.
+- **Rückgängig** übernimmt Text und Anhänge in den Entwurf und entfernt die Benutzernachricht mit dem folgenden Verlauf.
+- **Kopieren** übernimmt den Nachrichteninhalt.
 
 !!! warning "Externe Wirkungen bleiben bestehen"
-    Rückgängig, Retry und Stopp machen bereits ausgeführte Datei-, Integrations-, Freigabe- oder Memory-Änderungen nicht rückgängig.
+    Rückgängig, Retry und Stopp machen ausgeführte Datei-, Integrations-, Freigabe- oder Memory-Änderungen nicht rückgängig. Prüfe unklare Ergebnisse vor einem erneuten Auftrag.
 
-## Darstellung
-
-Antworten unterstützen Markdown, Tabellen, Code, Mathematik und Mermaid. Codeblöcke lassen sich kopieren oder herunterladen; fertige Mermaid-Diagramme als SVG herunterladen, als Quelle kopieren oder vergrößern. Die Quelle bleibt in der Nachricht, ohne zusätzliche Datei. Externe Bilder benötigen eine Zustimmung je Ursprung und Session. **Kleine Nachrichten** aus der Sessionvorlage bzw. Sessionansicht verdichtet die Darstellung, ohne den Inhalt zu kürzen.
+Antworten unterstützen Markdown, Tabellen, Code, Mathematik und Mermaid. Code und Diagrammquellen lassen sich kopieren oder herunterladen. Externe Bilder benötigen eine Zustimmung je Ursprung und Session. **Kleine Nachrichten** verdichtet die Darstellung, ohne Inhalt zu kürzen.

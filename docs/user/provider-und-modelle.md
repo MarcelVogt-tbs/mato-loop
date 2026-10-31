@@ -2,37 +2,37 @@
 
 ## Provider verwalten
 
-**Administration > Provider** öffnet zunächst **Einstellungen** mit dem Schalter für persönliche Provider. Unter **Verwaltung** legen Administratoren gemeinsame Verbindungen an und verwalten deren Modelle. **Einstellungen > Provider** verwaltet ausschließlich Ihre eigenen Provider, auch für Administratoren. Deaktivierte persönliche Konfiguration bleibt gespeichert; gemeinsame Modelle bleiben verfügbar.
+**Administration > Provider** öffnet zunächst **Einstellungen** mit dem Schalter für persönliche Provider. Unter **Verwaltung** legen Administratoren gemeinsame Verbindungen an und verwalten deren Modelle. **Einstellungen > Provider** verwaltet ausschließlich deine eigenen Provider, auch für Administratoren. Deaktivierte persönliche Konfiguration bleibt gespeichert; gemeinsame Modelle bleiben verfügbar.
 
 ### ChatGPT Codex
 
-MatoLoop zeigt einen einmaligen Gerätecode und die ChatGPT-Anmeldeseite. Bestätigen Sie ihn mit einem geeigneten Konto. OAuth-Zugangsdaten werden verschlüsselt gespeichert; ein lokaler Callback-Port ist nicht nötig. Danach können Modelle synchronisiert werden.
+MatoLoop zeigt einen einmaligen Gerätecode und die ChatGPT-Anmeldeseite. Bestätige ihn mit einem geeigneten Konto. OAuth-Zugangsdaten werden verschlüsselt gespeichert; ein lokaler Callback-Port ist nicht nötig. Danach können Modelle synchronisiert werden.
 
-**Fast** und **Ultrafast** erscheinen als eigene Modelle, zum Beispiel **GPT-6.1 Sol Fast**. Fast folgt dem Codex-Katalog; für GPT-6 Astra und GPT-6.1 Sol wird Ultrafast auch angeboten, wenn der Katalog diesen Modus nicht aufführt. Synchronisieren und aktivieren Sie die gewünschten Varianten; die Reasoning-Stufe wählen Sie weiterhin unabhängig davon. Bestehende Modelle werden nicht umgestellt. Ob die Ausführung erlaubt ist und wie viel Kontingent oder Guthaben sie verbraucht, hängt von Ihrem ChatGPT-Tarif und den Workspace-Freigaben ab.
+**Fast** und **Ultrafast** erscheinen als eigene Modelle, zum Beispiel **GPT-6.1 Sol Fast**. Fast folgt dem Codex-Katalog; für GPT-6 Astra und GPT-6.1 Sol wird Ultrafast auch angeboten, wenn der Katalog diesen Modus nicht aufführt. Synchronisiere und aktiviere die gewünschten Varianten; die Reasoning-Stufe wählst du weiterhin unabhängig davon. Bestehende Modelle werden nicht umgestellt. Ob die Ausführung erlaubt ist und wie viel Kontingent oder Guthaben sie verbraucht, hängt von deinem ChatGPT-Tarif und den Workspace-Freigaben ab.
 
 ### OpenAI-kompatibel
 
-Verwenden Sie Basis-URL, optionalen API-Schlüssel und entweder Chat Completions oder Responses. Modelle werden möglichst über `/models` erkannt; bei fehlender Erkennung ist eine manuelle Modell-ID möglich.
+Verwende Basis-URL, optionalen API-Schlüssel und entweder Chat Completions oder Responses. Modelle werden möglichst über `/models` erkannt; bei fehlender Erkennung ist eine manuelle Modell-ID möglich.
 
 ### Kimi Code (Abonnement)
 
-Wählen Sie **Kimi Code (Abonnement)** und tragen Sie einen API-Key aus der [Kimi-Code-Konsole](https://www.kimi.com/code/console) ein. Die Vorlage setzt `https://api.kimi.ai/coding/v1` und **Responses API** voraus; für China kann `https://api.kimi.com/coding/v1` verwendet werden. Gespeichert wird eine normale OpenAI-kompatible Verbindung mit verschlüsseltem Schlüssel. Moonshot-API-Keys und separat abgerechnetes API-Guthaben sind damit nicht austauschbar.
+Wähle **Kimi Code (Abonnement)** und trage einen API-Key aus der [Kimi-Code-Konsole](https://www.kimi.com/code/console) ein. Die Vorlage setzt `https://api.kimi.ai/coding/v1` und **Responses API** voraus; für China kann `https://api.kimi.com/coding/v1` verwendet werden. Gespeichert wird eine normale OpenAI-kompatible Verbindung mit verschlüsseltem Schlüssel. Moonshot-API-Keys und separat abgerechnetes API-Guthaben sind damit nicht austauschbar.
 
-Synchronisieren und aktivieren Sie die verfügbaren Modelle. Falls die Erkennung nicht angeboten wird, hinterlegen Sie die Modell-ID manuell, beispielsweise `kimi-for-coding` oder `k3.1-pro`. Prüfen Sie das Kontextfenster gegen Ihren Tarif; MatoLoop unterstellt keinen pauschalen 1-Mio.-Token-Zugang. Die unterstützten einstellbaren Modelle bieten **Low**, **High** und **Max** an. Thinking bleibt aktiviert, damit Kimi Anfragen nicht ablehnt oder auf ein anderes Modell umleitet; `kimi-for-coding-highspeed` bietet keine einstellbaren Reasoning-Stufen.
+Synchronisiere und aktiviere die verfügbaren Modelle. Falls die Erkennung nicht angeboten wird, hinterlege die Modell-ID manuell, beispielsweise `kimi-for-coding` oder `k3.1-pro`. Prüfe das Kontextfenster gegen deinen Tarif; MatoLoop unterstellt keinen pauschalen 1-Mio.-Token-Zugang. Die unterstützten einstellbaren Modelle bieten **Low**, **High** und **Max** an. Thinking bleibt aktiviert, damit Kimi Anfragen nicht ablehnt oder auf ein anderes Modell umleitet; `kimi-for-coding-highspeed` bietet keine einstellbaren Reasoning-Stufen.
 
-Das Abo ist laut [Kimi-Nutzungsrichtlinien](https://www.kimi.com/code/docs/en/kimi-code/community-guidelines.html) für persönliche interaktive Nutzung vorgesehen, nicht für unbeaufsichtigte Automatisierung, Batch-Jobs oder geteilten API-Zugang. Verwenden Sie es daher nicht für Hintergrundfunktionen wie Dreaming oder geplante Aufgaben. Kontingente und Ratenlimits gelten auch in MatoLoop; eine Freigabe für Ihren Client und Tarif muss bei Kimi bestehen. MatoLoop verwendet seine echte Clientkennung, keine nachgeahmte Kimi-CLI-Identität.
+Das Abo ist laut [Kimi-Nutzungsrichtlinien](https://www.kimi.com/code/docs/en/kimi-code/community-guidelines.html) für persönliche interaktive Nutzung vorgesehen, nicht für unbeaufsichtigte Automatisierung, Batch-Jobs oder geteilten API-Zugang. Verwende es daher nicht für Hintergrundfunktionen wie Dreaming oder geplante Aufgaben. Kontingente und Ratenlimits gelten auch in MatoLoop; eine Freigabe für deinen Client und Tarif muss bei Kimi bestehen. MatoLoop verwendet seine echte Clientkennung, keine nachgeahmte Kimi-CLI-Identität.
 
 ### Lemonade
 
-MatoLoop erkennt installierte Chat- und Medienmodelle eines Lemonade-Servers. Laden, Entladen und Speicherbelegung verwalten Sie in Lemonade; MatoLoop übernimmt dessen Modellresidenz nicht. Nicht jede Modellart ist ein Chatmodell.
+MatoLoop erkennt installierte Chat- und Medienmodelle eines Lemonade-Servers. Laden, Entladen und Speicherbelegung verwaltest du in Lemonade; MatoLoop übernimmt dessen Modellresidenz nicht. Nicht jede Modellart ist ein Chatmodell.
 
 ### Azure Speech
 
-Verwenden Sie einen HTTPS-Ressourcen- oder regionalen Endpunkt und den API-Schlüssel. Synchronisierung prüft verfügbare Sprachen und bietet `azure-speech-fast-transcription` an. Aktivieren Sie es und wählen Sie es als **Transkription** unter Standardmodelle. Azure Speech verarbeitet aufgezeichnetes Audio, weder Chat noch Live-Transkription oder Sprachgenerierung. Das Originalaudio wird übertragen und kann nicht textlich pseudonymisiert werden. Dienstregion, Tarif, Quoten und Sprachen müssen bei Azure passend verfügbar sein.
+Verwende einen HTTPS-Ressourcen- oder regionalen Endpunkt und den API-Schlüssel. Synchronisierung prüft verfügbare Sprachen und bietet `azure-speech-fast-transcription` an. Aktiviere es und wähle es als **Transkription** unter Standardmodelle. Azure Speech verarbeitet aufgezeichnetes Audio, weder Chat noch Live-Transkription oder Sprachgenerierung. Das Originalaudio wird übertragen und kann nicht textlich pseudonymisiert werden. Dienstregion, Tarif, Quoten und Sprachen müssen bei Azure passend verfügbar sein.
 
 ## Modelle synchronisieren
 
-Neu erkannte Modelle beginnen normalerweise deaktiviert; bestimmte hostseitig ergänzte native Medienmodelle können aktiv sein. Aktivieren und testen Sie benötigte Modelle. Synchronisierung erhält interne IDs und eigene Laufzeiteinstellungen, kennzeichnet verschwundene Modelle als **Nicht verfügbar** und löscht sie nicht automatisch.
+Neu erkannte Modelle beginnen normalerweise deaktiviert; bestimmte hostseitig ergänzte native Medienmodelle können aktiv sein. Aktiviere und teste benötigte Modelle. Synchronisierung erhält interne IDs und eigene Laufzeiteinstellungen, kennzeichnet verschwundene Modelle als **Nicht verfügbar** und löscht sie nicht automatisch.
 
 Löschen entfernt passende Standardmodellzuordnungen und explizite sessionweite Verweise. Nicht verfügbare agentenspezifische Sessionwerte werden bei der Auflösung übersprungen. Eine spätere Synchronisierung kann das externe Modell mit einer neuen internen ID wieder anlegen. Ein Fehler bei der Synchronisierung ersetzt nicht den zuletzt gültigen Katalog.
 
@@ -40,9 +40,9 @@ Löschen entfernt passende Standardmodellzuordnungen und explizite sessionweite 
 
 Kontextfenster, Auto-/manuelles Ausgabelimit, Streaming, Tool-, Paralleltool- und Bildunterstützung, Memory, Vertrauenslevel und Reasoning werden je Modell konfiguriert. **Auto** lässt ein unbekanntes Ausgabelimit beim Provider; MatoLoop prüft trotzdem seinen lokalen Kontextbudget-Schätzwert. Ein manuelles Limit ist eine Obergrenze, keine reservierte feste Ausgabe.
 
-Reasoning-Stufen erscheinen nur für unterstützte Modelle. Verfügbare Stufen und Standards hängen vom Provider und dessen erkanntem Modellprofil ab; synchronisieren Sie nach Provideränderungen. Die Auswahl eines öffentlichen Modells gibt bereits autorisierte Inhalte an diesen Provider frei. [Datenfreigabe](freigaben-und-datenfreigabe.md) und Memory-Zielgruppen bleiben getrennte Themen.
+Reasoning-Stufen erscheinen nur für unterstützte Modelle. Verfügbare Stufen und Standards hängen vom Provider und dessen erkanntem Modellprofil ab; synchronisiere nach Provideränderungen. Die Auswahl eines öffentlichen Modells gibt bereits autorisierte Inhalte an diesen Provider frei. [Datenfreigabe](freigaben-und-datenfreigabe.md) und Memory-Zielgruppen bleiben getrennte Themen.
 
-- **Administration > Provider > Einstellungen > Modelltrennung:** Pro Provider legen Sie fest, ob seine Modelle als privat oder öffentlich gelten. Bei aktiver Modelltrennung gelten dafür getrennte Tool-Rechte, Erinnerungen und persönliche Profilangaben. Änderungen am Schalter werden sofort gespeichert.
+- **Administration > Provider > Einstellungen > Modelltrennung:** Pro Provider legst du fest, ob seine Modelle als privat oder öffentlich gelten. Bei aktiver Modelltrennung gelten dafür getrennte Tool-Rechte, Erinnerungen und persönliche Profilangaben. Änderungen am Schalter werden sofort gespeichert.
 - **Ohne Trennung:** Für alle Modelle gelten dieselben Datenfreigaben. Gespeicherte Einstufungen bleiben erhalten.
 - **Kennungen und Secrets pseudonymisieren:** bleibt unabhängig einstellbar. Modelle können den Providerwert übernehmen oder überschreiben.
 - **Grundeinstellungen:** enthält weiterhin einen direkten Link zu diesem Bereich. Dort steht die öffentliche Adresse an erster Stelle.
@@ -57,7 +57,7 @@ Gemeinsame Zuordnungen stehen unter **Administration > Standardmodelle > Verwalt
 - Bild-, Video- und Audioanalyse.
 - Bild-, Sprach- und Audiogenerierung sowie Transkription.
 
-Das Dropdown **Agentenprofil** zeigt unter **Standard** alle bisherigen Modellvorgaben. Wählen Sie ein Profil, um nur dessen **Agentmodell** und **Reasoning-Stufe** anzupassen. Alle Modell- und Reasoning-Dropdowns bieten **Automatische Auswahl** als erste Option. Sie übernimmt die geerbte Vorgabe und ist ohne eigenen Wert vorausgewählt. Wählen Sie diese Option erneut, um einen eigenen Wert zurückzusetzen. Der Hinweis **Effektiv** zeigt die bekannte Vorgabe; **Auswahl zur Laufzeit** bedeutet, dass der bestehende Fallback erst bei der Verwendung entscheidet. Änderungen werden mit **Speichern** übernommen. Hilfs- und Medienmodelle bleiben von Profilvorgaben unberührt. Die weiteren Einstellungen eines Agentenprofils verlinken direkt auf dessen Modellauswahl.
+Das Dropdown **Agentenprofil** zeigt unter **Standard** alle bisherigen Modellvorgaben. Wähle ein Profil, um nur dessen **Agentmodell** und **Reasoning-Stufe** anzupassen. Alle Modell- und Reasoning-Dropdowns bieten **Automatische Auswahl** als erste Option. Sie übernimmt die geerbte Vorgabe und ist ohne eigenen Wert vorausgewählt. Wähle diese Option erneut, um einen eigenen Wert zurückzusetzen. Der Hinweis **Effektiv** zeigt die bekannte Vorgabe; **Auswahl zur Laufzeit** bedeutet, dass der bestehende Fallback erst bei der Verwendung entscheidet. Änderungen werden mit **Speichern** übernommen. Hilfs- und Medienmodelle bleiben von Profilvorgaben unberührt. Die weiteren Einstellungen eines Agentenprofils verlinken direkt auf dessen Modellauswahl.
 
 **Sessionvorlagen** wählen verfügbare Agenten, Startagent, Memory, Nachrichtengröße und optionale Chatmodell-/Reasoning-Werte für die Session oder einzelne Agenten. **Allgemein** bietet Allgemein/Sysadmin; **Coding** bietet Plan/Build und kleine Nachrichten. Beide beginnen mit vollem Memory. Eine Session kopiert die Vorlage einmal; spätere Vorlagenänderungen wirken nicht auf sie zurück.
 
