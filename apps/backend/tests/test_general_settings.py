@@ -123,10 +123,10 @@ async def test_tool_presets_change_only_selected_global_policies(monkeypatch, tr
     policies = getattr(tools, f"{trust}_permissions").policies
     assert tuple(tool_execution_policy(tools, key) for key in (
         "filesystem.read", "filesystem.write", "shell.write", "filesystem.delete", "automation.delete",
-        "sensitive_data.access", "secrets.access", "secrets.write",
-    )) == (read, write, write, "disabled", delete, sensitive, "ask", write)
+        "sensitive_data.access", "session.read_sensitive", "secrets.access", "secrets.write",
+    )) == (read, write, write, "disabled", delete, sensitive, sensitive, "ask", write)
     for key in (
-        "network.search", "network.fetch", "session.files.read", "session.files.write", "file.provide",
+        "network.search", "network.fetch", "session.read", "session.search", "session.files.read", "session.files.write", "file.provide",
         "media.generate.image", "media.edit.image", "media.generate.speech", "media.generate.audio",
         "media.transcribe.audio", "media.analyze.audio", "media.analyze.video", "skills.load", "session.tool_result.read",
     ):

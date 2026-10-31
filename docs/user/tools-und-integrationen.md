@@ -20,7 +20,7 @@ Ohne Modelltrennung bearbeitest du unter **Alle Modelle** die privaten Werte. Ö
 | Automatisch außer Löschen | Automatisch | Automatisch | Automatisch | Nachfragen |
 | Vollautomatisch | Automatisch | Automatisch | Automatisch | Automatisch |
 
-**Komfortabel** ist die Vorgabe für private, **Ausgewogen** für öffentliche Modelle. Beide erlauben öffentliche Recherche, Session-Dateien lesen und bearbeiten, Dateien bereitstellen, Medien erzeugen/verarbeiten, Skills laden und aktuelle Tool-Ergebnisse nachlesen automatisch. Diese Ausnahmen gelten auch in den großzügigeren Presets, nicht bei **Alles bestätigen**. Zusätzlich erforderliche Quell-, Ziel- und Verbindungsrechte bleiben bestehen.
+**Komfortabel** ist die Vorgabe für private, **Ausgewogen** für öffentliche Modelle. Beide erlauben öffentliche Recherche, Sessions lesen und durchsuchen, Session-Dateien lesen und bearbeiten, Dateien bereitstellen, Medien erzeugen/verarbeiten, Skills laden und aktuelle Tool-Ergebnisse nachlesen automatisch. Diese Ausnahmen gelten auch in den großzügigeren Presets, nicht bei **Alles bestätigen**. Zugriffe öffentlicher Modelle auf andere private Sessions bleiben sensibles Lesen und folgen der entsprechenden Preset-Spalte. Zusätzlich erforderliche Quell-, Ziel- und Verbindungsrechte bleiben bestehen.
 
 **Variablen und Secrets verwenden** verlangt in jedem Preset eine Freigabe, sofern keine eigene Regel oder passende Freigabe besteht. Für Browser gelten [gesonderte Vorgaben](browser.md#rechte-und-risiken).
 
