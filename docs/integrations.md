@@ -74,7 +74,9 @@ One account is one HTTPS instance with an encrypted password/app-password creden
 
 Creates use host-derived deterministic UIDs and `If-None-Match`; updates/deletes require observed ETags with `If-Match`. Recurring, scheduling-bearing or otherwise unrepresented properties make mutation unsupported rather than losing data. Timed values are UTC instants; all-day values remain dates. Results supply DST-correct Europe/Berlin local timing. Up to ten relative reminders are supported.
 
-Standard calendar/task-list selection is separate from permissions. Omitted targets use the configured complete pair before validation/authorization; an explicit complete pair wins. Partial targets never mix with defaults, and stale/disabled defaults fail closed. Task operations support title, note, due date/time and completion; unsupported recurrence/relationships/alarms remain readable but not editable.
+Standard calendar/task-list selection is separate from permissions. Calendar tools always require explicit `integration_id` and `calendar_key`; the configured default is supplied only as model context for requests without another named calendar, and only when effective action/resource policy allows it. Missing calendar targets are rejected, never filled automatically. Approvals show the selected calendar and account, using remembered resource names when available.
+
+Task-list tools still fill fully omitted targets with the configured complete pair before validation/authorization; an explicit complete pair wins. Partial targets never mix with defaults, and stale/disabled defaults fail closed. Task operations support title, note, due date/time and completion; unsupported recurrence/relationships/alarms remain readable but not editable.
 
 `tasks_create_many` adds at most 50 tasks under one approval, skipping case/whitespace-normalized open-title duplicates. It never deletes, rewrites or synchronizes the existing list. Tokens may be projected as short session-bound result references; resolution still validates original binding, ownership, policy and ETag.
 

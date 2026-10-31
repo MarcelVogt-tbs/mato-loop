@@ -55,6 +55,8 @@ Die anderen mitgelieferten Profile verwenden **Bei Bedarf**. **Tool-Ladeverhalte
 
 Nach dem Verbindungstest wähle unter **Standardressourcen dieses Kontos** einen Standardkalender und eine Standard-Aufgabenliste. Unspezifische Anfragen nutzen diese Auswahl; eine ausdrücklich benannte Ressource hat Vorrang.
 
+Den Standardkalender bekommt das Modell als Hinweis mit, sofern die Berechtigungen ihn für die jeweilige Kalenderaktion zulassen. Deaktivierte Kalender werden nicht als Hinweis mitgegeben. Das Modell muss den Zielkalender bei jedem Terminaufruf ausdrücklich angeben; MatoLoop ergänzt ihn nicht automatisch. Prüfe bei einer Freigabe den angezeigten Kalender und das Konto, bevor du zustimmst.
+
 Bitte beispielsweise: „Lege morgen um 10 Uhr einen Termin im Kalender an.“ Termine unterstützen bis zu zehn Erinnerungen. Wiederkehrende Termine und solche mit Einladungen oder nicht unterstützten Eigenschaften lassen sich lesen, aber nicht verändern.
 
 Aufgaben unterstützen Titel, Notiz, Fälligkeit und offen/erledigt. Erledigte Aufgaben werden standardmäßig ausgeblendet. Bis zu 50 fehlende Aufgaben können gemeinsam erstellt werden; gleichnamige offene Aufgaben werden übersprungen. Wiederholungen, Unteraufgaben, Erinnerungen, Kategorien und Prioritäten lassen sich nicht bearbeiten.

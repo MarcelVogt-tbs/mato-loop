@@ -356,7 +356,7 @@ def test_task_schemas_accept_dates_or_aware_datetimes_and_default_to_open() -> N
         )
 
 
-def test_active_default_calendar_is_bound_only_to_query_and_create() -> None:
+def test_default_calendar_is_context_only_and_targets_remain_required() -> None:
     account = _account()
     key = f"calendar:{'a' * 32}"
     settings = ToolSettings.model_validate(
@@ -364,7 +364,8 @@ def test_active_default_calendar_is_bound_only_to_query_and_create() -> None:
             "defaultCalendar": {
                 "integrationId": str(account.id),
                 "calendarKey": key,
-            }
+            },
+            "resourceLabels": {str(account.id): {key: "Persönlich"}},
         }
     )
 
@@ -375,26 +376,22 @@ def test_active_default_calendar_is_bound_only_to_query_and_create() -> None:
 
     calendar_fragment = next(
         fragment for fragment in effective.prompt_fragments
-        if fragment.startswith("A default calendar is configured.")
+        if fragment.startswith("Configured default calendar")
     )
-    assert "call calendar_query_events or calendar_create_event directly" in (
-        calendar_fragment
-    )
-    assert "omit both integration_id and calendar_key" in calendar_fragment
-    assert "For another calendar, include both" in calendar_fragment
+    assert json.loads(calendar_fragment.split(": ", 1)[1]) == {
+        "integration_id": str(account.id), "calendar_key": key, "name": "Persönlich",
+    }
     instructions = "\n".join(effective.prompt_fragments)
+    assert "Always include integration_id and calendar_key" in instructions
     assert "copy eventToken, integrationId, and calendarKey" in instructions
     assert "mutation succeeds only" in instructions
     assert "copy taskToken, integrationId, and taskListKey" in instructions
     for name in ("calendar_query_events", "calendar_create_event"):
         tool = effective.tools[name]
-        assert tool.default_arguments == {
-            "integration_id": str(account.id),
-            "calendar_key": key,
-        }
+        assert tool.default_arguments == {}
         required = tool.schema()["parameters"]["required"]
-        assert "integration_id" not in required
-        assert "calendar_key" not in required
+        assert "integration_id" in required
+        assert "calendar_key" in required
     assert "offset times and an exclusive range end" in effective.tools[
         "calendar_query_events"
     ].definition.description
@@ -405,6 +402,16 @@ def test_active_default_calendar_is_bound_only_to_query_and_create() -> None:
     ]["integration_id"]["enum"] == [str(account.id)]
     assert effective.tools["calendar_update_event"].default_arguments == {}
     assert effective.tools["calendar_delete_event"].default_arguments == {}
+
+    settings.permissions.resource_availability[str(account.id)] = {key: False}
+    blocked = tool_registry.effective(
+        IntegrationSettings(instances=[account]), tool_settings=settings,
+    )
+    assert not any(
+        fragment.startswith("Configured default calendar")
+        for fragment in blocked.prompt_fragments
+    )
+    settings.permissions.resource_availability.clear()
 
     settings.default_calendar.integration_id = uuid4()
     without_active_default = tool_registry.effective(
@@ -417,7 +424,7 @@ def test_active_default_calendar_is_bound_only_to_query_and_create() -> None:
     assert "integration_id" in required
     assert "calendar_key" in required
     assert not any(
-        fragment.startswith("A default calendar is configured.")
+        fragment.startswith("Configured default calendar")
         for fragment in without_active_default.prompt_fragments
     )
     instructions = "\n".join(without_active_default.prompt_fragments)

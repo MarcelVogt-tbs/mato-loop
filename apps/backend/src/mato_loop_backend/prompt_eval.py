@@ -1131,7 +1131,9 @@ CASES = (
         calendar_fixture=True,
         expected_tool="calendar_create_event",
         expected_tool_call_count=1,
-        expected_arguments={"integration_id": None, "calendar_key": None},
+        expected_arguments={
+            "integration_id": str(CALENDAR_INTEGRATION_ID), "calendar_key": CALENDAR_KEY,
+        },
         argument_contains={"summary": ("Zahnarzt",)},
         forbidden_tools=("question",),
     ),
@@ -1193,7 +1195,9 @@ CASES = (
         ),
         expected_tool="calendar_create_event",
         expected_tool_call_count=1,
-        expected_arguments={"integration_id": None, "calendar_key": None},
+        expected_arguments={
+            "integration_id": str(CALENDAR_INTEGRATION_ID), "calendar_key": CALENDAR_KEY,
+        },
         argument_contains={"summary": ("Zahnarzt",)},
         forbidden_tools=("question",),
     ),
@@ -4305,7 +4309,9 @@ SCHEMA_AB_CASES = tuple(_SCHEMA_AB_CASES_BY_ID[case_id] for case_id in _SCHEMA_A
         kind="general",
         user="Welche Termine stehen morgen in meinem Standardkalender an?",
         expected_tool="calendar_query_events",
-        expected_arguments={"integration_id": None, "calendar_key": None},
+        expected_arguments={
+            "integration_id": str(CALENDAR_INTEGRATION_ID), "calendar_key": CALENDAR_KEY,
+        },
         argument_contains={
             "start": ("2026-07-28",),
         },
@@ -5248,6 +5254,7 @@ def _general_offered_tools(case: PromptCase) -> EffectiveToolSet:
                     "integrationId": str(CALENDAR_INTEGRATION_ID),
                     "calendarKey": CALENDAR_KEY,
                 },
+                "resourceLabels": {str(CALENDAR_INTEGRATION_ID): {CALENDAR_KEY: "Persönlich"}},
                 "defaultTaskList": {
                     "integrationId": str(CALENDAR_INTEGRATION_ID),
                     "taskListKey": TASK_LIST_KEY,
@@ -5361,6 +5368,7 @@ def _startup_integrations(maximal: bool) -> tuple[IntegrationSettings, ToolSetti
                 "integrationId": str(CALENDAR_INTEGRATION_ID),
                 "calendarKey": CALENDAR_KEY,
             },
+            "resourceLabels": {str(CALENDAR_INTEGRATION_ID): {CALENDAR_KEY: "Persönlich"}},
             "defaultTaskList": {
                 "integrationId": str(CALENDAR_INTEGRATION_ID),
                 "taskListKey": TASK_LIST_KEY,
@@ -6255,7 +6263,7 @@ def slimming_system_prompt(
     for paragraph in prompt.split("\n\n"):
         if paragraph.startswith("Inactive installed capabilities"):
             continue
-        if paragraph.startswith(("A default calendar is configured", "A default task list is configured")):
+        if paragraph.startswith("A default task list is configured"):
             continue
         if paragraph.startswith("File tools:"):
             paragraph = (

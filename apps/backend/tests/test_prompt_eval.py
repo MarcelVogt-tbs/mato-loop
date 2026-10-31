@@ -537,11 +537,11 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     assert "QuestionOption" in question_parameters
     assert "default_answers" in question_parameters
     assert "Timed events require start and end" in calendar_tools[1]["description"]
-    assert "A default calendar is configured" in calendar_messages[0]["content"]
+    assert "Configured default calendar" in calendar_messages[0]["content"]
     assert "Missing-information contract" in calendar_messages[0]["content"]
     create_required = calendar_tools[1]["parameters"]["required"]
-    assert "integration_id" not in create_required
-    assert "calendar_key" not in create_required
+    assert "integration_id" in create_required
+    assert "calendar_key" in create_required
 
 
 def test_schema_ab_groups_full_tool_families_without_changing_production_registry() -> None:
@@ -576,7 +576,9 @@ def test_grouped_schema_keeps_required_action_and_resolvable_definitions() -> No
     assert all(reference.removeprefix("#/$defs/") in parameters["$defs"] for reference in refs)
     assert parameters["required"] == ["action"]
     assert parameters["additionalProperties"] is False
-    assert "Required fields: summary, timing" in parameters["properties"]["action"]["description"]
+    assert "Required fields: integration_id, calendar_key, summary, timing" in (
+        parameters["properties"]["action"]["description"]
+    )
 
 
 def test_prompt_slimming_schema_variants_preserve_tools_and_validation_shape() -> None:
@@ -1183,6 +1185,8 @@ def test_question_evaluator_checks_selection_payload_and_continuation() -> None:
                 "calendar",
                 "calendar_create_event",
                 {
+                    "integration_id": str(prompt_eval.CALENDAR_INTEGRATION_ID),
+                    "calendar_key": prompt_eval.CALENDAR_KEY,
                     "summary": "Zahnarzt",
                     "_reason": "Den gewünschten Termin erstellen.",
                     "timing": {
@@ -1196,6 +1200,15 @@ def test_question_evaluator_checks_selection_payload_and_continuation() -> None:
     )
 
     assert evaluate(complete_case, valid_create) == []
+    omitted_target = replace(valid_create, tool_calls=[ToolCall(
+        "calendar", "calendar_create_event", {
+            key: value for key, value in valid_create.tool_calls[0].arguments.items()
+            if key not in {"integration_id", "calendar_key"}
+        },
+    )])
+    assert "calendar_create_event returned invalid arguments" in evaluate(
+        complete_case, omitted_target,
+    )
     invalid_create = replace(
         valid_create,
         tool_calls=[
@@ -1203,6 +1216,8 @@ def test_question_evaluator_checks_selection_payload_and_continuation() -> None:
                 "calendar",
                 "calendar_create_event",
                 {
+                    "integration_id": str(prompt_eval.CALENDAR_INTEGRATION_ID),
+                    "calendar_key": prompt_eval.CALENDAR_KEY,
                     "summary": "Zahnarzt",
                     "_reason": "Den gewünschten Termin erstellen.",
                     "timing": {
