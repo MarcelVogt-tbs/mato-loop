@@ -1899,6 +1899,34 @@ async def test_qwen_3_8_uses_medium_by_default_and_disables_thinking_cleanly(
     assert exc_info.value.public_code == "provider.modelCapabilityUnavailable"
 
 
+@pytest.mark.parametrize("api_type", ["chat_completions", "responses"])
+@pytest.mark.parametrize("model_id,default", [
+    ("k3.1-pro", "high"), ("k3.1-pro-highspeed", "high"),
+    ("k3", "high"), ("k3-256k", "high"), ("kimi-for-coding", "max"),
+])
+async def test_kimi_reasoning_reaches_both_protocols_and_keeps_thinking_enabled(monkeypatch, api_type, model_id, default):
+    from mato_loop_backend.api.routes.providers import _model_reasoning_options
+
+    provider = LlmProviderConfig(
+        name="Kimi Code", adapter_type="openai-compatible", pseudonymization_enabled=False,
+        config={"base_url": "https://api.kimi.ai/coding/v1", "api_type": api_type},
+    )
+    model = ModelConfig(provider_id=provider.id, model_id=model_id)
+    transport = AsyncMock(return_value=ProviderResult(content="OK"))
+    monkeypatch.setattr(service_module, "chat_completions", transport)
+    monkeypatch.setattr(service_module, "responses_api", transport)
+    kwargs = dict(
+        provider=provider, model=model, messages=[{"role": "user", "content": "Test"}], tools=[],
+    )
+    await ProviderService.complete(AsyncMock(spec=AsyncSession), **kwargs)
+    request = transport.await_args.kwargs["request"]
+    body = _responses_body(request) if api_type == "responses" else _chat_body(request)
+    assert (body["reasoning"]["effort"] if api_type == "responses" else body["reasoning_effort"]) == default
+    assert _model_reasoning_options(provider, model) == ["low", "high", "max"]
+    with pytest.raises(ProviderError, match="selected reasoning effort"):
+        await ProviderService.complete(AsyncMock(spec=AsyncSession), reasoning_effort="none", **kwargs)
+
+
 @pytest.mark.parametrize("effort", [None, "none", "minimal", "low", "medium", "high", "xhigh"])
 async def test_halogen_reasoning_options_reach_chat_transport(monkeypatch, effort):
     from mato_loop_backend.api.routes.providers import (

@@ -107,9 +107,11 @@ def _model_reasoning_profile(
         if provider.adapter_type == "lemonade"
         else provider.config.get("api_type", "chat_completions")
     )
+    profile = reasoning_profile(model.model_id, model.discovery_metadata)
     return (
-        reasoning_profile(model.model_id, model.discovery_metadata)
+        profile
         if provider.adapter_type == "openai-codex" or api_type == "chat_completions"
+        or profile and profile.supports_responses
         else None
     )
 

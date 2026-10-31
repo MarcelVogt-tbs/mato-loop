@@ -14,6 +14,14 @@ MatoLoop zeigt einen einmaligen Gerätecode und die ChatGPT-Anmeldeseite. Bestä
 
 Verwenden Sie Basis-URL, optionalen API-Schlüssel und entweder Chat Completions oder Responses. Modelle werden möglichst über `/models` erkannt; bei fehlender Erkennung ist eine manuelle Modell-ID möglich.
 
+### Kimi Code (Abonnement)
+
+Wählen Sie **Kimi Code (Abonnement)** und tragen Sie einen API-Key aus der [Kimi-Code-Konsole](https://www.kimi.com/code/console) ein. Die Vorlage setzt `https://api.kimi.ai/coding/v1` und **Responses API** voraus; für China kann `https://api.kimi.com/coding/v1` verwendet werden. Gespeichert wird eine normale OpenAI-kompatible Verbindung mit verschlüsseltem Schlüssel. Moonshot-API-Keys und separat abgerechnetes API-Guthaben sind damit nicht austauschbar.
+
+Synchronisieren und aktivieren Sie die verfügbaren Modelle. Falls die Erkennung nicht angeboten wird, hinterlegen Sie die Modell-ID manuell, beispielsweise `kimi-for-coding` oder `k3.1-pro`. Prüfen Sie das Kontextfenster gegen Ihren Tarif; MatoLoop unterstellt keinen pauschalen 1-Mio.-Token-Zugang. Die unterstützten einstellbaren Modelle bieten **Low**, **High** und **Max** an. Thinking bleibt aktiviert, damit Kimi Anfragen nicht ablehnt oder auf ein anderes Modell umleitet; `kimi-for-coding-highspeed` bietet keine einstellbaren Reasoning-Stufen.
+
+Das Abo ist laut [Kimi-Nutzungsrichtlinien](https://www.kimi.com/code/docs/en/kimi-code/community-guidelines.html) für persönliche interaktive Nutzung vorgesehen, nicht für unbeaufsichtigte Automatisierung, Batch-Jobs oder geteilten API-Zugang. Verwenden Sie es daher nicht für Hintergrundfunktionen wie Dreaming oder geplante Aufgaben. Kontingente und Ratenlimits gelten auch in MatoLoop; eine Freigabe für Ihren Client und Tarif muss bei Kimi bestehen. MatoLoop verwendet seine echte Clientkennung, keine nachgeahmte Kimi-CLI-Identität.
+
 ### Lemonade
 
 MatoLoop erkennt installierte Chat- und Medienmodelle eines Lemonade-Servers. Laden, Entladen und Speicherbelegung verwalten Sie in Lemonade; MatoLoop übernimmt dessen Modellresidenz nicht. Nicht jede Modellart ist ein Chatmodell.

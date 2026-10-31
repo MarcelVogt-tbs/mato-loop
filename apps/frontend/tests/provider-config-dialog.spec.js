@@ -66,22 +66,49 @@ function save(label = 'Provider hinzufügen') {
   button.click()
 }
 
-async function selectAzure() {
+async function selectProvider(label) {
   field('Provider').querySelector('.q-field__native').click()
   await vi.waitFor(() => expect([...document.querySelectorAll('.q-item__label')]
-    .some((element) => element.textContent === 'Azure Speech')).toBe(true))
+    .some((element) => element.textContent === label)).toBe(true))
   const option = [...document.querySelectorAll('.q-item__label')]
-    .find((element) => element.textContent === 'Azure Speech')
+    .find((element) => element.textContent === label)
   option.closest('.q-item').click()
-  await vi.waitFor(() => expect(field('Azure-Speech-Endpunkt')).toBeDefined())
+  await vi.waitFor(() => expect(field('Name')).toBeDefined())
 }
+
+it('creates the Kimi subscription preset through the existing OpenAI-compatible endpoint', async () => {
+  const { createProvider } = await mountDialog()
+  await selectProvider('Kimi Code (Abonnement)')
+  await fill('API-Key (optional)', 'kimi-test-key')
+  save()
+  await vi.waitFor(() => expect(createProvider).toHaveBeenCalledWith('openai-compatible', {
+    name: 'Kimi Code', base_url: 'https://api.kimi.ai/coding/v1', api_type: 'responses',
+    api_key: 'kimi-test-key', remove_api_key: false, trust_level: 'public',
+    pseudonymization_enabled: true, memory_policy: 'inherit'
+  }))
+})
+
+it('recognizes a saved Kimi connection without replacing its protocol, name, or credential', async () => {
+  const { updateProvider } = await mountDialog(ProviderConfigDialog, { provider: {
+    id: 'kimi', name: 'Mein Kimi', adapterType: 'openai-compatible', hasCredential: true,
+    trustLevel: 'public', pseudonymizationEnabled: true,
+    config: { baseUrl: 'https://api.kimi.com/coding/v1', apiType: 'chat_completions' }
+  } })
+  expect(field('Provider').textContent).toContain('Kimi Code (Abonnement)')
+  save('Änderungen speichern')
+  await vi.waitFor(() => expect(updateProvider).toHaveBeenCalledWith('kimi', {
+    name: 'Mein Kimi', base_url: 'https://api.kimi.com/coding/v1', api_type: 'chat_completions',
+    api_key: null, remove_api_key: false, trust_level: 'public',
+    pseudonymization_enabled: true, memory_policy: 'inherit'
+  }))
+})
 
 it.each([
   'https://my-speech.cognitiveservices.azure.com',
   'https://westeurope.api.cognitive.microsoft.com'
 ])('creates Azure Speech with its HTTPS resource endpoint %s and public defaults', async (endpoint) => {
   const { createProvider } = await mountDialog()
-  await selectAzure()
+  await selectProvider('Azure Speech')
   expect(field('API-Protokoll')).toBeUndefined()
   expect(document.querySelector('.provider-dialog').textContent).toContain('Das Originalaudio wird ohne Pseudonymisierung an Azure gesendet')
   expect(document.querySelector('.provider-dialog').textContent).toContain('Keine Live-Transkription')
@@ -97,7 +124,7 @@ it.each([
 
 it('requires a new key and rejects non-HTTPS or non-origin Azure endpoints', async () => {
   const { createProvider } = await mountDialog()
-  await selectAzure()
+  await selectProvider('Azure Speech')
   await fill('Name', 'Azure Speech')
   await fill('Azure-Speech-Endpunkt', 'https://my-speech.cognitiveservices.azure.com')
   save()

@@ -604,11 +604,11 @@ class ProviderService:
             if pseudonymization_enabled is not None
             else effective_model_pseudonymization(provider, model)
         )
-        profile = (
-            reasoning_profile(model.model_id, model.discovery_metadata)
-            if api_type == "chat_completions" or adapter.reasoning_profile_for_responses
-            else None
-        )
+        profile = reasoning_profile(model.model_id, model.discovery_metadata)
+        if api_type == "responses" and not (
+            adapter.reasoning_profile_for_responses or profile and profile.supports_responses
+        ):
+            profile = None
         effective_reasoning_effort = (
             ReasoningEffort(reasoning_effort)
             if reasoning_effort is not None

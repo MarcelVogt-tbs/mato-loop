@@ -71,7 +71,7 @@
             :rules="[requiredRule, urlRule]"
           />
           <AppSelect dense
-            v-if="providerType === 'openai-compatible'"
+            v-if="isOpenAICompatible"
             v-model="form.api_type"
             outlined
             emit-value
@@ -101,6 +101,11 @@
             Keine Live-Transkription, kein Chat und keine Tool-Aufrufe.
             Das Originalaudio wird ohne Pseudonymisierung an Azure gesendet – auch wenn der Schutz für Kennungen und Secrets aktiviert ist.
             Nach der Modellerkennung kannst du das Modell im Agentenprofil für die Transkription auswählen.
+          </q-banner>
+          <q-banner v-if="providerType === 'kimi-code'" rounded class="provider-form-section app-surface-tonal">
+            Verwende einen API-Key aus der Kimi-Code-Konsole, keinen Moonshot-API-Key.
+            Das Abonnement ist für persönliche interaktive Nutzung vorgesehen, nicht für unbeaufsichtigte Automatisierung oder geteilten API-Zugang.
+            Modelle und Kontextlimits hängen vom Tarif ab.
           </q-banner>
         </q-form>
 
@@ -238,7 +243,8 @@ const memoryPolicyOptions = [
 const isEditing = computed(() => Boolean(props.provider))
 const hasCodexProvider = computed(() => providers.providers.some((item) => item.adapterType === 'openai-codex'))
 const isAzureSpeech = computed(() => providerType.value === 'azure-speech')
-const isConfiguredProvider = computed(() => ['openai-compatible', 'lemonade', 'azure-speech'].includes(providerType.value))
+const isOpenAICompatible = computed(() => ['openai-compatible', 'kimi-code'].includes(providerType.value))
+const isConfiguredProvider = computed(() => isOpenAICompatible.value || ['lemonade', 'azure-speech'].includes(providerType.value))
 const endpointPlaceholder = computed(() => {
   if (isAzureSpeech.value) return 'https://my-speech.cognitiveservices.azure.com'
   return providerType.value === 'lemonade' ? 'http://lemonade-host:13305/v1' : 'https://api.example.com/v1'
@@ -255,6 +261,12 @@ const providerOptions = computed(() => [
     icon: 'key',
     description: 'ChatGPT-Abonnement über Gerätecode-Anmeldung',
     disable: !isEditing.value && hasCodexProvider.value
+  },
+  {
+    label: 'Kimi Code (Abonnement)',
+    value: 'kimi-code',
+    icon: 'code',
+    description: 'Kimi-Abonnement über Kimi-Code-API-Key'
   },
   {
     label: 'OpenAI-kompatibel',
@@ -284,10 +296,11 @@ const dialogIcon = computed(() => ({
 
 function defaultForm(type = null) {
   const isLemonade = type === 'lemonade'
+  const isKimi = type === 'kimi-code'
   return {
-    name: '',
-    base_url: '',
-    api_type: 'chat_completions',
+    name: isKimi ? 'Kimi Code' : '',
+    base_url: isKimi ? 'https://api.kimi.ai/coding/v1' : '',
+    api_type: isKimi ? 'responses' : 'chat_completions',
     api_key: '',
     remove_api_key: false,
     trust_level: isLemonade ? 'private' : 'public',
@@ -324,9 +337,13 @@ function initialize() {
   clearPolling()
   codexLogin.value = null
   providerType.value = props.provider?.adapterType || null
+  const baseUrl = props.provider?.config?.baseUrl || props.provider?.config?.base_url || ''
+  if (providerType.value === 'openai-compatible' && [
+    'https://api.kimi.ai/coding/v1', 'https://api.kimi.com/coding/v1'
+  ].includes(baseUrl.replace(/\/+$/, ''))) providerType.value = 'kimi-code'
   Object.assign(form, defaultForm(providerType.value), props.provider ? {
     name: props.provider.name,
-    base_url: props.provider.config?.baseUrl || props.provider.config?.base_url || '',
+    base_url: baseUrl,
     api_type: props.provider.config?.apiType || props.provider.config?.api_type || 'chat_completions',
     trust_level: props.provider.trustLevel || 'public',
     pseudonymization_enabled: props.provider.pseudonymizationEnabled === true,
@@ -347,12 +364,12 @@ async function saveConfiguredProvider() {
       pseudonymization_enabled: form.pseudonymization_enabled,
       memory_policy: form.memory_policy
     }
-    if (providerType.value === 'openai-compatible') payload.api_type = form.api_type
+    if (isOpenAICompatible.value) payload.api_type = form.api_type
     let providerId = props.provider?.id
     if (props.provider) {
       await providers.updateProvider(props.provider.id, payload)
     } else {
-      providerId = await providers.createProvider(providerType.value, payload)
+      providerId = await providers.createProvider(isOpenAICompatible.value ? 'openai-compatible' : providerType.value, payload)
     }
     $q.notify({ type: 'positive', message: 'Provider gespeichert' })
     close()

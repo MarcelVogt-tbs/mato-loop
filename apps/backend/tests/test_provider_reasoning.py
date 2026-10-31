@@ -3,6 +3,7 @@ import json
 import httpx
 import pytest
 
+from mato_loop_backend import __version__
 from mato_loop_backend.providers.base import ProviderRequest
 from mato_loop_backend.providers.openai_compatible import (
     _chat_body,
@@ -379,7 +380,11 @@ async def test_responses_stream_routes_summary_separately(monkeypatch) -> None:
     ]
     body = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
     real_client = httpx.AsyncClient
-    transport = httpx.MockTransport(lambda _request: httpx.Response(200, text=body))
+    def respond(request):
+        assert request.headers["User-Agent"] == f"MatoLoop/{__version__}"
+        return httpx.Response(200, text=body)
+
+    transport = httpx.MockTransport(respond)
     monkeypatch.setattr(
         "mato_loop_backend.providers.openai_compatible.httpx.AsyncClient",
         lambda **kwargs: real_client(transport=transport, **kwargs),

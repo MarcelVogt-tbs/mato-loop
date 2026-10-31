@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from mato_loop_backend import __version__
 from mato_loop_backend.providers.base import (
     DeltaCallback,
     ProviderError,
@@ -678,7 +679,7 @@ async def discover_models(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, headers={"User-Agent": f"MatoLoop/{__version__}"}) as client:
             response = await client.get(f"{base_url.rstrip('/')}/models", headers=headers)
             await _ensure_success(response)
     except httpx.RequestError as exc:
@@ -879,7 +880,7 @@ async def chat_completions(
         request, direct_thinking_options=_direct_thinking_options(base_url)
     )
     url = f"{base_url.rstrip('/')}/chat/completions"
-    async with httpx.AsyncClient(timeout=request.timeout) as client:
+    async with httpx.AsyncClient(timeout=request.timeout, headers={"User-Agent": f"MatoLoop/{__version__}"}) as client:
         if not request.stream:
             response = await client.post(url, headers=headers, json=body)
             await _ensure_success(response)
@@ -984,7 +985,7 @@ async def responses_api(
     extra_body: dict[str, Any] | None = None,
 ) -> ProviderResult:
     body = _responses_body(request, extra_body)
-    async with httpx.AsyncClient(timeout=request.timeout) as client:
+    async with httpx.AsyncClient(timeout=request.timeout, headers={"User-Agent": f"MatoLoop/{__version__}"}) as client:
         if not request.stream:
             response = await client.post(url, headers=headers, json=body)
             await _ensure_success(response)

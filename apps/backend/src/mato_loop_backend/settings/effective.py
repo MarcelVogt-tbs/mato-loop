@@ -65,10 +65,13 @@ def apply_session_ai(settings: AiSettings, session: ChatSession, profile_id: UUI
     if effective.reasoning_effort is not None and (inherited_reasoning or effective.default_model_id != configured_model_id):
         model = available_model(settings, effective.default_model_id)
         provider = next((item for item in settings.providers if model and item.id == model.provider_id), None)
-        profile = reasoning_profile(model.model_id, model.discovery_metadata) if model and provider and (
+        profile = reasoning_profile(model.model_id, model.discovery_metadata) if model else None
+        if not (provider and (
             provider.adapter_type in {"openai-codex", "lemonade"}
             or provider.config.get("api_type", "chat_completions") == "chat_completions"
-        ) else None
+            or profile and profile.supports_responses
+        )):
+            profile = None
         if profile is None or effective.reasoning_effort not in profile.options:
             effective.reasoning_effort = None
     return effective

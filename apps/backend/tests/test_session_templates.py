@@ -20,6 +20,7 @@ from mato_loop_backend.settings.models import (
     PLAN_PROFILE_ID,
     SYSADMIN_PROFILE_ID,
     AiProviderSettings,
+    AiSettings,
     LlmProviderConfig,
     ModelConfig,
     ModelDefaults,
@@ -96,6 +97,13 @@ async def test_profile_model_uses_its_default_when_inherited_reasoning_is_unsupp
     await save_defaults(ModelDefaults(default_model_id=models[0].id, reasoning_effort="low", profile_models={PLAN_PROFILE_ID: ChatModelOverride(model_id=models[1].id)}), user, AsyncMock(spec=AsyncSession), "instance")
     selected = apply_session_ai(await load_effective_ai(AsyncMock(spec=AsyncSession), user.id), ChatSession(agent_profile_id=PLAN_PROFILE_ID))
     assert (selected.default_model_id, selected.reasoning_effort) == (models[1].id, None)
+
+
+def test_kimi_responses_preserves_supported_inherited_reasoning():
+    provider = LlmProviderConfig(name="Kimi Code", adapter_type="openai-compatible", config={"api_type": "responses"})
+    model = ModelConfig(provider_id=provider.id, model_id="kimi-for-coding")
+    settings = AiSettings(providers=[provider], models=[model], default_model_id=model.id, reasoning_effort="low")
+    assert apply_session_ai(settings, ChatSession()).reasoning_effort == "low"
 
 
 @pytest.mark.parametrize("include_choices", [False, True])

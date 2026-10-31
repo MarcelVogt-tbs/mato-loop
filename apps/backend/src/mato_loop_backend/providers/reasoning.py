@@ -20,6 +20,7 @@ class ReasoningProfile:
     efforts: tuple[ReasoningEffort, ...]
     default_effort: ReasoningEffort
     supports_disable: bool = False
+    supports_responses: bool = False
 
     @property
     def options(self) -> tuple[ReasoningEffort, ...]:
@@ -49,6 +50,8 @@ _HALOGEN_FLASH_NEXT = ReasoningProfile(
 def reasoning_profile(
     model_id: str, metadata: dict[str, object] | None = None
 ) -> ReasoningProfile | None:
+    name = model_id.rsplit("/", 1)[-1].casefold().replace("_", "-")
+    is_kimi = name in {"k3.1-pro", "k3.1-pro-highspeed", "k3", "k3-256k", "kimi-for-coding"}
     values = metadata or {}
     raw_efforts = values.get("reasoning_efforts")
     raw_default = values.get("default_reasoning_effort")
@@ -66,13 +69,19 @@ def reasoning_profile(
         except ValueError:
             default = None
         if default in efforts:
-            return ReasoningProfile(tuple(efforts), default)
+            return ReasoningProfile(tuple(efforts), default, supports_responses=is_kimi)
 
-    name = model_id.rsplit("/", 1)[-1].casefold().replace("_", "-")
     if name == "halogen-qwen3.8-flash-next":
         return _HALOGEN_FLASH_NEXT
     if name == "qwen3.8-27b" or name.startswith(("qwen3.8-27b-", "qwen3.8-27b:")):
         return _QWEN_3_8_27B
+    if is_kimi:
+        # Keep thinking enabled to avoid rejection or routing to a different model.
+        return ReasoningProfile(
+            efforts=(ReasoningEffort.LOW, ReasoningEffort.HIGH, ReasoningEffort.MAX),
+            default_effort=ReasoningEffort.MAX if name == "kimi-for-coding" else ReasoningEffort.HIGH,
+            supports_responses=True,
+        )
     return None
 
 
