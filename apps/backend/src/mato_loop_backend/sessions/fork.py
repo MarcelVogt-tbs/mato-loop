@@ -79,12 +79,11 @@ async def _fork_session(db: AsyncSession, session_id: UUID, user_id: UUID) -> Ch
     target = ChatSession(
         id=uuid4(), user_id=user_id, project_id=source.project_id,
         title="Kopie: " + source.title[:233], title_generation_status=TitleGenerationStatus.PENDING.value,
-        workspace_mode="local",
-        coding_workspace={**deepcopy(source.coding_workspace), "mode": "local"} if source.coding_workspace else None,
         **{key: deepcopy(getattr(source, key)) for key in (
             "model_config_id", "session_profile", "agent_profile_id", "reasoning_effort", "memory_mode",
             "trust_level", "web_search_policy", "preferred_execution_agent_id", "current_directory",
             "private_integration_data_used",
+            "workspace_mode", "coding_workspace",
         )},
     )
     history = sorted([*messages, *summaries], key=lambda item: (item.created_at, item.id))

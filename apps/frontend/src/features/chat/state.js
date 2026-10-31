@@ -16,6 +16,7 @@ export function defaultSessionOptions() {
     preferredExecutionAgentId: null,
     currentDirectory: null,
     workspaceMode: 'local',
+    workspacePath: null,
     workspaceContext: null
   }
 }
@@ -24,6 +25,7 @@ export function sanitizedSessionOptions(options) {
   const sanitized = { ...options, workspaceContext: null }
   if (!sanitized.preferredExecutionAgentId) sanitized.currentDirectory = null
   if (sanitized.sessionProfile?.worktreesEnabled === false) sanitized.workspaceMode = 'local'
+  if (sanitized.workspaceMode !== 'worktree') sanitized.workspacePath = null
   return sanitized
 }
 
@@ -40,6 +42,7 @@ export function sessionCreatePayload(options, projectId, controlCenter) {
     web_search_policy: options.webSearchPolicy,
     preferred_execution_agent_id: options.preferredExecutionAgentId,
     workspace_mode: projectId && options.preferredExecutionAgentId && options.currentDirectory ? options.workspaceMode || 'local' : 'local',
+    ...(projectId && options.workspaceMode === 'worktree' && options.workspacePath ? { workspace_path: options.workspacePath } : {}),
     ...(options.preferredExecutionAgentId ? { current_directory: options.currentDirectory } : {}),
     control_center: controlCenter
   }
@@ -145,6 +148,7 @@ export function normalizedNewSessionDraft(value) {
         : null,
       currentDirectory: typeof options.currentDirectory === 'string' ? options.currentDirectory : null,
       workspaceMode: options.workspaceMode === 'worktree' ? 'worktree' : 'local',
+      workspacePath: typeof options.workspacePath === 'string' ? options.workspacePath : null,
       workspaceContext: null
     })
   }

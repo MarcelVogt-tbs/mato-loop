@@ -14,7 +14,8 @@
     </template>
     <template #option="scope">
       <slot name="option" v-bind="scope">
-        <q-item v-bind="scope.itemProps" class="rounded-borders q-py-sm">
+        <q-separator v-if="scope.opt?.separatorBefore" spaced="xs" />
+        <q-item v-bind="scope.itemProps" class="rounded-borders q-py-sm" :class="{ 'q-virtual-scroll--with-prev': scope.opt?.separatorBefore }">
           <q-item-section v-if="scope.opt?.icon || scope.opt?.trustIcon" side>
             <q-icon :name="scope.opt.icon || scope.opt.trustIcon" size="20px" />
           </q-item-section>

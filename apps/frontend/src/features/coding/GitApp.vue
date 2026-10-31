@@ -32,7 +32,7 @@
             <section v-if="repository?.repository" aria-labelledby="git-commands-title">
               <h2 id="git-commands-title" class="text-subtitle2 q-mt-lg q-mb-sm">Agentenaufträge</h2>
               <q-card flat bordered class="app-surface overflow-hidden">
-                <GitActionList :disabled="saving || !online || Boolean(remoteChanged)" @refresh="refreshCommands" />
+                <GitActionList :disabled="saving || !online" :target-branch="targetBranch" @refresh="refreshCommands" />
               </q-card>
             </section>
           </div>
@@ -44,37 +44,10 @@
             <div v-if="!repository" class="app-muted" role="status">{{ loading ? 'Repository wird geprüft …' : 'Wähle einen Computer und Workspace mit installiertem Git.' }}</div>
             <div v-else-if="!repository.repository" class="app-muted" role="status">Im gewählten Workspace ist noch kein Git-Repository vorhanden.</div>
             <template v-if="repository?.repository">
-              <q-card flat bordered class="app-surface">
-                <q-card-section>
-                  <div class="text-caption app-muted">Arbeitsbereich</div>
-                  <div class="text-weight-medium">{{ context.workspaceMode === 'worktree' ? 'Worktree' : 'Lokal' }}</div>
-                  <div class="row items-center no-wrap q-gutter-sm q-mt-xs">
-                    <span class="col text-caption" style="overflow-wrap: anywhere">{{ context.currentDirectory }}</span>
-                    <q-btn flat dense no-caps icon="content_copy" label="Pfad kopieren" @click="copyPath(context.currentDirectory)" />
-                  </div>
-                </q-card-section>
-                <q-separator />
-                <q-card-section class="git-app__status">
-                  <div class="overflow-hidden">
-                    <div class="text-caption app-muted q-mb-xs"><q-icon name="call_split" class="q-mr-xs" />Aktueller Branch</div>
-                    <div class="text-weight-medium ellipsis">{{ repository.branch || 'Losgelöster Stand' }}</div>
-                  </div>
-                  <div class="overflow-hidden">
-                    <div class="text-caption app-muted q-mb-xs"><q-icon name="arrow_forward" class="q-mr-xs" />Zielbranch</div>
-                    <div class="text-weight-medium ellipsis">{{ targetBranch || 'Nicht eingerichtet' }}</div>
-                  </div>
-                  <div class="overflow-hidden">
-                    <div class="text-caption app-muted q-mb-xs"><q-icon name="cloud_queue" class="q-mr-xs" />Remote</div>
-                    <div class="row items-center q-gutter-x-sm">
-                      <span class="ellipsis">{{ remote || 'Nicht eingerichtet' }}</span>
-                      <q-btn flat dense no-caps color="primary" :label="remote ? 'Bearbeiten' : 'Einrichten'" :disable="busy || !online" @click="openRemote" />
-                    </div>
-                  </div>
-                </q-card-section>
-                <q-card-actions class="q-px-md q-pb-md q-pt-none">
-                  <q-btn v-if="project" flat no-caps icon="tune" label="Projektvorgaben" @click="projectOpen = true" />
-                </q-card-actions>
-              </q-card>
+              <GitWorkspacePanel :project="project" :repository="repository" :loading="loading" :target-branch="targetBranch"
+                :remote="remote" :remote-disabled="busy || !online" @changed="refresh" @edit-remote="openRemote"
+                @inspect-worktrees="refreshRepository({ worktreeDetails: true })"
+                @project-defaults="projectOpen = true" />
             </template>
             <section v-if="repository && !repository.repository" aria-labelledby="git-setup-title">
               <h2 id="git-setup-title" class="text-subtitle2 q-mt-lg q-mb-sm">Repository einrichten</h2>
@@ -95,7 +68,7 @@
             <AppSelect v-model="remoteName" outlined dense label="Name" :options="repository?.remotes || []" use-input new-value-mode="add-unique" :disable="saving" :rules="[requiredRule]" @update:model-value="selectRemote" />
             <q-input v-model.trim="remoteUrl" outlined dense label="Adresse" maxlength="4096" :disable="saving" hint="HTTPS-/SSH-Adresse ohne Zugangsdaten. Die Anmeldung wird auf dem Computer eingerichtet." persistent-hint />
             <div class="text-caption app-muted">Eine Adressänderung betrifft das gemeinsame Repository und alle seine Worktrees. Sie wird als Agentenauftrag ausgeführt. Ein vorhandener unveränderter Remote wird als Ziel übernommen.</div>
-            <div v-if="!chat.current && context.workspaceMode === 'worktree'" class="text-caption app-muted">Die Einrichtung startet eine lokale Session. Für einen Worktree danach eine neue Session starten.</div>
+            <div v-if="!chat.current && context.workspaceMode === 'worktree'" class="text-caption app-muted">Die Einrichtung startet zunächst lokal. Danach kannst du hier in den Einstellungen einen Worktree auswählen.</div>
           </q-card-section>
           <q-card-actions align="right" class="q-pa-md">
             <q-btn flat no-caps label="Abbrechen" :disable="saving" v-close-popup />
@@ -110,7 +83,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { copyToClipboard, useQuasar } from 'quasar'
+import { useQuasar } from 'quasar'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
 import ProjectDialog from 'src/features/projects/ProjectDialog.vue'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
@@ -126,11 +99,13 @@ import { useRepositoryProbe } from './repository'
 import { useGitActionStore } from './git-actions-store'
 import { useCommandCatalog } from 'src/features/commands/catalog'
 import GitActionList from './GitActionList.vue'
+import GitWorkspacePanel from './GitWorkspacePanel.vue'
 
 defineOptions({ name: 'GitApp' })
 const $q = useQuasar()
 const chat = useChatStore(), controlCenter = useControlCenterStore(), agents = useExecutionAgentStore()
 const projects = useProjectStore(), commands = useGitActionStore(), changes = useGitChangesStore()
+changes.view = changes.view === 'changes' ? 'changes' : 'settings'
 const context = computed(() => chat.activeContext)
 const project = computed(() => projects.items.find(item => item.id === (chat.current?.projectId || chat.sessionsProjectId)))
 const visible = computed(() => controlCenter.open && controlCenter.activeContentId === 'git')
@@ -148,19 +123,19 @@ const remoteScope = ref(null)
 const scopeKey = computed(() => JSON.stringify([context.value?.preferredExecutionAgentId, context.value?.currentDirectory,
   chat.current?.projectId || chat.sessionsProjectId]))
 const binding = computed(() => chat.current?.codingWorkspace || {})
-const boundContext = computed(() => binding.value.executionAgentId === context.value?.preferredExecutionAgentId
-  && [binding.value.repository, binding.value.path].includes(context.value?.currentDirectory))
 const { repository, loading, error, refresh: refreshRepository } = useRepositoryProbe(
-  () => context.value?.preferredExecutionAgentId, () => context.value?.currentDirectory, visible,
-  () => (boundContext.value ? binding.value.targetBranch : null)
-    || (project.value?.defaultExecutionAgentId === context.value?.preferredExecutionAgentId
-      && project.value?.defaultCurrentDirectory === context.value?.currentDirectory ? project.value.gitTargetBranch : null)
+  () => context.value?.preferredExecutionAgentId,
+  () => context.value?.currentDirectory, visible
 )
+const boundContext = computed(() => binding.value.executionAgentId === context.value?.preferredExecutionAgentId
+  && (Boolean(repository.value?.commonDirectory && repository.value.commonDirectory === binding.value.commonDirectory)
+    || [binding.value.repository, binding.value.path].includes(repository.value?.repository)))
 const projectDefaults = computed(() => project.value?.defaultExecutionAgentId === context.value?.preferredExecutionAgentId
-  && project.value?.defaultCurrentDirectory === (boundContext.value ? binding.value.repository : repository.value?.repository || context.value?.currentDirectory)
+  && (project.value?.defaultCurrentDirectory === (repository.value?.repository || context.value?.currentDirectory)
+    || repository.value?.worktrees?.some(item => item.path === project.value.defaultCurrentDirectory))
   ? project.value : null)
-const remote = computed(() => boundContext.value && binding.value.mode === 'worktree'
-  ? binding.value.remote : (boundContext.value ? binding.value.remote : null) || projectDefaults.value?.gitRemote || repository.value?.defaultRemote)
+const remote = computed(() => boundContext.value && Object.hasOwn(binding.value, 'remote')
+  ? binding.value.remote : projectDefaults.value?.gitRemote || repository.value?.defaultRemote)
 const targetBranch = computed(() => (boundContext.value ? binding.value.targetBranch : null) || projectDefaults.value?.gitTargetBranch || repository.value?.defaultBranch)
 const activeRun = computed(() => Boolean(chat.running || chat.runId || chat.current?.activeRun))
 const busy = computed(() => saving.value || commands.busy)
@@ -169,7 +144,7 @@ const remoteChanged = computed(() => boundContext.value && binding.value.remoteI
 const requiredRule = value => Boolean(String(value || '').trim()) || 'Pflichtfeld'
 async function refresh() {
   changes.setOverviewContext(overviewContext.value)
-  await Promise.all([refreshRepository(), refreshCommands(), changes.refresh(changes.overview)])
+  await Promise.all([refreshRepository({ worktreeDetails: changes.view === 'settings' }), refreshCommands(), changes.refresh(changes.overview)])
 }
 watch([visible, () => gitContextKey(overviewContext.value), () => chat.running], ([shown, key, running], [wasShown, , wasRunning] = []) => {
   if (!shown) return
@@ -202,7 +177,7 @@ async function saveRemote() {
     const exists = info.remotes.includes(name)
     if (exists && (!url || url === info.remoteUrls?.[name])) {
       if (chat.current) {
-        await commands.useRemote(name, info.remoteIdentities[name])
+        await commands.updateTarget({ remote: name, remote_identity: info.remoteIdentities[name] })
       } else if (projectDefaults.value) {
         const item = projectDefaults.value
         await projects.update(item.id, item.name, item.instructions, { gitRemote: name })
@@ -211,7 +186,7 @@ async function saveRemote() {
         if (chat.current || scopeKey.value !== scope) return
         const session = await chat.createEmptySession(controlCenter)
         if (!session || chat.current?.id !== session.id || scopeKey.value !== scope) return
-        await commands.useRemote(name, info.remoteIdentities[name])
+        await commands.updateTarget({ remote: name, remote_identity: info.remoteIdentities[name] })
       }
       $q.notify({ type: 'positive', message: 'Git-Ziel gespeichert.' })
     } else {
@@ -229,16 +204,4 @@ async function openGitFile(path) {
   try { await changes.openFile(path, gitState.value) }
   catch { /* Central API toast. */ }
 }
-async function copyPath(path) {
-  try { await copyToClipboard(path); $q.notify({ type: 'positive', message: 'Pfad kopiert.' }) }
-  catch { $q.notify({ type: 'negative', message: 'Der Pfad konnte nicht kopiert werden.' }) }
-}
 </script>
-
-<style scoped>
-.git-app__status {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
-  gap: 16px;
-}
-</style>

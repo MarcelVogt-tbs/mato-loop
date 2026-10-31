@@ -21,6 +21,7 @@ SUPPORTED_OPERATIONS = frozenset(
         "cache.export",
         "cache.store",
         "filesystem.resolve",
+        "git.branch",
         "git.changes",
         "git.repository",
         "git.worktree",

@@ -101,7 +101,7 @@ async def test_fork_copies_conversation_and_files_and_handles_transaction_failur
         copied_messages[1].provider_data["_matoloop"]["fileActions"],
         copied_attachment.file_root_id, copied_attachment.message_id, (target_files / "note.txt").read_text(), original_file.read_text(),
         [item["content"] for item in projection if item["role"] == "tool"], copied_fallback.content,
-    ) == ("Kopie: Source", "pending", project_id, "/worktree", {"mode": "local"}, "private", True, copied_messages[1].id,
+    ) == ("Kopie: Source", "pending", project_id, "/worktree", {"mode": "worktree"}, "private", True, copied_messages[1].id,
           f"Facts\nKeep {session_id} unchanged.\n## Source message IDs\n{copied_messages[1].id}\n", True,
            messages[0].content, messages[1].tool_calls,
           [{"root": "session", "rootIdentity": str(target.id), "filename": "note.txt", "path": "note.txt"}],

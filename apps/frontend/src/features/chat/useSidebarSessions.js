@@ -258,22 +258,8 @@ export function useSidebarSessions({
       })
       return
     }
-    let removeWorktree = false
     const title = typeof session === 'string' ? chat.findCachedSession(id)?.title : session.title
-    if (impact.hasWorktree) {
-      const result = await new Promise(resolve => {
-        $q.dialog({
-          transitionDuration: 0,
-          title: 'Session löschen',
-          message: `Session „${title || 'Ohne Titel'}“ löschen? Ohne Auswahl bleibt der Worktree erhalten. Beim Entfernen werden nicht committete Änderungen sowie zusätzliche und ignorierte Dateien unwiderruflich gelöscht. Branch und Commits bleiben erhalten.`,
-          options: { type: 'checkbox', model: [], items: [{ label: 'Worktree ebenfalls entfernen', value: 'remove' }] },
-          ok: { label: 'Löschen', color: 'negative', unelevated: true, noCaps: true },
-          cancel: { label: 'Abbrechen', flat: true, noCaps: true }
-        }).onOk(values => resolve(values.includes('remove'))).onCancel(() => resolve(null)).onDismiss(() => resolve(null))
-      })
-      if (result === null) return
-      removeWorktree = result
-    } else if (!await confirm(`Session „${title || 'Ohne Titel'}“ löschen?`, 'Session löschen', { okLabel: 'Löschen' })) return
+    if (!await confirm(`Session „${title || 'Ohne Titel'}“ löschen?${impact.hasWorktree ? ' Der Worktree bleibt erhalten und kann in der Git-App entfernt werden.' : ''}`, 'Session löschen', { okLabel: 'Löschen' })) return
     let automationMode = null
     if (impact.requiredAutomationCount) {
       const count = impact.automationCount
@@ -294,7 +280,6 @@ export function useSidebarSessions({
     ) return
     try {
       await chat.deleteSession(id, {
-        removeWorktree,
         automationMode,
         automationImpact: automationMode ? impact.automationImpact : null
       })

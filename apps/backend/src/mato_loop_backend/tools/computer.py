@@ -97,6 +97,7 @@ async def _validate_workspace_change(
     context: ToolContext, agent_id: UUID, directory: str | None,
 ) -> AgentRun:
     from mato_loop_backend.agent.session_settings import apply_run_session_settings
+    from mato_loop_backend.sessions.coding import git_metadata_directory
     from mato_loop_backend.sessions.git_commands import check_workspace_admission
     from mato_loop_backend.sessions.service import SessionServiceError
 
@@ -108,19 +109,15 @@ async def _validate_workspace_change(
     if run is None:
         raise SessionServiceError(409, "tool.unavailable")
     apply_run_session_settings(context.session, run)
-    if context.session.workspace_mode == "worktree":
-        raise SessionServiceError(409, "git.worktreeChanged")
     message = await context.db.get(Message, run.input_message_id) if run.input_message_id else None
     command = ((message.provider_data or {}).get("_matoloop", {}).get("codingCommand")
                if message is not None else None)
     if command:
         command = {**command, "resources": [*(command.get("resources") or []), directory]}
-    binding = context.session.coding_workspace or {}
     await check_workspace_admission(
         context.db, context.session.user_id, agent_id, directory, command,
         exclude_run_id=run.id,
-        metadata_directory=(binding.get("commonDirectory")
-                            if binding.get("executionAgentId") == str(agent_id) else None),
+        metadata_directory=git_metadata_directory(context.session.coding_workspace, agent_id, directory),
     )
     return run
 

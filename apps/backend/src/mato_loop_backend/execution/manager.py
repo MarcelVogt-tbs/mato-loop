@@ -43,6 +43,7 @@ _MUTATING_FILESYSTEM_OPERATIONS = {
     "filesystem.rename",
     "filesystem.upsert",
     "filesystem.write",
+    "git.branch",
     "git.worktree",
     "git.worktree.remove",
 }

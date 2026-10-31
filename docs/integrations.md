@@ -213,15 +213,15 @@ Each enabled account contributes a transient protected **Support-Assistent** pro
 
 Git is not an integration. Git operations use `shell_run` on the selected, connected MatoLoop Agent with Git installed. Repositories remain on that computer; the backend does not clone repositories or provide a Git fallback.
 
-The Git Control Center app separates **Änderungen** (the session-workspace change list and agent actions) from **Einstellungen** (mode and repository configuration). Individual files open the existing editor's read-only Git comparison. The overview and editor use an owner-bound browser API, not a model tool or Git integration. **Computer-Dateien** remains a filesystem tree. See [the architecture contract](architecture.md#matoloop-agent-boundary).
+The Git Control Center app separates **Änderungen** (changes and agent actions) and **Einstellungen** (workspace selection, branch management, session target and remote configuration). Individual files open the existing editor's read-only Git comparison. The overview and editor use an owner-bound browser API, not a model tool or Git integration. **Computer-Dateien** remains a filesystem tree. See [the architecture contract](architecture.md#matoloop-agent-boundary).
 
 Project settings discover repositories on the selected computer and configure a
 target branch and default workspace mode. The Git Control Center app controls the
 session mode and remote target, with explicit adoption after address changes.
-Sessions can use an owner-bound managed worktree from the committed local target
-branch, or a freshly fetched target when a remote is selected.
+Sessions can create a worktree from the committed local target branch or select any
+registered project worktree, without fetching or requiring a remote.
 Shared WebUI/Telegram coding commands start ordinary agent flows for initialization,
-remote setup, review, merge/publication, pull requests and project synchronization. See
+remote setup, review, explicit commits, local merges, publication, pull requests and project synchronization. See
 [the command system and managed worktrees](commands.md).
 
 Git commands follow ordinary shell inspection and permissions: recognized actions require read, write and/or delete. Normal consent is computer/category-bound rather than workspace-bound. Read/write prefix rules remain optional and cannot approve delete. Hard computer zones, ownership, sensitive-data and revision checks still apply. Read classification is not a guarantee of side-effect-free execution. See [the shell policy contract](architecture.md#matoloop-agent-boundary).

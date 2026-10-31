@@ -37,78 +37,123 @@ creating a repository later does not require recreating the project. Discovery d
 not fetch and never replaces an explicitly saved target with a discovered default.
 
 Session templates contain no Git configuration. Before session creation, the **Arbeitsbereich**
-field above the composer shows **Nicht verfügbar**, **Lokal** or **Worktree**.
+field above the composer offers **Lokal**, **Neuer Worktree**, and registered project worktrees.
 New project sessions can override the project default before creation. Worktrees
 require the configured project computer and repository. Without a workspace the
 field shows **Nicht verfügbar**; a selected offline computer does not change an
-existing mode. After session creation the mode is immutable; the composer field is hidden.
-Existing sessions show workspace information in the Git app instead.
+existing selection. A worktree is an ordinary session working directory, not a session
+lock or ownership relation. Sessions can change computer or directory through normal
+settings and tools, including leaving a missing worktree. The Git app offers registered
+worktrees as directory choices. Switching preserves the conversation and leaves all files
+in their original directory. Template worktree support gates creation and selection,
+not later template changes, directory changes or session deletion.
+Existing-session management follows the session's computer and Git inventory, even
+after project defaults change. **Lokal** is Git's main checkout; new creation still
+uses the configured project computer and repository. Initial creation rejects a
+different selected directory instead of silently replacing it.
 The Git app displays the workspace path with a copy action. Opening it in a browser
 draft does not create a session or prepare a worktree.
 
 Choosing worktree mode explicitly authorizes preparation on the selected computer.
-Session creation in worktree mode creates a local branch named
-`worktree-<first-eight-session-id-hex-digits>`. Name collisions stop preparation
-without adopting or overwriting another branch. Existing worktrees retain their
-recorded branch names.
-With a selected remote, it first fetches the
-configured target branch. Without a remote, it uses the committed local target
-branch, not uncommitted working changes. A missing or unborn local target is rejected.
+Session creation in worktree mode creates a local branch named `worktree-<eight-hex-id>`.
+An occupied destination or branch selects another short ID, with at most ten candidates.
+Candidates derive from the independent creation UUID so repeated requests authorize
+the same paths; the Agent records its choice before preparation. It never adopts or
+overwrites an occupied destination or branch. Existing worktrees retain their names.
+Preparation uses the committed local target branch without fetching,
+regardless of remote setup. A missing or unborn local target is rejected.
 It freezes that base commit and checks it out under
-`<agent-data>/worktrees/<first-eight-session-id-hex-digits>`, using the same prefix
-as the branch. No project directory or path allocation is needed. An occupied path
-without a matching preparation record stops creation, even if it belongs to another
-repository. Existing worktrees keep their recorded paths and branches, including
-the original `<project-id>/<session-id>` layout. Repository inspection reports the
-Agent's layout so the backend checks the exact destination's filesystem policy
-before preparation. The fixed layouts may be authorized so an interrupted creation
-can recover its old path after an Agent update. Older Agents retain the
-project/session layout until updated. New Agents reject short-path preparation
-without explicit permitted destinations from the Backend; existing project/session
-preparations can still be recovered without this newer request field.
-No other managed location is supported.
-Only the concrete worktree is selected
-and granted, never the Agent data directory. Normal computer filesystem and shell
-policies still apply, including external-path denials. No model, file browser,
-or terminal can use the session before this preparation succeeds. Fetch failure
-never falls back to a cached branch. The selected project directory must be the
-repository root and the managed worktree directory must be outside that repository.
-Computer filesystem denials are checked before preparation. The Agent derives the
-destination; callers cannot choose another destination through this operation.
-Remote-based preparation requires a network remote (HTTPS, HTTP, SSH or Git transport).
-Local paths and `file://` remotes remain available through ordinary authorized shell
-operations. Hooks and checkout filters are disabled during automatic preparation.
+`<agent-data>/worktrees/<project-id8>/<eight-hex-id>`, using the same worktree ID
+as the branch. The project folder uses the first eight hex digits of the project UUID;
+collisions or unrelated existing directories select `-2`, `-3`, and so on. A private
+`.matoloop-project` marker identifies the full project UUID so later worktrees reuse
+the folder, independently of session selection or project names. Repository inspection
+proposes the folder without creating it; preparation revalidates it under its lock.
+The project prefix only groups newly created directories; it does not
+restrict Git discovery or workspace selection to that project. Existing worktrees keep
+their recorded paths and branches, including flat short paths and the original
+`<project-id>/<session-id>` layout. No migration or renaming is performed. The backend
+checks each exact candidate's filesystem policy before preparation. New creation uses
+only the short-project/short-worktree layout and requires explicit permitted destinations.
+Update the Backend and Agent together: historical creation layouts, remote-based
+preparation and receipt-based removal protocols are no longer supported. Existing
+worktrees remain selectable and removable through Git inventory without preparation.
+Creation and switching use the normal working-directory selection and navigation grant.
+Only the concrete worktree is selected and granted, never its project parent or the
+Agent data directory. Existing action grants are not copied to the new path. Normal
+computer filesystem and shell policies still apply, including external-path denials.
+No model, file browser, or terminal can use the session before this preparation succeeds.
+The selected project directory must be the repository root and the managed worktree
+directory must be outside that repository. The Backend authorizes exact candidates;
+the Agent validates the fixed layout and selects an unoccupied destination under its lock.
+Hooks and checkout filters are disabled during automatic preparation.
 Linked metadata descendants and alternate object stores are rejected rather than
 following them beyond the authorized metadata directory.
 
-The session persists its original repository, remote, target, worktree path, branch,
-and initial commit. Worktree computer/path changes are rejected. Repeated preparation
+The session persists its original repository, remote, target and selected worktree path.
+Git is the source of truth for inventory and the current branch; no shared target registry
+or database migration is needed. Target overrides remain session-scoped and apply only
+to the matching computer and repository; entering another repository ignores the old
+target. Git commands resolve worktree membership from Git, including when the current
+directory is a subdirectory or the conversation was forked. Stored workspace modes
+do not block ordinary session operations.
+Repeated preparation
 recovers only a completed matching worktree and does not reset existing work.
 The Agent keeps a private preparation record with the repository metadata identity,
-optional remote fingerprint covering all effective fetch and push URLs, target and base
-commit. A process-shared lock and the filesystem mutation lock protect preparation.
-New worktrees store the full owner/session identity in their Git metadata. Short-path
-recovery and removal require this identity; a missing or changed marker requires
-manual inspection, while legacy project/session paths remain supported without it.
+target and base commit. A process-shared lock and the filesystem mutation lock protect preparation.
+New worktrees use an independent creation identity in the existing preparation record;
+the legacy `sessionId` wire field carries that key. Short-path recovery checks its marker.
 Changed inputs, replacement repositories
 and incomplete registered checkouts are rejected; they require explicit inspection.
 An existing short branch without a completed registered worktree requires inspection;
-it is never adopted after an uncertain checkout failure. Legacy operation-owned branches
-are reused only at the recorded base and when not checked out elsewhere.
+it is never adopted after an uncertain checkout failure.
 Requests with a run ID derive a stable session ID so retries can recover preparation.
-Archiving and project deletion retain worktrees. Session deletion offers an unchecked
-**Worktree ebenfalls entfernen** checkbox, backed by `DELETE /sessions/{id}?removeWorktree=true`.
-Without this explicit choice the worktree remains. The confirmation warns that removal
-uses `git worktree remove --force` and permanently discards uncommitted changes,
-untracked and ignored files while retaining branches and commits.
-Other sessions selecting the directory and active overlapping
-runs block removal. Removal failure preserves the session. The Agent revalidates its
-durable record and Git identities under the preparation lock and retains the receipt
-for safe retries after a lost response or database failure. There is no separate
-inventory, removal endpoint, or automatic cleanup.
+Archiving and session deletion retain worktrees. The Git app's compact status rows open
+separate workspace, branch and remote dialogs. The workspace dialog removes any registered
+non-main worktree without selecting it first, after explicit deletion consent, preserving
+branches and conversations. Pending, untracked and ignored files are lost on confirmed
+forced removal. The original checkout, locked worktrees, detached HEADs and overlapping
+active runs block removal. Before removing a worktree used by sessions, the backend
+validates the local project checkout and prepares normal directory grants. Affected
+sessions, including those in its subdirectories, then return to that local checkout.
+Session deletion has no worktree-removal option and needs no reachable Agent or external
+working directory.
+
+Workspace and branch dialogs use searchable compact lists: selecting a row only marks it
+and reveals its full path/name in the detail area. Workspace rows show their parent directory
+and use a location icon for the active workspace, without an active-color highlight.
+Workspaces activate through their per-row menu, including the local checkout; branches
+retain the shared switch button.
+Session links and dirty status appear only for the marked workspace. Per-row menus retain
+independent removal and current-branch rename actions. Occupied branches show their
+worktree name and its full path in details, but cannot be switched to. Target-branch editing
+is separate from branch switching. Display shortening does not rename branches or paths.
+
+Opening the workspace dialog or explicitly refreshing its settings requests worktree
+details. `git.changes` with `statusOnly` reports pending tracked and non-ignored untracked
+changes without generating diffs or executing Git filters; submodule contents remain
+excluded, as in the changes view. Failed or unsupported checks
+remain unknown, never clean. The backend checks only inventory paths allowed by the
+computer filesystem policy and derives session links from owner, computer and current
+directory containment, including subdirectories. No session-worktree assignment is stored.
+Session chips navigate to conversations; they do not select, reserve or own a worktree.
+
+`git.repository` reports registered worktrees and local branches. `git.worktree` and
+`git.worktree.remove` remain the creation/removal operations; `git.branch` supplies
+local create/switch/rename/delete. Explicit branch creation starts at the current HEAD
+without switching branches. The authenticated browser validates project, owner,
+computer, paths and Git membership before dispatch. The session workspace endpoint
+checks template availability and active runs. Branch switching refuses dirty trees and
+does not overwrite ignored files. Removal of a branch requires it to be unused and
+contained in the selected target. Deletion checks that target, not the branch's upstream,
+and removes only the checked commit so a concurrently advanced branch is preserved.
+Management status checks disable
+Git filters just like change inspection. Published branches are not renamed when known through
+tracking configuration or remote-tracking refs. No fetch is performed to discover them.
+No automatic cleanup or synchronization of branch names across sessions is needed.
 
 Repository inspection checks whether the selected local target contains a commit.
-Without a remote, the Worktree option is disabled for a missing commit before preparation.
+The new-worktree option is disabled for a missing local commit before preparation.
 
 Local worktrees need no remote. Review remains available; publication, pull requests
 and remote synchronization require explicit remote setup. Adding a remote later does
@@ -131,8 +176,10 @@ selection and ingress semantics.
 | --- | --- |
 | `/git-init` | Initialize Git in the selected workspace without committing, adding a remote, or publishing. |
 | `/git-review` | Review working changes and unpublished commits without editing or publishing. |
-| `/git-merge` | Commit, fetch, merge, review, run relevant checks, publish to the target, and update a clean fast-forwardable original checkout. |
-| `/git-pr` | Commit, review, check, publish the session branch, and create or update its pull request through available host tools. |
+| `/git-commit` | Inspect and explicitly commit selected task changes without fetching or pushing. |
+| `/git-merge` | Merge the local target into the worktree, review, check, and fast-forward the clean original checkout. No working-change commit, fetch or push. |
+| `/git-push` | Publish the existing current branch without committing, fetching or merging. |
+| `/git-pr` | Fetch and integrate the remote target, review, check, publish and create or update the PR. No working-change commit. |
 | `/git-sync` | Fetch and fast-forward the clean original project checkout without switching branches or discarding work. |
 | `/git-remote [name] [url]` | Configure only the explicitly requested remote through normal agent tools; ask for missing values. |
 
@@ -140,9 +187,9 @@ Merge and PR commands initially require a managed worktree. Review also works in
 local repository; sync requires a configured or unambiguous remote and target.
 Review checks correctness and unnecessary complexity and reports only; it never repairs
 project files. Temporary check files outside the project remain subject to normal permissions.
-Merge resolves clear conflicts in the session worktree, preserving both contributions,
-then reviews and tests the combined result before publication. Unclear intent, findings,
-or failed checks stop publication. Reports distinguish actual checks from limitations.
+Merge and PR commands stop on conflicts, dirty trees, findings or failed checks without
+repairing them. Necessary merge commits are authorized by the merge/PR request;
+pending working changes are committed only by an explicit commit request.
 Telegram users select an existing coding session with `/sessions` and `/use <ID>`;
 messaging commands never create an unrelated empty session. Web submission can
 start a new session using its explicit draft configuration. Existing command source,
@@ -154,8 +201,8 @@ Saved command names with underscores remain readable for retries and workspace
 admission; new preparations and retries store canonical hyphenated names.
 Opening or selecting in the web palette never starts an agent or creates a session.
 
-The Git app has two retained views: **Änderungen** shows the session-workspace change
-list, filter and agent actions; **Einstellungen** shows mode, branch, target and remote.
+The Git app has two views: **Änderungen** for changes and agent requests and **Einstellungen**
+for workspace selection/removal, branch management, the session target and remote configuration.
 Existing repositories start in the changes view; missing repositories use settings
 for setup. The overview keeps a separate store context from the active editor so
 opening a different repository's file cannot replace the session's change list.

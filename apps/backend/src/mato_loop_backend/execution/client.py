@@ -543,7 +543,7 @@ class ExecutionClient:
                 )
             elif code == "operation.cancelled":
                 mapped_code = (
-                    "executionAgent.outcomeUnknown" if operation in {"git.worktree", "git.worktree.remove"} else
+                    "executionAgent.outcomeUnknown" if operation in {"git.worktree", "git.worktree.remove", "git.branch"} else
                     "process.interrupted"
                     if operation.startswith("shell.") or operation == "terminal.run"
                     else "tool.executionInterrupted"
@@ -558,6 +558,9 @@ class ExecutionClient:
                 "git.worktreeChanged", "git.worktreeLocation",
                 "git.localRemoteUnsupported", "git.localBranchRequired",
                 "git.worktreeRemoveFailed", "git.worktreeInUse",
+                "git.dirty", "git.branchRequired", "git.branchInUse", "git.branchPublished",
+                "git.branchUnmerged", "git.targetRequired", "git.worktreeLocked", "git.mainWorktree",
+                "git.actionFailed", "git.configurationRequired",
             }:
                 mapped_code = code
             else:

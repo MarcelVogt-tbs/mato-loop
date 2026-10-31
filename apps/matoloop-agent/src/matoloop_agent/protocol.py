@@ -211,6 +211,7 @@ class StatArguments(PathArguments):
 
 class GitChangesArguments(PathArguments):
     file: str | None = Field(default=None, min_length=1, max_length=4096)
+    status_only: bool = Field(default=False, alias="statusOnly")
 
     @field_validator("file")
     @classmethod
@@ -222,15 +223,22 @@ class GitRepositoryArguments(PathArguments):
     target_branch: str | None = Field(
         default=None, alias="targetBranch", min_length=1, max_length=300
     )
+    project_id: str | None = Field(default=None, alias="projectId", pattern=UUID_PATTERN)
+
+
+class GitBranchArguments(PathArguments):
+    action: Literal["create", "switch", "rename", "delete"]
+    name: str = Field(min_length=1, max_length=300)
+    target_branch: str | None = Field(default=None, alias="targetBranch", max_length=300)
 
 
 class GitWorktreeRemoveArguments(PathArguments):
-    owner_id: str = Field(alias="ownerId", pattern=UUID_PATTERN)
-    project_id: str = Field(alias="projectId", pattern=UUID_PATTERN)
-    session_id: str = Field(alias="sessionId", pattern=UUID_PATTERN)
     common_directory: str = Field(alias="commonDirectory", min_length=1, max_length=4096)
+    repository: str = Field(min_length=1, max_length=4096)
+    force: bool = False
 
     _common_path = field_validator("common_directory")(_absolute_path)
+    _repository_path = field_validator("repository")(_absolute_path)
 
 
 class GitWorktreeArguments(PathArguments):
@@ -238,27 +246,15 @@ class GitWorktreeArguments(PathArguments):
     owner_id: str = Field(alias="ownerId", pattern=UUID_PATTERN)
     project_id: str = Field(alias="projectId", pattern=UUID_PATTERN)
     session_id: str = Field(alias="sessionId", pattern=UUID_PATTERN)
-    remote: str | None = Field(
-        default=None, min_length=1, max_length=200, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
-    )
     target_branch: str = Field(alias="targetBranch", min_length=1, max_length=300)
-    remote_identity: str | None = Field(
-        default=None, alias="remoteIdentity", pattern=r"^[0-9a-f]{64}$"
-    )
-    destinations: list[Annotated[str, Field(min_length=1, max_length=4096)]] | None = Field(
-        default=None, min_length=1, max_length=2
+    destinations: list[Annotated[str, Field(min_length=1, max_length=4096)]] = Field(
+        min_length=1, max_length=10
     )
 
     _common_path = field_validator("common_directory")(_absolute_path)
     _destination_paths = field_validator("destinations")(
-        lambda values: [_absolute_path(value) for value in values] if values is not None else None
+        lambda values: [_absolute_path(value) for value in values]
     )
-
-    @model_validator(mode="after")
-    def paired_remote(self):
-        if (self.remote is None) != (self.remote_identity is None):
-            raise ValueError("Remote and remoteIdentity must be supplied together")
-        return self
 
 
 class ListArguments(PathArguments):
@@ -606,6 +602,7 @@ class MaintenanceUpdateArguments(MaintenanceStartArguments):
 ARGUMENT_MODELS: dict[str, type[StrictModel]] = {
     "git.changes": GitChangesArguments,
     "git.repository": GitRepositoryArguments,
+    "git.branch": GitBranchArguments,
     "git.worktree": GitWorktreeArguments,
     "git.worktree.remove": GitWorktreeRemoveArguments,
     "maintenance.start": MaintenanceStartArguments,

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { createApp, h, nextTick, ref, withDirectives } from 'vue'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Quasar, QBtn, QForm, QIcon, QItem, QItemLabel, QItemSection, QList, QMenu, QSelect, ClosePopup } from 'quasar'
+import { Quasar, QBtn, QForm, QIcon, QItem, QItemLabel, QItemSection, QList, QMenu, QSelect, QSeparator, ClosePopup } from 'quasar'
 import AppMenu from '../src/shared/ui/AppMenu.vue'
 import AppSelect from '../src/shared/ui/AppSelect.vue'
 
@@ -15,7 +15,7 @@ function mount(render) {
   root = document.createElement('div')
   document.body.append(root)
   app = createApp({ render })
-  app.use(Quasar, { components: { QBtn, QForm, QIcon, QItem, QItemLabel, QItemSection, QList, QMenu, QSelect } })
+  app.use(Quasar, { components: { QBtn, QForm, QIcon, QItem, QItemLabel, QItemSection, QList, QMenu, QSelect, QSeparator } })
   app.mount(root)
 }
 

@@ -1,9 +1,9 @@
-"""Owner-bound repository discovery and persistent session worktree bindings."""
+"""Owner-bound repository discovery, worktree selection and session Git targets."""
 
+import asyncio
 import re
-from typing import Literal
 from urllib.parse import urlsplit
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from pydantic import Field, field_validator
 from sqlalchemy import select
@@ -16,7 +16,7 @@ from mato_loop_backend.execution.client import (
 )
 from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.execution.paths import absolute_path, within
-from mato_loop_backend.models import ChatSession, ExecutionAgent, Project
+from mato_loop_backend.models import AgentRun, ChatSession, ExecutionAgent, Project
 
 
 def validate_git_remote(value: str | None) -> str | None:
@@ -54,6 +54,28 @@ def validate_git_url(value: str) -> str:
     raise ValueError("A network remote address is required")
 
 
+class WorktreeSession(ExecutionResult):
+    id: UUID
+    title: str
+    project_id: UUID | None = None
+
+
+class WorktreeStatusResult(ExecutionResult):
+    repository: str | None
+    dirty: bool | None = None
+
+
+class WorktreeEntry(ExecutionResult):
+    path: str = Field(max_length=4096)
+    branch: str | None = Field(max_length=300)
+    main: bool
+    locked: bool
+    dirty: bool | None = None
+    sessions: list[WorktreeSession] = Field(default_factory=list)
+
+    _path = field_validator("path")(absolute_path)
+
+
 class RepositoryResult(ExecutionResult):
     repository: str | None = Field(max_length=4096)
     common_directory: str | None = Field(default=None, max_length=4096)
@@ -67,10 +89,11 @@ class RepositoryResult(ExecutionResult):
     remote_urls: dict[str, str | None] = Field(default_factory=dict, max_length=100)
     git_directory: str | None = Field(default=None, max_length=4096)
     worktree_root: str | None = Field(default=None, max_length=4096)
-    worktree_layout: Literal["short-session", "project-session"] = "project-session"
+    project_worktree_directory: str | None = Field(default=None, max_length=4096)
     target_has_commit: bool | None = None
+    worktrees: list[WorktreeEntry] = Field(default_factory=list, max_length=1000)
 
-    _repository_path = field_validator("repository", "common_directory", "git_directory", "worktree_root")(
+    _repository_path = field_validator("repository", "common_directory", "git_directory", "worktree_root", "project_worktree_directory")(
         lambda value: absolute_path(value) if value is not None else None
     )
 
@@ -80,9 +103,7 @@ class WorktreeResult(ExecutionResult):
     path: str
     branch: str
     base_commit: str = Field(pattern=r"^[0-9a-f]{40,64}$")
-    remote: str | None
     target_branch: str
-    remote_identity: str | None = Field(pattern=r"^[0-9a-f]{64}$")
     common_directory: str
     git_directory: str
 
@@ -95,20 +116,27 @@ class WorktreeRemovedResult(ExecutionResult):
     removed: bool
 
 
+def git_metadata_directory(binding: dict | None, agent_id: UUID | None, directory: str | None) -> str | None:
+    binding = binding or {}
+    if binding.get("executionAgentId") == str(agent_id) and directory and binding.get("path") and within(directory, binding["path"]):
+        return binding.get("commonDirectory")
+    return None
+
+
 def resolve_git_target(
     session: ChatSession, project: Project | None, info: RepositoryResult,
 ) -> tuple[dict, str | None, str | None]:
     binding = session.coding_workspace or {}
     if (binding.get("executionAgentId") != str(session.preferred_execution_agent_id)
-            or session.current_directory not in {binding.get("repository"), binding.get("path")}):
+            or (info.repository not in {binding.get("repository"), binding.get("path")}
+                and not (info.common_directory and info.common_directory == binding.get("commonDirectory")))):
         binding = {}
-    if binding.get("mode") == "worktree":
-        return binding, binding["remote"], binding["targetBranch"]
     configured = (project and project.default_execution_agent_id == session.preferred_execution_agent_id
-                  and project.default_current_directory == info.repository)
+                   and (project.default_current_directory == info.repository
+                        or any(item.path == project.default_current_directory for item in info.worktrees)))
     return (
         binding,
-        binding.get("remote") or (project.git_remote if configured else None) or info.default_remote,
+        binding["remote"] if "remote" in binding else (project.git_remote if configured else None) or info.default_remote,
         binding.get("targetBranch") or (project.git_target_branch if configured else None) or info.default_branch,
     )
 
@@ -130,7 +158,7 @@ async def coding_client(db: AsyncSession, user_id: UUID, agent_id: UUID | None) 
     return ExecutionClient(agent_id, operations)
 
 
-async def inspect_repository(db, user_id, agent_id, directory, target_branch=None) -> RepositoryResult:
+async def inspect_repository(db, user_id, agent_id, directory, target_branch=None, *, project=None, worktree_details=False) -> RepositoryResult:
     from mato_loop_backend.sessions.service import (
         SessionServiceError,
         validate_execution_preferences,
@@ -141,110 +169,108 @@ async def inspect_repository(db, user_id, agent_id, directory, target_branch=Non
         raise SessionServiceError(409, "file.workspaceNotSelected")
     client = await coding_client(db, user_id, agent_id)
     try:
-        result = await client.request("git.repository", {"path": directory, **({"targetBranch": target_branch} if target_branch else {})}, RepositoryResult)
+        result = await client.request("git.repository", {"path": directory, **({"targetBranch": target_branch} if target_branch else {}),
+            **({"projectId": str(project.id)} if project else {})}, RepositoryResult)
     except ExecutionClientError as exc:
         raise SessionServiceError(409, exc.code) from exc
     if result.repository is not None:
         if result.common_directory is None:
             raise SessionServiceError(502, "executionAgent.protocolError")
         await validate_execution_preferences(db, user_id, agent_id, result.common_directory)
+    if result.worktrees:
+        from mato_loop_backend.sessions.service import execution_filesystem_policy
+
+        agent = await db.get(ExecutionAgent, agent_id)
+        result.worktrees = [item for item in result.worktrees if execution_filesystem_policy(agent, item.path) != "deny"]
+    if worktree_details and result.worktrees:
+        sessions = list(await db.scalars(select(ChatSession).where(
+            ChatSession.user_id == user_id, ChatSession.preferred_execution_agent_id == agent_id,
+            ChatSession.current_directory.is_not(None),
+            ChatSession.session_type == "chat", ChatSession.parent_session_id.is_(None),
+        ).order_by(ChatSession.updated_at.desc())))
+        limit = asyncio.Semaphore(4)
+
+        async def details(item):
+            item.sessions = [WorktreeSession(id=session.id, title=session.title, projectId=session.project_id)
+                             for session in sessions if within(session.current_directory, item.path)]
+            async with limit:
+                try:
+                    status = await client.request("git.changes", {"path": item.path, "statusOnly": True}, WorktreeStatusResult, timeout=10)
+                    item.dirty = status.dirty if status.repository == item.path else None
+                except ExecutionClientError:
+                    item.dirty = None
+
+        await asyncio.gather(*(details(item) for item in result.worktrees))
     return result
 
 
-async def prepare_session_worktree(db, session: ChatSession, project: Project | None) -> None:
+async def select_session_workspace(db, session, project, directory=None, *, create=False, worktree_id=None):
+    from mato_loop_backend.sessions.git_commands import check_workspace_admission
     from mato_loop_backend.sessions.service import (
         SessionServiceError,
         execution_filesystem_policy,
         validate_execution_preferences,
     )
 
-    if project is None:
-        raise SessionServiceError(409, "git.configurationRequired")
-    if (project.default_execution_agent_id != session.preferred_execution_agent_id
-            or project.default_current_directory != session.current_directory):
+    agent_id = session.preferred_execution_agent_id
+    if project is None or project.user_id != session.user_id or (create and project.default_execution_agent_id != agent_id):
         raise SessionServiceError(409, "git.projectWorkspaceRequired")
-    client = await coding_client(db, session.user_id, session.preferred_execution_agent_id)
-    agent = await db.get(ExecutionAgent, session.preferred_execution_agent_id)
-    if agent is None:
-        raise SessionServiceError(403, "permission.denied")
-    info = await inspect_repository(db, session.user_id, session.preferred_execution_agent_id, session.current_directory)
-    if info.repository is None:
-        raise SessionServiceError(409, "git.notRepository")
-    if info.worktree_root is None:
-        raise SessionServiceError(409, "executionAgent.updateRequired")
-    binding, remote, target = resolve_git_target(session, project, info)
-    legacy_path = f"{info.worktree_root.rstrip('/')}/{project.id}/{session.id}"
-    expected_paths = [legacy_path]
-    if info.worktree_layout == "short-session":
-        expected_paths.insert(0, f"{info.worktree_root.rstrip('/')}/{str(session.id)[:8]}")
-    expected_paths = [path for path in expected_paths if execution_filesystem_policy(agent, path) != "deny"]
-    if not expected_paths:
-        raise SessionServiceError(403, "permission.denied")
-    if target is None:
-        raise SessionServiceError(409, "git.configurationRequired")
-    identity = info.remote_identities.get(remote)
-    if remote is not None and identity is None:
-        raise SessionServiceError(409, "git.remoteRequired")
-    if binding.get("remoteIdentity") and binding["remoteIdentity"] != identity:
+    if await db.scalar(select(AgentRun.id).where(
+        AgentRun.session_id == session.id, AgentRun.status.in_(("queued", "running", "waiting_approval", "waiting_input")),
+    )):
+        raise SessionServiceError(409, "session.runAlreadyActive")
+    original = await inspect_repository(db, session.user_id, agent_id,
+        project.default_current_directory if create else session.current_directory, **({"project": project} if create else {}))
+    root = project.default_current_directory if create else next((item.path for item in original.worktrees if item.main), None)
+    if not root or (create and original.repository != root):
+        raise SessionServiceError(409, "git.repositoryRootRequired")
+    directory = directory or root
+    if (create or directory != root) and not (session.session_profile or {}).get("worktrees_enabled", False):
+        raise SessionServiceError(409, "sessionTemplate.worktreesDisabled")
+    previous, remote, target = resolve_git_target(session, project, original)
+    if create:
+        if not target or not original.worktree_root or not original.project_worktree_directory:
+            raise SessionServiceError(409, "git.configurationRequired")
+        if original.project_worktree_directory.rsplit("/", 1)[0] != original.worktree_root:
+            raise SessionServiceError(502, "executionAgent.protocolError")
+        await check_workspace_admission(db, session.user_id, agent_id, root,
+            {"name": "git-worktree", "resources": [root, original.common_directory]})
+        identity = str(worktree_id or uuid5(session.id, "worktree"))
+        # Stable candidates let a repeated creation request recover its chosen destination.
+        names = [identity[:8], *(uuid5(UUID(identity), str(attempt)).hex[:8] for attempt in range(1, 10))]
+        paths = [f"{original.project_worktree_directory}/{name}" for name in names]
+        agent = await db.get(ExecutionAgent, agent_id)
+        paths = [path for path in paths if execution_filesystem_policy(agent, path) != "deny"]
+        if not paths:
+            raise SessionServiceError(403, "permission.denied")
+        client = await coding_client(db, session.user_id, agent_id)
+        try:
+            created = await client.request("git.worktree", {
+                "path": root, "commonDirectory": original.common_directory,
+                "ownerId": str(session.user_id), "projectId": str(project.id), "sessionId": identity,
+                "targetBranch": target, "destinations": paths,
+            }, WorktreeResult, timeout=300)
+        except ExecutionClientError as exc:
+            raise SessionServiceError(409, exc.code) from exc
+        if (created.path not in paths or created.repository != root or created.common_directory != original.common_directory
+                or created.target_branch != target or created.branch != f"worktree-{created.path.rsplit('/', 1)[-1]}"):
+            raise SessionServiceError(502, "executionAgent.protocolError")
+        directory = created.path
+        info = original
+    else:
+        if directory != root and not any(item.path == directory for item in original.worktrees):
+            raise SessionServiceError(409, "git.worktreeChanged")
+        info = original if directory == original.repository else await inspect_repository(db, session.user_id, agent_id, directory)
+        if info.repository != directory or info.common_directory != original.common_directory:
+            raise SessionServiceError(409, "git.worktreeChanged")
+    normalized, directory_policy = await validate_execution_preferences(db, session.user_id, agent_id, directory)
+    if normalized != directory:
         raise SessionServiceError(409, "git.worktreeChanged")
-    try:
-        result = await client.request("git.worktree", {
-            "path": session.current_directory,
-            "commonDirectory": info.common_directory,
-            "ownerId": str(session.user_id), "projectId": str(project.id),
-            "sessionId": str(session.id), "remote": remote,
-            "targetBranch": target,
-            "remoteIdentity": identity,
-            **({"destinations": expected_paths} if info.worktree_layout == "short-session" else {}),
-        }, WorktreeResult, timeout=300)
-    except ExecutionClientError as exc:
-        code = exc.code if exc.code.startswith(("git.", "executionAgent.")) else "git.worktreeFailed"
-        raise SessionServiceError(409, code) from exc
-    expected_branches = {f"matoloop/{session.user_id}/{session.id}", f"worktree-{str(session.id)[:8]}"}
-    if (result.repository != session.current_directory or result.path not in expected_paths or result.branch not in expected_branches
-            or result.remote != remote or result.target_branch != target
-            or result.remote_identity != identity or result.common_directory != info.common_directory):
-        raise SessionServiceError(502, "executionAgent.protocolError")
-    directory, _ = await validate_execution_preferences(
-        db, session.user_id, session.preferred_execution_agent_id, result.path
-    )
-    session.coding_workspace = {"mode": "worktree", "projectId": str(project.id), "executionAgentId": str(session.preferred_execution_agent_id),
-                                **result.model_dump(by_alias=True)}
     session.current_directory = directory
-
-
-async def remove_session_worktree(db, session: ChatSession, deleting_session_ids: list[UUID]) -> None:
-    from mato_loop_backend.sessions.git_commands import check_workspace_admission
-    from mato_loop_backend.sessions.service import (
-        SessionServiceError,
-        execution_filesystem_policy,
-    )
-
-    binding = session.coding_workspace or {}
-    if binding.get("mode") != "worktree":
-        return
-    agent_id = UUID(binding["executionAgentId"])
-    client = await coding_client(db, session.user_id, agent_id)
-    agent = await db.get(ExecutionAgent, agent_id)
-    if agent is None or execution_filesystem_policy(agent, binding["path"]) == "deny":
-        raise SessionServiceError(403, "permission.denied")
-    sessions = (await db.scalars(select(ChatSession).where(
-        ChatSession.user_id == session.user_id, ChatSession.id.not_in(deleting_session_ids),
-        ChatSession.preferred_execution_agent_id == agent_id,
-    ))).all()
-    if any(item.current_directory and within(item.current_directory, binding["path"]) for item in sessions):
-        raise SessionServiceError(409, "git.worktreeInUse")
-    info = await inspect_repository(db, session.user_id, agent_id, binding["repository"])
-    if info.common_directory != binding["commonDirectory"]:
-        raise SessionServiceError(409, "git.worktreeChanged")
-    await check_workspace_admission(db, session.user_id, agent_id, binding["path"],
-                                    {"name": "git-remote", "resources": [binding["path"], binding["repository"], binding["commonDirectory"]]})
-    try:
-        result = await client.request("git.worktree.remove", {
-            "ownerId": str(session.user_id), "projectId": binding["projectId"], "sessionId": str(session.id),
-            "path": binding["path"], "commonDirectory": binding["commonDirectory"],
-        }, WorktreeRemovedResult, timeout=180)
-    except ExecutionClientError as exc:
-        raise SessionServiceError(409, exc.code) from exc
-    if not result.removed:
-        raise SessionServiceError(409, "git.worktreeRemoveFailed")
+    session.workspace_mode = "local" if directory == root else "worktree"
+    session.coding_workspace = {
+        "mode": session.workspace_mode, "executionAgentId": str(agent_id), "repository": root,
+        "path": directory, "targetBranch": target, "remote": remote, "commonDirectory": info.common_directory,
+        "remoteIdentity": previous.get("remoteIdentity") if previous.get("remote") == remote else info.remote_identities.get(remote),
+    }
+    return directory_policy

@@ -515,9 +515,11 @@ export const sessionsActions = {
         web_search_policy: 'webSearchPolicy',
         preferred_execution_agent_id: 'preferredExecutionAgentId',
         current_directory: 'currentDirectory',
-        workspace_mode: 'workspaceMode'
+        workspace_mode: 'workspaceMode',
+        workspace_path: 'workspacePath'
       }
       const normalizedPatch = { ...patch }
+      if (Object.hasOwn(patch, 'preferred_execution_agent_id') || Object.hasOwn(patch, 'current_directory')) normalizedPatch.workspace_path = null
       if (typeof normalizedPatch.session_profile === 'function') {
         normalizedPatch.session_profile = normalizedPatch.session_profile(options.sessionProfile)
       }
@@ -625,13 +627,10 @@ export const sessionsActions = {
       await this.refreshSessions(null, data.projectId || null)
       return data
     },
-    async deleteSession(id, { automationMode = null, automationImpact = null, removeWorktree = false, suppressErrorToast = false } = {}) {
+    async deleteSession(id, { automationMode = null, automationImpact = null, suppressErrorToast = false } = {}) {
       const config = {
         ...(suppressErrorToast ? { suppressErrorToast: true } : {}),
-        ...(automationMode || removeWorktree ? { params: {
-          ...(automationMode ? { automationMode, automationImpact } : {}),
-          ...(removeWorktree ? { removeWorktree: true } : {})
-        } } : {})
+        ...(automationMode ? { params: { automationMode, automationImpact } } : {})
       }
       const queued = [...(this.queuedMessages[id] || [])]
       const ownerUserId = this.draftOwnerUserId

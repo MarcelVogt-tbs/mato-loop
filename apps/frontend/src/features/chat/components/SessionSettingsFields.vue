@@ -104,10 +104,7 @@ const templateId = computed(() => props.session?.sessionProfile?.templateId || p
 const templateOptions = computed(() => {
   const options = templates.templates.map((item) => ({
     label: `${item.name}${item.scope === 'personal' ? ' (Persönlich)' : ''}`,
-    value: item.id,
-    disable: Boolean(props.session?.id && props.session?.workspaceMode === 'worktree' && !item.worktreesEnabled),
-    caption: props.session?.id && props.session?.workspaceMode === 'worktree' && !item.worktreesEnabled
-      ? 'Diese Vorlage unterstützt den bestehenden Worktree nicht.' : undefined
+    value: item.id
   }))
   if (templateId.value && !options.some((item) => item.value === templateId.value)) {
     options.push({ label: 'Nicht verfügbare Vorlage', value: templateId.value, disable: true })
@@ -143,7 +140,6 @@ const selectedExecutionAgent = computed(() => (
 ))
 const directoryPickerOpen = ref(false)
 const directoryPickerAvailable = computed(() => !props.disabled && selectedExecutionAgent.value?.connected === true
-  && !(props.session?.id && props.session?.workspaceMode === 'worktree')
   && selectedExecutionAgent.value.operations?.includes('filesystem.list'))
 watch([() => props.session?.id, () => props.session?.preferredExecutionAgentId], () => {
   directoryPickerOpen.value = false
@@ -404,16 +400,14 @@ const ReasoningField = defineComponent(() => () => h(AppSelect, selectProps({
 })))
 const ComputerField = defineComponent(() => () => [
   h(AppSelect, selectProps({
-    disable: props.disabled || Boolean(props.session?.id && props.session?.workspaceMode === 'worktree'),
+    disable: props.disabled,
     modelValue: props.session?.preferredExecutionAgentId,
     options: executionAgentOptions.value,
     label: props.compact ? undefined : 'Computer',
     class: props.compact ? 'chat-start-select col-auto q-px-sm text-body2' : undefined,
     hideBottomSpace: props.compact,
     'aria-label': 'Computer auswählen',
-    hint: props.compact ? undefined : props.session?.id && props.session?.workspaceMode === 'worktree'
-      ? 'Computer und Arbeitsverzeichnis sind an den Worktree dieser Session gebunden.'
-      : 'Der Computer wird für den nächsten Lauf verwendet.',
+    hint: props.compact ? undefined : 'Der Computer wird für den nächsten Lauf verwendet.',
     persistentHint: !props.compact,
     'onUpdate:modelValue': selectExecutionAgent
   }), {

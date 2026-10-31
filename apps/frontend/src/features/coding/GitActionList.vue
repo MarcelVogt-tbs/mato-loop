@@ -5,7 +5,7 @@
     <q-item v-for="command in items" :key="command.name" clickable :disable="busy || Boolean(command.disabledReason)" @click="run(command)">
       <q-item-section avatar><q-icon :name="command.icon" color="primary" /></q-item-section>
       <q-item-section>
-        <q-item-label>{{ command.label }}</q-item-label>
+        <q-item-label>{{ command.name === 'git-merge' && targetBranch ? `In ${targetBranch} übernehmen` : command.label }}</q-item-label>
         <q-item-label caption>{{ command.disabledReason || command.description }}</q-item-label>
       </q-item-section>
       <q-item-section side><q-icon name="play_arrow" /></q-item-section>
@@ -18,7 +18,7 @@ import { computed } from 'vue'
 import { useCommandStore } from 'src/features/commands/store'
 import { useGitActionStore } from './git-actions-store'
 
-const props = defineProps({ disabled: Boolean })
+const props = defineProps({ disabled: Boolean, targetBranch: { type: String, default: null } })
 defineEmits(['refresh'])
 const catalog = useCommandStore(), actions = useGitActionStore()
 const items = computed(() => catalog.items.filter(command => command.source === 'git' && command.name !== 'git-remote'))

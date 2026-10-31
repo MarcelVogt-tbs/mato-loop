@@ -18,7 +18,7 @@ import { quasarOptions } from './quasar-options'
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); vi.clearAllMocks() })
 
-it('disables templates without worktree support in an existing worktree session', async () => {
+it('allows all templates in an existing worktree session', async () => {
   const pinia = createPinia()
   useSessionTemplateStore(pinia).templates = [
     { id: 'general', name: 'Allgemein', worktreesEnabled: false },
@@ -33,7 +33,7 @@ it('disables templates without worktree support in an existing worktree session'
   root.querySelector('[role="combobox"]').click()
   await vi.waitFor(() => expect([...document.querySelectorAll('[role="option"]')].map(item => [
     item.querySelector('.q-item__label').textContent, item.getAttribute('aria-disabled') === 'true'
-  ])).toEqual([['Allgemein', true], ['Coding', false]]))
+  ])).toEqual([['Allgemein', false], ['Coding', false]]))
 })
 
 it.each([true, false])('edits session trust only with model distinction enabled (%s)', async (enabled) => {

@@ -18,8 +18,8 @@ session banner, or fork-specific system prompt. File copying uses the existing s
 lock, rejects symlinks and pending file publications, and enforces the user's quota.
 Runs,
 grants, approvals, children, automations, and provider continuation scopes are not
-inherited. The execution-agent directory is reused as a local directory, without
-transferring managed-worktree ownership. Forks need no persistent parent relation.
+inherited. The execution-agent directory and repository-bound Git target preferences
+are reused; worktrees have no exclusive session ownership. Forks need no persistent parent relation.
 The provisional `Kopie: <original title>` is replaced through the normal title workflow
 after the first new message, using the original title as context. Manual titles take precedence.
 

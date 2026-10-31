@@ -97,6 +97,7 @@ class LinuxPlatform:
                 {
                     "git.changes",
                     "git.repository",
+                    "git.branch",
                     "git.worktree",
                     "git.worktree.remove",
                 }

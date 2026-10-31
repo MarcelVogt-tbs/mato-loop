@@ -535,8 +535,8 @@ async def test_execution_agent_switch_denial_keeps_existing_binding(tmp_path) ->
 
 
 @pytest.mark.parametrize("name", ["change_directory", "select_execution_agent"])
-@pytest.mark.parametrize("error", ["git.worktreeChanged", "git.projectBusy"])
-async def test_workspace_tools_recheck_session_mode_and_admission(monkeypatch, tmp_path, name, error):
+@pytest.mark.parametrize("error", [None, "git.projectBusy"])
+async def test_workspace_tools_allow_worktree_directory_changes_and_recheck_admission(monkeypatch, tmp_path, name, error):
     from mato_loop_backend.agent.runtime import AgentRuntime
     from mato_loop_backend.agent.session_settings import RunSessionSettings
     from mato_loop_backend.execution import DirectoryResult
@@ -545,15 +545,16 @@ async def test_workspace_tools_recheck_session_mode_and_admission(monkeypatch, t
     call = ToolCall("move", name, {"path": "/reserved"} if name == "change_directory" else {"agent_id": str(selected_id)})
     context = _context(tmp_path, call)
     context.session.session_type = "chat"
-    context.session.workspace_mode = "worktree" if error == "git.worktreeChanged" else "local"
+    context.session.workspace_mode = "worktree"
     context.execution_client = SimpleNamespace(agent_id=agent_id, current_directory="/worktree",
                                                request=AsyncMock(return_value=DirectoryResult(path="/reserved")))
     run = AgentRun(id=context.run_id, execution_agent_id=agent_id, current_directory_snapshot="/worktree")
     context.db.get.return_value = run
     context.db.scalar.return_value = ExecutionAgent(id=selected_id, user_id=context.session.user_id)
-    context.db.execute.side_effect = [None, [("/reserved", {"_matoloop": {"codingCommand": {"name": "git-sync"}}}, None)]]
+    context.db.execute.side_effect = [None, [("/reserved" if error else "/project", {"_matoloop": {"codingCommand": {"name": "git-sync"}}}, None)]]
     monkeypatch.setattr(AgentRuntime, "_session_settings", {run.id: RunSessionSettings(
         session_profile={}, memory_mode="disabled", web_search_policy="available",
+        coding_workspace={"executionAgentId": str(agent_id), "path": "/worktree", "commonDirectory": "/project/.git"},
     )})
     monkeypatch.setattr(mock_tools_access, "allow", AsyncMock(return_value=True))
     monkeypatch.setattr(mock_tools_computer.execution_agent_connections, "snapshot", lambda _id: frozenset({"filesystem.resolve"}))
@@ -563,7 +564,10 @@ async def test_workspace_tools_recheck_session_mode_and_admission(monkeypatch, t
         context.integration_settings, execution_operations=frozenset({"filesystem.resolve"}),
     ).execute(call, context)
 
-    assert result.metadata["errorCode"] == error
+    if error:
+        assert result.metadata["errorCode"] == error
+    else:
+        assert json.loads(result.content)["currentDirectory"] == "/reserved"
 
 
 async def test_execution_agent_switch_rechecks_connection_after_approval(monkeypatch, tmp_path) -> None:

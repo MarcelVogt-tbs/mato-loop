@@ -210,6 +210,7 @@ class AgentRuntime:
         )
         if active_run is not None:
             raise AgentRunError("session.runAlreadyActive")
+        from mato_loop_backend.sessions.coding import git_metadata_directory
         from mato_loop_backend.sessions.commands import parse_command, prepare_command
         from mato_loop_backend.sessions.git_commands import check_workspace_admission
         from mato_loop_backend.sessions.service import SessionServiceError
@@ -287,8 +288,7 @@ class AgentRuntime:
             await check_workspace_admission(
                 db, chat_session.user_id, chat_session.preferred_execution_agent_id,
                 current_directory, command_data,
-                metadata_directory=((chat_session.coding_workspace or {}).get("commonDirectory")
-                                    if (chat_session.coding_workspace or {}).get("executionAgentId") == str(chat_session.preferred_execution_agent_id) else None),
+                metadata_directory=git_metadata_directory(chat_session.coding_workspace, chat_session.preferred_execution_agent_id, current_directory),
             )
         except SessionServiceError as exc:
             raise AgentRunError(exc.code) from exc
@@ -514,6 +514,7 @@ class AgentRuntime:
             if input_message is None:
                 raise AgentRunError("session.retryUnavailable")
             metadata = (input_message.provider_data or {}).get("_matoloop", {})
+            from mato_loop_backend.sessions.coding import git_metadata_directory
             from mato_loop_backend.sessions.command_contracts import command_context
             from mato_loop_backend.sessions.commands import parse_command, prepare_command
             from mato_loop_backend.sessions.git_commands import check_workspace_admission
@@ -540,8 +541,7 @@ class AgentRuntime:
                     input_message.provider_data = {**(input_message.provider_data or {}), "_matoloop": metadata}
                 await check_workspace_admission(db, chat_session.user_id, agent_id, current_directory,
                                                 saved_command, exclude_run_id=run.id,
-                                                metadata_directory=((chat_session.coding_workspace or {}).get("commonDirectory")
-                                                                    if (chat_session.coding_workspace or {}).get("executionAgentId") == str(agent_id) else None))
+                                                metadata_directory=git_metadata_directory(chat_session.coding_workspace, agent_id, current_directory))
             except SessionServiceError as exc:
                 raise AgentRunError(exc.code) from exc
             if not before_execution:

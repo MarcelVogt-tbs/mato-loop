@@ -364,6 +364,7 @@ class SessionCreateRequest(SessionOptionsRequest):
     preferred_execution_agent_id: UUID | None = None
     current_directory: str | None = Field(default=None, max_length=4_096)
     workspace_mode: Literal["local", "worktree"] | None = None
+    workspace_path: str | None = Field(default=None, max_length=4096)
     control_center: ControlCenterState = Field(default_factory=default_control_center_state)
     active_file: ActiveFileRequest | None = Field(
         default=None, validation_alias=AliasChoices("active_file", "activeFile")
@@ -1061,7 +1062,6 @@ async def delete_session(
         str | None,
         Query(alias="automationImpact", min_length=64, max_length=64),
     ] = None,
-    remove_worktree: Annotated[bool, Query(alias="removeWorktree")] = False,
 ) -> None:
     try:
         await session_service.delete_session(
@@ -1070,7 +1070,6 @@ async def delete_session(
             db,
             automation_mode=automation_mode,
             automation_impact=automation_impact,
-            remove_worktree=remove_worktree,
             storage_factory=SessionStorage,
             owned_session_query=_mutable_session,
         )

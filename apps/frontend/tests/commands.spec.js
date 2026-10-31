@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { createApp, h, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
+import { createRouter, createMemoryHistory } from 'vue-router'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Quasar, Notify } from 'quasar'
+import { Quasar, Dialog, Notify } from 'quasar'
 import { quasarOptions } from './quasar-options'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
@@ -11,8 +12,10 @@ vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: vi.fn(
 
 import GitActionList from '../src/features/coding/GitActionList.vue'
 import GitApp from '../src/features/coding/GitApp.vue'
+import GitWorkspacePanel from '../src/features/coding/GitWorkspacePanel.vue'
 import WorkspaceField from '../src/features/coding/WorkspaceField.vue'
 import { useGitActionStore } from '../src/features/coding/git-actions-store'
+import { sessionCreatePayload } from '../src/features/chat/state'
 import { useCommandStore } from '../src/features/commands/store'
 import CommandList from '../src/features/commands/CommandList.vue'
 import { useChatStore } from '../src/features/chat/store'
@@ -26,6 +29,24 @@ import { apiErrorMessage } from 'src/utils/api-errors'
 
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.useRealTimers() })
+
+function mountPanel(props, session = {}, router) {
+  vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const chat = useChatStore()
+  chat.outboxLoaded = true
+  chat.current = { id: 'session', preferredExecutionAgentId: 'agent', currentDirectory: '/repo', ...session }
+  useExecutionAgentStore().items = [{ id: 'agent', connected: true, operations: ['git.branch'] }]
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp({ render: () => h(GitWorkspacePanel, {
+    project: { defaultExecutionAgentId: 'agent', defaultCurrentDirectory: '/repo' }, ...props
+  }) })
+  if (router) app.use(router)
+  app.use(pinia).use(Quasar, { ...quasarOptions, plugins: { Dialog, Notify } }).mount(root)
+  return chat
+}
 
 it('does not replace a new context catalog with a late previous response', async () => {
   setActivePinia(createPinia())
@@ -143,7 +164,7 @@ it('adopts a draft remote without changing an unrelated project workspace', asyn
   vi.spyOn(useCommandStore(), 'load').mockResolvedValue()
   const session = { id: 'session', projectId: 'project', preferredExecutionAgentId: 'agent', currentDirectory: '/repo' }
   vi.spyOn(chat, 'createEmptySession').mockImplementation(async () => { chat.current = session; return session })
-  const adopt = vi.spyOn(commands, 'useRemote').mockResolvedValue('session')
+  const adopt = vi.spyOn(commands, 'updateTarget').mockResolvedValue('session')
   const update = vi.spyOn(projects, 'update')
   api.post.mockResolvedValue({ data: { repository: '/repo', remotes: ['origin'], defaultRemote: 'origin',
     remoteUrls: { origin: 'https://example.com/repo.git' }, remoteIdentities: { origin: 'a'.repeat(64) } } })
@@ -152,12 +173,11 @@ it('adopts a draft remote without changing an unrelated project workspace', asyn
   app = createApp({ render: () => h(GitApp) })
   app.use(pinia).use(Quasar, { ...quasarOptions, plugins: { Notify } }).mount(root)
   root.querySelectorAll('[role="tab"]')[1].click()
-  await vi.waitFor(() => expect([...root.querySelectorAll('button')].some(button => button.textContent.includes('Bearbeiten'))).toBe(true))
-  const edit = [...root.querySelectorAll('button')].find(button => button.textContent.includes('Bearbeiten'))
-  edit.click()
+  await vi.waitFor(() => expect(root.querySelector('[aria-label="Remote bearbeiten"]')?.disabled).toBe(false))
+  root.querySelector('[aria-label="Remote bearbeiten"]').click()
   await vi.waitFor(() => expect(document.querySelector('.q-dialog form')).not.toBeNull())
   document.querySelector('.q-dialog form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
-  await vi.waitFor(() => expect(adopt).toHaveBeenCalledWith('origin', 'a'.repeat(64)))
+  await vi.waitFor(() => expect(adopt).toHaveBeenCalledWith({ remote: 'origin', remote_identity: 'a'.repeat(64) }))
   expect(update).not.toHaveBeenCalled()
 })
 
@@ -213,6 +233,182 @@ it('keeps the standalone workspace information read-only for existing sessions e
   useExecutionAgentStore().items = [{ id: 'agent', connected: false }]
   await nextTick()
   expect([root.textContent.includes('Worktree'), root.querySelector('[role="combobox"]')]).toEqual([true, null])
+})
+
+it('groups existing worktrees below local and new without repeating their type', async () => {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  useProjectStore().items = [{ id: 'project', defaultExecutionAgentId: 'agent', defaultCurrentDirectory: '/repo' }]
+  useExecutionAgentStore().items = [{ id: 'agent', connected: true, operations: ['git.repository', 'git.worktree'] }]
+  api.post.mockResolvedValue({ data: { repository: '/repo', defaultBranch: 'main', worktrees: [
+    { path: '/existing', branch: 'task' }, { path: '/repo', branch: 'main' }, { path: '/other', branch: 'feature' }
+  ] } })
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp({ render: () => h(WorkspaceField, { projectId: 'project', session: {
+    preferredExecutionAgentId: 'agent', currentDirectory: '/repo', workspaceMode: 'local', sessionProfile: { worktreesEnabled: true }
+  } }) })
+  app.use(pinia).use(Quasar, quasarOptions).mount(root)
+  root.querySelector('[role="combobox"]').click()
+  await vi.waitFor(() => expect([...document.querySelectorAll('[role="listbox"] [role="option"], [role="listbox"] hr')]
+    .map(item => item.tagName === 'HR' ? 'separator' : item.querySelector('.q-item__section--main').textContent))
+    .toEqual(['Lokal', 'Neuer Worktree', 'separator', 'existing · task', 'other · feature']))
+})
+
+it('uses an existing worktree at session creation without requesting another worktree', () => {
+  setActivePinia(createPinia())
+  const chat = useChatStore()
+  const options = { ...chat.activeContext, preferredExecutionAgentId: 'agent', currentDirectory: '/repo', workspaceMode: 'worktree', workspacePath: '/existing' }
+  expect(sessionCreatePayload(options, 'project', {}).workspace_path).toBe('/existing')
+})
+
+it('keeps the selected workspace unchanged after a failed switch', async () => {
+  setActivePinia(createPinia())
+  const chat = useChatStore()
+  chat.outboxLoaded = true
+  chat.current = { id: 'session', currentDirectory: '/original' }
+  api.put.mockRejectedValueOnce(new Error('blocked'))
+  await expect(useGitActionStore().workspaceAction('select', { directory: '/existing' })).rejects.toThrow('blocked')
+  expect(chat.current.currentDirectory).toBe('/original')
+})
+
+it('creates a branch from the workspace panel using the standard prompt', async () => {
+  vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const chat = useChatStore()
+  chat.outboxLoaded = true
+  chat.current = { id: 'session', projectId: 'project', preferredExecutionAgentId: 'agent', currentDirectory: '/repo' }
+  useProjectStore().items = [{ id: 'project', defaultExecutionAgentId: 'agent', defaultCurrentDirectory: '/repo' }]
+  useExecutionAgentStore().items = [{ id: 'agent', connected: true, operations: ['git.repository', 'git.branch'] }]
+  useControlCenterStore().$patch({ open: true, activeAppId: 'git' })
+  vi.spyOn(useCommandStore(), 'load').mockResolvedValue()
+  vi.spyOn(chat, 'refreshSession').mockResolvedValue()
+  api.post.mockResolvedValue({ data: { repository: '/repo', branch: 'main', localBranches: ['main'],
+    worktrees: [{ path: '/repo', branch: 'main', main: true, locked: false }] } })
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp({ render: () => h(GitApp) })
+  app.use(pinia).use(Quasar, { ...quasarOptions, plugins: { Dialog, Notify } }).mount(root)
+  const tabs = [...root.querySelectorAll('[role="tab"]')]
+  expect(tabs.map(tab => tab.textContent)).toEqual(['Änderungen', 'Einstellungen'])
+  tabs[1].click()
+  await vi.waitFor(() => expect(root.querySelector('[aria-label="Branch bearbeiten"]')?.disabled).toBe(false))
+  root.querySelector('[aria-label="Branch bearbeiten"]').click()
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="Branch erstellen"]')).not.toBeNull())
+  document.querySelector('[aria-label="Branch erstellen"]').click()
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog input[maxlength="300"]')).not.toBeNull())
+  const input = document.querySelector('.q-dialog input[maxlength="300"]')
+  input.value = 'task'
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  await nextTick()
+  ;[...document.querySelectorAll('.q-dialog button')].find(button => button.textContent === 'Speichern').click()
+  await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith('/coding/sessions/session/git', {
+    action: 'branch-create', directory: '/repo', name: 'task'
+  }))
+})
+
+it('shows where an occupied branch is checked out and switches only after confirmation', async () => {
+  mountPanel({
+    repository: { repository: '/repo', branch: 'main', localBranches: ['main', 'occupied', 'free'], worktrees: [
+      { path: '/repo', branch: 'main', main: true }, { path: '/other', branch: 'occupied' }
+    ] }
+  })
+  const select = vi.spyOn(useGitActionStore(), 'workspaceAction').mockResolvedValue(true)
+  root.querySelector('[aria-label="Branch bearbeiten"]').click()
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="Branch occupied markieren"]')).not.toBeNull())
+  document.querySelector('[aria-label="Branch occupied markieren"]').click()
+  await nextTick()
+  const locationVisible = document.querySelector('.q-dialog').textContent.includes('Ausgecheckt in: /other')
+  const blocked = document.querySelector('[aria-label="Branch wechseln"]').disabled
+  const search = document.querySelector('.q-dialog input')
+  search.value = 'free'
+  search.dispatchEvent(new Event('input', { bubbles: true }))
+  await nextTick()
+  document.querySelector('[aria-label="Branch free markieren"]').click()
+  await nextTick()
+  const rowActions = select.mock.calls.length
+  document.querySelector('[aria-label="Branch wechseln"]').click()
+  await vi.waitFor(() => expect([locationVisible, blocked, rowActions, select.mock.calls]).toEqual([
+    true, true, 0, [['branch-switch', { name: 'free' }]]
+  ]))
+  await nextTick()
+  root.querySelector('[aria-label="Arbeitsbereich bearbeiten"]').click()
+  await vi.waitFor(() => expect([...document.querySelectorAll('.q-dialog .q-list > .q-item')]
+    .map(item => item.querySelector('.q-item__label').textContent)).toEqual(['Lokal', 'other']))
+})
+
+it('lists the current workspace first and only activates a workspace through its menu', async () => {
+  mountPanel({
+    repository: { repository: '/worktrees/selected', worktrees: ['/worktrees/first', '/repo', '/worktrees/selected'].map(path => ({ path, main: path === '/repo' })) }
+  }, { currentDirectory: '/worktrees/selected', sessionProfile: { worktreesEnabled: true } })
+  const select = vi.spyOn(useGitActionStore(), 'workspaceAction').mockResolvedValue(true)
+  root.querySelector('[aria-label="Arbeitsbereich bearbeiten"]').click()
+  await vi.waitFor(() => expect([...document.querySelector('.q-dialog .q-list').children]
+    .map(item => item.tagName === 'HR' ? 'separator' : item.querySelector('.q-item__label').textContent))
+    .toEqual(['selected', 'separator', 'Lokal', 'separator', 'first']))
+  const first = document.querySelector('[aria-label="Arbeitsbereich /worktrees/first markieren"]')
+  const parentPath = first.querySelector('.q-item__label--caption').textContent
+  first.click()
+  await nextTick()
+  const rowActions = select.mock.calls.length
+  document.querySelector('[aria-label="Aktionen für Worktree first"]').click()
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="Arbeitsbereich /worktrees/first aktivieren"]')).not.toBeNull())
+  document.querySelector('[aria-label="Arbeitsbereich /worktrees/first aktivieren"]').click()
+  await vi.waitFor(() => expect([parentPath, rowActions, select.mock.calls]).toEqual(['/worktrees/', 0, [['select', { directory: '/worktrees/first', create: false }]]]))
+})
+
+it('edits the target separately from branch switching', async () => {
+  const chat = mountPanel({
+    repository: { repository: '/repo', branch: 'main', localBranches: ['main', 'develop'] }, targetBranch: 'main'
+  })
+  useProjectStore().items = [{ id: 'project', gitRemote: 'origin' }]
+  api.put.mockResolvedValue({ data: { codingWorkspace: { targetBranch: 'develop' }, projectId: 'project' } })
+  root.querySelector('[aria-label="Zielbranch bearbeiten"]').click()
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog [role="combobox"]')).not.toBeNull())
+  document.querySelector('.q-dialog [role="combobox"]').click()
+  await vi.waitFor(() => expect([...document.querySelectorAll('[role="option"]')].find(item => item.textContent.includes('develop'))).toBeDefined())
+  ;[...document.querySelectorAll('[role="option"]')].find(item => item.textContent.includes('develop')).click()
+  await nextTick()
+  document.querySelector('.q-dialog form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+  await vi.waitFor(() => expect([api.put.mock.calls, chat.current.codingWorkspace, useProjectStore().items[0].gitRemote]).toEqual([
+    [['/coding/sessions/session/target', { target_branch: 'develop' }]], { targetBranch: 'develop' }, 'origin'
+  ]))
+})
+
+it('removes an inactive worktree from the workspace dialog without selecting it', async () => {
+  const chat = mountPanel({ project: { defaultExecutionAgentId: 'other-agent', defaultCurrentDirectory: '/other' },
+    repository: { repository: '/repo', branch: 'main', localBranches: ['main'],
+    worktrees: [{ path: '/repo', branch: 'main', main: true, locked: false },
+      { path: '/worktrees/task', branch: 'task', main: false, locked: false }] } })
+  vi.spyOn(chat, 'refreshSession').mockResolvedValue()
+  api.post.mockResolvedValue({ data: { ok: true } })
+  root.querySelector('[aria-label="Arbeitsbereich bearbeiten"]').click()
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="Aktionen für Worktree task"]')).not.toBeNull())
+  document.querySelector('[aria-label="Aktionen für Worktree task"]').click()
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="Worktree task entfernen"]')).not.toBeNull())
+  document.querySelector('[aria-label="Worktree task entfernen"]').click()
+  await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith('/coding/sessions/session/git', {
+    action: 'remove', directory: '/worktrees/task', force: true
+  }))
+  expect(chat.current.currentDirectory).toBe('/repo')
+})
+
+it('opens a worktree session chip without changing the selected directory', async () => {
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', name: 'chat', component: { render: () => null } }] })
+  await router.push('/')
+  const chat = mountPanel({
+    repository: { repository: '/repo', worktrees: [{ path: '/external', branch: 'task', dirty: true,
+      sessions: [{ id: 'other', title: 'Shared work', projectId: 'project' }] }] }
+  }, { id: 'current' }, router)
+  root.querySelector('[aria-label="Arbeitsbereich bearbeiten"]').click()
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="Arbeitsbereich /external markieren"]')).not.toBeNull())
+  document.querySelector('[aria-label="Arbeitsbereich /external markieren"]').click()
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="Session Shared work öffnen"]')).not.toBeNull())
+  document.querySelector('[aria-label="Session Shared work öffnen"]').click()
+  await vi.waitFor(() => expect([router.currentRoute.value.query, chat.current.currentDirectory]).toEqual([
+    { session: 'other', project: 'project' }, '/repo'
+  ]))
 })
 
 it('opens a deleted session-workspace file from Git even when the editor inspects another repository', async () => {

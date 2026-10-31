@@ -10,7 +10,7 @@ export function useRepositoryProbe(agentId, directory, enabled = true, targetBra
   let version = 0
   let timer
 
-  async function refresh() {
+  async function refresh({ worktreeDetails = false } = {}) {
     clearTimeout(timer)
     const request = ++version
     error.value = null
@@ -22,7 +22,8 @@ export function useRepositoryProbe(agentId, directory, enabled = true, targetBra
     loading.value = true
     try {
       const { data } = await api.post('/coding/repository', {
-        execution_agent_id: id, current_directory: path, target_branch: toValue(targetBranch) || null
+        execution_agent_id: id, current_directory: path, target_branch: toValue(targetBranch) || null,
+        ...(worktreeDetails ? { worktree_details: true } : {})
       }, { suppressErrorToast: true })
       if (request === version) repository.value = data
     } catch (cause) {

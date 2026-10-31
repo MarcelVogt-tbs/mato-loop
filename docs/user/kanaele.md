@@ -33,9 +33,13 @@ folgende Befehle zur Verfügung:
 
 - `/git_init`: Git im gewählten Workspace anlegen, ohne Commit oder Veröffentlichung.
 - `/git_review`: Änderungen einschließlich noch nicht übernommener Commits prüfen.
-- `/git_merge`: Worktree-Änderungen committen, mit dem aktuellen Zielbranch
-  zusammenführen, reviewen, prüfen und veröffentlichen.
-- `/git_pr`: Session-Branch veröffentlichen und einen Pull Request erstellen
+- `/git_commit`: Ausgewählte Arbeitsänderungen ausdrücklich committen, ohne Push.
+- `/git_merge`: Bereits committete Änderungen mit dem lokalen Zielbranch
+  zusammenführen, reviewen, prüfen und das ursprüngliche Checkout per Fast-forward
+  aktualisieren. Kein Fetch oder Push; ein Remote ist nicht erforderlich.
+- `/git_push`: Vorhandene Commits des aktuellen Branches veröffentlichen, ohne Commit oder Merge.
+- `/git_pr`: Den Remote-Zielstand in den Arbeitsbranch integrieren, prüfen,
+  veröffentlichen und einen Pull Request erstellen
   beziehungsweise den vorhandenen aktualisieren.
 - `/git_sync`: Den ursprünglichen Projekt-Checkout aktualisieren, wenn er sauber,
   auf dem Zielbranch und ohne zusätzliche Zusammenführung aktualisierbar ist.
@@ -47,7 +51,9 @@ folgende Befehle zur Verfügung:
 Wählen Sie vorher mit `/sessions` und `/use <ID>` die gewünschte Coding-Session.
 Die Befehle starten normale Agentenläufe auf dem Computer dieser Session; die
 vorhandenen Tool-Rechte, Rückfragen und Freigaben gelten weiter. Merge und PR
-benötigen zunächst eine Session mit verwaltetem Worktree. Für PRs müssen ein
+benötigen einen ausgewählten Projekt-Worktree. Arbeitsänderungen werden dabei nicht
+automatisch committet. Konflikte, Review-Befunde und fehlgeschlagene Tests halten
+den Auftrag an; sie werden nicht automatisch repariert. Für PRs müssen ein
 geeignetes Werkzeug und die Anmeldung beim Git-Hoster auf dem Computer vorhanden
 sein. Ein laufender Auftrag wird durch diese Befehle nicht unterbrochen.
 

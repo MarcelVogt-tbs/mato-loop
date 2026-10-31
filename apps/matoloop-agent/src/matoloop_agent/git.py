@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import stat
@@ -19,7 +20,12 @@ from uuid import UUID
 from .config import AgentConfig
 from .errors import AgentError
 from .platform import FilesystemAdapter
-from .protocol import GitWorktreeArguments, GitWorktreeRemoveArguments, _relative_path
+from .protocol import (
+    GitBranchArguments,
+    GitWorktreeArguments,
+    GitWorktreeRemoveArguments,
+    _relative_path,
+)
 
 MAX_TEXT_BYTES = 256 * 1024
 MAX_PREVIEW_BYTES = 768 * 1024
@@ -43,7 +49,6 @@ async def _git(
     *arguments: str,
     limit: int = MAX_OUTPUT_BYTES,
     config: dict[str, str] | None = None,
-    network: bool = False,
     timeout_seconds: float = 15,
 ) -> tuple[int, bytes, bytes]:
     executable = shutil.which("git")
@@ -54,7 +59,7 @@ async def _git(
         GIT_OPTIONAL_LOCKS="0",
         GIT_TERMINAL_PROMPT="0",
         LC_ALL="C",
-        GIT_ALLOW_PROTOCOL="https:http:ssh:git" if network else "",
+        GIT_ALLOW_PROTOCOL="",
         GIT_NO_LAZY_FETCH="1",
     )
     if config:
@@ -88,7 +93,7 @@ async def _git(
     ]
     completed = False
     try:
-        async with asyncio.timeout(120 if network else timeout_seconds):
+        async with asyncio.timeout(timeout_seconds):
             output, error = await asyncio.gather(*readers)
             code = await process.wait()
             completed = True
@@ -221,7 +226,13 @@ async def _working(
     return await asyncio.to_thread(filesystem._read_bytes, f"{root.rstrip('/')}/{path}", limit)
 
 
-async def changes(filesystem: FilesystemAdapter, directory: str, file: str | None = None) -> dict:
+async def changes(
+    filesystem: FilesystemAdapter,
+    directory: str,
+    file: str | None = None,
+    *,
+    status_only: bool = False,
+) -> dict:
     directory = (await asyncio.to_thread(filesystem.resolve_directory, directory))["path"]
     code, output, error = await _git(directory, "rev-parse", "--show-toplevel")
     if code:
@@ -231,6 +242,22 @@ async def changes(filesystem: FilesystemAdapter, directory: str, file: str | Non
         raise AgentError(code, "Git working tree inspection failed")
     root = output.decode("utf-8").rstrip("\r\n").replace("\\", "/")
     await asyncio.to_thread(filesystem.resolve_directory, root)
+    if status_only:
+        while not filesystem._lock.acquire(blocking=False):
+            await asyncio.sleep(0.01)
+        try:
+            status = await _checked(
+                root,
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=normal",
+                "--ignore-submodules=all",
+                config=await _disabled_filters(root),
+            )
+            return {"repository": root, "dirty": bool(status)}
+        finally:
+            filesystem._lock.release()
     head_code, head, _ = await _git(root, "rev-parse", "--verify", "--quiet", "HEAD")
     if head_code not in {0, 1}:
         raise AgentError("path.unavailable", "Git HEAD inspection failed")
@@ -418,6 +445,7 @@ async def repository(
         "branch": branch,
         "localBranches": local_branches[:1000],
         "localBranchesTruncated": len(local_branches) > 1000,
+        "worktrees": await worktrees(filesystem, root),
         "remoteIdentities": identities,
         "remoteUrls": urls,
         "targetHasCommit": target_has_commit,
@@ -514,11 +542,149 @@ async def _locked_worktrees(config: AgentConfig, filesystem: FilesystemAdapter):
             filesystem._lock.release()
 
 
+def project_worktree_directory(config, filesystem, project_id: str) -> Path:
+    root = config.data_dir / "worktrees"
+    project_id = str(UUID(project_id))
+    for index in range(1, 1001):
+        candidate = root / (project_id[:8] if index == 1 else f"{project_id[:8]}-{index}")
+        if not os.path.lexists(candidate):
+            return candidate
+        try:
+            identity = filesystem._read_bytes((candidate / ".matoloop-project").as_posix(), 128)
+        except AgentError:
+            continue
+        if identity == project_id.encode():
+            return candidate
+    raise AgentError("git.worktreeFailed", "No available project directory name was found")
+
+
 async def prepare_worktree(
     config: AgentConfig, filesystem: FilesystemAdapter, arguments: GitWorktreeArguments
 ) -> dict:
     async with _locked_worktrees(config, filesystem) as state_directory:
         return await _prepare_worktree(config, filesystem, arguments, state_directory)
+
+
+async def worktrees(filesystem: FilesystemAdapter, directory: str) -> list[dict]:
+    records = (await _checked(directory, "worktree", "list", "--porcelain", "-z")).split(b"\0\0")
+    items = []
+    for index, record in enumerate(records):
+        fields = dict(field.partition(b" ")[::2] for field in record.split(b"\0") if field)
+        if b"worktree" not in fields or b"bare" in fields:
+            continue
+        path = _text(fields[b"worktree"])
+        try:
+            resolved = filesystem.resolve_directory(path)["path"]
+            if resolved != path:
+                raise AgentError("git.worktreeChanged", "The worktree path changed")
+        except AgentError:
+            continue
+        items.append(
+            {
+                "path": path,
+                "branch": _text(fields[b"branch"])[11:] if b"branch" in fields else None,
+                "main": index == 0,
+                "locked": b"locked" in fields,
+            }
+        )
+    return items
+
+
+async def branch_action(
+    config: AgentConfig, filesystem: FilesystemAdapter, arguments: GitBranchArguments
+) -> dict:
+    async with _locked_worktrees(config, filesystem):
+        info = await repository(filesystem, arguments.path, executor=_preparation_executor)
+        if not info["repository"] or info["repository"] != arguments.path:
+            raise AgentError("git.repositoryRootRequired", "Select the repository root")
+        await asyncio.to_thread(_check_metadata, info["commonDirectory"])
+        items = info["worktrees"]
+        selected = next((item for item in items if item["path"] == arguments.path), None)
+        if selected is None:
+            raise AgentError(
+                "git.worktreeChanged", "The worktree is not registered in this repository"
+            )
+        directory = selected["path"]
+        if selected["locked"]:
+            raise AgentError("git.worktreeLocked", "The worktree is locked")
+        name = arguments.name
+        if (
+            name.startswith("-")
+            or (await _git(directory, "check-ref-format", f"refs/heads/{name}"))[0]
+        ):
+            raise AgentError("git.invalidBranch", "The branch name is invalid")
+        if arguments.action in {"switch", "rename"} and await _checked(
+            directory,
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            config=await _disabled_filters(directory),
+        ):
+            raise AgentError("git.dirty", "Commit the working changes first")
+        if arguments.action == "create":
+            code, _, _ = await _git(directory, "branch", "--", name, "HEAD")
+        elif arguments.action == "switch":
+            if any(item["branch"] == name and item["path"] != directory for item in items):
+                raise AgentError("git.branchInUse", "The branch is checked out in another worktree")
+            if (await _git(directory, "show-ref", "--verify", "--quiet", f"refs/heads/{name}"))[0]:
+                raise AgentError("git.localBranchRequired", "The local branch is unavailable")
+            code, _, _ = await _git(
+                directory,
+                "checkout",
+                "--no-guess",
+                "--no-overwrite-ignore",
+                "--no-recurse-submodules",
+                name,
+                config=await _disabled_filters(directory),
+            )
+        elif arguments.action == "rename":
+            branch = info["branch"]
+            if not branch:
+                raise AgentError("git.branchRequired", "Create and select a branch first")
+            published = await _checked(
+                directory, "for-each-ref", "--format=%(refname)", "refs/remotes/"
+            )
+            if any(
+                _text(ref).removeprefix("refs/remotes/").partition("/")[2] == branch
+                for ref in published.splitlines()
+            ):
+                raise AgentError("git.branchPublished", "Published branches are not renamed")
+            if (await _git(directory, "config", "--get", f"branch.{branch}.remote"))[0] == 0:
+                raise AgentError("git.branchPublished", "Published branches are not renamed")
+            code, _, _ = await _git(directory, "branch", "-m", branch, name)
+        else:
+            reference = f"refs/heads/{name}"
+            occupied = await _checked(
+                directory, "branch", "--list", "--format=%(worktreepath)", "--", name
+            )
+            if occupied.strip():
+                raise AgentError("git.branchInUse", "The branch is checked out in a worktree")
+            target = arguments.target_branch
+            if not target or name == target:
+                raise AgentError("git.targetRequired", "Select a different local target branch")
+            tip = (await _checked(directory, "rev-parse", "--verify", reference)).decode().strip()
+            if (
+                await _git(
+                    directory,
+                    "merge-base",
+                    "--is-ancestor",
+                    tip,
+                    f"refs/heads/{target}",
+                )
+            )[0]:
+                raise AgentError(
+                    "git.branchUnmerged", "The branch contains commits not in the target"
+                )
+            # Delete only the checked tip, regardless of its configured upstream.
+            code, _, _ = await _git(directory, "update-ref", "-d", reference, tip)
+            if not code:
+                await _git(directory, "config", "--remove-section", f"branch.{name}")
+        if code:
+            raise AgentError(
+                "git.actionFailed",
+                "The Git action could not be completed; inspect its current state",
+            )
+        return {}
 
 
 def _check_worktree_session(filesystem, git_directory: str, owner: str, session: str) -> None:
@@ -533,66 +699,48 @@ def _check_worktree_session(filesystem, git_directory: str, owner: str, session:
 
 
 async def remove_worktree(config, filesystem, arguments: GitWorktreeRemoveArguments) -> dict:
-    async with _locked_worktrees(config, filesystem) as state_directory:
-        owner, project = str(UUID(arguments.owner_id)), str(UUID(arguments.project_id))
-        session = str(UUID(arguments.session_id))
-        record = state_directory / f"{owner}-{session}.json"
-        try:
-            state = json.loads(filesystem._read_bytes(record.as_posix(), 256 * 1024))
-        except (ValueError, UnicodeDecodeError) as exc:
-            raise AgentError("git.worktreeChanged", "Invalid preparation record") from exc
-        path = state.get("path") if isinstance(state, dict) else None
-        worktrees = config.data_dir / "worktrees"
-        if (
-            not isinstance(state, dict)
-            or not state.get("ready")
-            or state.get("projectId") != project
-            or path
-            not in (
-                (worktrees / session[:8]).as_posix(),
-                (worktrees / project / session).as_posix(),
-            )
-            or arguments.path != path
-            or state.get("branch") not in (f"matoloop/{owner}/{session}", f"worktree-{session[:8]}")
-            or state.get("commonDirectory") != arguments.common_directory
-        ):
-            raise AgentError("git.worktreeChanged", "The worktree binding changed")
-        info = await repository(filesystem, state["repository"], executor=_preparation_executor)
-        if info["commonDirectory"] != state["commonDirectory"]:
-            raise AgentError("git.worktreeChanged", "The source repository changed")
-        await asyncio.get_running_loop().run_in_executor(
-            _preparation_executor, _check_metadata, state["commonDirectory"]
-        )
-        registered = (
-            await _checked(state["repository"], "worktree", "list", "--porcelain", "-z")
-        ).split(b"\0")
-        if f"worktree {path}".encode() in registered:
-            current = await repository(filesystem, path, executor=_preparation_executor)
-            if (
-                current["repository"] != path
-                or current["branch"] != state["branch"]
-                or current["commonDirectory"] != state["commonDirectory"]
-                or current["gitDirectory"] != state.get("gitDirectory")
-            ):
-                raise AgentError("git.worktreeChanged", "The worktree binding changed")
-            if path == (worktrees / session[:8]).as_posix():
-                _check_worktree_session(filesystem, current["gitDirectory"], owner, session)
-            code, _, _ = await _git(
-                state["repository"],
-                "worktree",
-                "remove",
-                "--force",
-                "--",
-                path,
-                timeout_seconds=120,
-            )
-            if code:
-                raise AgentError("git.worktreeRemoveFailed", "The worktree could not be removed")
-        elif os.path.lexists(path):
+    async with _locked_worktrees(config, filesystem):
+        info = await repository(filesystem, arguments.repository, executor=_preparation_executor)
+        if info["commonDirectory"] != arguments.common_directory:
+            raise AgentError("git.worktreeChanged", "The repository metadata changed")
+        item = next((entry for entry in info["worktrees"] if entry["path"] == arguments.path), None)
+        if item is None:
             raise AgentError(
-                "git.worktreeChanged", "An unregistered directory occupies the worktree path"
+                "git.worktreeChanged", "The worktree is not registered in this repository"
             )
-        # Retain the receipt for retries after a lost response or a failed database commit.
+        if item["main"] or arguments.path == arguments.repository:
+            raise AgentError("git.mainWorktree", "The original checkout cannot be removed")
+        if item["locked"]:
+            raise AgentError("git.worktreeLocked", "The worktree is locked")
+        if item["branch"] is None:
+            raise AgentError(
+                "git.branchRequired", "Create a branch to retain detached commits before removal"
+            )
+        await asyncio.to_thread(_check_metadata, info["commonDirectory"])
+        current = await repository(filesystem, arguments.path, executor=_preparation_executor)
+        if current["commonDirectory"] != info["commonDirectory"]:
+            raise AgentError("git.worktreeChanged", "The worktree metadata changed")
+        if not arguments.force and await _checked(
+            arguments.path,
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignored",
+            config=await _disabled_filters(arguments.path),
+        ):
+            raise AgentError("git.dirty", "The worktree contains changes or additional files")
+        code, _, _ = await _git(
+            arguments.repository,
+            "worktree",
+            "remove",
+            *(("--force",) if arguments.force else ()),
+            "--",
+            arguments.path,
+            config=await _disabled_filters(arguments.path),
+            timeout_seconds=120,
+        )
+        if code:
+            raise AgentError("git.worktreeRemoveFailed", "The worktree could not be removed")
         return {"removed": True}
 
 
@@ -611,29 +759,6 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
         raise AgentError("git.repositoryRootRequired", "Select the repository root")
     if info["commonDirectory"] != arguments.common_directory:
         raise AgentError("git.worktreeChanged", "The repository metadata location changed")
-    remote_identity = None
-    if arguments.remote is not None:
-        if arguments.remote not in info["remotes"]:
-            raise AgentError("git.remoteRequired", "The selected Git remote is unavailable")
-        remote_url = await _checked(root, "remote", "get-url", "--", arguments.remote)
-        remote_identity = info["remoteIdentities"][arguments.remote]
-        if remote_identity != arguments.remote_identity:
-            raise AgentError("git.worktreeChanged", "The remote URL changed")
-        url = remote_url.decode("utf-8").strip()
-        scheme = urlsplit(url).scheme
-        scp_remote = (
-            scheme != "file"
-            and ":" in url
-            and "://" not in url
-            and len(url.split(":", 1)[0]) > 1
-            and "/" not in url.split(":", 1)[0]
-            and "\\" not in url.split(":", 1)[0]
-            and not url.startswith(".")
-        )
-        if scheme not in {"https", "http", "ssh", "git"} and not scp_remote:
-            raise AgentError(
-                "git.localRemoteUnsupported", "Remote preparation requires a network remote"
-            )
     await loop.run_in_executor(_preparation_executor, _check_metadata, info["commonDirectory"])
     target = f"refs/heads/{arguments.target_branch}"
     code, _, _ = await _git(root, "check-ref-format", target)
@@ -642,9 +767,15 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
     owner = str(UUID(arguments.owner_id))
     project = str(UUID(arguments.project_id))
     session = str(UUID(arguments.session_id))
-    worktrees = config.data_dir / "worktrees"
-    path = (worktrees / session[:8]).as_posix()
-    branch = f"worktree-{session[:8]}"
+    project_directory = project_worktree_directory(config, filesystem, project)
+    candidates = [
+        destination
+        for destination in arguments.destinations
+        if PurePosixPath(destination).parent == PurePosixPath(project_directory.as_posix())
+        and re.fullmatch(r"[0-9a-f]{8}", PurePosixPath(destination).name)
+    ]
+    if not candidates:
+        raise AgentError("git.worktreeChanged", "No authorized worktree destination was supplied")
     state_path = (state_directory / f"{owner}-{session}.json").as_posix()
     try:
         state = json.loads(filesystem._read_bytes(state_path, 256 * 1024))
@@ -654,18 +785,32 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
         state = None
     except (ValueError, UnicodeDecodeError) as exc:
         raise AgentError("git.worktreeChanged", "Invalid preparation record") from exc
+    registered = (await _checked(root, "worktree", "list", "--porcelain", "-z")).split(b"\0")
     if state is not None:
         if (
             not isinstance(state, dict)
-            or state.get("path") not in (path, (worktrees / project / session).as_posix())
-            or state.get("branch") not in (branch, f"matoloop/{owner}/{session}")
+            or state.get("path") not in candidates
+            or state.get("branch") != f"worktree-{PurePosixPath(state['path']).name}"
         ):
             raise AgentError("git.worktreeChanged", "Invalid preparation binding")
         path, branch = state["path"], state["branch"]
-    # Older Backends authorize only the original project/session destination.
-    destinations = arguments.destinations or [(worktrees / project / session).as_posix()]
-    if path not in destinations:
-        raise AgentError("git.worktreeChanged", "The expected worktree path changed")
+    else:
+        for candidate in candidates:
+            name = f"worktree-{PurePosixPath(candidate).name}"
+            code, _, _ = await _git(root, "show-ref", "--verify", "--quiet", f"refs/heads/{name}")
+            if code not in {0, 1}:
+                raise AgentError(
+                    "git.worktreeFailed", "The preparation branch could not be inspected"
+                )
+            if (
+                code == 1
+                and not os.path.lexists(candidate)
+                and f"worktree {candidate}".encode() not in registered
+            ):
+                path, branch = candidate, name
+                break
+        else:
+            raise AgentError("git.worktreeFailed", "No available worktree name was found")
     if path == root or path.startswith(root.rstrip("/") + "/"):
         raise AgentError(
             "git.worktreeLocation", "Managed worktrees must be outside the source repository"
@@ -676,8 +821,6 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
         "commonDirectory": info["commonDirectory"],
         "path": path,
         "branch": branch,
-        "remote": arguments.remote,
-        "remoteIdentity": remote_identity,
         "targetBranch": arguments.target_branch,
         "projectId": project,
     }
@@ -688,8 +831,8 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
         raise AgentError("git.worktreeChanged", "Preparation inputs changed")
     parent = path.rsplit("/", 1)[0]
     filesystem.mkdir(parent, True)
+    filesystem.upsert((project_directory / ".matoloop-project").as_posix(), project)
     # Recover only the exact registered worktree; never adopt or reset an unrelated directory.
-    registered = (await _checked(root, "worktree", "list", "--porcelain", "-z")).split(b"\0")
     exists = f"worktree {path}".encode() in registered
     if state is None:
         if exists or os.path.lexists(path):
@@ -700,12 +843,7 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
         filesystem.upsert(state_path, json.dumps(state))
     if exists:
         current = await repository(filesystem, path, executor=_preparation_executor)
-        git_dir = (
-            (await _checked(path, "rev-parse", "--absolute-git-dir"))
-            .decode()
-            .strip()
-            .replace("\\", "/")
-        )
+        git_dir = current["gitDirectory"]
         if (
             not state.get("ready")
             or current["repository"] != path
@@ -714,31 +852,16 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
             or git_dir != state.get("gitDirectory")
         ):
             raise AgentError("git.worktreeChanged", "The session worktree binding changed")
-        if path == (worktrees / session[:8]).as_posix():
-            _check_worktree_session(filesystem, git_dir, owner, session)
+        _check_worktree_session(filesystem, git_dir, owner, session)
     elif state.get("ready"):
         raise AgentError("git.worktreeChanged", "The completed worktree is no longer registered")
     if state.get("baseCommit") is None:
-        if arguments.remote is None:
-            code, commit, _ = await _git(root, "rev-parse", "--verify", f"{target}^{{commit}}")
-            if code:
-                raise AgentError(
-                    "git.localBranchRequired", "The local target branch must contain a commit"
-                )
-            await _checked(root, "update-ref", base_ref, commit.decode().strip())
-        else:
-            code, _, _ = await _git(
-                root,
-                "fetch",
-                "--no-tags",
-                "--no-write-fetch-head",
-                "--",
-                arguments.remote,
-                f"{target}:{base_ref}",
-                network=True,
+        code, commit, _ = await _git(root, "rev-parse", "--verify", f"{target}^{{commit}}")
+        if code:
+            raise AgentError(
+                "git.localBranchRequired", "The local target branch must contain a commit"
             )
-            if code:
-                raise AgentError("git.fetchFailed", "The target branch could not be fetched")
+        await _checked(root, "update-ref", base_ref, commit.decode().strip())
     base = (
         (await _checked(root, "rev-parse", "--verify", f"{base_ref}^{{commit}}")).decode().strip()
     )
@@ -746,14 +869,8 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
         raise AgentError("git.worktreeChanged", "The preparation base changed")
     state["baseCommit"] = base
     if not exists:
-        code, previous, _ = await _git(
-            root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"
-        )
-        if code == 0 and (
-            branch == f"worktree-{session[:8]}"
-            or previous.decode().strip() != base
-            or f"branch refs/heads/{branch}".encode() in registered
-        ):
+        code, _, _ = await _git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")
+        if code == 0:
             raise AgentError("git.worktreeChanged", "The preparation branch changed or is in use")
         if code not in {0, 1}:
             raise AgentError("git.worktreeFailed", "The preparation branch could not be inspected")
@@ -771,10 +888,11 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
             "worktree",
             "add",
             "--no-checkout",
-            *(("-b", branch) if code == 1 else ()),
+            "-b",
+            branch,
             "--",
             path,
-            base if code == 1 else branch,
+            base,
             timeout_seconds=120,
         )
         if not code:
@@ -804,9 +922,7 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
         "path": path,
         "branch": branch,
         "baseCommit": base,
-        "remote": arguments.remote,
         "targetBranch": arguments.target_branch,
-        "remoteIdentity": remote_identity,
         "commonDirectory": info["commonDirectory"],
         "gitDirectory": state["gitDirectory"],
     }

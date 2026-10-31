@@ -255,6 +255,7 @@ async def test_executor_preferences_can_change_without_moving_the_active_run(mon
         session_profile={},
         preferred_execution_agent_id=agent.id,
         current_directory="/home/user",
+        workspace_mode="worktree",
     )
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session

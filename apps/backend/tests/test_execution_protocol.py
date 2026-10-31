@@ -157,6 +157,7 @@ async def test_system_info_follows_connection_lifetime_and_agent_identity() -> N
 
 def test_supported_operations_match_the_execution_agent() -> None:
     assert SUPPORTED_OPERATIONS == {
+        "git.branch",
         "git.changes",
         "git.repository",
         "git.worktree",
@@ -245,8 +246,9 @@ def test_terminal_results_use_typed_wire_fields() -> None:
 async def test_manager_correlates_events_and_response_and_ignores_unknown_operations() -> None:
     manager = ExecutionAgentConnectionManager()
     websocket = FakeWebSocket()
-    hello = _hello(operations=["filesystem.read", "future.unknown"])
+    hello = _hello(operations=["filesystem.read", "git.branch", "future.unknown"])
     await manager.register(hello, websocket)  # type: ignore[arg-type]
+    assert manager.snapshot(hello.agent_id) == frozenset({"filesystem.read", "git.branch"})
     events = []
 
     task = asyncio.create_task(
@@ -440,6 +442,7 @@ async def test_dispatched_mutation_and_shell_timeouts_have_unknown_outcomes() ->
     for operation, expected_code in (
         ("filesystem.write", "executionAgent.outcomeUnknown"),
         ("git.worktree", "executionAgent.outcomeUnknown"),
+        ("git.branch", "executionAgent.outcomeUnknown"),
         ("shell.run", "process.outcomeUnknown"),
     ):
         manager = ExecutionAgentConnectionManager(default_timeout=0.01)

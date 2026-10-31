@@ -1,5 +1,5 @@
-from unittest.mock import AsyncMock, Mock
-from uuid import uuid4
+from unittest.mock import AsyncMock
+from uuid import uuid4, uuid5
 
 import pytest
 
@@ -9,9 +9,9 @@ from mato_loop_backend.messaging.telegram import telegram_commands
 from mato_loop_backend.models import ChatSession, ExecutionAgent, Message, Project, UserAccount
 from mato_loop_backend.sessions.coding import (
     RepositoryResult,
+    WorktreeRemovedResult,
     WorktreeResult,
     inspect_repository,
-    prepare_session_worktree,
 )
 from mato_loop_backend.sessions.commands import (
     parse_command,
@@ -21,7 +21,7 @@ from mato_loop_backend.sessions.commands import (
 from mato_loop_backend.sessions.git_commands import check_workspace_admission
 from mato_loop_backend.sessions.serialization import message_payload
 from mato_loop_backend.sessions.service import SessionServiceError
-from mato_loop_backend.settings import TrustLevel
+from mato_loop_backend.settings import AiSettings, TrustLevel
 from mato_loop_backend.tools.sessions import _message_item
 
 
@@ -110,18 +110,33 @@ async def test_command_binds_worktree_target_and_displays_its_prompt_without_run
     assert message_payload(message)["commandPrompt"] == definition.instructions + "\n\nonly parser changes"
 
 
-@pytest.mark.parametrize("changed", ["branch", "computer"])
-async def test_command_rejects_changed_worktree_binding(monkeypatch, changed):
+async def test_local_merge_uses_the_current_branch_without_requiring_a_remote(monkeypatch):
+    agent_id = uuid4()
+    session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=agent_id,
+        current_directory="/worktree/subdirectory", workspace_mode="local", coding_workspace={
+            "mode": "worktree", "executionAgentId": str(agent_id), "repository": "/project", "path": "/worktree",
+            "branch": "old-name", "remote": None, "targetBranch": "develop",
+        })
+    monkeypatch.setattr("mato_loop_backend.sessions.git_commands.inspect_repository", AsyncMock(return_value=RepositoryResult(
+        repository="/worktree", remotes=[], defaultRemote=None, defaultBranch="main", branch="renamed",
+        worktrees=[{"path": "/project", "branch": "develop", "main": True, "locked": False},
+                   {"path": "/worktree", "branch": "renamed", "main": False, "locked": False}],
+    )))
+    command = await prepare_command(AsyncMock(), session, parse_command("/git-merge"))
+    assert (command["context"]["branch"], command["context"]["remote"], command["context"]["targetBranch"]) == ("renamed", None, "develop")
+
+
+async def test_command_ignores_a_git_target_from_another_computer(monkeypatch):
     agent_id = uuid4()
     session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=agent_id, current_directory="/worktree", workspace_mode="worktree", coding_workspace={
-        "mode": "worktree", "executionAgentId": str(uuid4() if changed == "computer" else agent_id), "repository": "/project", "path": "/worktree", "branch": "session",
+        "mode": "worktree", "executionAgentId": str(uuid4()), "repository": "/project", "path": "/worktree", "branch": "session",
         "remote": "origin", "targetBranch": "develop",
     })
     monkeypatch.setattr("mato_loop_backend.sessions.git_commands.inspect_repository", AsyncMock(return_value=RepositoryResult(
-        repository="/worktree", remotes=["origin"], defaultRemote="origin", defaultBranch="main", branch="other" if changed == "branch" else "session",
+        repository="/worktree", remotes=["origin"], defaultRemote="origin", defaultBranch="main", branch="session",
     )))
-    with pytest.raises(SessionServiceError, match="git.worktreeChanged"):
-        await prepare_command(AsyncMock(), session, parse_command("/git-merge"))
+    command = await prepare_command(AsyncMock(), session, parse_command("/git-review"))
+    assert command["context"]["targetBranch"] == "main"
 
 
 async def test_local_command_rejects_a_changed_publication_target(monkeypatch):
@@ -138,76 +153,107 @@ async def test_local_command_rejects_a_changed_publication_target(monkeypatch):
 
 
 async def test_worktree_checks_destination_policy_before_creating_files(monkeypatch):
+    from mato_loop_backend.sessions.coding import select_session_workspace
+
     agent_id = uuid4()
-    project = Project(id=uuid4(), default_execution_agent_id=agent_id,
+    session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=agent_id, session_profile={"worktrees_enabled": True})
+    project = Project(id=uuid4(), user_id=session.user_id, default_execution_agent_id=agent_id,
                       default_current_directory="/project", git_remote="origin", git_target_branch="main")
-    session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=agent_id,
-                          current_directory="/project", workspace_mode="worktree")
     client = AsyncMock()
     monkeypatch.setattr("mato_loop_backend.sessions.coding.coding_client", AsyncMock(return_value=client))
+    monkeypatch.setattr("mato_loop_backend.sessions.git_commands.check_workspace_admission", AsyncMock())
     db = AsyncMock()
+    db.scalar.return_value = None
     db.get.return_value = ExecutionAgent(home_directory="/workspace", external_filesystem_policy="deny")
     monkeypatch.setattr("mato_loop_backend.sessions.coding.inspect_repository", AsyncMock(return_value=RepositoryResult(
-        repository="/project", remotes=[], defaultRemote=None, defaultBranch="main", branch="main", worktreeRoot="/data/worktrees", worktreeLayout="short-session",
+        repository="/project", remotes=[], defaultRemote=None, defaultBranch="main", branch="main", worktreeRoot="/data/worktrees", projectWorktreeDirectory="/data/worktrees/12345678",
     )))
     with pytest.raises(SessionServiceError, match="permission.denied"):
-        await prepare_session_worktree(db, session, project)
+        await select_session_workspace(db, session, project, create=True)
     client.request.assert_not_awaited()
 
 
-@pytest.mark.parametrize(("layout", "path_kind"), [
-    ("short-session", "current"), ("project-session", "current"),
-    ("short-session", "outside"), ("short-session", "legacy"), ("short-session", "legacy_denied"),
-])
-async def test_session_prepares_a_worktree_without_a_remote(monkeypatch, layout, path_kind):
+@pytest.mark.parametrize("outside", [False, True])
+async def test_worktree_creation_binds_an_independent_identity_without_a_remote(monkeypatch, outside):
+    from mato_loop_backend.sessions.coding import select_session_workspace
+
     agent_id = uuid4()
-    project = Project(id=uuid4(), default_execution_agent_id=agent_id, default_current_directory="/project", git_target_branch="develop")
-    session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=agent_id,
-                          current_directory="/project", workspace_mode="worktree")
-    current_path = f"/data/worktrees/{str(session.id)[:8]}"
-    destination = f"/data/worktrees/{project.id}/{session.id}" if layout == "project-session" or path_kind.startswith("legacy") else current_path
+    session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=agent_id, session_profile={"worktrees_enabled": True})
+    project = Project(id=uuid4(), user_id=session.user_id, default_execution_agent_id=agent_id, default_current_directory="/project", git_target_branch="develop")
+    identity = uuid4()
+    name = uuid5(identity, "1").hex[:8]
+    destination = f"/data/worktrees/{str(project.id)[:8]}/{name}"
     client = AsyncMock()
     client.request.return_value = WorktreeResult(
-        repository="/project", path="/outside" if path_kind == "outside" else destination,
-        branch=f"worktree-{str(session.id)[:8]}" if layout != "project-session" else f"matoloop/{session.user_id}/{session.id}",
-        baseCommit="a" * 40, remote=None, targetBranch="develop", remoteIdentity=None, commonDirectory="/project/.git",
+        repository="/project", path="/outside" if outside else destination,
+        branch=f"worktree-{name}",
+        baseCommit="a" * 40, targetBranch="develop", commonDirectory="/project/.git",
         gitDirectory="/project/.git/worktrees/session",
     )
     monkeypatch.setattr("mato_loop_backend.sessions.coding.coding_client", AsyncMock(return_value=client))
+    monkeypatch.setattr("mato_loop_backend.sessions.git_commands.check_workspace_admission", AsyncMock())
     monkeypatch.setattr("mato_loop_backend.sessions.coding.inspect_repository", AsyncMock(return_value=RepositoryResult(
-        repository="/project", commonDirectory="/project/.git", remotes=[], defaultRemote=None, defaultBranch="main", branch="main", worktreeRoot="/data/worktrees",
-        **({"worktreeLayout": layout} if layout != "project-session" else {}),
+        repository="/project", commonDirectory="/project/.git", remotes=[], defaultRemote=None, defaultBranch="main", branch="main", worktreeRoot="/data/worktrees", projectWorktreeDirectory=f"/data/worktrees/{str(project.id)[:8]}",
     )))
-    monkeypatch.setattr("mato_loop_backend.sessions.service.validate_execution_preferences", AsyncMock(return_value=(destination, "auto")))
     db = AsyncMock()
-    db.get.return_value = ExecutionAgent(
-        home_directory=current_path if path_kind == "legacy_denied" else "/workspace",
-        home_filesystem_policy="auto", external_filesystem_policy="deny" if path_kind == "legacy_denied" else "auto",
-    )
-    if path_kind in {"outside", "legacy_denied"}:
-        with pytest.raises(SessionServiceError, match="executionAgent.protocolError"):
-            await prepare_session_worktree(db, session, project)
-        if path_kind == "legacy_denied":
-            assert client.request.await_args.args[1]["destinations"] == [current_path]
-        return
-    await prepare_session_worktree(db, session, project)
-    assert (session.current_directory, session.coding_workspace["remote"]) == (destination, None)
-
-
-async def test_worktree_removal_rejects_a_directory_still_selected_by_a_session(monkeypatch):
-    from mato_loop_backend.sessions import coding
-
-    user, agent_id, project_id, session_id = UserAccount(id=uuid4()), uuid4(), uuid4(), uuid4()
-    session = ChatSession(id=session_id, user_id=user.id, coding_workspace={
-        "mode": "worktree", "executionAgentId": str(agent_id), "projectId": str(project_id), "path": "/data/worktrees/project/session",
-    })
-    client, db = AsyncMock(), AsyncMock()
-    monkeypatch.setattr(coding, "coding_client", AsyncMock(return_value=client))
+    db.scalar.return_value = None
     db.get.return_value = ExecutionAgent(home_directory="/workspace", external_filesystem_policy="auto")
-    db.scalars.return_value = Mock(all=Mock(return_value=[ChatSession(current_directory=session.coding_workspace["path"])]))
-    with pytest.raises(SessionServiceError) as error:
-        await coding.remove_session_worktree(db, session, [session_id])
-    assert (error.value.code, client.request.await_count) == ("git.worktreeInUse", 0)
+    if outside:
+        with pytest.raises(SessionServiceError, match="executionAgent.protocolError"):
+            await select_session_workspace(db, session, project, create=True, worktree_id=identity)
+        return
+    monkeypatch.setattr("mato_loop_backend.sessions.service.validate_execution_preferences", AsyncMock(return_value=(destination, "auto")))
+    await select_session_workspace(db, session, project, create=True, worktree_id=identity)
+    assert (session.current_directory, client.request.await_args.args[1]["sessionId"]) == (destination, str(identity))
+
+
+@pytest.mark.parametrize("registered", [True, False])
+async def test_existing_external_worktree_is_selected_only_when_registered_without_creating_a_branch(monkeypatch, registered):
+    from mato_loop_backend.sessions.coding import select_session_workspace
+
+    session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=uuid4(), session_profile={"worktrees_enabled": True})
+    session.current_directory = "/project"
+    project = Project(id=uuid4(), user_id=session.user_id, default_execution_agent_id=uuid4(), default_current_directory="/other")
+    info = RepositoryResult(repository="/project", commonDirectory="/project/.git", remotes=[], defaultRemote=None,
+        defaultBranch="develop", branch="develop", worktrees=[{"path": "/project", "branch": "develop", "main": True, "locked": False},
+            *([{"path": "/external", "branch": "task", "main": False, "locked": False}] if registered else [])])
+    monkeypatch.setattr("mato_loop_backend.sessions.coding.inspect_repository", AsyncMock(side_effect=[info, info.model_copy(update={"repository": "/external", "branch": "task"})]))
+    monkeypatch.setattr("mato_loop_backend.sessions.service.validate_execution_preferences", AsyncMock(return_value=("/external", "auto")))
+    client = AsyncMock()
+    monkeypatch.setattr("mato_loop_backend.sessions.coding.coding_client", AsyncMock(return_value=client))
+    db = AsyncMock()
+    db.scalar.return_value = None
+    if not registered:
+        with pytest.raises(SessionServiceError, match="git.worktreeChanged"):
+            await select_session_workspace(db, session, project, "/external")
+        client.request.assert_not_awaited()
+        return
+    await select_session_workspace(db, session, project, "/external")
+    assert (session.current_directory, client.request.await_count) == ("/external", 0)
+
+
+async def test_workspace_switch_grants_the_selected_working_directory(monkeypatch):
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from mato_loop_backend.api.routes import git as routes
+    from mato_loop_backend.permissions.policy import execution_directory_scope
+    from mato_loop_backend.settings import AiSettings
+    from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+
+    provider = LlmProviderConfig(name="Test", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="test")
+    session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=uuid4(),
+                          current_directory="/external", agent_profile_id=uuid4(), model_config_id=model.id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    monkeypatch.setattr(routes, "workspace_session", AsyncMock(return_value=(session, Project())))
+    monkeypatch.setattr(routes, "select_session_workspace", AsyncMock(return_value="ask"))
+    monkeypatch.setattr(routes, "load_effective_ai", AsyncMock(return_value=AiSettings(providers=[provider], models=[model])))
+    await routes.switch_workspace(session.id, routes.SessionWorkspaceRequest(directory="/external"), UserAccount(id=session.user_id), db)
+    grant = db.add.call_args.args[0]
+    assert (grant.capability, grant.resource_scope, grant.agent_profile_id, grant.trust_level) == (
+        "execution.directory", execution_directory_scope(session.preferred_execution_agent_id, "/external"), session.agent_profile_id, "public",
+    )
 
 
 async def test_repository_checks_the_actual_git_metadata_destination(monkeypatch):
@@ -336,3 +382,89 @@ async def test_target_adoption_does_not_change_an_unrelated_project_default(monk
     db.scalar.return_value = project
     result = await set_target(session.id, GitTargetRequest(remote="origin", remote_identity="a" * 64), user, db)
     assert (result["projectId"], project.git_remote, session.coding_workspace["remote"]) == (None, "upstream", "origin")
+
+
+@pytest.mark.parametrize("directory", ["/worktree", "/unrelated"])
+async def test_inactive_worktree_removal_returns_affected_sessions_to_local(monkeypatch, directory):
+    from mato_loop_backend.api.errors import ApiError
+    from mato_loop_backend.api.routes import git as routes
+
+    user = UserAccount(id=uuid4())
+    agent_id = uuid4()
+    project = Project(id=uuid4(), user_id=user.id, default_execution_agent_id=uuid4(), default_current_directory="/other")
+    session = ChatSession(id=uuid4(), user_id=user.id, project_id=project.id,
+                          preferred_execution_agent_id=agent_id, current_directory="/project")
+    affected = ChatSession(id=uuid4(), user_id=user.id, preferred_execution_agent_id=agent_id,
+                           current_directory="/worktree/subdirectory", workspace_mode="worktree",
+                           coding_workspace={"mode": "worktree", "path": "/worktree"})
+    client = AsyncMock()
+    client.request.return_value = WorktreeRemovedResult(removed=True)
+    monkeypatch.setattr(routes, "workspace_session", AsyncMock(return_value=(session, project)))
+    monkeypatch.setattr(routes, "inspect_repository", AsyncMock(return_value=RepositoryResult(
+        repository="/project", commonDirectory="/project/.git", remotes=[], defaultRemote=None,
+        defaultBranch="main", branch="task",
+        worktrees=[{"path": "/project", "branch": "main", "main": True, "locked": False},
+                   {"path": "/worktree", "branch": "task", "main": False, "locked": False}],
+    )))
+    monkeypatch.setattr(routes, "check_workspace_admission", AsyncMock())
+    monkeypatch.setattr(routes, "coding_client", AsyncMock(return_value=client))
+    monkeypatch.setattr(routes, "validate_execution_preferences", AsyncMock(return_value=("/project", "auto")))
+    monkeypatch.setattr(routes, "load_effective_ai", AsyncMock(return_value=AiSettings()))
+    grant = AsyncMock()
+    monkeypatch.setattr(routes, "add_directory_grant", grant)
+    db = AsyncMock()
+    db.scalars.return_value = [affected]
+
+    if directory == "/unrelated":
+        with pytest.raises(ApiError, match="git.worktreeChanged"):
+            await routes.git_action(session.id, routes.GitActionRequest(action="remove", directory=directory, force=True), user, db)
+        return
+    await routes.git_action(session.id, routes.GitActionRequest(action="remove", directory=directory, force=True), user, db)
+
+    assert client.request.await_args.args[1]["path"] == "/worktree"
+    assert (session.current_directory, affected.current_directory, affected.workspace_mode,
+            affected.coding_workspace["path"]) == ("/project", "/project", "local", "/project")
+    grant.assert_awaited_once()
+
+
+async def test_branch_management_uses_the_session_repository_after_project_defaults_change(monkeypatch):
+    from mato_loop_backend.api.routes import git as routes
+
+    user = UserAccount(id=uuid4())
+    project = Project(id=uuid4(), user_id=user.id, default_execution_agent_id=uuid4(), default_current_directory="/other")
+    session = ChatSession(id=uuid4(), user_id=user.id, project_id=project.id,
+                          preferred_execution_agent_id=uuid4(), current_directory="/project/src")
+    monkeypatch.setattr(routes, "git_session", AsyncMock(return_value=session))
+    monkeypatch.setattr(routes, "inspect_repository", AsyncMock(return_value=RepositoryResult(
+        repository="/project", commonDirectory="/project/.git", remotes=[], defaultRemote=None, defaultBranch="main", branch="main",
+        worktrees=[{"path": "/project", "branch": "main", "main": True, "locked": False}],
+    )))
+    monkeypatch.setattr(routes, "check_workspace_admission", AsyncMock())
+    client, db = AsyncMock(), AsyncMock()
+    db.scalar.return_value = project
+    monkeypatch.setattr(routes, "coding_client", AsyncMock(return_value=client))
+    await routes.git_action(session.id, routes.GitActionRequest(action="branch-create", directory="/project/src", name="task"), user, db)
+    assert client.request.await_args.args[:2] == ("git.branch", {
+        "path": "/project", "action": "create", "name": "task", "targetBranch": None,
+    })
+
+
+async def test_worktree_details_derive_sessions_from_the_current_directory_and_keep_unknown_status(monkeypatch):
+    from mato_loop_backend.execution.client import ExecutionClientError
+    from mato_loop_backend.sessions import coding
+    from mato_loop_backend.sessions.coding import WorktreeStatusResult
+
+    user, agent_id = UserAccount(id=uuid4()), uuid4()
+    session = ChatSession(id=uuid4(), title="Shared work", user_id=user.id, preferred_execution_agent_id=agent_id,
+                          current_directory="/worktree/subdirectory", coding_workspace={"path": "/other"})
+    info = RepositoryResult(repository="/project", commonDirectory="/project/.git", remotes=[], defaultRemote=None, defaultBranch="main", branch="main",
+        worktrees=[{"path": path, "branch": "task", "main": False, "locked": False} for path in ("/worktree", "/other")])
+    client = AsyncMock()
+    client.request.side_effect = [info, WorktreeStatusResult(repository="/worktree", dirty=True), ExecutionClientError("path.unavailable")]
+    monkeypatch.setattr(coding, "coding_client", AsyncMock(return_value=client))
+    monkeypatch.setattr("mato_loop_backend.sessions.service.validate_execution_preferences", AsyncMock(return_value=("/project", "auto")))
+    db = AsyncMock()
+    db.get.return_value = ExecutionAgent(home_directory="/project", home_filesystem_policy="auto", external_filesystem_policy="auto")
+    db.scalars.return_value = [session]
+    result = await inspect_repository(db, user.id, agent_id, "/project", worktree_details=True)
+    assert [(item.dirty, [entry.id for entry in item.sessions]) for item in result.worktrees] == [(True, [session.id]), (None, [])]

@@ -1067,12 +1067,12 @@ async def create_session(
     )
     item.current_directory = current_directory
     if item.workspace_mode == "worktree":
-        from mato_loop_backend.sessions.coding import prepare_session_worktree
+        from mato_loop_backend.sessions.coding import select_session_workspace
 
-        await prepare_session_worktree(db, item, project)
-        current_directory, directory_policy = await validate_execution_preferences(
-            db, user.id, agent_id, item.current_directory
-        )
+        if payload.workspace_path is None and project and current_directory != project.default_current_directory:
+            raise SessionServiceError(409, "git.projectWorkspaceRequired")
+        directory_policy = await select_session_workspace(db, item, project, payload.workspace_path, create=payload.workspace_path is None)
+        current_directory = item.current_directory
     elif (project and current_directory
           and agent_id == project.default_execution_agent_id
           and current_directory == project.default_current_directory):
@@ -1422,11 +1422,6 @@ async def update_session(
     item = await owned_session_query(db, session_id, user.id)
     if item is None:
         raise SessionServiceError(404, "session.notFound")
-    if item.workspace_mode == "worktree" and any(
-        name in fields and getattr(payload, name) != getattr(item, name)
-        for name in execution_fields
-    ):
-        raise SessionServiceError(409, "git.worktreeChanged")
     if "session_template_id" in fields:
         from mato_loop_backend.sessions.templates import load_template
 
@@ -1439,11 +1434,6 @@ async def update_session(
             "memory_mode": MemoryMode(template.memory_mode),
         })
         fields = payload.model_fields_set
-    if item.workspace_mode == "worktree" and payload.session_profile is not None and not payload.session_profile.worktrees_enabled:
-        previous = SessionProfileSnapshot.model_validate(item.session_profile or {})
-        # Existing legacy bindings remain editable without enabling worktrees retroactively.
-        if "session_template_id" in fields or previous.worktrees_enabled or payload.session_profile.template_id != previous.template_id:
-            raise SessionServiceError(409, "sessionTemplate.worktreesDisabled")
     target_profile_id = (
         payload.agent_profile_id or await default_agent_profile_id(db)
         if "agent_profile_id" in fields
@@ -1595,7 +1585,6 @@ async def update_session(
             current_directory = (
                 payload.current_directory if "current_directory" in fields else None
             )
-        if (selected_new_agent or current_directory != item.current_directory) and (item.coding_workspace or {}).get("mode") != "worktree":
             item.coding_workspace = None
         item.current_directory, directory_policy = await validate_execution_preferences(
             db, user.id, agent_id, current_directory
@@ -1836,7 +1825,6 @@ async def delete_session(
     automation_impact: str | None,
     storage_factory,
     owned_session_query,
-    remove_worktree: bool = False,
 ) -> None:
     item = await db.scalar(
         select(ChatSession).where(
@@ -1903,8 +1891,6 @@ async def delete_session(
     await db.rollback()
     for root_id in descendant_roots:
         await AgentRuntime.cancel_descendants(root_id)
-    if remove_worktree:
-        await db.execute(select(UserAccount.id).where(UserAccount.id == user_id).with_for_update(key_share=True))
     linked_automations = list(
         (
             await db.scalars(
@@ -1973,7 +1959,6 @@ async def delete_session(
                 automation_impact=automation_impact,
                 storage_factory=storage_factory,
                 owned_session_query=owned_session_query,
-                remove_worktree=remove_worktree,
             )
     session_storage = storage_factory()
     storage_sessions = [
@@ -2004,10 +1989,6 @@ async def delete_session(
         ).limit(1)
     )).all():
         raise SessionServiceError(409, "session.runAlreadyActive")
-    if remove_worktree:
-        from mato_loop_backend.sessions.coding import remove_session_worktree
-
-        await remove_session_worktree(db, item, storage_session_ids)
     trashed_trees = []
     try:
         for storage_session_id, project_id in storage_sessions:

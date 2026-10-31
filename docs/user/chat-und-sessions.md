@@ -65,20 +65,58 @@ die Schaltfläche zum erneuten Prüfen erkannt. Bei einem Repository speichern S
 **Standard-Zielbranch** und **Standard-Arbeitsbereich**. Bereits gespeicherte Werte werden nicht durch erkannte
 Vorschläge überschrieben. Verwenden Sie die Repository-Wurzel als Projektverzeichnis.
 
-Vor dem Sessionstart steht über dem Eingabefeld **Arbeitsbereich** mit **Nicht verfügbar**,
-**Lokal** oder **Worktree**. Ohne Computer oder Workspace ist der Arbeitsbereich
-nicht verfügbar. Ein ausgewählter Offline-Computer ändert den angezeigten Modus nicht.
-Bei neuen Projekt-Sessions wählen Sie vor dem Start **Lokal** oder **Worktree**;
-die Projektvorgabe liefert bei aktivierter Worktree-Unterstützung der Sessionvorlage die Vorauswahl. Worktrees benötigen den im Projekt
-eingerichteten Computer und Repositorypfad. Nach dem Start ist der Modus fest; das Feld
-verschwindet aus dem Chat. Die Informationen bleiben unter **Control Center > Git > Einstellungen** sichtbar.
+Vor dem Sessionstart wählen Sie unter **Arbeitsbereich** zwischen **Lokal**,
+**Neuer Worktree** und einem bestehenden Worktree des Projekt-Repositorys.
+Ohne Computer oder Workspace steht dort **Nicht verfügbar**. Die Projektvorgabe
+liefert den Startmodus. Worktrees benötigen den im Projekt eingerichteten Computer
+und Repositorypfad und stehen nur Projekt-Sessions zur Verfügung.
 In der Sessionvorlage steuert **Worktrees verwenden** die Verfügbarkeit. Bei **Coding** ist die Option standardmäßig aktiviert, bei **Allgemein** und neuen eigenen Vorlagen deaktiviert. Ohne diese Option starten neue Sessions unabhängig von der Projektvorgabe lokal; normale Git-Funktionen bleiben nutzbar.
 Lokal bleibt einschließlich eigener Änderungen alles im vorhandenen Verzeichnis.
-Beim Sessionstart mit Worktree verwendet MatoLoop ohne Remote den letzten Commit des lokalen
-Zielbranches. Der Branch muss bereits einen Commit enthalten; uncommittete Änderungen
-bleiben im ursprünglichen Verzeichnis. Mit ausgewähltem Remote wird der Zielbranch
-frisch vom Server abgerufen; ein fehlgeschlagener Abruf fällt nicht auf den lokalen
-Stand zurück. Für einen anderen Arbeitsbereich starten Sie eine neue Session.
+Nur **Neuer Worktree** erzeugt eine neue Arbeitskopie mit eigenem Arbeitsbranch
+vom letzten Commit des lokalen Zielbranches. Es findet kein Fetch statt; ein Remote
+ist nicht erforderlich. Uncommittete Änderungen bleiben im ursprünglichen Verzeichnis.
+**Lokal** und die Auswahl eines bestehenden Worktrees erzeugen keinen Branch.
+
+Unter **Control Center > Git > Einstellungen** öffnen die Bearbeiten-Symbole Dialoge
+für Arbeitsbereich, Branches und Remote. Im Arbeitsbereich-Dialog können Sie wechseln,
+einen neuen Worktree erstellen oder jeden registrierten Worktree direkt entfernen,
+ohne ihn vorher auszuwählen. Alle bei Git registrierten Worktrees des Repositorys
+werden gleich behandelt. Mehrere Sessions können denselben Worktree verwenden; sie
+teilen dann Dateien und Änderungen.
+Die Verwaltung bestehender Arbeitsbereiche folgt dem Computer und Repository der Session,
+auch nach Änderungen an Projektvorgaben. **Lokal** bezeichnet den Haupt-Checkout von Git;
+neue Worktrees benötigen weiterhin die passenden Projektvorgaben.
+Ein Wechsel verschiebt weder Dateien noch Gesprächsverlauf. Laufende Aufträge der
+Session und ungespeicherte Editoränderungen müssen vorher abgeschlossen sein.
+Der Worktree ist der normale Arbeitspfad der Session. Die Auswahl bestätigt die
+Navigation dorthin; Datei- und Shell-Aktionen folgen unverändert den eingestellten
+Berechtigungen. Freigaben des bisherigen Pfads werden nicht kopiert.
+Im Arbeitsbereich-Dialog markiert **Geändert** Worktrees mit uncommitteten Änderungen,
+einschließlich neuer, nicht ignorierter Dateien. Die Prüfung erfolgt beim Öffnen und
+über **Aktualisieren**; nicht prüfbare Zustände werden nicht als sauber ausgegeben.
+Die Listen zeigen kompakte Namen. Beim Arbeitsbereich steht das übergeordnete Verzeichnis
+gedimmt darunter; ein Standort-Symbol kennzeichnet den aktiven Arbeitsbereich ohne blaue
+Hervorhebung. Den aktuellen Branch kennzeichnet ein Häkchen.
+Über das Suchfeld filtern Sie Arbeitsbereiche oder Branches. Ein Klick auf eine Zeile
+markiert den Eintrag und zeigt darunter den vollständigen Pfad beziehungsweise Branchnamen.
+Arbeitsbereiche aktivieren Sie über **⋮ > Aktivieren**, auch **Lokal**. Bei Branches übernimmt
+erst **Wechseln** die Auswahl. Der aktuelle Arbeitsbereich beziehungsweise Branch
+steht zuerst; die übrigen Einträge behalten ihre Reihenfolge. Erstellen erreichen Sie über
+**+**, Entfernen beziehungsweise Umbenennen über das Menü **⋮** des jeweiligen Eintrags.
+Sessionnamen erscheinen im Detailbereich des markierten Arbeitsbereichs als klickbare Chips mit gekürzter Anzeige. Sie öffnen die
+jeweilige Session, ohne ein Arbeitsverzeichnis zu ändern. Die Liste wird aus Computer
+und aktuellem Arbeitspfad abgeleitet, auch für Unterverzeichnisse; es gibt keine feste
+Session-Zuweisung. Der Wechsel über die Git-Einstellungen bleibt möglich und setzt
+einfach den Arbeitspfad auf den gewählten Worktree.
+Die Branch-Verwaltung bietet Erstellen, Wechseln, Umbenennen und sicheres Löschen.
+Sie zeigt alle lokalen Branches des gemeinsamen Repositorys. Bei belegten Branches steht
+der zugehörige Arbeitsbereich direkt unter dem Namen, etwa **in Lokal** oder **in 42427136**.
+Sie können solche Branches markieren und den vollständigen Worktree-Pfad im Detailbereich
+lesen; **Wechseln** bleibt deaktiviert. Den Zielbranch bearbeiten Sie separat über dessen
+Bearbeiten-Symbol in den Git-Einstellungen.
+Bei Blockern hält die Aktion an, ohne Änderungen automatisch zu committen, zu stashen
+oder zu verwerfen. Ein Branchwechsel betrifft alle Sessions dieses Arbeitsbereichs.
+Der Zielbranch ist separat pro Session einstellbar; die Projektvorgabe bleibt der Standard.
 
 Die Git-Einstellungen zeigen Arbeitsbereich, kopierbaren Pfad, Branch, Zielbranch und Remote. **Änderungen** enthält
 die Dateiliste und Agentenaufträge; ein Klick auf eine Datei öffnet ihren Diff im Editor.
@@ -87,7 +125,7 @@ wird vorgeschlagen. Über **Einrichten** beziehungsweise **Bearbeiten** wählen 
 einen vorhandenen Remote oder beauftragen den Agenten, seine Adresse hinzuzufügen
 oder zu ändern. Verwenden Sie eine HTTPS-/SSH-Adresse ohne Zugangsdaten; die Anmeldung
 wird auf dem Computer eingerichtet. Eine Adressänderung betrifft alle Worktrees des
-Repositorys. Bestehende Sessions müssen das geänderte Ziel vor weiteren Git-Aufträgen
+Repositorys. Bestehende Sessions müssen das geänderte Ziel vor weiteren Veröffentlichungen
 über **Ziel übernehmen** ausdrücklich bestätigen. Projektvorgaben werden dabei nur
 für den zugehörigen Computer und Repositorypfad aktualisiert.
 
@@ -100,33 +138,43 @@ Repository- und Remote-Einrichtung starten zunächst lokal.
 Ein Worktree benötigt keinen Remote. Erst Veröffentlichung, Pull Requests und
 Remote-Synchronisierung benötigen ihn. Einen später hinzugefügten Remote übernehmen
 Sie in der Git-App ausdrücklich als Sessionziel; der vorhandene Worktree bleibt erhalten.
-Die Vorbereitung mit Remote verwendet Netzwerkadressen. Lokale Pfad- und
-`file://`-Remotes benötigen die normalen Shell-Tools mit deren Berechtigungen.
 Git-Hooks und Checkout-Filter werden bei der Vorbereitung nicht ausgeführt.
 Unvollständige oder nachträglich vertauschte Arbeitskopien werden nicht automatisch
 übernommen oder zurückgesetzt; prüfen Sie solche Fälle vor einem erneuten Start.
 
 Die Arbeitskopie liegt dauerhaft unter
-`<Agent-Datenverzeichnis>/worktrees/<Projekt-ID>/<Session-ID>`.
-Computer, Verzeichnis und Branch dieser Arbeitskopie bleiben der Session zugeordnet.
-Vorlagen ohne Worktree-Unterstützung sind für solche Sessions nicht auswählbar; der Wechsel zwischen den Agenten einer passenden Vorlage bleibt möglich. Bestehende Sessions werden durch Änderungen an Vorlagen weder umgestellt noch von ihrem Worktree gelöst. Das ursprüngliche Repository muss erreichbar
+`<Agent-Datenverzeichnis>/worktrees/<kurze-Projekt-ID>/<kurze-Worktree-ID>`.
+Beide IDs bestehen aus acht Hex-Zeichen. Ist der Projektordner bereits anderweitig
+belegt, erhält er `-2`, `-3` usw. Weitere Worktrees desselben Projekts verwenden
+denselben Projektordner. Vorhandene Arbeitskopien werden nicht verschoben.
+Der Anfangsbranch heißt `worktree-<kurze-Worktree-ID>`. Ist ein Name belegt, wird
+eine andere kurze ID gewählt, ohne Nummerierung. Nach zehn belegten Kandidaten
+bricht die Erstellung ab.
+Der technische Name und Pfad bleiben beim Umbenennen des Branches unverändert.
+Bestehende Worktrees behalten ihre bisherigen Pfade und Branches, auch im älteren
+Projekt-/Session-Verzeichnislayout.
+Auch Vorlagen ohne Worktree-Unterstützung bleiben für bestehende Sessions auswählbar;
+die Option steuert nur die Worktree-Auswahl und -Erstellung. Ein Worktree ist ein normales
+Arbeitsverzeichnis: Computer und Verzeichnis können Sie über die Session-Einstellungen
+oder freigegebene Agentenwerkzeuge wechseln, auch wenn das bisherige Verzeichnis fehlt.
+Bestehende Sessions werden durch Änderungen an Vorlagen weder umgestellt noch von ihrem
+Arbeitsverzeichnis gelöst. Das ursprüngliche Repository muss für Git-Operationen erreichbar
 bleiben; Worktrees teilen dessen Git-Metadaten. Lokale `.env`-Dateien, Abhängigkeiten,
 laufende Dienste und Datenbanken werden nicht automatisch kopiert oder getrennt.
-Archivieren entfernt den Worktree nicht. Beim Löschen einer Session können Sie im
-Bestätigungsdialog **Worktree ebenfalls entfernen** auswählen. Die Checkbox ist
-zunächst nicht angehakt. Ohne Auswahl bleibt der Worktree bestehen und kann später
-manuell mit Git entfernt werden. Branch und Commits bleiben immer erhalten.
+Archivieren und Löschen einer Session entfernen den Worktree nicht und benötigen weder
+einen verbundenen Computer noch ein vorhandenes externes Arbeitsverzeichnis. Entfernen Sie
+ihn ausdrücklich in der Git-App. Branch, Commits und Gesprächsverläufe bleiben erhalten.
 Beim Entfernen werden nicht committete Änderungen sowie zusätzliche und ignorierte
 Dateien wie `.env` unwiderruflich gelöscht. Der Bestätigungsdialog warnt ausdrücklich
-davor. Bei einem Fehler bleibt die Session erhalten. Andere Sessions und
-laufende Aufträge dürfen den Worktree nicht mehr verwenden. Es gibt keine separate
-Worktree-Verwaltung und keine automatische Löschung.
-Ohne Remote muss der lokale Zielbranch mindestens einen Commit enthalten; fehlt er,
-ist die Worktree-Option vor dem Sessionstart deaktiviert.
+davor. Laufende Aufträge verhindern die Entfernung. Bei Detached HEAD muss zuerst
+ein Branch angelegt und ausgewählt werden, damit Commits erhalten bleiben.
+Betroffene Sessions wechseln nach erfolgreicher Prüfung des lokalen Projektverzeichnisses
+automatisch dorthin; das gilt auch für ihre Unterverzeichnisse im entfernten Worktree.
+Es gibt keine automatische Löschung.
 
 Die allgemeine Befehlspalette und **Git** bieten die
-[Git-Befehle](kanaele.md#coding-befehle) für Review,
-Übernahme, PR, Synchronisierung und Einrichtung mit den vorhandenen Tools und Rechten.
+[Git-Befehle](kanaele.md#coding-befehle) für Review, ausdrückliches Committen,
+lokale Übernahme, Veröffentlichung, PR, Synchronisierung und Einrichtung mit den vorhandenen Tools und Rechten.
 Die Palette setzt den Befehl zunächst ein; die Aktionsliste in der Git-App startet
 den gewählten Auftrag direkt und erhält den vorhandenen Nachrichtenentwurf samt Anhängen. Merge-Review und
 Tests sind Teil des Agentenauftrags; ein positives Review garantiert keine Fehlerfreiheit.
