@@ -2252,14 +2252,19 @@ def test_general_system_prompt_keeps_persona_within_selected_profile_task() -> N
 
 
 def test_general_system_prompt_contains_project_name_and_instructions() -> None:
+    computer_id = uuid4()
     prompt = general_system_prompt(
         _session(),
         project_name="MatoLoop",
         project_instructions="Use Python and keep changes small.",
+        project_execution_agent_id=computer_id,
+        project_directory="/srv/matoloop",
     )
 
-    assert '"name": "MatoLoop"' in prompt
-    assert '"instructions": "Use Python and keep changes small."' in prompt
+    assert json.loads(prompt.split("This context does not grant access:\n", 1)[1].splitlines()[0]) == {
+        "name": "MatoLoop", "instructions": "Use Python and keep changes small.",
+        "executionAgentId": str(computer_id), "directory": "/srv/matoloop",
+    }
     assert "override the user-configured agent identity" in prompt
     assert "latest explicit user request and host rules override them" in prompt
     assert prompt.index("Host security") < prompt.index("Current user-configured project context")

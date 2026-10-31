@@ -211,7 +211,11 @@ class AgentRuntime:
         if active_run is not None:
             raise AgentRunError("session.runAlreadyActive")
         from mato_loop_backend.sessions.coding import git_metadata_directory
-        from mato_loop_backend.sessions.commands import parse_command, prepare_command
+        from mato_loop_backend.sessions.commands import (
+            command_profile_id,
+            parse_command,
+            prepare_command,
+        )
         from mato_loop_backend.sessions.git_commands import check_workspace_admission
         from mato_loop_backend.sessions.service import SessionServiceError
 
@@ -223,10 +227,9 @@ class AgentRuntime:
                 command_data = await prepare_command(db, chat_session, selected_command, content)
             except SessionServiceError as exc:
                 raise AgentRunError(exc.code, params=exc.params) from exc
-            if selected_command.mutates_workspace and (
-                agent_profile_id_override or chat_session.agent_profile_id
-            ) == PLAN_PROFILE_ID:
-                agent_profile_id_override = BUILD_PROFILE_ID
+            agent_profile_id_override = command_profile_id(
+                selected_command, agent_profile_id_override or chat_session.agent_profile_id,
+            )
         profile_id = agent_profile_id_override or chat_session.agent_profile_id
         from mato_loop_backend.settings.effective import session_agent_allowed
 

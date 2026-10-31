@@ -1,4 +1,5 @@
 import hashlib
+import json
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -53,6 +54,7 @@ from mato_loop_backend.models import (
     ExecutionAgent,
     Message,
     MessageAttachment,
+    PermissionGrant,
     Project,
     TitleGenerationStatus,
     UserAccount,
@@ -72,11 +74,16 @@ from mato_loop_backend.settings import (
     GeneralSettings,
     MemorySettings,
     SettingsStore,
+    ToolSettings,
     TrustLevel,
     UserPreferences,
 )
 from mato_loop_backend.settings.models import (
+    BUILD_PROFILE_ID,
+    GENERAL_PROFILE_ID,
+    PLAN_PROFILE_ID,
     AgentProfile,
+    AgentProfilePermissions,
     LlmProviderConfig,
     ModelAvailability,
     ModelConfig,
@@ -595,11 +602,19 @@ async def test_mark_session_read_uses_owned_assistant_message_monotonically(has_
     db.commit.assert_awaited_once()
 
 
-@pytest.mark.parametrize("content,general_template,directory", [
-    ("Erste Nachricht", False, None), ("/git-init", False, None),
-    ("Erste Nachricht", True, None), ("Erste Nachricht", False, "/other"),
+@pytest.mark.parametrize("content,general_template,directory,other_computer", [
+    ("Erste Nachricht", False, None, False), ("/git-init", False, None, False),
+    ("Erste Nachricht", True, None, False), ("Erste Nachricht", False, "/other", False),
+    ("Erste Nachricht", False, None, True),
 ])
-async def test_session_is_created_with_first_message_and_run(monkeypatch, content, general_template, directory) -> None:
+@pytest.mark.parametrize("read_policy,external_policy,trust", [
+    ("auto", "ask", "private"), ("ask", "ask", "private"),
+    ("disabled", "ask", "private"), ("auto", "disabled", "private"),
+    ("auto", "ask", "public"),
+])
+async def test_session_is_created_with_first_message_and_run(
+    monkeypatch, content, general_template, directory, other_computer, read_policy, external_policy, trust,
+) -> None:
     from mato_loop_backend.api.routes import sessions as sessions_route
     from mato_loop_backend.settings.session_profiles import CODING_TEMPLATE_ID, DEFAULT_TEMPLATE_ID
 
@@ -614,7 +629,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch, conten
         provider_id=provider_id,
         model_id="test-model",
         name="Test",
-        trust_level=TrustLevel.PRIVATE,
+        trust_level=TrustLevel(trust),
         discovery_metadata={"reasoning_efforts": ["low", "high"], "default_reasoning_effort": "low"},
     )
     ai_settings = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
@@ -628,6 +643,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch, conten
         default_session_template_id=CODING_TEMPLATE_ID,
         git_workspace_mode="worktree" if general_template else "local",
     )
+    selected_computer = uuid4() if other_computer else project.default_execution_agent_id
 
     async def load_settings(_db, settings_type, **_kwargs):
         if settings_type is AiProviderSettings:
@@ -645,6 +661,11 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch, conten
     start = AsyncMock(return_value=run)
     monkeypatch.setattr(SettingsStore, "load", load_settings)
     monkeypatch.setattr(AgentRuntime, "start", start)
+    tools = ToolSettings()
+    tools._agent_permissions = AgentProfilePermissions(policies={
+        "filesystem.read": read_policy, "working_directory.external": external_policy,
+    })
+    monkeypatch.setattr("mato_loop_backend.sessions.service.load_agent_profile_tools", AsyncMock(return_value=(tools, None)))
     validate_execution = AsyncMock(return_value=(directory or "/srv/project", None))
     monkeypatch.setattr(
         "mato_loop_backend.sessions.service.validate_execution_preferences",
@@ -666,6 +687,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch, conten
         content=f"  {content}  ",
         workspace_mode="worktree" if directory or content == "/git-init" else None,
         **({"current_directory": directory} if directory else {}),
+        **({"preferred_execution_agent_id": selected_computer, "current_directory": "/srv/project"} if other_computer else {}),
         project_id=project.id,
         session_template_id=DEFAULT_TEMPLATE_ID if general_template else None,
         reasoning_effort="low",
@@ -683,14 +705,22 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch, conten
         return
     result = await create_session(payload, user, db)
 
-    session = db.add.call_args.args[0]
+    session = db.add.call_args_list[0].args[0]
+    grants = [call.args[0] for call in db.add.call_args_list if isinstance(call.args[0], PermissionGrant)]
+    assert [(grant.session_id, grant.capability, grant.resource_type, json.loads(grant.resource_scope),
+             grant.agent_profile_id, grant.trust_level, grant.run_id) for grant in grants] == ([
+        (session.id, "category.read", "execution_path",
+         {"agentId": str(project.default_execution_agent_id), "path": "/srv/project", "recursive": True},
+         session.agent_profile_id, trust, None),
+    ] if read_policy == "auto" and external_policy != "disabled" and not other_computer else [])
+    assert session.agent_profile_id == (BUILD_PROFILE_ID if content == "/git-init" else GENERAL_PROFILE_ID if general_template else PLAN_PROFILE_ID)
     assert session.workspace_mode == "local"
     assert session.model_config_id is None
     assert session.reasoning_effort == "low"
     assert session.user_id == user.id
     assert session.memory_mode == "full"
     assert session.web_search_policy == "available"
-    assert session.preferred_execution_agent_id == project.default_execution_agent_id
+    assert session.preferred_execution_agent_id == selected_computer
     assert session.current_directory == "/srv/project"
     assert session.session_profile["template_id"] == str(DEFAULT_TEMPLATE_ID if general_template else CODING_TEMPLATE_ID)
     assert session.control_center == {
@@ -722,7 +752,7 @@ async def test_session_is_created_with_first_message_and_run(monkeypatch, conten
     assert result["modelName"] == "Test"
     assert result["message"]["id"] == str(persisted_message.id)
     validate_execution.assert_awaited_once_with(
-        db, user.id, project.default_execution_agent_id, "/srv/project", defer_unavailable=True,
+        db, user.id, selected_computer, "/srv/project", defer_unavailable=True,
     )
     storage.provision.assert_called_once_with(session.id, project.id, user_id=user.id)
 

@@ -58,14 +58,17 @@ from mato_loop_backend.models import (
     UserAccount,
 )
 from mato_loop_backend.permissions.policy import execution_directory_scope
+from mato_loop_backend.permissions.resolution import tool_execution_policy
 from mato_loop_backend.settings import (
     AgentProfileUnavailable,
     AiSettings,
     InstanceLimits,
     SettingsStore,
+    ToolExecutionPolicy,
     apply_session_ai,
     effective_model_trust,
     load_agent_profile,
+    load_agent_profile_tools,
     load_effective_ai,
 )
 from mato_loop_backend.settings.effective import default_agent_profile_id
@@ -985,7 +988,7 @@ async def create_session(
     if duplicate is not None:
         return duplicate
     content = payload.content.strip() if payload.content is not None else None
-    from mato_loop_backend.sessions.commands import parse_command
+    from mato_loop_backend.sessions.commands import command_profile_id, parse_command
 
     command = parse_command(content) if content else None
     if content == "" and not attachments:
@@ -1017,7 +1020,7 @@ async def create_session(
     configuration = payload.session_profile or template.snapshot()
     configuration.template_id = template.id
     configuration.worktrees_enabled = template.worktrees_enabled
-    agent_profile_id = payload.agent_profile_id or template.start_agent_id
+    agent_profile_id = command_profile_id(command, payload.agent_profile_id or template.start_agent_id)
     if configuration.agent_ids is not None and agent_profile_id not in configuration.agent_ids:
         raise SessionServiceError(422, "agentProfile.selectedUnavailable")
     fields = payload.model_fields_set
@@ -1093,19 +1096,35 @@ async def create_session(
     item_id = item.id
     item_project_id = item.project_id
     session_storage = storage_factory()
-    if content is not None and model_available(ai, model_id):
+    if model_available(ai, model_id):
         selected_model = model_for_session(ai, model_id)
         selected_provider = provider_for_session(ai, selected_model)
         assert selected_model is not None and selected_provider is not None
-        await add_directory_grant(
-            db,
-            item.id,
-            agent_id,
-            current_directory,
-            directory_policy,
-            item.agent_profile_id,
-            effective_model_trust(selected_provider, selected_model).value,
-        )
+        trust_level = effective_model_trust(selected_provider, selected_model)
+        if content is not None:
+            await add_directory_grant(
+                db,
+                item.id,
+                agent_id,
+                current_directory,
+                directory_policy,
+                item.agent_profile_id,
+                trust_level.value,
+            )
+        if (project and project.default_execution_agent_id is not None
+                and project.default_execution_agent_id == agent_id and project.default_current_directory):
+            tools, _ = await load_agent_profile_tools(db, user.id, item.agent_profile_id, trust_level)
+            if (tools.tool_availability.get("read", True)
+                    and tool_execution_policy(tools, "filesystem.read") == ToolExecutionPolicy.AUTO
+                    and tool_execution_policy(tools, "working_directory.external") != ToolExecutionPolicy.DISABLED):
+                db.add(PermissionGrant(
+                    session_id=item.id,
+                    capability="category.read",
+                    resource_type="execution_path",
+                    resource_scope=execution_directory_scope(agent_id, project.default_current_directory, recursive=True),
+                    agent_profile_id=item.agent_profile_id,
+                    trust_level=trust_level.value,
+                ))
     await db.flush()
     try:
         await asyncio.to_thread(session_storage.provision, item_id, item_project_id, user_id=user.id)

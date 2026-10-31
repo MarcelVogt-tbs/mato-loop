@@ -1,9 +1,11 @@
 """Shared command registry and dispatch for chat and messaging."""
 
 import re
+from uuid import UUID
 
 from mato_loop_backend.sessions.command_contracts import Command, CommandProvider, command_arguments
 from mato_loop_backend.sessions.git_commands import GIT_COMMAND_PROVIDER
+from mato_loop_backend.settings.models import BUILD_PROFILE_ID, PLAN_PROFILE_ID
 
 _providers: dict[str, CommandProvider] = {}
 FORK_COMMAND = Command("fork", "Session kopieren", "In einer unabhängigen Kopie weiterschreiben.", "", icon="call_split")
@@ -29,6 +31,10 @@ def parse_command(content: str) -> Command | None:
         return None
     name = text.split(None, 1)[0][1:].split("@", 1)[0].casefold().replace("_", "-")
     return next((command for command in (FORK_COMMAND, *registered_commands()) if command.name == name), None)
+
+
+def command_profile_id(command: Command | None, profile_id: UUID | None) -> UUID | None:
+    return BUILD_PROFILE_ID if command and command.mutates_workspace and profile_id == PLAN_PROFILE_ID else profile_id
 
 
 async def command_catalog(db, session) -> list[dict]:

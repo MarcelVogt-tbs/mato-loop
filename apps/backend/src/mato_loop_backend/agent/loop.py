@@ -423,6 +423,8 @@ async def execute_loop_body(
             user_profile=user_profile_payload,
             project_name=project_name,
             project_instructions=project_instructions,
+            project_execution_agent_id=project.default_execution_agent_id if project is not None else None,
+            project_directory=project.default_current_directory if project is not None else None,
             memory_context_enabled=memory_state.read_enabled,
             memory_overview_prefetched=memory_overview_prefetched,
             web_search_required=required_search and not tool_budget_exhausted,

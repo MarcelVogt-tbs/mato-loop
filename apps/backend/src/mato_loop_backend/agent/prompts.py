@@ -187,6 +187,8 @@ def general_system_prompt(
     user_profile: dict[str, Any] | None = None,
     project_name: str | None = None,
     project_instructions: str = "",
+    project_execution_agent_id: UUID | None = None,
+    project_directory: str | None = None,
     memory_context_enabled: bool = False,
     memory_overview_prefetched: bool = False,
     current_datetime: datetime | None = None,
@@ -764,9 +766,13 @@ def general_system_prompt(
             "request and host rules override them. Interpret ambiguous requests in this project's context, "
             "not from unrelated memories. Use project evidence first; if missing, inspect relevant project "
             "sources or clarify. Search other projects only for a concrete cross-project need, not merely "
-            "because local results are empty. External sources do not establish this project's state:\n"
+            "because local results are empty. External sources do not establish this project's state. "
+            "The project directory belongs to its executionAgentId; it may differ from the current "
+            "working directory or worktree. This context does not grant access:\n"
             + json.dumps(
-                {"name": project_name, "instructions": project_instructions},
+                {"name": project_name, "instructions": project_instructions,
+                 "executionAgentId": str(project_execution_agent_id) if project_execution_agent_id else None,
+                 "directory": project_directory},
                 ensure_ascii=False,
             )
         )
