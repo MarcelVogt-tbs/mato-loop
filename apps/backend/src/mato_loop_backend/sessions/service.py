@@ -1487,11 +1487,11 @@ async def update_session(
         "agent_profile_id" in fields
         and target_profile_id
         != item.agent_profile_id
-    ) or ("model_id" in fields and payload.model_id != item.model_config_id) or (
+    ) or (
         "session_profile" in fields
         and payload.session_profile is not None
-        and payload.session_profile.model_dump(exclude={"message_size"})
-        != SessionProfileSnapshot.model_validate(item.session_profile or {}).model_dump(exclude={"message_size"})
+        and payload.session_profile.model_dump(exclude={"message_size", "agent_models"})
+        != SessionProfileSnapshot.model_validate(item.session_profile or {}).model_dump(exclude={"message_size", "agent_models"})
     ):
         await db.execute(
             delete(PermissionGrant).where(

@@ -11,8 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent.run_contracts import ApprovalResolution
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.events import run_events
-from mato_loop_backend.models import ApprovalRequest, PermissionGrant
+from mato_loop_backend.files.service import RootFileService
+from mato_loop_backend.models import ApprovalRequest, ChatSession, PermissionGrant
 from mato_loop_backend.permissions.policy import (
+    PermissionPolicy,
     PermissionRequest,
     SessionGrantScope,
     session_grant_matches_request,
@@ -388,6 +390,34 @@ async def _decide_agent_action(
             await db.delete(grant)
         await db.commit()
         raise ApprovalDecisionError(409, "approval.runInactive")
+
+    superseded_grants: list[PermissionGrant] = []
+    for grant in created_grants:
+        if grant.resource_type not in {"execution_path", "session_path"}:
+            continue
+        session = await db.get(ChatSession, approval.session_id) if grant.resource_type == "session_path" else None
+        root_files = RootFileService(approval.session_id, project_id=session.project_id if session else None)
+        candidates = (await db.scalars(select(PermissionGrant).where(
+            PermissionGrant.session_id == approval.session_id,
+            PermissionGrant.resource_type == grant.resource_type,
+        ))).all()
+        for candidate in candidates:
+            if (
+                candidate not in created_grants
+                and candidate not in superseded_grants
+                and candidate.agent_profile_id == grant.agent_profile_id
+                and candidate.trust_level == grant.trust_level
+                and (grant.run_id is None or candidate.run_id == grant.run_id)
+                and PermissionPolicy.scope_matches(grant, SessionGrantScope(
+                    candidate.capability.removeprefix("category."),
+                    candidate.resource_type, candidate.resource_scope,
+                ), root_files)
+            ):
+                superseded_grants.append(candidate)
+                await db.delete(candidate)
+
+    if superseded_grants:
+        await db.commit()
 
     await run_events.publish(
         approval.run_id,

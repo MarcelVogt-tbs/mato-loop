@@ -135,6 +135,22 @@ async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = approval
     db.scalar.return_value = None
+    candidates = []
+    if kind == "parent":
+        base = {
+            "session_id": approval.session_id, "capability": "category.read",
+            "resource_type": "execution_path",
+            "resource_scope": execution_directory_scope(agent_id, "/source/file.txt"),
+            "agent_profile_id": profile_id, "trust_level": "public", "run_id": None,
+        }
+        candidates = [PermissionGrant(**(base | changes)) for changes in (
+            {}, {"capability": "category.write"}, {"capability": "category.delete"},
+            {"agent_profile_id": uuid4()}, {"trust_level": "private"},
+            {"resource_scope": execution_directory_scope(uuid4(), "/source/file.txt")},
+            {"resource_scope": execution_directory_scope(agent_id, "/source-other/file.txt")},
+            {"run_id": approval.run_id}, {"run_id": uuid4()},
+        )]
+    db.scalars.return_value = Mock(all=Mock(return_value=candidates))
     claim = Mock(return_value=True)
     resolve = Mock(return_value=True)
     publish = AsyncMock()
@@ -154,12 +170,49 @@ async def test_allow_persists_scoped_grant_before_resuming(monkeypatch, decision
     assert all(grant.agent_profile_id == profile_id for grant in grants)
     assert all(grant.trust_level == "public" for grant in grants)
     assert approval.status == "approved"
-    db.commit.assert_awaited_once()
+    assert db.commit.await_count == (2 if kind == "parent" else 1)
     db.refresh.assert_awaited_once_with(approval, with_for_update=True)
     resolve.assert_called_once_with(
         approval.id, ApprovalResolution(decision=decision)
     )
     assert result == {"status": "approved", "decision": decision}
+    assert [call.args[0] for call in db.delete.await_args_list] == (
+        [*candidates[:2], *candidates[7:]] if kind == "parent" and decision == "allow_session"
+        else candidates[7:8] if kind == "parent" else []
+    )
+
+
+async def test_failed_resume_does_not_restore_revoked_file_grant(monkeypatch) -> None:
+    approval = _approval()
+    agent_id = uuid4()
+    request = execution_directory_permission(agent_id, "/source/file.txt", capability="filesystem.write")
+    approval.capability, approval.resource_type, approval.resource_scope = request.capability, request.resource_type, request.resource_scope
+    approval.payload = {"sessionGrants": session_grants_payload(request), "grantOptions": session_grant_options_payload(request)}
+    _fingerprint(approval)
+    previous = PermissionGrant(
+        session_id=approval.session_id, capability="category.read", resource_type="execution_path",
+        resource_scope=execution_directory_scope(agent_id, "/source/file.txt"),
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    db.scalars.return_value = Mock(all=Mock(return_value=[previous]))
+    active_grants = [previous]
+    db.add.side_effect = active_grants.append
+    db.delete.side_effect = lambda grant: active_grants.remove(grant) if grant in active_grants else None
+    db.merge.side_effect = active_grants.append
+    monkeypatch.setattr(AgentRuntime, "claim_approval_resolution", Mock(return_value=True))
+
+    def fail_resume(*_args):
+        # Another request revokes all grants after the approval commit.
+        active_grants.clear()
+        return False
+
+    monkeypatch.setattr(AgentRuntime, "resolve_approval", Mock(side_effect=fail_resume))
+
+    with pytest.raises(ApprovalDecisionError, match="approval.runInactive"):
+        await decide_agent_action(db, approval, "allow_session", grant_option="parent")
+
+    assert active_grants == []
 
 
 @pytest.mark.parametrize("decision, confidential", [("allow_session", False), ("allow_once", False), ("allow_once", True)])

@@ -2798,8 +2798,8 @@ async def test_template_switch_replaces_session_overrides(monkeypatch) -> None:
     }
 
 
-@pytest.mark.parametrize("field,revokes", [("message_size", False), ("agent_ids", True), ("agent_models", True)])
-async def test_session_profile_changes_preserve_grants_only_for_message_size(monkeypatch, field, revokes) -> None:
+@pytest.mark.parametrize("field,revokes", [("message_size", False), ("agent_ids", True), ("agent_models", False), ("model_id", False)])
+async def test_session_changes_preserve_grants_for_model_and_message_size(monkeypatch, field, revokes) -> None:
     from mato_loop_backend.settings.session_profiles import (
         ChatModelOverride,
         SessionTemplatesSettings,
@@ -2813,16 +2813,21 @@ async def test_session_profile_changes_preserve_grants_only_for_message_size(mon
     template = SessionTemplatesSettings().templates[1]
     profile = template.snapshot()
     session = ChatSession(id=uuid4(), user_id=user.id, title="Test", agent_profile_id=template.start_agent_id, model_config_id=model.id, memory_mode="disabled", session_profile=profile.model_dump(mode="json"))
-    profile = profile.model_copy(update={field: {
-        "message_size": "standard",
-        "agent_ids": [template.start_agent_id],
-        "agent_models": {template.start_agent_id: ChatModelOverride(model_id=model.id)},
-    }[field]})
+    payload = SessionUpdateRequest(model_id=model.id)
+    if field == "model_id":
+        session.model_config_id = None
+    else:
+        profile = profile.model_copy(update={field: {
+            "message_size": "standard",
+            "agent_ids": [template.start_agent_id],
+            "agent_models": {template.start_agent_id: ChatModelOverride(model_id=model.id)},
+        }[field]})
+        payload = SessionUpdateRequest(session_profile=profile)
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
     db.scalar.return_value = None
 
-    await update_session(session.id, SessionUpdateRequest(session_profile=profile), user, db)
+    await update_session(session.id, payload, user, db)
 
     assert db.execute.await_count == int(revokes)
 
