@@ -239,14 +239,28 @@ async def _codex_operation(
     headers["OpenAI-Beta"] = "responses=experimental"
     if request.prompt_cache_key:
         headers["session-id"] = request.prompt_cache_key
+    state = request.turn_state
+    binding = (*(request.continuation_scope[key] for key in sorted(request.continuation_scope)),
+               request.prompt_cache_key, request.model, request.service_tier, refreshed.get("account_id"))
+    if state is not None and state.binding != binding:
+        state.binding, state.routing_token = binding, None
+
+    def capture_headers(response_headers: Mapping[str, str]) -> None:
+        token = response_headers.get("x-codex-turn-state")
+        if state is not None and state.routing_token is None and token and len(token) <= 4096:
+            state.routing_token = token
 
     async def execute() -> ProviderResult:
+        attempt_headers = dict(headers)
+        if state is not None and state.routing_token:
+            attempt_headers["x-codex-turn-state"] = state.routing_token
         return await runtime.responses_api(
             url=codex_oauth.CODEX_RESPONSES_URL,
-            headers=headers,
+            headers=attempt_headers,
             request=request,
             on_delta=on_delta,
             on_reasoning=on_reasoning,
+            on_response_headers=capture_headers,
         )
 
     return execute

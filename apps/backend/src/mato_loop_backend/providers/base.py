@@ -199,6 +199,12 @@ def select_provider_images(
     return [item[3] for item in selected]
 
 
+@dataclass(slots=True, repr=False)
+class ProviderTurnState:
+    binding: tuple[str | None, ...] | None = None
+    routing_token: str | None = None
+
+
 @dataclass(slots=True)
 class ProviderRequest:
     model: str
@@ -218,6 +224,9 @@ class ProviderRequest:
     service_tier: str | None = None
     continuation_scope: dict[str, str | None] = field(default_factory=dict)
     media: list[ProviderMedia] = field(default_factory=list)
+    configuration_updates: dict[int, str] = field(default_factory=dict)
+    reasoning_configuration: dict[str, Any] | None = None
+    turn_state: ProviderTurnState | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(slots=True)

@@ -91,4 +91,5 @@ JINA_ADAPTER = IntegrationAdapterDefinition(
     adapter_type="jina",
     config_model=JinaConfig,
     instance_only=True,
+    native_tool="webfetch",
 )

@@ -127,6 +127,26 @@ def test_grant_scope_migration_resets_consent_without_expiring_memory_proposals(
         engine.dispose()
 
 
+def test_native_provider_migration_moves_explicit_denials_to_tool_configuration():
+    path = Path(__file__).parents[1] / "alembic/versions/e685c50f164e_native_tool_providers.py"
+    spec = importlib.util.spec_from_file_location("native_provider_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    profile = "00000000-0000-4000-8000-000000000004"
+    child = {"id": str(uuid4()), "base_profile_id": profile, "overrides": {"toolAvailability": {"webfetch": True}}}
+    migrated = migration.migrate_settings([
+        {"id": uuid4(), "key": "integrations", "user_id": None, "data": {"instances": [{
+            "integration_type": "webfetch", "adapter_type": "jina", "config": {"base_url": "https://reader.test"},
+            "profile_permissions": {profile: {"available": False, "toolLoading": "all"}},
+        }]}},
+        {"id": uuid4(), "key": "agent-profiles", "user_id": uuid4(), "data": {"profiles": [child]}},
+    ])
+    assert (
+        migrated[-1]["data"]["builtin_access_overrides"][profile],
+        migrated[1]["data"]["profiles"][0]["overrides"],
+    ) == ({"toolAvailability": {"webfetch": False}}, {"toolAvailability": {"webfetch": False}})
+
+
 def test_permission_migration_preserves_settings_and_resets_navigation(monkeypatch):
     path = Path(__file__).parents[1] / "alembic/versions/9cee124e2dfb_simplify_permissions.py"
     spec = importlib.util.spec_from_file_location("connection_availability_migration", path)

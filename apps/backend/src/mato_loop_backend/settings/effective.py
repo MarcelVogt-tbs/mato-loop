@@ -291,6 +291,11 @@ def integration_tool_loading(instance: IntegrationInstance, profile: AgentProfil
 
 
 def integration_profile_available(instance: IntegrationInstance, profile: AgentProfile) -> bool:
+    from mato_loop_backend.integrations.registry import integration_adapter
+
+    adapter = integration_adapter(instance.integration_type, instance.adapter_type)
+    if adapter is not None and adapter.native_tool:
+        return True
     override = instance.profile_permissions.get(profile.id)
     if override is not None and override.available is not None:
         return override.available

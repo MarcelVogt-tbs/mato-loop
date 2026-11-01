@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -110,6 +110,7 @@ class DiscoveredModel(BaseModel):
             "reasoning_efforts",
             "api_model_id",
             "service_tier",
+            "supports_reasoning_effort_updates",
         }
         metadata: dict[str, Any] = {}
         for key, value in self.model_dump(
@@ -323,6 +324,7 @@ def _responses_input(
     media: list[ProviderMedia] | None = None,
     *,
     reasoning_token_estimates: dict[int, int] | None = None,
+    configuration_updates: dict[int, str] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     if any(item.modality != "image" for item in media or []):
         raise ProviderError(
@@ -348,6 +350,8 @@ def _responses_input(
         items.append({"role": "user", "content": content})
 
     for index, message in enumerate(messages):
+        if index in (configuration_updates or {}):
+            items.append({"type": "configuration_update", "reasoning": {"effort": configuration_updates[index]}})
         first_item = len(items)
         role = message["role"]
         content = message.get("content") or ""
@@ -454,6 +458,8 @@ def _responses_input(
                 pending_tool_media.clear()
         elif message_media:
             append_media(message_media, source_role=role)
+    if len(messages) in (configuration_updates or {}):
+        items.append({"type": "configuration_update", "reasoning": {"effort": configuration_updates[len(messages)]}})
     return "\n\n".join(instructions), items
 
 
@@ -502,6 +508,7 @@ def _responses_body(
     instructions, input_items = _responses_input(
         request.messages, request.continuation_scope, request.media,
         reasoning_token_estimates=reasoning_token_estimates,
+        configuration_updates=request.configuration_updates,
     )
     body: dict[str, Any] = {
         "model": request.model,
@@ -983,12 +990,15 @@ async def responses_api(
     on_delta: DeltaCallback | None,
     on_reasoning: ReasoningDeltaCallback | None = None,
     extra_body: dict[str, Any] | None = None,
+    on_response_headers: Callable[[Mapping[str, str]], None] | None = None,
 ) -> ProviderResult:
     body = _responses_body(request, extra_body)
     async with httpx.AsyncClient(timeout=request.timeout, headers={"User-Agent": f"MatoLoop/{__version__}"}) as client:
         if not request.stream:
             response = await client.post(url, headers=headers, json=body)
             await _ensure_success(response)
+            if on_response_headers:
+                on_response_headers(response.headers)
             result = _responses_result(_response_json(response))
             if on_reasoning and result.reasoning:
                 await on_reasoning(result.reasoning.text, result.reasoning.kind)
@@ -1008,6 +1018,8 @@ async def responses_api(
         reasoning_finished_at: float | None = None
         async with client.stream("POST", url, headers=headers, json=body) as response:
             await _ensure_success(response)
+            if on_response_headers:
+                on_response_headers(response.headers)
             async for event in _sse_events(response):
                 event_type = event.get("type")
                 if event_type == "response.output_text.delta":

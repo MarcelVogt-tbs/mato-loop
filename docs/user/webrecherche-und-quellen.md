@@ -16,6 +16,8 @@ Ohne weitere Einrichtung verwendet MatoLoop eine eingebaute Suche ohne API-Schl�
 
 Bei Fehlern gibt es keinen automatischen Anbieterwechsel.
 
+F체r Jina und SearXNG steuerst du Verf체gbarkeit und Berechtigungen 체ber die normalen Tools **Webseite abrufen** und **Im Web suchen**. Die Integrationskonfiguration verweist darauf; die allgemeine Profilvorgabe f체r Integrationen und deren Tool-Ladeverhalten schalten diese Anbieter nicht zus채tzlich aus. Die Verbindung selbst muss weiterhin aktiviert sein.
+
 ## Webseiten abrufen
 
 Unter **Einstellungen > Grundeinstellungen > Bevorzugte Sprache** hinterlegst du

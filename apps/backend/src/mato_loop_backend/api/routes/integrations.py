@@ -81,6 +81,7 @@ from mato_loop_backend.integrations.openscad.adapter import (
 )
 from mato_loop_backend.integrations.openscad.service import OpenScadIntegrationService
 from mato_loop_backend.integrations.registry import (
+    integration_adapter,
     integration_adapter_type_registered,
     integration_adapters,
     validate_integration,
@@ -1860,7 +1861,11 @@ async def get_integration_permissions(
         trust.value: api_integration_resources._access_payload(instance, resources, tools.model_copy(deep=True).select_trust(trust))
         for trust in TrustLevel
     } if actions else {}
+    adapter = integration_adapter(instance.integration_type, instance.adapter_type)
+    native_tool = adapter.native_tool if adapter is not None else None
     configured = instance.profile_permissions.get(profile_id, IntegrationPermissions()) if profile_id is not None else instance.permissions
+    if native_tool:
+        configured = IntegrationPermissions()
     inherited_available = True
     from mato_loop_backend.settings.effective import integration_tool_loading
 
@@ -1872,6 +1877,7 @@ async def get_integration_permissions(
         inherited_instance.permissions.tool_loading = None
     return {
         "integrationId": str(instance.id), "name": instance.name, "providerType": instance.adapter_type,
+        "nativeTool": native_tool,
         "permissions": configured.model_dump(mode="json", by_alias=True),
         "inherited": inherited,
         "inheritedAvailable": inherited_available,
@@ -1890,6 +1896,12 @@ async def update_integration_permissions(
     profile_id: UUID | None = None,
 ) -> dict:
     _settings, owner_id, instance = await _permission_instance(db, user, scope, integration_id)
+    adapter = integration_adapter(instance.integration_type, instance.adapter_type)
+    if adapter is not None and adapter.native_tool and (
+        payload.available is not None or payload.tool_loading is not None or payload.resource_availability
+        or any(branch.policies or branch.resource_policies for branch in (payload.private_permissions, payload.public_permissions))
+    ):
+        raise ApiError(422, "validation.invalidChoice", field="permissions")
     if profile_id is not None:
         profiles = await load_effective_agent_profiles(db, user.id, include_integrations=False, include_personal=owner_id is not None)
         if not any(item.id == profile_id for item in profiles.profiles):

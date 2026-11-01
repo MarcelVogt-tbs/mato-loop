@@ -113,6 +113,7 @@ class IntegrationAdapterDefinition:
     execution_tools: tuple[ToolContribution, ...] = ()
     personal_only: bool = False
     instance_only: bool = False
+    native_tool: str | None = None
     catalog_visible: bool = True
 
     def __post_init__(self) -> None:

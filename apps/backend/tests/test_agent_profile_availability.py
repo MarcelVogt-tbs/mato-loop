@@ -310,12 +310,9 @@ def test_profile_selection_covers_execution_builtin_and_option_tools(kind, adapt
     tools._agent_profile = profile
     if kind == "search":
         tools.web_search.primary_provider = f"searxng:{integration.id}"
-    assert (
-        tool_name
-        not in tool_registry.effective(
-            settings, tool_settings=tools, tool_capabilities={"project.coding"}
-        ).tools
-    )
+    assert (tool_name in tool_registry.effective(
+        settings, tool_settings=tools, tool_capabilities={"project.coding"}
+    ).tools) is (kind == "search")
     integration.profile_permissions[profile.id] = IntegrationPermissions(available=True)
     effective = tool_registry.effective(
         settings, tool_settings=tools, tool_capabilities={"project.coding"}
@@ -332,7 +329,7 @@ def test_profile_selection_covers_execution_builtin_and_option_tools(kind, adapt
             ).tools
         )
     if kind == "search":
-        integration.profile_permissions[profile.id].available = False
+        integration.enabled = False
         filtered = filter_agent_profile_integrations(settings, profile)
         assert not effective_integration_contributions(filtered).tool_options
         tools.web_search.primary_provider = "no_key"
@@ -411,7 +408,10 @@ async def test_search_and_coding_recheck_selection_after_approval(monkeypatch, k
     context = await tool_context(monkeypatch, settings, profile, call)
 
     async def approve(_request):
-        integration.profile_permissions[profile.id] = IntegrationPermissions(available=False)
+        if kind == "search":
+            integration.enabled = False
+        else:
+            integration.profile_permissions[profile.id] = IntegrationPermissions(available=False)
         return PermissionDecision.ALLOW
 
     context.ask_handler = approve

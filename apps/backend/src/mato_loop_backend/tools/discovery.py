@@ -48,10 +48,9 @@ def _words(text: str) -> set[str]:
     return set(re.findall(r"\w+", text.casefold().replace("_", " ")))
 
 
-def expire_discoveries(records: list[Message], profile: AgentProfile | None) -> bool:
+def expire_discoveries(records: list[Message]) -> bool:
     discoveries = [item for item in records if item.role == "tool"
                    and (meta := (item.provider_data or {}).get("_matoloop", {})).get("toolName") == "search_tools"
-                   and meta.get("toolDiscovery", {}).get("profileId") == (str(profile.id) if profile else None)
                    and meta.get("toolDiscovery", {}).get("tools")
                    and not meta.get("toolDiscoveryExpired") and not meta.get("contextOutputOmitted")]
     # Keep the latest search usable; older capabilities can be discovered again after pressure.
@@ -77,8 +76,7 @@ def offer_integration_tools(
         meta = (record.provider_data or {}).get("_matoloop", {})
         discovery = meta.get("toolDiscovery", {})
         if (record.role != "tool" or meta.get("toolName") != "search_tools"
-                or meta.get("contextOutputOmitted") or meta.get("toolDiscoveryExpired")
-                or discovery.get("profileId") != (str(profile.id) if profile else None)):
+                or meta.get("contextOutputOmitted") or meta.get("toolDiscoveryExpired")):
             continue
         # JSONB does not preserve object key order; order each persisted batch explicitly.
         for name in sorted(discovery.get("tools", {})):
@@ -130,7 +128,6 @@ def offer_integration_tools(
                        "description": candidates[name].definition.description.split("\n", 1)[0][:240]} for name in matches],
             "contentIsUntrusted": True,
         }, metadata={"toolDiscovery": {
-            "profileId": str(profile.id) if profile else None,
             "tools": {name: list(_source_ids(candidates[name])) for name in matches},
         }})
 

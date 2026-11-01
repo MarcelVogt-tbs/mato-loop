@@ -507,7 +507,7 @@ class ProviderSettingsService:
                 if provider_config.adapter_type == "openai-codex" and value.origin == ModelOrigin.MANUAL:
                     value.discovery_metadata.update({
                         key: discovered_model.metadata[key]
-                        for key in ("api_model_id", "service_tier")
+                        for key in ("api_model_id", "service_tier", "supports_reasoning_effort_updates")
                         if key in discovered_model.metadata
                     })
             if value is None:
@@ -678,7 +678,7 @@ class ProviderSettingsService:
             validated.discovered_max_output_tokens = None
             validated.discovery_metadata = {
                 key: value for key, value in validated.discovery_metadata.items()
-                if key not in {"api_model_id", "service_tier"}
+                if key not in {"api_model_id", "service_tier", "supports_reasoning_effort_updates"}
             }
         settings.models[settings.models.index(current)] = validated
         await clear_invalid_model_defaults(

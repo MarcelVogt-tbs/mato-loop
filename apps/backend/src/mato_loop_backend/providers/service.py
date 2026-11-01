@@ -51,6 +51,7 @@ from mato_loop_backend.providers.base import (
     ProviderMediaInput,
     ProviderRequest,
     ProviderResult,
+    ProviderTurnState,
     ReasoningDeltaCallback,
     select_provider_images,
 )
@@ -695,6 +696,19 @@ class ProviderService:
             continuation_scope=continuation_scope,
             media=media,
         )
+        if (adapter.codex_auth and model.discovery_metadata.get("supports_reasoning_effort_updates") is True
+                and request.reasoning_effort is not None):
+            from mato_loop_backend.providers.codex_configuration import reasoning_configuration
+
+            request.reasoning_effort, request.configuration_updates, request.reasoning_configuration = reasoning_configuration(
+                messages, {**continuation_scope, "apiModelId": request.model, "serviceTier": request.service_tier},
+                request.reasoning_effort,
+            )
+            if len(provider_messages) != len(messages):
+                request.configuration_updates = {
+                    index + len(provider_messages) - len(messages): effort
+                    for index, effort in request.configuration_updates.items()
+                }
         reasoning_token_estimates: dict[int, int] = {}
         body = (
             _responses_body(request, reasoning_token_estimates=reasoning_token_estimates)
@@ -740,6 +754,7 @@ class ProviderService:
         required_image_ids: tuple[str, ...] = (),
         reasoning_effort: ReasoningEffort | str | None = None,
         prepared_request: PreparedRequest | None = None,
+        turn_state: ProviderTurnState | None = None,
     ) -> ProviderResult:
         """Complete with an adaptive budget checked after all input transformations.
 
@@ -769,6 +784,7 @@ class ProviderService:
             prepared_request=prepared_request,
         )
         request = prepared.request
+        request.turn_state = turn_state
         adapter = prepared.adapter
         api_type = prepared.api_type
         pseudonymizer = prepared.pseudonymizer
@@ -883,6 +899,8 @@ class ProviderService:
 
         async def finalize(result: ProviderResult) -> ProviderResult:
             result.provider_data["output_budget"] = output_budget
+            if request.reasoning_configuration is not None:
+                result.provider_data["reasoning_configuration"] = request.reasoning_configuration
             try:
                 if delta_restorer is not None and on_delta is not None:
                     if remaining := delta_restorer.flush():

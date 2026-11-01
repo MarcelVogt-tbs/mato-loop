@@ -103,6 +103,7 @@ class ContextProjection:
     input_token_source: str = "estimate"
     counted_input_fingerprint: str | None = None
     prepared_request: PreparedRequest | None = field(default=None, repr=False, compare=False)
+    preparation: dict[str, int] = field(default_factory=dict)
 
 
 def compaction_messages(source: str) -> list[dict[str, str]]:

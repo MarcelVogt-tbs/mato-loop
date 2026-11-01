@@ -110,6 +110,7 @@ async def test_codex_model_discovery_filters_and_normalizes_models(
                         "supports_parallel_tool_calls": True,
                         "input_modalities": ["text", "image"],
                         "default_reasoning_level": "medium",
+                        "supports_reasoning_effort_updates": True,
                         "supported_reasoning_levels": [
                             {"effort": "low", "description": "Fast"},
                             {"effort": "medium", "description": "Balanced"},
@@ -150,6 +151,7 @@ async def test_codex_model_discovery_filters_and_normalizes_models(
         "supports_parallel_tool_calls": True,
         "supports_image_input": True,
         "default_reasoning_effort": "medium",
+        "supports_reasoning_effort_updates": True,
         "reasoning_efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
     }
     assert models[-1].capabilities == {"image_generation", "image_editing"}

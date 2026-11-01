@@ -96,6 +96,7 @@ async def test_profile_budget_snapshot_and_unlimited_run(monkeypatch, limit, cal
     assert len({request["pseudonymization_key"] for request in requests}) == 1
     assert len(requests[0]["pseudonymization_key"]) == 32
     assert len({id(request["pseudonymization_cache"]) for request in requests}) == 1
+    assert len({id(request["turn_state"]) for request in requests}) == 1
     assert tool_registry._execute_definition.await_count == calls
     assert len(_tool_messages(db)) == calls
     assert requests[-1]["tools"] == requests[-2]["tools"]
@@ -208,6 +209,7 @@ async def test_truncated_repairs_are_bounded_even_with_unlimited_budget(monkeypa
 async def test_runtime_privacy_keys_are_owner_and_session_scoped(monkeypatch, scope):
     owner_id, session_id = uuid4(), uuid4()
     keys = []
+    turn_states = []
     for index in range(2):
         db, run, requests, _projections, _events = await _runtime_setup(
             monkeypatch, [ProviderResult(content="Done")],
@@ -218,9 +220,11 @@ async def test_runtime_privacy_keys_are_owner_and_session_scoped(monkeypatch, sc
         session.user_id = uuid4() if index and scope == "other_owner" else owner_id
         await AgentRuntime._execute_loop(db, run)
         keys.append(requests[0]["pseudonymization_key"])
+        turn_states.append(requests[0]["turn_state"])
         assert {request["prompt_cache_key"] for request in requests} == {str(session.id)}
         assert all("pseudonymization_key" not in str(item.provider_data) for item in _assistant_messages(db))
     assert (keys[0] == keys[1]) == (scope == "same_session")
+    assert turn_states[0] is not turn_states[1]
     assert len({id(request["pseudonymization_cache"]) for request in requests}) == 1
     if scope == "same_session":
         from mato_loop_backend.privacy import shared_protection_cache
@@ -425,8 +429,8 @@ async def test_cwd_changes_failed_call_preconditions(monkeypatch, call):
 
 
 def test_child_integration_snapshot_is_concrete_and_missing_ids_fail_closed():
-    first = IntegrationInstance(name="First", integration_type="search", adapter_type="searxng")
-    second = IntegrationInstance(name="Second", integration_type="search", adapter_type="searxng")
+    first = IntegrationInstance(name="First", integration_type="calendar", adapter_type="caldav")
+    second = IntegrationInstance(name="Second", integration_type="calendar", adapter_type="caldav")
     settings = IntegrationSettings(instances=[first, second])
     profile = AgentProfile(name="Custom", instructions="Follow the task.", integrationsEnabledByDefault=False)
     first.profile_permissions[profile.id] = IntegrationPermissions(available=True)
@@ -434,7 +438,7 @@ def test_child_integration_snapshot_is_concrete_and_missing_ids_fail_closed():
     snapshot = permission_snapshot(ToolSettings(), {"web_search"}, selected)
     assert snapshot["integrationIds"] == [str(first.id)]
     profile.integrations_enabled_by_default = True
-    live = IntegrationSettings(instances=[first, second, IntegrationInstance(id=uuid4(), name="New", integration_type="search", adapter_type="searxng")])
+    live = IntegrationSettings(instances=[first, second, IntegrationInstance(id=uuid4(), name="New", integration_type="calendar", adapter_type="caldav")])
     scoped = filter_agent_profile_integrations(live, profile, allowed_ids=integration_ceiling_ids(snapshot))
     assert [item.id for item in scoped.instances] == [first.id]
     del snapshot["integrationIds"]

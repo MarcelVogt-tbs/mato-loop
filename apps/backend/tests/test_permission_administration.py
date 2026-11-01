@@ -76,6 +76,22 @@ def settings_db(monkeypatch, documents):
     return db
 
 
+@pytest.mark.parametrize("kind,adapter,tool", [("webfetch", "jina", "webfetch"), ("search", "searxng", "web_search")])
+async def test_native_provider_uses_tool_configuration_not_profile_integration_defaults(monkeypatch, kind, adapter, tool):
+    user = UserAccount(id=uuid4(), is_admin=True)
+    instance = IntegrationInstance(name="Provider", integration_type=kind, adapter_type=adapter, config={"base_url": "https://provider.test"})
+    db = settings_db(monkeypatch, {(IntegrationSettings, None): IntegrationSettings(instances=[instance])})
+    from mato_loop_backend.settings.effective import filter_agent_profile_integrations
+    from mato_loop_backend.settings.models import build_profile, plan_profile
+
+    assert [len(filter_agent_profile_integrations(IntegrationSettings(instances=[instance]), profile).instances)
+            for profile in (plan_profile(), build_profile())] == [1, 1]
+    assert not filter_agent_profile_integrations(IntegrationSettings(instances=[instance]), build_profile(), allowed_ids=[]).instances
+    assert (await get_integration_permissions(instance.id, user, db, "instance", BUILD_PROFILE_ID))["nativeTool"] == tool
+    with pytest.raises(ApiError, match="validation.invalidChoice"):
+        await update_integration_permissions(instance.id, IntegrationPermissions(available=False), user, db, "instance", BUILD_PROFILE_ID)
+
+
 async def test_personal_integration_profile_permissions_are_independent_of_global_tools(monkeypatch):
     user = UserAccount(id=uuid4(), username="owner", password_hash="hash", is_admin=False)
     own = IntegrationInstance(name="Own", integration_type="calendar", adapter_type="caldav", config={"base_url": "https://calendar.example.com", "username": "owner"})

@@ -382,7 +382,7 @@ async def test_responses_stream_routes_summary_separately(monkeypatch) -> None:
     real_client = httpx.AsyncClient
     def respond(request):
         assert request.headers["User-Agent"] == f"MatoLoop/{__version__}"
-        return httpx.Response(200, text=body)
+        return httpx.Response(200, text=body, headers={"x-codex-turn-state": "opaque-turn-token"})
 
     transport = httpx.MockTransport(respond)
     monkeypatch.setattr(
@@ -390,6 +390,7 @@ async def test_responses_stream_routes_summary_separately(monkeypatch) -> None:
         lambda **kwargs: real_client(transport=transport, **kwargs),
     )
     reasoning = []
+    response_headers = {}
 
     async def on_reasoning(text: str, kind: str) -> None:
         reasoning.append((text, kind))
@@ -400,12 +401,14 @@ async def test_responses_stream_routes_summary_separately(monkeypatch) -> None:
         request=ProviderRequest(model="reasoning", messages=[]),
         on_delta=None,
         on_reasoning=on_reasoning,
+        on_response_headers=response_headers.update,
     )
 
     assert reasoning == [("Kurz ", "summary"), ("begründet.", "summary")]
     assert result.content == "Antwort"
     assert result.reasoning is not None
     assert result.reasoning.text == "Kurz begründet."
+    assert response_headers["x-codex-turn-state"] == "opaque-turn-token"
 
 
 async def test_responses_stream_stops_at_completed_without_waiting_for_eof(

@@ -2719,6 +2719,9 @@ async def test_turn_context_uses_server_count_with_local_fallback(monkeypatch, c
                call, tool, _message(session.id, "user", "Continue")]
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = None
+    async def empty_repository(*, fits_context):
+        assert await fits_context("")
+        return ""
     projection, _, _ = await build_turn_context(
         None, db, AgentRun(id=uuid4(), session_id=session.id), session,
         ai_settings=AiSettings(), model=model, trust_level=TrustLevel.PRIVATE, settings=_settings(),
@@ -2727,7 +2730,9 @@ async def test_turn_context_uses_server_count_with_local_fallback(monkeypatch, c
         memory_turn=MemoryTurn(candidates=[(None, 0, 0)]), memory_read_enabled=False,
         request_options={"provider": provider, "model": model, "tools": []},
         live_tool_calls={}, ephemeral_images={}, attachment_service=AttachmentService,
+        repository_context_loader=empty_repository,
     )
+    assert projection.preparation["requestPreparationCount"] == 2
     prepared = await ProviderService.prepare_request(provider=provider, model=model, messages=projection.messages, tools=[])
     result = await ProviderService.complete(
         db, provider=provider, model=model, messages=projection.messages, tools=[],

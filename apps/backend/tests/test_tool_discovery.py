@@ -95,7 +95,10 @@ async def test_search_reloads_persisted_tools_without_changing_initial_prefix():
     assert reloaded.schemas()[:len(initial.tools)] == initial.schemas()
     record.provider_data = json.loads(json.dumps(record.provider_data, sort_keys=True))
     assert offer([instance], profile, [record]).schemas() == reloaded.schemas()
-    assert "tasks_create" not in offer([instance], AgentProfile(name="Other", instructions="Task"), [record]).tools
+    other = AgentProfile(name="Other", instructions="Task")
+    assert offer([instance], other, [record]).schemas() == reloaded.schemas()
+    instance.profile_permissions[other.id] = IntegrationPermissions(available=False)
+    assert "tasks_create" not in offer([instance], other, [record]).tools
 
 
 async def test_shared_tool_schema_loads_only_pinned_accounts_and_search_rechecks_availability():
@@ -130,7 +133,7 @@ def test_context_pressure_expires_older_discoveries_not_the_latest():
     records = [Message(id=uuid4(), role="tool", provider_data={"_matoloop": {"toolName": "search_tools", "toolDiscovery": {
         "profileId": str(profile.id), "tools": {name: [str(instance.id)]},
     }}}) for name in ("calendar_query_events", "tasks_create")]
-    assert expire_discoveries(records, profile)
+    assert expire_discoveries(records)
     offered = offer([instance], profile, records)
     assert "calendar_query_events" not in offered.tools and "tasks_create" in offered.tools
 

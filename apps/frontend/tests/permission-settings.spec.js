@@ -306,6 +306,17 @@ it('loads global web providers when navigating back from profile tool settings',
   await vi.waitFor(() => expect([...root.querySelectorAll('.q-field__label')].filter(label => label.textContent === 'Anbieter')).toHaveLength(2))
 })
 
+it('redirects native provider availability and loading to tool settings', async () => {
+  await mount(IntegrationPermissionEditor, {
+    modelValue: { ...rights(), resourceAvailability: {} }, profileId: builtinId,
+    data: { nativeTool: 'webfetch', inherited: {} }
+  }, '/tools', 'settings-tools')
+  expect([
+    ...[...root.querySelectorAll('button')].filter(button => /Verfügbarkeit anpassen|Tool-Ladeverhalten anpassen/.test(button.textContent)).map(button => button.disabled),
+    root.querySelector('a')?.getAttribute('href')
+  ]).toEqual([true, true, '/admin/tools'])
+})
+
 it('sets profile resource availability after finding an MCP tool by technical name', async () => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   const resources = [

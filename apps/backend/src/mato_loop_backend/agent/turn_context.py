@@ -82,9 +82,12 @@ async def build_turn_context(
     server_counts: dict[str, int] = {}
     counting_available: bool | None = None
     prepared_request = None
+    preparation = {"requestPreparationMs": 0, "requestPreparationCount": 0, "requestPreparationReuseCount": 0}
 
     async def prepare(messages: list[dict[str, Any]]):
         nonlocal prepared_request
+        started = time.monotonic()
+        previous = prepared_request
         messages, images = run_support._project_ephemeral_images(
             model_browser_observations(messages), ephemeral_images,
             model=model, target_trust_level=trust_level,
@@ -92,6 +95,8 @@ async def build_turn_context(
         prepared_request = await ProviderService.prepare_request(
             messages=messages, image_inputs=images, prepared_request=prepared_request, **request_options
         )
+        preparation["requestPreparationMs"] += round((time.monotonic() - started) * 1000)
+        preparation["requestPreparationReuseCount" if prepared_request is previous else "requestPreparationCount"] += 1
         return prepared_request
 
     async def count_request(prepared) -> int | None:
@@ -127,6 +132,7 @@ async def build_turn_context(
     )
     compacted_summary = None
     selected_memory_snapshot = None
+    projection_started = time.monotonic()
     for attempt in range(2):
         projection = None
         memory_count = 0
@@ -180,6 +186,9 @@ async def build_turn_context(
 
         async def fits_context(context: str, projection: ContextProjection = projection) -> bool:
             nonlocal candidate_tokens
+            if not context:
+                candidate_tokens = projection.estimated_input_tokens
+                return candidate_tokens <= projection.input_budget_tokens
             messages = [{**projection.messages[0], "content": projection.messages[0]["content"] + "\n\n" + context},
                         *projection.messages[1:]]
             candidate_tokens = await estimate_request(messages)
@@ -205,7 +214,9 @@ async def build_turn_context(
                 projection.estimated_input_tokens = candidate_tokens
 
         if repository_context_loader is not None:
+            repository_started = time.monotonic()
             repository_context = await repository_context_loader(fits_context=fits_context)
+            preparation["repositoryInstructionsMs"] = preparation.get("repositoryInstructionsMs", 0) + round((time.monotonic() - repository_started) * 1000)
             if repository_context:
                 projection.messages[0]["content"] += "\n\n" + repository_context
                 projection.estimated_input_tokens = candidate_tokens
@@ -222,7 +233,9 @@ async def build_turn_context(
                 projection.input_token_source = "server"
                 projection.counted_input_fingerprint = prepared.input_token_fingerprint
         projection.prepared_request = prepared
+        projection.preparation = preparation
         break
+    preparation["projectionMs"] = round((time.monotonic() - projection_started) * 1000)
     current_user = next((item for item in reversed(records) if item.role == "user"), None)
     if current_user is not None and selected_memory_snapshot is not None:
         data = current_user.provider_data or {}

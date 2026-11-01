@@ -14,8 +14,8 @@ the selected connection; it does not apply its local public-address filter or DN
 pinning to Jina's target requests. The configured Reader endpoint is an ordinary
 administrator-managed integration connection. `DNT: 1` requests no Reader caching;
 the service still receives the URL. Limits bound the Reader response, not its remote
-page load. Reader uses the existing `network.fetch` policy and profile integration
-availability, not separate connection-specific approvals. Reader output uses the
+page load. Reader uses the existing `webfetch` availability and `network.fetch` policy,
+not integration-profile availability or separate connection-specific approvals. Reader output uses the
 existing content/source envelope and sanitization.
 The selected Reader connection extends the `webfetch` schema with `engine`
 (`auto`, `browser`, `curl`), `remove_overlay`, `no_cache`, `target_selector`,

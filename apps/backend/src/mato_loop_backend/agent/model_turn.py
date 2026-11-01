@@ -29,6 +29,7 @@ from mato_loop_backend.models import AgentRun, ChatSession, Message
 from mato_loop_backend.providers.base import (
     ProviderImageInput,
     ProviderResult,
+    ProviderTurnState,
     PublicReasoning,
     ToolCall,
 )
@@ -63,6 +64,7 @@ async def complete_model_turn(
     schemas: list[dict[str, Any]],
     model_request: int,
     hold_response: bool,
+    provider_turn_state: ProviderTurnState | None = None,
 ) -> ModelTurn | None:
     visible_response.reset()
     started_at = time.monotonic()
@@ -191,6 +193,7 @@ async def complete_model_turn(
             prepared_request=projection.prepared_request,
             on_delta=on_delta, on_reasoning=on_reasoning,
             on_warning=on_warning, on_retry=on_provider_retry,
+            turn_state=provider_turn_state,
         )
     except asyncio.CancelledError:
         if run.id in runtime._user_cancelled_runs or run.id not in runtime._pending_continuations:

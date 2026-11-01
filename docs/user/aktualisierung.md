@@ -67,6 +67,8 @@ Die einmalige Auto-Umstellung setzt bestehende Modell-Ausgabelimits auf **Auto**
 
 Persönliche SearXNG-Verbindungen und persönliche Suchanbieterwahl werden nicht mehr verwendet oder automatisch global übernommen. Jina-Verbindungen und die Anbieterwahl sind ebenfalls instanzweit. Alte Fallback-Werte werden ignoriert; der bisherige Primäranbieter bleibt erhalten. Richte benötigte Dienste als Administrator ein und prüfe die Auswahl unter **Tools > Einstellungen**.
 
+Beim Wechsel zur alleinigen Tool-Konfiguration entfernt die Datenmigration alte Jina-/SearXNG-Verfügbarkeits- und Ladeabweichungen. Ausdrückliche Profilsperren werden als deaktiviertes `webfetch` beziehungsweise `web_search` in die Tool-Verfügbarkeit des Profils übernommen. Geerbte Sperren werden auch in abgeleiteten Profilen eingetragen, damit eigene Tool-Freigaben sie nicht aufheben. Das gilt konservativ auch für nicht ausgewählte Anbieterverbindungen und kann abgeleitete Profile stärker einschränken. Prüfe diese Tool-Einstellungen nach dem Update; die allgemeine Vorgabe „Integrationen nicht verfügbar“ wird nicht als Tool-Sperre übernommen. Ein Downgrade behält die übertragenen Tool-Sperren und stellt entfernte Anbieterabweichungen nicht wieder her.
+
 ### Windows-CLI nachrüsten
 
 Führe bei alten Windows-Installationen den aktuellen Installationsbefehl aus **Einstellungen > Computer** einmal erneut aus. Deinstalliere oder bereinige vorher nichts: Kopplung und Workspace bleiben erhalten. Starte danach ein neues Terminal. Die CLI-Einrichtung erfolgt vor dem Versionswechsel und kann nach einem fehlgeschlagenen Update bestehen bleiben.

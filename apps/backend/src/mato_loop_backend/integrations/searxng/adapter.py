@@ -38,4 +38,5 @@ SEARXNG_ADAPTER = IntegrationAdapterDefinition(
     config_model=SearxngConfig,
     contribution_factory=_contributions,
     instance_only=True,
+    native_tool="web_search",
 )

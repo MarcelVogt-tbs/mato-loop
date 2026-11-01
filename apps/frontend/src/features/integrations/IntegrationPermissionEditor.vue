@@ -1,9 +1,13 @@
 <template>
+  <div v-if="data.nativeTool" class="q-mb-md">
+    Verfügbarkeit und Berechtigungen werden über das Tool „{{ data.nativeTool === 'webfetch' ? 'Webseite abrufen' : 'Im Web suchen' }}“ gesteuert.
+    <q-btn flat no-caps color="primary" label="Tool-Einstellungen öffnen" :to="{ name: 'admin-tools' }" />
+  </div>
   <div v-if="resources.some(resource => resource.toolName)" class="text-caption app-muted q-mb-md">Tool-Metadaten stammen vom Server und sind nicht verifiziert. Sie bestimmen keine Berechtigungen.</div>
   <div class="row justify-end q-gutter-sm q-mb-md">
     <q-btn v-if="profileId" flat round dense icon="delete_outline" aria-label="Alle eigenen Regeln und Einstellungen entfernen" color="negative" :disable="disabled || !hasOverrides" @click="removeAll" />
-    <q-btn v-if="profileId && permissions.available == null" flat no-caps icon="tune" color="primary" label="Verfügbarkeit anpassen" :disable="disabled" @click="edit('', 'availability')" />
-    <q-btn v-if="permissions.toolLoading == null" flat no-caps icon="manage_search" color="primary" label="Tool-Ladeverhalten anpassen" :disable="disabled" @click="edit('', 'tool_loading')" />
+    <q-btn v-if="profileId && permissions.available == null" flat no-caps icon="tune" color="primary" label="Verfügbarkeit anpassen" :disable="disabled || Boolean(data.nativeTool)" @click="edit('', 'availability')" />
+    <q-btn v-if="permissions.toolLoading == null" flat no-caps icon="manage_search" color="primary" label="Tool-Ladeverhalten anpassen" :disable="disabled || Boolean(data.nativeTool)" @click="edit('', 'tool_loading')" />
     <q-btn v-if="groups.private[0].actions.length" flat no-caps icon="add" color="primary" label="Eigene Regel hinzufügen" :disable="disabled" @click="edit()" />
   </div>
   <q-card v-if="profileId && permissions.available != null" flat class="app-surface q-mb-md">
@@ -19,8 +23,8 @@
       <q-btn flat round dense icon="delete_outline" aria-label="Eigenes Tool-Ladeverhalten entfernen" :disable="disabled" @click="removeLoading()" />
     </q-card-section>
   </q-card>
-  <div v-else class="text-caption app-muted q-mb-md">Tool-Ladeverhalten – Vorgabe: {{ data.inheritedToolLoading === 'all' ? 'Sofort' : 'Bei Bedarf' }}.</div>
-  <q-card v-if="!hasVisibleOverrides" flat class="app-surface q-mb-md"><q-card-section class="app-muted">Keine eigenen Regeln. Es gelten die Vorgaben.</q-card-section></q-card>
+  <div v-else-if="!data.nativeTool" class="text-caption app-muted q-mb-md">Tool-Ladeverhalten – Vorgabe: {{ data.inheritedToolLoading === 'all' ? 'Sofort' : 'Bei Bedarf' }}.</div>
+  <q-card v-if="!hasVisibleOverrides && !data.nativeTool" flat class="app-surface q-mb-md"><q-card-section class="app-muted">Keine eigenen Regeln. Es gelten die Vorgaben.</q-card-section></q-card>
   <PermissionFields v-model="permissions" :groups-by-trust="groups" :resources="visibleResources" :model-trust-enabled="modelTrustEnabled" overrides-only resource-overrides-only>
     <template #policy="{ action, audience, resource }">
       <div class="text-caption app-muted">{{ audience.label }}</div>

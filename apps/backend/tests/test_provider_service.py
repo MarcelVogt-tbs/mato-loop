@@ -28,6 +28,7 @@ from mato_loop_backend.providers.base import (
     ProviderMediaInput,
     ProviderRequest,
     ProviderResult,
+    ProviderTurnState,
     PublicReasoning,
     ToolCall,
 )
@@ -681,12 +682,14 @@ async def test_codex_complete_uses_subscription_compatible_responses_payload(
         "account_id": "account",
     }
     captured = {}
+    turn_state = ProviderTurnState()
 
     async def fake_responses_api(**kwargs):
         captured.update(kwargs)
         captured["body"] = _responses_body(
             kwargs["request"], kwargs.get("extra_body")
         )
+        kwargs["on_response_headers"]({"x-codex-turn-state": "opaque-turn-token"})
         return ProviderResult(content="OK")
 
     monkeypatch.setattr(
@@ -704,6 +707,7 @@ async def test_codex_complete_uses_subscription_compatible_responses_payload(
         tools=[{"name": "read_file", "parameters": {}}],
         max_output_tokens=1_024,
         prompt_cache_key="session-1",
+        turn_state=turn_state,
     )
 
     request = captured["request"]
@@ -726,6 +730,7 @@ async def test_codex_complete_uses_subscription_compatible_responses_payload(
     assert "text" not in captured["body"]
     assert captured["body"]["prompt_cache_key"] == "session-1"
     assert captured["headers"]["session-id"] == "session-1"
+    assert "x-codex-turn-state" not in captured["headers"]
     assert captured["body"]["reasoning"]["effort"] == "low"
 
     await ProviderService.complete(
@@ -735,8 +740,53 @@ async def test_codex_complete_uses_subscription_compatible_responses_payload(
         messages=[{"role": "user", "content": "Test"}],
         tools=[],
         reasoning_effort="ultra",
+        turn_state=turn_state,
+        prompt_cache_key="session-1",
     )
     assert captured["body"]["reasoning"]["effort"] == "ultra"
+    assert captured["headers"]["x-codex-turn-state"] == "opaque-turn-token"
+    payload["account_id"] = "other-account"
+    await ProviderService.complete(db, provider=provider, model=model,
+                                   messages=[{"role": "user", "content": "Test"}], tools=[], turn_state=turn_state,
+                                   prompt_cache_key="session-1")
+    assert "x-codex-turn-state" not in captured["headers"]
+
+
+@pytest.mark.parametrize("privacy", [False, True])
+@pytest.mark.parametrize("changed_binding", ["credential", "model", "tier"])
+async def test_codex_reasoning_changes_preserve_serialized_history_across_followups(monkeypatch, privacy, changed_binding):
+    provider = LlmProviderConfig(name="Codex", adapter_type="openai-codex", credential_id=uuid4(), pseudonymization_enabled=privacy)
+    model = ModelConfig(provider_id=provider.id, model_id="openai-codex/gpt-6.1-sol", discovery_metadata={
+        "default_reasoning_effort": "low", "reasoning_efforts": ["low", "high"], "supports_reasoning_effort_updates": True,
+    })
+    monkeypatch.setattr(service_module, "refresh_codex_credential", AsyncMock(return_value={"access": "access", "account_id": "account"}))
+    bodies = []
+    async def response(**kwargs):
+        bodies.append(_responses_body(kwargs["request"]))
+        return ProviderResult(content="OK")
+    monkeypatch.setattr(service_module, "responses_api", response)
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = SimpleNamespace(user_id=None)
+    messages = [{"role": "user", "content": "Start"}]
+    for effort in ("low", "high", "high", "low"):
+        result = await ProviderService.complete(db, provider=provider, model=model, messages=messages, tools=[],
+            reasoning_effort=effort, pseudonymization_key=b"c" * 32)
+        messages += [{"role": "assistant", "content": result.content,
+                      "provider_data": json.loads(json.dumps(result.provider_data, sort_keys=True))},
+                     {"role": "assistant", "content": "[Host memory context begins]\nReference data\n[Host memory context ends]"},
+                     {"role": "user", "content": "Continue"}]
+    assert all(after["reasoning"] == before["reasoning"] and
+               json.dumps(after["input"][:len(before["input"])], sort_keys=True) == json.dumps(before["input"], sort_keys=True)
+               for before, after in zip(bodies, bodies[1:], strict=False))
+    assert [item["reasoning"]["effort"] for item in bodies[-1]["input"] if item.get("type") == "configuration_update"] == ["high", "low"]
+    if changed_binding == "credential":
+        provider.credential_id = uuid4()
+    elif changed_binding == "model":
+        model.model_id = "openai-codex/gpt-6-astra"
+    else:
+        model.discovery_metadata["service_tier"] = "priority"
+    prepared = await ProviderService.prepare_request(provider=provider, model=model, messages=messages, tools=[], reasoning_effort="high")
+    assert (prepared.request.reasoning_effort, prepared.request.configuration_updates) == (ReasoningEffort.HIGH, {})
 
 
 @pytest.mark.parametrize("role", ["user", "tool"])

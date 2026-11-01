@@ -101,6 +101,7 @@ class _CodexModel(BaseModel):
     )
     service_tiers: list[_CodexServiceTier] | None = None
     additional_speed_tiers: list[str] = Field(default_factory=list)
+    supports_reasoning_effort_updates: bool = False
 
 
 class _CodexModelsResponse(BaseModel):
@@ -354,6 +355,7 @@ async def discover_models(
                 supports_image_input="image" in model.input_modalities,
                 default_reasoning_effort=default_effort,
                 reasoning_efforts=efforts or None,
+                supports_reasoning_effort_updates=model.supports_reasoning_effort_updates,
             )
         )
         base_model = models[-1]

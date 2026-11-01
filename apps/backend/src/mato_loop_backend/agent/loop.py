@@ -67,7 +67,7 @@ from mato_loop_backend.models import (
     WebSearchPolicy,
 )
 from mato_loop_backend.privacy import shared_protection_cache
-from mato_loop_backend.providers.base import ProviderImageInput, ToolCall
+from mato_loop_backend.providers.base import ProviderImageInput, ProviderTurnState, ToolCall
 from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.settings import (
     AgentProfileUnavailable,
@@ -259,6 +259,8 @@ async def execute_loop_body(
     pdf_cache = {}
     continuation_context_stale = False
     previous_tool_names: tuple[str, ...] = ()
+    provider_turn_state = ProviderTurnState()
+    provider_turn_message_id = None
 
     while True:
         continuation_received = await cls._await_continuations(run.id)
@@ -332,7 +334,11 @@ async def execute_loop_body(
         if delegated:
             memory_state = memory_policy.EffectiveMemory(False, False, False)
         records = await cls._records(db, chat_session.id)
+        context_timings = {"settingsAndHistoryMs": round((time.monotonic() - context_started_at) * 1000)}
         current_user = next((item for item in reversed(records) if item.role == "user"), None)
+        if current_user is not None and current_user.id != provider_turn_message_id:
+            provider_turn_state = ProviderTurnState()
+            provider_turn_message_id = current_user.id
         if current_user is not None:
             data = current_user.provider_data or {}
             metadata = data.get("_matoloop", {})
@@ -378,6 +384,7 @@ async def execute_loop_body(
             user_quota_bytes=instance_limits.user_quota_bytes,
             max_editable_text_bytes=instance_limits.max_editable_text_bytes,
         )
+        memory_started = time.monotonic()
         memory_turn = await prepare_memory_context(
             db, chat_session, records,
             model=model,
@@ -390,7 +397,9 @@ async def execute_loop_body(
             cache=memory_cache,
         )
         memory_overview_prefetched = memory_turn.overview_prefetched
+        context_timings["memoryMs"] = round((time.monotonic() - memory_started) * 1000)
         memory_overview_runtime_state = memory_turn.overview_runtime_state
+        tools_started = time.monotonic()
         turn_tools = select_turn_tools(
             run, chat_session,
             model=model, ai_settings=ai_settings, tool_settings=tool_settings,
@@ -420,6 +429,7 @@ async def execute_loop_body(
         tool_schema_tokens = turn_tools.schema_tokens
         inactive_capability_groups = turn_tools.inactive_groups
         search_pending = turn_tools.search_pending
+        context_timings["toolSelectionMs"] = round((time.monotonic() - tools_started) * 1000)
         repository_context_loader = None
         repository_entries = None
         repository_authorize = None
@@ -542,12 +552,14 @@ async def execute_loop_body(
             tool_phase={}, next_model_request=next_helper_request,
             count_model_request=count_helper_request,
         )
+        pdf_started = time.monotonic()
         pdf_context = await prepare_pdf_attachments(
             records, AttachmentService(settings=instance_limits, run_id=run.id),
             images=ephemeral_images, cache=pdf_cache,
             supports_images=model.supports_image_input,
             trust=model_trust_level, handler=pdf_handler,
         )
+        context_timings["pdfMs"] = round((time.monotonic() - pdf_started) * 1000)
         try:
             projection, injected_memory_count, injected_episode_count = await build_turn_context(
                 cls, db, run, chat_session,
@@ -583,7 +595,7 @@ async def execute_loop_body(
                 },
             )
         except ContextError as exc:
-            if exc.code != "agent.contextWindowExceeded" or not expire_discoveries(records[summary_boundary:], _active_agent_profile):
+            if exc.code != "agent.contextWindowExceeded" or not expire_discoveries(records[summary_boundary:]):
                 raise
             await db.commit()
             continue
@@ -612,6 +624,7 @@ async def execute_loop_body(
             schemas=schemas,
             model_request=model_request,
             hold_response=hold_response,
+            provider_turn_state=provider_turn_state,
         )
         if model_turn is None:
             continuation_context_stale = True
@@ -676,6 +689,7 @@ async def execute_loop_body(
             "contextPreparationMs": max(
                 0, round((provider_started_at - context_started_at) * 1_000)
             ),
+            "contextPreparation": {**context_timings, **projection.preparation},
             "providerDurationMs": provider_duration_ms,
             "timeToFirstSignalMs": min(first_signals) if first_signals else None,
             "durableMemoryReferences": injected_memory_count,
