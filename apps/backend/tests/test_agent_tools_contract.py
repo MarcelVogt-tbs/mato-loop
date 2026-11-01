@@ -551,7 +551,7 @@ async def test_workspace_tools_allow_worktree_directory_changes_and_recheck_admi
     run = AgentRun(id=context.run_id, execution_agent_id=agent_id, current_directory_snapshot="/worktree")
     context.db.get.return_value = run
     context.db.scalar.return_value = ExecutionAgent(id=selected_id, user_id=context.session.user_id)
-    context.db.execute.side_effect = [None, [("/reserved" if error else "/project", {"_matoloop": {"codingCommand": {"name": "git-sync"}}}, None)]]
+    context.db.execute.side_effect = [None, [("/reserved" if error else "/project", {"_matoloop": {"codingCommand": {"name": "git-sync"}}}, None, uuid4(), "Other task", "running")]]
     monkeypatch.setattr(AgentRuntime, "_session_settings", {run.id: RunSessionSettings(
         session_profile={}, memory_mode="disabled", web_search_policy="available",
         coding_workspace={"executionAgentId": str(agent_id), "path": "/worktree", "commonDirectory": "/project/.git"},

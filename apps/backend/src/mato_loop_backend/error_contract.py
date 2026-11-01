@@ -26,7 +26,7 @@ _MESSAGES = {
     "git.worktreeLocation": "Managed worktrees must be outside the source repository.",
     "git.worktreeRemoveFailed": "The worktree could not be removed. Inspect its current state before retrying.",
     "git.worktreeInUse": "Another session or active run still uses the worktree.",
-    "git.projectBusy": "Another agent is working in the original project directory.",
+    "git.projectBusy": "Another session has an active run using a required checkout or shared Git configuration. Finish or stop that run, then retry.",
     "git.dirty": "Commit pending changes before this action. Additional or ignored files may prevent removal.",
     "git.branchRequired": "Create and select a local branch first; the workspace has a detached HEAD.",
     "git.branchInUse": "The branch is checked out in another worktree.",

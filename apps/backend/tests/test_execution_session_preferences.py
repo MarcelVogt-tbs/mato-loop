@@ -347,7 +347,7 @@ async def test_start_persists_rootless_executor_snapshot(monkeypatch, revoked, c
             assert locked
             return [("/home/user", {"_matoloop": {"codingCommand": {
                 "name": "git-sync", "resources": ["/home/user"],
-            }}}, None)]
+            }}}, None, uuid4(), "Other task", "running")]
 
         db.execute.side_effect = execute
         with pytest.raises(AgentRunError, match="git.projectBusy"):
@@ -395,7 +395,7 @@ async def test_retry_uses_current_computer_only_for_preflight_failure(monkeypatc
             side_effect=SessionServiceError(409, command_error) if command_error == "git.worktreeChanged" else None,
             return_value={"context": command_context, "resources": [session.current_directory]},
         ))
-        db.execute.return_value = [("/home/user/src", {}, None)]
+        db.execute.return_value = [("/home/user/src", {}, None, uuid4(), "Other task", "running")]
         with pytest.raises(AgentRunError, match=command_error):
             await AgentRuntime.retry(db, session, failed, before_execution=before_execution)
         return

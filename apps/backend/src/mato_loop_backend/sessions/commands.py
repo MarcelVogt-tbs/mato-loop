@@ -64,7 +64,7 @@ async def prepare_command(db, session, command: Command, content: str | None = N
     prepared = await provider.prepare(db, session, command, content)
     arguments = command_arguments(content)
     return {**prepared, "name": command.name, "label": command.label,
-            "prompt": command.instructions + (f"\n\n{arguments}" if arguments else ""),
+            "prompt": prepared.get("prompt", command.instructions + (f"\n\n{arguments}" if arguments else "")),
             "context": {**prepared.get("context", {}), "commandSource": provider.source,
                         "arguments": arguments}}
 

@@ -18,7 +18,12 @@ from mato_loop_backend.sessions.commands import (
     prepare_command,
     registered_commands,
 )
-from mato_loop_backend.sessions.git_commands import check_workspace_admission
+from mato_loop_backend.sessions.git_commands import (
+    COMMIT_INSTRUCTIONS,
+    COMMIT_RULES,
+    REVIEW_INSTRUCTIONS,
+    check_workspace_admission,
+)
 from mato_loop_backend.sessions.serialization import message_payload
 from mato_loop_backend.sessions.service import SessionServiceError
 from mato_loop_backend.settings import AiSettings, TrustLevel
@@ -34,12 +39,7 @@ def test_browser_and_telegram_share_portable_coding_commands():
 
 
 def test_git_merge_and_pr_follow_explicit_commit_message_rules():
-    rules = (
-        "Follow supplied repository commit-message rules for every commit, including merge commits. "
-        "Read relevant referenced guidelines before committing. Apply required format, language, and trailers. "
-        "Use recent history only where no explicit rule applies. Verify the resulting commit message."
-    )
-    assert all(rules in parse_command(f"/{name}").instructions for name in ("git-merge", "git-pr"))
+    assert all(COMMIT_RULES in parse_command(f"/{name}").instructions for name in ("git-commit", "git-merge", "git-pr"))
 
 
 @pytest.mark.parametrize("branch", ["--upload-pack=bad", "main..other", "main:other", "bad\nbranch"])
@@ -110,20 +110,34 @@ async def test_command_binds_worktree_target_and_displays_its_prompt_without_run
     assert message_payload(message)["commandPrompt"] == definition.instructions + "\n\nonly parser changes"
 
 
-async def test_local_merge_uses_the_current_branch_without_requiring_a_remote(monkeypatch):
+@pytest.mark.parametrize("name", ["git-merge", "git-pr"])
+@pytest.mark.parametrize("commit_first", [False, True])
+async def test_worktree_command_uses_the_current_branch_and_optional_commit_prompt(monkeypatch, name, commit_first):
     agent_id = uuid4()
+    remote = "origin" if name == "git-pr" else None
     session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=agent_id,
         current_directory="/worktree/subdirectory", workspace_mode="local", coding_workspace={
             "mode": "worktree", "executionAgentId": str(agent_id), "repository": "/project", "path": "/worktree",
-            "branch": "old-name", "remote": None, "targetBranch": "develop",
+            "branch": "old-name", "remote": remote, "targetBranch": "develop",
         })
     monkeypatch.setattr("mato_loop_backend.sessions.git_commands.inspect_repository", AsyncMock(return_value=RepositoryResult(
-        repository="/worktree", remotes=[], defaultRemote=None, defaultBranch="main", branch="renamed",
+        repository="/worktree", remotes=[remote] if remote else [], defaultRemote=remote, defaultBranch="main", branch="renamed",
         worktrees=[{"path": "/project", "branch": "develop", "main": True, "locked": False},
                    {"path": "/worktree", "branch": "renamed", "main": False, "locked": False}],
     )))
-    command = await prepare_command(AsyncMock(), session, parse_command("/git-merge"))
-    assert (command["context"]["branch"], command["context"]["remote"], command["context"]["targetBranch"]) == ("renamed", None, "develop")
+    content = f"/{name}" + (" --commit" if commit_first else "")
+    command = await prepare_command(AsyncMock(), session, parse_command(content), content)
+    assert (command["context"]["branch"], command["context"]["remote"], command["context"]["targetBranch"]) == ("renamed", remote, "develop")
+    assert (COMMIT_INSTRUCTIONS in command["prompt"], "Do not commit pending working changes" in command["prompt"]) == (commit_first, not commit_first)
+    assert command["prompt"].count(COMMIT_RULES) == command["prompt"].count(REVIEW_INSTRUCTIONS) == 1
+    message = Message(id=uuid4(), role="user", content=content, provider_data={"_matoloop": {"codingCommand": command}})
+    assert message_payload(message)["commandPrompt"] in message_dict(message)["content"]
+
+
+@pytest.mark.parametrize("name", ["git-review", "git-commit", "git-push", "git-sync"])
+async def test_commit_option_is_rejected_for_other_git_commands(name):
+    with pytest.raises(SessionServiceError, match="validation.invalid"):
+        await prepare_command(AsyncMock(), ChatSession(id=uuid4()), parse_command(f"/{name}"), f"/{name} --commit")
 
 
 async def test_command_ignores_a_git_target_from_another_computer(monkeypatch):
@@ -276,18 +290,58 @@ async def test_admission_blocks_overlap_in_both_directions(incoming_command, dir
     root = "C:/repo" if directory.startswith("C:") else "/repo"
     command = {"name": "git-sync", "resources": [root]}
     db = AsyncMock()
-    db.execute.return_value = [(directory, {} if incoming_command else {"_matoloop": {"codingCommand": command}}, None)]
-    with pytest.raises(SessionServiceError, match="git.projectBusy"):
+    session_id = uuid4()
+    db.execute.return_value = [(directory, {} if incoming_command else {"_matoloop": {"codingCommand": command}}, None,
+                                session_id, "Other task", "waiting_approval")]
+    with pytest.raises(SessionServiceError, match="git.projectBusy") as error:
         await check_workspace_admission(db, uuid4(), uuid4(), directory, command if incoming_command else None)
+    assert error.value.params == {"sessionId": str(session_id), "sessionTitle": "Other task", "status": "waiting_approval"}
+
+
+@pytest.mark.parametrize("incoming_command", [False, True])
+@pytest.mark.parametrize(("name", "other_directory", "blocked"), [
+    ("git-commit", "/project", False), ("git_commit", "/project", False),
+    ("git-push", "/project", False), ("git-pr", "/project", False),
+    ("git-commit", "/worktree", True), ("git-merge", "/project", True),
+    ("git-sync", "/project", True), ("git-remote", "/other-worktree", True),
+    ("git-commit", "/other-worktree", False),
+])
+async def test_admission_scopes_worktree_commands_to_the_checkouts_they_change(incoming_command, name, other_directory, blocked):
+    agent_id = uuid4()
+    binding = {"executionAgentId": str(agent_id), "path": "/worktree", "commonDirectory": "/project/.git"}
+    command = {"name": name, "resources": ["/project", "/worktree", "/project/.git"],
+               "context": {"repository": "/worktree", "originalProjectDirectory": "/project"}}
+    db = AsyncMock()
+    db.execute.return_value = [(
+        other_directory if incoming_command else "/worktree",
+        {} if incoming_command else {"_matoloop": {"codingCommand": command}},
+        {**binding, "path": other_directory} if incoming_command else binding, uuid4(), "Other task", "running",
+    )]
+    arguments = (db, uuid4(), agent_id, "/worktree" if incoming_command else other_directory, command if incoming_command else None)
+    if blocked:
+        with pytest.raises(SessionServiceError, match="git.projectBusy"):
+            await check_workspace_admission(*arguments, metadata_directory="/project/.git")
+    else:
+        await check_workspace_admission(*arguments, metadata_directory="/project/.git")
 
 
 async def test_admission_keeps_a_relocated_command_directory_reserved():
     db = AsyncMock()
     db.execute.return_value = [("/relocated", {"_matoloop": {"codingCommand": {
         "name": "git-sync", "resources": ["/original"],
-    }}}, None)]
+    }}}, None, uuid4(), "Other task", "running")]
     with pytest.raises(SessionServiceError, match="git.projectBusy"):
         await check_workspace_admission(db, uuid4(), uuid4(), "/relocated")
+
+
+async def test_admission_keeps_saved_git_resources_reserved_without_live_binding():
+    db = AsyncMock()
+    db.execute.return_value = [("/worktree", {"_matoloop": {"codingCommand": {
+        "name": "git-commit", "resources": ["/project/.git"], "context": {"repository": "/worktree"},
+    }}}, None, uuid4(), "Other task", "running")]
+    with pytest.raises(SessionServiceError, match="git.projectBusy"):
+        await check_workspace_admission(db, uuid4(), uuid4(), "/project",
+                                        {"name": "git-remote", "resources": ["/project/.git"]})
 
 
 async def test_continuation_rejects_coding_commands_before_run_reservation(monkeypatch):

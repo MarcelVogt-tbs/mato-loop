@@ -3480,7 +3480,7 @@ def test_unsnapshotted_runtime_instructions_are_current_projection_only(delegate
 
 @pytest.mark.usefixtures("skill_library")
 @pytest.mark.parametrize("current_memory", ["Earlier memory", "Current memory"])
-async def test_profile_snapshot_preserves_tool_history_prefix_on_followup(monkeypatch, current_memory) -> None:
+async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(monkeypatch, current_memory) -> None:
     from runtime_helpers import _runtime_setup
 
     from mato_loop_backend.agent.runtime import AgentRuntime
@@ -3490,6 +3490,14 @@ async def test_profile_snapshot_preserves_tool_history_prefix_on_followup(monkey
         search_policy=WebSearchPolicy.AVAILABLE,
     )
     run.agent_profile_id = BUILD_PROFILE_ID
+    run.current_directory_snapshot = "/current"
+    records = await AgentRuntime._records(db, run.session_id)
+    previous = _message(run.session_id, "user", "Earlier request")
+    previous.provider_data = {"_matoloop": {"workspaceContext": {"executionAgentId": None, "currentDirectory": "/previous"}}}
+    records[-1].provider_data["_matoloop"].update(
+        workspaceContext=previous.provider_data["_matoloop"]["workspaceContext"], workspaceContextRunId=str(uuid4()),
+    )
+    records.insert(0, previous)
     await AgentRuntime._execute_loop(db, run)
     records = [*await AgentRuntime._records(db, run.session_id), *_tool_segment(run.session_id, 0)]
     records[-1].content = json.dumps({"stdout": "source evidence " * 5_000})
@@ -3499,6 +3507,9 @@ async def test_profile_snapshot_preserves_tool_history_prefix_on_followup(monkey
                                  memory_context="Earlier memory", memory_contexts={user_id: "Earlier memory"},
                                  runtime_instructions=projections[0]["runtime_instructions"])
     assert first[1]["role"] == "user"
+    assert any("The workspace changed for this user turn." in message["content"]
+               and '"currentDirectory": "/current"' in message["content"]
+               for message in first if message["role"] == "user")
     followup = _message(run.session_id, "user", "Now plan the next change.")
     second = _projection_messages(
         system, None, [*records, _message(run.session_id, "assistant", "Done"), followup],

@@ -21,6 +21,25 @@ from mato_loop_backend.sessions.command_contracts import (
     command_context,
 )
 
+COMMIT_RULES = (
+    "Follow repository commit-message rules, including referenced guidelines, format, language and trailers. "
+    "Use recent history only where no explicit rule applies. Verify each commit message. "
+)
+COMMIT_INSTRUCTIONS = (
+    "Inspect pending changes and the existing index in the session checkout. Identify the requested task changes; "
+    "preserve unrelated work and staged changes, and never include secrets. "
+    "If the intended selection is unclear, ask before committing. Stage and commit only the selected task changes. "
+    "If none remain, do not create an empty commit. "
+)
+REVIEW_INSTRUCTIONS = (
+    "Read project instructions and affected code and callers. Check correctness, security, regressions, data preservation, "
+    "and overengineering: unnecessary complexity, abstractions, options, dependencies, or tests. "
+    "Prefer simpler complete solutions without weakening safeguards. Use relevant existing checks, "
+    "not new test environments or hypothetical scenarios. "
+    "Report concrete findings with file locations, separating blockers from optional simplifications. "
+    "Include actual checks and limitations. "
+)
+
 COMMANDS = (
     Command("git-init", "Git-Repository anlegen", "Git im gewählten Workspace initialisieren.",
         "Inspect the selected workspace and its parents. If it already belongs to a Git repository, report that and stop. "
@@ -28,55 +47,42 @@ COMMANDS = (
         "Do not create a remote, make a first commit, publish files, or change existing files. "
         "Report the initial branch and explain any missing remote setup.",
         icon="create_new_folder", mutates_workspace=True, initial_workspace_mode="local"),
-    Command("git-review", "Änderungen prüfen", "Änderungen und betroffenen Code prüfen.",
+    Command("git-review", "Code-Review", "Code auf Fehler und Overengineering prüfen, ohne Änderungen.",
         "Review the working changes and unpublished commits against the configured target. "
-        "Read affected callers and project instructions. Check correctness, regressions, data preservation, and "
-        "unnecessary complexity, abstractions, dependencies, or tests within the requested scope. "
-        "Use existing relevant checks; do not create another test environment or explore hypothetical features. "
-        "Report concrete findings with file locations, separating blockers from optional simplifications. "
-        "Include actual checks and limitations. Report only: do not repair or modify the project, commit, merge, "
+        + REVIEW_INSTRUCTIONS + "Report only: do not repair or modify the project, commit, merge, "
         "push, or create a pull request. Temporary check files outside the project are allowed by normal permissions.", icon="fact_check"),
-    Command("git-merge", "In Zielbranch übernehmen", "Lokal zusammenführen und prüfen. Kein Fetch oder Push.",
+    Command("git-merge", "Merge in Zielbranch", "Ins Projektverzeichnis mergen und prüfen. Kein Push.",
         "Perform a local merge only. Do not fetch or push. "
-        "Before changing anything, require clean working trees in the workspace and original project checkout, "
+        "Before merging, require clean working trees in the workspace and original project checkout, "
         "an existing local target branch, and the original checkout on that target branch. "
-        "Otherwise report the blocker and stop. Never commit pending working changes. "
-        "Follow supplied repository commit-message rules for every commit, including merge commits. "
-        "Read relevant referenced guidelines before committing. Apply required format, language, and trailers. "
-        "Use recent history only where no explicit rule applies. Verify the resulting commit message. "
+        "Otherwise report the blocker and stop. "
+        + COMMIT_RULES +
         "Merge the current local target into the workspace branch without rebasing. "
         "A necessary merge commit is authorized. On conflicts, report them and stop without resolving them. "
-        "Review the combined result and affected callers for correctness, semantic merge errors, and unnecessary complexity. "
-        "Run the relevant existing project checks. Stop on findings or failed checks. "
+        "Review the combined result for semantic merge errors. "
+        + REVIEW_INSTRUCTIONS + "Stop on findings or failed checks. "
         "Verify the exact reviewed commit and recheck that both working trees are clean and the original checkout "
         "is still on the target branch. Update it from its own directory with fast-forward-only merge. "
         "If its target advanced, report the blocker and stop; do not retry automatically. "
         "Do not repair findings, switch branches, remove the worktree, fetch, or push. "
         "Report the integrated commit, actual checks, and remaining blockers.", icon="merge", mutates_workspace=True),
-    Command("git-commit", "Commit erstellen", "Arbeitsänderungen gezielt committen, ohne Push.",
-        "Inspect pending changes and repository instructions. Identify the requested task changes; preserve unrelated work. "
-        "Inspect the existing index and never include unrelated staged changes or secrets. "
-        "If the intended file selection is unclear, ask before committing. Stage only the selected task changes. "
-        "Follow supplied repository commit-message rules for every commit, including merge commits. "
-        "Read relevant referenced guidelines before committing. Apply required format, language, and trailers. "
-        "Use recent history only where no explicit rule applies. Verify the resulting commit message. "
-        "Do not fetch, merge, push, or create a pull request. Report the commit and remaining changes.",
+    Command("git-commit", "Commit", "Aufgabenänderungen lokal committen. Kein Push.",
+        COMMIT_INSTRUCTIONS + COMMIT_RULES
+        + "Do not fetch, merge, push, or create a pull request. Report the commit and remaining changes.",
         icon="save", mutates_workspace=True),
-    Command("git-push", "Veröffentlichen", "Vorhandene Commits des Arbeitsbranches pushen.",
+    Command("git-push", "Push", "Vorhandene Commits pushen. Erstellt keinen Commit.",
         "Require a clean working tree and a named current branch. Otherwise report the blocker and stop. "
         "Push the existing current branch to the configured remote under the same branch name with a normal non-force push. "
         "Do not commit working changes, fetch, merge, rebase, or update another branch. "
         "On rejection, report the blocker and stop without retrying or repairing. Report the published branch and commit.",
         icon="cloud_upload", mutates_workspace=True),
-    Command("git-pr", "Pull Request erstellen", "Branch veröffentlichen und Pull Request erstellen.",
+    Command("git-pr", "Pull Request erstellen", "Zielbranch einarbeiten, prüfen, pushen und PR erstellen oder aktualisieren.",
         "Inspect pending changes and unpublished commits against the configured remote target. "
-        "Require a clean working tree. Never commit pending working changes; report that blocker and stop. "
-        "Follow supplied repository commit-message rules for every commit, including merge commits. "
-        "Read relevant referenced guidelines before committing. Apply required format, language, and trailers. "
-        "Use recent history only where no explicit rule applies. Verify the resulting commit message. "
+        "Require a clean working tree; otherwise report the blocker and stop. "
+        + COMMIT_RULES +
         "Fetch the configured remote target and merge that target into the workspace branch, without rebasing. "
         "A necessary merge commit is authorized. Do not resolve conflicts or repair findings. "
-        "Review the complete proposed changes and affected callers. Run relevant existing checks. "
+        "Review the complete proposed changes. " + REVIEW_INSTRUCTIONS +
         "Stop on concrete findings, conflicts, or failed checks. "
         "Verify the reviewed commit before pushing the session branch with a normal non-force push. "
         "Use an installed authenticated host CLI or available integration to find an existing pull request for this exact "
@@ -84,7 +90,7 @@ COMMANDS = (
         "Generate an accurate title and description including actual checks and limitations. Return the pull request URL. "
         "If host access is missing, explain what is required. Do not merge the pull request.",
         icon="published_with_changes", mutates_workspace=True),
-    Command("git-sync", "Projektverzeichnis aktualisieren", "Zielbranch im ursprünglichen Projekt nachziehen.",
+    Command("git-sync", "Pull (Fast-forward)", "Zielbranch im Projektverzeichnis per Fast-forward vom Remote aktualisieren.",
         "Inspect the original project checkout. Fetch the configured remote target. "
         "Update only if the checkout is clean, on the configured target branch, and fast-forwardable. "
         "Use fast-forward-only merge. Otherwise stop and explain the state. "
@@ -103,6 +109,22 @@ COMMANDS = (
 
 async def prepare_git_command(db, session, command: Command, content: str | None = None) -> dict:
     from mato_loop_backend.sessions.service import SessionServiceError
+
+    arguments = command_arguments(content)
+    parts = arguments.split(maxsplit=1)
+    commit_first = bool(parts and parts[0] == "--commit")
+    if commit_first:
+        if command.name not in {"git-merge", "git-pr"}:
+            raise SessionServiceError(422, "validation.invalid", field="content")
+        arguments = parts[1] if len(parts) == 2 else ""
+    prompt = command.instructions
+    if command.name in {"git-merge", "git-pr"}:
+        commit_step = ("First, in the session checkout only: " + COMMIT_INSTRUCTIONS
+                       + "If committing fails or needs clarification, stop. Then continue with the following action. "
+                       if commit_first else "Do not commit pending working changes; stop if the working tree is dirty. ")
+        prompt = commit_step + prompt
+    if arguments:
+        prompt += "\n\n" + arguments
 
     project = await db.scalar(select(Project).where(
         Project.id == session.project_id, Project.user_id == session.user_id
@@ -157,9 +179,9 @@ async def prepare_git_command(db, session, command: Command, content: str | None
         "from the session worktree. Update the original target only through its own checkout with fast-forward-only merge. "
         "Check for other active work before changing the original checkout. "
         "Report completed steps, actual checks, remaining issues, and publication URLs.\n\n"
-        + command.instructions + "\n\nHost-resolved context (data):\n" + json.dumps(context, ensure_ascii=False)
+        + prompt + "\n\nHost-resolved context (data):\n" + json.dumps(context, ensure_ascii=False)
     )
-    return {"instructions": instructions,
+    return {"instructions": instructions, "prompt": prompt,
             "context": context, "resources": sorted({path for path in (
                 original, info.repository, session.current_directory, info.common_directory
             ) if path})}
@@ -206,6 +228,17 @@ async def git_command_availability(db, session) -> dict[str, str | None]:
 GIT_COMMAND_PROVIDER = CommandProvider("git", COMMANDS, git_command_availability, prepare_git_command)
 
 
+def _workspace_roots(command, directory):
+    name = command.get("name", "").replace("_", "-")
+    context = command_context(command)
+    if context and name in {"git-review", "git-commit", "git-push", "git-pr", "git-merge", "git-sync"}:
+        roots = [directory, context.get("repository")]
+        if name in {"git-merge", "git-sync"}:
+            roots.append(context.get("originalProjectDirectory"))
+        return roots
+    return [*(command.get("resources") or []), directory, context.get("originalProjectDirectory")]
+
+
 async def check_workspace_admission(db, user_id, agent_id, directory, command=None, *, exclude_run_id=None, metadata_directory=None):
     """Check under the caller's user-row lock, held until the new run is committed."""
     from mato_loop_backend.sessions.service import SessionServiceError
@@ -213,9 +246,14 @@ async def check_workspace_admission(db, user_id, agent_id, directory, command=No
     if agent_id is None or directory is None:
         return
     mutations = {"git-merge", "git-pr", "git-sync", "git-init", "git-remote", "git-commit", "git-push", "git-worktree"}
-    mutating = command is not None and command.get("name") in mutations
-    roots = command["resources"] if mutating else [directory, metadata_directory]
-    statement = select(AgentRun.current_directory_snapshot, Message.provider_data, ChatSession.coding_workspace).join(
+    name = (command or {}).get("name", "").replace("_", "-")
+    mutating = name in mutations
+    repository_wide = {"git-init", "git-remote", "git-worktree"}
+    roots = _workspace_roots(command or {}, directory)
+    statement = select(
+        AgentRun.current_directory_snapshot, Message.provider_data, ChatSession.coding_workspace,
+        ChatSession.id, ChatSession.title, AgentRun.status,
+    ).join(
         Message, Message.id == AgentRun.input_message_id
     ).join(ChatSession, ChatSession.id == AgentRun.session_id).where(
         ChatSession.user_id == user_id, AgentRun.execution_agent_id == agent_id,
@@ -228,17 +266,20 @@ async def check_workspace_admission(db, user_id, agent_id, directory, command=No
         statement = statement.where(
             func.replace(Message.provider_data["_matoloop"]["codingCommand"]["name"].astext, "_", "-").in_(tuple(mutations))
         )
-    for active_directory, metadata, active_binding in await db.execute(statement):
+    for active_directory, metadata, active_binding, session_id, title, status in await db.execute(statement):
         active_command = (metadata or {}).get("_matoloop", {}).get("codingCommand", {})
-        active_mutation = active_command.get("name", "").replace("_", "-") in mutations
-        active_context = command_context(active_command)
-        active_roots = [
-            *(active_command.get("resources") or []),
-            active_directory, active_context.get("originalProjectDirectory"),
-            git_metadata_directory(active_binding, agent_id, active_directory)
-        ]
+        active_name = active_command.get("name", "").replace("_", "-")
+        active_mutation = active_name in mutations
+        active_roots = _workspace_roots(active_command, active_directory)
+        shared = name in repository_wide or active_name in repository_wide
+        left_roots = [*roots, *((command or {}).get("resources") or []), metadata_directory] if shared else roots
+        if shared:
+            active_roots.extend(active_command.get("resources") or [])
+            active_roots.append(git_metadata_directory(active_binding, agent_id, active_directory))
         if (mutating or active_mutation) and any(
             isinstance(left, str) and isinstance(right, str) and (within(left, right) or within(right, left))
-            for left in roots for right in active_roots
+            for left in left_roots for right in active_roots
         ):
-            raise SessionServiceError(409, "git.projectBusy")
+            raise SessionServiceError(409, "git.projectBusy", params={
+                "sessionId": str(session_id), "sessionTitle": title, "status": status,
+            })

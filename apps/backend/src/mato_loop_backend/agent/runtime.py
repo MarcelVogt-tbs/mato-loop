@@ -294,7 +294,7 @@ class AgentRuntime:
                 metadata_directory=git_metadata_directory(chat_session.coding_workspace, chat_session.preferred_execution_agent_id, current_directory),
             )
         except SessionServiceError as exc:
-            raise AgentRunError(exc.code) from exc
+            raise AgentRunError(exc.code, params=exc.params) from exc
         if agent_profile_id_override is not None and profile_id != chat_session.agent_profile_id:
             await db.execute(
                 delete(PermissionGrant).where(PermissionGrant.session_id == chat_session.id)
@@ -546,7 +546,7 @@ class AgentRuntime:
                                                 saved_command, exclude_run_id=run.id,
                                                 metadata_directory=git_metadata_directory(chat_session.coding_workspace, agent_id, current_directory))
             except SessionServiceError as exc:
-                raise AgentRunError(exc.code) from exc
+                raise AgentRunError(exc.code, params=exc.params) from exc
             if not before_execution:
                 input_message.provider_data = {
                     **(input_message.provider_data or {}),

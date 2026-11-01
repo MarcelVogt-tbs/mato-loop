@@ -91,7 +91,7 @@ it('runs a selected command in the current session without consuming its draft',
   setActivePinia(pinia)
   const commands = useCommandStore()
   commands.loaded = true
-  commands.items = [{ source: 'git', name: 'git-review', label: 'Änderungen prüfen', description: 'Review' }]
+  commands.items = [{ source: 'git', name: 'git-review', label: 'Code-Review', description: 'Review' }]
   const chat = useChatStore()
   chat.outboxLoaded = true
   chat.current = { id: 'session', messages: [], agentProfileId: 'stored', preferredExecutionAgentId: 'agent', currentDirectory: '/repo' }
@@ -115,7 +115,7 @@ it('explains and blocks publication without a remote in the Git app', async () =
   setActivePinia(pinia)
   const commands = useCommandStore(), chat = useChatStore()
   commands.loaded = true
-  commands.items = [{ source: 'git', name: 'git-sync', label: 'Projektverzeichnis aktualisieren', disabledReason: 'Remote einrichten, um zu veröffentlichen.' }, { source: 'git', name: 'git-remote', label: 'Remote einrichten' }]
+  commands.items = [{ source: 'git', name: 'git-sync', label: 'Pull (Fast-forward)', disabledReason: 'Remote einrichten, um zu veröffentlichen.' }, { source: 'git', name: 'git-remote', label: 'Remote einrichten' }]
   chat.outboxLoaded = true
   chat.current = { id: 'session', preferredExecutionAgentId: 'agent', currentDirectory: '/repo', workspaceMode: 'local' }
   useExecutionAgentStore().items = [{ id: 'agent', connected: true }]
@@ -128,6 +128,31 @@ it('explains and blocks publication without a remote in the Git app', async () =
   root.querySelector('.q-item').click()
   expect([root.textContent.includes('Remote einrichten, um zu veröffentlichen.'), root.textContent.includes('/git-'), root.querySelectorAll('.q-item').length, run.mock.calls.length])
     .toEqual([true, false, 1, 0])
+})
+
+it.each(['git-merge', 'git-pr', 'git-push', 'git-sync'])('applies the shared commit checkbox only to merge and PR (%s)', async name => {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  useCommandStore().items = ['git-review', 'git-commit', 'git-merge', 'git-pr', 'git-push', 'git-sync']
+    .map(name => ({ name, label: name, source: 'git' }))
+  const chat = useChatStore()
+  chat.outboxLoaded = true
+  chat.current = { id: 'session', messages: [], preferredExecutionAgentId: 'agent', currentDirectory: '/repo' }
+  const send = vi.spyOn(chat, 'sendToCurrent').mockResolvedValue({})
+  root = document.createElement('div')
+  app = createApp({ render: () => h(GitActionList) })
+  app.use(pinia).use(Quasar, quasarOptions).mount(root)
+  const action = [...root.querySelectorAll('.q-item--clickable')].find(item => item.querySelector('.q-item__label').textContent === name)
+  expect(root.querySelector('[role="checkbox"]').closest('.q-item').previousElementSibling.textContent).toContain('git-pr')
+  action.click()
+  await nextTick()
+  root.querySelector('[role="checkbox"]').click()
+  await nextTick()
+  action.click()
+  await nextTick()
+  expect(send.mock.calls.map(([content]) => content)).toEqual([
+    `/${name}`, `/${name}${['git-merge', 'git-pr'].includes(name) ? ' --commit' : ''}`
+  ])
 })
 
 it('does not recheck a repository when computer polling replaces unchanged agents', async () => {
@@ -172,7 +197,7 @@ it('adopts a draft remote without changing an unrelated project workspace', asyn
   document.body.append(root)
   app = createApp({ render: () => h(GitApp) })
   app.use(pinia).use(Quasar, { ...quasarOptions, plugins: { Notify } }).mount(root)
-  root.querySelectorAll('[role="tab"]')[1].click()
+  ;[...root.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === 'Repository').click()
   await vi.waitFor(() => expect(root.querySelector('[aria-label="Remote bearbeiten"]')?.disabled).toBe(false))
   root.querySelector('[aria-label="Remote bearbeiten"]').click()
   await vi.waitFor(() => expect(document.querySelector('.q-dialog form')).not.toBeNull())
@@ -291,9 +316,10 @@ it('creates a branch from the workspace panel using the standard prompt', async 
   app = createApp({ render: () => h(GitApp) })
   app.use(pinia).use(Quasar, { ...quasarOptions, plugins: { Dialog, Notify } }).mount(root)
   const tabs = [...root.querySelectorAll('[role="tab"]')]
-  expect(tabs.map(tab => tab.textContent)).toEqual(['Änderungen', 'Einstellungen'])
+  expect(tabs.map(tab => tab.textContent)).toEqual(['Änderungen', 'Repository'])
   tabs[1].click()
   await vi.waitFor(() => expect(root.querySelector('[aria-label="Branch bearbeiten"]')?.disabled).toBe(false))
+  expect([...root.querySelectorAll('h2')].map(heading => heading.textContent)).toEqual(['Aktionen', 'Einstellungen'])
   root.querySelector('[aria-label="Branch bearbeiten"]').click()
   await vi.waitFor(() => expect(document.querySelector('[aria-label="Branch erstellen"]')).not.toBeNull())
   document.querySelector('[aria-label="Branch erstellen"]').click()
@@ -427,6 +453,7 @@ it('opens a deleted session-workspace file from Git even when the editor inspect
   app = createApp({ render: () => h(GitApp) })
   app.use(pinia).use(Quasar, quasarOptions).mount(root)
   await vi.waitFor(() => expect(root.querySelector('[aria-label="Diff öffnen: deleted.txt"]')).not.toBeNull())
+  expect([...root.querySelectorAll('[role="tab"] .text-positive, [role="tab"] .text-negative')].map(item => item.textContent)).toEqual(['−2'])
   git.setContext({ sessionId: 'session', executionAgentId: 'agent', currentDirectory: '/other' })
   Object.assign(git.current, { repository: '/other', files: [{ path: 'foreign.txt' }] })
   await nextTick()

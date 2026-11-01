@@ -901,6 +901,15 @@ def _projection_messages(
                 + profile_instructions.strip()
                 + "\n</system-reminder>"
             )
+        if item.role == "user" and isinstance(runtime_data, dict) and runtime_data.get("workspaceChanged"):
+            projected["content"] = (projected.get("content") or "") + (
+                "\n\n<system-reminder>\n"
+                "The workspace changed for this user turn. Use the selected computer context's currentDirectory "
+                "as the default work target. Earlier paths in history are not a reason to return to a previous checkout. "
+                "Use other directories only when the current task requires them. Permissions are unchanged.\n"
+                + json.dumps(runtime_data["workspaceContext"], ensure_ascii=False, sort_keys=True)
+                + "\n</system-reminder>"
+            )
     if user_edited_tool_arguments:
         messages[0]["content"] += (
             "\n\nThe transcript contains tool calls whose arguments the user edited and "

@@ -331,9 +331,32 @@ async def execute_loop_body(
         if current_user is not None:
             data = current_user.provider_data or {}
             metadata = data.get("_matoloop", {})
-            if metadata.get("agentProfileInstructions", "") != profile_instructions:
+            updated = {**metadata, "agentProfileInstructions": profile_instructions}
+            # A retry reuses the user message but may select another workspace.
+            if metadata.get("workspaceContextRunId") != str(run.id):
+                workspace = {"executionAgentId": str(run.execution_agent_id) if run.execution_agent_id else None,
+                             "currentDirectory": run.current_directory_snapshot}
+                previous_user = next((item for item in reversed(records)
+                                      if item.role == "user" and item.id != current_user.id), None)
+                previous_workspace = ((previous_user.provider_data or {}).get("_matoloop", {}).get("workspaceContext")
+                                      if previous_user is not None else None)
+                if previous_user is not None and previous_workspace is None:
+                    # Read the legacy baseline once; subsequent turns use their saved workspace context.
+                    previous_run = await db.scalar(select(AgentRun).where(
+                        AgentRun.session_id == run.session_id, AgentRun.id != run.id,
+                        AgentRun.input_message_id != current_user.id, AgentRun.parent_run_id.is_(None),
+                    ).order_by(AgentRun.created_at.desc(), AgentRun.id.desc()).limit(1))
+                    if isinstance(previous_run, AgentRun):
+                        previous_workspace = {
+                            "executionAgentId": str(previous_run.execution_agent_id) if previous_run.execution_agent_id else None,
+                            "currentDirectory": previous_run.current_directory_snapshot,
+                        }
+                updated["workspaceContext"] = workspace
+                updated["workspaceContextRunId"] = str(run.id)
+                updated["workspaceChanged"] = previous_workspace is not None and previous_workspace != workspace
+            if updated != metadata:
                 current_user.provider_data = {
-                    **data, "_matoloop": {**metadata, "agentProfileInstructions": profile_instructions},
+                    **data, "_matoloop": updated,
                 }
                 await db.commit()
         summary = None

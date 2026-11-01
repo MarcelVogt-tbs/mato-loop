@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { apiErrorMessage, decodeBlobApiError, errorDescriptor } from '../src/utils/api-errors'
 
 describe('API error messages', () => {
+  it('identifies the session waiting for approval that blocks a Git command', () => {
+    expect(apiErrorMessage({ error: { code: 'git.projectBusy', params: { sessionTitle: 'Andere Aufgabe', status: 'waiting_approval' } } })).toBe(
+      'Auftrag kann noch nicht starten: Die Session „Andere Aufgabe“ wartet auf Freigabe und benötigt dasselbe Arbeitsverzeichnis oder gemeinsame Git-Einstellungen. Beende oder stoppe den dortigen Lauf und starte den Auftrag erneut.'
+    )
+  })
   it('explains why a local worktree cannot start from an unborn branch', () => {
     expect(apiErrorMessage({ error: { code: 'git.localBranchRequired' } })).toBe(
       'Der lokale Zielbranch fehlt oder enthält noch keinen Commit. Prüfe den Zielbranch und erstelle bei Bedarf zuerst einen Commit.'

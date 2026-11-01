@@ -177,19 +177,23 @@ selection and ingress semantics.
 | `/git-init` | Initialize Git in the selected workspace without committing, adding a remote, or publishing. |
 | `/git-review` | Review working changes and unpublished commits without editing or publishing. |
 | `/git-commit` | Inspect and explicitly commit selected task changes without fetching or pushing. |
-| `/git-merge` | Merge the local target into the worktree, review, check, and fast-forward the clean original checkout. No working-change commit, fetch or push. |
+| `/git-merge [--commit]` | Optionally commit task changes, merge the local target into the worktree, review, check, and fast-forward the clean original checkout. No fetch or push. |
 | `/git-push` | Publish the existing current branch without committing, fetching or merging. |
-| `/git-pr` | Fetch and integrate the remote target, review, check, publish and create or update the PR. No working-change commit. |
+| `/git-pr [--commit]` | Optionally commit task changes, fetch and integrate the remote target, review, check, publish and create or update the PR. |
 | `/git-sync` | Fetch and fast-forward the clean original project checkout without switching branches or discarding work. |
 | `/git-remote [name] [url]` | Configure only the explicitly requested remote through normal agent tools; ask for missing values. |
 
 Merge and PR commands initially require a managed worktree. Review also works in a
 local repository; sync requires a configured or unambiguous remote and target.
-Review checks correctness and unnecessary complexity and reports only; it never repairs
+Review checks correctness, security and overengineering and reports only; it never repairs
 project files. Temporary check files outside the project remain subject to normal permissions.
 Merge and PR commands stop on conflicts, dirty trees, findings or failed checks without
 repairing them. Necessary merge commits are authorized by the merge/PR request;
-pending working changes are committed only by an explicit commit request.
+pending working changes are committed only by an explicit commit request or the leading
+`--commit` option on merge/PR. That option reuses the standalone commit instructions,
+limited to selected task changes in the session checkout. Unclear selections require a
+question; unrelated work, staged changes and secrets are excluded. A remaining dirty
+tree still blocks merge/PR. Other Git commands reject `--commit` as a leading option.
 Telegram users select an existing coding session with `/sessions` and `/use <ID>`;
 messaging commands never create an unrelated empty session. Web submission can
 start a new session using its explicit draft configuration. Existing command source,
@@ -201,10 +205,18 @@ Saved command names with underscores remain readable for retries and workspace
 admission; new preparations and retries store canonical hyphenated names.
 Opening or selecting in the web palette never starts an agent or creates a session.
 
-The Git app has two views: **Änderungen** for changes and agent requests and **Einstellungen**
-for workspace selection/removal, branch management, the session target and remote configuration.
-Existing repositories start in the changes view; missing repositories use settings
-for setup. The overview keeps a separate store context from the active editor so
+The Git app has two tabs in order: **Änderungen** for changed files and **Repository**
+with agent requests under **Aktionen** first, then workspace selection/removal, branch
+management, the session target and remote configuration under **Einstellungen** in the
+same scroll area. The changes tab shows known positive addition totals in green
+and deletion totals in red; zero and unknown totals are omitted. Existing repositories start in the
+changes view; missing repositories use the repository tab for setup.
+Actions use Git terms in one compact list with headings and separators between three groups: **Prüfen & sichern** (Code-Review,
+Commit), **Übernehmen & veröffentlichen** (Merge, Pull Request), and **Remote** (Push,
+Pull (Fast-forward)). The shared **Vor Merge oder Pull Request committen** checkbox
+is off by default, sits directly below merge/PR, and resets when changing sessions.
+It adds `--commit` to those invocations only; it does not affect Push or Pull.
+The overview keeps a separate store context from the active editor so
 opening a different repository's file cannot replace the session's change list.
 Individual paths still open normal editor tabs in comparison mode. Remote address
 changes run as agent requests. Addresses must be network URLs
@@ -228,7 +240,11 @@ workflow engine. Mutation commands switch the built-in Plan selection to Build o
 when the session allows that profile; custom profile and tool restrictions remain.
 The private metadata key `codingCommand` is retained for compatibility with existing
 histories and retries; it carries any prepared command contribution. New commands
-also snapshot their command instructions plus arguments as `prompt`. The message API
+also snapshot their composed task instructions plus arguments as `prompt`. Git reuses
+the same commit core and commit-message rules for standalone Commit and optional
+pre-commit steps; review instructions are shared by Review, Merge and PR. Prompt
+composition removes the option token and avoids conflicting commit prohibitions.
+This adds no backend Git execution or separate run. The message API
 exposes only that snapshot as `commandPrompt` for the user bubble; execution wrappers
 and resolved runtime context remain private. The canonical message content retains
 the original invocation for undo and retry. Older messages without a prompt snapshot
@@ -241,11 +257,17 @@ continue to govern commit conventions and checks. Review and publication safegua
 are agent instructions plus the existing tool authorization; they are not a Git sandbox
 or a deterministic proof of review quality. The task explicitly requires non-force
 pushes of the reviewed commit, re-review after target advancement, stopping on conflicts
-or failed checks, and preservation of unrelated changes. Known active runs in the
-original checkout/worktree prevent starting a publication/sync/init/remote command. Admission
-is checked under the existing user-row lock until commit, includes nested directories,
-and also blocks ordinary runs overlapping an active publication/sync command. External
-processes can still change the repository and must be inspected by the agent.
+or failed checks, and preservation of unrelated changes. Admission reserves only affected
+checkouts: commit, push and PR commands reserve the current checkout; merge and sync also
+reserve the original checkout. Shared Git metadata alone does not block work in independent
+worktrees. Init, remote configuration and worktree management retain repository-wide
+protection using saved command resources, even if the live session selection changes.
+Checks run under the existing user-row lock until commit, include nested
+directories, and also block ordinary runs overlapping an active mutation command.
+Queued runs and runs waiting for approval or input remain active. Conflicts report the
+blocking session's ID, title and run status as structured error parameters; the UI and
+Telegram explain how to finish or stop that run before retrying. External processes can
+still change the repository and must be inspected by the agent.
 
 Git subprocesses run in a separate process group/tree. Cancellation terminates the
 tree and bounds pipe cleanup; a dispatched preparation with a lost response,

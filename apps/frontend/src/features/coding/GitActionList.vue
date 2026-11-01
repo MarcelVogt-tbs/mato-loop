@@ -1,30 +1,50 @@
 <template>
-  <q-list separator aria-label="Agentenaufträge">
-    <q-item v-if="catalog.loading && !catalog.items.length"><q-item-section>Wird geladen …</q-item-section></q-item>
-    <q-item v-if="catalog.failed" clickable @click="$emit('refresh')"><q-item-section>Befehle erneut laden</q-item-section></q-item>
-    <q-item v-for="command in items" :key="command.name" clickable :disable="busy || Boolean(command.disabledReason)" @click="run(command)">
-      <q-item-section avatar><q-icon :name="command.icon" color="primary" /></q-item-section>
-      <q-item-section>
-        <q-item-label>{{ command.name === 'git-merge' && targetBranch ? `In ${targetBranch} übernehmen` : command.label }}</q-item-label>
-        <q-item-label caption>{{ command.disabledReason || command.description }}</q-item-label>
-      </q-item-section>
-      <q-item-section side><q-icon name="play_arrow" /></q-item-section>
-    </q-item>
+  <q-list aria-label="Agentenaufträge">
+    <q-item v-if="catalog.loading && !catalog.items.length" dense><q-item-section>Wird geladen …</q-item-section></q-item>
+    <q-item v-if="catalog.failed" dense clickable @click="$emit('refresh')"><q-item-section>Befehle erneut laden</q-item-section></q-item>
+    <template v-for="(group, index) in groups" :key="group.label">
+      <q-separator v-if="index" />
+      <q-item-label header class="q-py-sm" role="heading" aria-level="3">{{ group.label }}</q-item-label>
+      <q-item v-for="command in group.items" :key="command.name" dense clickable :disable="busy || Boolean(command.disabledReason)" @click="run(command)">
+        <q-item-section avatar><q-icon :name="command.icon" color="primary" /></q-item-section>
+        <q-item-section>
+          <q-item-label>{{ command.name === 'git-merge' && targetBranch ? `Merge in „${targetBranch}“` : command.label }}</q-item-label>
+          <q-item-label caption>{{ command.disabledReason || command.description }}</q-item-label>
+        </q-item-section>
+        <q-item-section side><q-icon name="play_arrow" /></q-item-section>
+      </q-item>
+      <q-item v-if="group.commit" tag="label" dense :disable="busy">
+        <q-item-section avatar>
+          <q-checkbox v-model="commitFirst" dense :disable="busy" aria-label="Vor Merge oder Pull Request committen" />
+        </q-item-section>
+        <q-item-section><q-item-label class="text-caption">Vor Merge oder Pull Request committen</q-item-label></q-item-section>
+      </q-item>
+    </template>
   </q-list>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useChatStore } from 'src/features/chat/store'
 import { useCommandStore } from 'src/features/commands/store'
 import { useGitActionStore } from './git-actions-store'
 
 const props = defineProps({ disabled: Boolean, targetBranch: { type: String, default: null } })
 defineEmits(['refresh'])
 const catalog = useCommandStore(), actions = useGitActionStore()
+const chat = useChatStore(), commitFirst = ref(false)
 const items = computed(() => catalog.items.filter(command => command.source === 'git' && command.name !== 'git-remote'))
+const groups = computed(() => [
+  { label: 'Repository einrichten', names: ['git-init'] },
+  { label: 'Prüfen & sichern', names: ['git-review', 'git-commit'] },
+  { label: 'Übernehmen & veröffentlichen', names: ['git-merge', 'git-pr'], commit: true },
+  { label: 'Remote', names: ['git-push', 'git-sync'] }
+].map(group => ({ ...group, items: group.names.map(name => items.value.find(command => command.name === name)).filter(Boolean) }))
+  .filter(group => group.items.length))
 const busy = computed(() => props.disabled || catalog.loading || actions.busy)
+watch(() => chat.current?.id, () => { commitFirst.value = false })
 async function run(command) {
   if (busy.value || command.disabledReason) return
-  try { await actions.run(command.name) } catch { /* Central API toast. */ }
+  try { await actions.run(command.name, [], commitFirst.value && ['git-merge', 'git-pr'].includes(command.name)) } catch { /* Central API toast. */ }
 }
 </script>

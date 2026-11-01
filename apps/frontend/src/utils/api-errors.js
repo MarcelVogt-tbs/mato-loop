@@ -149,7 +149,11 @@ const messages = {
   'git.mainWorktree': () => 'Das ursprüngliche Projektverzeichnis kann hier nicht entfernt werden.',
   'git.actionFailed': () => 'Die Git-Aktion ist fehlgeschlagen. Prüfe den aktuellen Zustand vor einem erneuten Versuch.',
   'git.worktreeLocation': () => 'Der verwaltete Worktree-Bereich liegt im Quellrepository. Wähle ein Repository außerhalb dieses Bereichs.',
-  'git.projectBusy': () => 'Im ursprünglichen Projektverzeichnis arbeitet noch ein Agent. Warte auf dessen Abschluss.',
+  'git.projectBusy': ({ params }) => {
+    const session = params?.sessionTitle ? `Die Session „${params.sessionTitle}“` : 'Eine andere Session'
+    const status = { queued: 'ist eingereiht', running: 'läuft noch', waiting_approval: 'wartet auf Freigabe', waiting_input: 'wartet auf deine Antwort' }[params?.status] || 'hat einen aktiven Auftrag'
+    return `Auftrag kann noch nicht starten: ${session} ${status} und benötigt dasselbe Arbeitsverzeichnis oder gemeinsame Git-Einstellungen. Beende oder stoppe den dortigen Lauf und starte den Auftrag erneut.`
+  },
   'agentProfile.duplicate': () => 'Ein Agentenprofil mit diesem Namen ist bereits vorhanden.',
   'agentProfile.defaultProtected': () => 'Integrierte Agentenprofile können nicht umbenannt oder gelöscht werden.',
   'agentProfile.inUse': () => 'Das Agentenprofil wird noch von einer Session verwendet.',

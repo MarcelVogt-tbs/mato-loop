@@ -2,8 +2,16 @@
   <section class="column full-height no-wrap" aria-label="Git">
     <div class="row items-center no-wrap q-pr-sm">
       <q-tabs v-model="changes.view" dense no-caps align="left" class="col" aria-label="Git-Ansicht">
-        <q-tab name="changes" label="Änderungen" />
-        <q-tab name="settings" label="Einstellungen" />
+        <q-tab name="changes">
+          <div class="row items-center no-wrap q-gutter-x-xs">
+            <span>Änderungen</span>
+            <template v-if="gitState?.repository && !gitState.error">
+              <span v-if="additions > 0" class="text-positive">+{{ additions }}</span>
+              <span v-if="deletions > 0" class="text-negative">−{{ deletions }}</span>
+            </template>
+          </div>
+        </q-tab>
+        <q-tab name="repository" label="Repository" />
       </q-tabs>
       <q-btn flat dense no-caps icon="refresh" label="Aktualisieren" :loading="loading || gitState?.loading" :disable="!online || saving" @click="refresh" />
     </div>
@@ -29,31 +37,26 @@
               <AppStateMessage v-else icon="check_circle_outline" :title="gitState.files.length ? 'Keine passenden Änderungen' : 'Keine Änderungen'" :description="gitState.files.length ? 'Passe den Dateifilter an.' : 'Es sind keine neuen, geänderten oder gelöschten Dateien vorhanden.'" />
             </template>
             <div v-else class="app-muted" role="status">{{ !chat.current ? 'Die Änderungsübersicht ist nach dem Sessionstart verfügbar.' : !changesAvailable ? 'Für die Änderungsübersicht ist ein verbundener Computer mit Git-Zugriff erforderlich.' : 'Im gewählten Workspace ist kein Git-Repository vorhanden.' }}</div>
-            <section v-if="repository?.repository" aria-labelledby="git-commands-title">
-              <h2 id="git-commands-title" class="text-subtitle2 q-mt-lg q-mb-sm">Agentenaufträge</h2>
-              <q-card flat bordered class="app-surface overflow-hidden">
-                <GitActionList :disabled="saving || !online" :target-branch="targetBranch" @refresh="refreshCommands" />
-              </q-card>
-            </section>
           </div>
         </q-scroll-area>
       </q-tab-panel>
-      <q-tab-panel name="settings" class="q-pa-none">
+      <q-tab-panel name="repository" class="q-pa-none">
         <q-scroll-area class="fit">
           <div class="q-pa-md q-gutter-y-md">
             <div v-if="!repository" class="app-muted" role="status">{{ loading ? 'Repository wird geprüft …' : 'Wähle einen Computer und Workspace mit installiertem Git.' }}</div>
             <div v-else-if="!repository.repository" class="app-muted" role="status">Im gewählten Workspace ist noch kein Git-Repository vorhanden.</div>
-            <template v-if="repository?.repository">
+            <section v-if="repository" aria-labelledby="git-actions-title">
+              <h2 id="git-actions-title" class="text-subtitle2 q-mt-none q-mb-sm">Aktionen</h2>
+              <q-card flat bordered class="app-surface overflow-hidden">
+                <GitActionList :disabled="saving || !online" :target-branch="targetBranch" @refresh="refreshCommands" />
+              </q-card>
+            </section>
+            <section v-if="repository?.repository" aria-labelledby="git-settings-title">
+              <h2 id="git-settings-title" class="text-subtitle2 q-mt-none q-mb-sm">Einstellungen</h2>
               <GitWorkspacePanel :project="project" :repository="repository" :loading="loading" :target-branch="targetBranch"
                 :remote="remote" :remote-disabled="busy || !online" @changed="refresh" @edit-remote="openRemote"
                 @inspect-worktrees="refreshRepository({ worktreeDetails: true })"
                 @project-defaults="projectOpen = true" />
-            </template>
-            <section v-if="repository && !repository.repository" aria-labelledby="git-setup-title">
-              <h2 id="git-setup-title" class="text-subtitle2 q-mt-lg q-mb-sm">Repository einrichten</h2>
-              <q-card flat bordered class="app-surface overflow-hidden">
-                <GitActionList :disabled="saving || !online || Boolean(remoteChanged)" @refresh="refreshCommands" />
-              </q-card>
             </section>
           </div>
         </q-scroll-area>
@@ -105,7 +108,7 @@ defineOptions({ name: 'GitApp' })
 const $q = useQuasar()
 const chat = useChatStore(), controlCenter = useControlCenterStore(), agents = useExecutionAgentStore()
 const projects = useProjectStore(), commands = useGitActionStore(), changes = useGitChangesStore()
-changes.view = changes.view === 'changes' ? 'changes' : 'settings'
+if (changes.view !== 'changes') changes.view = 'repository'
 const context = computed(() => chat.activeContext)
 const project = computed(() => projects.items.find(item => item.id === (chat.current?.projectId || chat.sessionsProjectId)))
 const visible = computed(() => controlCenter.open && controlCenter.activeContentId === 'git')
@@ -114,6 +117,8 @@ const changesAvailable = computed(() => online.value && Boolean(chat.current?.id
   && agents.byId(context.value?.preferredExecutionAgentId)?.operations?.includes('git.changes'))
 const overviewContext = computed(() => changesAvailable.value ? gitContext(chat.current) : null)
 const gitState = computed(() => gitContextKey(changes.overview) === gitContextKey(overviewContext.value) ? changes.overview : null)
+const additions = computed(() => gitState.value?.files.some(file => file.additions == null) ? '–' : (gitState.value?.files || []).reduce((sum, file) => sum + file.additions, 0))
+const deletions = computed(() => gitState.value?.files.some(file => file.deletions == null) ? '–' : (gitState.value?.files || []).reduce((sum, file) => sum + file.deletions, 0))
 const fileFilter = ref('')
 const filteredFiles = computed(() => (gitState.value?.files || []).filter(file => file.path.toLocaleLowerCase().includes((fileFilter.value || '').toLocaleLowerCase())))
 const { refresh: refreshCommands } = useCommandCatalog(visible)
@@ -144,7 +149,7 @@ const remoteChanged = computed(() => boundContext.value && binding.value.remoteI
 const requiredRule = value => Boolean(String(value || '').trim()) || 'Pflichtfeld'
 async function refresh() {
   changes.setOverviewContext(overviewContext.value)
-  await Promise.all([refreshRepository({ worktreeDetails: changes.view === 'settings' }), refreshCommands(), changes.refresh(changes.overview)])
+  await Promise.all([refreshRepository({ worktreeDetails: changes.view === 'repository' }), refreshCommands(), changes.refresh(changes.overview)])
 }
 watch([visible, () => gitContextKey(overviewContext.value), () => chat.running], ([shown, key, running], [wasShown, , wasRunning] = []) => {
   if (!shown) return
@@ -154,7 +159,7 @@ watch([visible, () => gitContextKey(overviewContext.value), () => chat.running],
   if (wasShown && wasRunning && !running) void refresh()
   else if (changesAvailable.value && (changed || !wasShown)) void changes.refresh(changes.overview)
 }, { immediate: true })
-watch(repository, info => { if (info && !info.repository) changes.view = 'settings' })
+watch(repository, info => { if (info && !info.repository) changes.view = 'repository' })
 watch(() => chat.current?.id, (id, previous) => {
   if (previous && id !== previous) { remoteOpen.value = false; projectOpen.value = false; changes.view = 'changes'; fileFilter.value = '' }
 })

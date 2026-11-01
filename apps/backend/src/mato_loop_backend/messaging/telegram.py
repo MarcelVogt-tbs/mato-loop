@@ -116,7 +116,14 @@ def telegram_commands() -> list[BotCommand]:
     ]
 
 
-def command_error(code: str) -> str:
+def command_error(code: str, params: dict | None = None) -> str:
+    if code == "git.projectBusy":
+        params = params or {}
+        session = f'Die Session „{params["sessionTitle"]}“' if params.get("sessionTitle") else "Eine andere Session"
+        status = {"queued": "ist eingereiht", "running": "läuft noch", "waiting_approval": "wartet auf Freigabe",
+                  "waiting_input": "wartet auf deine Antwort"}.get(params.get("status"), "hat einen aktiven Auftrag")
+        return (f"Auftrag kann noch nicht starten: {session} {status} und benötigt dasselbe Arbeitsverzeichnis "
+                "oder gemeinsame Git-Einstellungen. Beende oder stoppe den dortigen Lauf und starte den Auftrag erneut.")
     return {
         "git.sessionRequired": "Wähle zuerst mit /sessions und /use <ID> eine Coding-Session aus.",
         "git.notRepository": "Im Arbeitsverzeichnis der Session wurde kein Git-Repository erkannt.",
@@ -125,7 +132,6 @@ def command_error(code: str) -> str:
         "git.worktreeRequired": "Wähle für diese Aktion einen Projekt-Worktree in der Git-App.",
         "git.invalidRemote": "Remote-Name oder Netzwerkadresse ist ungültig. Die Anmeldung gehört auf den Computer, nicht in die Adresse.",
         "git.worktreeChanged": "Der Worktree passt nicht mehr zur gespeicherten Session-Zuordnung.",
-        "git.projectBusy": "Im Projektverzeichnis arbeitet noch ein Agent. Warte auf dessen Abschluss.",
         "git.branchRequired": "Der Arbeitsbereich steht auf Detached HEAD. Erstelle zuerst einen Branch und wähle ihn aus.",
         "git.targetRequired": "Arbeitsbranch und lokaler Zielbranch müssen unterschiedlich sein.",
         "session.runAlreadyActive": "In dieser Session läuft bereits ein Auftrag. Warte oder verwende /stop.",
@@ -1513,7 +1519,7 @@ async def process_inbox(inbox_id: UUID) -> UUID | None:
                     destination=inbox.payload["chatId"],
                     key=f"inbox-error:{inbox.id}",
                     text=(
-                        command_error(code) if parse_command(text) is not None
+                        command_error(code, getattr(exc, "params", None)) if parse_command(text) is not None
                         else "Die Nachricht konnte nicht verarbeitet werden. Prüfe die Session in MatoLoop."
                     ),
                     inbox_id=inbox.id,

@@ -51,7 +51,7 @@ export const useGitActionStore = defineStore('git-actions', {
         await this.updateTarget({ target_branch: targetBranch })
       } finally { chat.sessionSettingsPending -= 1 }
     },
-    async run(name, argumentsList = []) {
+    async run(name, argumentsList = [], commitFirst = false) {
       const chat = useChatStore()
       if (this.busy) return null
       if (!chat.current) {
@@ -65,7 +65,8 @@ export const useGitActionStore = defineStore('git-actions', {
       }
       if (this.busy) return null
       const sessionId = chat.current.id
-      await chat.sendToCurrent(`/${name}${argumentsList.map(value => ` ${JSON.stringify(value)}`).join('')}`, [], {
+      const commitFlag = commitFirst && ['git-merge', 'git-pr'].includes(name) ? ' --commit' : ''
+      await chat.sendToCurrent(`/${name}${commitFlag}${argumentsList.map(value => ` ${JSON.stringify(value)}`).join('')}`, [], {
         clearDraft: false, activeFile: null, runId: randomUuid(), agentProfileId: chat.activeAgentProfileId
       })
       return sessionId

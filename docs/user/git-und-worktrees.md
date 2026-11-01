@@ -5,7 +5,7 @@ Git läuft auf dem ausgewählten Computer mit dessen Git-Installation und Anmeld
 ## Ein Repository verwenden
 
 1. Wähle einen verbundenen Computer und einen zugänglichen Arbeitsordner mit Git-Repository.
-2. Öffne **Control Center > Git**. Ohne Repository bietet **Git-Repository anlegen** einen Agentenauftrag zur Initialisierung; er legt weder Commit noch Remote an.
+2. Öffne **Control Center > Git > Repository**. Unter **Aktionen** bietet **Git-Repository anlegen** ohne vorhandenes Repository einen Agentenauftrag zur Initialisierung; er legt weder Commit noch Remote an.
 3. Für Projektvorgaben wähle in **Projekt bearbeiten** die Repository-Wurzel und speichere **Standard-Zielbranch** und **Standard-Arbeitsbereich**. Ein später angelegtes Repository wird beim erneuten Öffnen oder Prüfen erkannt.
 
 Git-App und Befehlspalette allein erzeugen keinen Chat. Erst Sessionstart oder Agentenauftrag speichert die Unterhaltung.
@@ -13,6 +13,8 @@ Git-App und Befehlspalette allein erzeugen keinen Chat. Erst Sessionstart oder A
 ## Änderungen ansehen
 
 **Git > Änderungen** vergleicht HEAD mit dem aktuellen Arbeitsstand. Die Liste enthält staged und unstaged Änderungen sowie neue, nicht ignorierte Dateien des Repositorys oder Worktrees. Auch eigene, bereits vorhandene Änderungen zählen mit. Die Zahlen sind kein Änderungsprotokoll einzelner KI-Antworten.
+
+Der Tab zeigt hinzugefügte Zeilen als grünes **+** und gelöschte Zeilen als rotes **−**, jeweils nur bei einer bekannten Anzahl größer null. Ohne solche Zeilenänderungen steht dort nur **Änderungen**; betroffene Dateien bleiben in der Liste sichtbar.
 
 Ein Klick auf eine Datei öffnet den schreibgeschützten Diff im normalen Dateitab. Das Diff-Symbol schaltet zwischen Vergleich und Quelltext um. Ungespeicherte Entwürfe gehören nicht zum Git-Diff und bleiben beim Umschalten erhalten. Auf kleinen Flächen stehen die Vergleichsseiten untereinander.
 
@@ -33,7 +35,7 @@ Es findet kein Fetch statt und ein Remote ist nicht nötig. Uncommittete Änderu
 
 ## Arbeitsbereich oder Branch wechseln
 
-Unter **Git > Einstellungen** öffnen die Bearbeiten-Symbole die Dialoge für Arbeitsbereich, Branches und Remote. Markiere einen Arbeitsbereich und wähle **⋮ > Aktivieren**; bei Branches übernimmt **Wechseln** die Auswahl. Ein Wechsel verschiebt keine Dateien und kopiert keine Freigaben. Beende laufende Aufträge und speichere Editoränderungen vorher.
+Unter **Git > Repository** findest du unterhalb der **Aktionen** die **Einstellungen**. Dort öffnen die Bearbeiten-Symbole die Dialoge für Arbeitsbereich, Branches und Remote. Markiere einen Arbeitsbereich und wähle **⋮ > Aktivieren**; bei Branches übernimmt **Wechseln** die Auswahl. Ein Wechsel verschiebt keine Dateien und kopiert keine Freigaben. Beende laufende Aufträge und speichere Editoränderungen vorher.
 
 **Geändert** kennzeichnet uncommittete Änderungen einschließlich neuer, nicht ignorierter Dateien. Prüfe bei Bedarf mit **Aktualisieren**; nicht prüfbar bedeutet nicht sauber. Sessionlinks zeigen andere Unterhaltungen am selben Arbeitspfad, reservieren aber keinen Worktree.
 
@@ -41,11 +43,17 @@ Ein Branchwechsel betrifft alle Sessions dieses Arbeitsbereichs. Belegte Branche
 
 ## Remote einrichten und veröffentlichen
 
-Unter **Git > Einstellungen** wählst du einen vorhandenen Remote oder beauftragst über **Einrichten/Bearbeiten** den Agenten, seine Adresse zu ändern. Verwende HTTPS-/SSH-Adressen ohne Zugangsdaten; richte die Anmeldung auf dem Computer ein.
+Unter **Git > Repository > Einstellungen** wählst du einen vorhandenen Remote oder beauftragst über **Einrichten/Bearbeiten** den Agenten, seine Adresse zu ändern. Verwende HTTPS-/SSH-Adressen ohne Zugangsdaten; richte die Anmeldung auf dem Computer ein.
 
 Eine Remoteänderung betrifft alle Worktrees. Bestehende Sessions müssen das geänderte Ziel über **Ziel übernehmen** bestätigen. Ein nachträglicher Remote setzt den Worktree nicht zurück. Veröffentlichung, Pull Requests und Remote-Synchronisierung benötigen ihn, lokale Arbeit und Review nicht.
 
-Die [Git-Befehle](kanaele.md#coding-befehle) starten Review, ausdrückliches Committen, lokale Übernahme, Veröffentlichung, PR und Synchronisierung. Die Befehlspalette setzt den Auftrag zunächst ein; Aktionen in der Git-App starten ihn direkt. Toolrechte gelten unabhängig davon. Ein positives Review ist kein Nachweis der Fehlerfreiheit.
+Unter **Git > Repository > Aktionen** starten die [Git-Befehle](kanaele.md#coding-befehle) direkt einen Agentenauftrag. **Prüfen & sichern** enthält **Code-Review** und **Commit**, **Übernehmen & veröffentlichen** enthält **Merge in „Zielbranch“** und **Pull Request erstellen**, **Remote** enthält **Push** und **Pull (Fast-forward)**. Die Befehlspalette setzt den Auftrag zunächst ein. Toolrechte gelten unabhängig davon. Ein positives Review ist kein Nachweis der Fehlerfreiheit; es prüft auch auf Overengineering.
+
+Aktiviere bei Bedarf **Vor Merge oder Pull Request committen** direkt unterhalb dieser beiden Aktionen. Das Häkchen ist zunächst aus und wird beim Sessionwechsel zurückgesetzt. Es beauftragt den Agenten, zuerst eindeutig zur Aufgabe gehörende Änderungen im Session-Worktree zu committen. Bei unklarer Auswahl fragt er nach; fremde Änderungen und Secrets dürfen nicht mitcommittet werden. Ohne Häkchen sind uncommittete Änderungen ein Blocker. **Push** und **Pull (Fast-forward)** committen auch mit gesetztem Häkchen nichts. In der Palette oder über Telegram entspricht die Auswahl `/git-merge --commit` beziehungsweise `/git-pr --commit`.
+
+**Pull (Fast-forward)** holt den Remote-Zielbranch ins ursprüngliche Projektverzeichnis. Es übernimmt keine Änderungen aus dem Session-Worktree und stoppt bei lokalen Änderungen oder wenn kein Fast-forward möglich ist.
+
+Ein Commit im eigenen Worktree darf parallel zu einem Lauf im Hauptverzeichnis starten. Lokale Übernahme und Projektaktualisierung benötigen dagegen auch das Hauptverzeichnis; Remoteänderungen betreffen alle Worktrees. Bei einer Überschneidung nennt die Meldung die blockierende Session und ihren Status. Beende oder stoppe den dortigen Lauf und starte den Auftrag erneut. Auch auf Freigabe oder Antwort wartende Läufe können blockieren.
 
 ## Worktree entfernen
 
