@@ -189,8 +189,6 @@ async def request_approval(
     if run_id in cls._pending_continuations:
         waiter.set_result("superseded")
     try:
-        if chat_session.spawned_by_run_id in cls._pending_continuations:
-            cls.cancel(run_id)
         await db.commit()
         await run_events.publish(
             run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)}

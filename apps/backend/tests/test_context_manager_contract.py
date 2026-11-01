@@ -107,6 +107,30 @@ def _message(session_id, role: str, content: str) -> Message:
     )
 
 
+async def test_deferred_child_results_fit_small_context_with_retrieval_references():
+    session = _session()
+    delivered = _message(session.id, "assistant", "Results arrived")
+    child_id, result_id = uuid4(), uuid4()
+    delivered.provider_data = {"_matoloop": {"subagentResults": {"tasks": [
+        {"sessionId": str(child_id), "resultMessageId": str(result_id), "result": "evidence " * 1500}
+        for _ in range(4)
+    ]}}}
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    projection = await _build_context(
+        db, chat_session=session,
+        records=[_message(session.id, "user", "Delegate."), _message(session.id, "user", "Status?"), delivered],
+        system_prompt="System", tool_schemas=[],
+        model=ModelConfig(provider_id=uuid4(), model_id="test", context_window_tokens=8000, max_output_tokens=512),
+        settings=AgentRuntimeSettings(safety_reserve_tokens=0),
+        summarize=AsyncMock(return_value=SummaryResult("Summary", None)),
+        target_trust_level=TrustLevel.PUBLIC,
+    )
+    assert projection.estimated_input_tokens <= projection.input_budget_tokens and all(
+        value in str(projection.messages) for value in (str(child_id), str(result_id), "session_read")
+    )
+
+
 def _attach_image(
     message: Message,
     file_path: str = "attachments/00000000-0000-4000-8000-000000000000/image.png",
@@ -3499,13 +3523,20 @@ async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(
     run.current_directory_snapshot = "/current"
     records = await AgentRuntime._records(db, run.session_id)
     previous = _message(run.session_id, "user", "Earlier request")
-    previous.provider_data = {"_matoloop": {"workspaceContext": {"executionAgentId": None, "currentDirectory": "/previous"}}}
+    previous.provider_data = {"_matoloop": {
+        "workspaceContext": {"executionAgentId": None, "currentDirectory": "/previous"},
+        "delegationSource": {"sessionId": str(uuid4()), "runId": str(uuid4()), "toolCallId": "delegate"},
+    }}
     records[-1].provider_data["_matoloop"].update(
         workspaceContext=previous.provider_data["_matoloop"]["workspaceContext"], workspaceContextRunId=str(uuid4()),
     )
     records.insert(0, previous)
     await AgentRuntime._execute_loop(db, run)
-    records = [*await AgentRuntime._records(db, run.session_id), *_tool_segment(run.session_id, 0)]
+    delivered = _message(run.session_id, "assistant", "Ergebnisse delegierter Aufgaben sind eingetroffen.")
+    delivered.provider_data = {"_matoloop": {"origin": "host", "subagentResults": {
+        "tasks": [{"status": "completed", "result": "Child evidence", "runId": str(uuid4())}],
+    }}}
+    records = [*await AgentRuntime._records(db, run.session_id), delivered, *_tool_segment(run.session_id, 0)]
     records[-1].content = json.dumps({"stdout": "source evidence " * 5_000})
     tool_message = records[-3]
     tool_message.tool_calls[0]["arguments"] = {
@@ -3521,10 +3552,13 @@ async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(
                                  runtime_instructions=projections[0]["runtime_instructions"],
                                  live_tool_calls={tool_message.id: live_calls})
     assert first[1]["role"] == "user"
+    assert "Child evidence" in str(first) and "Task instruction from the parent agent" in str(first)
     assert any("The workspace changed for this user turn." in message["content"]
                and '"currentDirectory": "/current"' in message["content"]
                for message in first if message["role"] == "user")
     followup = _message(run.session_id, "user", "Now plan the next change.")
+    for record in records:
+        record.provider_data = json.loads(json.dumps(record.provider_data, sort_keys=True))
     second = _projection_messages(
         system, None, [*records, _message(run.session_id, "assistant", "Done"), followup],
         TrustLevel.PRIVATE, runtime_instructions=agent_profile_runtime_instructions(plan_profile()),

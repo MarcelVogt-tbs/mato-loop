@@ -46,7 +46,7 @@ Einrichtung, Diffs, Branches und getrennte Arbeitskopien stehen unter [Git und W
 
 ## Während einer Antwort eingreifen
 
-**Jetzt senden** ergänzt den laufenden Auftrag um deine Nachricht. Eine Modellanfrage wird neu aufgebaut; aktive Tool-Arbeit darf zuerst enden. Überholte Freigaben und Rückfragen werden ohne unfertige Antworten geschlossen. Wartende Subagenten enden ebenfalls; der Hauptagent plant mit deiner Anweisung weiter. Neue Anweisungen erlauben keine gesperrten Aktionen.
+**Jetzt senden** ergänzt den laufenden Auftrag um deine Nachricht. Eine Modellanfrage wird neu aufgebaut; aktive Tool-Arbeit darf zuerst enden. Überholte Freigaben und Rückfragen des angesprochenen Laufs werden ohne unfertige Antworten geschlossen. Der Hauptagent kann dir auch antworten, während Subagenten weiterarbeiten. Deren Freigaben und Rückfragen bleiben bestehen, sofern er ihnen nicht gezielt eine Korrektur schickt. Neue Anweisungen erlauben keine gesperrten Aktionen.
 
 **Nach dem Lauf senden** reiht eine Nachricht für einen anschließenden Auftrag ein. Der Browser-Postausgang erhält Nachrichten und Anhänge in Reihenfolge. Fehlerhafte Sendungen bleiben für einen erneuten Versuch oder die Übernahme in den Entwurf erhalten. Abmelden oder Kontowechsel entfernt den bisherigen Postausgang dieses Browsers.
 
@@ -59,6 +59,10 @@ Während einer internen Reparaturrunde bleibt die Aktivitätsanzeige neutral. Ge
 Strukturierte Rückfragen erscheinen direkt im Chat. **Weiter** navigiert, **Fertig** sendet auch unvollständige Antworten, **Ablehnen** verwirft den Entwurf. Mit **Jetzt senden** kannst du stattdessen nachfragen oder die Richtung ändern. Geheimnisse gehören nur in [geschützte Eingabefelder](variablen-und-secrets.md).
 
 Aufgabenlisten zeigen gemeldeten Fortschritt. Delegierte Aufgaben erscheinen mit Titel und Status; ein Klick öffnet ihren schreibgeschützten Verlauf. Fragen und Freigaben beantwortest du in der Hauptsession. Kinder teilen den Computer-Arbeitsbereich, sind also nicht dateiseitig isoliert. Ein Stopp des Elternlaufs stoppt auch offene delegierte Arbeit.
+
+Pro Hauptsession können höchstens vier Subagenten gleichzeitig aktiv sein; wartende Freigaben und Rückfragen zählen mit. Subagenten starten selbst keine weiteren Subagenten. Der Hauptagent kann einem früheren Subagenten Folgeaufträge mit erhaltenem Verlauf geben oder einen laufenden Auftrag korrigieren. Bitte ihn beispielsweise: „Lass denselben Subagenten die überarbeitete Version prüfen.“
+
+Eine Zwischenantwort des Hauptagenten beendet laufende Subagenten nicht. Er übernimmt deren Ergebnisse anschließend. Eine bestätigte Weitergabe ist noch kein abgeschlossenes Ergebnis: Korrekturen können einen laufenden Toolaufruf abwarten und bereits ausgeführte Änderungen nicht rückgängig machen. Die Vierergrenze begrenzt die Parallelität, nicht die Gesamtkosten aufeinanderfolgender Aufträge.
 
 ## Nachrichten erneut versuchen oder zurücknehmen
 

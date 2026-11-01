@@ -130,5 +130,5 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     # Includes task continuation, explicit Git consent, progress updates, grounding, media, permission failures, automation scope, computer provenance, and explicit calendar context.
     assert prompt_tokens <= 9_430, prompt_tokens
     assert schema_tokens <= 13_300, schema_tokens
-    # Includes inactive integration guidance and explicit calendar targets/context.
-    assert prompt_tokens + schema_tokens <= 22_560, prompt_tokens + schema_tokens
+    # Includes child session IDs, live corrections/deferred results, and integration/calendar context.
+    assert prompt_tokens + schema_tokens <= 22_650, prompt_tokens + schema_tokens

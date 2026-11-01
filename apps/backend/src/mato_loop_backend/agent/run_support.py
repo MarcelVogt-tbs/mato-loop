@@ -268,6 +268,9 @@ def _tool_policy(
     # Account discovery uses the integration baseline without resource overrides.
     resource_key = request.policy_resource_key if request.use_integration_policy else None
     if snapshot is not None:
+        # This function checks each saved layer, including its shell rules, exactly once.
+        tool_settings = tool_settings.model_copy()
+        tool_settings._delegation_ceiling = None
         defaults = (
             snapshot["integrationDefaults"].get(str(integration_id), {})
             if integration_id is not None else snapshot["actionDefaults"]
@@ -295,7 +298,7 @@ def _tool_policy(
         )
         if action is None:
             return ToolExecutionPolicy.DISABLED
-        return resolve_tool_execution_policy(
+        policy = resolve_tool_execution_policy(
             tool_settings,
             request.capability,
             (
@@ -309,19 +312,20 @@ def _tool_policy(
                 request.policy_hard_unavailable_capabilities
             ),
         ).policy
-    action = tool_registry.actions_by_capability.get(request.capability)
-    policy = resolve_tool_execution_policy(
-        tool_settings,
-        request.capability,
-        (
-            ToolExecutionPolicy(snapshot["actionDefaults"].get(request.capability, "disabled"))
-            if snapshot is not None
-            else action.default_policy(tool_settings) if action is not None
-            else next((action.default_policy(tool_settings) for action in tool_registry.policy_actions(integration_settings)
-                       if action.capability == request.capability), ToolExecutionPolicy.ASK)
-        ),
-        resource_key=resource_key,
-    ).policy
+    else:
+        action = tool_registry.actions_by_capability.get(request.capability)
+        policy = resolve_tool_execution_policy(
+            tool_settings,
+            request.capability,
+            (
+                ToolExecutionPolicy(snapshot["actionDefaults"].get(request.capability, "disabled"))
+                if snapshot is not None
+                else action.default_policy(tool_settings) if action is not None
+                else next((action.default_policy(tool_settings) for action in tool_registry.policy_actions(integration_settings)
+                           if action.capability == request.capability), ToolExecutionPolicy.ASK)
+            ),
+            resource_key=resource_key,
+        ).policy
     if (
         policy == ToolExecutionPolicy.ASK
         and request.resource_type == "shell_command"
@@ -344,6 +348,9 @@ def _external_working_directory_policy(
     snapshot: dict[str, Any] | None = None,
 ) -> ToolExecutionPolicy:
     capability = "working_directory.external"
+    if snapshot is not None:
+        tool_settings = tool_settings.model_copy()
+        tool_settings._delegation_ceiling = None
     if snapshot is not None and capability not in snapshot["actionDefaults"]:
         return ToolExecutionPolicy.DISABLED
     policy = resolve_tool_execution_policy(

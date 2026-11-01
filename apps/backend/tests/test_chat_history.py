@@ -150,6 +150,7 @@ async def test_retry_keeps_user_message_and_restarts_original_failed_run(monkeyp
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = failed_run
     db.execute.return_value = MagicMock(all=lambda: [])
+    db.scalars.return_value = MagicMock(all=lambda: [])
     remove_suffix = AsyncMock()
     retry = AsyncMock(return_value=replacement_run)
     monkeypatch.setattr(ChatHistoryService, "_owned_session", AsyncMock(return_value=session))

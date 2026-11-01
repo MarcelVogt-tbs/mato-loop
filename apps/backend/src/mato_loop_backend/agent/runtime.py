@@ -131,6 +131,7 @@ class AgentRuntime:
     _redirected_runs: set[UUID] = set()
     _continuations: dict[UUID, set[asyncio.Event]] = {}
     _pending_continuations: set[UUID] = set()
+    _continuation_wakeups: dict[UUID, asyncio.Event] = {}
     _waiting_interactions: dict[UUID, tuple[UUID | None, asyncio.Future[Any]]] = {}
     _provider_active_runs: set[UUID] = set()
     _tool_active_runs: set[UUID] = set()
@@ -607,11 +608,10 @@ class AgentRuntime:
     def finish_continuation(cls, run_id: UUID, reservation: asyncio.Event, *, accepted: bool) -> None:
         if accepted:
             cls._pending_continuations.add(run_id)
-            for waiting_run_id, (parent_run_id, waiter) in tuple(cls._waiting_interactions.items()):
+            cls._continuation_wakeups.setdefault(run_id, asyncio.Event()).set()
+            for waiting_run_id, (_parent_run_id, waiter) in tuple(cls._waiting_interactions.items()):
                 if waiting_run_id == run_id and not waiter.done():
                     waiter.set_result("superseded")
-                elif parent_run_id == run_id:
-                    cls.cancel(waiting_run_id)
         cls._continuations.get(run_id, set()).discard(reservation)
         if not cls._continuations.get(run_id):
             cls._continuations.pop(run_id, None)
@@ -627,6 +627,8 @@ class AgentRuntime:
             await asyncio.gather(*(reservation.wait() for reservation in reservations))
         if run_id in cls._pending_continuations:
             cls._pending_continuations.discard(run_id)
+            if wakeup := cls._continuation_wakeups.get(run_id):
+                wakeup.clear()
             return True
         return False
 
@@ -1258,6 +1260,7 @@ class AgentRuntime:
             cls._interrupted_runs.discard(run_id)
             cls._continuations.pop(run_id, None)
             cls._pending_continuations.discard(run_id)
+            cls._continuation_wakeups.pop(run_id, None)
             cls._provider_active_runs.discard(run_id)
             cls._tool_active_runs.discard(run_id)
 
@@ -1294,9 +1297,10 @@ class AgentRuntime:
                 image.data = b""
             ephemeral_images.clear()
             one_time_secrets.clear()
+            from mato_loop_backend.agent.subagents import cancel_children
             from mato_loop_backend.skill_resources import release_computers
 
-            cleanup = asyncio.create_task(release_computers(run))
+            cleanup = asyncio.gather(cancel_children(cls, run.id), release_computers(run))
             while not cleanup.done():
                 try:
                     await asyncio.shield(cleanup)

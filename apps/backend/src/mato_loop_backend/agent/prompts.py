@@ -401,7 +401,8 @@ def general_system_prompt(
             "context justifies handoff. In English, give "
             "exact question, scope, stopping condition, result format and length, acceptance criteria, "
             "paths/IDs and skills; no parent transcript. "
-            "Preserve quotes/IDs. Avoid overlapping writes or duplicate work; verify results."
+            "Preserve quotes/IDs. Avoid overlapping writes or duplicate work; verify results. "
+            "Answer direct messages while children work."
         )
     research_instructions: list[str] = []
     if "web_search" in offered_tool_names:

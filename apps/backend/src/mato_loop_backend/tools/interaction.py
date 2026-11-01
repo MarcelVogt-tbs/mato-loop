@@ -318,7 +318,10 @@ QUESTION = ToolDefinition(
 
 TASK = ToolDefinition(
             "task",
-            "Join scoped self-contained tasks with bounded results; avoid write conflicts; 8/run; no recursion.",
+            "Delegate scoped tasks; max 4 active children per main session, no recursion. "
+            "Omit session_id to start; supply a returned sessionId to resume history or correct its active run. "
+            "Avoid write conflicts. Normally wait; direct user messages interrupt only the wait. "
+            "Children continue; results arrive later. Delivery is not completion.",
             TaskArguments,
             _task,
             group="agent",

@@ -388,6 +388,39 @@ async def test_suffix_undo_preserves_earlier_children_and_removes_child_run_cycl
     assert all(storage.session_path(item_id).exists() for item_id in retained_ids)
 
 
+@pytest.mark.parametrize("retry", [False, True], ids=["undo", "retry"])
+async def test_removed_parent_turn_trims_reused_child_history(tree, monkeypatch, retry):
+    db = tree.db
+    parent, _, initial = tree.records[0]
+    child = tree.records[1][0]
+    child_id = child.id
+    request = Message(session_id=parent.id, role="user", content="Follow up", created_at=initial.created_at + timedelta(seconds=2))
+    db.add(request)
+    await db.flush()
+    run = AgentRun(session_id=parent.id, input_message_id=request.id, status="failed")
+    db.add(run)
+    await db.flush()
+    instruction = Message(session_id=child.id, role="user", content="Discard this instruction",
+                          created_at=request.created_at, provider_data={"_matoloop": {"delegationSource": {
+                              "sessionId": str(parent.id), "runId": str(run.id),
+                          }}})
+    error = Message(session_id=parent.id, role="assistant", content="", error_code="provider.requestFailed", error_run_id=run.id,
+                    created_at=request.created_at + timedelta(seconds=1))
+    db.add_all([instruction, error])
+    await db.flush()
+    child_run = AgentRun(session_id=child.id, input_message_id=instruction.id, status="completed")
+    db.add(child_run)
+    db.add(Message(session_id=child.id, role="assistant", content="Discard this result", created_at=error.created_at))
+    await db.commit()
+    if retry:
+        monkeypatch.setattr(AgentRuntime, "retry", AsyncMock(return_value=run))
+        await sessions.retry_failed_message(parent.id, error.id, tree.user, db)
+    else:
+        await sessions.undo_user_message(parent.id, request.id, tree.user, db)
+    assert (await db.scalars(select(Message.content).where(Message.session_id == child_id)
+                             .order_by(Message.created_at, Message.id))).all() == ["Task", "Result"]
+
+
 async def test_automation_and_terminal_attach_reject_real_child(tree, monkeypatch):
     child = tree.records[1][0]
     with pytest.raises(AutomationError, match="session.readOnly"):

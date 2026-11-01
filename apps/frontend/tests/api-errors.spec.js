@@ -69,8 +69,8 @@ describe('API error messages', () => {
     )
   })
   it('translates subagent limits and read-only session errors', () => {
-    expect(apiErrorMessage({ error: { code: 'agent.subagentLimitReached' } })).toBe(
-      'Die maximale Anzahl an Subagents für diesen Lauf ist erreicht.'
+    expect(apiErrorMessage({ error: { code: 'agent.subagentLimitReached', params: { available: 1, maximum: 4 } } })).toBe(
+      'Freie Subagent-Plätze: 1 von 4. Es wurden keine Aufträge gestartet.'
     )
     expect(apiErrorMessage({ error: { code: 'session.readOnly' } })).toBe(
       'Subagent-Sessions sind schreibgeschützt. Arbeite in der Hauptsession weiter.'

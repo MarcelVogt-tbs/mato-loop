@@ -84,6 +84,13 @@ export const useSubagentStore = defineStore('subagents', () => {
           if (listDirty) continue
           children.value = Array.isArray(data) ? data : []
           childrenError.value = null
+          const selected = children.value.find((child) => child.id === selectedId)
+          if (selected?.run?.id && selected.run.id !== run.value?.id) {
+            setRun(selected.run)
+            await refresh(id)
+            if (version !== listVersion) return
+          }
+          if (selected) connect(id)
         } catch (failure) {
           if (version === listVersion) childrenError.value = failure
           return
@@ -130,6 +137,21 @@ export const useSubagentStore = defineStore('subagents', () => {
     streamReasoning.value = null
     streamContextSummary.value = null
     warnings.value = []
+  }
+
+  function setRun(next) {
+    if (run.value?.id && next?.id !== run.value.id) {
+      source?.close()
+      source = null
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+      reconnectAttempts = 0
+      clearStream()
+      processOutputs.value = {}
+      completedToolCallId.value = null
+      activity.value = emptyActivity()
+    }
+    run.value = next
   }
 
   async function open(parent, id) {
@@ -181,7 +203,7 @@ export const useSubagentStore = defineStore('subagents', () => {
             contextSummaries: mergeById(previous?.contextSummaries, data.contextSummaries),
             nextMessageCursor: previous ? previous.nextMessageCursor : data.nextMessageCursor
           }
-          run.value = runData
+          setRun(runData)
           resetHistory = false
           error.value = null
           if (!source) activity.value = mergeAgentActivity(emptyActivity(), {

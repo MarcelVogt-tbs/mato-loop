@@ -6,12 +6,12 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.files.storage import SessionStorage
-from mato_loop_backend.models import ChatSession
+from mato_loop_backend.models import AgentRun, ChatSession, Message
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,30 @@ async def deleting_child_sessions(
                 .where(ChatSession.id.in_([child_id for child_id, _ in children]))
                 .execution_options(synchronize_session=False)
             )
+        if spawned_by_run_ids:
+            instructions = (await db.scalars(
+                select(Message).join(ChatSession, ChatSession.id == Message.session_id).where(
+                    ChatSession.parent_session_id == session_id,
+                    Message.provider_data["_matoloop"]["delegationSource"]["sessionId"].as_string() == str(session_id),
+                    Message.provider_data["_matoloop"]["delegationSource"]["runId"].as_string().in_(
+                        [str(run_id) for run_id in spawned_by_run_ids]
+                    ),
+                ).order_by(Message.created_at, Message.id)
+            )).all()
+            trimmed = set()
+            for instruction in instructions:
+                if instruction.session_id in trimmed:
+                    continue
+                trimmed.add(instruction.session_id)
+                suffix = select(Message.id).where(
+                    Message.session_id == instruction.session_id,
+                    tuple_(Message.created_at, Message.id) >= tuple_(instruction.created_at, instruction.id),
+                )
+                await db.execute(delete(AgentRun).where(
+                    AgentRun.session_id == instruction.session_id,
+                    AgentRun.input_message_id.in_(suffix),
+                ).execution_options(synchronize_session=False))
+                await db.execute(delete(Message).where(Message.id.in_(suffix)).execution_options(synchronize_session=False))
         yield
     except BaseException:
         await db.rollback()

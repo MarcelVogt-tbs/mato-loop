@@ -39,7 +39,10 @@ from mato_loop_backend.agent.session_settings import apply_run_session_settings
 from mato_loop_backend.agent.subagents import (
     apply_delegation_ceiling,
     delegation_snapshot,
+    deliver_completed,
+    has_children,
     integration_ceiling_ids,
+    wait_for_children,
 )
 from mato_loop_backend.agent.tool_round import execute_tool_batch
 from mato_loop_backend.agent.turn_context import build_turn_context
@@ -267,6 +270,7 @@ async def execute_loop_body(
             if project is not None:
                 await db.refresh(project)
             continuation_context_stale = False
+        await deliver_completed(db, run, chat_session)
         tool_budget_exhausted = budget_finalization or (
             tool_call_limit is not None and tool_calls_used >= tool_call_limit
         )
@@ -818,6 +822,12 @@ async def execute_loop_body(
         if rejected_final_response:
             raise AgentRunError("agent.toolCallLimitReached")
         if not normalized_calls:
+            if has_children(run.id):
+                await agent_run_support._publish_run_phase(
+                    run.id, "processing_tool", tool="task", activityLabel="Subagenten arbeiten",
+                )
+                await wait_for_children(cls, run.id)
+                continue
             await agent_run_support._publish_run_phase(run.id, "finalizing")
             return
 

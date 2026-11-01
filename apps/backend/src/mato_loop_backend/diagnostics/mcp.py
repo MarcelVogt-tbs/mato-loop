@@ -15,7 +15,7 @@ from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
-from sqlalchemy import or_, select, tuple_
+from sqlalchemy import and_, or_, select, tuple_
 from sqlalchemy.orm import selectinload
 from starlette.responses import JSONResponse
 
@@ -644,15 +644,18 @@ def create_debug_mcp() -> tuple[FastMCP, Any]:
             run = await _owned_run(db, run_id, user_id)
             if run is None:
                 return _not_found()
+            delegation_run = Message.provider_data["_matoloop"]["delegationSource"]["runId"].as_string()
             children = list(
                 (
                     await db.scalars(
                         select(AgentRun)
                         .join(ChatSession, ChatSession.id == AgentRun.session_id)
+                        .outerjoin(Message, Message.id == AgentRun.input_message_id)
                         .where(
                             or_(
                                 AgentRun.parent_run_id == run.id,
-                                ChatSession.spawned_by_run_id == run.id,
+                                delegation_run == str(run.id),
+                                and_(delegation_run.is_(None), ChatSession.spawned_by_run_id == run.id),
                             ),
                             ChatSession.user_id == user_id,
                         )

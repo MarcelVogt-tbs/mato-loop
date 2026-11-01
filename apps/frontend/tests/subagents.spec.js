@@ -238,6 +238,20 @@ describe('read-only subagents', () => {
     expect(store.parentId).toBe('other-parent')
   })
 
+  it('follows a resumed child run without reopening the inspector', async () => {
+    await store.loadChildren('parent')
+    run.status = 'completed'
+    session.activeRun = null
+    await store.open('parent', 'child')
+    run = { id: 'follow-up-run', status: 'running' }
+    session.activeRun = run
+    api.get.mockResolvedValueOnce({ data: [{ ...child, run }] })
+
+    await store.loadChildren('parent')
+
+    expect(EventSourceMock.instances.at(-1)?.url).toBe('/api/sessions/child/runs/follow-up-run/events')
+  })
+
   it('ignores late child responses after close and validates the parent/read-only boundary', async () => {
     const stale = deferred()
     api.get.mockReturnValueOnce(stale.promise)

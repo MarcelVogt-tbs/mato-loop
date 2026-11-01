@@ -193,6 +193,7 @@ async def test_task_tool_has_bounded_prompt_and_delegates(tmp_path) -> None:
                   [{"description": "Inspect", "prompt": " "}],
                   [{"description": " ", "prompt": "Inspect"}],
                   [{"description": "Inspect", "prompt": "x" * 8_001}],
+                  [{"description": "Inspect", "prompt": "x", "session_id": str(uuid4())}] * 2,
                   [{"description": "Inspect", "prompt": "x", "type": "explore"}]):
         with pytest.raises(ValidationError):
             TaskArguments(tasks=tasks)

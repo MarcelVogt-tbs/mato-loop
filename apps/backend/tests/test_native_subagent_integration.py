@@ -313,6 +313,169 @@ async def test_direct_message_during_model_response(native_database, monkeypatch
     assert "Keep the PDF file small." in str(requests[-1]["messages"])
 
 
+async def test_parent_can_answer_correct_and_reuse_a_waiting_child(native_database, monkeypatch):
+    fixture = native_database
+    parent_id, parent_run_id = uuid4(), uuid4()
+    fixture.owned_runs.add(parent_run_id)
+    calls = Counter()
+    answers = asyncio.Queue()
+    release = asyncio.Event()
+    child_id = None
+
+    async def complete(db, **kwargs):
+        nonlocal child_id
+        session_id = UUID(kwargs["prompt_cache_key"])
+        calls[session_id] += 1
+        turn = calls[session_id]
+        if session_id == parent_id:
+            if turn in {1, 3, 6}:
+                task = {"description": "Inspect", "prompt": "Read your session."}
+                if turn != 1:
+                    task.update(session_id=str(child_id), prompt="Skip reading; report corrected result." if turn == 3 else "Check again with your previous result.")
+                return ProviderResult(tool_calls=[ToolCall(f"delegate-{turn}", "task", {"tasks": [task]})], finish_reason="tool_calls")
+            text = {2: "Still working.", 4: "Correction delivered.", 5: "Done.", 7: "Follow-up done."}[turn]
+            if turn == 5:
+                assert "Corrected result" in str(kwargs["messages"])
+            await answers.put(text)
+            return ProviderResult(content=text, finish_reason="stop")
+        child_id = session_id
+        run = await db.scalar(select(AgentRun).where(AgentRun.session_id == session_id)
+                              .order_by(AgentRun.created_at.desc()).limit(1))
+        fixture.owned_runs.add(run.id)
+        if turn == 1:
+            return ProviderResult(tool_calls=[ToolCall("read-session", "session_read", {
+                "session_id": str(session_id),
+            })], finish_reason="tool_calls")
+        assert "Task instruction from the parent agent" in str(kwargs["messages"])
+        if turn == 2:
+            assert "Skip reading" in str(kwargs["messages"])
+            await release.wait()
+            return ProviderResult(content="Corrected result", finish_reason="stop")
+        assert "Corrected result" in str(kwargs["messages"])
+        return ProviderResult(content="Follow-up result", finish_reason="stop")
+
+    monkeypatch.setattr(ProviderService, "complete", complete)
+    async with fixture.factory() as db:
+        parent = ChatSession(id=parent_id, user_id=fixture.user.id, title="Interactive delegation",
+                             title_generation_status="skipped", agent_profile_id=BUILD_PROFILE_ID,
+                             model_config_id=fixture.model.id, memory_mode="disabled",
+                             preferred_execution_agent_id=fixture.agent.id, current_directory="/workspace")
+        db.add(parent)
+        await db.flush()
+        SessionStorage().provision(parent_id)
+        await AgentRuntime.start(db, parent, "Delegate inspecting your session.", run_id=parent_run_id)
+    approval = (await _events(parent_run_id, "approval.created"))[0]["approval"]
+
+    async def send(content):
+        response = await fixture.client.post(f"/api/sessions/{parent_id}/runs/{parent_run_id}/messages", json={
+            "message_id": str(uuid4()), "content": content,
+        })
+        assert response.status_code == 202, response.text
+
+    await send("Answer my status question now; leave the child working.")
+    assert await asyncio.wait_for(answers.get(), 20) == "Still working."
+    async with fixture.factory() as db:
+        assert (await db.get(ApprovalRequest, UUID(approval["id"]))).status == "pending"
+        assert (await db.get(AgentRun, parent_run_id)).status == "running"
+    await send("Tell the child to skip reading and report a corrected result.")
+    assert await asyncio.wait_for(answers.get(), 20) == "Correction delivered."
+    async with fixture.factory() as db:
+        assert (await db.get(ApprovalRequest, UUID(approval["id"]))).status == "expired"
+    release.set()
+    await _events(parent_run_id, "run.completed")
+    assert await asyncio.wait_for(answers.get(), 20) == "Done."
+
+    async with fixture.factory() as db:
+        parent = await db.get(ChatSession, parent_id)
+        next_run = await AgentRuntime.start(db, parent, "Ask the same child to check again.")
+        fixture.owned_runs.add(next_run.id)
+    await _events(next_run.id, "run.completed")
+    assert await asyncio.wait_for(answers.get(), 20) == "Follow-up done."
+    async with fixture.factory() as db:
+        children = list((await db.scalars(select(ChatSession).where(ChatSession.parent_session_id == parent_id))).all())
+        child_runs = list((await db.scalars(select(AgentRun).where(AgentRun.session_id == child_id))).all())
+        assert len(children) == 1 and children[0].spawned_by_run_id == parent_run_id
+        assert len(child_runs) == 2 and all(run.status == "completed" for run in child_runs)
+        records = list((await db.scalars(select(Message).where(Message.session_id == parent_id))).all())
+        assert sum("subagentResults" in (item.provider_data or {}).get("_matoloop", {}) for item in records) == 1
+
+
+async def test_four_active_children_reject_an_entire_batch_and_release_slots(native_database, monkeypatch):
+    fixture = native_database
+    parent_id, parent_run_id = uuid4(), uuid4()
+    fixture.owned_runs.add(parent_run_id)
+    started = asyncio.Queue()
+    release = asyncio.Event()
+    rejected = asyncio.Event()
+    calls = Counter()
+    first_child = None
+
+    async def complete(db, **kwargs):
+        nonlocal first_child
+        session_id = UUID(kwargs["prompt_cache_key"])
+        calls[session_id] += 1
+        if session_id != parent_id:
+            first_child = first_child or session_id
+            run = await db.scalar(select(AgentRun).where(AgentRun.session_id == session_id))
+            fixture.owned_runs.add(run.id)
+            await started.put(session_id)
+            await release.wait()
+            return ProviderResult(content="Child done", finish_reason="stop")
+        turn = calls[session_id]
+        if turn == 1:
+            tasks = [{"description": f"Task {index}", "prompt": "Wait and report."} for index in range(4)]
+        elif turn == 2:
+            if release.is_set():
+                return ProviderResult(content="All done.", finish_reason="stop")
+            tasks = [
+                {"description": "Fifth", "prompt": "Do not start."},
+                {"description": "Correction", "prompt": "Do not deliver.", "session_id": str(first_child)},
+            ]
+        elif turn == 3:
+            result = json.loads([item for item in kwargs["messages"] if item["role"] == "tool"][-1]["content"])
+            assert result["error"]["params"] == {"available": 0, "maximum": 4}
+            rejected.set()
+            return ProviderResult(content="No free slots.", finish_reason="stop")
+        elif turn == 4:
+            tasks = [{"description": "Reused call ID", "prompt": "Report after a slot is released."}]
+        else:
+            return ProviderResult(content="All done.", finish_reason="stop")
+        return ProviderResult(tool_calls=[ToolCall("delegate", "task", {"tasks": tasks})], finish_reason="tool_calls")
+
+    monkeypatch.setattr(ProviderService, "complete", complete)
+    async with fixture.factory() as db:
+        parent = ChatSession(id=parent_id, user_id=fixture.user.id, title="Concurrent slots",
+                             title_generation_status="skipped", agent_profile_id=BUILD_PROFILE_ID,
+                             model_config_id=fixture.model.id, memory_mode="disabled",
+                             preferred_execution_agent_id=fixture.agent.id, current_directory="/workspace")
+        db.add(parent)
+        await db.flush()
+        SessionStorage().provision(parent_id)
+        await AgentRuntime.start(db, parent, "Start four children.", run_id=parent_run_id)
+    for _ in range(4):
+        await asyncio.wait_for(started.get(), 20)
+    response = await fixture.client.post(f"/api/sessions/{parent_id}/runs/{parent_run_id}/messages", json={
+        "message_id": str(uuid4()), "content": "Try one more task and a correction.",
+    })
+    assert response.status_code == 202, response.text
+    await asyncio.wait_for(rejected.wait(), 20)
+    async with fixture.factory() as db:
+        child_messages = list((await db.scalars(select(Message).join(ChatSession).where(
+            ChatSession.parent_session_id == parent_id, Message.role == "user",
+        ))).all())
+        assert len(child_messages) == 4 and all(item.content == "Wait and report." for item in child_messages)
+    release.set()
+    await _events(parent_run_id, "run.completed")
+    async with fixture.factory() as db:
+        parent = await db.get(ChatSession, parent_id)
+        # A new main run gets all four slots back, irrespective of earlier starts.
+        calls[parent_id] = 0
+        next_run = await AgentRuntime.start(db, parent, "Start four more children.")
+        fixture.owned_runs.add(next_run.id)
+    await _events(next_run.id, "run.completed")
+    assert len(calls) == 10
+
+
 @pytest.mark.parametrize("profile_id", [PLAN_PROFILE_ID, BUILD_PROFILE_ID], ids=["plan", "build"])
 @pytest.mark.parametrize("cancel", [False, True], ids=["approve", "cancel"])
 async def test_native_delegation_pipeline(native_database, monkeypatch, profile_id, cancel):
@@ -340,7 +503,8 @@ async def test_native_delegation_pipeline(native_database, monkeypatch, profile_
                     {"description": "First task", "prompt": "Read this child session and report first result."},
                     {"description": "Second task", "prompt": "Report second result independently."},
                 ]})], finish_reason="tool_calls")
-            assert not cancel
+            if cancel:
+                return ProviderResult(content="The children are still working.", finish_reason="stop")
             tools = [item for item in kwargs["messages"] if item["role"] == "tool"]
             result = json.loads(tools[-1]["content"])
             joined_results.extend(result["tasks"])
@@ -419,11 +583,19 @@ async def test_native_delegation_pipeline(native_database, monkeypatch, profile_
     await _events(parent_run_id, "subagent.updated")
 
     if cancel:
+        response = await fixture.client.post(f"/api/sessions/{parent_id}/runs/{parent_run_id}/messages", json={
+            "message_id": str(uuid4()), "content": "Answer my status question while the children work.",
+        })
+        assert response.status_code == 202, response.text
+        async with asyncio.timeout(20), aclosing(run_events.subscribe(parent_run_id)) as stream:
+            async for event in stream:
+                if event["type"] == "message.completed" and event["message"]["content"] == "The children are still working.":
+                    break
         assert await AgentRuntime.cancel_and_wait(parent_run_id)
         await _events(parent_run_id, "run.cancelled")
         await _events(parent_run_id, "approval.expired", count=2)
         assert all(calls[child_id] == 1 for child_id in child_ids)
-        assert calls[parent_id] == 1
+        assert calls[parent_id] == 2
     else:
         await _events(child_run_ids[1], "run.completed")
         assert calls[child_ids[1]] == 1 and calls[child_ids[0]] == 1 and calls[parent_id] == 1

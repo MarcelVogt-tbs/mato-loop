@@ -241,6 +241,19 @@ def delegated_runtime(monkeypatch):
         db.add.side_effect = add
         db.add_all.side_effect = lambda items: [add(item) for item in items]
         db.scalar.return_value = None
+        async def scalar(statement):
+            if "count(" in str(statement):
+                return sum(
+                    model is AgentRun and item.session_id != session.id
+                    and item.status in {"queued", "running", "waiting_approval", "waiting_input"}
+                    for (model, _key), item in objects.items()
+                )
+            if "FROM agent_runs" in str(statement):
+                session_id = statement.compile().params["session_id_1"]
+                return next((item for (model, _key), item in reversed(objects.items())
+                             if model is AgentRun and item.session_id == session_id), None)
+            return None
+        db.scalar.side_effect = scalar
         async def scalars(statement):
             session_id = statement.compile().params["session_id_1"]
             tools = [item for (model, _key), item in objects.items()
@@ -275,12 +288,12 @@ def delegated_runtime(monkeypatch):
                  "_terminalize_incomplete_tool_calls"):
         monkeypatch.setattr(AgentRuntime, name, AsyncMock())
 
-    async def delegate(max_tool_calls=None, *, tool_settings=None, integration_settings=None, tool_names=None):
+    async def delegate(max_tool_calls=None, *, tool_settings=None, integration_settings=None, tool_names=None, tasks=None):
         selected_tools = tool_settings or ToolSettings().select_trust(TrustLevel.PUBLIC)
         selected_tools._agent_profile = profile
         return await subagents.run_tasks(
             AgentRuntime, db, parent, session,
-            TaskArguments(tasks=[{"description": f"Task {i}", "prompt": f"Translate text {i}"} for i in range(2)]),
+            TaskArguments(tasks=tasks or [{"description": f"Task {i}", "prompt": f"Translate text {i}"} for i in range(2)]),
             tool_call_id="task-1", tool_settings=selected_tools,
             tool_names=tool_names or {"task", "question", "write_file", "web_search"},
             integration_settings=integration_settings,
@@ -337,6 +350,24 @@ async def test_delegated_children_parallel_normal_lifecycle(monkeypatch, delegat
         assert metadata["delegationCeiling"]["integrationIds"] == []
         assert metadata["delegationCeiling"]["toolNames"] == ["question", "web_search", "write_file"]
         assert child.id not in AgentRuntime._tasks
+
+
+def test_repeated_permission_ceilings_stay_bounded_and_are_evaluated_once(monkeypatch):
+    settings = ToolSettings().select_trust(TrustLevel.PUBLIC)
+    offered = subagents.permission_snapshot(settings, {"webfetch"})
+    settings.permissions.policies["network.fetch"] = ToolExecutionPolicy.ASK
+    current = subagents.permission_snapshot(settings, {"webfetch"})
+    snapshot = subagents.intersect_snapshots(current, offered)
+    for _ in range(100):
+        snapshot = subagents.intersect_snapshots(current, offered, snapshot)
+    assert snapshot == {**current, "offeredCeiling": offered}
+    resolve = Mock(wraps=mock_agent_run_support.resolve_tool_execution_policy)
+    monkeypatch.setattr(mock_agent_run_support, "resolve_tool_execution_policy", resolve)
+    request = PermissionRequest(capability="network.fetch", resource_type="url", resource_scope="https://example.org",
+                                action_kind="fetch", risk_level="low", title="Read", summary="Read")
+    policy = mock_agent_run_support._tool_policy(subagents.ceiling_settings(snapshot, TrustLevel.PUBLIC),
+                                                IntegrationSettings(), request, snapshot=snapshot)
+    assert policy == ToolExecutionPolicy.ASK and resolve.call_count == 2
 
 
 async def test_delegation_intersects_live_spawn_scope_and_both_permission_ceilings(monkeypatch, delegated_runtime):
@@ -409,6 +440,25 @@ async def test_delegation_intersects_live_spawn_scope_and_both_permission_ceilin
     assert all(task["status"] == "completed" for task in json.loads(result.content)["tasks"])
     subagents.load_agent_profile_tools.assert_awaited_once()
     subagents.load_effective_integrations.assert_awaited_once()
+    child_id = json.loads(result.content)["tasks"][0]["sessionId"]
+    followup = await delegate(tool_settings=offered_tools, integration_settings=live_integrations,
+                              tool_names={"task", "question", "write_file", "webfetch", "calendar_query_events"},
+                              tasks=[{"session_id": child_id, "description": "Follow-up", "prompt": "Check again."}])
+    assert json.loads(followup.content)["tasks"][0]["sessionId"] == child_id
+
+
+@pytest.mark.parametrize("foreign_owner", [False, True])
+async def test_delegation_rejects_unrelated_sessions_before_starting(delegated_runtime, foreign_owner):
+    session, _parent, objects, _databases, delegate = delegated_runtime
+    target = ChatSession(id=uuid4(), user_id=uuid4() if foreign_owner else session.user_id,
+                         parent_session_id=session.id if foreign_owner else uuid4())
+    objects[ChatSession, target.id] = target
+    before = len(objects)
+    result = await delegate(tasks=[
+        {"description": "New task", "prompt": "Do not start on invalid batch."},
+        {"session_id": target.id, "description": "Follow-up", "prompt": "Do not send."},
+    ])
+    assert result.metadata["errorCode"] == "session.notFound" and len(objects) == before
 
 
 @pytest.mark.parametrize("limited", [False, True])
@@ -480,15 +530,16 @@ async def test_delegated_parent_cancellation_joins_children(monkeypatch, delegat
     assert parent.status == "running"
 
 
-async def test_delegation_limit_and_recursion_are_host_enforced(delegated_runtime):
+async def test_delegation_limit_and_recursion_are_host_enforced(delegated_runtime, monkeypatch):
     session, _parent, _objects, databases, delegate = delegated_runtime
-    databases[0].scalar.return_value = 7
+    monkeypatch.setattr(subagents, "MAX_ACTIVE_SUBAGENTS", 1)
     result = await delegate()
     assert result.is_error
-    assert len(databases) == 1
+    assert json.loads(result.content)["error"]["params"]["available"] == 1
+    assert len(databases) == 2
     session.parent_session_id = uuid4()
     assert (await delegate()).is_error
-    assert len(databases) == 1
+    assert len(databases) == 2
 
 
 @pytest.mark.parametrize("shutdown", [False, True])
@@ -605,8 +656,12 @@ async def test_delegated_waits_keep_parent_active_and_expire_on_cancel(monkeypat
         try:
             AgentRuntime.finish_continuation(parent.id, asyncio.Event(), accepted=True)
             await asyncio.wait_for(task, timeout=1)
+            assert all(request.status == "pending" for (model, _key), request in objects.items()
+                       if model in {ApprovalRequest, QuestionRequest})
+            await subagents.cancel_children(AgentRuntime, parent.id)
         finally:
             AgentRuntime._pending_continuations.discard(parent.id)
+            AgentRuntime._continuation_wakeups.pop(parent.id, None)
     else:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):

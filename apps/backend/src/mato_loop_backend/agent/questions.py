@@ -62,8 +62,6 @@ async def request_question(
     if run_id in cls._pending_continuations:
         waiter.set_result("superseded")
     try:
-        if chat_session.spawned_by_run_id in cls._pending_continuations:
-            cls.cancel(run_id)
         await db.commit()
         await run_events.publish(
             run.id,

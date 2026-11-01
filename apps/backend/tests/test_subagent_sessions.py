@@ -268,7 +268,7 @@ async def test_undo_cleans_child_storage_for_only_removed_turns(tmp_path, monkey
     monkeypatch.setattr(ChatHistoryService, "_lock_after_cancelling_active_run", AsyncMock(return_value=parent))
     monkeypatch.setattr(ChatHistoryService, "_messages", AsyncMock(return_value=messages))
     db = AsyncMock(spec=AsyncSession)
-    db.scalars.return_value = MagicMock(all=lambda: [run_id])
+    db.scalars.side_effect = [MagicMock(all=lambda: [run_id]), MagicMock(all=lambda: [])]
     target = messages[0 if first_message else 2]
     result = await ChatHistoryService.undo_user_message(
         db, session_id=parent.id, user_id=parent.user_id, message_id=target.id,

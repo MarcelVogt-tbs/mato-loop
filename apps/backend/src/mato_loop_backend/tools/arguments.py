@@ -43,9 +43,13 @@ class ProtectedText(ToolArguments):
         return self
 
 
+MAX_ACTIVE_SUBAGENTS = 4
+
+
 class DelegatedTask(ToolArguments):
     description: str = Field(min_length=1, max_length=240)
     prompt: str = Field(min_length=1, max_length=8_000)
+    session_id: UUID | None = None
 
     @field_validator("description", "prompt")
     @classmethod
@@ -56,7 +60,14 @@ class DelegatedTask(ToolArguments):
 
 
 class TaskArguments(ToolArguments):
-    tasks: list[DelegatedTask] = Field(min_length=1, max_length=4)
+    tasks: list[DelegatedTask] = Field(min_length=1, max_length=MAX_ACTIVE_SUBAGENTS)
+
+    @model_validator(mode="after")
+    def unique_sessions(self) -> TaskArguments:
+        ids = [task.session_id for task in self.tasks if task.session_id is not None]
+        if len(ids) != len(set(ids)):
+            raise ValueError("each subagent session may appear only once")
+        return self
 
 
 class NotifyArguments(ToolArguments):

@@ -1,6 +1,8 @@
 # Active-run continuations and elevated environments
 
-A direct parent message cancels delegated runs waiting for approval or input, including children that ask after the message arrives. Active child work may finish first. The parent joins the children and then processes the new instruction; a child never continues its old task with a silently dismissed question.
+A direct message to the main session interrupts its wait for delegated work, not the children. The parent can answer immediately or explicitly send a correction with `task` and the child's `session_id`. Unrelated child work, approvals and questions remain unchanged. The parent stays active after intermediate answers and receives persisted child results before it finishes. Explicit stops and parent failures still cancel and join its children.
+
+A correction to an active child uses the same continuation mechanism as a direct user message, with persisted parent-agent provenance. Only that child's superseded approvals/questions expire. A provider request can be interrupted; an active tool call may finish before the correction is processed. Delivery does not confirm completion and cannot undo effects. A finished child instead starts a follow-up run in the same child session; no two runs execute there concurrently.
 
 A direct message interrupts the current model request and starts a new model request in the same run. Its instruction supersedes pending approvals and questions, but successful tool results from that run remain current evidence. Existing context budgets still shorten large tool outputs. Run-local secret references stay available only until that run ends; repeat protected-input requests reuse already answered names and ask only for missing ones. Remembering a value for later runs still requires the user's session opt-in.
 

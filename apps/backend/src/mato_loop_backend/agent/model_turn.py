@@ -18,6 +18,7 @@ from mato_loop_backend.agent.projection import (
 from mato_loop_backend.agent.research import _research_snapshot
 from mato_loop_backend.agent.run_contracts import _VisibleResponse
 from mato_loop_backend.agent.run_support import GATED_DELTA_CHARACTERS, logger
+from mato_loop_backend.agent.subagents import has_children
 from mato_loop_backend.diagnostics.service import (
     diagnostic_access_active,
     schedule_diagnostic_event,
@@ -277,6 +278,7 @@ async def persist_model_response(
         **({"completionCause": "agent.toolCallLimitReached"} if tool_budget_exhausted else {}),
         "performance": performance,
         **({"warnings": message_warnings} if message_warnings else {}),
+        **({"continuationSegment": True} if not calls and has_children(run.id) else {}),
     }
     if memory_overview_runtime_state is not None:
         provider_data["_matoloop"] = {
@@ -313,7 +315,7 @@ async def persist_model_response(
             {"id": call.id, "name": call.name, "arguments": call.arguments}
             for call in calls
         ]
-    else:
+    elif not has_children(run.id):
         run.result_message_id = assistant.id
         await runtime._finalize_run_files(db, run, tolerate_conflict=rejected_final_response)
     await EpisodeIndexService.enqueue(db, assistant)
@@ -331,7 +333,7 @@ async def persist_model_response(
         visible_response.reset()
         await runtime._resume_continuation(db, run, visible_response)
         return assistant, True
-    if not calls:
+    if not calls and not has_children(run.id):
         runtime._cancellable_runs.discard(run.id)
     visible_response.reset()
     if hold_response and not calls and assistant.content:
@@ -359,6 +361,7 @@ async def persist_model_response(
             "research": public_research, "warnings": message_warnings,
             "runId": str(run.id),
             "agentProfileId": str(run.agent_profile_id) if run.agent_profile_id else None,
+            "continuationSegment": provider_data["_matoloop"].get("continuationSegment", False),
         },
     })
     return assistant, False

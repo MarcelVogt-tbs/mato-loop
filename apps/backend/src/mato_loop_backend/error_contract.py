@@ -83,7 +83,7 @@ _MESSAGES = {
         "Change the arguments or use another approach."
     ),
     "agent.toolCallLimitReached": "The agent reached the maximum number of tool calls.",
-    "agent.subagentLimitReached": "The run reached the maximum number of subagents.",
+    "agent.subagentLimitReached": "The main session has too few free subagent slots. No tasks were started.",
     "session.readOnly": "Subagent sessions are read-only. Use the main session to continue.",
     "agentProfile.notFound": "The agent profile was not found.",
     "agentProfile.duplicate": "An agent profile with this name already exists.",
