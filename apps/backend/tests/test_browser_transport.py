@@ -119,7 +119,7 @@ def wire(env, monkeypatch):
 @pytest.mark.parametrize("invalid", [
     "origin", "missing-origin", "login", "expired", "login-owner", "inactive", "missing-session",
     "session-owner", "child", "automation", "agent-owner", "revoked", "binding",
-    "integration", "disabled", "global-disabled",
+    "integration", "disabled", "global-disabled", "browser-id",
 ])
 def test_websocket_access_denied_before_any_rpc(env, monkeypatch, invalid):
     headers, url = ORIGIN, env.url
@@ -137,6 +137,8 @@ def test_websocket_access_denied_before_any_rpc(env, monkeypatch, invalid):
         env.user.is_active = False
     elif invalid == "missing-session":
         url = url.split("?")[0]
+    elif invalid == "browser-id":
+        url += "&expectedBrowserId=invalid"
     elif invalid == "session-owner":
         env.session.user_id = uuid4()
     elif invalid == "child":
@@ -191,7 +193,7 @@ def test_views_share_one_runtime_without_takeover_and_survive_disconnect(env):
             assert viewer.receive()["type"] == "websocket.close"
     assert env.coordinator.current_for(env.session.id, env.agent.id) is connection
     assert not connection.sockets and not connection.view_sockets
-    with env.client.websocket_connect(env.url, headers=ORIGIN) as resumed:
+    with env.client.websocket_connect(env.url + f"&expectedBrowserId={state['browserId']}", headers=ORIGIN) as resumed:
         restored = resumed.receive_json()
         assert restored["browserId"] == state["browserId"]
         assert restored["viewId"] != state["viewId"]
@@ -201,6 +203,19 @@ def test_views_share_one_runtime_without_takeover_and_survive_disconnect(env):
             assert env.coordinator.current_for(env.session.id, env.agent.id) is connection
     assert sum(op == "integration.browser.open" for op, _ in env.calls) == 1
     assert not any(op == "integration.browser.setup" for op, _ in env.calls)
+
+
+@pytest.mark.parametrize("target", ["closed", "different"])
+def test_resume_never_opens_a_replacement_browser(env, target):
+    with env.client.websocket_connect(env.url, headers=ORIGIN) as control:
+        state = control.receive_json()
+    if target == "closed":
+        connection = env.coordinator.current_for(env.session.id, env.agent.id)
+        env.client.portal.call(env.coordinator.close, connection)
+    expected = state["browserId"] if target == "closed" else str(uuid4())
+    with env.client.websocket_connect(env.url + f"&expectedBrowserId={expected}", headers=ORIGIN) as resumed:
+        assert resumed.receive_json()["error"]["code"] == "browser.notConnected"
+    assert sum(op == "integration.browser.open" for op, _ in env.calls) == 1
 
 
 @pytest.mark.parametrize("gate", ["default", "explicit", "missing-profile"])

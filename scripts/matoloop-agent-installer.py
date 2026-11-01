@@ -568,8 +568,26 @@ def install(arguments: argparse.Namespace) -> None:
     layout["venvs"].mkdir(exist_ok=True)
     new_venv = layout["venvs"] / secrets.token_hex(8)
     cleanup_paths.append(new_venv)
-    sync_environment(layout, active_source, new_venv)
+    browser_installation = layout["root"] / "tools/browser"
+    browser = browser_installation.exists()
+    sync_environment(layout, active_source, new_venv, browser=browser)
     run(new_venv / "bin/matoloop-agent", "--help", stdout=subprocess.DEVNULL)
+    if browser:
+        with tempfile.TemporaryDirectory(prefix="matoloop-browser-check-") as temporary:
+            probe = Path(temporary)
+            probe.chmod(0o755)
+            run(
+                new_venv / "bin/python",
+                "-m",
+                "matoloop_agent",
+                "browser-install",
+                env={
+                    **os.environ,
+                    "MATOLOOP_BROWSER_DATA_DIR": str(layout["data"]),
+                    "MATOLOOP_BROWSER_ROOT": str(probe),
+                    "MATOLOOP_BROWSER_INSTALLATION": str(browser_installation),
+                },
+            )
     if not managed:
         shutil.rmtree(active_source)
 

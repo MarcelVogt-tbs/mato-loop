@@ -17,6 +17,12 @@ is used. Website traffic originates on the Agent, not the backend or the user's 
   their existing user-namespace/security settings. No debugging or viewer TCP port is published.
 - The independent setup terminal retains its bounded replay buffer across viewer reconnects,
   but not an Agent process restart. Do not restart an Agent during package installation.
+- Native updates retain browser support when the managed Chromium installation exists, including
+  installations whose Python packages were lost by an earlier update. The staged environment includes
+  the release's browser dependency group and installs and probes matching Chromium before activation.
+  Preparation failure leaves the running release unchanged. Playwright retains Chromium versions
+  referenced by the active and staged environments and removes unused versions on later installs;
+  additional host packages still require explicit setup consent.
 
 ## Isolation and Lifetime
 
@@ -183,6 +189,14 @@ binary page stream. The Agent connects outbound to `/api/browser-relay/{relayId}
 existing one-use, connection-bound token. Login ownership, allowed origins, live access checks,
 queue limits and transport cleanup remain enforced. No arbitrary CDP method or upstream URL
 is exposed. See [the Agent runtime contract](../apps/matoloop-agent/BROWSER.md).
+
+The WebUI retries interrupted viewers after 1, 2 and 3 seconds while the Browser app is visible
+and eligible. A failed page stream replaces only that stream. Control reconnects send
+`expectedBrowserId` and may subscribe only to that live runtime; they never create a replacement.
+Each new control subscription receives a fresh login-bound view ID. Inputs and mutations are not
+replayed. The retry count resets only after the first matching page image is drawn, not on metadata
+alone. Hidden views pause retries. Exhausted retries or terminal access/runtime errors require
+**Browser erneut verbinden**; closing a browser in another view cannot automatically reopen it.
 
 API errors use the central error catalog and German frontend formatter. No raw Chromium,
 Playwright or installer exception is exposed. Technical latency logs and durable browser

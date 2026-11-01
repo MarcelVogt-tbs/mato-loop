@@ -151,6 +151,11 @@ async def browser_control(websocket: WebSocket, integration_id: UUID) -> None:
             session_id = UUID(websocket.query_params.get("sessionId", ""))
         except ValueError as exc:
             raise ExecutionClientError("session.notFound") from exc
+        try:
+            expected = websocket.query_params.get("expectedBrowserId")
+            expected_browser_id = UUID(expected) if expected is not None else None
+        except ValueError as exc:
+            raise ExecutionClientError("browser.invalidTarget") from exc
         color_scheme = websocket.query_params.get("colorScheme", "light")
         if color_scheme not in {"light", "dark"}:
             raise ExecutionClientError("browser.invalidTarget")
@@ -158,6 +163,7 @@ async def browser_control(websocket: WebSocket, integration_id: UUID) -> None:
         await websocket.accept()
         connection = await browser_coordinator.open(
             login.user.id, integration_id, session_id, login.login_id, websocket,
+            expected_browser_id=expected_browser_id,
             color_scheme=color_scheme,
         )
         view_id = next(key for key, (socket, _) in connection.sockets.items() if socket is websocket)
@@ -302,25 +308,26 @@ async def browser_view(websocket: WebSocket, integration_id: UUID) -> None:
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
             task.result()
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, asyncio.CancelledError):
         pass
     except Exception as exc:
         # The page stream must contain only framed protocol bytes, never API errors.
         if connection is not None:
             with suppress(Exception):
-                await connection.send({"type": "error", "error": describe_error(
+                await connection.send({"type": "error", "operation": "view", "error": describe_error(
                     exc.code if isinstance(exc, ExecutionClientError) else "browser.unavailable",
-                ).payload()})
+                ).payload()}, view_id=view_id)
     finally:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        if relay is not None:
-            relay.ended.set()
-            browser_coordinator.relays.pop(relay.relay_id, None)
-        if connection is not None and connection.view_sockets.get(view_id) is websocket:
-            connection.view_sockets.pop(view_id, None)
-        await _close_socket(websocket)
+        with CancelScope(shield=True):
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if relay is not None:
+                relay.ended.set()
+                browser_coordinator.relays.pop(relay.relay_id, None)
+            if connection is not None and connection.view_sockets.get(view_id) is websocket:
+                connection.view_sockets.pop(view_id, None)
+            await _close_socket(websocket)
 
 
 @router.websocket("/browser-relay/{relay_id}")

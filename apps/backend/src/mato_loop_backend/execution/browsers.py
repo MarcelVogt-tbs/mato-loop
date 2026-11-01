@@ -348,6 +348,7 @@ class BrowserCoordinator:
 
     async def open(self, owner_id, integration_id, session_id, login_id=None, websocket=None,
                    *, run_id: UUID | None = None,
+                   expected_browser_id: UUID | None = None,
                    color_scheme: str = "light") -> BrowserConnection:
         instance, model_available = await validate_browser_access(
             owner_id, integration_id, login_id=login_id, session_id=session_id,
@@ -356,6 +357,12 @@ class BrowserCoordinator:
         agent_id = instance.execution_agent_id
         async with self.lock:
             previous = self.connections.get((session_id, agent_id))
+            if expected_browser_id is not None and (
+                previous is None or previous.browser_id != expected_browser_id
+                or previous.closed or not previous.ready
+                or previous.generation != execution_agent_connections.generation(agent_id)
+            ):
+                raise ExecutionClientError("browser.notConnected")
             if previous is not None:
                 if previous.integration_id != integration_id or previous.owner_id != owner_id:
                     raise ExecutionClientError("browser.busy")

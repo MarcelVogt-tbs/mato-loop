@@ -19,6 +19,7 @@ export const useBrowserStore = defineStore('browser', {
     pickerHasMore: false, pickerNextOffset: null, pickerSelected: null, pickerLoading: false,
     pickerError: null, pickerContext: null, pickerController: null, pickerGeneration: 0,
     activationKey: null, activationAttempted: false, viewVisible: false,
+    reconnectEligible: false, reconnectTarget: null, reconnectTimer: null, reconnectAttempts: 0,
     resizeTarget: null, resizeInFlight: null, resizeLast: null, resizeTimer: null,
     navigation: null, navigationPending: false
   }),
@@ -34,26 +35,41 @@ export const useBrowserStore = defineStore('browser', {
   },
   actions: {
     activate(key, context, eligible) {
+      this.reconnectEligible = Boolean(key && eligible)
+      if (!this.reconnectEligible) {
+        clearTimeout(this.reconnectTimer)
+        this.reconnectTimer = null
+      }
       if (context && this.stoppedContext === JSON.stringify([context.integrationId, context.sessionId, context.agentId])) return
       if (key !== this.activationKey) {
         this.activationKey = key
         this.activationAttempted = false
       }
-      if (!key || !eligible || this.activationAttempted) return
+      if (!key || !eligible) return
+      if (this.reconnectTarget && this.sessionId === context.sessionId
+        && this.agentId === context.agentId && this.integrationId === context.integrationId) {
+        this.scheduleReconnect()
+        return
+      }
+      if (this.activationAttempted) return
       this.activationAttempted = true
-      if (this.socket && this.sessionId === context.sessionId) return
+      if (this.socket && this.sessionId === context.sessionId
+        && this.agentId === context.agentId && this.integrationId === context.integrationId) return
       this.connect(context)
     },
-    connect({ integrationId, sessionId, agentId }) {
+    connect({ integrationId, sessionId, agentId }, { resume = false } = {}) {
       if (!integrationId || !sessionId || !agentId || sessionId !== this.displayedSessionId) return
-      if (this.status !== 'closed' && this.integrationId === integrationId
+      if (!resume && this.status !== 'closed' && this.integrationId === integrationId
         && this.sessionId === sessionId && this.agentId === agentId) return
-      this.release()
+      const expectedBrowserId = resume ? this.browserId : null
+      const reconnectEligible = this.reconnectEligible
+      if (!resume) this.release()
       const generation = this.generation
       const socket = markRaw(new WebSocket(browserSocketUrl(integrationId, '', {
-        sessionId, colorScheme: Dark.isActive ? 'dark' : 'light'
+        sessionId, colorScheme: Dark.isActive ? 'dark' : 'light',
+        ...(expectedBrowserId ? { expectedBrowserId } : {})
       })))
-      Object.assign(this, { integrationId, sessionId, agentId, status: 'connecting', socket, stoppedContext: null })
+      Object.assign(this, { integrationId, sessionId, agentId, status: 'connecting', socket, stoppedContext: null, reconnectEligible })
       const current = () => this.generation === generation && this.socket === socket
       socket.onmessage = (event) => {
         if (!current() || typeof event.data !== 'string') return
@@ -72,8 +88,12 @@ export const useBrowserStore = defineStore('browser', {
             notifyError({ error: message.error })
             return
           }
-          this.updateViewOnly()
-          if (!this.browserId || ['browser.bindingChanged', 'browser.notConnected'].includes(message.error?.code)) this.release()
+          if (message.operation === 'view' && this.browserId
+            && ['browser.notConnected', 'browser.unavailable', 'browser.busy'].includes(message.error?.code)) {
+            this.reconnect('view')
+            return
+          }
+          this.release({ stop: true })
           notifyError({ error: message.error })
         } else if (message.type === 'navigation') {
           if (!this.browserId || message.browserId !== this.browserId) return
@@ -88,12 +108,12 @@ export const useBrowserStore = defineStore('browser', {
           this.scheduleResize()
         } else if (message.type === 'state' && message.browserId && message.viewId) {
           if (this.browserId && this.browserId !== message.browserId) {
-            this.release()
+            this.release({ stop: true })
             notifyError({ error: { code: 'browser.bindingChanged' } })
             return
           }
           if (this.viewId && this.viewId !== message.viewId) {
-            this.release()
+            this.release({ stop: true })
             notifyError({ error: { code: 'browser.bindingChanged' } })
             return
           }
@@ -108,12 +128,49 @@ export const useBrowserStore = defineStore('browser', {
       }
       socket.onerror = () => {
         if (!current()) return
-        notifyError({ error: { code: 'browser.unavailable' } })
+        socket.close()
       }
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         if (!current()) return
-        this.release()
+        if (this.browserId && ![4401, 4403].includes(event?.code)) this.reconnect('control')
+        else {
+          this.release({ stop: true })
+          notifyError({ error: { code: 'browser.unavailable' } })
+        }
       }
+    },
+    reconnect(target) {
+      this.clearView()
+      this.reconnectTarget = this.reconnectTarget === 'control' ? 'control' : target
+      if (this.reconnectTarget === 'control') {
+        const socket = this.socket
+        this.socket = null
+        socket?.close()
+        this.viewId = null
+        this.navigation = null
+        this.navigationPending = false
+        this.resizeInFlight = null
+        this.resizeLast = null
+        this.status = 'connecting'
+      }
+      this.scheduleReconnect()
+    },
+    scheduleReconnect() {
+      if (!this.reconnectTarget || this.reconnectTimer || !this.reconnectEligible || !this.ownsDisplay || document.hidden) return
+      if (this.reconnectAttempts >= 3) {
+        this.release({ stop: true })
+        notifyError({ error: { code: 'browser.notConnected' } })
+        return
+      }
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null
+        if (!this.reconnectEligible || !this.ownsDisplay || document.hidden) return
+        const target = this.reconnectTarget
+        this.reconnectTarget = null
+        this.reconnectAttempts += 1
+        if (target === 'control') this.connect(this, { resume: true })
+        else void this.mountView(this.viewParent)
+      }, (this.reconnectAttempts + 1) * 1000)
     },
     setDisplayedSession(sessionId) {
       sessionId ||= null
@@ -124,6 +181,9 @@ export const useBrowserStore = defineStore('browser', {
     parkView() {
       this.displayGeneration += 1
       this.viewVisible = false
+      this.reconnectEligible = false
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
       this.viewer?.releaseInput()
       this.updateViewOnly()
       this.viewer?.blur()
@@ -152,10 +212,11 @@ export const useBrowserStore = defineStore('browser', {
     },
     async mountView(host) {
       if (!host || !this.ownsDisplay || this.status !== 'open' || !this.viewId) return
+      this.viewParent = markRaw(host)
+      if (this.reconnectTarget) return
       const restoring = !this.viewVisible || this.viewHost?.parentElement !== host
       this.viewVisible = true
       this.updateViewOnly()
-      this.viewParent = markRaw(host)
       if (this.viewHost) {
         // Keep the same viewer when the collapsed/mobile panel remounts.
         if (this.viewHost.parentElement !== host) host.replaceChildren(this.viewHost)
@@ -188,14 +249,15 @@ export const useBrowserStore = defineStore('browser', {
           this.updateViewOnly()
           this.navigate('state')
         })
+        viewer.addEventListener('ready', () => {
+          if (current()) this.reconnectAttempts = 0
+        })
         viewer.addEventListener('disconnect', () => {
           if (!current()) return
-          this.release()
-          notifyError({ error: { code: 'browser.notConnected' } })
+          this.reconnect('view')
         })
       } catch {
-        this.release()
-        notifyError({ error: { code: 'browser.unavailable' } })
+        this.reconnect('view')
       }
     },
     toggleViewportScale() {
@@ -500,17 +562,18 @@ export const useBrowserStore = defineStore('browser', {
     syncContext({ sessionId, agentId, available, tabPresent }) {
       if (this.sessionId && (!available || (sessionId === this.sessionId && (this.agentId !== agentId || !tabPresent)))) this.release()
     },
-    release({ close = false } = {}) {
+    release({ close = false, stop = false } = {}) {
       if (close && !this.ownsDisplay) return
       const retained = { displayedSessionId: this.displayedSessionId, displayGeneration: this.displayGeneration + 1 }
       const socket = this.socket
       const generation = this.generation + 1
       const { activationKey, activationAttempted } = this
-      const stoppedContext = close ? JSON.stringify([this.integrationId, this.sessionId, this.agentId]) : this.stoppedContext
+      const stoppedContext = close || stop ? JSON.stringify([this.integrationId, this.sessionId, this.agentId]) : this.stoppedContext
       this.generation = generation
       this.clearView()
       const viewGeneration = this.viewGeneration
       clearTimeout(this.resizeTimer)
+      clearTimeout(this.reconnectTimer)
       this.$reset()
       Object.assign(this, retained, { activationKey, activationAttempted: close || activationAttempted, stoppedContext })
       this.generation = generation

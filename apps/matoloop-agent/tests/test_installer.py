@@ -439,8 +439,10 @@ class InstallerTests(unittest.TestCase):
                 "XDG_CONFIG_HOME": str(base / "config"),
             }
             system_service = base / "system/matoloop-agent.service"
+            browser_modes = []
 
-            def fake_sync(layout, _source, destination):
+            def fake_sync(layout, _source, destination, *, browser=False):
+                browser_modes.append(browser)
                 self.assertNotIn(("sudo", "-v"), [call.args for call in commands.call_args_list])
                 executable = destination / "bin/matoloop-agent"
                 executable.parent.mkdir(parents=True)
@@ -476,6 +478,7 @@ class InstallerTests(unittest.TestCase):
             )
             previous = layout["venv"].resolve()
             (previous / "working").touch()
+            (root / "tools/browser").mkdir()
 
             def fail_start(*command, **_kwargs):
                 if command[:4] == ("sudo", "install", "-m", "0644"):
@@ -497,6 +500,13 @@ class InstallerTests(unittest.TestCase):
                     installer.install(arguments)
             self.assertEqual(layout["venv"].resolve(), previous)
             self.assertTrue((previous / "working").exists())
+            self.assertEqual(
+                (
+                    browser_modes,
+                    any("browser-install" in call.args for call in commands.call_args_list),
+                ),
+                ([False, True], True),
+            )
 
     def test_target_revision_requires_clean_backend_metadata(self) -> None:
         for version in ("2026-10-08-aaaaaaaa", "2026-10-08-aaaaaaaa-dirty"):

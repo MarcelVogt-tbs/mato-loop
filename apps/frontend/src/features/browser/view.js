@@ -93,7 +93,9 @@ export class BrowserView extends EventTarget {
         this.canvas.width = image.naturalWidth
         this.canvas.height = image.naturalHeight
         this.canvas.getContext('2d').drawImage(image, 0, 0)
+        const firstFrame = !this.drawn
         this.drawn = frame
+        if (firstFrame) this.dispatchEvent(new Event('ready'))
       }
       this.drawing = false
       this.draw()

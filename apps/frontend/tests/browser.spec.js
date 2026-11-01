@@ -43,6 +43,7 @@ afterEach(() => { browser.release(); useBrowserSetupStore().release(); vi.useRea
 
 async function open() {
   browser.connect(context)
+  browser.activate(JSON.stringify(context), context, true)
   socket = browser.socket
   socket.open()
   socket.message(state)
@@ -50,6 +51,7 @@ async function open() {
   vi.spyOn(host, 'getClientRects').mockReturnValue([{ width: 1000, height: 700 }])
   await browser.mountView(host)
   viewers.at(-1).dispatchEvent(new Event('connect'))
+  viewers.at(-1).dispatchEvent(new Event('ready'))
   socket.message({ ...navigation, completed: true })
   socket.send.mockClear()
   return viewers.at(-1)
@@ -65,6 +67,82 @@ it('binds a viewer without a model attachment handshake', async () => {
   expect(viewer.url).toContain('sessionId=session-1&browserId=runtime-1&viewId=view-1')
   expect(viewer.readOnly).toBe(false)
   expect(socket.send).not.toHaveBeenCalled()
+})
+
+it.each(['view', 'control'])('restores the same browser after a %s disconnect without replaying navigation', async (target) => {
+  vi.useFakeTimers()
+  const viewer = await open()
+  browser.navigate('reload')
+  socket.send.mockClear()
+  if (target === 'view') viewer.dispatchEvent(new Event('disconnect'))
+  else { socket.close(); socket.onclose({ code: 1006 }) }
+  await vi.advanceTimersByTimeAsync(1000)
+  if (target === 'control') {
+    socket = browser.socket
+    expect(socket.url).toContain('expectedBrowserId=runtime-1')
+    socket.open()
+    socket.message({ ...state, viewId: 'view-2' })
+    await browser.mountView(browser.viewParent)
+  }
+  viewers.at(-1).dispatchEvent(new Event('connect'))
+  viewers.at(-1).dispatchEvent(new Event('ready'))
+  socket.message({ ...navigation, completed: true })
+  expect({ ready: browser.ready, browserId: browser.browserId, attempts: browser.reconnectAttempts, commands: socket.send.mock.calls.map(([raw]) => JSON.parse(raw).action) })
+    .toEqual({ ready: true, browserId: 'runtime-1', attempts: 0, commands: target === 'control' ? ['state'] : [] })
+})
+
+it('limits reconnects that receive state but never display an image', async () => {
+  vi.useFakeTimers()
+  const viewer = await open()
+  viewer.dispatchEvent(new Event('disconnect'))
+  for (const delay of [1000, 2000, 3000]) {
+    await vi.advanceTimersByTimeAsync(delay)
+    viewers.at(-1).dispatchEvent(new Event('connect'))
+    viewers.at(-1).dispatchEvent(new Event('disconnect'))
+  }
+  browser.activate(null, null, false)
+  browser.activate(JSON.stringify(context), context, true)
+  await vi.advanceTimersByTimeAsync(10000)
+  expect({ status: browser.status, attempts: viewers.length, notices: notifyError.mock.calls.length })
+    .toEqual({ status: 'closed', attempts: 4, notices: 1 })
+})
+
+it('pauses retries while parked and resumes them when the view becomes eligible', async () => {
+  vi.useFakeTimers()
+  const viewer = await open()
+  viewer.dispatchEvent(new Event('disconnect'))
+  browser.parkView()
+  await vi.advanceTimersByTimeAsync(10000)
+  expect(viewers).toHaveLength(1)
+  browser.activate(JSON.stringify(context), context, true)
+  await vi.advanceTimersByTimeAsync(1000)
+  expect(viewers).toHaveLength(2)
+})
+
+it.each(['close', 'session'])('cancels pending retries on %s changes', async (change) => {
+  vi.useFakeTimers()
+  const viewer = await open()
+  viewer.dispatchEvent(new Event('disconnect'))
+  if (change === 'close') browser.release({ close: true })
+  else {
+    browser.setDisplayedSession('session-2')
+    browser.activate('session-2', { ...context, sessionId: 'session-2' }, true)
+  }
+  await vi.advanceTimersByTimeAsync(10000)
+  expect(viewers).toHaveLength(1)
+})
+
+it('does not reopen a browser after the backend refuses its previous runtime', async () => {
+  vi.useFakeTimers()
+  await open()
+  socket.close()
+  socket.onclose({ code: 1006 })
+  await vi.advanceTimersByTimeAsync(1000)
+  browser.socket.message({ type: 'error', error: { code: 'browser.notConnected' } })
+  browser.activate(null, null, false)
+  browser.activate(JSON.stringify(context), context, true)
+  await vi.advanceTimersByTimeAsync(10000)
+  expect(FakeWebSocket.instances).toHaveLength(2)
 })
 
 it('retains a parked viewer on remount but never exposes another chat as its own', async () => {

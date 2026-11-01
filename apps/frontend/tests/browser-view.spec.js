@@ -28,12 +28,16 @@ beforeEach(() => {
 afterEach(() => { view.disconnect(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 it('reassembles split frames and gates input on the image actually displayed', () => {
+  const ready = vi.fn()
+  view.addEventListener('ready', ready)
   const bytes = packet(frame)
   view.receive(bytes.slice(0, 7).buffer)
   view.receive(bytes.slice(7).buffer)
   view.send({ kind: 'text', text: 'hello' })
   expect(view.socket.send).not.toHaveBeenCalled()
+  const beforeImage = ready.mock.calls.length
   images[0].onload()
+  expect([beforeImage, ready.mock.calls.length]).toEqual([0, 1])
   view.send({ kind: 'text', text: 'Grüße 🌍' })
   const sent = view.socket.send.mock.calls.at(-1)[0]
   expect(JSON.parse(new TextDecoder().decode(sent.subarray(4)))).toMatchObject({ kind: 'text', inputEpoch: 'epoch-1', tabId: 'tab-1', text: 'Grüße 🌍' })
