@@ -8,6 +8,8 @@ Eine Session ist eine gespeicherte Unterhaltung mit eigenen Einstellungen, Datei
 
 Über das Sessionmenü kannst du anpinnen, umbenennen, einem Projekt zuordnen, archivieren oder löschen. Projektvorgaben für Vorlage, Computer und Arbeitsordner gelten für neue Sessions, nicht rückwirkend. Ein Projektwechsel übernimmt einen Entwurf nur in ein leeres Ziel, niemals über dortige Eingaben oder Warteschlangen.
 
+Ziehe Projekte in der Seitenleiste mit gedrückter Maustaste an die gewünschte Position. Auf Touch hältst du den Projektnamen kurz gedrückt und verschiebst ihn dann. Eine Linie zeigt die Einfügeposition. Die Reihenfolge bleibt für dein Konto auch nach dem Neuladen und auf anderen Geräten gespeichert; normales Wischen scrollt weiterhin die Liste.
+
 ## Session-Einstellungen ändern
 
 Unter **Control Center > Session** bearbeitest du die Vorgaben; Agent, Modell und Reasoning sind auch am Eingabefeld auswählbar.

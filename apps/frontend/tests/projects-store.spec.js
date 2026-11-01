@@ -99,6 +99,17 @@ describe('projects store', () => {
     })
   })
 
+  it('saves a reordered project list', async () => {
+    api.put.mockResolvedValue({})
+    const store = useProjectStore()
+    store.items = [project, { ...project, id: 'project-2' }]
+
+    await store.reorder(['project-2', project.id])
+
+    expect(api.put).toHaveBeenCalledWith('/projects/order', { projectIds: ['project-2', project.id] })
+    expect(store.items.map(({ id }) => id)).toEqual(['project-2', project.id])
+  })
+
   it('discovers, sets, and clears an OpenCode binding', async () => {
     const codingService = {
       adapterType: 'opencode',
@@ -192,12 +203,14 @@ describe('projects store', () => {
     api.post.mockRejectedValue(error)
     api.patch.mockRejectedValue(error)
     api.delete.mockRejectedValue(error)
+    api.put.mockRejectedValue(error)
     const store = useProjectStore()
     store.items = [project]
 
     await expect(store.create('Neu')).rejects.toThrow('request failed')
     await expect(store.update(project.id, 'Neu')).rejects.toThrow('request failed')
     await expect(store.remove(project.id, { automationImpact: 'impact-token' })).rejects.toThrow('request failed')
+    await expect(store.reorder([project.id])).rejects.toThrow('request failed')
 
     expect(store.items).toEqual([project])
     expect(store.revision).toBe(0)

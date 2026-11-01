@@ -148,6 +148,28 @@ body.body--dark .app-floating-control--flat {
   flex-direction: row;
 }
 
+.project-list-item__header {
+  cursor: grab;
+  -webkit-touch-callout: none;
+}
+
+.project-list-item--dragging {
+  opacity: 0.5;
+}
+
+.project-list-item--drop-before {
+  box-shadow: 0 -2px var(--q-primary);
+}
+
+.project-list-item--drop-after {
+  box-shadow: 0 2px var(--q-primary);
+}
+
+.project-drag-preview {
+  z-index: 7000;
+  max-width: 260px;
+}
+
 .sidebar-session-group-label {
   padding-left: calc(8px + 22px + 8px);
 }

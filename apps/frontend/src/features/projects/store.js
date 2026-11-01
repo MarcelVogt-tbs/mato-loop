@@ -8,9 +8,25 @@ export const useProjectStore = defineStore('projects', {
     loading: false,
     loaded: false,
     loadFailed: false,
+    reordering: false,
     revision: 0
   }),
   actions: {
+    async reorder(projectIds) {
+      if (this.reordering) return
+      this.reordering = true
+      try {
+        await api.put('/projects/order', { projectIds })
+        this.revision += 1
+        this.loading = false
+        const positions = new Map(projectIds.map((id, index) => [id, index]))
+        this.items = [...this.items].sort((a, b) => (
+          (positions.get(a.id) ?? positions.size) - (positions.get(b.id) ?? positions.size)
+        ))
+      } finally {
+        this.reordering = false
+      }
+    },
     async fetchAll(config = {}) {
       return queueRefresh(this, config, async (revision) => {
         this.loading = !this.loaded

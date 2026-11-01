@@ -38,6 +38,7 @@ from mato_loop_backend.sessions.service import (
     validate_execution_preferences,
 )
 from mato_loop_backend.sessions.templates import load_template
+from mato_loop_backend.settings import SettingsStore, UserPreferences
 
 router = APIRouter(prefix="/projects", dependencies=[Depends(require_user)])
 logger = logging.getLogger(__name__)
@@ -110,6 +111,19 @@ class ProjectListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[ProjectResponse]
+
+
+class ProjectOrderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_ids: list[UUID] = Field(alias="projectIds", min_length=1, max_length=10000)
+
+    @field_validator("project_ids")
+    @classmethod
+    def unique_projects(cls, value: list[UUID]) -> list[UUID]:
+        if len(value) != len(set(value)):
+            raise ValueError("project IDs must be unique")
+        return value
 
 
 def _payload(project: Project, session_count: int, has_unread_messages: bool = False) -> ProjectResponse:
@@ -257,9 +271,34 @@ async def list_projects(
             .order_by(Project.updated_at.desc(), Project.id.desc())
         )
     ).all()
+    if not archived:
+        preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id)
+        positions = {project_id: index for index, project_id in enumerate(preferences.project_order)}
+        rows = sorted(rows, key=lambda row: positions.get(row[0].id, len(positions)))
     return ProjectListResponse(
         items=[_payload(project, session_count, unread) for project, session_count, unread in rows]
     )
+
+
+@router.put("/order", status_code=status.HTTP_204_NO_CONTENT)
+async def reorder_projects(
+    payload: ProjectOrderRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> None:
+    owned_ids = set(await db.scalars(select(Project.id).where(
+        Project.user_id == user.id,
+    )))
+    requested_ids = set(payload.project_ids)
+    if not requested_ids <= owned_ids:
+        raise ApiError(status.HTTP_404_NOT_FOUND, "project.notFound")
+    preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id, for_update=True)
+    preferences.project_order = payload.project_ids + [
+        project_id for project_id in preferences.project_order
+        if project_id in owned_ids and project_id not in requested_ids
+    ]
+    await SettingsStore.save(db, preferences, user_id=user.id)
+    await db.commit()
 
 
 def _unread_project_sessions():

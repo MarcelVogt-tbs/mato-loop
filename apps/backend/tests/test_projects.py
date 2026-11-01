@@ -13,12 +13,14 @@ from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import ApiError, register_error_handlers
 from mato_loop_backend.api.routes.projects import (
     ProjectCreateRequest,
+    ProjectOrderRequest,
     ProjectRequest,
     create_project,
     delete_project,
     list_projects,
     project_delete_impact,
     project_delete_impact_token,
+    reorder_projects,
     router,
     update_project,
 )
@@ -26,6 +28,7 @@ from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.models import Automation, ChatSession, Project, UserAccount
 from mato_loop_backend.security import require_user
+from mato_loop_backend.settings import SettingsStore, UserPreferences
 
 
 def _user() -> UserAccount:
@@ -106,7 +109,7 @@ def test_project_fields_are_trimmed_and_bounded() -> None:
         )
 
 
-async def test_project_list_is_owner_scoped_and_counts_sessions() -> None:
+async def test_project_list_is_owner_scoped_and_counts_sessions(monkeypatch) -> None:
     user = _user()
     project = _project(user.id)
     project.coding_integration_id = uuid4()
@@ -120,6 +123,7 @@ async def test_project_list_is_owner_scoped_and_counts_sessions() -> None:
     result.all.return_value = [(project, 3, True)]
     db = AsyncMock(spec=AsyncSession)
     db.execute.return_value = result
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=UserPreferences()))
 
     response = await list_projects(user, db)
 
@@ -130,6 +134,46 @@ async def test_project_list_is_owner_scoped_and_counts_sessions() -> None:
     statement = db.execute.await_args.args[0]
     assert user.id in statement.compile().params.values()
     assert "LEFT OUTER JOIN chat_sessions" in str(statement)
+
+
+async def test_project_order_is_saved_and_used_by_subsequent_lists(monkeypatch) -> None:
+    user = _user()
+    first, second = _project(user.id), _project(user.id)
+    archived_id, deleted_id = uuid4(), uuid4()
+    preferences = UserPreferences(project_order=[first.id, second.id, archived_id, deleted_id])
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=preferences))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = [first.id, second.id, archived_id]
+    db.execute.return_value = _rows((first, 0, False), (second, 0, False))
+
+    await reorder_projects(ProjectOrderRequest(projectIds=[second.id, first.id]), user, db)
+    response = await list_projects(user, db)
+
+    assert [item.id for item in response.items] == [second.id, first.id]
+    assert preferences.project_order == [second.id, first.id, archived_id]
+    SettingsStore.save.assert_awaited_once_with(db, preferences, user_id=user.id)
+    db.commit.assert_awaited_once()
+
+
+async def test_project_order_rejects_unowned_or_missing_projects(monkeypatch) -> None:
+    user = _user()
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = []
+    save = AsyncMock()
+    monkeypatch.setattr(SettingsStore, "save", save)
+
+    with pytest.raises(ApiError):
+        await reorder_projects(ProjectOrderRequest(projectIds=[uuid4()]), user, db)
+
+    assert user.id in db.scalars.await_args.args[0].compile().params.values()
+    save.assert_not_awaited()
+
+
+def test_project_order_rejects_duplicates() -> None:
+    project_id = uuid4()
+    with pytest.raises(ValidationError):
+        ProjectOrderRequest(projectIds=[project_id, project_id])
 
 
 async def test_create_and_update_project_commit_owner_scoped_changes() -> None:

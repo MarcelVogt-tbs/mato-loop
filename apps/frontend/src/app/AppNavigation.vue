@@ -27,6 +27,7 @@
       <div class="col column no-wrap drawer-navigation q-py-xs">
         <SidebarNavItem icon="home" icon-color="primary" label="Home" :to="{ name: 'chat' }" :active="route.name === 'chat' && !routeSessionId && !Object.hasOwn(route.query, 'new')" class="q-mx-xs q-mb-xs" @click="closeDrawerOnMobile" />
         <q-scroll-area
+          ref="sidebarScrollArea"
           class="col session-scroll-area"
           :content-style="{ width: '100%' }"
           :content-active-style="{ width: '100%' }"
@@ -85,7 +86,10 @@
               </template>
             </SidebarNavItem>
 
-            <q-list id="project-list" v-show="projectsSectionOpen" class="project-list q-pl-sm">
+            <q-list
+              id="project-list" v-show="projectsSectionOpen" class="project-list q-pl-sm"
+              @mousedown="startProjectDrag" @touchstart.passive="startProjectDrag"
+            >
               <div v-if="projects.loading && !projects.loaded" class="row justify-center q-pa-sm" aria-label="Projekte werden geladen">
                 <q-spinner-dots color="primary" size="24px" />
               </div>
@@ -93,6 +97,7 @@
               <q-expansion-item
                 v-for="project in projects.items"
                 :key="project.id"
+                :data-project-id="project.id"
                 v-model="expandedProjects[project.id]"
                 :duration="0"
                 dense
@@ -100,9 +105,12 @@
                 class="project-list-item rounded-borders"
                 :class="{
                   'app-surface-tonal': sessionDropTarget === project.id,
-                  'project-list-item--menu-open': openProjectActionMenuId === project.id
+                  'project-list-item--menu-open': openProjectActionMenuId === project.id,
+                  'project-list-item--dragging': draggedProject?.id === project.id,
+                  'project-list-item--drop-before': projectDropTarget?.id === project.id && !projectDropTarget.after,
+                  'project-list-item--drop-after': projectDropTarget?.id === project.id && projectDropTarget.after
                 }"
-                header-class="sidebar-row project-list-item__header rounded-borders q-px-sm q-py-xs"
+                header-class="sidebar-row project-list-item__header non-selectable rounded-borders q-px-sm q-py-xs"
                 @dragover="dragSessionOver($event, project.id)"
                 @dragleave="leaveSessionDropTarget"
                 @drop="dropSession($event, project.id)"
@@ -117,7 +125,7 @@
                       {{ project.name }}<span v-if="project.hasUnreadMessages" class="app-sr-only">, ungelesene Nachrichten</span>
                     </q-item-label>
                   </q-item-section>
-                  <q-item-section side class="project-list-item__actions row no-wrap items-center">
+                  <q-item-section side class="project-list-item__actions row no-wrap items-center" :class="{ invisible: draggedProject }">
                     <SidebarIconButton
                       icon="add_comment"
                       class="project-list-item__action"
@@ -236,6 +244,18 @@
     </div>
   </q-drawer>
 
+  <Teleport to="body">
+    <div
+      v-if="draggedProject"
+      class="project-drag-preview fixed no-pointer-events app-surface rounded-borders shadow-4 q-pa-sm row no-wrap items-center q-gutter-sm"
+      :style="{ left: `clamp(8px, ${dragPosition.x + 12}px, calc(100vw - 272px))`, top: `min(${dragPosition.y + 12}px, calc(100vh - 48px))` }"
+      aria-hidden="true"
+    >
+      <q-icon :name="mdiFolderOutline" size="22px" />
+      <span class="ellipsis">{{ draggedProject.name }}</span>
+    </div>
+  </Teleport>
+
   <AccountDialog
     v-model="accountDialogOpen"
     :before-password-change="confirmDiscardedEdit"
@@ -283,6 +303,7 @@ import SidebarSessionList from 'src/features/chat/components/SidebarSessionList.
 import SidebarSessionItem from 'src/features/chat/components/SidebarSessionItem.vue'
 import SessionDialogs from 'src/features/chat/components/SessionDialogs.vue'
 import { useProjectNavigation } from 'src/features/projects/useProjectNavigation'
+import { useProjectReorder } from 'src/features/projects/useProjectReorder'
 import { useSidebarSessions } from 'src/features/chat/useSidebarSessions'
 import { useApprovalStore } from 'stores/approvals'
 import { useAutomationStore } from 'stores/automations'
@@ -313,6 +334,8 @@ const notifications = useInAppNotificationStore()
 const questions = useQuestionStore()
 const search = useSearchStore()
 const projects = useProjectStore()
+const sidebarScrollArea = ref(null)
+const { draggedProject, projectDropTarget, dragPosition, startProjectDrag } = useProjectReorder(projects, sidebarScrollArea)
 const { confirm } = useConfirm()
 const selectedProjectId = computed(() => (
   typeof route.query.project === 'string' ? route.query.project : null
