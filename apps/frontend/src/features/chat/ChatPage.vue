@@ -125,14 +125,13 @@
               tabindex="-1"
             >
             <span v-if="message.role === 'user'" class="app-sr-only">Benutzernachricht</span>
-            <span v-else-if="message.showAgentLabel && !message.workHistory" class="app-sr-only">Assistentenantwort</span>
+            <span v-else-if="message.showAgentLabel" class="app-sr-only">Assistentenantwort</span>
             <template
               v-if="message.content
                 || message.workHistory
                 || message.generationStatus === 'interrupted'"
             >
               <AgentActivityPanel
-                v-if="message.workHistory"
                 hide-provided-files
                 :history="message.workHistory"
                 :subagents="childrenByMessage.get(message.id) || emptyItems"
@@ -143,45 +142,37 @@
                 :warnings="message.currentTurn ? chat.runWarnings : emptyItems"
                 :trusted-image-origins="trustedImageOrigins"
                 :running="chat.running && message.currentTurn"
-                :expanded="expandedWorkHistoryIds.has(message.id)"
-                :class="{
-                  'q-mb-xs': message.content
-                    || message.attachments?.length
-                    || message.generationStatus === 'interrupted'
-                }"
+                :expanded="expandedWorkHistoryIds.has(message.workHistory?.id || message.id)"
                 @open-file="openToolFile"
                 @open-approval-draft="openApprovalDraft"
-                @history-expanded="setWorkHistoryExpanded(message.id, $event)"
+                @history-expanded="setWorkHistoryExpanded(message.workHistory?.id || message.id, $event)"
                 @rendered="handleMessageRendered"
                 @resize-start="beginActivityResize"
                 @resized="finishActivityResize"
                 @trust-image-origin="trustImageOrigin"
               >
-                <template v-if="message.showAgentLabel" #header>
-                  <span class="app-sr-only">Assistentenantwort</span>
-                </template>
+                <MessageContent
+                  v-if="message.preparedReply"
+                  :content="message.preparedReply.markdown"
+                  :prepared-replies="message.preparedReply.options"
+                  class="q-mb-sm"
+                  @prepared-reply="sendPreparedAnswer"
+                />
+                <MessageContent
+                  v-if="message.content && message.role === 'assistant'"
+                  class="chat-message__content"
+                  :content="message.content"
+                  :role="message.error ? 'alert' : undefined"
+                  :file-actions="message.fileActions"
+                  :research-sources="message.research?.linkedSources || emptyItems"
+                  :streaming="message.streaming"
+                  :trusted-image-origins="trustedImageOrigins"
+                  @open-file="openToolFile"
+                  @rendered="handleMessageRendered"
+                  @trust-image-origin="trustImageOrigin"
+                />
+                <div v-else-if="message.content" class="chat-message__content">{{ message.commandPrompt || message.content }}</div>
               </AgentActivityPanel>
-              <MessageContent
-                v-if="message.preparedReply"
-                :content="message.preparedReply.markdown"
-                :prepared-replies="message.preparedReply.options"
-                class="q-mb-sm"
-                @prepared-reply="sendPreparedAnswer"
-              />
-              <MessageContent
-                v-if="message.content && message.role === 'assistant'"
-                class="chat-message__content"
-                :content="message.content"
-                :role="message.error ? 'alert' : undefined"
-                :file-actions="message.fileActions"
-                :research-sources="message.research?.linkedSources || emptyItems"
-                :streaming="message.streaming"
-                :trusted-image-origins="trustedImageOrigins"
-                @open-file="openToolFile"
-                @rendered="handleMessageRendered"
-                @trust-image-origin="trustImageOrigin"
-              />
-              <div v-else-if="message.content" class="chat-message__content">{{ message.commandPrompt || message.content }}</div>
             </template>
             <ChatFiles
               v-if="message.attachments?.length"
@@ -1056,7 +1047,9 @@ async function reconcileRouteProject() {
 async function revealRouteMessage() {
   const messageId = routeMessageId.value
   if (!messageId || chat.current?.id !== routeSessionId.value) return
-  let index = displayMessages.value.findIndex((message) => message.id === messageId)
+  const matchesMessage = (message) => message.id === messageId
+    || message.workHistory?.entries?.some((entry) => entry.message?.id === messageId || entry.batchId === messageId)
+  let index = displayMessages.value.findIndex(matchesMessage)
   if (index < 0 && chat.current.nextMessageCursor) {
     try {
       await chat.loadThroughMessage(messageId)
@@ -1064,16 +1057,20 @@ async function revealRouteMessage() {
       return
     }
     await nextTick()
-    index = displayMessages.value.findIndex((message) => message.id === messageId)
+    index = displayMessages.value.findIndex(matchesMessage)
   }
   if (index < 0) return
+  const displayedMessage = displayMessages.value[index]
+  if (displayedMessage.id !== messageId) {
+    setWorkHistoryExpanded(displayedMessage.workHistory.id || displayedMessage.id, true)
+  }
   followingBottom.value = false
   cancelFollowScroll()
-  highlightedMessageId.value = messageId
+  highlightedMessageId.value = displayedMessage.id
   await nextTick()
   virtualScroll.value?.scrollTo(index, 'center-force')
   await new Promise((resolve) => window.requestAnimationFrame(resolve))
-  const target = findMessageElement(messageId)
+  const target = findMessageElement(displayedMessage.id)
   // Align the rendered message after virtual scrolling; expanded history changes item heights.
   if (target && scrollTarget) {
     restoreChatReadingAnchor(scrollTarget, target, {
@@ -1084,7 +1081,7 @@ async function revealRouteMessage() {
   rememberReadingAnchor()
   clearTimeout(searchHighlightTimer)
   searchHighlightTimer = window.setTimeout(() => {
-    if (highlightedMessageId.value === messageId) highlightedMessageId.value = null
+    if (highlightedMessageId.value === displayedMessage.id) highlightedMessageId.value = null
   }, 2500)
 }
 

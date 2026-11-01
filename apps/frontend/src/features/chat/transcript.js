@@ -18,6 +18,19 @@ export function withLiveTranscriptMessage(messages, liveMessage) {
   ), -1)
   if (liveMessage.content) {
     const displayed = [...messages]
+    if (currentIndex >= 0 && displayed[currentIndex].currentTurn
+      && displayed[currentIndex].workHistory && !displayed[currentIndex].content) {
+      displayed[currentIndex] = {
+        ...displayed[currentIndex],
+        agentProfileId: displayed[currentIndex].agentProfileId || liveMessage.agentProfileId,
+        content: liveMessage.content,
+        modelName: liveMessage.modelName,
+        research: liveMessage.research,
+        streaming: true,
+        liveMessageId: liveMessage.id
+      }
+      return displayed
+    }
     if (currentIndex >= 0 && displayed[currentIndex].continuationSegment) {
       displayed[currentIndex] = {
         ...displayed[currentIndex],
@@ -270,7 +283,9 @@ export function buildChatTranscript(
     const reasoningItems = workEntries
       .filter((entry) => entry.type === 'reasoning')
       .map((entry) => entry.reasoning)
-    const carrier = assistantSection.find((message) => message.agentProfileId) || assistantSection[0]
+    const historyCarrier = assistantSection.find((message) => message.agentProfileId) || assistantSection[0]
+    const carrier = finalAnswer || historyCarrier
+    carrier.agentProfileId ||= historyCarrier.agentProfileId
     carrier.preparedReply = [...workEntries].reverse().find((entry) => (
       entry.type === 'tool' && entry.result?.preparedReply
     ))?.result.preparedReply || null
@@ -284,7 +299,7 @@ export function buildChatTranscript(
     if (workEntries.length || Number.isInteger(activeDurationMs)) {
       const durations = reasoningItems.map((item) => item.observedDurationMs).filter(Number.isFinite)
       carrier.workHistory = {
-        id: `work-history-${carrier.id}`,
+        id: `work-history-${historyCarrier.id}`,
         entries: workEntries,
         observedDurationMs: durations.length ? durations.reduce((total, value) => total + value, 0) : null,
         activeDurationMs,

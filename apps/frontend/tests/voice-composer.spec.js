@@ -26,7 +26,7 @@ vi.mock('src/features/chat/components/SessionSettingsFields.vue', () => ({ defau
   }
 } }))
 vi.mock('src/features/approvals/ApprovalCard.vue', () => ({ default: { render: () => null } }))
-vi.mock('src/features/chat/components/AgentActivityPanel.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/chat/components/AgentActivityPanel.vue', () => ({ default: { inheritAttrs: false, render() { return this.$slots.default?.() } } }))
 vi.mock('src/shared/ui/AppLogo.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/home/HomeContent.vue', () => ({ default: { render: () => h('section', { class: 'home-stub' }, 'Übersicht') } }))
 vi.mock('src/features/chat/components/ComputerChoiceStrip.vue', () => ({ default: { render: () => null } }))
@@ -154,7 +154,7 @@ beforeEach(async () => {
   app.component('QVirtualScroll', {
     props: ['items'],
     emits: ['virtual-scroll'],
-    methods: { reset: mocks.resetMessageSizes, refresh() { this.$emit('virtual-scroll', { from: 0, direction: 'decrease' }) } },
+    methods: { reset: mocks.resetMessageSizes, refresh() { this.$emit('virtual-scroll', { from: 0, direction: 'decrease' }) }, scrollTo() {} },
     render() { return h('div', this.items.map((item) => this.$slots.default?.({ item }))) }
   })
   app.component('QSkeleton', { render: () => null })
@@ -260,6 +260,20 @@ describe('voice attachment composer', () => {
     await vi.advanceTimersByTimeAsync(250)
 
     expect(target.scrollTop).toBe(300)
+  })
+
+  it('reveals a search result merged into the final assistant message', async () => {
+    chat.outboxLoaded = true
+    mocks.api.get.mockImplementation(async (url) => ({ data: url === '/sessions/session-1'
+      ? { id: 'session-1', messages: [
+          { id: 'user', role: 'user', content: 'Start' },
+          { id: 'source', role: 'assistant', content: 'Unique plan text' },
+          { id: 'final', role: 'assistant', content: 'Done' }
+        ] }
+      : url.endsWith('/children') ? [] : { items: [] } }))
+    await router.push('/?session=session-1&message=source')
+    showPage.value = true
+    await vi.waitFor(() => expect(root.querySelector('[data-message-id="final"].chat-message--search-target')).not.toBeNull())
   })
 
   it('shows the saved command prompt instead of its invocation in the user message', async () => {

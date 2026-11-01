@@ -189,6 +189,11 @@ describe('tool display', () => {
       arguments: { command: 'cat /private/secret' },
       toolDisplay: { group: 'process', icon: 'terminal', label: 'Shell-Befehl ausführen' }
     })).toBe('cat /private/secret')
+    expect(toolSummary({
+      name: 'calendar_query_events',
+      arguments: { start: '2026-10-30', end: '2026-10-31' },
+      toolDisplay: { group: 'calendar', icon: 'event', label: 'Termine lesen' }
+    })).toBe('2026-10-30 – 2026-10-31')
     expect(toolIdentity({
       name: 'read_file',
       toolDisplay: { label: '  ', icon: null, summary: {} }

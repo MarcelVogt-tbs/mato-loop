@@ -44,7 +44,7 @@ afterEach(() => {
 })
 
 describe('subagent inspector navigation and presentation', () => {
-  it.each([false, true])('hides rejected arguments from live activity and history (expanded: %s)', (expanded) => {
+  it.each([false, true])('hides rejected arguments from live activity and history (expanded: %s)', async (expanded) => {
     root = document.createElement('div')
     document.body.append(root)
     app = createApp({ render: () => h(AgentActivityPanel, {
@@ -59,6 +59,10 @@ describe('subagent inspector navigation and presentation', () => {
     }) })
     app.use(createPinia()).use(Quasar, { components })
     mountApp()
+    if (expanded) {
+      root.querySelector('.work-history__tool-group-header').click()
+      await nextTick()
+    }
 
     expect({
       tools: [...root.querySelectorAll('.tool-call__header .work-history__activity-summary')].map((element) => element.textContent),
@@ -184,6 +188,11 @@ describe('subagent inspector navigation and presentation', () => {
     for (let i = 0; i < 2; i++) {
       root.querySelector('.work-history__toggle').click()
       await nextTick()
+      const group = root.querySelector('.work-history__tool-group-header[aria-expanded="false"]')
+      if (group) {
+        group.click()
+        await nextTick()
+      }
       expect(root.querySelector('.activity-row[aria-expanded="true"]')).not.toBeNull()
       expect(root.querySelector('.work-history__reasoning-detail').textContent).toContain(detail.trim())
     }
@@ -224,9 +233,11 @@ describe('subagent inspector navigation and presentation', () => {
 
     root.querySelector('.work-history__toggle').click()
     await nextTick()
+    root.querySelector('.work-history__tool-group-header').click()
+    await nextTick()
     expect([...root.querySelectorAll('.tool-call__summary')].map((node) => node.textContent))
       .toEqual(commands.map((command) => command.replace(/\s+/g, ' ')))
-    root.querySelectorAll('.activity-row')[1].click()
+    root.querySelectorAll('.tool-call__header')[1].click()
     await nextTick()
 
     const shell = root.querySelector('.activity-row__shell-command')
@@ -431,12 +442,16 @@ describe('subagent inspector navigation and presentation', () => {
     app = createApp({
       render: () => h(AgentActivityPanel, {
         history: { entries: [], activeDurationMs: 4_000 }
-      }, { header: () => h('div', 'codemato · Allgemein') })
+      }, {
+        header: () => h('div', 'codemato · Allgemein'),
+        default: () => h('div', 'Antwort')
+      })
     })
     app.use(pinia).use(Quasar, { components })
     mountApp()
 
     expect(root.querySelector('.work-history__agent-header').textContent).toContain('codemato · Allgemein')
+    expect(root.querySelector('.work-history__timeline').textContent).toBe('Antwort')
     expect(root.querySelector('.work-history__toggle')).not.toBeNull()
     expect(root.querySelector('[role="timer"]')).toBeNull()
     root.querySelector('.work-history__toggle').click()
@@ -459,7 +474,6 @@ describe('subagent inspector navigation and presentation', () => {
     app.use(createPinia()).use(Quasar, { components })
     mountApp()
 
-    expect(root.querySelector('.work-history--preview')).not.toBeNull()
     expect(root.querySelector('.activity-shimmer').textContent).toBe('Verarbeite Anfrage')
     expect(root.querySelector('.work-history__meta-section [role="timer"]')).toBeNull()
     expect(root.querySelector('.work-history__header')).toBeNull()
@@ -489,7 +503,6 @@ describe('subagent inspector navigation and presentation', () => {
     app.use(createPinia()).use(Quasar, { components })
     mountApp()
 
-    expect(root.querySelector('.work-history--preview')).not.toBeNull()
     expect(root.textContent).toContain('Verarbeite Anfrage')
     expect(root.querySelector('.work-history__activity-line .q-icon').textContent).toBe('settings')
     expect(root.textContent).not.toContain('Verlauf')
@@ -502,7 +515,6 @@ describe('subagent inspector navigation and presentation', () => {
     activity.value = { phase: 'processing_tool', tool: 'read_file', toolCallId: 'pending' }
     await nextTick()
 
-    expect(root.querySelector('.work-history--preview')).toBeNull()
     expect(root.querySelector('.activity-shimmer').textContent).toContain('Datei lesen')
     expect(root.textContent).not.toContain('Verlauf')
     expect(root.textContent).toContain('Vorherige Suche')
@@ -591,6 +603,8 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.querySelector('.work-history__header')).toBeNull()
     expect(group.querySelector('.work-history__activity-title').textContent.trim()).toBe('Websuche')
     expect(group.querySelector('.work-history__activity-summary').textContent.trim()).toBe('· 3')
+    group.querySelector('.work-history__tool-group-header').click()
+    await nextTick()
     expect([...group.querySelectorAll('.tool-call__summary')].map((node) => node.textContent))
       .toEqual(['Erste Suche', 'Zweite Suche', 'Aktuelle Suche'])
     expect(group.querySelector('.work-history__tool-group-items')).not.toBeNull()
@@ -654,6 +668,8 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.querySelector('.work-history__tool-group .q-icon').classList)
       .toContain('work-history__activity-title--past')
     expect(root.querySelector('.work-history__activity-summary').textContent.trim()).toBe('· 2')
+    root.querySelector('.work-history__tool-group-header').click()
+    await nextTick()
     expect(root.querySelectorAll('.tool-call--detail')).toHaveLength(0)
     expect(root.textContent).not.toContain('Aufruf')
   })
@@ -721,6 +737,8 @@ describe('subagent inspector navigation and presentation', () => {
 
     expect(root.querySelectorAll('.work-history__tool-group')).toHaveLength(1)
     expect(root.querySelector('.work-history__tool-group-header').textContent).toContain('· 2')
+    root.querySelector('.work-history__tool-group-header').click()
+    await nextTick()
     expect([...root.querySelectorAll('.tool-call__summary')].map((item) => item.textContent))
       .toEqual(['eins.md', 'zwei.md', 'Text'])
     expect(root.querySelectorAll('.tool-call--running')).toHaveLength(1)
@@ -841,7 +859,7 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.querySelector('.tool-call__header')).toBeNull()
   })
 
-  it('shows status icons only on each grouped tool', async () => {
+  it('shows grouped failures while collapsed and individual statuses when opened', async () => {
     const pinia = createPinia()
     root = document.createElement('div')
     document.body.append(root)
@@ -859,6 +877,12 @@ describe('subagent inspector navigation and presentation', () => {
 
     expect(root.querySelector('.tool-call--detail')).toBeNull()
     root.querySelector('.work-history__toggle').click()
+    await nextTick()
+    expect({
+      groupIcon: root.querySelector('.work-history__tool-group-header .tool-call__state .q-icon')?.textContent,
+      rows: root.querySelectorAll('.tool-call--detail').length
+    }).toEqual({ groupIcon: 'error', rows: 0 })
+    root.querySelector('.work-history__tool-group-header').click()
     await nextTick()
     const details = [...root.querySelectorAll('.tool-call--detail')]
     expect(details).toHaveLength(2)
@@ -955,7 +979,7 @@ describe('subagent inspector navigation and presentation', () => {
   })
 
   it.each([
-    ['reasoning', { phase: 'waiting_model' }, { key: 'reasoning', type: 'reasoning', live: true, reasoning: { kind: 'content', text: 'Prüfen' } }],
+    ['reasoning', { phase: 'waiting_model' }, { key: 'reasoning', type: 'reasoning', live: true, reasoning: { kind: 'summary', text: '**Prüfen**\nDetails' } }],
     ['compaction', { phase: 'compacting_context' }, { key: 'summary', type: 'context-summary', current: true, text: 'Kontext', presentation: { title: 'Gesprächskontext wird verdichtet' } }]
   ])('keeps current %s subtly collapsible', async (_kind, activity, entry) => {
     const pinia = createPinia()
@@ -1000,7 +1024,7 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.querySelector('.activity-shimmer').textContent).toBe('Verarbeite Anfrage')
   })
 
-  it('shows the current reasoning summary beside its label and removes it afterwards', async () => {
+  it('uses a summary-only reasoning title without an expander and removes it afterwards', async () => {
     const pinia = createPinia()
     const activity = ref({ phase: 'waiting_model' })
     root = document.createElement('div')
@@ -1015,9 +1039,9 @@ describe('subagent inspector navigation and presentation', () => {
     app.use(pinia).use(Quasar, { components })
     mountApp()
 
-    expect(root.querySelector('.work-history__activity-title').textContent).toBe('Nachdenken')
+    expect(root.querySelector('.work-history__activity-title').textContent).toBe('Ergebnisse prüfen')
     expect(root.querySelector('.work-history__activity-title').classList).toContain('activity-shimmer')
-    expect(root.querySelector('.work-history__activity-summary').textContent.trim()).toBe('Ergebnisse prüfen')
+    expect(root.querySelector('.work-history__activity-summary, .work-history__detail-indicator')).toBeNull()
     activity.value = { phase: 'processing_tool' }
     await nextTick()
     expect(root.querySelector('.work-history__reasoning')).toBeNull()
@@ -1095,7 +1119,7 @@ describe('subagent inspector navigation and presentation', () => {
         running: true,
         history: { entries: [{
           key: 'reasoning', type: 'reasoning',
-          reasoning: { kind: 'content', text: 'Öffentliche Überlegung' }
+          reasoning: { kind: 'summary', text: '**Ergebnisse prüfen**\nÖffentliche Überlegung', observedDurationMs: 3_000 }
         }, {
           key: 'summary', type: 'context-summary', text: 'Goal\nVollständiger Kontext',
           presentation: { title: 'Gesprächskontext verdichtet', summary: null, duration: null }
@@ -1116,7 +1140,7 @@ describe('subagent inspector navigation and presentation', () => {
     const detailRows = root.querySelectorAll('.work-history__reasoning .q-item')
     expect(detailRows).toHaveLength(2)
     expect([...root.querySelectorAll('.work-history__activity-title')].map((node) => node.textContent.trim()))
-      .toEqual(['Nachdenken', 'Gesprächskontext verdichtet', 'Verarbeite Anfrage'])
+      .toEqual(['Ergebnisse prüfen · 3 s', 'Gesprächskontext verdichtet', 'Verarbeite Anfrage'])
     detailRows[0].click()
     await nextTick()
     expect(root.textContent).toContain('Öffentliche Überlegung')
@@ -1155,9 +1179,10 @@ describe('subagent inspector navigation and presentation', () => {
           {
             key: 'tool', type: 'tool', runId: 'run', approval,
             tool: { id: 'call', name: 'read_file', arguments: { path: 'result.txt' } },
-            result: { fileActions: [fileAction] }
-          },
-          { key: 'after', type: 'commentary', message: { content: 'Nach dem Tool' } }
+             result: { fileActions: [fileAction] }
+           },
+          { key: 'other', type: 'tool', tool: { id: 'other', name: 'read_file', arguments: { path: 'other.txt' } }, result: {} },
+           { key: 'after', type: 'commentary', message: { content: 'Nach dem Tool' } }
         ] }
       })
     })

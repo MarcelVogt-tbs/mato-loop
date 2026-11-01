@@ -50,7 +50,11 @@ Einrichtung, Diffs, Branches und getrennte Arbeitskopien stehen unter [Git und W
 
 **Nach dem Lauf senden** reiht eine Nachricht für einen anschließenden Auftrag ein. Der Browser-Postausgang erhält Nachrichten und Anhänge in Reihenfolge. Fehlerhafte Sendungen bleiben für einen erneuten Versuch oder die Übernahme in den Entwurf erhalten. Abmelden oder Kontowechsel entfernt den bisherigen Postausgang dieses Browsers.
 
-Der Stoppknopf beendet den Agentenlauf. Ein Browserdisconnect beendet ihn nicht; beim Wiederverbinden lädt MatoLoop den gespeicherten Zustand nach. Reasoning-Zusammenfassungen zeigen Modellangaben, keine garantiert vollständigen internen Gedankengänge.
+Der Stoppknopf beendet den Agentenlauf. Ein Browserdisconnect beendet ihn nicht; beim Wiederverbinden lädt MatoLoop den gespeicherten Zustand nach.
+
+Eine verfügbare Reasoning-Zusammenfassung ersetzt die Bezeichnung **Nachdenken**. Die Zeile lässt sich nur aufklappen, wenn zusätzlicher Reasoning-Text vorhanden ist. Zusammenfassungen zeigen Modellangaben, keine garantiert vollständigen internen Gedankengänge.
+
+Gleichartige Tool-Aufrufe erscheinen als aufklappbare Gruppe mit ihrer Anzahl. Ein Fehlersymbol an der Gruppe weist auf mindestens einen fehlgeschlagenen Aufruf hin. Klappe die Gruppe auf, um die einzelnen Ressourcen, ihren Status und verfügbare Details zu sehen. Freigaben, Rückfragen und Ausgaben bleiben auch bei geschlossener Gruppe sichtbar.
 
 Während einer internen Reparaturrunde bleibt die Aktivitätsanzeige neutral. Gelingt die Korrektur, erscheint der Fehlversuch nicht im Arbeitsverlauf; ungelöste Fehler werden am Laufende sichtbar. Freigaben, Rückfragen und Hinweise auf mögliche Teiländerungen bleiben sofort sichtbar.
 

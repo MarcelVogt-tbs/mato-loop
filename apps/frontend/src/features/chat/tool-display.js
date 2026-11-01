@@ -354,11 +354,10 @@ export function toolPresentation(tool, displayItems = []) {
 }
 
 export function toolSummary(tool) {
-  if (validToolDisplay(tool?.toolDisplay) && (
-    tool.toolDisplay.summary !== undefined || !['shell_run', 'shell.run'].includes(tool?.name)
-  )) return displayText(tool.toolDisplay.summary)
+  const suppliedDisplay = validToolDisplay(tool?.toolDisplay)
+  if (suppliedDisplay && tool.toolDisplay.summary !== undefined) return displayText(tool.toolDisplay.summary)
   const argumentsValue = tool?.arguments
-  const fallback = TOOL_DISPLAY[tool?.name] || BROWSER_LABELS[tool?.name] ? '' : tool?.name || ''
+  const fallback = suppliedDisplay || TOOL_DISPLAY[tool?.name] || BROWSER_LABELS[tool?.name] ? '' : tool?.name || ''
   if (!argumentsValue || typeof argumentsValue !== 'object') return fallback
   if (tool?.name === 'update_user_profile') {
     const count = Object.keys(PROFILE_FIELD_LABELS)

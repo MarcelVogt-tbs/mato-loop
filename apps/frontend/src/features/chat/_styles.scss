@@ -1125,6 +1125,10 @@
 
 .work-history {
   min-width: 0;
+  display: flow-root;
+}
+
+.work-history--with-agent-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
@@ -1146,18 +1150,12 @@
   font-variant-numeric: tabular-nums;
 }
 
-.work-history--with-agent-header .work-history__meta-section {
-  grid-row: 2;
-}
-
 .work-history--with-agent-header .work-history__timeline {
   grid-column: 1 / -1;
   grid-row: 2;
 }
 
 .work-history__meta-section {
-  grid-column: 2;
-  grid-row: 1;
   padding-left: 8px;
 }
 
@@ -1185,20 +1183,8 @@
 }
 
 .work-history__timeline {
-  grid-column: 1 / -1;
-  grid-row: 2;
+  min-width: 0;
   margin: 0 2px;
-}
-
-.work-history:not(.work-history--with-agent-header).work-history--preview .work-history__timeline {
-  grid-column: 1;
-  grid-row: 1;
-  margin-top: 0;
-}
-
-.chat-page__scroll-content .work-history__timeline {
-  grid-column: 1;
-  grid-row: 1;
 }
 
 .work-history__children {
@@ -1210,9 +1196,7 @@
 }
 
 .work-history__entries {
-  display: flex;
   min-width: 0;
-  flex-direction: column;
   padding: 0 0 4px;
 }
 
@@ -1227,7 +1211,8 @@
 
 .work-history__activity-line,
 .tool-call__line {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr) auto;
   min-width: 0;
   align-items: center;
   gap: 8px;
@@ -1235,10 +1220,19 @@
   line-height: 20px;
 }
 
+.work-history__activity-icon {
+  grid-column: 1;
+}
+
+.work-history__tool-group-header .work-history__activity-line {
+  grid-template-columns: auto minmax(0, max-content) auto auto;
+}
+
 .work-history__activity-title,
 .tool-call__title {
   min-width: 0;
-  flex: 0 1 auto;
+  grid-column: 2;
+  overflow-wrap: anywhere;
   color: var(--app-text);
   font-weight: 500;
 }
@@ -1255,7 +1249,7 @@
 .work-history__activity-summary,
 .tool-call__summary {
   min-width: 0;
-  flex: 0 1 auto;
+  grid-column: 3;
   color: var(--app-muted);
   font-weight: 400;
   overflow: hidden;
@@ -1263,8 +1257,13 @@
   white-space: nowrap;
 }
 
+.tool-call--detail .work-history__activity-title,
+.tool-call--detail .work-history__activity-summary {
+  grid-column: 1 / 4;
+}
+
 .work-history__detail-indicator {
-  flex: none;
+  grid-column: 4;
   color: var(--app-muted);
   opacity: 0;
   transition: opacity 150ms ease;

@@ -53,7 +53,6 @@
               </q-banner>
               <template v-else>
                 <AgentActivityPanel
-                  v-if="message.workHistory"
                   :history="message.workHistory"
                   :running="inspector.running && message.currentTurn"
                   :activity="message.currentTurn ? inspector.activity : null"
@@ -63,7 +62,6 @@
                   :warnings="message.currentTurn ? inspector.warnings : []"
                   :trusted-image-origins="trustedImageOrigins"
                   read-only
-                  class="q-mb-sm"
                   @rendered="followBottom"
                   @trust-image-origin="trustImageOrigin"
                 >
@@ -74,18 +72,18 @@
                       <span>{{ agentProfileName(message) }}</span>
                     </div>
                   </template>
+                  <MessageContent
+                    v-if="message.content && message.role === 'assistant'"
+                    class="chat-message__content"
+                    :content="message.content"
+                    :research-sources="message.research?.linkedSources || []"
+                    :streaming="message.streaming"
+                    :trusted-image-origins="trustedImageOrigins"
+                    @trust-image-origin="trustImageOrigin"
+                    @rendered="followBottom"
+                  />
+                  <div v-else-if="message.content" class="chat-message__content">{{ message.content }}</div>
                 </AgentActivityPanel>
-                <MessageContent
-                  v-if="message.content && message.role === 'assistant'"
-                  class="chat-message__content"
-                  :content="message.content"
-                  :research-sources="message.research?.linkedSources || []"
-                  :streaming="message.streaming"
-                  :trusted-image-origins="trustedImageOrigins"
-                  @trust-image-origin="trustImageOrigin"
-                  @rendered="followBottom"
-                />
-                <div v-else-if="message.content" class="chat-message__content">{{ message.content }}</div>
               </template>
               <ChatFiles v-if="message.attachments?.length" :attachments="message.attachments" class="q-mt-sm" />
               <FileChanges :actions="message.fileChanges" read-only />

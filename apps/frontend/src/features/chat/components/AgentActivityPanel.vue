@@ -1,10 +1,9 @@
 <template>
+  <slot v-if="!history" />
   <div
-    v-if="$slots.header || entries.length || running || unmatchedSubagents.length"
+    v-else-if="$slots.default || $slots.header || entries.length || running || unmatchedSubagents.length"
     class="work-history"
     :class="{
-      'q-pb-sm': historyExpanded,
-      'work-history--preview': showPreview,
       'work-history--with-agent-header': $slots.header
     }"
   >
@@ -27,7 +26,7 @@
         <q-tooltip>{{ historyExpanded ? 'Verlauf ausblenden' : 'Verlauf anzeigen' }}</q-tooltip>
       </q-btn>
     </div>
-    <div v-if="!$slots.header" class="work-history__meta-section row items-center no-wrap" :class="showPreview ? 'self-start' : 'self-center'">
+    <div v-if="!$slots.header" class="work-history__meta-section float-right row items-center no-wrap">
       <div v-if="historyExpanded" class="work-history__meta row items-center no-wrap q-gutter-xs">
         <TurnDuration :history="running ? activity : history" :running="running" />
       </div>
@@ -46,8 +45,8 @@
       </q-btn>
     </div>
 
-    <div v-if="displayEntries.length" class="work-history__timeline" role="region" aria-label="Aktivitäten der Antworterstellung">
-      <div class="work-history__entries">
+    <div v-if="displayEntries.length || $slots.default" class="work-history__timeline">
+      <div v-if="displayEntries.length" class="work-history__entries" role="region" aria-label="Aktivitäten der Antworterstellung">
         <AgentActivityEntry
           v-for="entry in displayEntries"
           :key="entry.key"
@@ -66,6 +65,7 @@
           @trust-image-origin="emit('trust-image-origin', $event)"
         />
       </div>
+      <slot />
     </div>
     <div v-if="!historyExpanded && outputEntries.length" class="work-history__persistent-outputs">
       <AgentActivityEntry
@@ -101,7 +101,7 @@ import { useInstanceLimitsStore } from 'stores/instance-limits'
 defineOptions({ name: 'AgentActivityPanel' })
 
 const props = defineProps({
-  history: { type: Object, required: true },
+  history: { type: Object, default: null },
   activity: { type: Object, default: null },
   presentation: { type: Object, default: null },
   reasoning: { type: Object, default: null },
@@ -196,7 +196,6 @@ const currentEntries = computed(() => {
     ))
   ))
 })
-const showPreview = computed(() => !historyExpanded.value && currentEntries.value.length > 0)
 const displayEntries = computed(() => historyExpanded.value ? entries.value
   : currentBatch.value != null ? groupWorkHistoryEntries(currentEntries.value, null, true) : currentEntries.value)
 const items = computed(() => enrichedEntries.value.filter((entry) => entry.type === 'tool'))

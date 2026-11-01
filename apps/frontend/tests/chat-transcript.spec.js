@@ -61,7 +61,8 @@ describe('chat transcript', () => {
     ])
 
     expect(transcript.messages.filter((message) => message.role === 'assistant' && message.content)
-      .map((message) => message.content)).toEqual(['Ich prüfe die Datei.'])
+      .map((message) => [message.content, Boolean(message.workHistory)]))
+      .toEqual([['Ich prüfe die Datei.', true]])
   })
 
   it('exposes validated file actions on the final assistant response', () => {
@@ -108,7 +109,7 @@ describe('chat transcript', () => {
 
     expect(messages.filter((message) => message[field]?.length).map((message) => [
       message.id, message[field].map((change) => change.path)
-    ])).toEqual([[streaming ? 'live' : 'final', ['result.txt']]])
+    ])).toEqual([[streaming ? 'tool' : 'final', ['result.txt']]])
   })
 
   it('offers retry only for the current backend-approved failed response', () => {
@@ -403,7 +404,7 @@ describe('chat transcript', () => {
     const transcript = buildChatTranscript(messages)
 
     expect(transcript.messages.map((message) => message.id))
-      .toEqual(['user-1', 'assistant-1', 'assistant-3'])
+      .toEqual(['user-1', 'assistant-3'])
     expect(transcript.messages[1].workHistory).toMatchObject({
       observedDurationMs: 500,
       activeDurationMs: 2_400,
@@ -422,13 +423,8 @@ describe('chat transcript', () => {
     ])
     expect(transcript.messages[1]).toMatchObject({
       showAgentLabel: true,
-      continuesAssistantTurn: true,
-      content: '',
-      createdAt: null,
-      modelName: null,
-      trustLevel: null
-    })
-    expect(transcript.messages[2]).toMatchObject({
+      continuesAssistantTurn: false,
+      content: 'Ergebnis',
       hasAssistantContent: true,
       createdAt: '2026-08-06T12:00:03Z',
       modelName: 'Antwortmodell',
@@ -454,7 +450,7 @@ describe('chat transcript', () => {
       { id: 'final', role: 'assistant', content: 'Fertige Antwort', toolCalls: [] }
     ])
 
-    expect(transcript.messages.map((message) => message.id)).toEqual(['user', 'commentary-1', 'final'])
+    expect(transcript.messages.map((message) => message.id)).toEqual(['user', 'final'])
     expect(transcript.messages[1].workHistory.entries.map((entry) => (
       entry.message?.content || entry.tool.name
     ))).toEqual(['**Plan**', 'web_search', 'Prüfe den Treffer.'])
@@ -462,7 +458,6 @@ describe('chat transcript', () => {
       research: { linkedSources: [source] }, attachments: [attachment]
     })
     expect(transcript.messages.filter((message) => message.content === 'Fertige Antwort')).toHaveLength(1)
-    expect(transcript.messages[1].attachments).toEqual([])
   })
 
   it('creates duration metadata for a plain completed answer', () => {
@@ -488,8 +483,7 @@ describe('chat transcript', () => {
       { id: 'final', role: 'assistant', content: 'Ergebnis', activeDurationMs: 57_000 }
     ]
     const completed = buildChatTranscript(messages).messages
-    expect(completed.find((message) => message.id === 'step').activeDurationMs).toBeNull()
-    expect(completed.find((message) => message.id === 'step').workHistory.activeDurationMs).toBe(57_000)
+    expect(completed.at(-1).workHistory.activeDurationMs).toBe(57_000)
     expect(completed.at(-1).activeDurationMs).toBeNull()
     const live = buildChatTranscript(messages, [], { running: true }).messages
     expect(live.filter((message) => message.role === 'assistant').every((message) => message.activeDurationMs === null)).toBe(true)
@@ -562,7 +556,6 @@ describe('chat transcript', () => {
 
     expect(transcript.messages.map((message) => message.id)).toEqual([
       '11111111-1111-4111-8111-111111111111',
-      '22222222-2222-4222-8222-222222222222',
       '44444444-4444-4444-8444-444444444444'
     ])
     const summaryEntry = transcript.messages[1].workHistory.entries.find((entry) => entry.type === 'context-summary')
@@ -622,7 +615,7 @@ describe('chat transcript', () => {
       id: 'live-session', role: 'assistant', content: 'Antwort', agentProfileId: 'profile-live'
     })
     expect(streaming[1].agentProfileId).toBe('profile-live')
-    expect(streaming[2].content).toBe('Antwort')
+    expect(streaming[1].content).toBe('Antwort')
   })
 
   it('does not mix reused tool call ids across user requests', () => {

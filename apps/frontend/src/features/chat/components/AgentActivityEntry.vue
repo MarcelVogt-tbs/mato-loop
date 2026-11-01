@@ -1,11 +1,19 @@
 <template>
   <div v-if="entry.type === 'tool-group'" class="work-history__tool-group">
-    <q-item dense class="work-history__tool-group-header">
+    <q-item
+      dense clickable manual-focus
+      class="activity-row work-history__tool-group-header"
+      :aria-expanded="detailsOpen"
+      :aria-controls="detailsId"
+      :aria-label="detailsLabel"
+      @click="toggleDetails"
+    >
       <q-item-section>
-        <q-item-label lines="1" class="work-history__activity-line">
+        <q-item-label class="work-history__activity-line">
           <q-icon
-            :name="groupIdentity.icon"
+            :name="identity.icon"
             size="18px"
+            class="work-history__activity-icon"
             :class="{ 'work-history__activity-title--past': !groupActive }"
             aria-hidden="true"
           />
@@ -16,20 +24,30 @@
               'work-history__activity-title--past': !groupActive
             }"
           >
-            {{ groupIdentity.label }}
+            {{ identity.label }}
           </span>
           <span
             class="work-history__activity-summary"
             :aria-label="`${entry.items.length} Aufrufe`"
           >· {{ entry.items.length }}</span>
+          <q-icon
+            :name="detailsOpen ? 'expand_more' : 'chevron_right'"
+            size="17px"
+            class="work-history__detail-indicator"
+            aria-hidden="true"
+          />
         </q-item-label>
       </q-item-section>
+      <q-item-section v-if="statusIcon" side class="tool-call__state">
+        <q-icon :name="statusIcon" size="17px" :class="`tool-call__status--${status.name}`" role="img" :aria-label="status.label" />
+      </q-item-section>
     </q-item>
-    <div class="work-history__tool-group-items">
+    <div :id="detailsId" class="work-history__tool-group-items">
       <AgentActivityEntry
         v-for="item in entry.items"
         :key="item.key"
-         :entry="{ ...item, detailOnly: true }"
+        :entry="{ ...item, detailOnly: true }"
+        :output-only="!detailsOpen"
         :expanded-details="expandedDetails"
         :trusted-image-origins="trustedImageOrigins"
         :read-only="readOnly"
@@ -62,19 +80,20 @@
       @click="toggleDetails"
     >
       <q-item-section>
-        <q-item-label lines="1" class="work-history__activity-line">
+        <q-item-label class="work-history__activity-line">
           <q-icon
             v-if="identity.icon && !entry.detailOnly"
             :name="identity.icon"
             size="18px"
+            class="work-history__activity-icon"
             :class="{ 'work-history__activity-title--past': !entry.active }"
             aria-hidden="true"
           />
           <span
-            v-if="!entry.detailOnly"
-            class="work-history__activity-title ellipsis"
+            v-if="!entry.detailOnly || !summary"
+            class="work-history__activity-title"
             :class="{ 'tool-call__title': isTool, 'activity-shimmer': entry.active, 'work-history__activity-title--past': !entry.active }"
-          >{{ identity.label }}</span>
+          >{{ identity.label }}<span v-if="entry.presentation?.duration" class="work-history__reasoning-duration text-no-wrap"> · {{ entry.presentation.duration }}</span></span>
           <span v-if="summary" class="work-history__activity-summary" :class="{ 'tool-call__summary': isTool }">{{ summary }}</span>
           <q-icon
             v-if="hasDetails"
@@ -85,9 +104,8 @@
           />
         </q-item-label>
       </q-item-section>
-      <q-item-section v-if="statusIcon || entry.presentation?.duration" side class="tool-call__state">
+      <q-item-section v-if="statusIcon" side class="tool-call__state">
         <div class="tool-call__status row items-center no-wrap q-gutter-xs" :class="`tool-call__status--${status.name}`">
-          <span v-if="entry.presentation?.duration" class="work-history__reasoning-duration">{{ entry.presentation.duration }}</span>
           <q-icon v-if="statusIcon" :name="statusIcon" size="17px" role="img" :aria-label="status.label" />
         </div>
       </q-item-section>
@@ -193,18 +211,45 @@ const props = defineProps({
 const emit = defineEmits(['open-approval-draft', 'open-file', 'rendered', 'resize-start', 'resized', 'trust-image-origin', 'toggle-details'])
 const detailsId = useId()
 const isTool = computed(() => props.entry.type === 'tool')
-const identity = computed(() => isTool.value
+const isGroup = computed(() => props.entry.type === 'tool-group')
+const isReasoning = computed(() => props.entry.type === 'reasoning')
+const reasoningSummary = computed(() => isReasoning.value
+  && ['Nachdenken', 'Nachdenken unterbrochen'].includes(props.entry.presentation?.title)
+  ? props.entry.presentation?.summary?.trim() || '' : '')
+const identity = computed(() => isTool.value || isGroup.value
   ? toolIdentity(props.entry.tool)
-  : { label: props.entry.presentation?.title, icon: props.entry.presentation?.icon })
+  : {
+      label: reasoningSummary.value
+        ? `${reasoningSummary.value}${props.entry.reasoning?.status === 'interrupted' ? ' (unterbrochen)' : ''}`
+        : props.entry.presentation?.title,
+      icon: props.entry.presentation?.icon
+    })
 const result = computed(() => isTool.value ? parseToolResult(props.entry.result?.content, props.entry.tool.name) : {})
 const toolInfo = computed(() => isTool.value ? toolPresentation(props.entry.tool, props.entry.approval?.details?.displayItems) : null)
-const summary = computed(() => isTool.value ? result.value.summary || toolInfo.value.summary : props.entry.presentation?.summary)
+const summary = computed(() => isTool.value ? result.value.summary || toolInfo.value.summary : reasoningSummary.value ? '' : props.entry.presentation?.summary)
 const shellCommandText = computed(() => isTool.value ? shellCommand(props.entry.tool) : '')
-const status = computed(() => isTool.value ? toolStatus(props.entry) : { name: props.entry.warning ? 'interrupted' : '', label: 'Warnung' })
+const status = computed(() => {
+  if (isGroup.value) {
+    const statuses = props.entry.items.map(toolStatus)
+    return statuses.find((item) => ['failed', 'denied'].includes(item.name))
+      || statuses.find((item) => item.name === 'interrupted')
+      || statuses.find((item) => ['approval', 'question'].includes(item.name))
+      || { name: '', label: '' }
+  }
+  return isTool.value ? toolStatus(props.entry) : { name: props.entry.warning ? 'interrupted' : '', label: 'Warnung' }
+})
 const statusIcon = computed(() => ({ failed: 'error', denied: 'error', interrupted: 'warning', approval: 'pending_actions', question: 'help_outline' })[status.value.name])
 const errorDetails = computed(() => result.value.errorMessage || '')
 const toolDetails = computed(() => (toolInfo.value?.items || []).filter((item) => item.value.length && item.value !== summary.value && item.value !== shellCommandText.value))
-const hasDetails = computed(() => Boolean(errorDetails.value || shellCommandText.value || toolDetails.value.length || props.entry.text?.trim() || props.entry.blocks?.length))
+const hasDetails = computed(() => {
+  if (isGroup.value) return true
+  if (isReasoning.value) {
+    const text = (props.entry.blocks || []).map((block) => block.map((segment) => segment.text).join('')).join(' ')
+      .replace(/^\*{1,2}|\*{1,2}$/g, '').replace(/\s+/g, ' ').trim()
+    return Boolean(text && text !== reasoningSummary.value)
+  }
+  return Boolean(errorDetails.value || shellCommandText.value || toolDetails.value.length || props.entry.text?.trim() || props.entry.blocks?.length)
+})
 const detailKey = computed(() => isTool.value ? `${props.entry.runId || ''}:${props.entry.tool.id || props.entry.key}` : props.entry.key)
 const detailsOpen = computed(() => props.expandedDetails.has(detailKey.value))
 const detailsLabel = computed(() => `${identity.value.label}: Details ${detailsOpen.value ? 'ausblenden' : 'anzeigen'}`)
@@ -215,5 +260,4 @@ function toggleDetails() {
   nextTick(() => emit('resized'))
 }
 const groupActive = computed(() => props.entry.active || props.entry.items?.some((item) => item.active))
-const groupIdentity = computed(() => toolIdentity(props.entry.tool))
 </script>
