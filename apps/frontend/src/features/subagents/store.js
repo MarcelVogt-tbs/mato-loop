@@ -10,6 +10,8 @@ import { mergeResearchSources } from 'src/utils/research-sources'
 
 const ACTIVE = new Set(['queued', 'running', 'waiting_approval', 'waiting_input'])
 
+export const isActiveSubagent = (child) => ACTIVE.has(child.run?.status)
+
 export function subagentStatus(run) {
   return ({
     queued: 'Wartet', running: 'Arbeitet', waiting_approval: 'Freigabe erforderlich',

@@ -1,5 +1,6 @@
 <template>
-  <div v-if="entry.type === 'tool-group'" class="work-history__tool-group">
+  <SubagentRows v-if="entry.type === 'tool' && showSupplementary && entry.subagents?.length" :children="entry.subagents" />
+  <div v-else-if="entry.type === 'tool-group'" class="work-history__tool-group">
     <q-item
       dense clickable manual-focus
       class="activity-row work-history__tool-group-header"
@@ -67,10 +68,8 @@
     v-else-if="!outputOnly && ['tool', 'reasoning', 'context-summary'].includes(entry.type)"
     :class="isTool ? 'work-history__tool' : hasDetails ? 'work-history__reasoning' : 'work-history__reasoning-static'"
   >
-    <q-item
+    <AgentActivityRow
       v-if="!entry.detailOnly || summary || hasDetails || statusIcon"
-      dense
-      class="activity-row"
       manual-focus
       :class="isTool ? ['tool-call tool-call__header', `tool-call--${status.name}`, { 'tool-call--detail': entry.detailOnly }] : 'work-history__reasoning-header'"
       :clickable="hasDetails"
@@ -79,37 +78,35 @@
       :aria-label="hasDetails ? detailsLabel : undefined"
       @click="toggleDetails"
     >
-      <q-item-section>
-        <q-item-label class="work-history__activity-line">
-          <q-icon
-            v-if="identity.icon && !entry.detailOnly"
-            :name="identity.icon"
-            size="18px"
-            class="work-history__activity-icon"
-            :class="{ 'work-history__activity-title--past': !entry.active }"
-            aria-hidden="true"
-          />
-          <span
-            v-if="!entry.detailOnly || !summary"
-            class="work-history__activity-title"
-            :class="{ 'tool-call__title': isTool, 'activity-shimmer': entry.active, 'work-history__activity-title--past': !entry.active }"
-          >{{ identity.label }}<span v-if="entry.presentation?.duration" class="work-history__reasoning-duration text-no-wrap"> · {{ entry.presentation.duration }}</span></span>
-          <span v-if="summary" class="work-history__activity-summary" :class="{ 'tool-call__summary': isTool }">{{ summary }}</span>
-          <q-icon
-            v-if="hasDetails"
-            :name="detailsOpen ? 'expand_more' : 'chevron_right'"
-            size="17px"
-            class="work-history__detail-indicator"
-            aria-hidden="true"
-          />
-        </q-item-label>
-      </q-item-section>
-      <q-item-section v-if="statusIcon" side class="tool-call__state">
-        <div class="tool-call__status row items-center no-wrap q-gutter-xs" :class="`tool-call__status--${status.name}`">
-          <q-icon v-if="statusIcon" :name="statusIcon" size="17px" role="img" :aria-label="status.label" />
-        </div>
-      </q-item-section>
-    </q-item>
+      <q-icon
+        v-if="identity.icon && !entry.detailOnly"
+        :name="identity.icon"
+        size="18px"
+        class="work-history__activity-icon"
+        :class="{ 'work-history__activity-title--past': !entry.active }"
+        aria-hidden="true"
+      />
+      <span
+        v-if="!entry.detailOnly || !summary"
+        class="work-history__activity-title"
+        :class="{ 'tool-call__title': isTool, 'activity-shimmer': entry.active, 'work-history__activity-title--past': !entry.active }"
+      >{{ identity.label }}<span v-if="entry.presentation?.duration" class="work-history__reasoning-duration text-no-wrap"> · {{ entry.presentation.duration }}</span></span>
+      <span v-if="summary" class="work-history__activity-summary" :class="{ 'tool-call__summary': isTool }">{{ summary }}</span>
+      <q-icon
+        v-if="hasDetails"
+        :name="detailsOpen ? 'expand_more' : 'chevron_right'"
+        size="17px"
+        class="work-history__detail-indicator"
+        aria-hidden="true"
+      />
+      <template #state>
+        <q-item-section v-if="statusIcon" side class="tool-call__state">
+          <div class="tool-call__status row items-center no-wrap q-gutter-xs" :class="`tool-call__status--${status.name}`">
+            <q-icon v-if="statusIcon" :name="statusIcon" size="17px" role="img" :aria-label="status.label" />
+          </div>
+        </q-item-section>
+      </template>
+    </AgentActivityRow>
     <div v-if="hasDetails && detailsOpen" :id="detailsId" class="work-history__reasoning-detail">
       <p v-if="errorDetails" class="tool-call__message" :class="`tool-call__status--${status.name}`" role="status">{{ errorDetails }}</p>
       <template v-if="isTool">
@@ -158,7 +155,6 @@
   </div>
   <div v-if="entry.type === 'tool'">
     <template v-if="showSupplementary">
-      <SubagentRows :children="entry.subagents || []" />
       <ApprovalCard
         v-if="entry.approval && !readOnly"
         :approval="entry.approval"
@@ -191,6 +187,7 @@
 <script setup>
 import { computed, nextTick, useId } from 'vue'
 import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
+import AgentActivityRow from 'src/features/chat/components/AgentActivityRow.vue'
 import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
 import QuestionDock from 'src/features/questions/QuestionDock.vue'

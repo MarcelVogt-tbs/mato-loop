@@ -518,7 +518,7 @@ describe('read-only subagents', () => {
     expect(transcript.unmatchedApprovals).toHaveLength(2)
     expect(transcript.unmatchedQuestions).toHaveLength(2)
     expect(transcript.messages[1].workHistory.entries[0]).toMatchObject({ active: true, approval: null, question: null })
-    expect(agentRunPresentation({ runId: 'parent-run', running: true, activity, transcript }).label).toBe('Subagenten beauftragen')
+    expect(agentRunPresentation({ runId: 'parent-run', running: true, activity, transcript }).label).toBe('Subagent starten')
     expect(agentRunPresentation({ runId: 'child-1-run', running: true, activity, transcript }).label).toBe('Freigabe erforderlich')
     const childTranscript = buildChatTranscript([
       { id: 'child-message', role: 'assistant', toolCalls: [{ id: 'same-call', name: 'read' }] }

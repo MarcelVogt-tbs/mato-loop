@@ -29,7 +29,7 @@ TOOL_ACTIVITY_LABELS = {
     "coding_list_plans": "Pläne anzeigen", "coding_enqueue": "Pläne ausführen",
     "question": "Rückfrage stellen", "todo_write": "Aufgaben aktualisieren", "read": "Pfad lesen", "glob": "Dateien suchen",
     "grep": "Dateiinhalte durchsuchen", "list_directory": "Ordner auflisten",
-    "read_file": "Datei lesen", "task": "Aufgaben delegieren", "provide_file": "Datei bereitstellen",
+    "read_file": "Datei lesen", "task": "Subagent starten", "provide_file": "Datei bereitstellen",
     "write_file": "Datei schreiben", "edit_file": "Datei bearbeiten", "apply_patch": "Patch anwenden",
     "create_directory": "Ordner erstellen", "delete_path": "Pfad löschen", "copy_path": "Pfad kopieren",
     "move_path": "Pfad verschieben", "web_search": "Im Web suchen", "webfetch": "Webseite abrufen",

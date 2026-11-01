@@ -126,6 +126,7 @@ const questions = useQuestionStore()
 const agentProfiles = useAgentProfileStore()
 const scrollArea = ref(null)
 const returnFocus = document.activeElement?.closest('[tabindex]:not([tabindex^="-"])') || document.activeElement
+const returnHistoryToggle = returnFocus?.closest('.work-history')?.querySelector('.work-history__toggle')
 const following = ref(true)
 const trustedImageOrigins = ref([])
 const parentRoute = computed(() => {
@@ -194,8 +195,9 @@ watch(messages, followBottom, { flush: 'post' })
 onBeforeUnmount(() => {
   inspector.close()
   void nextTick(() => {
-    if (!route.query.subagent && route.query.session === props.parentId && returnFocus?.isConnected) {
-      returnFocus.focus({ preventScroll: true })
+    if (!route.query.subagent && route.query.session === props.parentId) {
+      const target = returnFocus?.isConnected ? returnFocus : returnHistoryToggle
+      if (target?.isConnected) target.focus({ preventScroll: true })
     }
   })
 })

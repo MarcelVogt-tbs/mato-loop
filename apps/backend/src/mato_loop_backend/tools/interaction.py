@@ -325,7 +325,7 @@ TASK = ToolDefinition(
             TaskArguments,
             _task,
             group="agent",
-            label="Aufgaben delegieren",
+            label="Subagent starten",
             icon="account_tree",
         )
 

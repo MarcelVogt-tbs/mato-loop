@@ -511,7 +511,7 @@ import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
 import QuestionDock from 'src/features/questions/QuestionDock.vue'
 import SubagentInspector from 'src/features/subagents/SubagentInspector.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'
-import { useSubagentStore } from 'stores/subagents'
+import { isActiveSubagent, useSubagentStore } from 'stores/subagents'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useApprovalStore } from 'stores/approvals'
 import { useChatStore } from 'src/features/chat/store'
@@ -736,7 +736,7 @@ const childrenByMessage = computed(() => {
 })
 const unmatchedChildren = computed(() => {
   const matched = new Set([...childrenByMessage.value.values()].flat().map((child) => child.id))
-  return subagents.children.filter((child) => !matched.has(child.id))
+  return subagents.children.filter((child) => isActiveSubagent(child) && !matched.has(child.id))
 })
 const hasCurrentWorkHistory = computed(() => (
   transcript.value.messages.some((message) => message.currentTurn && message.workHistory)

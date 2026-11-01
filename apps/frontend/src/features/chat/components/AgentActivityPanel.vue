@@ -45,7 +45,8 @@
       </q-btn>
     </div>
 
-    <div v-if="displayEntries.length || $slots.default" class="work-history__timeline">
+    <div v-if="displayEntries.length || activeSubagents.length || $slots.default" class="work-history__timeline">
+      <SubagentRows v-if="!historyExpanded" :children="activeSubagents" class="q-mb-xs" />
       <div v-if="displayEntries.length" class="work-history__entries" role="region" aria-label="Aktivitäten der Antworterstellung">
         <AgentActivityEntry
           v-for="entry in displayEntries"
@@ -79,7 +80,7 @@
         @open-file="emit('open-file', $event)"
       />
     </div>
-    <SubagentRows class="work-history__children" :children="unmatchedSubagents" />
+    <SubagentRows v-if="historyExpanded" class="work-history__children" :children="unmatchedSubagents" />
   </div>
 </template>
 
@@ -87,6 +88,7 @@
 import { computed, nextTick, ref } from 'vue'
 import AgentActivityEntry from 'src/features/chat/components/AgentActivityEntry.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'
+import { isActiveSubagent } from 'stores/subagents'
 import TurnDuration from 'src/features/chat/components/TurnDuration.vue'
 import {
   toolOutputAttachments,
@@ -196,8 +198,17 @@ const currentEntries = computed(() => {
     ))
   ))
 })
-const displayEntries = computed(() => historyExpanded.value ? entries.value
-  : currentBatch.value != null ? groupWorkHistoryEntries(currentEntries.value, null, true) : currentEntries.value)
+const displayEntries = computed(() => {
+  if (historyExpanded.value) return entries.value
+  const current = currentEntries.value.filter((entry) => !entry.subagents?.length || entry.subagents.some(isActiveSubagent)).map((entry) => ({
+    ...entry, subagents: entry.subagents?.filter(isActiveSubagent)
+  }))
+  return currentBatch.value != null ? groupWorkHistoryEntries(current, null, true) : current
+})
+const activeSubagents = computed(() => {
+  const visible = new Set(currentEntries.value.flatMap((entry) => (entry.subagents || []).map((child) => child.id)))
+  return props.subagents.filter((child) => isActiveSubagent(child) && !visible.has(child.id))
+})
 const items = computed(() => enrichedEntries.value.filter((entry) => entry.type === 'tool'))
 const unmatchedSubagents = computed(() => {
   const matched = new Set(items.value.flatMap((item) => item.subagents || []).map((child) => child.id))

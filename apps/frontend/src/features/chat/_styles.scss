@@ -1224,10 +1224,6 @@
   grid-column: 1;
 }
 
-.work-history__tool-group-header .work-history__activity-line {
-  grid-template-columns: auto minmax(0, max-content) auto auto;
-}
-
 .work-history__activity-title,
 .tool-call__title {
   min-width: 0;

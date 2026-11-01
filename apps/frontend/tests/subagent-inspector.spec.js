@@ -245,14 +245,12 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.querySelector('.work-history__reasoning-detail').textContent).not.toContain('Shell-Befehl\n')
   })
 
-  it.each([false, true])('shows status indicators without removing readable labels (reduced motion=%s)', async (reducedMotion) => {
+  it.each([false, true])('keeps status text neutral and only pulses working squares (reduced motion=%s)', async (reducedMotion) => {
     vi.stubGlobal('matchMedia', () => ({ matches: reducedMotion }))
     const states = [
-      ['queued', 'schedule', 'Wartet'], ['running', 'play_circle_outline', 'Arbeitet'],
-      ['waiting_approval', 'pending_actions', 'Freigabe erforderlich'],
-      ['waiting_input', 'help_outline', 'Antwort erforderlich'],
-      ['completed', 'check_circle', 'Abgeschlossen'], ['failed', 'error_outline', 'Fehlgeschlagen'],
-      ['cancelled', 'cancel', 'Abgebrochen']
+      ['queued', 'primary', 'Wartet'], ['running', 'primary', 'Arbeitet'],
+      ['waiting_approval', 'primary', 'Wartet'], ['waiting_input', 'primary', 'Wartet'],
+      ['completed', 'grey', 'Fertig'], ['failed', 'grey', 'Abgebrochen'], ['cancelled', 'grey', 'Abgebrochen']
     ]
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', name: 'chat', component: { render: () => null } }] })
     await router.push('/?session=parent')
@@ -262,17 +260,40 @@ describe('subagent inspector navigation and presentation', () => {
     app.use(router).use(Quasar, { components })
     mountApp()
     const rows = [...root.querySelectorAll('a')]
-    for (const [index, [status, icon, label]] of states.entries()) {
+    expect(root.querySelector('[aria-label="Subagenten"]').getAttribute('role')).toBe('list')
+    for (const [index, [status, color, label]] of states.entries()) {
       expect(rows[index].textContent).toContain(`Auftrag ${status}`)
-      expect(rows[index].textContent).toContain(label)
-      const animated = !reducedMotion && ['queued', 'running'].includes(status)
-      expect(Boolean(rows[index].querySelector('.q-spinner'))).toBe(animated)
-      if (!animated) expect(rows[index].querySelector('.q-icon').textContent).toBe(icon)
+      expect(rows[index].querySelector('.tool-call__summary').textContent).toBe(label)
+      expect(rows[index].querySelector('.tool-call__summary').classList.contains('text-negative')).toBe(false)
+      expect(rows[index].querySelector('.work-history__activity-icon').classList.contains(`text-${color}`)).toBe(true)
+      expect(rows[index].querySelector('rect').getAttribute('opacity')).toBe(label === 'Wartet' ? '0.4' : '1')
+      expect(Boolean(rows[index].querySelector('.subagent-row__pulse'))).toBe(!reducedMotion && status === 'running')
     }
-    expect(root.querySelectorAll('.q-spinner')).toHaveLength(reducedMotion ? 0 : 2)
   })
 
-  it.each([[1280, false], [1280, true], [390, false], [390, true]])('renders a passive Quasar inspector and returns to the mounted parent (width=%s, dark=%s)', async (width, dark) => {
+  it('does not restore the start row when the delegated child finishes with history collapsed', async () => {
+    const children = ref([])
+    const entry = { key: 'task', type: 'tool', runId: 'run', active: true, tool: { id: 'call', name: 'task', arguments: {} } }
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', name: 'chat', component: { render: () => null } }] })
+    await router.push('/?session=parent')
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({ render: () => h(AgentActivityPanel, {
+      running: true, history: { entries: [entry] }, presentation: { entry }, subagents: children.value
+    }) })
+    app.use(createPinia()).use(router).use(Quasar, { components })
+    mountApp()
+    const initial = root.querySelector('.tool-call__title')?.textContent
+    children.value = [{
+      id: 'child', parentSessionId: 'parent', title: 'Dateien prüfen',
+      spawnedByRunId: 'run', spawnedByToolCallId: 'call', run: { status: 'completed' }
+    }]
+    await nextTick()
+
+    expect([initial, root.querySelector('.tool-call__title')?.textContent]).toEqual(['Subagent starten', undefined])
+  })
+
+  it.each([[1280, false], [1280, true], [390, false], [390, true], [1280, false, true]])('renders a passive Quasar inspector and returns to the mounted parent (width=%s, dark=%s, finishes=%s)', async (width, dark, finishes) => {
     vi.stubGlobal('scrollTo', vi.fn())
     vi.stubGlobal('innerWidth', width)
     vi.stubGlobal('EventSource', class { addEventListener() {} close() {} })
@@ -300,7 +321,7 @@ describe('subagent inspector navigation and presentation', () => {
         return () => h('main', [
           h('textarea', { 'aria-label': 'Elternentwurf', value: 'Mein Entwurf' }),
           h('div', { id: 'parent-scroll', style: 'overflow: auto' }, 'Elternverlauf'),
-          h(AgentActivityPanel, { history: { entries: [] }, subagents: [child] }),
+          h(AgentActivityPanel, { history: { entries: [] }, subagents: store.children }),
           h(SubagentRequestLink, { request }),
           route.value.query.subagent ? h(SubagentInspector, { parentId: 'parent', childId: route.value.query.subagent }) : null
         ])
@@ -318,7 +339,8 @@ describe('subagent inspector navigation and presentation', () => {
     mountApp()
     const parentScroll = document.getElementById('parent-scroll')
     parentScroll.scrollTop = 123
-    const row = [...root.querySelectorAll('a')].find((link) => link.textContent.includes('Freigabe erforderlich'))
+    const row = [...root.querySelectorAll('a')].find((link) => link.getAttribute('aria-label')?.includes('Freigabe erforderlich'))
+    const returnTarget = finishes ? row.closest('.work-history').querySelector('.work-history__toggle') : row
     expect(row.textContent).toContain(child.title)
     expect(row.getAttribute('href')).toContain('session=parent')
     expect(row.getAttribute('href')).toContain('subagent=child')
@@ -354,6 +376,7 @@ describe('subagent inspector navigation and presentation', () => {
     expect(api.delete).not.toHaveBeenCalled()
     expect(inspector.querySelector('.chat-message__meta [role="timer"]')).toBeNull()
     store.run = { id: 'run', status: 'completed' }
+    if (finishes) store.children[0].run.status = 'completed'
     await nextTick()
     expect(inspector.querySelector('.chat-message__meta [role="timer"]')).toBeNull()
     expect(inspector.querySelector('.work-history [role="timer"]').textContent).toContain('57 s')
@@ -363,7 +386,7 @@ describe('subagent inspector navigation and presentation', () => {
     expect(document.getElementById('parent-scroll')).toBe(parentScroll)
     expect(parentScroll.scrollTop).toBe(123)
     expect(root.querySelector('textarea').value).toBe('Mein Entwurf')
-    expect(document.activeElement).toBe(row)
+    expect(document.activeElement).toBe(returnTarget)
     expect(store.current).toBeNull()
     expect(api.get.mock.calls.filter(([url]) => url.endsWith('/children'))).toHaveLength(1)
   })
@@ -1173,7 +1196,7 @@ describe('subagent inspector navigation and presentation', () => {
     app = createApp({
       setup: () => () => h(AgentActivityPanel, {
         readOnly: readOnly.value,
-        subagents: [child],
+        subagents: [child, { ...child, id: 'finished', title: 'Abgeschlossene Prüfung', run: { status: 'completed' } }],
         history: { entries: [
           { key: 'before', type: 'commentary', message: { content: 'Vor dem Tool' } },
           {
@@ -1188,6 +1211,9 @@ describe('subagent inspector navigation and presentation', () => {
     })
     app.use(pinia).use(router).use(Quasar, { components })
     mountApp()
+
+    expect([...root.querySelectorAll('[aria-label="Subagenten"] a')].map((link) => link.textContent.trim()))
+      .toEqual([expect.stringContaining(child.title)])
 
     root.querySelector('.work-history__toggle').click()
     await nextTick()
@@ -1251,7 +1277,7 @@ describe('subagent inspector navigation and presentation', () => {
     app = createApp({ render: () => h(RouterView) })
     app.use(pinia).use(router).use(Quasar, { components })
     mountApp()
-    expect(root.querySelector('[role="status"]').textContent).toBe('Subagenten beauftragen')
+    expect(root.querySelector('[role="status"]').textContent).toBe('Subagent starten')
     expect(root.querySelectorAll('.approval-card')).toHaveLength(2)
     expect(root.querySelectorAll('.question-dock')).toHaveLength(1)
     for (const id of ['one', 'two']) {
@@ -1269,6 +1295,6 @@ describe('subagent inspector navigation and presentation', () => {
     expect(api.post).toHaveBeenCalledWith('/questions/question-one/answers', { answers: { answer: [] } })
     expect(chat.running).toBe(true)
     expect(chat.runId).toBe('parent-run')
-    expect(root.querySelector('[role="status"]').textContent).toBe('Subagenten beauftragen')
+    expect(root.querySelector('[role="status"]').textContent).toBe('Subagent starten')
   })
 })
