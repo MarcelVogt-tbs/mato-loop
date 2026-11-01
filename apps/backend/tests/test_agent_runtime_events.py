@@ -1399,30 +1399,32 @@ def test_write_file_content_is_fully_redacted_before_persistence() -> None:
     assert secret not in str(arguments)
 
 
-def test_edit_file_text_is_fully_redacted_before_persistence() -> None:
+@pytest.mark.parametrize("old,new", [("oldText", "newText"), ("oldString", "newString")])
+def test_edit_file_text_is_fully_redacted_before_persistence(old, new) -> None:
     arguments = _safe_tool_arguments(
         "edit_file",
         {
             "root": "session",
             "path": "note.txt",
-            "oldText": "private old text",
-            "newText": "private new text",
+            old: "private old text",
+            new: "private new text",
         },
     )
 
-    assert arguments["oldText"] == {"characters": 16, "redacted": True}
-    assert arguments["newText"] == {"characters": 16, "redacted": True}
+    assert arguments[old] == {"characters": 16, "redacted": True}
+    assert arguments[new] == {"characters": 16, "redacted": True}
     assert "private" not in str(arguments)
 
 
-def test_apply_patch_content_is_fully_redacted_before_persistence() -> None:
+@pytest.mark.parametrize("field", ["patch", "patchText"])
+def test_apply_patch_content_is_fully_redacted_before_persistence(field) -> None:
     patch = "*** Begin Patch\n*** Add File: secret.txt\n+secret\n*** End Patch\n"
 
     arguments = _safe_tool_arguments(
-        "apply_patch", {"patch": patch, "expectedSha256": {}}
+        "apply_patch", {field: patch}
     )
 
-    assert arguments["patch"] == {"characters": len(patch), "redacted": True}
+    assert arguments[field] == {"characters": len(patch), "redacted": True}
     assert "secret" not in str(arguments)
 
 

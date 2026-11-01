@@ -97,6 +97,8 @@ Channel approvals/questions revalidate owner, destination, source message, activ
 
 One provider-neutral runtime assembles a host registry, projects context, requests model output and authorizes concrete tool operations. Model arguments, descriptions and retrieved text cannot grant authority. Host-controlled prompts and schemas use concise English; dynamic content may use any language.
 
+File mutation schemas keep revision bookkeeping out of model arguments. Execution-time conflict handling and internal repair presentation are defined in the [tool contract](harness.md#tool-contract); neither replaces authorization or hides uncertain effects.
+
 Profiles define workflow, not an alternative permission engine. Plan analyzes without implementing; Build requires an actual implementation request. Tool approval or switching profiles alone is not such a request. Skills supply scoped instructions/resources, never new credentials, tools or permissions. See [harness.md](harness.md), [tool-permissions.md](tool-permissions.md) and [skills.md](skills.md).
 
 ## MatoLoop Agent Boundary

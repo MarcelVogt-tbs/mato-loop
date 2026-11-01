@@ -1097,7 +1097,7 @@ async def test_administrator_once_approval_is_reused_for_revalidation(tmp_path, 
     monkeypatch.setattr(AgentRuntime, "_request_approval", approve)
     request = administrator_permission(agent.id, "/work", capability="filesystem.write", path="/etc/demo.conf")
     run = AgentRun(id=uuid4(), session_id=session.id)
-    call = ToolCall("edit", "edit_file", {"root": "computer", "path": "/etc/demo.conf", "oldText": "old", "newText": "new", "elevated": True})
+    call = ToolCall("edit", "edit_file", {"root": "computer", "path": "/etc/demo.conf", "oldString": "old", "newString": "new", "elevated": True})
     resolution = {}
     roots = _root_files(tmp_path, session)
     assert await AgentRuntime._authorize(db, run, session, call, request, roots, resolution) == PermissionDecision.ALLOW

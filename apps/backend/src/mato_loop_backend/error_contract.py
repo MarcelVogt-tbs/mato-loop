@@ -166,8 +166,8 @@ _MESSAGES = {
     "file.changed": "The file changed since it was opened.",
     "file.accessDenied": "Access to the file was denied.",
     "file.activeDirty": "The file has unsaved changes and cannot be overwritten.",
-    "file.editTextNotFound": "The exact text to edit was not found.",
-    "file.editTextNotUnique": "The text to edit occurs more than once.",
+    "file.editTextNotFound": "The exact text to edit was not found. Read the affected lines again and copy oldString exactly, including indentation but without line-number prefixes.",
+    "file.editTextNotUnique": "The text to edit occurs more than once. Include more surrounding text in oldString, or use replaceAll only when every occurrence should change.",
     "file.crossBoundaryMoveUnavailable": "Files cannot be moved across this boundary. Copy them instead.",
     "file.directoryNotEmpty": "The directory is not empty.",
     "file.fileNotFound": "The file was not found.",
@@ -176,7 +176,7 @@ _MESSAGES = {
     "file.invalidName": "The file name is invalid.",
     "file.invalidDestination": "The destination is invalid.",
     "file.operationTooLarge": "The file operation is too large.",
-    "file.patchContextMismatch": "The patch context no longer matches the file.",
+    "file.patchContextMismatch": "The patch context does not match uniquely. Read the affected lines again and retry with exact, unique context.",
     "file.patchIncomplete": (
         "The patch did not complete. Files may have changed, including in the "
         "failed operation. Reread the affected paths before retrying."

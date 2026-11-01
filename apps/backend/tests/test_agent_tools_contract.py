@@ -809,8 +809,8 @@ async def test_protected_text_can_write_file_after_authorization(tmp_path) -> No
 
     edit = ToolCall("edit-protected", "edit_file", {
         "root": "session", "path": "credentials.txt",
-        "oldText": {"parts": ["token=", {"value_ref": f"run-secret:{secret_id}"}]},
-        "newText": {"parts": ["token=", {"value_ref": f"run-secret:{secret_id}"}, "-updated"]},
+        "oldString": {"parts": ["token=", {"value_ref": f"run-secret:{secret_id}"}]},
+        "newString": {"parts": ["token=", {"value_ref": f"run-secret:{secret_id}"}, "-updated"]},
     })
     context.tool_call = edit
     edited = await tool_registry.execute(edit, context)
@@ -1399,7 +1399,6 @@ def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
         "glob",
         "grep",
         "provide_file",
-        "write_file",
         "create_directory",
         "delete_path",
     }:
@@ -1409,6 +1408,11 @@ def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
         assert "path" in parameters["properties"]
     assert schemas["read"]["parameters"]["properties"]["offset"]["default"] == 1
     assert schemas["read"]["parameters"]["properties"]["limit"]["default"] == 1000
+    for name, required in (("write_file", {"path", "content"}), ("edit_file", {"path", "oldString", "newString"})):
+        parameters = schemas[name]["parameters"]
+        assert set(parameters["required"]) == required
+        assert parameters["properties"]["root"]["default"] == "computer"
+        assert "expectedSha256" not in parameters["properties"]
     assert "revision" not in schemas["read"]["parameters"]["properties"]
     with pytest.raises(ValidationError):
         ReadArguments(root="session", path="notes.txt", revision=1)
@@ -2006,7 +2010,7 @@ async def test_session_file_operations_follow_delete_confirmation_preset(tmp_pat
         ("grep", {"root": "files", "pattern": "before"}),
         ("provide_file", {"root": "files", "path": "note.txt"}),
         ("edit_file", {
-            "root": "files", "path": "note.txt", "oldText": "before", "newText": "after",
+            "root": "files", "path": "note.txt", "oldString": "before", "newString": "after",
         }),
         ("create_directory", {"root": "files", "path": "output"}),
         ("copy_path", {
@@ -5055,8 +5059,8 @@ async def test_memory_write_requires_session_permission_before_mutation(
 
 
 @pytest.mark.parametrize("name,arguments,operation", [
-    ("write_file", {"root": "files", "path": "new.txt", "content": "new"}, "create"),
-    ("edit_file", {"root": "files", "path": "a.txt", "oldText": "old", "newText": "new"}, "edit"),
+    ("write_file", {"root": "files", "path": "new.txt", "content": "new"}, "write"),
+    ("edit_file", {"root": "files", "path": "a.txt", "oldString": "old", "newString": "new"}, "edit"),
     ("create_directory", {"root": "files", "path": "folder"}, "mkdir"),
     ("delete_path", {"root": "files", "path": "a.txt"}, "delete"),
     ("copy_path", {"source_root": "files", "source_path": "a.txt", "destination_root": "files", "destination_path": "b.txt"}, "copy"),

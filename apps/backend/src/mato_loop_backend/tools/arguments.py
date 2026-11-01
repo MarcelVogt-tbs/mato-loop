@@ -388,23 +388,17 @@ class ProvideFileArguments(SessionFileReadArguments):
 
 
 class WriteFileArguments(ElevatedArguments):
-    root: Literal["session", "workspace"]
+    root: Literal["session", "workspace"] = "workspace"
     path: str = Field(min_length=1, max_length=1_000)
     content: Annotated[str, Field(max_length=1_000_000)] | ProtectedText
-    expected_sha256: str | None = Field(
-        default=None, alias="expectedSha256", pattern=r"^[0-9a-f]{64}$"
-    )
 
 
 class EditFileArguments(ElevatedArguments):
-    root: Literal["session", "workspace"]
+    root: Literal["session", "workspace"] = "workspace"
     path: str = Field(min_length=1, max_length=1_000)
-    old_text: Annotated[str, Field(min_length=1, max_length=1_000_000)] | ProtectedText = Field(alias="oldText")
-    new_text: Annotated[str, Field(max_length=1_000_000)] | ProtectedText = Field(alias="newText")
+    old_text: Annotated[str, Field(min_length=1, max_length=1_000_000)] | ProtectedText = Field(alias="oldString")
+    new_text: Annotated[str, Field(max_length=1_000_000)] | ProtectedText = Field(alias="newString")
     replace_all: bool = Field(default=False, alias="replaceAll")
-    expected_sha256: str | None = Field(
-        default=None, alias="expectedSha256", pattern=r"^[0-9a-f]{64}$"
-    )
 
     @model_validator(mode="after")
     def require_change(self) -> EditFileArguments:
@@ -419,11 +413,7 @@ class CreateDirectoryArguments(ToolArguments):
 
 
 class ApplyPatchArguments(ToolArguments):
-    patch: str = Field(min_length=1, max_length=512 * 1024)
-    expected_sha256: dict[
-        Annotated[str, Field(min_length=1, max_length=4_096)],
-        Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")],
-    ] = Field(default_factory=dict, alias="expectedSha256", max_length=1_000)
+    patch: str = Field(alias="patchText", min_length=1, max_length=512 * 1024)
 
     @field_validator("patch")
     @classmethod

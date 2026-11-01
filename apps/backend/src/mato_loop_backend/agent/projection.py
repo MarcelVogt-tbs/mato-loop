@@ -416,7 +416,7 @@ def _model_tool_calls(
                         "Regenerate content before retrying.]"
                     )
                 )
-            for key in ("oldText", "newText"):
+            for key in ("oldText", "newText", "oldString", "newString"):
                 edit_text = projected_arguments.get(key)
                 if isinstance(edit_text, dict) and edit_text.get("redacted") is True:
                     characters = edit_text.get("characters")

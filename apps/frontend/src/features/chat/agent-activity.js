@@ -61,6 +61,13 @@ export function agentActivityLabel(activity) {
   return LABELS[activity?.phase] || 'Agent arbeitet'
 }
 
+export function hiddenToolRepair(entry, running = false) {
+  if (entry?.approval || entry?.question) return false
+  const repair = entry?.result?.toolRepair
+  return repair === 'recovered' || repair === 'superseded'
+    || (repair === 'pending' ? running && entry.current !== false : entry?.result?.argumentsRejected === true)
+}
+
 export function agentActivityDisplayKey(activity) {
   if (activity?.phase === 'waiting_model') {
     return `waiting_model:${activity.modelRequest > 1 ? 'tool_results' : 'request'}`
@@ -146,7 +153,7 @@ export function agentRunPresentation({
         ? toolItems.find((item) => item.tool.id === activity.toolCallId)
         : toolItems.findLast((item) => item.current !== false && (item.result || item.completed))
       : null
-  const argumentsRejected = selectedTool?.result?.argumentsRejected === true
+  const argumentsRejected = hiddenToolRepair(selectedTool, running)
   const presentationTool = argumentsRejected ? null : selectedTool?.tool || (
     ['preparing_context', 'processing_tool', 'waiting_model'].includes(activity?.phase) && activity.tool && !reasoningSummary && !streamContextSummary?.content
       ? { id: activity.toolCallId, name: activity.tool, arguments: {}, toolDisplay: activity.toolDisplay }

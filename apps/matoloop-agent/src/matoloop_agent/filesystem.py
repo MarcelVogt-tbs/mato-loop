@@ -877,13 +877,15 @@ class Filesystem:
                 os.close(source_parent)
                 os.close(destination_parent)
 
-    def patch(self, patch: str, expected_sha256: dict[str, str]) -> dict:
+    def patch(self, patch: str, expected_sha256: dict[str, str] | None = None) -> dict:
         operations = parse_patch(
             patch,
             max_bytes=self.max_transfer_bytes,
             max_entries=self.max_entries,
             validate_path=_parts,
         )
+        supplied_revisions = expected_sha256 is not None
+        expected_sha256 = dict(expected_sha256 or {})
         if len(expected_sha256) > self.max_entries:
             raise AgentError("operation.tooLarge", "Patch has too many revisions")
         for path, digest in expected_sha256.items():
@@ -895,7 +897,7 @@ class Filesystem:
             ):
                 raise AgentError("request.invalid", "Patch revision is invalid")
         revision_paths = {item.path for item in operations if item.operation != "add"}
-        if set(expected_sha256) != revision_paths:
+        if supplied_revisions and set(expected_sha256) != revision_paths:
             raise AgentError("request.invalid", "Patch revisions do not match its source files")
         touched = [
             path
@@ -919,6 +921,8 @@ class Filesystem:
                     digest = hashlib.sha256(encoded).hexdigest()
                 else:
                     content, data, digest = self._read_patch_file(item.path)
+                    if not supplied_revisions:
+                        expected_sha256[item.path] = digest
                     if digest != expected_sha256[item.path]:
                         raise AgentError("file.changed", "File changed since it was read")
                     if item.operation in {"update", "move"}:

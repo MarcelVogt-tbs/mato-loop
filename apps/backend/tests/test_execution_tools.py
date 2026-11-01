@@ -685,26 +685,24 @@ async def test_workspace_directory_read_grants_only_that_directory(tmp_path) -> 
     )
 
 
-async def test_workspace_write_uses_compare_and_swap_operation(tmp_path) -> None:
+async def test_workspace_write_uses_upsert_without_model_revision(tmp_path) -> None:
     call = ToolCall(
         "write",
         "write_file",
         {
-            "root": "workspace",
             "path": "README.md",
             "content": "updated\n",
-            "expectedSha256": "a" * 64,
         },
     )
     client = FakeExecutionClient(
         {
-            "filesystem.write": WorkspaceWriteResult(
+            "filesystem.upsert": WorkspaceWriteResult(
                 path="/home/user/project/README.md",
                 sha256="b" * 64,
                 size=8,
             )
         },
-        {"filesystem.write"},
+        {"filesystem.upsert"},
     )
     context = _context(tmp_path, call, client)
 
@@ -713,11 +711,10 @@ async def test_workspace_write_uses_compare_and_swap_operation(tmp_path) -> None
     assert not result.is_error
     assert client.requests == [
         (
-            "filesystem.write",
+            "filesystem.upsert",
             {
                 "path": "/home/user/project/README.md",
                 "content": "updated\n",
-                "expectedSha256": "a" * 64,
             },
         )
     ]
@@ -725,8 +722,8 @@ async def test_workspace_write_uses_compare_and_swap_operation(tmp_path) -> None
 
 @pytest.mark.parametrize(("tool", "operation", "arguments", "response"), [
     ("read", "filesystem.read", {}, WorkspaceReadResult(content="old", lines_read=1, has_more=False, next_offset=None, truncated_lines=[], sha256="a" * 64)),
-    ("write_file", "filesystem.write", {"content": "new", "expectedSha256": "a" * 64}, WorkspaceWriteResult(path="/etc/demo.conf", sha256="b" * 64, size=3)),
-    ("edit_file", "filesystem.edit", {"oldText": "old", "newText": "new", "expectedSha256": "a" * 64}, WorkspaceWriteResult(path="/etc/demo.conf", sha256="b" * 64, size=3)),
+    ("write_file", "filesystem.upsert", {"content": "new"}, WorkspaceWriteResult(path="/etc/demo.conf", sha256="b" * 64, size=3)),
+    ("edit_file", "filesystem.edit", {"oldString": "old", "newString": "new"}, WorkspaceWriteResult(path="/etc/demo.conf", sha256="b" * 64, size=3)),
 ])
 async def test_elevated_files_use_structured_worker_and_existing_permissions(tmp_path, tool, operation, arguments, response):
     call = ToolCall("file", tool, {"root": "computer", "path": "/etc/demo.conf", "elevated": True, **arguments})
@@ -755,7 +752,7 @@ async def test_apply_patch_resolves_paths_and_checks_each_permission(tmp_path, m
     call = ToolCall(
         "patch",
         "apply_patch",
-        {"patch": patch, "expectedSha256": {"README.md": "a" * 64}},
+        {"patchText": patch},
     )
     client = FakeExecutionClient(
         {
@@ -802,9 +799,6 @@ async def test_apply_patch_resolves_paths_and_checks_each_permission(tmp_path, m
                     "README.md", "/home/user/project/README.md"
                 ).replace("src/new.py", "/home/user/project/src/new.py")
                 .replace("renamed.md", "/home/user/project/renamed.md"),
-                "expectedSha256": {
-                    "/home/user/project/README.md": "a" * 64
-                },
             },
         )
     ]
@@ -835,9 +829,8 @@ async def test_incomplete_patch_error_propagates_remote_params_through_registry(
         "mato_loop_backend.execution.client.execution_agent_connections.request", request
     )
     call = ToolCall("patch", "apply_patch", {
-        "patch": "*** Begin Patch\n*** Add File: first\n+first\n"
+        "patchText": "*** Begin Patch\n*** Add File: first\n+first\n"
         "*** Update File: source\n*** Move to: destination\n*** End Patch\n",
-        "expectedSha256": {"source": "a" * 64},
     })
 
     result = await _tools(client.operations).execute(call, _context(tmp_path, call, client))
@@ -856,8 +849,7 @@ async def test_execution_error_params_are_validated_before_tool_serialization(tm
 
     client = FakeExecutionClient({"filesystem.patch": fail}, {"filesystem.patch"})
     call = ToolCall("patch", "apply_patch", {
-        "patch": "*** Begin Patch\n*** Add File: first\n+first\n*** End Patch\n",
-        "expectedSha256": {},
+        "patchText": "*** Begin Patch\n*** Add File: first\n+first\n*** End Patch\n",
     })
 
     result = await _tools(client.operations).execute(call, _context(tmp_path, call, client))

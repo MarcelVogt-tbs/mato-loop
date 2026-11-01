@@ -491,6 +491,7 @@ def message_payload(
         "trustLevel": item.trust_level,
         "toolCallId": item.tool_call_id,
         **({"argumentsRejected": True} if item.role == "tool" and runtime_data.get("argumentsRejected") is True else {}),
+        **({"toolRepair": runtime_data["toolRepair"]} if item.role == "tool" and runtime_data.get("toolRepair") in {"pending", "recovered", "superseded"} else {}),
         "toolCalls": enrich_tool_calls(item.tool_calls),
         "reasoning": item.public_reasoning,
         "activeDurationMs": _public_active_duration_ms(item),

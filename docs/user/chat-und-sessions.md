@@ -52,6 +52,8 @@ Einrichtung, Diffs, Branches und getrennte Arbeitskopien stehen unter [Git und W
 
 Der Stoppknopf beendet den Agentenlauf. Ein Browserdisconnect beendet ihn nicht; beim Wiederverbinden lädt MatoLoop den gespeicherten Zustand nach. Reasoning-Zusammenfassungen zeigen Modellangaben, keine garantiert vollständigen internen Gedankengänge.
 
+Während einer internen Reparaturrunde bleibt die Aktivitätsanzeige neutral. Gelingt die Korrektur, erscheint der Fehlversuch nicht im Arbeitsverlauf; ungelöste Fehler werden am Laufende sichtbar. Freigaben, Rückfragen und Hinweise auf mögliche Teiländerungen bleiben sofort sichtbar.
+
 ## Rückfragen und delegierte Aufgaben
 
 Strukturierte Rückfragen erscheinen direkt im Chat. **Weiter** navigiert, **Fertig** sendet auch unvollständige Antworten, **Ablehnen** verwirft den Entwurf. Mit **Jetzt senden** kannst du stattdessen nachfragen oder die Richtung ändern. Geheimnisse gehören nur in [geschützte Eingabefelder](variablen-und-secrets.md).

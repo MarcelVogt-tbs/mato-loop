@@ -127,8 +127,7 @@ async def test_repository_rules_arrive_before_model_and_follow_successful_reads(
     arguments = {
         "read": {"root": "computer", "path": "src/main.py"},
         "write_file": {"root": "computer", "path": "src/new.py", "content": "pass"},
-        "apply_patch": {"patch": "*** Begin Patch\n*** Add File: src/new.py\n+pass\n*** Update File: src/main.py\n*** Move to: dst/main.py\n@@\n-pass\n+pass # moved\n*** End Patch\n",
-                        "expectedSha256": {"src/main.py": "a" * 64}},
+        "apply_patch": {"patchText": "*** Begin Patch\n*** Add File: src/new.py\n+pass\n*** Update File: src/main.py\n*** Move to: dst/main.py\n@@\n-pass\n+pass # moved\n*** End Patch\n"},
         "move_path": {"source_root": "computer", "source_path": "src/main.py", "destination_root": "computer", "destination_path": "dst/main.py"},
         "move_directory": {"source_root": "computer", "source_path": "src", "destination_root": "computer", "destination_path": "dst/new"},
         "move_directory_exact_rules": {"source_root": "computer", "source_path": "src", "destination_root": "computer", "destination_path": "dst/new"},
@@ -441,8 +440,8 @@ async def test_runtime_replays_exact_tool_calls_without_persisting_them(monkeypa
     arguments = {
         "root": "files",
         "path": "note.txt",
-        "oldText": "private old text",
-        "newText": "private new text",
+        "oldString": "private old text",
+        "newString": "private new text",
     }
     db, run, _requests, projections, events = await _runtime_setup(
         monkeypatch,
@@ -466,8 +465,8 @@ async def test_runtime_replays_exact_tool_calls_without_persisting_them(monkeypa
     assert persisted_arguments == {
         "root": "files",
         "path": "note.txt",
-        "oldText": {"characters": 16, "redacted": True},
-        "newText": {"characters": 16, "redacted": True},
+        "oldString": {"characters": 16, "redacted": True},
+        "newString": {"characters": 16, "redacted": True},
     }
     display = _assistant_messages(db)[0].tool_calls[0]["toolDisplay"]
     assert display == {
@@ -589,6 +588,29 @@ async def test_generated_openscad_source_requires_a_successful_render(monkeypatc
         "cube(1)" in message.content for message in _assistant_messages(db)
     )
     assert _assistant_messages(db)[-1].content == "Fertig gerendert."
+
+
+async def test_default_computer_root_keeps_each_openscad_file_pending(monkeypatch) -> None:
+    agent_id = uuid4()
+    integration = IntegrationInstance(
+        name="OpenSCAD", integration_type="openscad", adapter_type="openscad",
+        execution_agent_id=agent_id, config={"binary_path": "/usr/bin/openscad"},
+    )
+    calls = [
+        ToolCall("write-a", "write_file", {"path": "a.scad", "content": "cube(1);"}),
+        ToolCall("write-b", "write_file", {"root": "computer", "path": "b.scad", "content": "cube(2);"}),
+        ToolCall("render-b", "render_openscad", {"root": "computer", "path": "b.scad"}),
+        ToolCall("read-b", "read", {"root": "computer", "path": "b.scad"}),
+    ]
+    db, run, *_ = await _runtime_setup(
+        monkeypatch,
+        [*[ProviderResult(tool_calls=[call]) for call in calls], *[ProviderResult(content="Done.") for _ in range(3)]],
+        search_policy=WebSearchPolicy.DISABLED,
+        integration_settings=IntegrationSettings(instances=[integration]),
+        execution_agent_id=agent_id, execution_operations=("integration.openscad.render", "cache.export"),
+    )
+    with pytest.raises(AgentRunError, match="agent.requiredOpenScadRenderMissing"):
+        await AgentRuntime._execute_loop(db, run)
 
 
 async def test_execution_agent_unavailable_stops_before_model_retry(monkeypatch) -> None:
@@ -1684,7 +1706,7 @@ async def test_cancelled_dispatched_workspace_write_stops_without_waiting(
     )
     run.execution_agent_id = uuid4()
     run.current_directory_snapshot = "/home/user/project"
-    run.execution_operations = ["filesystem.write"]
+    run.execution_operations = ["filesystem.upsert"]
     dispatched = asyncio.Event()
 
     async def request(
@@ -1711,10 +1733,10 @@ async def test_cancelled_dispatched_workspace_write_stops_without_waiting(
     tool_registry._execute_definition.side_effect = execute
 
     task = asyncio.create_task(AgentRuntime._execute_loop(db, run))
-    await dispatched.wait()
+    await asyncio.wait_for(dispatched.wait(), timeout=5)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.wait_for(task, timeout=5)
 
     assert not any(
         isinstance(call.args[0], Message) and call.args[0].role == "tool"

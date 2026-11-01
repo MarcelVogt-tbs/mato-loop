@@ -191,7 +191,7 @@ class WindowsFilesystem:
         updated, digest = edited_text(data, old_text, new_text, replace_all, expected_sha256)
         return self.write(path, updated, digest)
 
-    def patch(self, patch: str, expected_sha256: dict[str, str]) -> dict:
+    def patch(self, patch: str, expected_sha256: dict[str, str] | None = None) -> dict:
         prepared = parse_patch(
             patch,
             max_bytes=self.max_transfer_bytes,
@@ -199,7 +199,7 @@ class WindowsFilesystem:
             validate_path=absolute,
         )
         revisions = {item.path for item in prepared if item.operation != "add"}
-        if revisions != expected_sha256.keys():
+        if expected_sha256 is not None and revisions != expected_sha256.keys():
             raise AgentError("request.invalid", "Patch revisions do not match its files")
         paths = [p for item in prepared for p in (item.path, item.destination) if p]
         if len({p.casefold() for p in paths}) != len(paths):
@@ -214,7 +214,7 @@ class WindowsFilesystem:
                     else:
                         data = self._read_bytes(path, self.max_file_bytes)
                         digest = hashlib.sha256(data).hexdigest()
-                        if digest != expected_sha256[path]:
+                        if expected_sha256 is not None and digest != expected_sha256[path]:
                             raise AgentError("file.changed", "File changed since it was read")
                         if action == "delete":
                             self.delete(path, False)

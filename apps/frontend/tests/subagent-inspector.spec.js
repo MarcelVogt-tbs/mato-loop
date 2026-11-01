@@ -67,6 +67,29 @@ describe('subagent inspector navigation and presentation', () => {
     }).toEqual({ tools: expanded ? ['saved.txt', 'denied.txt'] : [], activity: 'Verarbeite Anfrage', count: expanded ? '· 2' : undefined })
   })
 
+  it.each([
+    ['pending', true, false],
+    ['recovered', false, false],
+    ['superseded', false, false],
+    ['pending', false, true],
+    [undefined, true, true]
+  ])('shows only unresolved terminal edit errors (%s, running: %s)', (toolRepair, running, visible) => {
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({ render: () => h(AgentActivityPanel, {
+      expanded: true,
+      running,
+      activity: { phase: 'waiting_model', tool: 'edit_file', toolCallId: 'edit' },
+      history: { entries: [{
+        key: 'edit', type: 'tool', tool: { id: 'edit', name: 'edit_file', arguments: { path: 'target.txt' } },
+        result: { toolRepair, content: '{"error":{"code":"file.editTextNotFound"}}' }
+      }] }
+    }) })
+    app.use(createPinia()).use(Quasar, { components })
+    mountApp()
+    expect(root.textContent.includes('target.txt')).toBe(visible)
+  })
+
   it('summarizes repeated and deleted file operations without output cards', () => {
     const sessionId = '550e8400-e29b-41d4-a716-446655440000'
     const action = {

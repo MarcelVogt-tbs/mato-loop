@@ -241,6 +241,7 @@ async def execute_loop_body(
     failed_tool_call_signatures: dict[str, str] = {}
     retried_transient_reads: set[str] = set()
     repeated_tool_call_repair_available = True
+    pending_tool_repairs: dict[str, Message] = {}
     budget_finalization = False
     truncated_tool_batches = 0
     live_tool_calls: dict[UUID, list[dict[str, Any]]] = {}
@@ -866,6 +867,7 @@ async def execute_loop_body(
                 openscad_source_review_retries=openscad_source_review_retries,
                 repository_entries=repository_entries,
                 repository_authorize=repository_authorize,
+                pending_tool_repairs=pending_tool_repairs,
             )
         finally:
             cls._tool_active_runs.discard(run.id)

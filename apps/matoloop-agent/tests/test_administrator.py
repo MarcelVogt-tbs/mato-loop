@@ -126,6 +126,8 @@ class AdministratorTests(unittest.IsolatedAsyncioTestCase):
             (self.file.read_text(), after.st_mode & 0o777, after.st_uid, after.st_gid),
             ("batchSize: 8\n", 0o640, before.st_uid, before.st_gid),
         )
+        await self.invoke("filesystem.upsert", content="batchSize: 9\n")
+        self.assertEqual(self.file.read_text(), "batchSize: 9\n")
 
     @unittest.skipUnless(
         os.geteuid() == 0, "The development container runs the privileged worker as root"

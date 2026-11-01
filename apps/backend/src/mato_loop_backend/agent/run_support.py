@@ -463,14 +463,16 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
     if tool_name == "generate_qr_code" and isinstance(safe.get("wifi"), dict):
         safe["wifi"] = {"redacted": True}
     if tool_name == "edit_file":
-        for key in ("oldText", "newText"):
+        for key in ("oldText", "newText", "oldString", "newString"):
             text = safe.get(key)
             if isinstance(text, str):
                 safe[key] = {"characters": len(text), "redacted": True}
             elif isinstance(text, dict):
                 safe[key] = {"redacted": True}
-    if tool_name == "apply_patch" and isinstance(safe.get("patch"), str):
-        safe["patch"] = {"characters": len(safe["patch"]), "redacted": True}
+    if tool_name == "apply_patch":
+        for key in ("patch", "patchText"):
+            if isinstance(safe.get(key), str):
+                safe[key] = {"characters": len(safe[key]), "redacted": True}
     if tool_name in {"webfetch", "fetch_transcript"} and isinstance(
         safe.get("url"), str
     ):
@@ -604,6 +606,8 @@ def _argument_edit_permission_binding(request: PermissionRequest) -> str:
 
 def _tool_call_signature(call: ToolCall, *, include_reason: bool = False) -> str:
     normalized = dict(call.arguments)
+    if call.name in {"edit_file", "write_file"}:
+        normalized.setdefault("root", "workspace")
     if not include_reason:
         normalized.pop(PERMISSION_REASON_ARGUMENT, None)
     if call.name == "fetch_transcript" and isinstance(normalized.get("url"), str):

@@ -147,9 +147,9 @@ def simulate(raw, schemas, mapping, state, case):
     if name == "read" and case == "file_edit":
         return {"content": "OLD", "totalLines": 1}, "read", None
     if name in {"write_file", "edit_file"} and case.startswith("file_"):
-        valid = args.get("root") == "computer" and args.get("path") in {FILE, "note.txt"}
+        valid = args.get("root", "computer") == "computer" and args.get("path") in {FILE, "note.txt"}
         valid = valid and (name == "write_file" and case == "file_write" and args.get("content") == "NEW"
-                          or name == "edit_file" and case == "file_edit" and args.get("oldText") == "OLD" and args.get("newText") == "NEW")
+                           or name == "edit_file" and case == "file_edit" and args.get("oldString") == "OLD" and args.get("newString") == "NEW")
         return {}, name, valid
     return {}, "unexpected_action", False
 

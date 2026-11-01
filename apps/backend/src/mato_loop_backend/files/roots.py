@@ -38,6 +38,8 @@ def model_file_root_schema(value: object) -> None:
             and set(enum) == {"session", "workspace"}
         ):
             value["enum"] = [_MODEL_FILE_ROOTS[item] for item in enum]
+            if value.get("default") in _MODEL_FILE_ROOTS:
+                value["default"] = _MODEL_FILE_ROOTS[value["default"]]
         for item in value.values():
             model_file_root_schema(item)
     elif isinstance(value, list):

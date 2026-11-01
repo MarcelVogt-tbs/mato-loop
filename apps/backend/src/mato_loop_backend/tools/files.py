@@ -329,7 +329,6 @@ def _read_text_result(arguments: ReadArguments, target_session_id: UUID, result)
         )
     if notices:
         content += ("\n\n" if content else "") + "\n".join(notices)
-    content += f"\n\n[File SHA-256: {result.sha256}]"
     return ToolResult(
         content,
         {
@@ -564,15 +563,10 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
         return ToolResult.error("file.omittedContent", field="content")
     if arguments.root == "workspace":
         result = await (administrator.invoke if arguments.elevated else files_access.workspace_request)(
-            context, "filesystem.write",
+            context, "filesystem.upsert",
             {
                 "path": path,
                 "content": content,
-                **(
-                    {"expectedSha256": arguments.expected_sha256}
-                    if arguments.expected_sha256 is not None
-                    else {}
-                ),
             },
             WorkspaceWriteResult,
             **({"reference": arguments.sudo_password_ref} if arguments.elevated else {}),
@@ -589,16 +583,14 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
                 "sha256": result.sha256,
             },
             file_actions=files_access.workspace_file_action(
-                context, "edit" if arguments.expected_sha256 is not None else "create", result.path, result.size
+                context, "write", result.path, result.size
             ),
         )
     written = await asyncio.to_thread(
-        context.root_files.write_file,
+        context.root_files.upsert_text_file,
         arguments.root,
         path,
         content,
-        mode="replace" if arguments.expected_sha256 is not None else "create",
-        expected_sha256=arguments.expected_sha256,
     )
     encoded = content.encode("utf-8")
     return ToolResult.json(
@@ -609,7 +601,7 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
             "sha256": hashlib.sha256(encoded).hexdigest(),
         },
         file_actions=files_access.regular_file_action(
-            context, "edit" if arguments.expected_sha256 is not None else "create", arguments.root, written
+            context, "write", arguments.root, written
         ),
     )
 
@@ -624,9 +616,9 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
     if files_access.delegated_session_files(context, arguments.root):
         return ToolResult.error("tool.unavailable")
     if isinstance(arguments.old_text, str) and _omitted_file_content(arguments.old_text):
-        return ToolResult.error("file.omittedContent", field="oldText")
+        return ToolResult.error("file.omittedContent", field="oldString")
     if isinstance(arguments.new_text, str) and _omitted_file_content(arguments.new_text):
-        return ToolResult.error("file.omittedContent", field="newText")
+        return ToolResult.error("file.omittedContent", field="newString")
     path = (
         files_access.execution_path(context, arguments.path)
         if arguments.root == "workspace"
@@ -665,10 +657,10 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
     old_text, new_text = old[0], new[0]
     try:
         EditFileArguments.model_validate({
-            **arguments.model_dump(by_alias=True), "oldText": old_text, "newText": new_text,
+            **arguments.model_dump(by_alias=True), "oldString": old_text, "newString": new_text,
         })
     except ValidationError:
-        return ToolResult.error("tool.invalidArguments", field="newText")
+        return ToolResult.error("tool.invalidArguments", field="newString")
     if _omitted_file_content(old_text) or _omitted_file_content(new_text):
         return ToolResult.error("file.omittedContent")
     if arguments.root == "workspace":
@@ -679,11 +671,6 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
                 "oldText": old_text,
                 "newText": new_text,
                 "replaceAll": arguments.replace_all,
-                **(
-                    {"expectedSha256": arguments.expected_sha256}
-                    if arguments.expected_sha256 is not None
-                    else {}
-                ),
             },
             WorkspaceWriteResult,
             **({"reference": arguments.sudo_password_ref} if arguments.elevated else {}),
@@ -710,7 +697,6 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
         old_text,
         new_text,
         replace_all=arguments.replace_all,
-        expected_sha256=arguments.expected_sha256,
     )
     edited_bytes = context.root_files.read_bytes(
         arguments.root, edited, limit=context.root_files.max_editable_text_bytes
@@ -729,8 +715,7 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
 def _workspace_patch(
     context: ToolContext,
     patch: str,
-    expected_sha256: dict[str, str],
-) -> tuple[str, dict[str, str], list[dict[str, str | None]], set[str]]:
+) -> tuple[str, list[dict[str, str | None]], set[str]]:
     operations: list[dict[str, str | None]] = []
     edited_sources: set[str] = set()
     rewritten = []
@@ -763,21 +748,13 @@ def _workspace_patch(
             rewritten.append(line)
     if not operations:
         raise ExecutionClientError("tool.invalidArguments")
-    revisions: dict[str, str] = {}
-    for path, digest in expected_sha256.items():
-        absolute = files_access.execution_path(context, path)
-        if absolute in revisions:
-            raise ExecutionClientError("tool.invalidArguments")
-        revisions[absolute] = digest
-    return "\n".join(rewritten), revisions, operations, edited_sources
+    return "\n".join(rewritten), operations, edited_sources
 
 
 async def _apply_patch(
     arguments: ApplyPatchArguments, context: ToolContext
 ) -> ToolResult:
-    patch, revisions, operations, edited_sources = _workspace_patch(
-        context, arguments.patch, arguments.expected_sha256
-    )
+    patch, operations, edited_sources = _workspace_patch(context, arguments.patch)
     context.repository_target_paths = tuple(
         str(path) for operation in operations
         for path in (operation["path"], operation["destination"]) if path is not None
@@ -787,7 +764,7 @@ async def _apply_patch(
         if operation["operation"] != "add" and await files_access.active_file_is_dirty(
             context, "workspace", source
         ):
-            return ToolResult.error("file.activeDirty", field="patch")
+            return ToolResult.error("file.activeDirty", field="patchText")
         requests = []
         if operation["operation"] in {"delete", "move"}:
             requests.append(
@@ -828,7 +805,7 @@ async def _apply_patch(
     result = await files_access.workspace_request(
         context,
         "filesystem.patch",
-        {"patch": patch, "expectedSha256": revisions},
+        {"patch": patch},
         WorkspacePatchResult,
     )
     assert isinstance(result, WorkspacePatchResult)
@@ -1172,7 +1149,7 @@ READ = ToolDefinition(
             "Read directories, UTF-8 text, PDFs, or images directly. "
             "offset/limit paginate text/directories; pdf_pages selects visual PDF pages. "
             "Text is not visual evidence. elevated=true: UTF-8 computer files; optional "
-            "sudo_password_ref, else reuse/request authentication. Reuse returned SHA-256 as expectedSha256 for edits.",
+            "sudo_password_ref, else reuse/request authentication.",
             ReadArguments,
             _read,
             tool_type="shared",
@@ -1236,8 +1213,8 @@ PROVIDE_FILE = ToolDefinition(
 
 WRITE_FILE = ToolDefinition(
             "write_file",
-            "Write complete UTF-8 content to one file. Pass root explicitly. Parent directories must exist; "
-            "use create_directory first when missing. Creating needs no hash; replacing requires the current expectedSha256. content may "
+            "Create or overwrite one file with complete UTF-8 content. root defaults to computer; use files for session storage. "
+            "Parent directories must exist; use create_directory first when missing. For partial changes use edit_file. content may "
             "contain protected text parts with value_ref from secret_input; resolve only after "
              "file access is authorized. elevated=true uses administrator rights for root=computer; "
               "pass a matching sudo_password_ref or omit it for automatic authentication reuse or protected input.",
@@ -1255,8 +1232,9 @@ WRITE_FILE = ToolDefinition(
 
 EDIT_FILE = ToolDefinition(
             "edit_file",
-            "Replace exact text in one existing UTF-8 file. oldText must be unique unless replaceAll is true. "
-             "oldText and newText may contain protected text parts with value_ref from secret_input. "
+            "Replace exact text in one existing UTF-8 file. root defaults to computer; use files for session storage. "
+             "oldString must be unique unless replaceAll is true. Copy indentation exactly and omit read output's line-number prefixes. "
+             "oldString and newString may contain protected text parts with value_ref from secret_input. "
               "elevated=true uses administrator rights for root=computer; "
               "pass a matching sudo_password_ref or omit it for automatic authentication reuse or protected input.",
             EditFileArguments,
@@ -1339,8 +1317,7 @@ MOVE_PATH = ToolDefinition(
 APPLY_PATCH = ToolDefinition(
             "apply_patch",
             "Apply one bounded patch to computer files in the current directory. Paths may be relative "
-            "or absolute. Include expectedSha256 for every updated, moved, or deleted source file; add "
-            "operations do not use a revision. Use LF patch text enclosed by *** Begin Patch and "
+            "or absolute. Pass patchText using LF text enclosed by *** Begin Patch and "
             "*** End Patch. File headers are *** Add File: path (all lines prefixed +), "
             "*** Delete File: path (no body), or *** Update File: path. An update may include "
             "*** Move to: new-path immediately after its header, with or without content changes. "

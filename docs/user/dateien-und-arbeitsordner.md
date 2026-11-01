@@ -39,6 +39,9 @@ Tabs behalten Entwurf, Auswahl und Undo-Verlauf im Browser-Arbeitsspeicher. Tabw
 
 Wenn du bei geöffneter Datei eine Nachricht sendest, erhält der Agent nur einen Dateiverweis und den Status ungespeicherter Änderungen, nicht automatisch den Inhalt. Solange der übermittelte Stand als ungespeichert markiert ist, werden passende Modell-Schreibzugriffe blockiert.
 
+!!! warning "Gleichzeitige Änderungen abstimmen"
+    Agentenänderungen arbeiten gegen den Dateiinhalt bei der Tool-Ausführung, nicht gegen einen beim früheren Lesen festgehaltenen Gesamtstand. Vollständiges Schreiben kann vorhandene Inhalte ersetzen. Vermeide parallele Änderungen derselben Computerdatei und prüfe anschließend den Diff; interne Schreibsperren halten externe Programme nicht auf.
+
 ## Versionen ansehen und wiederherstellen
 
 Nur Dateien der **Ablage** besitzen gespeicherte Vollversionen. Öffne deren Versionsansicht zum Anzeigen, Herunterladen oder Aktivieren einer älteren Version. Aktivieren ersetzt den aktuellen Inhalt, erhält aber alle gespeicherten Versionen. Umbenennen und Verschieben erhalten Dateiidentität und Verlauf; Kopieren erzeugt eine eigenständige Datei.

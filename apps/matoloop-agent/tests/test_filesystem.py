@@ -560,6 +560,23 @@ class FilesystemTests(unittest.TestCase):
         self.assertFalse((self.root / "must-not-exist.txt").exists())
         self.assertEqual(target.read_text(), "current\n")
 
+    def test_patch_without_model_revisions_rechecks_before_publication(self) -> None:
+        target = self.root / "target.txt"
+        target.write_text("current\n")
+        write = self.filesystem.write
+
+        def concurrent_write(path, content, revision):
+            target.write_text("external change\n")
+            return write(path, content, revision)
+
+        with patch.object(self.filesystem, "write", side_effect=concurrent_write):
+            with self.assertRaises(AgentError):
+                self.filesystem.patch(
+                    f"*** Begin Patch\n*** Update File: {target}\n"
+                    "@@\n-current\n+new\n*** End Patch\n"
+                )
+        self.assertEqual(target.read_text(), "external change\n")
+
     def test_patch_moves_with_hunks_and_preflights_destination(self) -> None:
         target = self.root / "target.txt"
         destination = self.root / "moved.txt"

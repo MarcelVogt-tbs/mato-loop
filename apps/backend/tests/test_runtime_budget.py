@@ -227,8 +227,8 @@ async def test_runtime_privacy_keys_are_owner_and_session_scoped(monkeypatch, sc
 
 
 async def test_alternative_edit_patch_repair_retains_original_failure(monkeypatch):
-    edit = ToolCall("edit", "edit_file", {"root": "workspace", "path": "note.txt", "oldText": "old", "newText": "new"})
-    patch = ToolCall("patch", "apply_patch", {"patch": "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n+new\n*** End Patch"})
+    edit = ToolCall("edit", "edit_file", {"root": "workspace", "path": "note.txt", "oldString": "old", "newString": "new"})
+    patch = ToolCall("patch", "apply_patch", {"patchText": "*** Begin Patch\n*** Update File: note.txt\n@@\n-old\n+new\n*** End Patch"})
     db, run, _requests, _projections, _events = await _runtime_setup(
         monkeypatch,
         [ProviderResult(tool_calls=[edit]), ProviderResult(tool_calls=[patch]), ProviderResult(content="Die Datei wurde per Patch korrigiert.")],
@@ -339,6 +339,13 @@ def test_transcript_signature_canonicalizes_youtube_url():
     assert _tool_call_signature(shared) == _tool_call_signature(canonical)
 
 
+@pytest.mark.parametrize("tool", ["edit_file", "write_file"])
+def test_default_computer_root_cannot_bypass_repeated_failure_guard(tool):
+    implicit = ToolCall("implicit", tool, {"path": "note.txt"})
+    explicit = ToolCall("explicit", tool, {"root": "computer", "path": "note.txt"})
+    assert _tool_call_signature(implicit) == _tool_call_signature(explicit)
+
+
 @pytest.mark.parametrize(("old_limit", "new_limit"), [(None, 2), (2, None)])
 @pytest.mark.parametrize("legacy", [False, True])
 async def test_retry_snapshots_current_budget_without_overwriting_failed_run(monkeypatch, old_limit, new_limit, legacy):
@@ -380,7 +387,7 @@ async def test_retry_snapshots_current_budget_without_overwriting_failed_run(mon
 @pytest.mark.parametrize("repair_succeeds", [False, True])
 async def test_shell_retry_after_edit_keeps_failure_evidence(monkeypatch, repair_succeeds):
     command = ToolCall("check", "shell_run", {"command": "pytest"})
-    edit = ToolCall("repair", "edit_file", {"root": "computer", "path": "test_app.py", "oldText": "old", "newText": "new"})
+    edit = ToolCall("repair", "edit_file", {"root": "computer", "path": "test_app.py", "oldString": "old", "newString": "new"})
     db, run, _requests, _projections, _events = await _runtime_setup(
         monkeypatch,
         [ProviderResult(tool_calls=[command]), ProviderResult(tool_calls=[edit]), ProviderResult(tool_calls=[command]),

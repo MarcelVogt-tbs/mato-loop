@@ -305,14 +305,14 @@ class EditArguments(PathArguments):
 
 class PatchArguments(StrictModel):
     patch: str = Field(min_length=1, max_length=512 * 1024)
-    expected_sha256: dict[str, Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]] = Field(
-        alias="expectedSha256", max_length=1000
+    expected_sha256: dict[str, Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]] | None = Field(
+        default=None, alias="expectedSha256", max_length=1000
     )
 
     @field_validator("expected_sha256")
     @classmethod
-    def absolute_revision_paths(cls, value: dict[str, str]) -> dict[str, str]:
-        for path in value:
+    def absolute_revision_paths(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        for path in value or {}:
             if len(path) > 4096:
                 raise ValueError("revision path is too long")
             _absolute_path(path)
@@ -408,6 +408,7 @@ class AdministratorArguments(StrictModel):
         "authenticate",
         "filesystem.read",
         "filesystem.write",
+        "filesystem.upsert",
         "filesystem.edit",
         "shell.inspect",
         "shell.run",

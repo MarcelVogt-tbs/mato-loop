@@ -29,6 +29,7 @@ from mato_loop_backend.agent.run_support import (
 )
 from mato_loop_backend.agent.session_settings import apply_run_session_settings
 from mato_loop_backend.agent.subagents import run_tasks
+from mato_loop_backend.agent.tool_repairs import repairable_tool_error, tool_repair_key
 from mato_loop_backend.diagnostics.service import schedule_diagnostic_event
 from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.events import run_events
@@ -104,6 +105,7 @@ async def persist_tool_result(
                 **({"userEditedArguments": True} if metadata.get("userEdited") is True else {}),
                 **({"errorCode": metadata["errorCode"]} if isinstance(metadata.get("errorCode"), str) else {}),
                 **({"argumentsRejected": True} if metadata.get("argumentsRejected") is True else {}),
+                **({"toolRepair": metadata["toolRepair"]} if "toolRepair" in metadata else {}),
                 **({"toolSnapshot": metadata["toolSnapshot"]} if isinstance(metadata.get("toolSnapshot"), dict) else {}),
                 **({"toolDiscovery": metadata["toolDiscovery"]}
                    if call.name == "search_tools" and not metadata.get("errorCode")
@@ -309,7 +311,10 @@ async def execute_tool_batch(
     repository_entries: dict[str, dict] | None = None,
     delegation_tool_names: frozenset[str] | None = None,
     repository_authorize: Callable[[PermissionRequest], Awaitable[PermissionDecision]] | None = None,
+    pending_tool_repairs: dict[str, Message] | None = None,
 ) -> ToolBatchResult:
+    if pending_tool_repairs is None:
+        pending_tool_repairs = {}
     state = ToolBatchResult(
         research_tool_calls_used=research_tool_calls_used,
         research_used=research_used,
@@ -380,7 +385,9 @@ async def execute_tool_batch(
         call_signature = run_support._tool_call_signature(call)
         call_signature += authentication_scope
         validation_signature = "arguments:" + run_support._tool_call_signature(call, include_reason=True)
-        if call.arguments.get("root") in {"workspace", "computer"} or call.name in {"shell_run", "apply_patch"}:
+        if (call.arguments.get("root") in {"workspace", "computer"}
+                or call.name in {"shell_run", "apply_patch"}
+                or call.name in {"edit_file", "write_file"} and "root" not in call.arguments):
             call_signature += f":directory={run.current_directory_snapshot}"
             validation_signature += f":directory={run.current_directory_snapshot}"
         is_research_call = (
@@ -415,6 +422,8 @@ async def execute_tool_batch(
                 )
             content = json.dumps(rejected, ensure_ascii=False)
             metadata = {"errorCode": rejected_batch_code}
+            if truncated_batch and not tool_batch_exceeds_budget:
+                metadata["toolRepair"] = "pending"
         elif state.repeated_tool_call_limit_reached:
             content = json.dumps(error_payload("agent.repeatedToolCall"), ensure_ascii=False)
             metadata = {"errorCode": "agent.repeatedToolCall"}
@@ -453,6 +462,8 @@ async def execute_tool_batch(
                 state.repeated_tool_call_limit_reached = True
             content = json.dumps(error_payload("agent.repeatedToolCall"), ensure_ascii=False)
             metadata = {"errorCode": "agent.repeatedToolCall"}
+            if repeated_tool_call_repair_available:
+                metadata["toolRepair"] = "pending"
             if (repeated_tool_call_repair_available
                     and failed_tool_call_signatures.get(validation_signature) == "tool.invalidArguments:notStarted"):
                 metadata["argumentsRejected"] = True
@@ -571,7 +582,9 @@ async def execute_tool_batch(
             if tool_result.metadata.get("userEdited") is True or authentication_scope:
                 call_signature = run_support._tool_call_signature(call)
                 call_signature += authentication_scope
-                if call.arguments.get("root") in {"workspace", "computer"} or call.name in {"shell_run", "apply_patch"}:
+                if (call.arguments.get("root") in {"workspace", "computer"}
+                        or call.name in {"shell_run", "apply_patch"}
+                        or call.name in {"edit_file", "write_file"} and "root" not in call.arguments):
                     call_signature += f":directory={run.current_directory_snapshot}"
             if delegated:
                 for attachment in tool_result.attachments:
@@ -645,6 +658,28 @@ async def execute_tool_batch(
                     )
                 attachment.data = b""
             attachments = tuple(attachment for attachment in attachments if not attachment.ephemeral)
+        workflow_repair = (
+            (call.name == "web_search" and session.web_search_policy == WebSearchPolicy.REQUIRED)
+            or call.name == "memory_write"
+            or (call.name == "render_openscad" and state.openscad_render_pending)
+        )
+        repair_key = tool_repair_key(call, run)
+        repairable = repairable_tool_error(call, metadata, workflow=workflow_repair)
+        error_code = metadata.get("errorCode")
+        if not metadata.get("repositoryInstructionsDeferred") and (
+            repairable or not error_code or error_code == "agent.repeatedToolCall"
+        ):
+            previous_repair = pending_tool_repairs.pop(repair_key, None)
+            if previous_repair is not None:
+                previous_repair.provider_data = {
+                    **previous_repair.provider_data,
+                    "_matoloop": {
+                        **previous_repair.provider_data["_matoloop"],
+                        "toolRepair": "superseded" if error_code else "recovered",
+                    },
+                }
+        if repairable:
+            metadata["toolRepair"] = "pending"
         tool_message, content, metadata = await persist_tool_result(
             db, run, session, call, content=content, metadata=metadata,
             attachments=attachments, file_actions=file_actions,
@@ -653,6 +688,8 @@ async def execute_tool_batch(
             execution_binding=execution_binding,
         )
         error_code = metadata.get("errorCode")
+        if repairable:
+            pending_tool_repairs[repair_key] = tool_message
         await run_events.publish(run.id, {
             "type": "tool.completed", "tool": call.name, "toolLabel": tool_label,
             "toolDisplay": display, "toolCallId": call.id,
@@ -693,7 +730,7 @@ async def execute_tool_batch(
                   and isinstance(call.arguments.get("path"), str)
                   and call.arguments["path"].casefold().endswith(".scad")):
                 state.openscad_render_pending = True
-                root = call.arguments.get("root")
+                root = call.arguments.get("root", "computer")
                 path = call.arguments.get("path")
                 if isinstance(root, str) and isinstance(path, str):
                     openscad_pending_paths.add((root, path))

@@ -19,6 +19,7 @@ usage() {
         "  context-search       Evaluate implemented cross-session recall tools" \
         "  project-context      Evaluate project-first recall and result paging" \
         "  session-cache        Evaluate cache reuse across real sessions" \
+        "  file-tools           Accept file mutations, repair presentation, and cache reuse in a real session" \
         "  coding-comparison    Compare persisted coding-run artifacts" \
         "  browser-performance  Compare synthetic browser tool contracts (requires a running backend)" \
         "  shell-decider        Evaluate shell classification models, including Qwen and teacher experiments" \
@@ -34,6 +35,7 @@ case "${1:-}" in
     automation-permissions) shift; compose run --rm --no-deps backend uv run python /workspace/scripts/automation-permissions-eval.py "$@" ;;
     prompts) shift; compose run --rm --no-deps backend uv run python -m mato_loop_backend.prompt_eval "$@" ;;
     session-cache) shift; compose run --rm --no-deps backend uv run python -m mato_loop_backend.session_cache_eval "$@" ;;
+    file-tools) shift; compose run --rm --no-deps backend uv run python /workspace/scripts/file-tools-eval.py "$@" ;;
     coding-comparison) shift; compose run --rm --no-deps backend uv run python -m mato_loop_backend.coding_eval "$@" ;;
     browser-performance) shift; compose exec -T backend /opt/mato-loop/backend/venv/bin/python -B -m mato_loop_backend.browser_perf_eval "$@" ;;
     shell-decider) shift; compose -f docker-compose.eval.yaml run --build --rm --no-deps shell-decider-eval "$@" ;;

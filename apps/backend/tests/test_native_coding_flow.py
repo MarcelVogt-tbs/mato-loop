@@ -26,7 +26,7 @@ from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.tools.catalog import tool_registry
 
 
-async def test_native_coding_replays_revision_errors_checks_and_diff(tmp_path, monkeypatch):
+async def test_native_coding_replays_patch_repairs_checks_and_diff(tmp_path, monkeypatch):
     agent_id = uuid4()
     directory = "/home/test/project"
     revision = "a" * 64
@@ -79,13 +79,13 @@ async def test_native_coding_replays_revision_errors_checks_and_diff(tmp_path, m
             "command": "./check.sh",
             "_reason": "Run the existing check before changing the file.",
         }),
-        ToolCall("stale-patch", "apply_patch", {
-            "patch": patch, "expectedSha256": {"check.sh": "0" * 64},
-            "_reason": "Apply the fix without overwriting newer changes.",
+        ToolCall("bad-context", "apply_patch", {
+            "patchText": patch.replace('test "old"', 'test "missing"'),
+            "_reason": "Apply the focused fix.",
         }),
         ToolCall("patch", "apply_patch", {
-            "patch": patch, "expectedSha256": {"check.sh": revision},
-            "_reason": "Apply the fix to the reviewed file revision.",
+            "patchText": patch,
+            "_reason": "Apply the fix to the exact source text.",
         }),
         ToolCall("check", "shell_run", {
             "command": "./check.sh",
@@ -111,12 +111,10 @@ async def test_native_coding_replays_revision_errors_checks_and_diff(tmp_path, m
                 "linesRead": 3, "hasMore": False, "truncatedLines": [], "sha256": revision,
             }
         elif operation == "filesystem.patch":
-            assert arguments["patch"] == patch.replace("check.sh", directory + "/check.sh")
-            expected = arguments["expectedSha256"]
-            assert expected == {directory + "/check.sh": "0" * 64 if step == 3 else revision}
+            assert arguments == {"patch": calls[step - 1].arguments["patchText"].replace("check.sh", directory + "/check.sh")}
             if step == 3:
                 return ResponseMessage(
-                    type="response", id=request_id, ok=False, error={"code": "file.changed"},
+                    type="response", id=request_id, ok=False, error={"code": "file.patchContextMismatch"},
                 )
             result = {"files": [{
                 "operation": "update", "path": directory + "/check.sh", "sha256": "b" * 64, "size": 72,
@@ -144,7 +142,7 @@ async def test_native_coding_replays_revision_errors_checks_and_diff(tmp_path, m
     monkeypatch.setattr(
         "mato_loop_backend.execution.client.execution_agent_connections.request", request,
     )
-    final = "The initial check failed; the stale patch was rejected. The corrected check passes; the diff includes your comment."
+    final = "The corrected check passes; the diff includes your comment."
 
     async def complete(_db, **kwargs):
         nonlocal step
@@ -159,10 +157,6 @@ async def test_native_coding_replays_revision_errors_checks_and_diff(tmp_path, m
             previous = json.loads(messages[-1].content) if step > 1 else None
             assert messages[-1].tool_call_id == calls[step - 1].id
             if step == 1:
-                assert any(
-                    f"[File SHA-256: {revision}]" in message["content"]
-                    for message in kwargs["messages"] if message["role"] == "tool"
-                )
                 assert "# existing user change" in messages[-1].content
                 read_event = next(event for event in events if event.get("type") == "tool.completed")
                 assert read_event["metadata"]["sha256"] == revision
@@ -173,7 +167,7 @@ async def test_native_coding_replays_revision_errors_checks_and_diff(tmp_path, m
                     "process.commandFailed" if step == 2 else None
                 )
             elif step == 3:
-                assert previous["error"]["code"] == "file.changed"
+                assert previous["error"]["code"] == "file.patchContextMismatch"
             elif step == 4:
                 assert "error" not in previous
             if step == 6:
@@ -188,6 +182,7 @@ async def test_native_coding_replays_revision_errors_checks_and_diff(tmp_path, m
     await AgentRuntime._execute_loop(db, run)
 
     assert step == len(calls)
+    assert _tool_messages(db)[2].provider_data["_matoloop"]["toolRepair"] == "recovered"
     assert _assistant_messages(db)[-1].content == final
     assert any(
         event.get("type") == "message.completed" and event["message"]["content"] == final

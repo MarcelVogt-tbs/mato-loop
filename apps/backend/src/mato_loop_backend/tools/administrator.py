@@ -52,7 +52,7 @@ async def authorize(context: ToolContext, request: PermissionRequest, reference=
                 raise ExecutionClientError("question.rejected")
     previews = []
     fields = (
-        (("oldText", "Vorher"), ("newText", "Nachher")) if context.tool_call.name == "edit_file"
+        (("oldString", "Vorher"), ("newString", "Nachher")) if context.tool_call.name == "edit_file"
         else (("content", "Dateiinhalt"),) if context.tool_call.name == "write_file" else ()
     )
     for field, label in fields:

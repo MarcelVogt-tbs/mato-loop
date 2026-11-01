@@ -152,7 +152,7 @@ async def _run_worker(config, request, sudo, options, request_path, timeout, str
     try:
         response = await asyncio.wait_for(asyncio.shield(task), timeout + 5)
     except asyncio.CancelledError:
-        if request.operation in {"filesystem.write", "filesystem.edit"}:
+        if request.operation in {"filesystem.write", "filesystem.upsert", "filesystem.edit"}:
             # Finish atomic mutations and report their real outcome, like ordinary file writes.
             while not task.done():
                 try:
@@ -211,6 +211,8 @@ async def worker(payload: dict) -> dict:
         )
     if request.operation == "filesystem.write":
         return files.write(arguments.path, arguments.content, arguments.expected_sha256)
+    if request.operation == "filesystem.upsert":
+        return files.upsert(arguments.path, arguments.content)
     if request.operation == "filesystem.edit":
         return files.edit(
             arguments.path,
