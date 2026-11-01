@@ -31,6 +31,7 @@ CATEGORY_LABELS: dict[ToolActionCategory, str] = {
 AUTOMATIC_ACTION_GROUPS = {
     "Öffentliche Recherche und Downloads in die Session": ("network.search", "network.fetch"),
     "Sessions lesen und durchsuchen (ohne sensible Zugriffe)": ("session.read", "session.search"),
+    "Memories lesen": ("memory.read",),
     "Session-Dateien lesen, bearbeiten und organisieren": ("session.files.read", "session.files.write"),
     "Dateien bereitstellen": ("file.provide",),
     "Bilder erzeugen und bearbeiten": ("media.generate.image", "media.edit.image"),

@@ -200,7 +200,7 @@ def test_category_defaults_and_saved_policies(
 ) -> None:
     settings = ToolSettings().select_trust(trust)
     expected = (
-        ToolExecutionPolicy.ASK if capability in {"session.files.delete", "secrets.access"} or (trust == TrustLevel.PUBLIC and capability == "memory.read") else ToolExecutionPolicy.AUTO
+        ToolExecutionPolicy.ASK if capability in {"session.files.delete", "secrets.access"} else ToolExecutionPolicy.AUTO
     )
     assert resolve_tool_execution_policy(settings, capability).policy == expected
     for policy in ToolExecutionPolicy:
