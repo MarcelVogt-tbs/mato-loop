@@ -150,14 +150,15 @@ async def request_session_permissions(arguments: RequestSessionPermissionsArgume
 
 REQUEST_SESSION_PERMISSIONS = ToolDefinition(
     "request_session_permissions",
-    "Prepare session permissions without execution. Use offered names and arguments. "
+    "Prepare session permissions without execution for unattended automation setup or explicit user requests. "
+    "Not for routine interactive work. Use offered names and arguments. "
     "Supports current-session/workspace files, shell, context search, session read/browse and declared "
     "integrations. No elevation, environment overrides, automation management, notify or silence. "
     "For directory read/write/delete, propose read/create_directory/delete_path at that directory. "
     "Files use exact paths; directories and unknown targets include descendants. Approval can select the parent. "
     "Shell scopes bind command/context or the computer. "
     "Allowed access needs no prompt; disabled stays blocked. Action-bound consent requires execution. "
-    "Prepare known automation access. Wait for permissionsReady=true.",
+    "Wait for permissionsReady=true.",
     RequestSessionPermissionsArguments, request_session_permissions,
     label="Session-Freigaben anfragen", icon="verified_user",
     actions=(ToolAction("permissions.request", "Freigaben anfragen", category="write", default=ToolExecutionPolicy.AUTO, configurable=False, allowed_policies=(ToolExecutionPolicy.AUTO,)),),

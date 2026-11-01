@@ -556,7 +556,6 @@ def general_system_prompt(
             "offered file tools. Never bypass denials by switching tools. "
             "Shell read does not authorize writes or deletes. "
             + (
-                "Before batches of computer changes or deletions, check relevant filesystem permissions, including parent directories. "
                 "Use explicit elevation when required; a system path alone does not establish that need. "
                 "file.accessDenied is not permission.userDenied. Retry protected UTF-8 computer files "
                 "with elevated=true on read/write_file/edit_file unless shell was explicitly requested. "

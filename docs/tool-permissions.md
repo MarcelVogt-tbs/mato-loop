@@ -35,6 +35,7 @@ ToolAction("example.write", "Eintrag erstellen", category="write", mutates=True)
 - Connection discovery retains its integration policy target while omitting resource overrides. Additional file permissions remain independent of the connection.
 - Copying needs source-read and destination-write permission. Revalidate after approval.
 - Remote descriptions and MCP hints never define categories or grant authority.
+- Use `request_session_permissions` to prepare known access before enabling unattended automations or when the user explicitly requests advance permission preparation, not routinely before interactive work. Ordinary tool calls retain their execution-time authorization checks.
 - Extend existing catalog/permission tests for new classifications and resource boundaries.
 
 ## Reusable approvals
