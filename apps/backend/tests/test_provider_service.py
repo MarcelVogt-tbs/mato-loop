@@ -2499,6 +2499,7 @@ async def test_prepare_is_local_and_matches_transmitted_request(monkeypatch, ada
 
     def handler(request):
         bodies.append(json.loads(request.content))
+        assert request.headers.get("session-id") == ("test-session" if adapter.codex_auth else None)
         return httpx.Response(200, json={"choices": [], "status": "completed", "output": []})
 
     real_client = httpx.AsyncClient

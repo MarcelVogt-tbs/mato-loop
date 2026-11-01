@@ -101,7 +101,9 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Reuse identical request preparation only within its validated input/provider binding. Never cache permission decisions, skip post-approval checks, or revive revoked sources to preserve a prefix.
 - Keep privacy markers owner/session-isolated and protection caches bounded. Restoration authority stays request-local; never share restoration maps or log/persist cache originals.
 - Keep session cache routing stable in the provider adapter; retain Codex's matching `prompt_cache_key` and `session-id` mapping without leaking that header to other adapters.
-- Correctness, current instructions, privacy, revocation, and context limits take precedence over cache reuse. Use existing prefix/serialization/isolation regression coverage for behavior changes; distinguish historical measurements from new validation and never promise cache hits.
+- Preserve the repository-discovery cache contract in `docs/harness.md#repository-instructions`: reuse historical target classification, not instruction contents or permissions; keep current-target checks and the aggregate file budget before effects.
+- Changes to prompt assembly, history projection, tool schemas, privacy, provider conversion/routing, or repository discovery must pass the affected cache regression tests linked in `docs/harness.md#prompt-construction-and-cache-stability`. Compare serialized retained prefixes across tool rounds and live-to-persisted follow-ups, not only internal objects; extend existing tests when a changed boundary lacks coverage. Do not weaken assertions merely to accept an unexplained prefix break or repeated scan.
+- Correctness, current instructions, privacy, revocation, and context limits take precedence over cache reuse. Document intentional prefix invalidation; distinguish historical measurements from new validation and never promise cache hits.
 
 ## Error Contract
 

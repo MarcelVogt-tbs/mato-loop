@@ -218,6 +218,7 @@ async def test_runtime_privacy_keys_are_owner_and_session_scoped(monkeypatch, sc
         session.user_id = uuid4() if index and scope == "other_owner" else owner_id
         await AgentRuntime._execute_loop(db, run)
         keys.append(requests[0]["pseudonymization_key"])
+        assert {request["prompt_cache_key"] for request in requests} == {str(session.id)}
         assert all("pseudonymization_key" not in str(item.provider_data) for item in _assistant_messages(db))
     assert (keys[0] == keys[1]) == (scope == "same_session")
     assert len({id(request["pseudonymization_cache"]) for request in requests}) == 1

@@ -3480,12 +3480,18 @@ def test_unsnapshotted_runtime_instructions_are_current_projection_only(delegate
 
 @pytest.mark.usefixtures("skill_library")
 @pytest.mark.parametrize("current_memory", ["Earlier memory", "Current memory"])
-async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(monkeypatch, current_memory) -> None:
+@pytest.mark.parametrize("api_type, serialize, history_key", [
+    ("chat_completions", service_module._chat_body, "messages"),
+    ("responses", service_module._responses_body, "input"),
+])
+async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(
+    monkeypatch, current_memory, api_type, serialize, history_key,
+) -> None:
     from runtime_helpers import _runtime_setup
 
     from mato_loop_backend.agent.runtime import AgentRuntime
 
-    db, run, _, projections, _ = await _runtime_setup(
+    db, run, requests, projections, _ = await _runtime_setup(
         monkeypatch, [ProviderResult(content="Done", finish_reason="stop")],
         search_policy=WebSearchPolicy.AVAILABLE,
     )
@@ -3501,11 +3507,19 @@ async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(monkeypat
     await AgentRuntime._execute_loop(db, run)
     records = [*await AgentRuntime._records(db, run.session_id), *_tool_segment(run.session_id, 0)]
     records[-1].content = json.dumps({"stdout": "source evidence " * 5_000})
+    tool_message = records[-3]
+    tool_message.tool_calls[0]["arguments"] = {
+        "environment": {"Z_VAR": str(uuid4()), "A_VAR": str(uuid4())}, "command": "pwd",
+    }
+    live_calls = deepcopy(tool_message.tool_calls)
+    # Simulate JSONB key reordering while the current run still has live calls.
+    tool_message.tool_calls = json.loads(json.dumps(tool_message.tool_calls, sort_keys=True))
     system = projections[0]["system_prompt"]
     user_id = next(item.id for item in reversed(records) if item.role == "user")
     first = _projection_messages(system, None, records, TrustLevel.PRIVATE,
                                  memory_context="Earlier memory", memory_contexts={user_id: "Earlier memory"},
-                                 runtime_instructions=projections[0]["runtime_instructions"])
+                                 runtime_instructions=projections[0]["runtime_instructions"],
+                                 live_tool_calls={tool_message.id: live_calls})
     assert first[1]["role"] == "user"
     assert any("The workspace changed for this user turn." in message["content"]
                and '"currentDirectory": "/current"' in message["content"]
@@ -3516,10 +3530,19 @@ async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(monkeypat
         TrustLevel.PRIVATE, runtime_instructions=agent_profile_runtime_instructions(plan_profile()),
         memory_context=current_memory, memory_contexts={user_id: "Earlier memory"},
     )
+    provider = requests[0]["provider"]
+    provider.config["api_type"] = api_type
+    bodies = []
     for messages in (first, second):
         _strip_projection_metadata(messages)
+        prepared = await ProviderService.prepare_request(
+            provider=provider, model=requests[0]["model"], messages=messages,
+            tools=requests[0]["tools"], pseudonymization_enabled=False,
+        )
+        bodies.append(serialize(prepared.request))
     assert second[:len(first)] == first
     assert sum(message["content"].count("Earlier memory") for message in second) == 1
+    assert {**bodies[1], history_key: bodies[1][history_key][:len(bodies[0][history_key])]} == bodies[0]
 
 
 def test_custom_profile_instructions_have_no_id_based_host_workflow() -> None:
