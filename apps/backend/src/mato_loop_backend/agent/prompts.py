@@ -469,6 +469,15 @@ def general_system_prompt(
             "Use a browser only for page interaction or browser-authenticated access. Verify saved "
             "downloads before claiming success."
         )
+    if execution_agent_connected:
+        parts.append(
+            "For interactive and visual UI checks, use this chat's Browser integration when available "
+            "and suitable, before installing or launching a separate browser. Discover its tools first; "
+            "use browser_run_code for permitted Python/Playwright checks in the existing browser. "
+            "Continue to run existing project browser test suites normally. Do not bypass denied or "
+            "disabled browser access with scripts or another browser. "
+            "Before validating a code change in the browser, verify that the target app serves the intended working copy."
+        )
     if "webfetch" in offered_tool_names and any(
         name.startswith("browser_") for name in offered_tool_names
     ):

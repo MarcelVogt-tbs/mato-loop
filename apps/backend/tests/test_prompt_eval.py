@@ -352,6 +352,13 @@ def test_agent_web_routing_production_prompt_is_conditional() -> None:
     }
     assert messages[0]["content"].count(rule) == 1
     assert rule not in offline_messages[0]["content"]
+    assert (
+        "For interactive and visual UI checks, use this chat's Browser integration when available "
+        "and suitable, before installing or launching a separate browser. Discover its tools first; "
+        "use browser_run_code for permitted Python/Playwright checks in the existing browser. "
+        "Continue to run existing project browser test suites normally. Do not bypass denied or "
+        "disabled browser access with scripts or another browser."
+    ) in messages[0]["content"]
     command_rule = (
         "Use the most suitable available tool. Prefer dedicated tools and established "
         "command-line utilities over custom scripts. Give each shell call one purpose. "
@@ -367,7 +374,7 @@ def test_agent_web_routing_production_prompt_is_conditional() -> None:
     growth = prompt_eval.estimate_tokens(messages[0]["content"], 4.0) - prompt_eval.estimate_tokens(
         offline_messages[0]["content"], 4.0
     )
-    assert 100 <= growth <= 520
+    assert 100 <= growth <= 650
 
     shell_only_messages, _tools = build_case(
         replace(case, tools=("shell_run",))

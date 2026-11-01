@@ -143,4 +143,10 @@ def offer_integration_tools(
         + ". Use search_tools for capabilities not yet offered. Discovered tools remain available until context compaction; "
         "call their exact names normally on subsequent turns. Never execute a tool that was not offered."
     )
+    if "browser_tabs" in candidates:
+        instructions += (
+            " For page interaction and visual UI checks, this chat has an isolated browser on the selected computer. "
+            "It starts on first use and needs no open viewer. If browser_tabs is not offered, "
+            "call search_tools with query=browser_tabs before claiming browser access is unavailable."
+        )
     return replace(offered, tools=selected, prompt_fragments=(*offered.prompt_fragments, instructions))

@@ -47,6 +47,17 @@ chat's browser if necessary; no app entry, attachment, control request or viewer
 Ordinary action permissions remain authoritative. Concurrent starts reuse one runtime per chat
 and computer. All views share one viewport; an explicit resize affects every view.
 
+With on-demand tool loading, the integration catalog explains browser access before its schemas
+are loaded and directs the model to discover `browser_tabs`. This hint follows effective tool
+availability without eagerly loading schemas or probing the runtime.
+
+For interactive and visual UI checks, the model must use the chat's Browser integration when
+available and suitable before installing or launching a separate browser. Python/Playwright checks
+use `browser_run_code` with its independent permission. Existing project browser test suites still
+run normally; denied or disabled browser access must not be bypassed through scripts or another browser.
+Regardless of tool-loading mode, the model must verify that the target app serves the intended
+working copy before validating a code change.
+
 The Agent streams the selected page through CDP `Page.startScreencast`; the WebUI draws JPEG
 frames and sends typed mouse, keyboard, text and dialog input. Tabs, address, history, reload
 and stop remain Quasar controls. Resize changes the actual viewport (320x240 to 3840x2160),

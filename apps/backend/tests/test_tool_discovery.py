@@ -112,6 +112,18 @@ async def test_shared_tool_schema_loads_only_pinned_accounts_and_search_rechecks
     assert json.loads(result.content)["tools"] == []
 
 
+@pytest.mark.parametrize("available", [True, False])
+def test_deferred_browser_guidance_respects_effective_availability(available):
+    profile = AgentProfile(name="Agent", instructions="Task")
+    browser = IntegrationInstance(
+        name="Browser", integration_type="browser", adapter_type="browser",
+        owner_id=uuid4(), execution_agent_id=uuid4(),
+        profile_permissions={profile.id: IntegrationPermissions(available=available)},
+    )
+    initial = offer([calendar(), browser], profile)
+    assert ("call search_tools with query=browser_tabs" in "\n".join(initial.prompt_fragments)) is available
+
+
 def test_context_pressure_expires_older_discoveries_not_the_latest():
     instance = calendar()
     profile = AgentProfile(name="Agent", instructions="Task")

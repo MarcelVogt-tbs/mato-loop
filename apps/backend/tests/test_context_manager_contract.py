@@ -2138,6 +2138,7 @@ def test_available_web_research_prompt_balances_freshness_and_search_cost() -> N
 def test_webfetch_browser_fallback_prompt_matches_available_tools() -> None:
     attached = general_system_prompt(
         _session(),
+        execution_agent_connected=True,
         offered_tool_names=frozenset({
             "webfetch", "browser_tabs", "browser_snapshot",
         }),
@@ -2152,6 +2153,7 @@ def test_webfetch_browser_fallback_prompt_matches_available_tools() -> None:
     )
 
     assert "Use this chat's browser when the task requires interaction" in attached
+    assert "verify that the target app serves the intended working copy" in attached
     assert "downloads that require page interaction" in attached
     assert "works without an open viewer" in attached
     assert "wait for their reply; do not poll with browser tools" in attached
