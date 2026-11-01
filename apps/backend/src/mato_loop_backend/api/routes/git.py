@@ -9,14 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.execution.client import ExecutionClientError, ExecutionResult
-from mato_loop_backend.execution.paths import within
-from mato_loop_backend.models import ChatSession, Project, UserAccount
+from mato_loop_backend.models import Project, UserAccount
 from mato_loop_backend.security import require_user
 from mato_loop_backend.sessions.coding import (
     RepositoryResult,
-    WorktreeRemovedResult,
     coding_client,
     inspect_repository,
+    remove_worktree,
     resolve_git_target,
     select_session_workspace,
     validate_git_branch,
@@ -29,7 +28,6 @@ from mato_loop_backend.sessions.service import (
     get_owned_session,
     model_for_session,
     provider_for_session,
-    validate_execution_preferences,
 )
 from mato_loop_backend.settings import apply_session_ai, effective_model_trust, load_effective_ai
 
@@ -149,49 +147,16 @@ async def git_action(session_id: UUID, payload: GitActionRequest,
         if payload.action != "remove" and payload.directory != session.current_directory:
             raise SessionServiceError(409, "git.worktreeChanged")
         info = await inspect_repository(db, user.id, session.preferred_execution_agent_id, session.current_directory)
-        root = next((item.path for item in info.worktrees if item.main), None)
-        directory = payload.directory if payload.action == "remove" else info.repository
-        if not root or not info.repository or not any(item.path == directory for item in info.worktrees):
-            raise SessionServiceError(409, "git.worktreeChanged")
-        await check_workspace_admission(db, user.id, session.preferred_execution_agent_id, directory,
-            {"name": "git-worktree", "resources": [directory, info.common_directory, root]})
-        client = await coding_client(db, user.id, session.preferred_execution_agent_id)
         if payload.action == "remove":
-            if directory == root:
-                raise SessionServiceError(409, "git.mainWorktree")
-            affected = [item for item in await db.scalars(select(ChatSession).where(
-                ChatSession.user_id == user.id,
-                ChatSession.preferred_execution_agent_id == session.preferred_execution_agent_id,
-                ChatSession.current_directory.is_not(None),
-            )) if within(item.current_directory, directory)]
-            if affected:
-                fallback, fallback_policy = await validate_execution_preferences(
-                    db, user.id, session.preferred_execution_agent_id, root,
-                )
-                if fallback != root:
-                    raise SessionServiceError(409, "git.worktreeChanged")
-                ai = await load_effective_ai(db, user.id)
-                for item in affected:
-                    session_ai = apply_session_ai(ai, item)
-                    model = model_for_session(session_ai, session_ai.default_model_id)
-                    provider = provider_for_session(session_ai, model)
-                    await add_directory_grant(
-                        db, item.id, item.preferred_execution_agent_id, fallback, fallback_policy,
-                        item.agent_profile_id, effective_model_trust(provider, model).value if provider and model else None,
-                    )
-            await client.request("git.worktree.remove", {
-                "path": directory, "repository": root, "commonDirectory": info.common_directory,
-                "force": payload.force,
-            }, WorktreeRemovedResult, timeout=180)
-            for affected_session in affected:
-                binding = {**(affected_session.coding_workspace or {}), "mode": "local",
-                           "executionAgentId": str(affected_session.preferred_execution_agent_id),
-                            "repository": root, "path": root,
-                           "commonDirectory": info.common_directory}
-                affected_session.current_directory = root
-                affected_session.workspace_mode = "local"
-                affected_session.coding_workspace = binding
+            await remove_worktree(db, session, info, payload.directory, force=payload.force)
         else:
+            root = next((item.path for item in info.worktrees if item.main), None)
+            directory = info.repository
+            if not root or not directory or not any(item.path == directory for item in info.worktrees):
+                raise SessionServiceError(409, "git.worktreeChanged")
+            await check_workspace_admission(db, user.id, session.preferred_execution_agent_id, directory,
+                {"name": "git-worktree", "resources": [directory, info.common_directory, root]})
+            client = await coding_client(db, user.id, session.preferred_execution_agent_id)
             if not payload.name:
                 raise SessionServiceError(422, "validation.required", field="name")
             await client.request("git.branch", {

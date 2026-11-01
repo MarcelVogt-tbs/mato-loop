@@ -108,7 +108,7 @@ and incomplete registered checkouts are rejected; they require explicit inspecti
 An existing short branch without a completed registered worktree requires inspection;
 it is never adopted after an uncertain checkout failure.
 Requests with a run ID derive a stable session ID so retries can recover preparation.
-Archiving and session deletion retain worktrees. The Git app's compact status rows open
+Archiving and session-only deletion retain worktrees. The Git app's compact status rows open
 separate workspace, branch and remote dialogs. The workspace dialog removes any registered
 non-main worktree without selecting it first, after explicit deletion consent, preserving
 branches and conversations. Pending, untracked and ignored files are lost on confirmed
@@ -116,8 +116,15 @@ forced removal. The original checkout, locked worktrees, detached HEADs and over
 active runs block removal. Before removing a worktree used by sessions, the backend
 validates the local project checkout and prepares normal directory grants. Affected
 sessions, including those in its subdirectories, then return to that local checkout.
-Session deletion has no worktree-removal option and needs no reachable Agent or external
-working directory.
+The session deletion dialog offers unchecked worktree removal after live repository discovery,
+showing the path, irreversible file loss and other affected sessions. The optional
+`worktreeImpact` query parameter binds deletion consent to the previewed computer, current
+directory, worktree path, shared Git metadata and affected session IDs. The backend revalidates that target after
+stopping the deleted session's runs and calls the same removal service as the Git app.
+Removal failure preserves the session. Successful removal cannot be undone if the later
+database commit fails. Session-only deletion still needs no reachable Agent or external
+working directory; optional worktree discovery has a three-second budget and falls back
+to session-only deletion when unavailable or timed out.
 
 Workspace and branch dialogs use searchable compact lists: selecting a row only marks it
 and reveals its full path/name in the detail area. Workspace rows show their parent directory
@@ -204,6 +211,11 @@ executor, directory and command context before dispatching a new run.
 Saved command names with underscores remain readable for retries and workspace
 admission; new preparations and retries store canonical hyphenated names.
 Opening or selecting in the web palette never starts an agent or creates a session.
+
+New web project-session drafts open the Git app once when the existing workspace probe
+detects a repository. If detection is still pending at session creation, the persistent
+chat page also uses the session's normal Git change discovery. Opening does not create a session or worktree, and manual closure
+is respected until the next draft. Existing sessions restore their saved Control Center state.
 
 The Git app has two tabs in order: **Änderungen** for changed files and **Repository**
 with agent requests under **Aktionen** first, then workspace selection/removal, branch

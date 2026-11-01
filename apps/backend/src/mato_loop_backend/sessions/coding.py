@@ -1,6 +1,8 @@
 """Owner-bound repository discovery, worktree selection and session Git targets."""
 
 import asyncio
+import hashlib
+import json
 import re
 from urllib.parse import urlsplit
 from uuid import UUID, uuid5
@@ -274,3 +276,80 @@ async def select_session_workspace(db, session, project, directory=None, *, crea
         "remoteIdentity": previous.get("remoteIdentity") if previous.get("remote") == remote else info.remote_identities.get(remote),
     }
     return directory_policy
+
+
+async def session_worktree(db, session) -> RepositoryResult | None:
+    if not session.project_id or not session.preferred_execution_agent_id or not session.current_directory:
+        return None
+    info = await inspect_repository(db, session.user_id, session.preferred_execution_agent_id, session.current_directory)
+    return info if any(item.path == info.repository and not item.main for item in info.worktrees) else None
+
+
+def worktree_removal_token(session, info: RepositoryResult, affected) -> str:
+    return hashlib.sha256(json.dumps([
+        str(session.preferred_execution_agent_id), session.current_directory, info.repository, info.common_directory,
+        sorted(str(item.id) for item in affected),
+    ]).encode()).hexdigest()
+
+
+async def sessions_in_worktree(db, user_id, agent_id, directory):
+    return [item for item in await db.scalars(select(ChatSession).where(
+        ChatSession.user_id == user_id,
+        ChatSession.preferred_execution_agent_id == agent_id,
+        ChatSession.current_directory.is_not(None),
+    )) if within(item.current_directory, directory)]
+
+
+async def remove_worktree(db, session, info: RepositoryResult, directory, *, force=False, expected_impact=None):
+    from mato_loop_backend.sessions.git_commands import check_workspace_admission
+    from mato_loop_backend.sessions.service import (
+        SessionServiceError,
+        add_directory_grant,
+        model_for_session,
+        provider_for_session,
+        validate_execution_preferences,
+    )
+    from mato_loop_backend.settings import (
+        apply_session_ai,
+        effective_model_trust,
+        load_effective_ai,
+    )
+
+    root = next((item.path for item in info.worktrees if item.main), None)
+    if not root or not info.repository or not any(item.path == directory for item in info.worktrees):
+        raise SessionServiceError(409, "git.worktreeChanged")
+    if directory == root:
+        raise SessionServiceError(409, "git.mainWorktree")
+    await check_workspace_admission(db, session.user_id, session.preferred_execution_agent_id, directory,
+        {"name": "git-worktree", "resources": [directory, info.common_directory, root]})
+    affected = await sessions_in_worktree(db, session.user_id, session.preferred_execution_agent_id, directory)
+    if expected_impact is not None and worktree_removal_token(session, info, affected) != expected_impact:
+        raise SessionServiceError(409, "git.worktreeChanged")
+    if affected:
+        fallback, fallback_policy = await validate_execution_preferences(
+            db, session.user_id, session.preferred_execution_agent_id, root,
+        )
+        if fallback != root:
+            raise SessionServiceError(409, "git.worktreeChanged")
+        ai = await load_effective_ai(db, session.user_id)
+        for item in affected:
+            session_ai = apply_session_ai(ai, item)
+            model = model_for_session(session_ai, session_ai.default_model_id)
+            provider = provider_for_session(session_ai, model)
+            await add_directory_grant(
+                db, item.id, item.preferred_execution_agent_id, fallback, fallback_policy,
+                item.agent_profile_id, effective_model_trust(provider, model).value if provider and model else None,
+            )
+    client = await coding_client(db, session.user_id, session.preferred_execution_agent_id)
+    try:
+        await client.request("git.worktree.remove", {
+            "path": directory, "repository": root, "commonDirectory": info.common_directory, "force": force,
+        }, WorktreeRemovedResult, timeout=180)
+    except ExecutionClientError as exc:
+        raise SessionServiceError(409, exc.code) from exc
+    for item in affected:
+        item.coding_workspace = {**(item.coding_workspace or {}), "mode": "local",
+            "executionAgentId": str(item.preferred_execution_agent_id),
+            "repository": root, "path": root, "commonDirectory": info.common_directory}
+        item.current_directory = root
+        item.workspace_mode = "local"

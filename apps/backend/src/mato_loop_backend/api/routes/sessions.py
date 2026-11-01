@@ -1037,7 +1037,7 @@ async def session_delete_impact(
     session_id: UUID,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> dict[str, int | str]:
+) -> dict[str, Any]:
     try:
         return await session_service.session_delete_impact(
             session_id,
@@ -1062,6 +1062,10 @@ async def delete_session(
         str | None,
         Query(alias="automationImpact", min_length=64, max_length=64),
     ] = None,
+    worktree_impact: Annotated[
+        str | None,
+        Query(alias="worktreeImpact", min_length=64, max_length=64),
+    ] = None,
 ) -> None:
     try:
         await session_service.delete_session(
@@ -1072,6 +1076,7 @@ async def delete_session(
             automation_impact=automation_impact,
             storage_factory=SessionStorage,
             owned_session_query=_mutable_session,
+            worktree_impact=worktree_impact,
         )
     except session_service.SessionServiceError as exc:
         _raise_api_error(exc)

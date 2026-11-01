@@ -600,6 +600,10 @@ const currentGit = computed(() => {
     ? state
     : null
 })
+watch([currentGit, () => controlCenter.gitAutoOpened, () => chat.loading], ([state]) => {
+  if (chat.loading || !chat.current?.projectId || state?.currentDirectory !== chat.current.currentDirectory) return
+  void controlCenter.autoOpenGit(state?.repository).catch(() => {})
+})
 watch([
   () => gitContextKey(currentGitContext.value), gitAvailable, () => chat.running
 ], ([key, available, running], [oldKey, oldAvailable, oldRunning] = []) => {

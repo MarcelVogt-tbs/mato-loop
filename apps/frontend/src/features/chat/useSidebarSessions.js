@@ -259,7 +259,25 @@ export function useSidebarSessions({
       return
     }
     const title = typeof session === 'string' ? chat.findCachedSession(id)?.title : session.title
-    if (!await confirm(`Session „${title || 'Ohne Titel'}“ löschen?${impact.hasWorktree ? ' Der Worktree bleibt erhalten und kann in der Git-App entfernt werden.' : ''}`, 'Session löschen', { okLabel: 'Löschen' })) return
+    let worktreeImpact = null
+    if (impact.worktree) {
+      const others = impact.worktree.sessions
+      const selection = await new Promise(resolve => {
+        $q.dialog({
+          title: 'Session löschen', transitionDuration: 0,
+          message: `Session „${title || 'Ohne Titel'}“ löschen? Optional kannst du auch den Worktree „${impact.worktree.path}“ entfernen. Dabei werden nicht committete Änderungen sowie zusätzliche und ignorierte Dateien wie .env unwiderruflich gelöscht. Branch und Commits bleiben erhalten.${others.length ? ` ${others.length} weitere Session${others.length === 1 ? '' : 's'} wechseln zu Lokal: ${others.map(item => item.title || 'Ohne Titel').join(', ')}.` : ''}`,
+          options: { type: 'checkbox', model: [], items: [{ label: 'Worktree ebenfalls entfernen', value: impact.worktree.impact }] },
+          ok: { label: 'Löschen', color: 'negative', unelevated: true, noCaps: true },
+          cancel: { label: 'Abbrechen', flat: true, noCaps: true }
+        }).onOk(resolve).onCancel(() => resolve(null)).onDismiss(() => resolve(null))
+      })
+      if (selection === null) return
+      worktreeImpact = selection[0] || null
+    } else if (!await confirm(`Session „${title || 'Ohne Titel'}“ löschen?${impact.hasWorktree ? ' Der Worktree kann hier derzeit nicht geprüft oder entfernt werden und bleibt erhalten.' : ''}`, 'Session löschen', { okLabel: 'Löschen' })) return
+    if (worktreeImpact && workspace.hasDirtyEditors) {
+      $q.notify({ type: 'warning', message: 'Bitte zuerst die ungespeicherten Editoränderungen speichern oder verwerfen.' })
+      return
+    }
     let automationMode = null
     if (impact.requiredAutomationCount) {
       const count = impact.automationCount
@@ -281,7 +299,8 @@ export function useSidebarSessions({
     try {
       await chat.deleteSession(id, {
         automationMode,
-        automationImpact: automationMode ? impact.automationImpact : null
+        automationImpact: automationMode ? impact.automationImpact : null,
+        worktreeImpact
       })
       if (sourceProjectId) void projects.fetchAll().catch(() => {})
     } catch {
@@ -291,6 +310,9 @@ export function useSidebarSessions({
       void controlCenter.removeFileTabs(affectedTabs.map((tab) => tab.tabId)).catch(() => {})
     }
     affectedTabs.forEach((tab) => workspace.discardFileTab(tab.tabId))
+    if (worktreeImpact && impact.worktree.sessions.some(item => item.id === chat.current?.id)) {
+      void chat.refreshSession(chat.current.id).catch(() => {})
+    }
     if (automationMode) void automations.fetchAutomations().catch(() => {})
     if (route.query.session === id) {
       await router.push({ name: 'chat', query: chatQuery(null, sourceProjectId) })

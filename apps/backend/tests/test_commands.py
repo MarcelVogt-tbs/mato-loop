@@ -442,6 +442,7 @@ async def test_target_adoption_does_not_change_an_unrelated_project_default(monk
 async def test_inactive_worktree_removal_returns_affected_sessions_to_local(monkeypatch, directory):
     from mato_loop_backend.api.errors import ApiError
     from mato_loop_backend.api.routes import git as routes
+    from mato_loop_backend.sessions import coding
 
     user = UserAccount(id=uuid4())
     agent_id = uuid4()
@@ -460,12 +461,12 @@ async def test_inactive_worktree_removal_returns_affected_sessions_to_local(monk
         worktrees=[{"path": "/project", "branch": "main", "main": True, "locked": False},
                    {"path": "/worktree", "branch": "task", "main": False, "locked": False}],
     )))
-    monkeypatch.setattr(routes, "check_workspace_admission", AsyncMock())
-    monkeypatch.setattr(routes, "coding_client", AsyncMock(return_value=client))
-    monkeypatch.setattr(routes, "validate_execution_preferences", AsyncMock(return_value=("/project", "auto")))
-    monkeypatch.setattr(routes, "load_effective_ai", AsyncMock(return_value=AiSettings()))
+    monkeypatch.setattr("mato_loop_backend.sessions.git_commands.check_workspace_admission", AsyncMock())
+    monkeypatch.setattr(coding, "coding_client", AsyncMock(return_value=client))
+    monkeypatch.setattr("mato_loop_backend.sessions.service.validate_execution_preferences", AsyncMock(return_value=("/project", "auto")))
+    monkeypatch.setattr("mato_loop_backend.settings.load_effective_ai", AsyncMock(return_value=AiSettings()))
     grant = AsyncMock()
-    monkeypatch.setattr(routes, "add_directory_grant", grant)
+    monkeypatch.setattr("mato_loop_backend.sessions.service.add_directory_grant", grant)
     db = AsyncMock()
     db.scalars.return_value = [affected]
 

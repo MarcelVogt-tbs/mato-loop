@@ -18,6 +18,7 @@ import { useApprovalStore } from '../src/stores/approvals'
 import { useChatStore } from '../src/features/chat/store'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { useWorkspaceStore } from '../src/stores/workspace'
+import { useExecutionAgentStore } from '../src/stores/execution-agents'
 
 let app, root, chat
 const initialRevision = 'a'.repeat(64)
@@ -93,6 +94,19 @@ afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
   vi.clearAllMocks()
+})
+
+it('opens Git when repository detection finishes after a new session has attached', async () => {
+  await mountPage()
+  const controlCenter = useControlCenterStore()
+  const open = vi.spyOn(controlCenter, 'openApp').mockResolvedValue()
+  await chat.loadSession(null)
+  await controlCenter.attachCreatedSession('created', controlCenter)
+  useExecutionAgentStore().items = [{ id: 'computer', connected: true, operations: ['git.changes'] }]
+  api.get.mockResolvedValue({ data: { repository: '/worktree', files: [], truncated: false } })
+  chat.selectedSessionId = 'created'
+  chat.current = { id: 'created', projectId: 'project', preferredExecutionAgentId: 'computer', currentDirectory: '/worktree', messages: [] }
+  await vi.waitFor(() => expect(open).toHaveBeenCalledWith('git'))
 })
 
 describe('child skill draft previews', () => {

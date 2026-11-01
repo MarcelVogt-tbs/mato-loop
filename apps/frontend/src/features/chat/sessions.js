@@ -627,10 +627,13 @@ export const sessionsActions = {
       await this.refreshSessions(null, data.projectId || null)
       return data
     },
-    async deleteSession(id, { automationMode = null, automationImpact = null, suppressErrorToast = false } = {}) {
+    async deleteSession(id, { automationMode = null, automationImpact = null, worktreeImpact = null, suppressErrorToast = false } = {}) {
       const config = {
         ...(suppressErrorToast ? { suppressErrorToast: true } : {}),
-        ...(automationMode ? { params: { automationMode, automationImpact } } : {})
+        ...((automationMode || worktreeImpact) ? { params: {
+          ...(automationMode ? { automationMode, automationImpact } : {}),
+          ...(worktreeImpact ? { worktreeImpact } : {})
+        } } : {})
       }
       const queued = [...(this.queuedMessages[id] || [])]
       const ownerUserId = this.draftOwnerUserId

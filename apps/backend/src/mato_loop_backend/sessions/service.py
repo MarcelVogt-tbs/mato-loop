@@ -1745,7 +1745,13 @@ async def session_delete_impact(
     db: AsyncSession,
     *,
     owned_session_query,
-) -> dict[str, int | str]:
+) -> dict[str, Any]:
+    from mato_loop_backend.sessions.coding import (
+        session_worktree,
+        sessions_in_worktree,
+        worktree_removal_token,
+    )
+
     item = await owned_session_query(db, session_id, user_id)
     if item is None:
         raise SessionServiceError(404, "session.notFound")
@@ -1759,11 +1765,12 @@ async def session_delete_impact(
             )
         ).all()
     )
-    return {
+    impact = {
         "automationCount": len(linked),
         "requiredAutomationCount": len(linked),
         "automationImpact": automation_impact_token(linked),
         "hasWorktree": (item.coding_workspace or {}).get("mode") == "worktree",
+        "worktree": None,
         "fileReferenceCount": await _external_file_reference_count_for_roots(
             db,
             [
@@ -1772,6 +1779,17 @@ async def session_delete_impact(
             ],
         ),
     }
+    try:
+        async with asyncio.timeout(3):
+            info = await session_worktree(db, item)
+            if info is not None:
+                affected = await sessions_in_worktree(db, user_id, item.preferred_execution_agent_id, info.repository)
+                impact["worktree"] = {"path": info.repository, "impact": worktree_removal_token(item, info, affected),
+                                     "sessions": [{"id": str(other.id), "title": other.title} for other in affected if other.id != item.id]}
+    except (SessionServiceError, TimeoutError):
+        # Session-only deletion must not depend on optional computer discovery.
+        pass
+    return impact
 
 
 async def _external_file_reference_count(
@@ -1844,6 +1862,7 @@ async def delete_session(
     automation_impact: str | None,
     storage_factory,
     owned_session_query,
+    worktree_impact: str | None = None,
 ) -> None:
     item = await db.scalar(
         select(ChatSession).where(
@@ -1910,6 +1929,8 @@ async def delete_session(
     await db.rollback()
     for root_id in descendant_roots:
         await AgentRuntime.cancel_descendants(root_id)
+    if worktree_impact is not None:
+        await db.execute(select(UserAccount.id).where(UserAccount.id == user_id).with_for_update(key_share=True))
     linked_automations = list(
         (
             await db.scalars(
@@ -1978,6 +1999,7 @@ async def delete_session(
                 automation_impact=automation_impact,
                 storage_factory=storage_factory,
                 owned_session_query=owned_session_query,
+                worktree_impact=worktree_impact,
             )
     session_storage = storage_factory()
     storage_sessions = [
@@ -2059,6 +2081,16 @@ async def delete_session(
 
     commit_task: asyncio.Task[None] | None = None
     try:
+        if worktree_impact is not None:
+            from mato_loop_backend.sessions.coding import (
+                remove_worktree,
+                session_worktree,
+            )
+
+            info = await session_worktree(db, item)
+            if info is None:
+                raise SessionServiceError(409, "git.worktreeChanged")
+            await remove_worktree(db, item, info, info.repository, force=True, expected_impact=worktree_impact)
         for automation in linked_automations:
             if automation_mode == "deleteAutomations":
                 await db.delete(automation)

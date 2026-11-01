@@ -5,7 +5,7 @@ Git läuft auf dem ausgewählten Computer mit dessen Git-Installation und Anmeld
 ## Ein Repository verwenden
 
 1. Wähle einen verbundenen Computer und einen zugänglichen Arbeitsordner mit Git-Repository.
-2. Öffne **Control Center > Git > Repository**. Unter **Aktionen** bietet **Git-Repository anlegen** ohne vorhandenes Repository einen Agentenauftrag zur Initialisierung; er legt weder Commit noch Remote an.
+2. Bei neuen Projekt-Sessions öffnet sich **Git** automatisch, sobald im gewählten Projekt-Arbeitsordner ein Repository erkannt wird. Sonst öffne **Control Center > Git > Repository**. Unter **Aktionen** bietet **Git-Repository anlegen** ohne vorhandenes Repository einen Agentenauftrag zur Initialisierung; er legt weder Commit noch Remote an.
 3. Für Projektvorgaben wähle in **Projekt bearbeiten** die Repository-Wurzel und speichere **Standard-Zielbranch** und **Standard-Arbeitsbereich**. Ein später angelegtes Repository wird beim erneuten Öffnen oder Prüfen erkannt.
 
 Git-App und Befehlspalette allein erzeugen keinen Chat. Erst Sessionstart oder Agentenauftrag speichert die Unterhaltung.
@@ -57,7 +57,9 @@ Ein Commit im eigenen Worktree darf parallel zu einem Lauf im Hauptverzeichnis s
 
 ## Worktree entfernen
 
-Archivieren oder Löschen einer Session entfernt keinen Worktree. Entferne ihn ausdrücklich im Arbeitsbereich-Dialog der Git-App. Branch, Commits und Gesprächsverläufe bleiben erhalten; betroffene Sessions wechseln nach Prüfung ins lokale Projektverzeichnis. Laufende Aufträge verhindern die Entfernung. Bei Detached HEAD musst du zuerst einen Branch anlegen und auswählen.
+Entferne einen Worktree im Arbeitsbereich-Dialog der Git-App oder aktiviere beim Löschen einer Projekt-Session **Worktree ebenfalls entfernen**. Die Option ist zunächst aus und erscheint nur, wenn der Worktree auf dem verbundenen Computer innerhalb von drei Sekunden geprüft werden kann. Ohne diese Auswahl und beim Archivieren bleibt er erhalten. Scheitert die Entfernung, wird die Session nicht gelöscht.
+
+Branch und Commits bleiben erhalten; andere betroffene Sessions wechseln nach Prüfung ins lokale Projektverzeichnis. Der Löschdialog zeigt diese Sessions an. Hat sich die Zuordnung vor dem Löschen geändert, bricht die Entfernung ab; öffne den Dialog dann erneut. Laufende Aufträge und gesperrte Worktrees verhindern die Entfernung. Bei Detached HEAD musst du zuerst einen Branch anlegen und auswählen.
 
 !!! danger "Lokale Dateien werden unwiderruflich gelöscht"
-    Beim Entfernen gehen uncommittete Änderungen sowie zusätzliche und ignorierte Dateien wie `.env` verloren. Prüfe und sichere diese vor der Bestätigung. Es gibt keine automatische Worktree-Bereinigung.
+    Beim Entfernen gehen uncommittete Änderungen sowie zusätzliche und ignorierte Dateien wie `.env` verloren. Prüfe und sichere diese vor der Bestätigung. Es gibt keinen automatischen Commit oder Stash. Auch ein späterer Fehler beim Löschen der Session stellt den entfernten Worktree nicht wieder her. Es gibt keine automatische Worktree-Bereinigung.

@@ -26,6 +26,7 @@ import { useRepositoryProbe } from '../src/features/coding/repository'
 import { useGitChangesStore } from '../src/features/files/git-store'
 import { api } from 'src/boot/axios'
 import { apiErrorMessage } from 'src/utils/api-errors'
+import { useSidebarSessions } from '../src/features/chat/useSidebarSessions'
 
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.useRealTimers() })
@@ -173,6 +174,59 @@ it('does not recheck a repository when computer polling replaces unchanged agent
   await nextTick()
   await vi.advanceTimersByTimeAsync(300)
   expect(api.post).toHaveBeenCalledTimes(1)
+})
+
+it('opens Git once per new project draft without creating a session', async () => {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const chat = useChatStore(), controlCenter = useControlCenterStore()
+  controlCenter.resetDraft()
+  Object.assign(chat.drafts.newSession.options, { preferredExecutionAgentId: 'agent', currentDirectory: '/repo' })
+  useProjectStore().items = [{ id: 'project', defaultExecutionAgentId: 'agent', defaultCurrentDirectory: '/repo' }]
+  useExecutionAgentStore().items = [{ id: 'agent', connected: true, operations: ['git.repository'] }]
+  api.post.mockResolvedValue({ data: { repository: '/repo' } })
+  const create = vi.spyOn(chat, 'createEmptySession')
+  root = document.createElement('div')
+  app = createApp({ render: () => h(WorkspaceField, { projectId: 'project', session: chat.activeContext }) })
+  app.use(pinia).use(Quasar, quasarOptions).mount(root)
+  await vi.waitFor(() => expect(controlCenter.activeAppId).toBe('git'))
+  await controlCenter.removeIntegration('git')
+  useProjectStore().items = [...useProjectStore().items]
+  await nextTick()
+  expect([controlCenter.open, controlCenter.tabs.some(tab => tab.appId === 'git'), create.mock.calls.length])
+    .toEqual([true, false, 0])
+  controlCenter.resetDraft()
+  await vi.waitFor(() => expect(controlCenter.activeAppId).toBe('git'))
+})
+
+it.each([false, true])('offers optional worktree removal when deleting an unopened session (selected: %s)', async remove => {
+  vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const chat = useChatStore(), impact = 'a'.repeat(64)
+  vi.spyOn(chat, 'sessionDeleteImpact').mockResolvedValue({ worktree: { path: '/worktree', impact, sessions: [] } })
+  const deleted = vi.spyOn(chat, 'deleteSession').mockResolvedValue()
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp({ setup() {
+    const sidebar = useSidebarSessions({
+      chat, projects: useProjectStore(), controlCenter: useControlCenterStore(), workspace: {},
+      route: { query: {} }, $q: { dialog: Dialog.create },
+      confirm: vi.fn().mockResolvedValue(true)
+    })
+    return () => h('button', { onClick: () => sidebar.removeSession({ id: 'other', title: 'Auftrag' }) }, 'Löschen')
+  } })
+  app.use(pinia).use(Quasar, { ...quasarOptions, plugins: { Dialog } }).mount(root)
+  root.querySelector('button').click()
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog [role="checkbox"]')).not.toBeNull())
+  const checkbox = document.querySelector('.q-dialog [role="checkbox"]')
+  expect(checkbox.getAttribute('aria-checked')).toBe('false')
+  if (remove) checkbox.click()
+  await nextTick()
+  ;[...document.querySelectorAll('.q-dialog button')].find(button => button.textContent === 'Löschen').click()
+  await vi.waitFor(() => expect(deleted).toHaveBeenCalledWith('other', {
+    automationMode: null, automationImpact: null, worktreeImpact: remove ? impact : null
+  }))
 })
 
 it('adopts a draft remote without changing an unrelated project workspace', async () => {

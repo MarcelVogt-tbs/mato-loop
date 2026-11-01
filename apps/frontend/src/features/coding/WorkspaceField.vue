@@ -17,10 +17,11 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useProjectStore } from 'stores/projects'
+import { useControlCenterStore } from 'stores/control-center'
 import { useRepositoryProbe } from './repository'
 import { apiErrorMessage } from 'src/utils/api-errors'
 
@@ -30,7 +31,7 @@ const props = defineProps({
   disabled: Boolean
 })
 const emit = defineEmits(['update'])
-const agents = useExecutionAgentStore(), projects = useProjectStore()
+const agents = useExecutionAgentStore(), projects = useProjectStore(), controlCenter = useControlCenterStore()
 const available = computed(() => Boolean(props.session.preferredExecutionAgentId && props.session.currentDirectory))
 const project = computed(() => !props.session.id && props.projectId ? projects.items.find(item => item.id === props.projectId
   && item.defaultExecutionAgentId === props.session.preferredExecutionAgentId
@@ -40,6 +41,10 @@ const { repository, loading, error, refresh } = useRepositoryProbe(
   () => !props.session.id && available.value && Boolean(project.value),
   () => project.value?.gitTargetBranch
 )
+watch([repository, () => controlCenter.gitAutoOpened], ([info]) => {
+  if (props.session.id || !project.value) return
+  void controlCenter.autoOpenGit(info?.repository).catch(() => {})
+})
 function select(value) {
   emit('update', { workspace_mode: value === 'local' ? 'local' : 'worktree', workspace_path: ['local', 'new'].includes(value) ? null : value })
 }

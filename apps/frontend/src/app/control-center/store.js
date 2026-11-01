@@ -253,6 +253,7 @@ export const useControlCenterStore = defineStore('control-center', {
     pendingState: null,
     confirmedState: defaultState(),
     requestedAppId: null,
+    gitAutoOpened: true,
     fileDiffModes: {},
     restoredOpen: false
   }),
@@ -295,6 +296,7 @@ export const useControlCenterStore = defineStore('control-center', {
     },
     bindSession(session) {
       const sessionId = session?.id || null
+      if (this.sessionId !== sessionId) this.gitAutoOpened = true
       this.requestGeneration += 1
       this.ready = false
       this.saving = false
@@ -310,6 +312,7 @@ export const useControlCenterStore = defineStore('control-center', {
       this.restoredOpen = true
     },
     resetDraft() {
+      this.gitAutoOpened = false
       this.fileDiffModes = {}
       this.requestGeneration += 1
       this.ready = true
@@ -382,6 +385,11 @@ export const useControlCenterStore = defineStore('control-center', {
           this.saving = false
         }
       }
+    },
+    async autoOpenGit(repository) {
+      if (!repository || this.gitAutoOpened || !this.ready) return
+      this.gitAutoOpened = true
+      return this.openApp('git')
     },
     async openApp(appId) {
       if (appId === 'approvals') appId = 'notifications'
