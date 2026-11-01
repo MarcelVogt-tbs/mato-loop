@@ -624,7 +624,7 @@ class WebFetchArguments(ToolArguments):
 
 class JinaWebFetchArguments(WebFetchArguments):
     engine: Literal["auto", "browser", "curl"] = Field(
-        default="auto", description="Browser renders JavaScript, not automatic consent/login. Stored cookies require browser; auto selects it, curl is rejected for those targets.",
+        default="auto", description="Jina Reader engine, not the computer's Browser integration. browser renders JavaScript but cannot click, type, submit forms or automate consent/login. Use computer tools for page interaction. Matching Jina cookies disallow engine=curl; auto handles engine selection.",
     )
     remove_overlay: bool | None = Field(default=None, description="Remove overlays; omit for the connection default.")
     no_cache: bool = Field(default=False, description="Bypass Reader's existing cache for fresh content.")

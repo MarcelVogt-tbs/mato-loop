@@ -23,8 +23,10 @@ The selected Reader connection extends the `webfetch` schema with `engine`
 `with_images_summary`. Built-in Webfetch does not accept these arguments.
 Link and image overviews are returned as `links` and `imageLinks` dictionaries;
 they are untrusted discovery data, not fetched attachments or citation evidence.
-Browser mode renders JavaScript but does not automatically solve consent, login,
-or bot challenges. Reader-specific arguments cannot be combined with `pdf_pages`.
+Jina's `engine=browser` is separate from the computer's Browser integration. It
+renders JavaScript but exposes no clicking, typing or form submission and does not
+automatically solve consent, login or bot challenges. Page interaction uses computer tools.
+Reader-specific arguments cannot be combined with `pdf_pages`.
 The Jina-specific tool description distinguishes extracted content from original
 files and does not promise verbatim structured data or validated image attachments.
 It directs the model to use `auto` unless a mode was requested and, for incomplete
@@ -43,7 +45,7 @@ responses expose only their target hosts and presence, never cookie values. Cook
 replacement/removal is explicit; omitting cookies preserves them independently of
 API-key updates. Only cookies whose exact target host matches the requested HTTPS
 URL are sent. They are encoded as secure host-only browser cookies with path `/`,
-without a Domain attribute. Matching cookies force browser mode and bypass cache;
+without a Domain attribute. Matching cookies force `engine=browser` and bypass cache;
 explicit `engine=curl` is rejected because Reader's direct redirect handling does
 not reliably preserve host-only cookie scope. The administrator-selected Reader is
 trusted to enforce browser cookie scoping and receives the secrets. Cookies on a

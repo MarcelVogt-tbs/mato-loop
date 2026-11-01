@@ -190,6 +190,8 @@ def test_webfetch_schema_uses_reader_arguments_and_description_only_for_jina(jin
     settings = IntegrationSettings(instances=[provider], webfetch_integration_id=provider.id if jina else None)
     schema = tool_registry.effective(settings, webfetch_enabled=True).tools["webfetch"].schema()
     assert ("engine" in schema["parameters"]["properties"], "through Jina Reader" in schema["description"]) == (jina, jina)
+    if jina:
+        assert "not the computer's Browser integration" in schema["parameters"]["properties"]["engine"]["description"]
 
 
 @pytest.mark.parametrize("options", [{"pdf_pages": [1], "engine": "browser"}, {"target_selector": "main\r\nInjected: yes"}])
