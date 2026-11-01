@@ -577,8 +577,8 @@ def general_system_prompt(
         )
     if "provide_file" in offered_tool_names:
         parts.append(
-            "Call provide_file only when the user explicitly requests a file, image result, download, or ZIP. "
-            "Pass source paths directly; do not create an archive first."
+            "Use provide_file only for user-requested files or ZIPs not already attached with downloads "
+            "in this response. Pass source paths; do not create an archive first."
         )
     if "transcribe_audio" in offered_tool_names:
         parts.append(

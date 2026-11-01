@@ -2320,8 +2320,11 @@ def test_system_prompt_describes_managed_file_roots() -> None:
     assert "file.accessDenied is not permission.userDenied" not in prompt
     assert "revisioned" not in prompt
     assert "No computer directory selected. Use root=files." in prompt
-    assert "user explicitly requests a file, image result, download, or ZIP" in prompt
-    assert "Pass source paths directly; do not create an archive first" in prompt
+    assert (
+        "Use provide_file only for user-requested files or ZIPs not already attached with downloads "
+        "in this response"
+    ) in prompt
+    assert "Pass source paths; do not create an archive first" in prompt
 
 
 def test_system_prompt_enforces_managed_writing_contract() -> None:

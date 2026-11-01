@@ -1199,9 +1199,10 @@ GREP = ToolDefinition(
 
 PROVIDE_FILE = ToolDefinition(
             "provide_file",
-            "On explicit file, image result, download, or ZIP request, provide path (file/folder) or paths "
-            "(files) as a reference. Contents are fetched only when the user opens or downloads it. "
-            "Folders/lists become ZIPs on download. References open the current file; computer files are not copied to session storage.",
+            "For explicit file, download, or ZIP requests, provide path (file/folder) or paths "
+            "(files) as references. Skip result attachments already shown with downloads in this response. "
+            "Contents are fetched on open/download; folders/lists become ZIPs on download. "
+            "References open current files; computer files are not copied to session storage.",
             ProvideFileArguments,
             _provide_file,
             tool_type="shared",

@@ -142,7 +142,7 @@ Deleting a managed file irreversibly purges all revisions and explicitly owned c
 
 The optional per-user quota counts current files, revisions and reserved final snapshots across owned sessions. Lowering it preserves existing reads/deletions but blocks growth. Computer files and relational messages are outside this quota. Preview/format/provider limits are independent of the 1 GiB transfer/upload ceiling; processing may consume more RAM than input size.
 
-`provide_file` publishes an owner-bound reference to original storage, not an implicit import. Provision has its own policy and path grants; confidential filenames alone do not invoke the normal sensitive-read prompt. Hard computer zones, ownership and disabled provision still apply. Computer references retain their original computer even after session switches. ZIP downloads reject unsafe/incomplete trees, bound both source and archive output to 1 GiB, and do not promise an atomic whole-tree snapshot.
+`provide_file` publishes an owner-bound reference to original storage, not an implicit import. Tool result attachments are already shown with download controls; the model must not provide them again in the same response. Provision has its own policy and path grants; confidential filenames alone do not invoke the normal sensitive-read prompt. Hard computer zones, ownership and disabled provision still apply. Computer references retain their original computer even after session switches. ZIP downloads reject unsafe/incomplete trees, bound both source and archive output to 1 GiB, and do not promise an atomic whole-tree snapshot.
 
 ### Computer execution
 
