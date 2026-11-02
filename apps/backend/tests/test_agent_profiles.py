@@ -100,6 +100,7 @@ def test_builtin_agent_profile_defaults() -> None:
         assert "simplest" in profile.instructions
         assert "current requirements justify" in profile.instructions
         assert "standard-library or native features" in profile.instructions
+        assert "Missing context alone does not justify retrieval" in profile.runtime_instructions
     assert default.delegation_enabled is False
     assert default.session_write_paths is None
     assert plan.delegation_enabled is True
@@ -121,7 +122,7 @@ def test_builtin_agent_profile_defaults() -> None:
     assert "Do not turn such choices into assumptions" in plan.instructions
     assert "do not call any tool" not in plan.instructions
     assert "continue only permitted analysis and planning" in plan.runtime_instructions
-    assert default.runtime_instructions == build.runtime_instructions == ""
+    assert default.runtime_instructions == ""
     assert "keep an analysis-only task read-only" in build.instructions
     assert "plan discussed earlier in the conversation" in build.instructions
     assert "profile switch alone does not authorize implementation" in build.instructions

@@ -1961,7 +1961,7 @@ def test_secret_input_prompt_routes_all_credentials_before_probing() -> None:
         offered_tool_names=frozenset({"question", "secret_input", "shell_run"}),
     )
 
-    assert "stable non-credential user context" in prompt
+    assert "For missing required stable non-credential user context" in prompt
     assert "Credential routing overrides the missing-information contract" in prompt
     assert "usernames count as credentials even when they are visible" in prompt
     assert "the runtime requests missing administrator input directly" in prompt
@@ -2456,7 +2456,7 @@ def test_prefetched_memory_overview_disables_redundant_retrieval() -> None:
 
     assert "Do not call context_search, memory_browse" in prompt
     assert "or session_browse" in prompt
-    assert "Use context_search when" not in primary
+    assert "Use context_search for missing facts" not in primary
     assert "Present this as a partial overview" in prompt
 
 
@@ -3443,7 +3443,10 @@ async def test_failed_projection_does_not_commit_new_summary() -> None:
 
 def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions() -> None:
     session = _session()
-    tools = frozenset({"write_file", "read", "glob", "task"})
+    tools = frozenset({
+        "write_file", "read", "glob", "task", "question",
+        "context_search", "memory_browse", "memory_write", "session_browse", "session_read",
+    })
     plan = plan_profile()
     build = build_profile()
     main_system = general_system_prompt(session, agent_profile=plan, offered_tool_names=tools)

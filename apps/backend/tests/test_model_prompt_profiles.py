@@ -55,6 +55,12 @@ def test_coding_profiles_share_batching_guidance(profile):
     assert "group coherent changes to the same file into one patch" in prompt
 
 
+@pytest.mark.parametrize("profile", [plan_profile(), build_profile()])
+def test_coding_memory_restriction_reaches_delegated_agents(profile):
+    prompt = agent_profile_runtime_instructions(profile, delegated=True)
+    assert "Missing context alone does not justify retrieval" in prompt
+
+
 def test_custom_profile_inherits_build_model_instructions():
     profile = resolve_agent_profile(
         CustomAgentProfile(

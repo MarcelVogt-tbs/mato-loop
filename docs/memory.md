@@ -60,6 +60,10 @@ When `session_read` is available, the late memory context instructs the model to
 
 Explicit durable-memory overview intent uses bounded chronological prefetch and continuation state while still injecting every visible pin in full. `memory_browse`, `context_search`, `session_browse`, and `session_read` remain available for deliberate retrieval beyond automatic quotas. Assistant provider metadata records injected durable-memory and prior-session counts without duplicating their content.
 
+Plan and Build use relevant supplied Memory context, but their runtime instructions allow active retrieval of saved memories or prior conversations only when the user explicitly requests it or refers to information from those sources. Missing context alone does not justify retrieval. Required retrieval for explicitly requested memory writes, updates, or deletions remains allowed. The restriction is visible in the profile editor's runtime-instruction field, supports custom-profile inheritance and overrides, and also reaches delegated agents.
+
+These profile instructions also govern retrieval hints in supplied references; they do not change automatic context injection, tool availability, or runtime permissions. Changes to this static prompt contract intentionally invalidate affected provider prefixes so current instructions apply; historical turn snapshots, schema order, and cache routing remain unchanged.
+
 ## Durable Memory
 
 A durable memory stores canonical content, category, audience, source provenance, revision, evidence links, seen state, and `pinned`. Categories are `context`, `fact`, `goal`, `identity`, and `preference`; sources are `manual`, `tool_call`, and `dreaming`. Normalized content hashes prevent case- and whitespace-equivalent duplicates.

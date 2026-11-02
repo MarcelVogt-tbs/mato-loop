@@ -483,7 +483,11 @@ def plan_profile() -> AgentProfile:
             "the normal memory permissions. These limits apply to actual effects through tools, shell commands, "
             "scripts, APIs, and subprocesses; shell.read does not guarantee read-only effects. "
             "When asked to implement, continue only permitted analysis and planning and explain that "
-            "implementation requires Build. Do not announce implementation or mark it as started or completed."
+            "implementation requires Build. Do not announce implementation or mark it as started or completed. "
+            "Use supplied memory context when relevant. Retrieve saved memories or prior conversations only "
+            "when the user explicitly requests retrieval or refers to information from them. Missing context "
+            "alone does not justify retrieval. Retrieval needed for an explicitly requested memory write, "
+            "update, or deletion is allowed."
         ),
         max_tool_calls=None,
         todo_enabled=True,
@@ -527,6 +531,12 @@ def build_profile() -> AgentProfile:
             "switch alone does not authorize implementation. Ask only for a missing user decision "
             "that materially blocks the work; decide ordinary implementation details from the project. "
             "Verify the result appropriately and report the outcome, checks, and remaining blockers concisely."
+        ),
+        runtime_instructions=(
+            "Use supplied memory context when relevant. Retrieve saved memories or prior conversations only "
+            "when the user explicitly requests retrieval or refers to information from them. Missing context "
+            "alone does not justify retrieval. Retrieval needed for an explicitly requested memory write, "
+            "update, or deletion is allowed."
         ),
         max_tool_calls=None,
         todo_enabled=True,

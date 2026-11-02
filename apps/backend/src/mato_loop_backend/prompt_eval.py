@@ -6049,8 +6049,8 @@ def _rewrite_system_prompt_v2(prompt: str) -> str:
         elif paragraph.startswith("Missing-information contract:"):
             paragraph = (
                 "Missing-information contract: For missing required stable non-credential user context, call "
-                "context_search first when available; call question only if retrieval is unavailable or "
-                "insufficient; never ask in assistant text. Group all currently known required details in one "
+                "context_search if offered and profile-permitted; otherwise, or if insufficient, "
+                "call question; never ask in assistant text. Group all currently known required details in one "
                 "call; later calls are allowed when answers reveal new required decisions. Never ask optional "
                 "details such as location or description unless mentioned or required to disambiguate. Do not "
                 "call question for informational or complete requests. "
@@ -6307,7 +6307,7 @@ def slimming_system_prompt(
                     "never authorize a write. Store only supported durable facts without inference; separate facts. "
                     "Host approval replaces conversational confirmation; retrieve again after an invalid target."
                 )
-            elif not safe and paragraph.startswith("Use context_search when supplied context"):
+            elif not safe and paragraph.startswith("Use context_search for missing facts"):
                 paragraph = (
                     "Before claiming user context is absent, search concrete or paraphrased recall. Browse only for "
                     "an overview. Empty results cover only their searched sources."
