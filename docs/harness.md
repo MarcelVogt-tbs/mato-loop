@@ -163,7 +163,7 @@ Each `shell_run` starts a fresh process in the selected directory. `cd`, variabl
 
 Elevated operations dispatch through the dedicated `administrator.run` path with independent authorization and reinspection. Password input supplies authentication only and never appears in tool arguments/logs. Process output is filtered for injected values and recognized authentication headers before live or canonical publication; transformed secrets are not contained by textual redaction.
 
-An Agent's session scratch subtree is readable by default; `temporaryFilesEnabled` adds writes, not deletion. Plan/Build/Sysadmin enable it. It does not grant other scratch/worktree access or override computer/tool/delegation limits. Older Agents without advertised support get no implicit scratch grant. New required result fields use the general `executionAgent.updateRequired` error; compatible older operations remain usable, without requiring exact version equality.
+An Agent's session scratch subtree is readable by default; `temporaryFilesEnabled` adds writes, not deletion. Plan/Build/Sysadmin enable it. The model is instructed to use it for temporary scripts, logs and intermediate files, including explicit program output paths, unless the user explicitly requests another location; normal permissions still apply. It does not grant other scratch/worktree access or override computer/tool/delegation limits. Older Agents without advertised support get no implicit scratch grant. New required result fields use the general `executionAgent.updateRequired` error; compatible older operations remain usable, without requiring exact version equality.
 
 ## History and Request Context
 

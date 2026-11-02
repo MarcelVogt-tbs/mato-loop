@@ -1901,6 +1901,10 @@ def test_computer_identity_changes_prompt_only_when_binding_changes() -> None:
     without_temporary = general_system_prompt(session, **{**options, "temporary_files_enabled": False})
     assert first.split("Selected computer context:")[0] == without_temporary.split("Selected computer context:")[0]
     assert '"temporaryDirectory": "/tmp/mato-loop/' in first
+    assert (
+        "Use temporaryDirectory for temporary scripts, logs, and intermediate files, including explicit program "
+        "output paths, unless the user explicitly requests another location. Normal permissions still apply."
+    ) in first
     assert '"temporaryDirectoryWritable": false' in without_temporary
     assert f'"id": "{agent_id}"' in first
     assert first != general_system_prompt(session, **{**options, "execution_agent_id": uuid4()})

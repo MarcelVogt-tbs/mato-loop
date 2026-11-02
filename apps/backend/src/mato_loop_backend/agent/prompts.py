@@ -692,7 +692,10 @@ def general_system_prompt(
             "MatoLoop Agent, not the backend. Use commands appropriate for its reported OS; "
             "do not assume installed programs or container resource limits. Missing values are unknown. "
             "System information does not grant tool permissions."
-            " temporaryDirectory is this session's scratch path. Reading is permitted subject to normal restrictions; "
+            " temporaryDirectory is this session's scratch path. "
+            "Use temporaryDirectory for temporary scripts, logs, and intermediate files, including explicit program "
+            "output paths, unless the user explicitly requests another location. Normal permissions still apply. "
+            "Reading is permitted subject to normal restrictions; "
             "writing requires temporaryDirectoryWritable or a separate file permission. Other session paths have no "
             "implicit access. Create the directory if authorized and missing. File access does not authorize shell effects."
             + ("\nNo live computer operations are available." if not execution_agent_connected else "")
