@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from mato_loop_backend.tools.registry import BoundTool
@@ -24,7 +24,7 @@ from mato_loop_backend.diagnostics.service import schedule_diagnostic_event
 from mato_loop_backend.execution import ExecutionClientError
 from mato_loop_backend.files.service import RootFileError
 from mato_loop_backend.integrations.arcane.client import ArcaneError
-from mato_loop_backend.integrations.contracts import IntegrationResource
+from mato_loop_backend.integrations.contracts import IntegrationResource, remote_error_params
 from mato_loop_backend.integrations.mail.client import MailError
 from mato_loop_backend.integrations.registry import integration_adapter
 from mato_loop_backend.integrations.search import SearchIntegrationError
@@ -51,10 +51,11 @@ from mato_loop_backend.tools.contracts import (
 )
 from mato_loop_backend.tools.references import InvalidToolReference, resolve_tool_references
 from mato_loop_backend.tools.snapshots import ToolSnapshotState, snapshot_revision
+from mato_loop_backend.tools.validation import argument_error
 from mato_loop_backend.web.fetch import WebFetchError
 
 
-def _rejected_arguments(*, field: str | None = None, params: dict[str, str] | None = None) -> ToolResult:
+def _rejected_arguments(*, field: str | None = None, params: dict[str, Any] | None = None) -> ToolResult:
     result = ToolResult.error("tool.invalidArguments", field=field, params=params)
     result.metadata["argumentsRejected"] = True
     return result
@@ -212,46 +213,20 @@ async def execute_definition(
         return ToolResult.error("integration.staleReference", field=exc.field)
     try:
         arguments = definition.validate_arguments(raw_arguments)
-    except JsonSchemaValidationError as exc:
-        field_name = ".".join(str(part) for part in exc.absolute_path) or None
-        return _rejected_arguments(field=field_name)
     except DynamicToolArgumentsError as exc:
-        return _rejected_arguments(field=exc.field)
+        return _rejected_arguments(field=exc.field, params=exc.params)
     except (SchemaError, Unresolvable):
-        return _rejected_arguments()
-    except ValidationError as exc:
-        errors = exc.errors(include_url=False, include_input=False)
-        for error in errors:
-            if error["type"] == "personal_settings_invalid":
-                return _rejected_arguments(field=error["ctx"]["field"])
+        return ToolResult.error("tool.unavailable")
+    except (ValidationError, JsonSchemaValidationError) as exc:
+        for error in exc.errors(include_url=False, include_input=False) if isinstance(exc, ValidationError) else ():
             if error["type"] == "question_placeholder_not_allowed":
                 return ToolResult.error(
                     "question.placeholderNotAllowed",
                     field=f"questions[{error['loc'][1]}].placeholder",
                 )
-        # Follow input containers, stopping before Pydantic's synthetic union-branch labels.
-        field_parts = []
-        value = raw_arguments
-        for part in errors[0].get("loc") or ():
-            if isinstance(value, dict) and part in value:
-                field_parts.append(str(part))
-                value = value[part]
-            elif isinstance(value, list) and isinstance(part, int) and 0 <= part < len(value):
-                field_parts.append(str(part))
-                value = value[part]
-            else:
-                if not field_parts:
-                    field_parts.append(str(part))
-                break
-        field_name = ".".join(field_parts) or None
-        reason = {
-            "missing": "missing", "uuid_parsing": "invalid_uuid", "uuid_type": "invalid_uuid",
-            "literal_error": "invalid_choice", "enum": "invalid_choice",
-        }.get(errors[0]["type"])
-        return _rejected_arguments(
-            field=field_name,
-            params={"reason": reason} if reason else None,
-        )
+        result = argument_error(exc, raw_arguments)
+        result.metadata["argumentsRejected"] = True
+        return result
     selected_integration_id = tool.source_id
     aggregate_integration_ids: tuple[str, ...] = ()
     if definition.instance_argument is not None:
@@ -260,7 +235,7 @@ async def execute_definition(
                 UUID(str(getattr(arguments, definition.instance_argument)))
             )
         except (AttributeError, TypeError, ValueError):
-            return _rejected_arguments(field=definition.instance_argument)
+            return _rejected_arguments(field=definition.instance_argument, params={"reason": "invalid_uuid"})
         if selected_integration_id not in dict(tool.integration_revisions):
             return ToolResult.error("tool.unavailable")
     elif tool.integration_revisions:
@@ -303,7 +278,7 @@ async def execute_definition(
             if definition.resource_argument is not None:
                 resource_key = getattr(arguments, definition.resource_argument, None)
                 if not isinstance(resource_key, str) or not resource_key:
-                    return _rejected_arguments(field=definition.resource_argument)
+                    return _rejected_arguments(field=definition.resource_argument, params={"reason": "invalid_choice"})
             from mato_loop_backend.tools.access import profile_tool_settings
 
             context.tool_settings = await profile_tool_settings(context)
@@ -456,7 +431,9 @@ async def execute_definition(
     ) as exc:
         return ToolResult.error(
             exc.code,
-            params=exc.params if isinstance(exc, (WebFetchError, ExecutionClientError)) else None,
+            params=exc.params if isinstance(exc, (WebFetchError, ExecutionClientError)) else (
+                remote_error_params(exc.status_code) if isinstance(exc, (ArcaneError, TbsDeskError)) else None
+            ),
         )
     except ProviderError as exc:
         return ToolResult.error(exc.public_code, params=exc.params)

@@ -289,9 +289,12 @@ def _result(value: Any) -> Any:
     return ToolResult.json({"data": value, "contentIsUntrusted": True})
 
 
-def _error(code: str) -> Any:
+def _error(code: str | ArcaneError) -> Any:
+    from mato_loop_backend.integrations.contracts import remote_error_params
     from mato_loop_backend.tools.contracts import ToolResult
 
+    if isinstance(code, ArcaneError):
+        return ToolResult.error(code.code, params=remote_error_params(code.status_code))
     return ToolResult.error(code)
 
 
@@ -311,7 +314,7 @@ async def arcane_environments(args: ArcaneInstance, context: Any) -> Any:
     except ValueError:
         return _error("integration.staleReference")
     except ArcaneError as exc:
-        return _error(exc.code)
+        return _error(exc)
 
 
 async def arcane_list(args: ArcaneList, context: Any) -> Any:
@@ -329,7 +332,7 @@ async def arcane_list(args: ArcaneList, context: Any) -> Any:
     except ValueError:
         return _error("integration.staleReference")
     except ArcaneError as exc:
-        return _error(exc.code)
+        return _error(exc)
 
 
 async def arcane_get(args: ArcaneGet, context: Any) -> Any:
@@ -347,7 +350,7 @@ async def arcane_get(args: ArcaneGet, context: Any) -> Any:
     except ValueError:
         return _error("integration.staleReference")
     except ArcaneError as exc:
-        return _error(exc.code)
+        return _error(exc)
 
 
 async def arcane_logs(args: ArcaneLogs, context: Any) -> Any:
@@ -358,7 +361,7 @@ async def arcane_logs(args: ArcaneLogs, context: Any) -> Any:
     except ValueError:
         return _error("integration.staleReference")
     except ArcaneError as exc:
-        return _error(exc.code)
+        return _error(exc)
 
 
 def _project_snapshot_context(args: ArcaneEnvironment, context: Any, project_id: str) -> dict[str, str]:
@@ -378,7 +381,7 @@ async def arcane_project_config(args: ArcaneProjectConfig, context: Any) -> Any:
     except ValueError:
         return _error("integration.staleReference")
     except ArcaneError as exc:
-        return _error(exc.code)
+        return _error(exc)
 
 
 async def arcane_project_save(args: ArcaneProjectSave, context: Any) -> Any:
@@ -426,7 +429,7 @@ async def arcane_project_save(args: ArcaneProjectSave, context: Any) -> Any:
     except ValueError:
         return _error("integration.staleReference")
     except ArcaneError as exc:
-        return _error(exc.code)
+        return _error(exc)
 
 
 _ACTION_ROUTES = {
@@ -482,7 +485,7 @@ async def arcane_action(args: ArcaneAction, context: Any) -> Any:
     except ValueError:
         return _error("integration.staleReference")
     except ArcaneError as exc:
-        return _error(exc.code)
+        return _error(exc)
 
 
 async def arcane_delete(args: ArcaneDelete, context: Any) -> Any:
@@ -496,7 +499,7 @@ async def arcane_delete(args: ArcaneDelete, context: Any) -> Any:
     except ValueError:
         return _error("integration.staleReference")
     except ArcaneError as exc:
-        return _error(exc.code)
+        return _error(exc)
 
 
 def _accounts_permission(_args: ArcaneAccounts, _context: Any) -> tuple[Any, ...]:

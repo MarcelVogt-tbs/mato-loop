@@ -10,9 +10,10 @@ _MAX_RESPONSE_BYTES = 1_000_000
 
 
 class TbsDeskError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, status_code: int | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.status_code = status_code
 
 
 class TbsCustomer(BaseModel):
@@ -123,10 +124,14 @@ class TbsDeskClient:
             try:
                 if allow_not_found and response.status_code == 404:
                     return None
-                if response.status_code in {401, 403}:
-                    raise TbsDeskError("integration.authenticationFailed")
                 if response.is_redirect or response.status_code >= 400:
-                    raise TbsDeskError("integration.unavailable")
+                    code = {
+                        400: "integration.requestFailed", 422: "integration.requestFailed",
+                        401: "integration.authenticationFailed", 403: "integration.permissionDenied",
+                        404: "integration.remoteNotFound", 409: "integration.remoteChanged",
+                        429: "integration.rateLimited",
+                    }.get(response.status_code, "integration.unavailable")
+                    raise TbsDeskError(code, status_code=response.status_code)
                 body = bytearray()
                 async for chunk in response.aiter_bytes():
                     body.extend(chunk)

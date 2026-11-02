@@ -482,6 +482,19 @@ def test_mcp_result_json_does_not_translate_file_root_values() -> None:
     assert ToolResult.raw_json({"root": "session"}).content == '{"root": "session"}'
 
 
+@pytest.mark.parametrize("adapter", [MCP_ADAPTER, SONOBIN_ADAPTER])
+async def test_mcp_tool_errors_keep_payload_and_persistent_error_status(monkeypatch, adapter):
+    instance = IntegrationInstance(
+        name="Server", integration_type=adapter.integration_type, adapter_type=adapter.adapter_type,
+        config={"endpoint": "https://mcp.example.test/mcp/", "tools": [{"name": "lookup", "input_schema": {"type": "object"}}]},
+    )
+    payload = {"isError": True, "content": [{"type": "text", "text": "Missing required remote field"}]}
+    monkeypatch.setattr(McpClient, "call_tool", AsyncMock(return_value=(payload, True)))
+    context = SimpleNamespace(db=None, integration_settings=IntegrationSettings(instances=[instance]))
+    result = await adapter.contributions(instance).tools[0].handler({}, context)
+    assert (result.is_error, result.metadata.get("errorCode"), json.loads(result.content)) == (True, "mcp.callFailed", payload)
+
+
 def test_mcp_config_rejects_endpoint_query() -> None:
     with pytest.raises(ValueError):
         McpConfig(endpoint="https://mcp.example.test/rpc?token=secret")
@@ -548,13 +561,13 @@ def test_sonobin_adapter_covers_the_complete_catalog() -> None:
 
 
 @pytest.mark.parametrize(
-    "arguments",
+    "arguments,params",
     [
-        {"value": float("nan")},
-        {"value": "x" * (256 * 1024)},
+        ({"value": float("nan")}, {"reason": "invalid_json"}),
+        ({"value": "x" * (256 * 1024)}, {"reason": "too_large", "maxBytes": 256 * 1024}),
     ],
 )
-def test_dynamic_mcp_arguments_are_bounded_finite_json(arguments) -> None:
+def test_dynamic_mcp_arguments_are_bounded_finite_json(arguments, params) -> None:
     instance = IntegrationInstance(
         name="Server",
         integration_type="mcp",
@@ -567,8 +580,9 @@ def test_dynamic_mcp_arguments_are_bounded_finite_json(arguments) -> None:
     definition = ToolRegistry._contributed_definition(
         MCP_ADAPTER.contributions(instance).tools[0]
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(DynamicToolArgumentsError) as error:
         definition.validate_arguments(arguments)
+    assert error.value.params == params
 
 
 def test_dynamic_mcp_arguments_have_bounded_depth() -> None:
@@ -587,8 +601,9 @@ def test_dynamic_mcp_arguments_have_bounded_depth() -> None:
     definition = ToolRegistry._contributed_definition(
         MCP_ADAPTER.contributions(instance).tools[0]
     )
-    with pytest.raises(ValueError, match="depth"):
+    with pytest.raises(DynamicToolArgumentsError, match="depth") as error:
         definition.validate_arguments({"value": value})
+    assert error.value.params == {"reason": "too_deep", "maxDepth": 64}
 
 
 def test_mcp_policy_resolves_global_server_and_tool_levels() -> None:

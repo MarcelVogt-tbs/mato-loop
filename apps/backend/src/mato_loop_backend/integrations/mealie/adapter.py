@@ -18,11 +18,13 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic_core import PydanticCustomError
 
 from mato_loop_backend.integrations.contracts import (
     IntegrationAdapterDefinition,
     IntegrationContributions,
     ToolContribution,
+    remote_error_params,
 )
 from mato_loop_backend.integrations.mealie.client import (
     MealieClient,
@@ -164,7 +166,7 @@ class RecipeIngredientInput(_Arguments):
     @model_validator(mode="after")
     def require_content(self) -> RecipeIngredientInput:
         if not any((value or "").strip() for value in (self.food, self.note, self.title, self.original_text)):
-            raise ValueError("ingredient content is required")
+            raise PydanticCustomError("tool_argument_invalid", "ingredient content is required", {"reason": "missing", "hint": "Provide at least one of food, note, title, or original_text."})
         return self
 
 
@@ -191,7 +193,7 @@ class RecipeFields(_Arguments):
     def reject_null_fields(self) -> RecipeFields:
         for field in self.model_fields_set & RecipeFields.model_fields.keys():
             if getattr(self, field) is None:
-                raise ValueError(f"{field} cannot be null; omit it to preserve the current value")
+                raise PydanticCustomError("tool_argument_invalid", "recipe field cannot be null", {"field": field, "hint": "Omit the field to preserve its current value; do not send null."})
         return self
 
 
@@ -203,7 +205,7 @@ class RecipeUpdateArguments(RecipeFields, RecipeGetArguments):
     @model_validator(mode="after")
     def require_patch(self) -> RecipeUpdateArguments:
         if not self.model_fields_set & RecipeFields.model_fields.keys():
-            raise ValueError("at least one recipe field is required")
+            raise PydanticCustomError("tool_argument_invalid", "recipe changes are required", {"reason": "missing", "hint": "Provide at least one recipe field to update."})
         return self
 
 
@@ -230,7 +232,7 @@ class MealPlanGetArguments(MealieIntegrationArguments):
     @model_validator(mode="after")
     def validate_range(self) -> MealPlanGetArguments:
         if self.end_date < self.start_date or (self.end_date - self.start_date).days > 365:
-            raise ValueError("date range must contain at most 366 inclusive days")
+            raise PydanticCustomError("tool_argument_invalid", "invalid date range", {"field": "end_date", "hint": "Use end_date on or after start_date, at most 365 days later."})
         return self
 
 
@@ -251,7 +253,7 @@ class MealPlanAddArguments(MealieIntegrationArguments):
     @model_validator(mode="after")
     def require_content(self) -> MealPlanAddArguments:
         if self.recipe_token is None and not self.title.strip():
-            raise ValueError("recipe_token or title is required")
+            raise PydanticCustomError("tool_argument_invalid", "meal plan content is required", {"reason": "missing", "hint": "Provide recipe_token or a non-blank title."})
         return self
 
 
@@ -288,10 +290,10 @@ class MealPlanUpdateArguments(MealPlanTokenArguments):
             "recipe_token",
         }
         if not fields:
-            raise ValueError("at least one meal plan field is required")
+            raise PydanticCustomError("tool_argument_invalid", "meal plan changes are required", {"reason": "missing", "hint": "Provide at least one meal plan field to update."})
         for field in fields - {"recipe_token"}:
             if getattr(self, field) is None:
-                raise ValueError(f"{field} cannot be null")
+                raise PydanticCustomError("tool_argument_invalid", "meal plan field cannot be null", {"field": field, "hint": "Omit the field instead of setting it to null."})
         return self
 
 
@@ -302,7 +304,7 @@ class MealPlanDeleteArguments(MealPlanTokenArguments):
 _MEALIE_ERROR_CODES = {
     "mealie.authenticationFailed": "integration.authenticationFailed",
     "mealie.invalidResponse": "integration.invalidResponse",
-    "mealie.invalidRequest": "tool.invalidArguments",
+    "mealie.invalidRequest": "integration.requestFailed",
     "mealie.invalidUrl": "integration.invalidConfiguration",
     "mealie.malformedResponse": "integration.invalidResponse",
     "mealie.notFound": "integration.remoteNotFound",
@@ -589,7 +591,7 @@ def _result(value: dict[str, Any]) -> Any:
 def _error(error: MealieError) -> Any:
     from mato_loop_backend.tools.contracts import ToolResult
 
-    return ToolResult.error(mealie_error_code(error))
+    return ToolResult.error(mealie_error_code(error), params=remote_error_params(error.status_code))
 
 
 def _invalid(field: str) -> Any:

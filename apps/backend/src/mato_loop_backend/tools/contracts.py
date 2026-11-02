@@ -35,9 +35,10 @@ MAX_DYNAMIC_JSON_DEPTH = 64
 
 
 class DynamicToolArgumentsError(ValueError):
-    def __init__(self, message: str, *, field: str | None = None) -> None:
+    def __init__(self, message: str, *, field: str | None = None, params: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.field = field
+        self.params = params or {"reason": "invalid_value"}
 
 
 class ToolCallSuperseded(Exception):
@@ -63,7 +64,7 @@ class ToolArgumentsEdited(Exception):
 
 def _json_depth(value: Any, depth: int = 0) -> int:
     if depth > MAX_DYNAMIC_JSON_DEPTH:
-        raise DynamicToolArgumentsError("dynamic JSON exceeds maximum depth")
+        raise DynamicToolArgumentsError("dynamic JSON exceeds maximum depth", params={"reason": "too_deep", "maxDepth": MAX_DYNAMIC_JSON_DEPTH})
     if isinstance(value, dict):
         return max((_json_depth(item, depth + 1) for item in value.values()), default=depth)
     if isinstance(value, list):
@@ -215,7 +216,8 @@ class ToolDefinition:
                 not isinstance(reason, str) or not reason.strip() or len(reason) > 500
             ):
                 raise DynamicToolArgumentsError(
-                    "permission reason is invalid", field=PERMISSION_REASON_ARGUMENT
+                    "permission reason is invalid", field=PERMISSION_REASON_ARGUMENT,
+                    params={"reason": "invalid_value", "hint": "Use a non-blank string of at most 500 characters, or omit _reason."},
                 )
         if self.arguments_schema is not None:
             _json_depth(value)
@@ -226,9 +228,9 @@ class ToolDefinition:
                     ).encode()
                 )
             except (TypeError, ValueError) as exc:
-                raise DynamicToolArgumentsError("dynamic arguments are not finite JSON") from exc
+                raise DynamicToolArgumentsError("dynamic arguments are not finite JSON", params={"reason": "invalid_json"}) from exc
             if size > MAX_DYNAMIC_ARGUMENT_BYTES:
-                raise DynamicToolArgumentsError("dynamic arguments exceed maximum size")
+                raise DynamicToolArgumentsError("dynamic arguments exceed maximum size", params={"reason": "too_large", "maxBytes": MAX_DYNAMIC_ARGUMENT_BYTES})
             validator_for(self.arguments_schema)(
                 self.arguments_schema, registry=Registry()
             ).validate(value)

@@ -28,9 +28,10 @@ class ArcaneConfig(BaseModel):
 
 
 class ArcaneError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, status_code: int | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.status_code = status_code
 
 
 def segment(value: str) -> str:
@@ -152,19 +153,19 @@ class ArcaneClient:
         try:
             status = response.status_code
             if status in {400, 422}:
-                raise ArcaneError("tool.invalidArguments")
+                raise ArcaneError("integration.requestFailed", status_code=status)
             if status == 401:
-                raise ArcaneError("integration.authenticationFailed")
+                raise ArcaneError("integration.authenticationFailed", status_code=status)
             if status == 403:
-                raise ArcaneError("integration.permissionDenied")
+                raise ArcaneError("integration.permissionDenied", status_code=status)
             if status == 404:
-                raise ArcaneError("integration.remoteNotFound")
+                raise ArcaneError("integration.remoteNotFound", status_code=status)
             if status == 409:
-                raise ArcaneError("integration.changed")
+                raise ArcaneError("integration.changed", status_code=status)
             if status == 429:
-                raise ArcaneError("integration.rateLimited")
+                raise ArcaneError("integration.rateLimited", status_code=status)
             if status < 200 or status >= 300:
-                raise ArcaneError("integration.outcomeUnknown" if mutation else "integration.unavailable")
+                raise ArcaneError("integration.outcomeUnknown" if mutation else "integration.unavailable", status_code=status)
             limit = 2 * 1024 * 1024 if streamed else max_bytes
             if streamed:
                 size = 0

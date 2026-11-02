@@ -58,6 +58,7 @@ async def test_reason_repair_through_runtime_and_real_registry(monkeypatch, extr
         "code": "tool.invalidArguments",
         "message": "The tool arguments are invalid. Inspect error.field and error.params.reason and retry with arguments that match the tool schema.",
         "field": "_reason",
+        "params": {"reason": "invalid_value", "hint": "Use a non-blank string of at most 500 characters, or omit _reason."},
     }
     assert json.loads(second.content) == {"content": "note"}
     assert len(requests) == 3

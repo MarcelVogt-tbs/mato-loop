@@ -518,7 +518,7 @@ export function parseToolResult(content, toolName = null) {
   if (typeof content !== 'string') return { text: '', error: null }
   try {
     const value = JSON.parse(content)
-    const error = errorDescriptor(value)
+    const error = value?.isError === true ? { code: 'mcp.callFailed' } : errorDescriptor(value)
     const processValue = value?.output && typeof value.output === 'object' ? value.output : value
     const hasProcessOutput = typeof processValue?.stdout === 'string'
       || typeof processValue?.stderr === 'string'

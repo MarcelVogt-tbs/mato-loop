@@ -54,6 +54,7 @@ from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
 )
+from mato_loop_backend.tools.validation import argument_error
 
 RECIPE_ID = "12345678-1234-5678-9234-567812345678"
 GROUP_ID = "22345678-1234-5678-9234-567812345678"
@@ -605,10 +606,30 @@ async def test_meal_plan_mutations_reject_a_remotely_changed_entry(
     client.delete_meal_plan.assert_not_awaited()
 
 
+def test_date_range_validation_provides_a_controlled_correction_hint():
+    arguments = {"integration_id": uuid4(), "start_date": "2026-11-02", "end_date": "2026-11-01"}
+    with pytest.raises(ValidationError) as error:
+        MealPlanGetArguments.model_validate(arguments)
+    result = argument_error(error.value, arguments)
+    descriptor = json.loads(result.content)["error"]
+    assert (descriptor["field"], descriptor["params"]) == ("end_date", {
+        "reason": "invalid_value", "hint": "Use end_date on or after start_date, at most 365 days later.",
+    })
+
+
+def test_remote_validation_error_keeps_status_and_controlled_correction_hint():
+    result = integrations_mealie_adapter._error(MealieError("mealie.invalidRequest", status_code=422))
+    error = json.loads(result.content)["error"]
+    assert (error["code"], error["params"]) == ("integration.requestFailed", {
+        "statusCode": 422, "reason": "remote_rejected",
+        "hint": "The remote service rejected the request. Check its field requirements; local schema validation does not cover all remote rules.",
+    })
+
+
 def test_error_mapping_covers_mealie_client_failures() -> None:
     assert integrations_mealie_adapter.mealie_error_code(
         MealieError("mealie.invalidRequest")
-    ) == "tool.invalidArguments"
+    ) == "integration.requestFailed"
     assert integrations_mealie_adapter.mealie_error_code(
         MealieError("mealie.authenticationFailed")
     ) == "integration.authenticationFailed"

@@ -35,6 +35,7 @@ from mato_loop_backend.integrations.contracts import (
     IntegrationContributions,
     IntegrationResource,
     ToolContribution,
+    remote_error_params,
 )
 from mato_loop_backend.integrations.service import remember_resource_labels
 from mato_loop_backend.models import Credential
@@ -353,7 +354,7 @@ _BOOKSTACK_ERROR_CODES = {
     "bookstack.invalidLimit": "integration.invalidConfiguration",
     "bookstack.invalidPage": "tool.invalidArguments",
     "bookstack.invalidQuery": "tool.invalidArguments",
-    "bookstack.invalidRequest": "tool.invalidArguments",
+    "bookstack.invalidRequest": "integration.requestFailed",
     "bookstack.invalidUrl": "integration.invalidConfiguration",
     "bookstack.malformedResponse": "integration.invalidResponse",
     "bookstack.notFound": "integration.remoteNotFound",
@@ -663,7 +664,7 @@ def _result(value: dict[str, Any]) -> Any:
 def _error(error: BookStackError) -> Any:
     from mato_loop_backend.tools.contracts import ToolResult
 
-    return ToolResult.error(bookstack_error_code(error))
+    return ToolResult.error(bookstack_error_code(error), params=remote_error_params(error.status_code))
 
 
 def _invalid(field: str) -> Any:

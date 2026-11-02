@@ -33,6 +33,7 @@ from mato_loop_backend.integrations.contracts import (
     IntegrationContributions,
     IntegrationResource,
     ToolContribution,
+    remote_error_params,
 )
 from mato_loop_backend.models import Credential
 from mato_loop_backend.security import CredentialCipher, load_credential, read_credential
@@ -389,6 +390,9 @@ class _TaskToken(BaseModel):
 
 _CALDAV_ERROR_CODES = {
     "caldav.authenticationFailed": "integration.authenticationFailed",
+    "caldav.permissionDenied": "integration.permissionDenied",
+    "caldav.rateLimited": "integration.rateLimited",
+    "caldav.invalidRequest": "integration.requestFailed",
     "caldav.conflict": "integration.remoteChanged",
     "caldav.crossOrigin": "integration.invalidResponse",
     "caldav.etagRequired": "integration.remoteChanged",
@@ -888,7 +892,7 @@ def _result(value: dict[str, Any]) -> Any:
 def _error(error: CalDavError) -> Any:
     from mato_loop_backend.tools.contracts import ToolResult
 
-    return ToolResult.error(caldav_error_code(error))
+    return ToolResult.error(caldav_error_code(error), params=remote_error_params(error.status_code))
 
 
 async def calendar_list_accounts(

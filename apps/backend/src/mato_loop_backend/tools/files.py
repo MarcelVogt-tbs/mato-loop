@@ -73,6 +73,7 @@ from mato_loop_backend.tools.contracts import ToolDefinition as ToolDefinition
 from mato_loop_backend.tools.contracts import ToolFileAction as ToolFileAction
 from mato_loop_backend.tools.contracts import ToolResult as ToolResult
 from mato_loop_backend.tools.secrets import resolve_protected_text
+from mato_loop_backend.tools.validation import argument_error
 from mato_loop_backend.web.fetch import WebFetchError
 
 logger = logging.getLogger("mato_loop_backend.agent.tools")
@@ -557,8 +558,8 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
     content, _protected = resolved
     try:
         WriteFileArguments.model_validate({**arguments.model_dump(by_alias=True), "content": content})
-    except ValidationError:
-        return ToolResult.error("tool.invalidArguments", field="content")
+    except ValidationError as exc:
+        return argument_error(exc, {"content": content})
     if _omitted_file_content(content):
         return ToolResult.error("file.omittedContent", field="content")
     if arguments.root == "workspace":
@@ -659,8 +660,8 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
         EditFileArguments.model_validate({
             **arguments.model_dump(by_alias=True), "oldString": old_text, "newString": new_text,
         })
-    except ValidationError:
-        return ToolResult.error("tool.invalidArguments", field="newString")
+    except ValidationError as exc:
+        return argument_error(exc, {"oldString": old_text, "newString": new_text})
     if _omitted_file_content(old_text) or _omitted_file_content(new_text):
         return ToolResult.error("file.omittedContent")
     if arguments.root == "workspace":

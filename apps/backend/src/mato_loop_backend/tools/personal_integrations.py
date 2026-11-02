@@ -15,6 +15,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic_core import PydanticCustomError
 
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.execution.client import ExecutionClientError
@@ -58,6 +59,7 @@ from mato_loop_backend.tools.arguments import PersonalSettingsArguments
 from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import ToolResult
 from mato_loop_backend.tools.secrets import resolve_secret_refs
+from mato_loop_backend.tools.validation import argument_error
 
 logger = logging.getLogger(__name__)
 
@@ -130,18 +132,20 @@ class IntegrationChanges(BaseModel):
 
     @model_validator(mode="after")
     def validate_values(self) -> IntegrationChanges:
-        if any(getattr(self, key) is None for key in self.model_fields_set):
-            raise ValueError("integration fields must not be null")
-        for url in (self.base_url, self.endpoint):
+        for key in sorted(self.model_fields_set):
+            if getattr(self, key) is None:
+                raise PydanticCustomError("tool_argument_invalid", "integration fields must not be null", {"field": key, "hint": "Omit the field instead of setting it to null."})
+        for key in ("base_url", "endpoint"):
+            url = getattr(self, key)
             if url is not None and (
                 url.username is not None or url.password is not None
                 or url.query is not None or url.fragment is not None
             ):
-                raise ValueError("integration URLs must not contain credentials, queries, or fragments")
+                raise PydanticCustomError("tool_argument_invalid", "invalid integration URL", {"field": key, "hint": "Use a URL without credentials, query, or fragment."})
         if self.name is not None and not self.name.strip():
-            raise ValueError("integration name must not be blank")
+            raise PydanticCustomError("tool_argument_invalid", "blank integration name", {"field": "name", "reason": "too_short", "hint": "Use a non-blank name."})
         if self.secret_refs and self.remove_credential:
-            raise ValueError("cannot set and remove credentials together")
+            raise PydanticCustomError("tool_argument_invalid", "conflicting credential changes", {"field": "secret_refs", "hint": "Do not combine secret_refs with remove_credential."})
         for reference in self.secret_refs.values():
             if isinstance(reference, UUID):
                 continue
@@ -151,7 +155,7 @@ class IntegrationChanges(BaseModel):
             except ValueError:
                 valid = False
             if not valid:
-                raise ValueError("invalid secret reference")
+                raise PydanticCustomError("tool_argument_invalid", "invalid secret reference", {"field": "secret_refs", "hint": "Use a valueRef returned by secret_input or variable_read."})
         return self
 
 
@@ -193,7 +197,7 @@ async def _caldav_defaults(
     assert arguments.integration_id is not None
     changes = arguments.changes or {}
     if set(changes) - {"default_resource_key", "default_task_list_key"}:
-        return ToolResult.error("tool.invalidArguments")
+        return ToolResult.error("tool.invalidArguments", field=f"changes.{sorted(set(changes) - {'default_resource_key', 'default_task_list_key'})[0]}", params={"reason": "extra_field"})
     global_settings, personal = await _settings(context)
     item = next((item for item in personal.instances if item.id == arguments.integration_id
                  and item.adapter_type == "caldav"), None)
@@ -264,24 +268,26 @@ async def manage_integrations(
         return ToolResult.error("integration.notFound")
     adapter_type = arguments.adapter_type or (current.adapter_type if current else None)
     if adapter_type not in _CONFIG_FIELDS or (current and current.adapter_type != adapter_type):
-        return ToolResult.error("tool.invalidArguments")
+        return ToolResult.error("tool.invalidArguments", field="adapter_type", params={"reason": "invalid_choice", "hint": "Use a supported adapter type; an existing integration's adapter type cannot be changed."})
     if action != "delete" and global_settings.availability_for(adapter_type) != IntegrationAdapterAvailability.FULL:
         return ToolResult.error("integration.personalAdapterDisabled")
     changes = None
     if action != "delete":
         try:
             changes = IntegrationChanges.model_validate(arguments.changes)
-        except ValidationError:
-            return ToolResult.error("tool.invalidArguments")
+        except ValidationError as exc:
+            return argument_error(exc, arguments.changes, prefix="changes")
         allowed = {"name", "enabled", "secret_refs", *_CONFIG_FIELDS[adapter_type]}
         if adapter_type in {"mcp_streamable_http", "opencode"}:
             allowed.add("remove_credential")
-        if changes.model_fields_set - allowed or set(changes.secret_refs) - set(_SECRETS.get(adapter_type, ())):
-            return ToolResult.error("tool.invalidArguments")
+        if changes.model_fields_set - allowed:
+            return ToolResult.error("tool.invalidArguments", field=f"changes.{sorted(changes.model_fields_set - allowed)[0]}", params={"reason": "extra_field"})
+        if set(changes.secret_refs) - set(_SECRETS.get(adapter_type, ())):
+            return ToolResult.error("tool.invalidArguments", field="changes.secret_refs", params={"reason": "invalid_choice", "hint": "Use only credential fields supported by the selected adapter."})
         if changes.remove_credential and adapter_type not in {"mcp_streamable_http", "opencode"}:
-            return ToolResult.error("tool.invalidArguments")
+            return ToolResult.error("tool.invalidArguments", field="changes.remove_credential", params={"reason": "invalid_choice"})
         if adapter_type == "bookstack" and len(changes.secret_refs) == 1:
-            return ToolResult.error("tool.invalidArguments")
+            return ToolResult.error("tool.invalidArguments", field="changes.secret_refs", params={"reason": "missing", "hint": "Provide both token_id and token_secret references."})
         if action == "create" and (
             changes.name is None or any(
                 getattr(changes, field) is None and field not in changes.secret_refs
@@ -291,7 +297,7 @@ async def manage_integrations(
                    if field != "username" and adapter_type not in {"opencode", "mcp_streamable_http"})
             or changes.remove_credential
         ):
-            return ToolResult.error("tool.invalidArguments")
+            return ToolResult.error("tool.invalidArguments", field="changes", params={"reason": "missing", "hint": "Creating an integration requires a name, all adapter configuration fields and required secret_refs; remove_credential must be false."})
         config = dict(current.config) if current is not None else {}
         if adapter_type == "sonobin" and current is not None:
             config["base_url"] = sonobin_base_url(current.config["endpoint"])
@@ -304,21 +310,29 @@ async def manage_integrations(
                 config["endpoint"] = str(_SERVICES[adapter_type].config_model(
                     endpoint=config["base_url"] if adapter_type == "sonobin" else config["endpoint"],
                 ).endpoint)
+            except ValidationError as exc:
+                if adapter_type == "sonobin":
+                    return ToolResult.error("tool.invalidArguments", field="changes.base_url", params={
+                        "reason": "invalid_format", "hint": "Use an HTTPS base URL without credentials, query, or fragment.",
+                    })
+                return argument_error(exc, {"endpoint": config.get("endpoint")}, prefix="changes")
             except (ValueError, KeyError):
-                return ToolResult.error("tool.invalidArguments")
+                return ToolResult.error("tool.invalidArguments", field="changes.base_url" if adapter_type == "sonobin" else "changes.endpoint", params={"reason": "invalid_format"})
         elif adapter_type not in {"opencode", "browser"}:
             adapter = next((item for item in (integration_adapter(kind, adapter_type) for kind in (
                 "search", "calendar", "mail", "support", "knowledge", "recipes", "infrastructure", "openscad"
             )) if item is not None), None)
             if adapter is None:
-                return ToolResult.error("tool.invalidArguments")
+                return ToolResult.error("tool.unavailable")
             if adapter_type == "openscad":
                 config = {"binary_path": config["binary_path"]}
             if "username" not in changes.secret_refs:
                 try:
                     adapter.config_model.model_validate(config)
-                except (ValidationError, KeyError):
-                    return ToolResult.error("tool.invalidArguments")
+                except ValidationError as exc:
+                    return argument_error(exc, config, prefix="changes")
+                except KeyError:
+                    return ToolResult.error("tool.invalidArguments", field="changes", params={"reason": "missing"})
     denied = await authorize(
         context, action, "integrations", integration_id=arguments.integration_id,
         fields=tuple(sorted((arguments.changes or {}).keys())), changes=arguments.changes,
@@ -345,14 +359,14 @@ async def manage_integrations(
             for value in credential_values.values() for character in value
         )
     ):
-        return ToolResult.error("tool.invalidArguments")
+        return ToolResult.error("tool.invalidArguments", field="changes.secret_refs", params={"reason": "invalid_value", "hint": "Request new credentials matching the adapter's length and character requirements."})
     if "username" in credential_values:
         if adapter_type == "opencode" and (
             len(credential_values["username"]) > 255
             or ":" in credential_values["username"]
             or any(character in "\r\n" for character in credential_values["username"])
         ):
-            return ToolResult.error("tool.invalidArguments")
+            return ToolResult.error("tool.invalidArguments", field="changes.secret_refs.username", params={"reason": "invalid_value", "hint": "Use a username of at most 255 characters without colons or line breaks."})
         config["username"] = credential_values["username"]
         if adapter_type in {"caldav", "imap_smtp", "tbs-desk"}:
             adapter = next((item for item in (integration_adapter(kind, adapter_type) for kind in (
@@ -360,8 +374,10 @@ async def manage_integrations(
             )) if item is not None), None)
             try:
                 adapter.config_model.model_validate(config)
-            except (ValidationError, AttributeError):
-                return ToolResult.error("tool.invalidArguments")
+            except ValidationError as exc:
+                return argument_error(exc, config, prefix="changes")
+            except AttributeError:
+                return ToolResult.error("tool.unavailable")
     owner_id = context.session.user_id
     if action == "delete":
         try:

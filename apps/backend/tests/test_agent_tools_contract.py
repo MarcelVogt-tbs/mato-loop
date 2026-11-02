@@ -42,6 +42,7 @@ from mato_loop_backend.agent.projection import (
     message_dict,
 )
 from mato_loop_backend.agent.run_support import _argument_edit_payload, _tool_policy
+from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.files.search import MAX_MATCH_TEXT, MAX_SEARCH_RESULTS, RootFileSearch
 from mato_loop_backend.files.service import FileRoot, RootFileError, RootFileService
 from mato_loop_backend.integrations.contracts import (
@@ -115,6 +116,7 @@ from mato_loop_backend.tools.arguments import (
     CreateAutomationArguments,
     EditAutomationArguments,
     MemoryWriteArguments,
+    PersonalSettingsArguments,
     ReadArguments,
     TaskArguments,
 )
@@ -714,7 +716,7 @@ def test_tool_registry_rejects_duplicate_names() -> None:
         ToolRegistry([_definition(), _definition()])
 
 
-async def test_dynamic_tool_unresolved_local_ref_is_controlled_invalid_arguments(
+async def test_dynamic_tool_unresolved_local_ref_is_unavailable(
     tmp_path,
 ) -> None:
     definition = ToolDefinition(
@@ -728,7 +730,54 @@ async def test_dynamic_tool_unresolved_local_ref_is_controlled_invalid_arguments
 
     result = await ToolRegistry([definition]).execute(call, _context(tmp_path, call))
 
-    assert result.metadata == {"errorCode": "tool.invalidArguments", "argumentsRejected": True}
+    assert result.metadata == {"errorCode": "tool.unavailable"}
+
+
+@pytest.mark.parametrize("name,arguments,field,params", [
+    ("write_file", {"path": "file.json", "content": {"private": "secret"}}, "content.parts", {"reason": "missing"}),
+    ("write_file", {"path": "file.json", "content": {"parts": [{"value_ref": "not-a-reference"}]}}, "content.parts.0.value_ref", {"reason": "invalid_uuid"}),
+    ("write_file", {"path": "file.json", "content": "x" * 1_000_001}, "content", {"reason": "too_long", "maxLength": 1_000_000}),
+    ("read", {"root": "files", "path": "file.txt", "limit": 1001}, "limit", {"reason": "above_maximum", "maximum": 1000}),
+    ("customize_matoloop", {"action": "update", "area": "memory", "changes": {f"field{i}": i for i in range(21)}}, "changes", {"reason": "too_long", "maxProperties": 20}),
+])
+async def test_tool_argument_errors_explain_constraints_without_rejected_values(tmp_path, name, arguments, field, params):
+    call = ToolCall("invalid", name, arguments)
+    result = await tool_registry.execute(call, _context(tmp_path, call))
+    assert json.loads(result.content)["error"] == {
+        "code": "tool.invalidArguments", "message": describe_error("tool.invalidArguments").message,
+        "field": field, "params": params,
+    }
+
+
+@pytest.mark.parametrize("arguments,field,params", [
+    ({}, "query", {"reason": "missing"}),
+    ({"query": 123}, "query", {"reason": "invalid_type", "expectedType": "string"}),
+    ({"query": "secret"}, "query", {"reason": "too_long", "maxLength": 4}),
+    ({"query": "ok", "unknown": "secret"}, "unknown", {"reason": "extra_field"}),
+])
+async def test_dynamic_tool_argument_errors_explain_schema_constraints(tmp_path, arguments, field, params):
+    definition = ToolDefinition("dynamic", "Dynamic tool", None, _successful_handler, arguments_schema={
+        "type": "object", "properties": {"query": {"type": "string", "maxLength": 4}},
+        "required": ["query"], "additionalProperties": False,
+    })
+    call = ToolCall("invalid", "dynamic", arguments)
+    result = await ToolRegistry([definition]).execute(call, _context(tmp_path, call))
+    assert json.loads(result.content)["error"] == {
+        "code": "tool.invalidArguments", "message": describe_error("tool.invalidArguments").message,
+        "field": field, "params": params,
+    }
+
+
+async def test_dynamic_optional_string_reports_its_length_limit(tmp_path):
+    definition = ToolDefinition("dynamic", "Dynamic tool", None, _successful_handler, arguments_schema={
+        "type": "object", "properties": {"query": {"anyOf": [{"type": "string", "maxLength": 4}, {"type": "null"}]}},
+    })
+    call = ToolCall("invalid", "dynamic", {"query": "secret"})
+    result = await ToolRegistry([definition]).execute(call, _context(tmp_path, call))
+    assert json.loads(result.content)["error"] == {
+        "code": "tool.invalidArguments", "message": describe_error("tool.invalidArguments").message,
+        "field": "query", "params": {"reason": "too_long", "maxLength": 4},
+    }
 
 
 async def test_generate_qr_code_returns_scannable_png(tmp_path) -> None:
@@ -2752,6 +2801,21 @@ async def test_personal_settings_validates_scalar_patch_and_rechecks_policy(monk
     result = await tool_registry.execute(call, context)
     assert result.metadata["errorCode"] == "tool.unavailable"
     assert save.await_count == 1
+
+
+async def test_sonobin_url_error_names_the_writable_field(monkeypatch, tmp_path):
+    arguments = PersonalSettingsArguments(action="create", area="integrations", adapter_type="sonobin", changes={
+        "name": "Music", "base_url": "http://music.example.test", "secret_refs": {"bearer_token": str(uuid4())},
+    })
+    monkeypatch.setattr(mock_personal_integrations, "_settings", AsyncMock(return_value=(
+        IntegrationSettings(adapter_availability={"sonobin": "full"}), UserIntegrationSettings(),
+    )))
+    call = ToolCall("sonobin", "customize_matoloop", arguments.model_dump())
+    result = await mock_personal_integrations.manage_integrations(arguments, _context(tmp_path, call), AsyncMock())
+    assert json.loads(result.content)["error"] == {
+        "code": "tool.invalidArguments", "message": describe_error("tool.invalidArguments").message,
+        "field": "changes.base_url", "params": {"reason": "invalid_format", "hint": "Use an HTTPS base URL without credentials, query, or fragment."},
+    }
 
 
 async def test_personal_settings_mcp_uses_owned_service_and_secret_reference(monkeypatch, tmp_path) -> None:

@@ -306,8 +306,14 @@ class CalDavClient:
             if 300 <= response.status_code < 400:
                 raise _error("redirectRejected", status_code=response.status_code)
             if response.status_code not in expected:
-                if response.status_code in {401, 403}:
+                if response.status_code == 401:
                     code = "authenticationFailed"
+                elif response.status_code == 403:
+                    code = "permissionDenied"
+                elif response.status_code in {400, 422}:
+                    code = "invalidRequest"
+                elif response.status_code == 429:
+                    code = "rateLimited"
                 elif response.status_code == 404:
                     code = "notFound"
                 elif response.status_code == 409:

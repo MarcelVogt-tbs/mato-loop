@@ -349,7 +349,9 @@ const messages = {
   'integration.rateLimited': () => 'Das Nutzungslimit der Integration wurde erreicht.',
   'integration.resourceDiscoveryFailed': () => 'Die Ressourcen der Integration konnten nicht geladen werden.',
   'integration.resourcePoliciesUnsupported': () => 'Diese Integration besitzt keine konfigurierbaren Ressourcen.',
-  'integration.requestFailed': () => 'Die Anfrage an die Integration ist fehlgeschlagen.',
+  'integration.requestFailed': ({ params }) => params?.reason === 'remote_rejected'
+    ? 'Die Integration hat die Anfrage abgelehnt. Prüfe die Eingaben und die Anforderungen des Dienstes.'
+    : 'Die Anfrage an die Integration ist fehlgeschlagen.',
   'integration.remoteChanged': () => 'Der entfernte Eintrag wurde zwischenzeitlich geändert. Lade ihn erneut.',
   'integration.staleReference': () =>
     'Der Verweis auf den Eintrag ist veraltet. Der Eintrag muss erneut gesucht oder aufgelistet werden.',
@@ -582,7 +584,17 @@ const messages = {
   'tool.invalidArguments': ({ params }) => ({
     missing: 'Das Modell hat ein erforderliches Tool-Argument ausgelassen.',
     invalid_uuid: 'Das Modell hat eine ungültige ID als Tool-Argument verwendet.',
-    invalid_choice: 'Das Modell hat einen nicht erlaubten Wert als Tool-Argument verwendet.'
+    invalid_choice: 'Das Modell hat einen nicht erlaubten Wert als Tool-Argument verwendet.',
+    invalid_type: 'Ein Tool-Argument hat den falschen Datentyp.',
+    too_short: 'Ein Tool-Argument ist kürzer als erlaubt oder enthält zu wenige Einträge.',
+    too_long: 'Ein Tool-Argument ist länger als erlaubt oder enthält zu viele Einträge.',
+    below_minimum: 'Ein Tool-Argument unterschreitet den erlaubten Wertebereich.',
+    above_maximum: 'Ein Tool-Argument überschreitet den erlaubten Wertebereich.',
+    extra_field: 'Das Modell hat ein nicht erlaubtes Tool-Argument übergeben.',
+    invalid_format: 'Ein Tool-Argument hat ein ungültiges Format.',
+    invalid_json: 'Die Tool-Argumente enthalten ungültige JSON-Daten.',
+    too_large: 'Die Tool-Argumente überschreiten das Größenlimit.',
+    too_deep: 'Die Tool-Argumente sind zu tief verschachtelt.'
   }[params?.reason] || 'Das Modell hat ungültige Tool-Argumente erzeugt.'),
   'tool.unknown': () => 'Das angeforderte Tool ist nicht bekannt.',
   'tool.unavailable': () => 'Dieses Tool ist für das ausgewählte Modell nicht verfügbar.',

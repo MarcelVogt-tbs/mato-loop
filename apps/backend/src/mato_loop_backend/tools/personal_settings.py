@@ -53,6 +53,7 @@ from mato_loop_backend.tools.personal_integrations import (
     manage_integrations,
 )
 from mato_loop_backend.tools.secrets import resolve_secret_refs
+from mato_loop_backend.tools.validation import argument_error
 from mato_loop_backend.user_profile import user_profile_runtime_payload
 
 # ponytail: expose only scalar, non-policy settings; add fields when their owner checks are defined.
@@ -222,10 +223,10 @@ async def _personal_settings(
         if action != "delete":
             try:
                 changes = VariableChanges.model_validate(arguments.changes)
-            except ValidationError:
-                return ToolResult.error("tool.invalidArguments")
+            except ValidationError as exc:
+                return argument_error(exc, arguments.changes, prefix="changes")
             if action == "create" and (changes.name is None or changes.value_ref is None):
-                return ToolResult.error("tool.invalidArguments")
+                return ToolResult.error("tool.invalidArguments", field="changes.name" if changes.name is None else "changes.value_ref", params={"reason": "missing"})
         denied = await _authorize(
             context, action, area, fields=tuple(sorted((arguments.changes or {}).keys())),
             changes=arguments.changes,
@@ -322,8 +323,8 @@ async def _personal_settings(
             })
         try:
             changes = UpdateAgentIdentityArguments.model_validate(arguments.changes)
-        except ValidationError:
-            return ToolResult.error("tool.invalidArguments")
+        except ValidationError as exc:
+            return argument_error(exc, arguments.changes, prefix="changes")
         result = await _update_agent_identity(changes, context)
         if not result.is_error:
             await context.db.commit()
@@ -340,8 +341,8 @@ async def _personal_settings(
             changes = UpdateUserProfileArguments.model_validate(
                 {**(arguments.changes or {}), "model_scope": arguments.model_scope}
             )
-        except ValidationError:
-            return ToolResult.error("tool.invalidArguments")
+        except ValidationError as exc:
+            return argument_error(exc, arguments.changes, prefix="changes")
         result = await _update_user_profile(changes, context)
         if not result.is_error:
             await context.db.commit()
@@ -356,13 +357,12 @@ async def _personal_settings(
             settings = await SettingsStore.load(context.db, settings_type, user_id=context.session.user_id)
             return ToolResult.json(settings.model_dump(mode="json", include=set(fields)))
         changes = arguments.changes or {}
-        if set(changes) - set(fields) or any(value is None for value in changes.values()):
-            return ToolResult.error("tool.invalidArguments")
-        if any(
-            type(value) is not settings_type.model_fields[field].annotation
-            for field, value in changes.items()
-        ):
-            return ToolResult.error("tool.invalidArguments")
+        for field, value in changes.items():
+            if field not in fields or value is None:
+                return ToolResult.error("tool.invalidArguments", field=f"changes.{field}", params={"reason": "extra_field" if field not in fields else "invalid_value"})
+            expected = settings_type.model_fields[field].annotation
+            if type(value) is not expected:
+                return ToolResult.error("tool.invalidArguments", field=f"changes.{field}", params={"reason": "invalid_type", "expectedType": {bool: "boolean", int: "integer", str: "string"}[expected]})
         denied = await _authorize(
             context, action, area, fields=tuple(sorted(changes)), changes=changes,
         )
@@ -373,8 +373,8 @@ async def _personal_settings(
         )
         try:
             updated = settings_type.model_validate({**current.model_dump(), **changes})
-        except ValidationError:
-            return ToolResult.error("tool.invalidArguments")
+        except ValidationError as exc:
+            return argument_error(exc, changes, prefix="changes")
         await SettingsStore.save(context.db, updated, user_id=context.session.user_id)
         await context.db.commit()
         return ToolResult.json({"updatedFields": sorted(changes), "effectiveFrom": "next_run"})

@@ -14,6 +14,18 @@ from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 ToolHandler = Callable[[Any, Any], Awaitable[Any]]
 
 
+def remote_error_params(status_code: int | None) -> dict[str, Any] | None:
+    if status_code is None:
+        return None
+    params: dict[str, Any] = {"statusCode": status_code}
+    if status_code in {400, 422}:
+        params.update(
+            reason="remote_rejected",
+            hint="The remote service rejected the request. Check its field requirements; local schema validation does not cover all remote rules.",
+        )
+    return params
+
+
 @dataclass(frozen=True, slots=True)
 class IntegrationResource:
     key: str

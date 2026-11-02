@@ -467,4 +467,10 @@ describe('tool display', () => {
     expect(toolStatus({ approval: { id: 'approval-1' } }).name).toBe('approval')
     expect(toolStatus({ result: { content: '{"written":"plan.md"}' } }).name).toBe('completed')
   })
+
+  it('recognizes MCP tool failures without relying on their untrusted error text', () => {
+    const result = { content: JSON.stringify({ isError: true, content: [{ type: 'text', text: 'private remote detail' }] }) }
+    expect(parseToolResult(result.content).errorMessage).toBe('Der Aufruf des MCP-Tools ist fehlgeschlagen.')
+    expect(toolStatus({ result }).name).toBe('failed')
+  })
 })

@@ -188,6 +188,8 @@ def mcp_tool_contribution(
             return ToolResult.error(exc.code)
         result = ToolResult.raw_json(payload)
         result.is_error = is_error
+        if is_error:
+            result.metadata["errorCode"] = "mcp.callFailed"
         return result
 
     def authorize(_arguments: Any, context: Any) -> tuple[Any, ...]:

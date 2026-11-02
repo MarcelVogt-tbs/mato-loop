@@ -52,6 +52,20 @@ def test_config_allows_http_endpoint() -> None:
     assert str(config.base_url) == "http://192.168.1.30:9000/"
 
 
+@pytest.mark.parametrize("status,code", [
+    (400, "integration.requestFailed"), (422, "integration.requestFailed"),
+    (401, "integration.authenticationFailed"), (403, "integration.permissionDenied"),
+    (404, "integration.remoteNotFound"), (409, "integration.remoteChanged"),
+    (429, "integration.rateLimited"), (500, "integration.unavailable"),
+])
+async def test_client_distinguishes_remote_failures_without_response_text(status, code):
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(status, text="private server detail"))) as http:
+        async with TbsDeskClient("https://desk.example.test", "user", "secret", client=http) as client:
+            with pytest.raises(TbsDeskError) as error:
+                await client._json("GET", "/api/v2/customer/search")
+    assert (str(error.value), error.value.status_code) == (code, status)
+
+
 async def test_client_authenticates_and_binds_ticket_search_to_customer() -> None:
     requests = []
 
