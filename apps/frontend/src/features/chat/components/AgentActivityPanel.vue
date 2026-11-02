@@ -1,5 +1,8 @@
 <template>
-  <slot v-if="!history" />
+  <template v-if="!history">
+    <SubagentRows :children="activeSubagents" class="q-mb-xs" />
+    <slot />
+  </template>
   <div
     v-else-if="$slots.default || entries.length || running || unmatchedSubagents.length"
     class="work-history"
@@ -88,6 +91,7 @@ const props = defineProps({
   contextSummary: { type: Object, default: null },
   warnings: { type: Array, default: () => [] },
   subagents: { type: Array, default: () => [] },
+  showActiveSubagents: { type: Boolean, default: true },
   trustedImageOrigins: { type: Array, default: () => [] },
   readOnly: Boolean,
   hideProvidedFiles: Boolean,
@@ -178,12 +182,13 @@ const currentEntries = computed(() => {
 })
 const displayEntries = computed(() => {
   if (historyExpanded.value) return entries.value
-  const current = currentEntries.value.filter((entry) => !entry.subagents?.length || entry.subagents.some(isActiveSubagent)).map((entry) => ({
+  const current = currentEntries.value.filter((entry) => !entry.subagents?.length || (props.showActiveSubagents && entry.subagents.some(isActiveSubagent))).map((entry) => ({
     ...entry, subagents: entry.subagents?.filter(isActiveSubagent)
   }))
   return currentBatch.value != null ? groupWorkHistoryEntries(current, null, true) : current
 })
 const activeSubagents = computed(() => {
+  if (!props.showActiveSubagents) return []
   const visible = new Set(currentEntries.value.flatMap((entry) => (entry.subagents || []).map((child) => child.id)))
   return props.subagents.filter((child) => isActiveSubagent(child) && !visible.has(child.id))
 })

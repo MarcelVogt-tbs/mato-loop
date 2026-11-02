@@ -141,6 +141,7 @@
                 hide-provided-files
                 :history="message.workHistory"
                 :subagents="childrenByMessage.get(message.id) || emptyItems"
+                :show-active-subagents="message.id === latestAssistantMessageId"
                 :activity="message.currentTurn ? chat.activity : null"
                 :presentation="message.currentTurn ? runPresentation : null"
                 :reasoning="message.currentTurn ? chat.streamReasoning : null"
@@ -743,12 +744,18 @@ const transcript = computed(() => buildChatTranscript(
     } : null
   }
 ))
+const latestAssistantMessageId = computed(() => (
+  transcript.value.messages.findLast((message) => message.role === 'assistant')?.id
+))
 const childrenByMessage = computed(() => {
   const result = new Map()
   for (const message of transcript.value.messages) {
-    const children = subagents.children.filter((child) => (message.workHistory?.entries || []).some((entry) => (
-      entry.tool?.id === child.spawnedByToolCallId && entry.runId === child.spawnedByRunId
-    )))
+    const children = subagents.children.filter((child) => (
+      (message.id === latestAssistantMessageId.value && isActiveSubagent(child))
+      || (message.workHistory?.entries || []).some((entry) => (
+        entry.tool?.id === child.spawnedByToolCallId && entry.runId === child.spawnedByRunId
+      ))
+    ))
     if (children.length) result.set(message.id, children)
   }
   return result

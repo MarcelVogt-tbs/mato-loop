@@ -292,6 +292,25 @@ describe('subagent inspector navigation and presentation', () => {
     }
   })
 
+  it('shows active subagents without history only when enabled for the reply', async () => {
+    const showActiveSubagents = ref(true)
+    const child = { id: 'child', parentSessionId: 'parent', title: 'Dateien prüfen', run: { status: 'running' } }
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', name: 'chat', component: { render: () => null } }] })
+    await router.push('/?session=parent')
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({ render: () => h(AgentActivityPanel, {
+      subagents: [child], showActiveSubagents: showActiveSubagents.value
+    }) })
+    app.use(createPinia()).use(router).use(Quasar, { components })
+    mountApp()
+    const initialLink = root.querySelector('a')?.getAttribute('href')
+    showActiveSubagents.value = false
+    await nextTick()
+
+    expect([initialLink, root.querySelector('a')]).toEqual(['/?session=parent&subagent=child', null])
+  })
+
   it('does not restore the start row when the delegated child finishes with history collapsed', async () => {
     const children = ref([])
     const entry = { key: 'task', type: 'tool', runId: 'run', active: true, tool: { id: 'call', name: 'task', arguments: {} } }

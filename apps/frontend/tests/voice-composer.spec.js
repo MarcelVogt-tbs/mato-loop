@@ -26,7 +26,16 @@ vi.mock('src/features/chat/components/SessionSettingsFields.vue', () => ({ defau
   }
 } }))
 vi.mock('src/features/approvals/ApprovalCard.vue', () => ({ default: { render: () => null } }))
-vi.mock('src/features/chat/components/AgentActivityPanel.vue', () => ({ default: { inheritAttrs: false, render() { return this.$slots.default?.() } } }))
+vi.mock('src/features/chat/components/AgentActivityPanel.vue', () => ({ default: {
+  inheritAttrs: false,
+  props: ['subagents', 'showActiveSubagents'],
+  render() {
+    return h('div', {
+      'data-subagents': this.subagents?.map((child) => child.id).join(','),
+      'data-show-active-subagents': this.showActiveSubagents
+    }, this.$slots.default?.())
+  }
+} }))
 vi.mock('src/shared/ui/AppLogo.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/home/HomeContent.vue', () => ({ default: { render: () => h('section', { class: 'home-stub' }, 'Übersicht') } }))
 vi.mock('src/features/chat/components/ComputerChoiceStrip.vue', () => ({ default: { render: () => null } }))
@@ -647,6 +656,30 @@ describe('voice attachment composer', () => {
     await vi.waitFor(() => expect(chat.current?.id).toBe('parent'))
     expect(mocks.api.post.mock.calls.some(([url]) => url.startsWith('/sessions/session-1'))).toBe(false)
     stopGuard()
+  })
+
+  it('shows active subagents on the latest assistant reply after a direct message and preserves their start history', async () => {
+    const child = { id: 'child', parentSessionId: 'session-1', spawnedByRunId: 'run-1', spawnedByToolCallId: 'spawn', run: { status: 'running' } }
+    const messages = [
+      { id: 'user', role: 'user', content: 'Prüfe die Dateien' },
+      { id: 'original', role: 'assistant', runId: 'run-1', toolCalls: [{ id: 'spawn', name: 'task', arguments: {} }] },
+      { id: 'direct', role: 'user', content: 'Prüfe zuerst die Tests' },
+      { id: 'latest', role: 'assistant', content: 'Ich passe die Reihenfolge an.' }
+    ]
+    chat.outboxLoaded = true
+    mocks.api.get.mockImplementation(async (url) => ({ data: url === '/sessions/session-1'
+      ? { id: 'session-1', messages }
+      : url.endsWith('/children') ? [child] : { items: [] } }))
+    showPage.value = true
+
+    await vi.waitFor(() => expect([...root.querySelectorAll('.chat-message--assistant')].map((message) => ({
+      id: message.dataset.messageId,
+      children: message.querySelector('[data-subagents]')?.dataset.subagents,
+      active: message.querySelector('[data-subagents]')?.dataset.showActiveSubagents
+    }))).toEqual([
+      { id: 'original', children: 'child', active: 'false' },
+      { id: 'latest', children: 'child', active: 'true' }
+    ]))
   })
 
   it('keeps the mounted parent composer, draft and session when only the subagent URL changes', async () => {
