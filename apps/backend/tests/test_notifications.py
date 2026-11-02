@@ -71,15 +71,53 @@ async def test_mark_notification_presence_is_user_scoped(monkeypatch) -> None:
     mark.assert_called_once_with(user.id)
 
 
-def test_notification_model_preserves_history_when_session_is_deleted() -> None:
+def test_notification_model_deletes_notices_when_session_is_deleted() -> None:
     foreign_keys = {column.name: next(iter(column.foreign_keys)) for column in Notification.__table__.columns if column.foreign_keys}
 
     assert foreign_keys["user_id"].ondelete == "CASCADE"
-    assert foreign_keys["session_id"].ondelete == "SET NULL"
+    assert foreign_keys["session_id"].ondelete == "CASCADE"
     assert any(
         constraint.name == "uq_notifications_user_deduplication_key"
         for constraint in Notification.__table__.constraints
     )
+
+
+async def test_session_deletion_and_migration_remove_only_session_notices(request) -> None:
+    if not request.config.getoption("--memory-db"):
+        pytest.skip("requires the migrated development PostgreSQL database")
+    engine = create_async_engine(get_runtime_config().database_url, poolclass=NullPool)
+    try:
+        async with engine.connect() as connection:
+            await connection.begin()
+            async with AsyncSession(connection, join_transaction_mode="create_savepoint", expire_on_commit=False) as db:
+                user = _user()
+                user.username = f"deleted-notice-{user.id}"
+                db.add(user)
+                await db.flush()
+                session = ChatSession(user_id=user.id)
+                db.add(session)
+                await db.flush()
+                linked, orphan, independent = [_notification(user.id) for _ in range(3)]
+                linked.session_id = session.id
+                linked.kind = orphan.kind = "agent.notice"
+                independent.kind = "memory.approval"
+                db.add_all([linked, orphan, independent])
+                await db.flush()
+                path = Path(__file__).parents[1] / "alembic/versions/d99f4a6c781b_cascade_session_notifications.py"
+                upgrade = runpy.run_path(path)["upgrade"]
+
+                def migrate(connection):
+                    with Operations.context(MigrationContext.configure(connection)):
+                        upgrade()
+
+                await connection.run_sync(migrate)
+                await db.delete(session)
+                await db.flush()
+                assert list(await db.scalars(select(Notification.id).where(
+                    Notification.user_id == user.id,
+                ))) == [independent.id]
+    finally:
+        await engine.dispose()
 
 
 def test_notification_draft_normalizes_text_and_rejects_blanks() -> None:

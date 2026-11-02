@@ -42,7 +42,7 @@ class Notification(Base):
         ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False
     )
     session_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("chat_sessions.id", ondelete="SET NULL"), nullable=True, index=True
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=True, index=True
     )
     automation_run_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("automation_runs.id", ondelete="CASCADE", use_alter=True),

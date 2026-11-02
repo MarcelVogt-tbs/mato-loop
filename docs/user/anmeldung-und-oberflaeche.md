@@ -40,6 +40,8 @@ Der globale Bereich **Benachrichtigungen** zeigt eine chronologische Liste. Sein
 
 Hinweise auf Freigaben und Rückfragen öffnen die Quell-Session; Dreaming-Vorschläge öffnen **Memory > Dreaming > Offene Vorschläge**. Normale Antworten und Laufzeitfehler erzeugen ebenfalls Hinweise, sofern ihre Session nicht sichtbar und fokussiert ist. Antwort- und Sessionanfrage-Hinweise verschwinden nach dem Lesen; andere Hinweise können einen gelesenen Verlauf behalten. Lesen oder Löschen entscheidet niemals die zugrunde liegende Anfrage.
 
+Wenn du eine Session löschst, werden auch alle mit ihr verknüpften Benachrichtigungen gelöscht. Hinweise ohne Sessionbezug bleiben erhalten.
+
 Session-Freigaben verwaltest du unter **Session > Session-Freigaben**. Computer und Arbeitsverzeichnis haben eigene Auswahlfelder im Sessionbereich.
 
 ## App und Push verwenden
