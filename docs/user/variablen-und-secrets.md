@@ -30,7 +30,7 @@ Mit **Fertig** kannst du auch nur einen Teil der Felder beantworten oder alle au
 
 Unter **Computer > Verwalten > Einstellungen > sudo-Passwort** kannst du ein eigenes Secret als Standard für diesen Computer zuordnen. Es wird für native Linux-Updates und Admin-Ausführungen verwendet. Im Chat gelten weiterhin die Secret-Zugriffsregeln und die Freigabe der konkreten Aktion. Explizite Passwortreferenzen und temporäre Lauf-/Session-Passwörter haben Vorrang. Das Entfernen des Computers oder der Zuordnung löscht das persönliche Secret nicht.
 
-Fehlt bei einer Administratoraktion ein Passwort und ist kein passwortloses sudo verfügbar, öffnet MatoLoop die geschützte Eingabe direkt und setzt danach mit der Aktionsfreigabe fort. Überspringen oder Abbrechen stoppt diesen Aufruf. Der Agent kann Zugangsdaten weiterhin vorab oder gemeinsam abfragen.
+Fehlt bei einer Administratoraktion ein Passwort und ist kein passwortloses sudo verfügbar, öffnet MatoLoop die geschützte Eingabe direkt und setzt danach mit der Aktionsfreigabe fort. Überspringen oder Abbrechen stoppt diesen Aufruf. Der Agent kann Zugangsdaten weiterhin vorab oder gemeinsam abfragen; auch dabei wird ein vorhandenes sudo-Passwort wiederverwendet, sofern er nicht ausdrücklich eine Neueingabe anfordert.
 
 Ein geschütztes Administratorpasswort ist an den ausgewählten eigenen Computer gebunden. Eingeben, Auswählen oder **Für diese Session merken** dient nur der Authentifizierung und erzeugt keine Zugriffsrechte. Administratoraktionen werden unabhängig davon nach den wirksamen Regeln und passenden Freigaben geprüft: Dateifreigaben gelten für exakte Pfade, Shell-Freigaben für exakte Befehle samt Computer, Arbeitsverzeichnis, Umgebung und Administrator-Einstellung.
 

@@ -90,6 +90,7 @@ from mato_loop_backend.settings.models import ReasoningEffort, TrustLevel
 from mato_loop_backend.skills import RunSkillState, SkillService
 from mato_loop_backend.tools.discovery import expire_discoveries
 from mato_loop_backend.tools.display import tool_display
+from mato_loop_backend.tools.secrets import available_secret_references
 from mato_loop_backend.tools.snapshots import collect_tool_snapshots
 from mato_loop_backend.user_profile import user_profile_content_hashes, user_profile_runtime_payload
 from mato_loop_backend.web.access import webfetch_available
@@ -589,10 +590,7 @@ async def execute_loop_body(
                 attachment_service=AttachmentService,
                 session_automations=await AutomationService.session_definitions(db, chat_session) if not delegated else None,
                 repository_context_loader=repository_context_loader,
-                available_secret_references={
-                    *(f"run-secret:{secret_id}" for secret_id in one_time_secrets),
-                    *session_secrets.references(chat_session.id).values(),
-                },
+                available_secret_references=await available_secret_references(db, chat_session, one_time_secrets),
             )
         except ContextError as exc:
             if exc.code != "agent.contextWindowExceeded" or not expire_discoveries(records[summary_boundary:]):

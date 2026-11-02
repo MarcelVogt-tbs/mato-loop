@@ -37,6 +37,7 @@ from mato_loop_backend.tools.arguments import (
 from mato_loop_backend.tools.context import ToolContext as ToolContext
 from mato_loop_backend.tools.contracts import ToolDefinition as ToolDefinition
 from mato_loop_backend.tools.contracts import ToolResult as ToolResult
+from mato_loop_backend.tools.secrets import effective_sudo_reference
 
 SECRET_INPUT_USAGE = (
     "Continue the requested work in this run where the available inputs are sufficient; "
@@ -107,15 +108,9 @@ async def collect_secret_input(
            if context.one_time_secrets.get(UUID(ref.removeprefix("run-secret:"))) is not None},
         **session_secrets.references(context.session.id),
     }
-    missing = [item for item in arguments.inputs if item.refresh or item.name not in known]
-    if not missing:
-        return ToolResult.json({
-            "environment": {item.name: known[item.name] for item in arguments.inputs},
-            "unanswered": [],
-            "instruction": SECRET_INPUT_USAGE,
-        })
     administrator = None
-    if any(item.administrator for item in missing):
+    administrator_input = next((item for item in arguments.inputs if item.administrator), None)
+    if administrator_input is not None:
         client = context.execution_client
         if client is None or client.agent_id != context.session.preferred_execution_agent_id:
             return ToolResult.error("permission.denied")
@@ -127,6 +122,20 @@ async def collect_secret_input(
         if agent is None:
             return ToolResult.error("permission.denied")
         administrator = AdministratorQuestionTarget(agent_id=agent.id, alias=agent.display_name)
+        if not administrator_input.refresh:
+            reference = await effective_sudo_reference(
+                context.db, context.session, context.run_secret_refs, agent.id,
+                known.get(administrator_input.name),
+            )
+            if reference is not None:
+                known[administrator_input.name] = str(reference)
+    missing = [item for item in arguments.inputs if item.refresh or item.name not in known]
+    if not missing:
+        return ToolResult.json({
+            "environment": {item.name: known[item.name] for item in arguments.inputs},
+            "unanswered": [],
+            "instruction": SECRET_INPUT_USAGE,
+        })
     answers = await context.ask_user(
         ProtectedQuestionArguments(
             questions=[

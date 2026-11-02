@@ -21,7 +21,6 @@ from mato_loop_backend.agent.projection import (
     command_message_content,
     tool_execution_binding,
 )
-from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.media.attachments import model_attachments
 from mato_loop_backend.models import AgentRun, ChatSession, Message
 from mato_loop_backend.permissions.policy import (
@@ -46,13 +45,7 @@ from mato_loop_backend.tools.context import ToolContext as ToolContext
 from mato_loop_backend.tools.contracts import ToolDefinition as ToolDefinition
 from mato_loop_backend.tools.contracts import ToolResult as ToolResult
 from mato_loop_backend.tools.references import model_tool_references
-
-
-def _available_secret_references(context: ToolContext) -> set[str]:
-    return {
-        *(f"run-secret:{secret_id}" for secret_id in context.one_time_secrets),
-        *session_secrets.references(context.session.id).values(),
-    }
+from mato_loop_backend.tools.secrets import available_secret_references
 
 
 def _attachment_items(message: Message) -> list[dict[str, Any]]:
@@ -151,7 +144,9 @@ async def _session_tool_result_read(
         return ToolResult.error("session.messageNotFound")
     payload = _tool_result_page(
         message, tool_name, arguments.offset, context.memory_trust_level,
-        available_secret_references=_available_secret_references(context),
+        available_secret_references=await available_secret_references(
+            context.db, context.session, context.one_time_secrets,
+        ),
     )
     if attachments := _attachment_items(message):
         payload["attachments"] = attachments
@@ -266,6 +261,9 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
     tool_names = _tool_names_by_message_id(records)
     remaining = 50_000
     messages: list[dict[str, Any]] = []
+    secret_references = await available_secret_references(
+        context.db, context.session, context.one_time_secrets,
+    ) if target_id == context.session.id else set()
     for message in page:
         item, remaining = _message_item(
             message,
@@ -273,9 +271,7 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
             tool_names,
             context.memory_trust_level,
             reference_tool_results=target_id == context.session.id,
-            available_secret_references=(
-                _available_secret_references(context) if target_id == context.session.id else set()
-            ),
+            available_secret_references=secret_references,
         )
         if "executionAgentId" not in item and message.id in agent_by_message:
             agent_id = agent_by_message[message.id]

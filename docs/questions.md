@@ -47,6 +47,13 @@ must send a change of direction as a normal chat message rather than entering it
 field.
 
 `secret_input` reuses existing run/session values by name unless a field sets `refresh: true`.
+Administrator input also reuses the selected computer's temporary sudo reference or assigned
+secret when no value is known under the requested name. Only the reference is returned;
+secret access and administrator actions retain their independent authorization checks.
+Model requests and same-session history reads retain the saved reference only while it is
+assigned to the selected, owned, non-revoked computer. Its tool result stays unchanged across
+turns while that binding remains current. Changing that binding intentionally
+invalidates the affected history prefix; expired temporary references remain unavailable.
 After authentication rejects credentials, the model must refresh the affected fields under their
 existing names. Submitting the protected question invalidates the previous run and session
 references for refreshed fields, including skipped fields; rejection or expiry leaves them unchanged.

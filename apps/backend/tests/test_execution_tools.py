@@ -1245,13 +1245,14 @@ async def test_administrator_input_authenticates_without_granting_access(tmp_pat
     )}, {"shell.run", "shell.classify", "administrator.run"})
     call = ToolCall("password", "secret_input", {"inputs": [{
         "name": "SERVER_PASSWORD", "label": "Administrator", "question": "Enter the password",
-        "administrator": True,
+        "administrator": True, "refresh": True,
     }]})
     context = _context(tmp_path, call, client)
     context.session.preferred_execution_agent_id = client.agent_id
     context.agent_profile_id = uuid4()
     agent = ExecutionAgent(
         id=client.agent_id, alias="AI-PC", user_id=context.session.user_id,
+        sudo_credential_id=uuid4(),
         home_filesystem_policy="auto", external_filesystem_policy="auto",
         home_shell_enabled=True, external_shell_enabled=True,
     )
@@ -1334,6 +1335,9 @@ async def test_computer_sudo_secret_uses_existing_secret_and_action_permissions(
     context.db.get.return_value = ExecutionAgent(
         id=client.agent_id, user_id=context.session.user_id, sudo_credential_id=credential_id,
     )
+    context.session.preferred_execution_agent_id = client.agent_id
+    context.db.scalar.return_value = context.db.get.return_value
+    context.question_handler = AsyncMock(side_effect=AssertionError("Stored sudo input must not prompt"))
     variable = Mock(id=credential_id, label="COMPUTER_SUDO", metadata_json={"secret": mode != "no_longer_secret"})
     monkeypatch.setattr("mato_loop_backend.tools.secrets.get_personal_variable", AsyncMock(return_value=variable))
     decode = Mock(return_value="stored password")
@@ -1347,7 +1351,14 @@ async def test_computer_sudo_secret_uses_existing_secret_and_action_permissions(
         return PermissionDecision.DENY if denied else PermissionDecision.ALLOW
 
     context.ask_handler = AsyncMock(side_effect=authorize)
-    arguments = ShellRunArguments(command="id -u", elevated=True)
+    secret_call = ToolCall("password", "secret_input", {"inputs": [{
+        "name": "sudo_password", "label": "Administrator", "question": "Enter the password",
+        "administrator": True,
+    }]})
+    secret_result = await _tools(client.operations).execute(secret_call, context)
+    reference = json.loads(secret_result.content)["environment"]["sudo_password"]
+    assert reference == str(credential_id)
+    arguments = ShellRunArguments(command="id -u", elevated=True, sudo_password_ref=reference)
     if mode == "explicit":
         identifier = uuid4()
         context.one_time_secrets[identifier] = "one-time password"

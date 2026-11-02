@@ -79,7 +79,7 @@ def model_tool_reference_arguments(
 
 
 def model_secret_references(content: str, available_references: set[str]) -> str:
-    """Expose only temporary references still available in the calling run or session."""
+    """Expose only references currently available to the calling session."""
     try:
         payload = json.loads(content)
     except (TypeError, json.JSONDecodeError):

@@ -129,6 +129,7 @@ from mato_loop_backend.tools.contracts import (
     ToolResult,
 )
 from mato_loop_backend.tools.registry import BoundTool, EffectiveToolSet
+from mato_loop_backend.tools.secrets import available_secret_references
 from mato_loop_backend.web.fetch import DownloadedFile, WebFetchError, WebFetchImage, WebFetchResult
 
 
@@ -4205,15 +4206,23 @@ def _mock_tool_result_history(context, message, tool_name) -> None:
 
 
 @pytest.mark.parametrize("tool_name", ["secret_input", "session_tool_result_read"])
-async def test_historical_secret_input_filters_expired_references(tmp_path, tool_name) -> None:
+@pytest.mark.parametrize("assignment", ["active", "removed", "other_owner", "revoked"])
+async def test_historical_secret_input_filters_expired_references(tmp_path, tool_name, assignment) -> None:
     call = ToolCall("read-result", "session_tool_result_read", {"message_id": str(uuid4())})
     context = _context(tmp_path, call)
-    expired, active = uuid4(), uuid4()
+    expired, active, saved = uuid4(), uuid4(), uuid4()
     context.one_time_secrets[active] = "hidden password"
+    context.session.preferred_execution_agent_id = uuid4()
+    context.db.get.return_value = ExecutionAgent(
+        id=context.session.preferred_execution_agent_id,
+        user_id=uuid4() if assignment == "other_owner" else context.session.user_id,
+        sudo_credential_id=None if assignment == "removed" else saved,
+        revoked_at=datetime.now(UTC) if assignment == "revoked" else None,
+    )
     message = Message(
         id=UUID(call.arguments["message_id"]), session_id=context.session.id, role="tool",
         content=json.dumps({"environment": {
-            "OLD": f"run-secret:{expired}", "CURRENT": f"run-secret:{active}",
+            "OLD": f"run-secret:{expired}", "CURRENT": f"run-secret:{active}", "SAVED": str(saved),
         }}),
     )
     if tool_name == "session_tool_result_read":
@@ -4230,13 +4239,16 @@ async def test_historical_secret_input_filters_expired_references(tmp_path, tool
     )
     projected = _projection_messages(
         "System", None, [*context.db.scalars.return_value.all.return_value, reader, page],
-        TrustLevel.PRIVATE, available_secret_references={f"run-secret:{active}"},
+        TrustLevel.PRIVATE, available_secret_references=await available_secret_references(
+            context.db, context.session, context.one_time_secrets,
+        ),
     )
     history = json.loads(json.loads(next(item["content"] for item in projected if item.get("tool_call_id") == call.id))["content"])
     if tool_name == "session_tool_result_read":
         history = json.loads(history["content"])
     assert (history["environment"], history["unavailableCredentialNames"]) == (
-        {"CURRENT": f"run-secret:{active}"}, ["OLD"],
+        {"CURRENT": f"run-secret:{active}", **({"SAVED": str(saved)} if assignment == "active" else {})},
+        ["OLD"] if assignment == "active" else ["OLD", "SAVED"],
     )
 
 

@@ -3553,12 +3553,22 @@ async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(
     live_calls = deepcopy(tool_message.tool_calls)
     # Simulate JSONB key reordering while the current run still has live calls.
     tool_message.tool_calls = json.loads(json.dumps(tool_message.tool_calls, sort_keys=True))
+    saved_reference = str(uuid4())
+    secret_call = _message(run.session_id, "assistant", "")
+    secret_call.tool_calls = [{"id": "sudo-input", "name": "secret_input", "arguments": {"inputs": [{
+        "name": "sudo_password", "label": "Administrator", "question": "Enter the password", "administrator": True,
+    }]}}]
+    secret_result = _message(run.session_id, "tool", json.dumps({"environment": {"sudo_password": saved_reference}}))
+    secret_result.tool_call_id = "sudo-input"
+    records.extend([secret_call, secret_result])
     system = projections[0]["system_prompt"]
     user_id = next(item.id for item in reversed(records) if item.role == "user")
     first = _projection_messages(system, None, records, TrustLevel.PRIVATE,
                                  memory_context="Earlier memory", memory_contexts={user_id: "Earlier memory"},
                                  runtime_instructions=projections[0]["runtime_instructions"],
-                                 live_tool_calls={tool_message.id: live_calls})
+                                 live_tool_calls={tool_message.id: live_calls},
+                                 available_secret_references={saved_reference})
+    assert json.loads(first[-1]["content"])["environment"] == {"sudo_password": saved_reference}
     assert first[1]["role"] == "user"
     assert "Child evidence" in str(first) and "Task instruction from the parent agent" in str(first)
     assert any("The workspace changed for this user turn." in message["content"]
@@ -3571,6 +3581,7 @@ async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(
         system, None, [*records, _message(run.session_id, "assistant", "Done"), followup],
         TrustLevel.PRIVATE, runtime_instructions=agent_profile_runtime_instructions(plan_profile()),
         memory_context=current_memory, memory_contexts={user_id: "Earlier memory"},
+        available_secret_references={saved_reference},
     )
     provider = requests[0]["provider"]
     provider.config["api_type"] = api_type

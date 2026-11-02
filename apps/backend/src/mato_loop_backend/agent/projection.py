@@ -866,6 +866,7 @@ def _projection_messages(
                 else:
                     projected["content"] = _historical_tool_result(
                         tool_name, original_content, item.id, reference=original_references.get(item.id),
+                        available_secret_references=available_secret_references,
                     )
                     historical_tool_indices.append(len(messages))
                     projected[_HOST_TOOL_RESULT_REFERENCE] = True
@@ -989,6 +990,7 @@ def _historical_tool_result(
     *,
     include_reference: bool = True,
     reference: dict[str, Any] | None = None,
+    available_secret_references: set[str] | None = None,
 ) -> str:
     content = _sanitize_tool_result_reference_fields(content)
     try:
@@ -998,6 +1000,12 @@ def _historical_tool_result(
     if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     if tool_name == "secret_input" and isinstance(payload, dict):
+        environment = payload.get("environment", {})
+        if isinstance(environment, dict) and environment and all(
+            isinstance(ref, str) and ref in (available_secret_references or ())
+            for ref in environment.values()
+        ) and any(":" not in ref for ref in environment.values()):
+            return content
         return json.dumps({
             "historicalCredentialNames": list(payload.get("environment", {})),
             "instruction": "Historical input does not restore credentials. Use current runtime references or call secret_input.",

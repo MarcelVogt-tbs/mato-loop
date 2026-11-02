@@ -16,6 +16,21 @@ from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import ToolResult
 
 
+async def available_secret_references(
+    db: AsyncSession, session: ChatSession, one_time_secrets: dict[UUID, str],
+) -> set[str]:
+    references = {
+        *(f"run-secret:{secret_id}" for secret_id in one_time_secrets),
+        *session_secrets.references(session.id).values(),
+    }
+    if session.preferred_execution_agent_id is not None:
+        agent = await db.get(ExecutionAgent, session.preferred_execution_agent_id, populate_existing=True)
+        if (agent is not None and agent.user_id == session.user_id
+                and agent.revoked_at is None and agent.sudo_credential_id is not None):
+            references.add(str(agent.sudo_credential_id))
+    return references
+
+
 async def resolve_secret_refs(
     context: ToolContext, references: dict[str, UUID | str], *, secret_only: bool = False
 ) -> dict[str, str] | ToolResult:
