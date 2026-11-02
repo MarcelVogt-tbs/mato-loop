@@ -144,6 +144,7 @@ const transcript = computed(() => buildChatTranscript(inspector.current?.message
   toolExecutionActive: inspector.activity.phase === 'processing_tool',
   activeToolCallId: inspector.activity.toolCallId,
   completedToolCallId: inspector.completedToolCallId,
+  processOutputs: inspector.processOutputs,
   questions: pendingQuestions.value,
   contextSummaries: inspector.current?.contextSummaries
 }))

@@ -110,7 +110,7 @@
     <div v-if="hasDetails && detailsOpen" :id="detailsId" class="work-history__reasoning-detail">
       <p v-if="errorDetails" class="tool-call__message" :class="`tool-call__status--${status.name}`" role="status">{{ errorDetails }}</p>
       <template v-if="isTool">
-        <pre v-if="shellCommandText" class="activity-row__shell-command q-ma-none">{{ shellCommandText }}</pre>
+        <ShellToolOutput v-if="shellCommandText" :command="shellCommandText" :output="typeof result.stdout === 'string' ? result : entry.processOutput || {}" />
         <div v-for="(item, index) in toolDetails" :key="index" class="q-mb-sm">
           <div class="text-weight-medium">{{ item.label }}</div>
           <ul v-if="item.format === 'list'" class="q-my-none q-pl-md"><li v-for="(value, i) in item.value" :key="i">{{ value }}</li></ul>
@@ -190,6 +190,7 @@ import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
 import AgentActivityRow from 'src/features/chat/components/AgentActivityRow.vue'
 import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
+import ShellToolOutput from 'src/features/chat/components/ShellToolOutput.vue'
 import QuestionDock from 'src/features/questions/QuestionDock.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'
 import { parseToolResult, shellCommand, toolIdentity, toolPresentation, toolStatus } from 'src/utils/tool-display'

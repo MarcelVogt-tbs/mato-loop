@@ -73,6 +73,10 @@ Löschen und fremde Sessionordner benötigen normale Dateirechte. Computersperre
 | Agent-Ausgabe | Befehle des Agenten und gefilterte Liveausgabe sowie jüngste gespeicherte Ergebnisse |
 | Terminal | Persönliche interaktive Shell im Home eines unterstützten Linux-Agents |
 
+Klappe einen Shell-Aufruf im Chat auf, um dessen Befehl und gefilterte Liveausgabe direkt als schreibgeschützten Terminalblock zu sehen. Nach Abschluss bleibt das gespeicherte Ergebnis sichtbar. Neue Ausgabe scrollt mit, solange du nicht nach oben gescrollt hast. Beim erneuten Öffnen erscheinen die gespeicherten Standard- und Fehlerausgaben nacheinander, nicht zwingend in ihrer ursprünglichen zeitlichen Reihenfolge.
+
+Enthält ein Abbruch- oder Fehlerergebnis keine gespeicherte Ausgabe, bleibt die bereits empfangene Liveausgabe vorerst sichtbar. Nach dem Neuladen oder Verlassen der Session lässt sie sich nicht wiederherstellen.
+
 Deine eigenen Terminalbefehle laufen außerhalb der Modellrechte. **Strg+C** beendet den Vordergrundprozess deiner Shell; der Stoppknopf im Chat beendet den Agentenlauf. Das Schließen der Ansicht stoppt keinen Agentenbefehl. Abgeschlossene Wirkungen bleiben bestehen.
 
 Neuladen, Zuklappen und Sessionwechsel erhalten die persönliche Shell. Der neueste berechtigte Viewer ersetzt den vorherigen. Tabentfernung, Shellende, Bindungsverlust oder Backend-/Agentneustart beenden sie. Persönliche Ausgabe ist nur ein begrenzter Arbeitsspeicherausschnitt; gespeicherte Agent-Ausgabe ist kein wiederhergestellter Prozess.

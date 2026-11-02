@@ -271,6 +271,22 @@ describe('read-only subagents', () => {
     expect(store.current).toBeNull()
   })
 
+  it('keeps process output until the saved output replaces it', async () => {
+    await store.open('parent', 'child')
+    const source = EventSourceMock.instances[0]
+    source.emit('process.output', { toolCallId: 'shell', stream: 'stdout', delta: 'Output\n' })
+    const response = deferred()
+    api.get.mockReturnValueOnce(response.promise)
+    source.emit('tool.completed', { toolCallId: 'shell' })
+    const before = store.processOutputs.shell?.stdout
+    response.resolve({ data: { ...session, messages: [{
+      id: 'result', role: 'tool', toolCallId: 'shell', runId: run.id,
+      content: JSON.stringify({ output: { stdout: 'Output\n', stderr: '' } })
+    }] } })
+    await vi.waitFor(() => expect({ before, after: store.processOutputs.shell })
+      .toEqual({ before: 'Output\n', after: undefined }))
+  })
+
   it('streams deltas, reasoning and process output and deduplicates replayed messages and event IDs', async () => {
     await store.open('parent', 'child')
     const source = EventSourceMock.instances[0]

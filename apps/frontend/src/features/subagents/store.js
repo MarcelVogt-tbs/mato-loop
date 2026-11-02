@@ -7,6 +7,7 @@ import { notifyError } from 'src/utils/notifications'
 import { useApprovalStore } from 'src/stores/approvals'
 import { useQuestionStore } from 'src/stores/questions'
 import { mergeResearchSources } from 'src/utils/research-sources'
+import { parseToolResult } from 'src/utils/tool-display'
 
 const ACTIVE = new Set(['queued', 'running', 'waiting_approval', 'waiting_input'])
 
@@ -206,6 +207,12 @@ export const useSubagentStore = defineStore('subagents', () => {
             nextMessageCursor: previous ? previous.nextMessageCursor : data.nextMessageCursor
           }
           setRun(runData)
+          for (const message of current.value.messages) {
+            if (message.role === 'tool' && message.runId === run.value?.id && processOutputs.value[message.toolCallId]
+              && typeof parseToolResult(message.content).stdout === 'string') {
+              delete processOutputs.value[message.toolCallId]
+            }
+          }
           resetHistory = false
           error.value = null
           if (!source) activity.value = mergeAgentActivity(emptyActivity(), {
@@ -347,7 +354,6 @@ export const useSubagentStore = defineStore('subagents', () => {
             payload.metadata?.sources
           )
           completedToolCallId.value = payload.toolCallId || null
-          delete processOutputs.value[payload.toolCallId]
         }
         if (name === 'context.compacted') {
           streamContextSummary.value = null

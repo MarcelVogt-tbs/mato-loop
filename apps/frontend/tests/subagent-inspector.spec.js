@@ -5,6 +5,11 @@ import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { Quasar } from 'quasar'
 import { quasarOptions } from './quasar-options'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Terminal } from '@xterm/xterm'
+
+vi.hoisted(() => {
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+})
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() } }))
@@ -41,6 +46,7 @@ afterEach(() => {
   store?.close()
   vi.unstubAllGlobals()
   vi.clearAllMocks()
+  vi.restoreAllMocks()
 })
 
 describe('subagent inspector navigation and presentation', () => {
@@ -218,13 +224,25 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.textContent).not.toContain('Technische Argumente')
   })
 
-  it('shows expanded shell commands without a repeated field label', async () => {
+  it('keeps the command and streamed ANSI output when a shell call is interrupted', async () => {
     const commands = ['printf "first\\n"', 'sudo -n true\nprintf "done\\n"']
+    const output = ref({ stdout: 'first\n' })
+    const interrupted = ref(null)
+    let terminal
+    // Keep the real parser; jsdom cannot measure or render a terminal.
+    vi.spyOn(Terminal.prototype, 'open').mockImplementation(function () {
+      terminal = this
+      this.options.allowProposedApi = true
+    })
+    vi.spyOn(Terminal.prototype, 'loadAddon').mockImplementation(() => {})
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
     root = document.createElement('div')
     document.body.append(root)
     app = createApp({ render: () => h(AgentActivityPanel, {
+      running: true,
+      activity: { phase: 'processing_tool', toolCallId: 'shell-1' },
       history: { entries: commands.map((command, index) => ({
-        key: `shell-${index}`, type: 'tool', result: {},
+        key: `shell-${index}`, type: 'tool', result: index === 0 ? {} : interrupted.value, processOutput: output.value,
         tool: { id: `shell-${index}`, name: 'shell.run', arguments: { command }, toolDisplay: { group: 'process', icon: 'terminal', label: 'Shell-Befehl ausführen' } }
       })) }
     }) })
@@ -240,9 +258,13 @@ describe('subagent inspector navigation and presentation', () => {
     root.querySelectorAll('.tool-call__header')[1].click()
     await nextTick()
 
-    const shell = root.querySelector('.activity-row__shell-command')
-    expect(shell.textContent).toBe(commands[1])
-    expect(root.querySelector('.work-history__reasoning-detail').textContent).not.toContain('Shell-Befehl\n')
+    output.value = { stdout: 'first\n\x1b[31mdone\x1b[0m\n', stderr: 'warning\n' }
+    await nextTick()
+    interrupted.value = { content: JSON.stringify({ error: { code: 'tool.executionInterrupted' } }) }
+    await nextTick()
+    await new Promise((resolve) => terminal.write('', resolve))
+    expect(Array.from({ length: 5 }, (_, index) => terminal.buffer.active.getLine(index).translateToString(true)))
+      .toEqual(['$ sudo -n true', 'printf "done\\n"', 'first', 'done', 'warning'])
   })
 
   it.each([false, true])('keeps status text neutral and only pulses working squares (reduced motion=%s)', async (reducedMotion) => {

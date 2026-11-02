@@ -717,6 +717,7 @@ const transcript = computed(() => buildChatTranscript(
     toolExecutionActive: chat.activity.phase === 'processing_tool',
     activeToolCallId: chat.activity.toolCallId,
     completedToolCallId: chat.completedToolCallId,
+    processOutputs: chat.processOutputs,
     questions: sessionQuestions.value,
     contextSummaries: chat.current?.contextSummaries
   }
