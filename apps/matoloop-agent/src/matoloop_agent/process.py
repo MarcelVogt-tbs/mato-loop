@@ -1906,7 +1906,9 @@ class ProcessRunner:
 
     def execution_timeout(self, timeout: float | None) -> float:
         if timeout is not None and (isinstance(timeout, bool) or not 0 < timeout <= 3600):
-            raise AgentError("request.invalid", "Process timeout is outside the allowed range")
+            raise AgentError.invalid_arguments(
+                "Use a numeric timeout in seconds greater than 0 and at most 3600.", field="timeout"
+            )
         return min(self.default_timeout if timeout is None else timeout, self.max_timeout)
 
     def validate_executable(self, executable: str) -> None:

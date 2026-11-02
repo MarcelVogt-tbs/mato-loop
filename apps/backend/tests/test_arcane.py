@@ -133,8 +133,14 @@ def test_arcane_actions_and_permissions_are_target_bound():
         ArcaneList(integration_id=instance.id, environment_id="../other", kind="containers")
     with pytest.raises(ValidationError):
         ArcaneGet(integration_id=instance.id, environment_id="0", kind="containers", resource_id="x", view="updates")
-    with pytest.raises(ValidationError):
-        ArcaneProjectSave(integration_id=instance.id, environment_id="0", project_id="x", compose_content="services: {}")
+    for changes in (
+        {"project_id": "x", "compose_content": "services: {}"},
+        {"compose_content": "services: {}"},
+        {"project_id": "x", "snapshot_token": "already-provided"},
+    ):
+        with pytest.raises(ValidationError) as rejected:
+            ArcaneProjectSave(integration_id=instance.id, environment_id="0", **changes)
+        assert "field" not in rejected.value.errors()[0]["ctx"]
 
 
 def test_arcane_does_not_release_remote_secrets():

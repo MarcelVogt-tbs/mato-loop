@@ -42,6 +42,7 @@ from mato_loop_backend.settings import (
     SettingsStore,
 )
 from mato_loop_backend.tools.actions import ApprovalEditField, ToolAction
+from mato_loop_backend.tools.argument_errors import invalid_argument
 from mato_loop_backend.tools.display import format_duration_minutes
 from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
@@ -145,7 +146,7 @@ class CalendarQueryEventsArguments(CalendarResourceArguments):
             or self.end.utcoffset() is None
             or self.end <= self.start
         ):
-            raise ValueError("start and end must be aware and increasing")
+            raise invalid_argument("Include timezone offsets in start and end; end must be after start.", field="end")
         return self
 
 
@@ -165,7 +166,7 @@ class TimedEventTiming(BaseModel):
             or self.end.utcoffset() is None
             or self.end <= self.start
         ):
-            raise ValueError("start and end must be aware and increasing")
+            raise invalid_argument("Include timezone offsets in start and end; end must be after start.", field="end")
         return self
 
 
@@ -179,12 +180,15 @@ class AllDayEventTiming(BaseModel):
     @model_validator(mode="after")
     def validate_range(self) -> AllDayEventTiming:
         if self.end <= self.start:
-            raise ValueError("end must be after start")
+            raise invalid_argument("Use an exclusive end date after start.", field="end")
         return self
 
 
 def _parse_event_timing(value: Any) -> Any:
-    return json.loads(value) if isinstance(value, str) else value
+    try:
+        return json.loads(value) if isinstance(value, str) else value
+    except ValueError as exc:
+        raise invalid_argument("Provide timing as an object or valid JSON object text.", reason="invalid_json") from exc
 
 
 EventTiming = Annotated[
@@ -203,7 +207,7 @@ ReminderMinutes = Annotated[int, Field(ge=0, le=525_600)]
 
 def _validate_reminders(value: list[int]) -> list[int]:
     if len(value) != len(set(value)):
-        raise ValueError("reminders must be unique")
+        raise invalid_argument("Use unique reminder offsets.")
     return value
 
 
@@ -226,7 +230,7 @@ class CalendarEventArguments(CalendarResourceArguments):
         try:
             _EventToken.model_validate(CredentialCipher().decrypt(value.encode("ascii")))
         except Exception as exc:
-            raise ValueError("invalid event token") from exc
+            raise invalid_argument("Use an event_token from a fresh calendar query.") from exc
         return value
 
 
@@ -245,11 +249,11 @@ class CalendarUpdateEventArguments(CalendarEventArguments):
             {"summary", "description", "location", "timing", "reminders_minutes_before"}
         )
         if not fields:
-            raise ValueError("at least one event field is required")
+            raise invalid_argument("Provide at least one event field to update.", reason="missing")
         if "summary" in fields and self.summary is None:
-            raise ValueError("summary cannot be null")
+            raise invalid_argument("Omit summary to preserve it; do not send null.", field="summary")
         if "timing" in fields and self.timing is None:
-            raise ValueError("timing cannot be null")
+            raise invalid_argument("Omit timing to preserve it; do not send null.", field="timing")
         return self
 
 
@@ -285,7 +289,7 @@ class TaskCreateArguments(TaskResourceArguments):
         if isinstance(value, datetime) and (
             value.tzinfo is None or value.utcoffset() is None
         ):
-            raise ValueError("due datetime must be aware")
+            raise invalid_argument("Include a timezone offset when due is a datetime.")
         return value
 
 
@@ -315,7 +319,7 @@ class TaskTokenArguments(TaskResourceArguments):
         try:
             _TaskToken.model_validate(CredentialCipher().decrypt(value.encode("ascii")))
         except Exception as exc:
-            raise ValueError("invalid task token") from exc
+            raise invalid_argument("Use a task_token from a fresh task query.") from exc
         return value
 
 
@@ -333,9 +337,9 @@ class TaskUpdateArguments(TaskTokenArguments):
     def require_patch(self) -> TaskUpdateArguments:
         fields = self.model_fields_set.intersection({"title", "description", "due"})
         if not fields:
-            raise ValueError("at least one task field is required")
+            raise invalid_argument("Provide at least one task field to update.", reason="missing")
         if "title" in fields and self.title is None:
-            raise ValueError("title cannot be null")
+            raise invalid_argument("Omit title to preserve it; do not send null.", field="title")
         return self
 
 
@@ -892,7 +896,7 @@ def _result(value: dict[str, Any]) -> Any:
 def _error(error: CalDavError) -> Any:
     from mato_loop_backend.tools.contracts import ToolResult
 
-    return ToolResult.error(caldav_error_code(error), params=remote_error_params(error.status_code))
+    return ToolResult.error(caldav_error_code(error), field=error.field, params=error.params or remote_error_params(error.status_code))
 
 
 async def calendar_list_accounts(
@@ -1294,7 +1298,7 @@ async def tasks_update(arguments: TaskUpdateArguments, context: Any) -> Any:
     except ValueError:
         from mato_loop_backend.tools.contracts import ToolResult
 
-        return ToolResult.error("tool.invalidArguments", field="task_token")
+        return ToolResult.error("integration.staleReference", field="task_token")
     except CalDavError as exc:
         return _error(exc)
 
@@ -1340,7 +1344,7 @@ async def tasks_set_completed(
     except ValueError:
         from mato_loop_backend.tools.contracts import ToolResult
 
-        return ToolResult.error("tool.invalidArguments", field="task_token")
+        return ToolResult.error("integration.staleReference", field="task_token")
     except CalDavError as exc:
         return _error(exc)
 
@@ -1361,7 +1365,7 @@ async def tasks_delete(arguments: TaskDeleteArguments, context: Any) -> Any:
     except ValueError:
         from mato_loop_backend.tools.contracts import ToolResult
 
-        return ToolResult.error("tool.invalidArguments", field="task_token")
+        return ToolResult.error("integration.staleReference", field="task_token")
     except CalDavError as exc:
         return _error(exc)
 

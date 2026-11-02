@@ -71,7 +71,9 @@ class WindowsSearch:
         try:
             matcher = re.compile(pattern)
         except re.error as exc:
-            raise AgentError("request.invalid", "Invalid grep pattern") from exc
+            raise AgentError.invalid_arguments(
+                "Use a valid regular expression.", field="pattern", reason="invalid_format"
+            ) from exc
         matches = []
         truncated = False
         for candidate, wire, size in self._files(path):

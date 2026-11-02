@@ -292,6 +292,7 @@ class ExecutionClientError(Exception):
         super().__init__(code)
         self.code = code
         self.params = dict(params) if params is not None else None
+        self.field = self.params.pop("field", None) if self.params and code == "tool.invalidArguments" else None
 
 
 _REMOTE_ERROR_CODES = {

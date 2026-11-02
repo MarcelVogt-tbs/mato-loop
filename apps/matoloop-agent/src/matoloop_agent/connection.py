@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from .browser_contracts import BROWSER_ARGUMENT_MODELS
 from .config import AgentConfig
-from .errors import AgentError
+from .errors import AgentError, argument_details
 from .maintenance_results import replay_maintenance_results
 from .platform import RuntimeServices, TransferAdapter, current_platform
 from .protocol import (
@@ -208,9 +208,18 @@ class MatoLoopAgent:
         try:
             arguments = validate_arguments(request)
         except (ValidationError, ValueError) as exc:
+            params = (
+                argument_details(exc)
+                if isinstance(exc, ValidationError)
+                else {"reason": "invalid_value"}
+            )
+            if params.get("field") == "patch":
+                params["field"] = "patchText"
             if request.operation.startswith("integration.browser."):
-                raise AgentError("browser.invalidTarget", "Invalid browser arguments") from exc
-            raise AgentError("request.invalid", "Invalid operation arguments") from exc
+                raise AgentError(
+                    "browser.invalidTarget", "Invalid browser arguments", params
+                ) from exc
+            raise AgentError("request.invalid", "Invalid operation arguments", params) from exc
 
         if isinstance(arguments, AdministratorArguments):
             from .administrator import run_administrator

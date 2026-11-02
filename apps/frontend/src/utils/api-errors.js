@@ -583,7 +583,9 @@ const messages = {
   'tool.executionFailed': () => 'Die Tool-Aktion ist fehlgeschlagen.',
   'tool.executionInterrupted': () => 'Die Tool-Aktion wurde unterbrochen.',
   'tool.superseded': () => 'Die ausstehende Aktion wurde wegen deiner neuen Nachricht übersprungen.',
-  'tool.invalidArguments': ({ params }) => ({
+  'tool.invalidArguments': ({ field, params }) => field === 'patchText' && params?.reason === 'invalid_format'
+    ? `Der Patch ist ungültig${Number.isInteger(params?.line) && params.line > 0 ? ` (Patch-Zeile ${params.line})` : ''}. Prüfe die Dateimarker und die mit Leerzeichen, + oder - beginnenden Änderungszeilen.`
+    : ({
     missing: 'Das Modell hat ein erforderliches Tool-Argument ausgelassen.',
     invalid_uuid: 'Das Modell hat eine ungültige ID als Tool-Argument verwendet.',
     invalid_choice: 'Das Modell hat einen nicht erlaubten Wert als Tool-Argument verwendet.',

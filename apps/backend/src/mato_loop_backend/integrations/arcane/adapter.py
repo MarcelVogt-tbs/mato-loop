@@ -36,6 +36,7 @@ from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings import IntegrationInstance
 from mato_loop_backend.tools.actions import ToolAction
+from mato_loop_backend.tools.argument_errors import invalid_argument
 from mato_loop_backend.tools.arguments import ProtectedText
 from mato_loop_backend.tools.contracts import ToolResult
 from mato_loop_backend.tools.secrets import resolve_protected_text
@@ -82,7 +83,7 @@ class ArcaneGet(ArcaneEnvironment):
     @model_validator(mode="after")
     def validate_view(self) -> ArcaneGet:
         if self.kind != "projects" and self.view != "summary":
-            raise ValueError("runtime and updates views require a project")
+            raise invalid_argument("Use runtime and updates views only with kind=projects.", field="view")
         return self
 
 
@@ -107,9 +108,9 @@ class ArcaneProjectSave(ArcaneEnvironment):
     def validate_project(self) -> ArcaneProjectSave:
         if self.project_id is None:
             if not self.name or self.compose_content is None or self.snapshot_token is not None or self.override_content is not None:
-                raise ValueError("a new Arcane project requires name and compose_content, without snapshot or override")
+                raise invalid_argument("For create, provide name and compose_content; omit snapshot_token and override_content.")
         elif self.snapshot_token is None or all(value is None for value in (self.name, self.compose_content, self.env_content, self.override_content)):
-            raise ValueError("an Arcane project update requires snapshot_token and at least one changed field")
+            raise invalid_argument("For update, provide snapshot_token and at least one changed configuration field.", reason="missing")
         return self
 
 
@@ -130,15 +131,15 @@ class ArcaneAction(ArcaneEnvironment):
     def validate_action(self) -> ArcaneAction:
         needs_id = self.action not in {"create_container", "create_volume", "create_network", "pull_image"}
         if needs_id != (self.resource_id is not None):
-            raise ValueError("resource_id must match the selected Arcane action")
+            raise invalid_argument("Provide resource_id except for create_container, create_volume, create_network and pull_image.", field="resource_id")
         if (self.action in {"create_container", "create_volume", "create_network", "pull_image", "tag_image", "rename_volume", "connect_network", "disconnect_network"}) != (self.name is not None):
-            raise ValueError("name must match the selected Arcane action")
+            raise invalid_argument("Provide name only for creation, pull_image, tag_image, rename_volume, connect_network and disconnect_network.", field="name")
         if (self.action == "tag_image") != (self.tag is not None):
-            raise ValueError("tag must match the selected Arcane action")
+            raise invalid_argument("Provide tag only for tag_image.", field="tag")
         if (self.action == "create_container") != (self.image is not None):
-            raise ValueError("image must match the selected Arcane action")
+            raise invalid_argument("Provide image only for create_container.", field="image")
         if (self.action == "auto_update") != (self.enabled is not None):
-            raise ValueError("enabled must match the selected Arcane action")
+            raise invalid_argument("Provide enabled only for auto_update.", field="enabled")
         return self
 
 
@@ -397,9 +398,9 @@ async def arcane_project_save(args: ArcaneProjectSave, context: Any) -> Any:
                 return resolved
             text, _protected = resolved
             if len(text) > MAX_CONFIG_CHARACTERS or remote == "composeContent" and not text.strip():
-                return _error("tool.invalidArguments")
+                return ToolResult.error("tool.invalidArguments", field=field, params={"reason": "invalid_value", "hint": "Configuration text must not exceed 80000 characters; compose_content must not be blank."})
             if args.project_id and not text.strip() and isinstance(value, ProtectedText):
-                return _error("tool.invalidArguments")
+                return ToolResult.error("tool.invalidArguments", field=field, params={"reason": "invalid_value", "hint": "Do not clear configuration with protected text; omit the field or use an explicit plain empty string."})
             body[remote] = text
         context.integration_settings = await context.current_integrations()
         for request in _project_save_permission(args, context):
@@ -418,7 +419,7 @@ async def arcane_project_save(args: ArcaneProjectSave, context: Any) -> Any:
             try:
                 configuration({**current_config, **body})
             except ArcaneError:
-                return _error("tool.invalidArguments")
+                return ToolResult.error("tool.invalidArguments", params={"reason": "invalid_value", "hint": "Keep a non-empty compose_content, bounded configuration fields and a total configuration size of at most 256 KiB."})
             if args.project_id:
                 data, _ = await client.request("PUT", path, body=body, max_bytes=MAX_CONFIG_RESPONSE_BYTES)
             else:

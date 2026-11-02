@@ -735,7 +735,7 @@ def _workspace_patch(
             rewritten.append(f"{matched}{path}")
         elif line.startswith("*** Move to: "):
             if not operations or operations[-1]["operation"] != "update":
-                raise ExecutionClientError("tool.invalidArguments")
+                raise ExecutionClientError("tool.invalidArguments", {"field": "patchText", "reason": "invalid_format", "hint": "Place *** Move to: immediately after an update header, once per operation."})
             destination = files_access.execution_path(
                 context, line.removeprefix("*** Move to: ")
             )
@@ -748,7 +748,7 @@ def _workspace_patch(
                 edited_sources.add(str(operations[-1]["path"]))
             rewritten.append(line)
     if not operations:
-        raise ExecutionClientError("tool.invalidArguments")
+        raise ExecutionClientError("tool.invalidArguments", {"field": "patchText", "reason": "missing", "hint": "Include at least one file operation."})
     return "\n".join(rewritten), operations, edited_sources
 
 

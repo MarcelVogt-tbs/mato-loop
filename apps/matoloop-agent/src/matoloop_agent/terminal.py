@@ -296,7 +296,11 @@ class TerminalManager:
         entry = self._get(terminal_id)
         data = base64.b64decode(encoded, validate=True)
         if len(data) > 65_536:
-            raise AgentError("request.invalid", "Terminal input is too large")
+            raise AgentError.invalid_arguments(
+                "Send at most 65536 decoded bytes per terminal write.",
+                field="data",
+                reason="too_long",
+            )
         return await self._write(entry, data)
 
     async def _write(self, entry: _Terminal, data: bytes) -> dict:

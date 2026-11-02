@@ -7,6 +7,7 @@ from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
 from .windows_paths import absolute
 
@@ -76,9 +77,20 @@ def _bounded_unprotected_environment(
         )
     protected.update(name for name in value if name.startswith(("DYLD_", "GIT_CONFIG_")))
     if protected:
-        raise ValueError(f"environment cannot replace {min(protected)}")
+        raise PydanticCustomError(
+            "operation_argument_invalid",
+            "Protected environment variable",
+            {"hint": "Do not replace host identity or process startup environment variables."},
+        )
     if any("\x00" in item or len(item.encode("utf-8")) > 65_536 for item in value.values()):
-        raise ValueError("environment values must be valid process values of at most 65536 bytes")
+        raise PydanticCustomError(
+            "operation_argument_invalid",
+            "Invalid environment value",
+            {
+                "hint": "Use environment values without NUL characters "
+                "and with at most 65536 UTF-8 bytes."
+            },
+        )
     return value
 
 
@@ -97,7 +109,14 @@ def _relative_path(value: str, *, allow_dot: bool = False) -> str:
         or any(part in {"", ".", ".."} for part in value.split("/"))
         or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
     ):
-        raise ValueError("path must be a normalized relative POSIX path")
+        raise PydanticCustomError(
+            "operation_argument_invalid",
+            "Invalid relative path",
+            {
+                "hint": "Use a normalized relative POSIX path "
+                "without traversal or control characters."
+            },
+        )
     return value
 
 
@@ -299,7 +318,11 @@ class EditArguments(PathArguments):
     @model_validator(mode="after")
     def different_text(self):
         if self.old_text == self.new_text:
-            raise ValueError("oldText and newText must differ")
+            raise PydanticCustomError(
+                "operation_argument_invalid",
+                "Edit has no change",
+                {"hint": "newText must differ from oldText."},
+            )
         return self
 
 
@@ -314,7 +337,11 @@ class PatchArguments(StrictModel):
     def absolute_revision_paths(cls, value: dict[str, str] | None) -> dict[str, str] | None:
         for path in value or {}:
             if len(path) > 4096:
-                raise ValueError("revision path is too long")
+                raise PydanticCustomError(
+                    "operation_argument_invalid",
+                    "Revision path is too long",
+                    {"hint": "Use revision paths of at most 4096 characters."},
+                )
             _absolute_path(path)
         return value
 
@@ -380,7 +407,14 @@ class ShellArguments(HostDirectoryArguments):
 
 def _single_line_password(value: str | None) -> str | None:
     if value is not None and any(character in value for character in "\r\n\0"):
-        raise ValueError("Invalid sudo password")
+        raise PydanticCustomError(
+            "operation_argument_invalid",
+            "Invalid sudo password",
+            {
+                "hint": "Request a new single-line administrator password "
+                "of at most 4096 characters without NUL characters."
+            },
+        )
     return value
 
 
@@ -424,7 +458,11 @@ class AdministratorArguments(StrictModel):
     def validate_operation(self):
         if self.operation == "authenticate":
             if self.arguments or self.sudo_password is not None:
-                raise ValueError("Authentication probe accepts no arguments or password")
+                raise PydanticCustomError(
+                    "operation_argument_invalid",
+                    "Invalid authentication probe",
+                    {"hint": "Do not supply arguments or a password for an authentication probe."},
+                )
         else:
             ARGUMENT_MODELS[self.operation].model_validate(self.arguments)
         return self
@@ -454,9 +492,17 @@ class TerminalWriteArguments(TerminalIdArguments):
         try:
             decoded = base64.b64decode(value, validate=True)
         except (binascii.Error, ValueError) as exc:
-            raise ValueError("data must be valid base64") from exc
+            raise PydanticCustomError(
+                "operation_argument_invalid",
+                "Invalid base64",
+                {"hint": "Encode data as valid base64."},
+            ) from exc
         if len(decoded) > 65_536:
-            raise ValueError("decoded data exceeds 65536 bytes")
+            raise PydanticCustomError(
+                "operation_argument_invalid",
+                "Data is too large",
+                {"hint": "Send at most 65536 decoded bytes per write."},
+            )
         return value
 
 
@@ -498,7 +544,11 @@ class ArtifactDescriptor(StrictModel):
     @classmethod
     def plain_filename(cls, value: str) -> str:
         if value in {".", ".."} or "/" in value or "\\" in value or "\x00" in value:
-            raise ValueError("artifact filename must be plain")
+            raise PydanticCustomError(
+                "operation_argument_invalid",
+                "Invalid artifact filename",
+                {"hint": "Use a plain artifact filename without directories."},
+            )
         return value
 
 
@@ -592,7 +642,11 @@ class MaintenanceStartArguments(StrictModel):
     @model_validator(mode="after")
     def revision_matches_action(self):
         if (self.action == "update") != (self.revision is not None):
-            raise ValueError("A target revision is required only for updates")
+            raise PydanticCustomError(
+                "operation_argument_invalid",
+                "Invalid target revision",
+                {"hint": "Provide a target revision only for updates."},
+            )
         return self
 
 

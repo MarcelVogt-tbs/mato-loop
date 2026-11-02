@@ -28,12 +28,17 @@ describe('API error messages', () => {
       'Das Modell hat ein erforderliches Tool-Argument ausgelassen.'
     )
   })
+  it('locates invalid patches without displaying raw parser text', () => {
+    expect(apiErrorMessage({ error: { code: 'tool.invalidArguments', field: 'patchText', params: {
+      reason: 'invalid_format', line: 5, hint: 'private parser detail'
+    } } })).toBe('Der Patch ist ungültig (Patch-Zeile 5). Prüfe die Dateimarker und die mit Leerzeichen, + oder - beginnenden Änderungszeilen.')
+  })
   it.each([
     ['tool.invalidArguments', 'invalid_type', 'Ein Tool-Argument hat den falschen Datentyp.'],
     ['tool.invalidArguments', 'too_long', 'Ein Tool-Argument ist länger als erlaubt oder enthält zu viele Einträge.'],
     ['integration.requestFailed', 'remote_rejected', 'Die Integration hat die Anfrage abgelehnt. Prüfe die Eingaben und die Anforderungen des Dienstes.']
   ])('explains %s with reason %s without exposing external details', (code, reason, expected) => {
-    expect(apiErrorMessage({ error: { code, params: { reason, hint: 'private detail' } } })).toBe(expected)
+    expect(apiErrorMessage({ error: { code, field: 'patchText', params: { reason, hint: 'private detail' } } })).toBe(expected)
   })
   it('explains unavailable native audio analysis', () => {
     expect(apiErrorMessage({ error: { code: 'audio.analysisUnavailable' } })).toBe(

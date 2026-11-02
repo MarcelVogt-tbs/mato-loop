@@ -26,6 +26,7 @@ from mato_loop_backend.models import Credential
 from mato_loop_backend.security import CredentialCipher, load_credential, read_credential
 from mato_loop_backend.settings import IntegrationInstance
 from mato_loop_backend.tools.actions import ApprovalEditField, ToolAction
+from mato_loop_backend.tools.argument_errors import invalid_argument
 from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 MAIL_CREDENTIAL_KIND = "mail.password"
@@ -59,7 +60,7 @@ def _address(value: str) -> str:
         or value.count("@") != 1
         or any(character.isspace() for character in value)
     ):
-        raise ValueError("invalid email address")
+        raise invalid_argument("Use an email address of at most 320 characters with one @ and no whitespace.", reason="invalid_format")
     return value
 
 
@@ -146,7 +147,7 @@ class MailComposeArguments(MailIntegrationArguments):
     @classmethod
     def validate_subject(cls, value: str) -> str:
         if "\r" in value or "\n" in value:
-            raise ValueError("subject must not contain line breaks")
+            raise invalid_argument("Use a subject without line breaks.", reason="invalid_format")
         return value
 
 
@@ -162,7 +163,7 @@ class MailSendMessageArguments(MailComposeArguments):
     @model_validator(mode="after")
     def require_recipient(self) -> MailSendMessageArguments:
         if not self.to and not self.cc and not self.bcc:
-            raise ValueError("at least one recipient is required")
+            raise invalid_argument("Provide at least one recipient in to, cc or bcc.", field="to", reason="missing")
         return self
 
 
@@ -371,7 +372,7 @@ def _result(payload: dict[str, Any]):
 def _error(error: MailError):
     from mato_loop_backend.tools.contracts import ToolResult
 
-    return ToolResult.error(mail_error_code(error))
+    return ToolResult.error(mail_error_code(error), field=error.field, params=error.params)
 
 
 async def mail_list_accounts(_arguments: MailListAccountsArguments, context: Any):

@@ -26,6 +26,7 @@ from mato_loop_backend.agent.run_support import _external_working_directory_poli
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.session_secrets import SessionSecretStore, session_secrets
 from mato_loop_backend.agent.subagents import permission_snapshot
+from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.execution import (
     DirectoryResult,
     ExecutionClient,
@@ -808,8 +809,9 @@ async def test_apply_patch_resolves_paths_and_checks_each_permission(tmp_path, m
           if moving else ["filesystem.write", "filesystem.write"])
 
 
-async def test_incomplete_patch_error_propagates_remote_params_through_registry(
-    tmp_path, monkeypatch,
+@pytest.mark.parametrize("invalid", [False, "remote", "envelope"])
+async def test_patch_error_details_propagate_through_registry(
+    tmp_path, monkeypatch, invalid,
 ) -> None:
     params = {
         "completedOperations": 1,
@@ -818,12 +820,14 @@ async def test_incomplete_patch_error_propagates_remote_params_through_registry(
         "path": "/home/user/project/source",
         "destination": "/home/user/project/destination",
     }
+    if invalid:
+        params = {"field": "patchText", "reason": "invalid_format", "line": 5, "hint": "Prefix update lines with a space, + or -."}
     client = ExecutionClient(uuid4(), frozenset({"filesystem.patch"}), "/home/user/project")
     request = AsyncMock(return_value=ResponseMessage.model_validate({
         "type": "response",
         "id": uuid4(),
         "ok": False,
-        "error": {"code": "file.patchIncomplete", "params": params},
+        "error": {"code": "request.invalid" if invalid else "file.patchIncomplete", "params": params},
     }))
     monkeypatch.setattr(
         "mato_loop_backend.execution.client.execution_agent_connections.request", request
@@ -832,11 +836,17 @@ async def test_incomplete_patch_error_propagates_remote_params_through_registry(
         "patchText": "*** Begin Patch\n*** Add File: first\n+first\n"
         "*** Update File: source\n*** Move to: destination\n*** End Patch\n",
     })
+    if invalid == "envelope":
+        call.arguments["patchText"] = "private invalid patch"
+        params = {"field": "patchText", "reason": "invalid_format", "hint": "Use LF text with *** Begin Patch and *** End Patch on separate boundary lines."}
 
     result = await _tools(client.operations).execute(call, _context(tmp_path, call, client))
 
     assert result.is_error
     descriptor = json.loads(result.content)["error"]
+    if invalid:
+        assert descriptor == {"code": "tool.invalidArguments", "message": describe_error("tool.invalidArguments").message, "field": "patchText", "params": {key: value for key, value in params.items() if key != "field"}}
+        return
     assert descriptor["code"] == "file.patchIncomplete"
     assert descriptor["params"] == params
     assert "Reread the affected paths before retrying" in descriptor["message"]

@@ -740,10 +740,17 @@ async def test_dynamic_tool_unresolved_local_ref_is_unavailable(
     ("write_file", {"path": "file.json", "content": "x" * 1_000_001}, "content", {"reason": "too_long", "maxLength": 1_000_000}),
     ("read", {"root": "files", "path": "file.txt", "limit": 1001}, "limit", {"reason": "above_maximum", "maximum": 1000}),
     ("customize_matoloop", {"action": "update", "area": "memory", "changes": {f"field{i}": i for i in range(21)}}, "changes", {"reason": "too_long", "maxProperties": 20}),
+    ("edit_file", {"path": "file.txt", "oldString": "private", "newString": "private"}, "newString", {"reason": "invalid_value", "hint": "newString must differ from oldString."}),
+    ("provide_file", {"root": "files", "path": "one", "paths": ["two"]}, "path", {"reason": "invalid_value", "hint": "Provide exactly one of path or paths."}),
+    ("memory_write", {"action": "forget"}, "memory_id", {"reason": "missing", "hint": "Provide memory_id for update and forget."}),
+    ("write_file", {"path": "file.txt", "content": {"parts": ["private"]}}, "content.parts", {"reason": "invalid_value", "hint": "Include at least one protected value reference in parts."}),
 ])
 async def test_tool_argument_errors_explain_constraints_without_rejected_values(tmp_path, name, arguments, field, params):
     call = ToolCall("invalid", name, arguments)
-    result = await tool_registry.execute(call, _context(tmp_path, call))
+    context = _context(tmp_path, call)
+    context.memory_read_enabled = True
+    context.memory_write_enabled = True
+    result = await tool_registry.execute(call, context)
     assert json.loads(result.content)["error"] == {
         "code": "tool.invalidArguments", "message": describe_error("tool.invalidArguments").message,
         "field": field, "params": params,

@@ -92,12 +92,12 @@ def test_question_contract_rejects_invalid_questions_and_oversized_answers() -> 
     payload = _arguments().model_dump(mode="json")
     payload["questions"][0]["question"] = "   "
 
-    with pytest.raises(ValueError, match="question text must not be blank"):
+    with pytest.raises(ValueError, match="Use non-blank question text"):
         QuestionArguments.model_validate(payload)
     invalid_default = _arguments().model_dump(mode="json")
     invalid_default["questions"][0]["allow_custom"] = False
     invalid_default["questions"][0]["default_answers"] = ["Unbekannt"]
-    with pytest.raises(ValueError, match="single-choice"):
+    with pytest.raises(ValueError, match="Defaults must match the question type"):
         QuestionArguments.model_validate(invalid_default)
     with pytest.raises(ValueError, match="at most 13 items"):
         QuestionAnswerRequest(answers={"topics": [str(index) for index in range(14)]})

@@ -62,7 +62,9 @@ def argument_error(
             params[keyword] = exc.validator_value
     else:
         # Prefer the matching structured alternative over a plain-type union error.
-        error = max(exc.errors(include_url=False, include_input=False), key=lambda item: len(_argument_path(item, arguments)[0]))
+        error = max(exc.errors(include_url=False, include_input=False), key=lambda item: (
+            len(_argument_path(item, arguments)[0]), item["type"] == "tool_argument_invalid",
+        ))
         kind, context = error["type"], error.get("ctx", {})
         path, value = _argument_path(error, arguments)
         expected = {

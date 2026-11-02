@@ -86,7 +86,7 @@ async def fetch(
             if any(not cookie.reader_value_supported for cookie in selected):
                 raise WebFetchError("integration.invalidConfiguration")
             if engine == "curl":
-                raise WebFetchError("tool.invalidArguments")
+                raise WebFetchError("tool.invalidArguments", params={"reason": "invalid_choice", "hint": "Matching Reader cookies require engine=auto or engine=browser, not curl."})
             headers["X-Engine"] = "browser"
             headers["X-No-Cache"] = "true"
             headers["X-Set-Cookie"] = ", ".join(f"{cookie.name}={cookie.value}; Path=/; Secure" for cookie in selected)

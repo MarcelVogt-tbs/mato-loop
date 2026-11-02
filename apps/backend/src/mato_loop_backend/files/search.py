@@ -147,7 +147,7 @@ class RootFileSearch:
             arguments += ["--", pattern, "."]
             return_code, truncated = await self._run(root, path, arguments, b"\n", consume)
         if return_code == 2 and not truncated:
-            raise RootFileError("tool.invalidArguments", "Invalid grep pattern")
+            raise RootFileError("tool.invalidArguments", "Invalid grep pattern", field="pattern", params={"reason": "invalid_format", "hint": "Use a valid ripgrep regular expression and include glob."})
         if return_code not in {0, 1} and not truncated:
             raise RootFileError("tool.executionFailed", "Grep search failed")
         if binary:

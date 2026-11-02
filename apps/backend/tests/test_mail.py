@@ -59,6 +59,14 @@ from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import ToolArgumentsEdited
 
 
+def test_mail_api_preserves_argument_error_details() -> None:
+    error = MailError("mail.invalidMessage", field="query", hint="Use a mail query without control characters.")
+    response = mail_routes._api_error(error)
+    assert (response.field, response.params) == ("query", {
+        "reason": "invalid_value", "hint": "Use a mail query without control characters.",
+    })
+
+
 def _account() -> IntegrationInstance:
     return IntegrationInstance(
         name="Mail",

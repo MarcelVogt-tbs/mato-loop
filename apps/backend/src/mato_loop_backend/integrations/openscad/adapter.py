@@ -48,6 +48,7 @@ from mato_loop_backend.settings import (
     load_effective_integrations,
 )
 from mato_loop_backend.tools.actions import ToolAction
+from mato_loop_backend.tools.argument_errors import invalid_argument
 
 
 def _relative_path(value: str) -> str:
@@ -62,7 +63,7 @@ def _relative_path(value: str) -> str:
         or any(part in {"", ".", ".."} for part in value.split("/"))
         or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value)
     ):
-        raise ValueError("invalid relative path")
+        raise invalid_argument("Use a normalized relative POSIX path without traversal or control characters.", reason="invalid_format")
     return value
 
 _MAX_RENDER_ATTACHMENTS_BYTES = MAX_FILE_ATTACHMENT_BYTES
@@ -135,7 +136,7 @@ class OpenScadRenderArguments(WireModel):
     def scad_path(cls, value: str) -> str:
         normalized = _relative_path(value)
         if normalized == "." or PurePosixPath(normalized).suffix.casefold() != ".scad":
-            raise ValueError("path must identify an OpenSCAD file")
+            raise invalid_argument("Use a path to a .scad file.", reason="invalid_format")
         return normalized
 
     _validate_project_path = field_validator("project_path")(
@@ -148,7 +149,7 @@ class OpenScadRenderArguments(WireModel):
         try:
             PurePosixPath(self.path).relative_to(PurePosixPath(project))
         except ValueError as exc:
-            raise ValueError("path must be inside projectPath") from exc
+            raise invalid_argument("Use a path inside projectPath.", field="path") from exc
         return self
 
 

@@ -70,7 +70,7 @@ def _api_error(error: MailError) -> ApiError:
     if code == "integration.responseTooLarge":
         return ApiError(413, code)
     if code == "tool.invalidArguments":
-        return ApiError(422, code)
+        return ApiError(422, code, field=error.field, params=error.params)
     return ApiError(502, code)
 
 

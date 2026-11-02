@@ -200,10 +200,17 @@ class WindowsFilesystem:
         )
         revisions = {item.path for item in prepared if item.operation != "add"}
         if expected_sha256 is not None and revisions != expected_sha256.keys():
-            raise AgentError("request.invalid", "Patch revisions do not match its files")
+            raise AgentError.invalid_arguments(
+                "Provide revisions for exactly the existing patch source files.",
+                field="expected_sha256",
+            )
         paths = [p for item in prepared for p in (item.path, item.destination) if p]
         if len({p.casefold() for p in paths}) != len(paths):
-            raise AgentError("request.invalid", "Patch paths must be unique")
+            raise AgentError.invalid_arguments(
+                "Combine changes to each path into one operation; "
+                "paths must be unique ignoring case.",
+                field="patchText",
+            )
         results = []
         with self._lock:
             for item in prepared:

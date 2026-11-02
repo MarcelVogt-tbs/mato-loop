@@ -708,7 +708,9 @@ class Filesystem:
         expected_sha256: str | None = None,
     ) -> dict:
         if not old_text or old_text == new_text:
-            raise AgentError("request.invalid", "Edit text must be non-empty and different")
+            raise AgentError.invalid_arguments(
+                "Use non-empty oldString and a different newString.", field="oldString"
+            )
         with (
             self._lock,
             self._parent(path) as (parent, name, _),
@@ -895,10 +897,17 @@ class Filesystem:
             if len(digest) != 64 or any(
                 character not in "0123456789abcdef" for character in digest
             ):
-                raise AgentError("request.invalid", "Patch revision is invalid")
+                raise AgentError.invalid_arguments(
+                    "Patch revisions must be lowercase SHA-256 hashes.",
+                    field="expected_sha256",
+                    reason="invalid_format",
+                )
         revision_paths = {item.path for item in operations if item.operation != "add"}
         if supplied_revisions and set(expected_sha256) != revision_paths:
-            raise AgentError("request.invalid", "Patch revisions do not match its source files")
+            raise AgentError.invalid_arguments(
+                "Provide revisions for exactly the existing patch source files.",
+                field="expected_sha256",
+            )
         touched = [
             path
             for item in operations
@@ -906,7 +915,11 @@ class Filesystem:
             if path is not None
         ]
         if len(touched) != len(set(touched)):
-            raise AgentError("request.invalid", "Patch paths must be unique")
+            raise AgentError.invalid_arguments(
+                "Combine changes to each path into one operation; "
+                "source and destination paths must be unique.",
+                field="patchText",
+            )
 
         prepared = []
         prepared_bytes = 0

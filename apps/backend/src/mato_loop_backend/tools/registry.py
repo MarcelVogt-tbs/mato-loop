@@ -238,7 +238,7 @@ class EffectiveToolSet:
                     for segment in path[:-1]:
                         child = target.get(segment)
                         if not isinstance(child, dict):
-                            return ToolResult.error("tool.invalidArguments", field=segment)
+                            return ToolResult.error("tool.invalidArguments", field=".".join(path), params={"reason": "invalid_type", "expectedType": "object", "hint": "The edited argument's parent must be an object; submit a new tool call with the expected structure."})
                         target = child
                     target[path[-1]] = value
                 call.arguments.clear()

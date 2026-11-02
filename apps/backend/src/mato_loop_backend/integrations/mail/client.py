@@ -40,9 +40,11 @@ _UNSAFE_DRAFT_TYPES = {
 
 
 class MailError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, field: str | None = None, hint: str | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.field = field
+        self.params = {"reason": "invalid_value", "hint": hint} if hint else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +120,7 @@ def _modified_utf7_decode(value: str) -> str:
 
 def _modified_utf7_encode(value: str) -> str:
     if not value or any(ord(character) < 32 or ord(character) == 127 for character in value):
-        raise MailError("mail.invalidMessage")
+        raise MailError("mail.invalidMessage", field="mailbox", hint="Use a non-empty mailbox name without control characters.")
     chunks: list[str] = []
     non_ascii: list[str] = []
 
@@ -294,7 +296,7 @@ def attachment_bytes(raw: bytes, part_path: str) -> tuple[bytes, str, str]:
 
 def _draft_body_part(message: Message) -> Message:
     if any(part.get_content_type() in _UNSAFE_DRAFT_TYPES for part in message.walk()):
-        raise MailError("mail.invalidMessage")
+        raise MailError("mail.invalidMessage", hint="Signed or encrypted drafts cannot be edited; create a new plain-text draft.")
     if not message.is_multipart():
         candidates = [message]
     elif message.get_content_type() == "multipart/mixed":
@@ -304,17 +306,17 @@ def _draft_body_part(message: Message) -> Message:
             if not part.get_filename() and part.get_content_disposition() != "attachment"
         ]
     else:
-        raise MailError("mail.invalidMessage")
+        raise MailError("mail.invalidMessage", hint="Edit only plain-text drafts, optionally with multipart/mixed attachments.")
     if (
         len(candidates) != 1
         or candidates[0].is_multipart()
         or candidates[0].get_content_type() != "text/plain"
     ):
-        raise MailError("mail.invalidMessage")
+        raise MailError("mail.invalidMessage", hint="The draft must have exactly one plain-text body; create a new draft for other MIME structures.")
     part = candidates[0]
     content = part.get_content()
     if not isinstance(content, str) or len(content) > MAX_BODY_CHARS:
-        raise MailError("mail.invalidMessage")
+        raise MailError("mail.invalidMessage", field="body", hint="The draft body must be text within the configured body size limit.")
     return part
 
 
@@ -330,7 +332,7 @@ def edit_message(raw: bytes, *, subject: str, body: str) -> bytes:
     except MailError:
         raise
     except Exception as exc:
-        raise MailError("mail.invalidMessage") from exc
+        raise MailError("mail.invalidMessage", hint="The draft could not be parsed or edited; read it again or create a new plain-text draft.") from exc
     if len(edited) > MAX_MESSAGE_BYTES:
         raise MailError("mail.responseTooLarge")
     return edited
@@ -347,16 +349,16 @@ def _patch_draft(
     except MailError:
         raise
     except Exception as exc:
-        raise MailError("mail.invalidMessage") from exc
+        raise MailError("mail.invalidMessage", hint="The draft could not be parsed or edited; read it again or create a new plain-text draft.") from exc
     if not isinstance(body, str):
-        raise MailError("mail.invalidMessage")
+        raise MailError("mail.invalidMessage", field="body", hint="Provide a plain-text draft body.")
     if len(_addresses(changes, "To", "Cc", "Bcc", limit=None)) > 100:
-        raise MailError("mail.invalidMessage")
+        raise MailError("mail.invalidMessage", field="to", hint="Use at most 100 recipients in total across to, cc and bcc.")
     if sum(
         bool(part.get_filename() or part.get_content_disposition() == "attachment")
         for part in message.walk()
     ) > MAX_ATTACHMENTS:
-        raise MailError("mail.invalidMessage")
+        raise MailError("mail.invalidMessage", hint="The existing draft has too many attachments to edit safely; create a new draft with fewer attachments.")
     if replace_attachments:
         preserved = {
             name.casefold()
@@ -551,7 +553,7 @@ class MailClient:
     ) -> MessagePage:
         _modified_utf7_encode(mailbox)
         if query and any(ord(character) < 32 or ord(character) == 127 for character in query):
-            raise MailError("mail.invalidMessage")
+            raise MailError("mail.invalidMessage", field="query", hint="Use a mail query without control characters.")
         with self._imap() as client:
             uidvalidity = self._select(client, mailbox, readonly=True)
             if expected_uidvalidity is not None and uidvalidity != expected_uidvalidity:
@@ -808,13 +810,13 @@ class MailClient:
         try:
             message = BytesParser(policy=policy.default).parsebytes(raw)
         except Exception as exc:
-            raise MailError("mail.invalidMessage") from exc
+            raise MailError("mail.invalidMessage", hint="The message could not be parsed; read it again or create a new message.") from exc
         while message.get("From") is not None:
             del message["From"]
         message["From"] = self.from_address
         recipients = _addresses(message, "To", "Cc", "Bcc", limit=None)
         if not recipients or len(recipients) > 100:
-            raise MailError("mail.invalidMessage")
+            raise MailError("mail.invalidMessage", field="to", hint="Provide between 1 and 100 recipients in total across to, cc and bcc.")
         with self._smtp() as client:
             refused = client.send_message(
                 message, from_addr=self.from_address, to_addrs=list(recipients)
@@ -884,7 +886,7 @@ def build_message(
     if bcc:
         message["Bcc"] = ", ".join(bcc)
     if len(_addresses(message, "To", "Cc", "Bcc", limit=None)) > 100:
-        raise MailError("mail.invalidMessage")
+        raise MailError("mail.invalidMessage", field="to", hint="Use at most 100 recipients in total across to, cc and bcc.")
     message["Date"] = formatdate(localtime=True)
     message["Message-ID"] = message_id or make_msgid(
         domain=from_address.rpartition("@")[2]

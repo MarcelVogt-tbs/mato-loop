@@ -35,6 +35,7 @@ from mato_loop_backend.settings import (
     UserIntegrationSettings,
 )
 from mato_loop_backend.tools.actions import ToolAction
+from mato_loop_backend.tools.argument_errors import invalid_argument
 
 if TYPE_CHECKING:
     from mato_loop_backend.tools.context import ToolContext
@@ -112,14 +113,14 @@ class SelectCustomerArguments(BaseModel):
     @model_validator(mode="after")
     def one_action(self) -> SelectCustomerArguments:
         if self.query is not None and self.erp_id is not None:
-            raise ValueError("query and erp_id cannot be combined")
+            raise invalid_argument("Provide query or erp_id, not both.", field="query")
         return self
 
     @field_validator("query")
     @classmethod
     def strip_query(cls, value: str | None) -> str | None:
         if value is not None and len(value := value.strip()) < 2:
-            raise ValueError("query must contain at least two characters")
+            raise invalid_argument("Use a query with at least two non-blank characters.", reason="too_short")
         return value
 
 

@@ -189,8 +189,16 @@ class SearchTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(long["matches"][0]["text"]), MAX_MATCH_TEXT)
             self.assertEqual([match["line"] for match in long["matches"]], [1, 2])
             self.assertTrue(long["truncated"])
-            with self.assertRaisesRegex(AgentError, "Invalid grep pattern"):
+            with self.assertRaises(AgentError) as rejected:
                 await agent.search.grep(str(root), "[", None)
+            self.assertEqual(
+                rejected.exception.params,
+                {
+                    "field": "pattern",
+                    "reason": "invalid_format",
+                    "hint": "Use a valid ripgrep regular expression and include glob.",
+                },
+            )
 
     async def test_result_limit_requires_an_extra_eligible_result(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

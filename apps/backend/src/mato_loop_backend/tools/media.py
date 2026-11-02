@@ -55,6 +55,7 @@ from mato_loop_backend.tools.contracts import ToolAttachment as ToolAttachment
 from mato_loop_backend.tools.contracts import ToolDefinition as ToolDefinition
 from mato_loop_backend.tools.contracts import ToolResult as ToolResult
 from mato_loop_backend.tools.secrets import resolve_protected_text
+from mato_loop_backend.tools.validation import argument_error
 
 QR_CODE_MAX_RESULTS = 16
 
@@ -260,11 +261,11 @@ async def _generate_qr_code(
         elif security in {"OPEN", "OFFEN", "NOPASS"}:
             security = "nopass"
         else:
-            return ToolResult.error("tool.invalidArguments", field="wifi.security")
+            return ToolResult.error("tool.invalidArguments", field="wifi.security", params={"reason": "invalid_choice", "hint": "Use WPA, WPA2, WPA3, WPA/WPA2, WPA2/WPA3, WEP or nopass."})
         if not fields["ssid"] or (security != "nopass" and not fields["password"]) or (
             security == "nopass" and fields["password"]
         ):
-            return ToolResult.error("tool.invalidArguments", field="wifi")
+            return ToolResult.error("tool.invalidArguments", field="wifi", params={"reason": "invalid_value", "hint": "Provide a non-empty SSID; secured networks require a password, open networks require no password."})
         content = f'WIFI:T:{security};S:{_wifi_qr_escape(fields["ssid"])};'
         if security != "nopass":
             content += f'P:{_wifi_qr_escape(fields["password"])};'
@@ -279,8 +280,8 @@ async def _generate_qr_code(
         content, protected = resolved
     try:
         GenerateQrCodeArguments.model_validate({"content": content})
-    except ValidationError:
-        return ToolResult.error("tool.invalidArguments", field="content")
+    except ValidationError as exc:
+        return argument_error(exc, {"content": content})
     try:
         data = await asyncio.to_thread(_qr_code_png, content)
     except Exception:

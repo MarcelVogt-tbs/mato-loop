@@ -225,7 +225,11 @@ async def worker(payload: dict) -> dict:
     if request.operation == "shell.inspect":
         return process.inspect_shell(arguments.command, arguments.current_directory)
     if arguments.expected_inspection_revision is None:
-        raise AgentError("request.invalid", "Administrator shell requires an inspection revision")
+        raise AgentError.invalid_arguments(
+            "Inspect the administrator shell command before executing it.",
+            field="expectedInspectionRevision",
+            reason="missing",
+        )
 
     async def stream(channel: str, value: str) -> None:
         print(json.dumps({"event": channel, "data": value}), flush=True)

@@ -50,7 +50,9 @@ def edited_text(
     data: bytes, old_text: str, new_text: str, replace_all: bool, expected_sha256: str | None
 ) -> tuple[str, str]:
     if not old_text or old_text == new_text:
-        raise AgentError("request.invalid", "Edit text must be non-empty and different")
+        raise AgentError.invalid_arguments(
+            "Use non-empty oldString and a different newString.", field="oldString"
+        )
     content = decode_text(data)
     digest = hashlib.sha256(data).hexdigest()
     if expected_sha256 is not None and digest != expected_sha256:
@@ -63,7 +65,9 @@ def edited_text(
 
     old, replacement = adapt(old_text), adapt(new_text)
     if old == replacement:
-        raise AgentError("request.invalid", "Edit text must be different")
+        raise AgentError.invalid_arguments(
+            "newString must differ from oldString after newline normalization.", field="newString"
+        )
     index = content.find(old)
     if index < 0:
         raise AgentError("file.editTextNotFound", "Edit text was not found")
@@ -90,14 +94,20 @@ def parse_patch(
     patch: str, *, max_bytes: int, max_entries: int, validate_path: Callable[[str], object]
 ) -> list[PatchOperation]:
     if "\r" in patch or "\0" in patch:
-        raise AgentError("request.invalid", "Patch must use LF text")
+        raise AgentError.invalid_arguments(
+            "Use LF patch text without NUL characters.", field="patchText", reason="invalid_format"
+        )
     if len(patch.encode("utf-8")) > min(max_bytes, 512 * 1024):
         raise AgentError("operation.tooLarge", "Patch exceeds the operation limit")
     lines = patch.split("\n")
     if lines[-1] == "":
         lines.pop()
     if not lines or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
-        raise AgentError("request.invalid", "Patch markers are invalid")
+        raise AgentError.invalid_arguments(
+            "Start with *** Begin Patch and end with *** End Patch on separate lines.",
+            field="patchText",
+            reason="invalid_format",
+        )
     operations = []
     index = 1
     while index < len(lines) - 1:
@@ -110,7 +120,12 @@ def parse_patch(
         elif header.startswith("*** Delete File: "):
             operation, path = "delete", header.removeprefix("*** Delete File: ")
         else:
-            raise AgentError("request.invalid", "Patch operation marker is invalid")
+            raise AgentError.invalid_arguments(
+                "Use *** Add File:, *** Update File: or *** Delete File: followed by a path.",
+                field="patchText",
+                reason="invalid_format",
+                line=index,
+            )
         if len(path) > 4096:
             raise AgentError("path.invalid", "Patch path is too long")
         validate_path(path)
@@ -132,13 +147,24 @@ def parse_patch(
             index += 1
         body = lines[start:index]
         if operation == "add":
-            if any(not line.startswith("+") for line in body):
-                raise AgentError("request.invalid", "Added file lines must start with +")
+            for number, line in enumerate(body, start + 1):
+                if not line.startswith("+"):
+                    raise AgentError.invalid_arguments(
+                        "Prefix every added file line, including blank lines, with +.",
+                        field="patchText",
+                        reason="invalid_format",
+                        line=number,
+                    )
             content = "\n".join(line[1:] for line in body) + ("\n" if body else "")
             operations.append(PatchOperation(operation, path, content=content))
         elif operation == "delete":
             if body:
-                raise AgentError("request.invalid", "Delete operation cannot have a body")
+                raise AgentError.invalid_arguments(
+                    "Delete operations cannot have a body.",
+                    field="patchText",
+                    reason="invalid_format",
+                    line=start + 1,
+                )
             operations.append(PatchOperation(operation, path))
         else:
             hunks = []
@@ -150,7 +176,12 @@ def parse_patch(
                     locator = marker[3:] if marker.startswith("@@ ") else None
                     body_index += 1
                 elif hunks or not marker or marker[0] not in " +-":
-                    raise AgentError("request.invalid", "Update hunk marker is invalid")
+                    raise AgentError.invalid_arguments(
+                        "Start each update hunk with @@ or @@ followed by an exact locator line.",
+                        field="patchText",
+                        reason="invalid_format",
+                        line=start + body_index + 1,
+                    )
                 old, new = [], []
                 changed = False
                 end_of_file = False
@@ -159,21 +190,40 @@ def parse_patch(
                     body_index += 1
                     if line == "*** End of File":
                         if body_index != len(body):
-                            raise AgentError("request.invalid", "End of file must end the update")
+                            raise AgentError.invalid_arguments(
+                                "Place *** End of File only at the end of an update.",
+                                field="patchText",
+                                reason="invalid_format",
+                                line=start + body_index,
+                            )
                         end_of_file = True
                         break
                     if not line or line[0] not in " +-":
-                        raise AgentError("request.invalid", "Update hunk line is invalid")
+                        raise AgentError.invalid_arguments(
+                            "Prefix update lines with a space, + or -; "
+                            "blank context lines need a space.",
+                            field="patchText",
+                            reason="invalid_format",
+                            line=start + body_index,
+                        )
                     if line[0] in " -":
                         old.append(line[1:])
                     if line[0] in " +":
                         new.append(line[1:])
                     changed |= line[0] in "+-"
                 if not changed or old == new:
-                    raise AgentError("request.invalid", "Update hunk has no exact change")
+                    raise AgentError.invalid_arguments(
+                        "Each hunk must add or remove text and produce an actual change.",
+                        field="patchText",
+                        line=start + body_index,
+                    )
                 hunks.append((locator, tuple(old), tuple(new), end_of_file))
             if not hunks and destination is None:
-                raise AgentError("request.invalid", "Update requires a hunk or move")
+                raise AgentError.invalid_arguments(
+                    "Provide an update hunk or *** Move to: destination.",
+                    field="patchText",
+                    line=start,
+                )
             operations.append(
                 PatchOperation(
                     "move" if destination else operation,
@@ -185,7 +235,9 @@ def parse_patch(
         if len(operations) > max_entries:
             raise AgentError("operation.tooLarge", "Patch has too many operations")
     if not operations:
-        raise AgentError("request.invalid", "Patch has no operations")
+        raise AgentError.invalid_arguments(
+            "Include at least one file operation.", field="patchText", reason="missing"
+        )
     return operations
 
 

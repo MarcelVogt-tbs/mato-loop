@@ -40,3 +40,17 @@ class PatchTextTests(unittest.TestCase):
         for content, body in cases:
             with self.subTest(body=body), self.assertRaises(AgentError):
                 self.apply(content, body)
+
+    def test_invalid_update_line_reports_safe_patch_location(self):
+        with self.assertRaises(AgentError) as rejected:
+            self.apply("old\n", "@@\n-old\n+new\nprivate invalid context")
+        self.assertEqual(
+            rejected.exception.params,
+            {
+                "field": "patchText",
+                "reason": "invalid_format",
+                "line": 6,
+                "hint": "Prefix update lines with a space, + or -; "
+                "blank context lines need a space.",
+            },
+        )

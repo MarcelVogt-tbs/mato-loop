@@ -38,6 +38,29 @@ def configuration(home: Path, **values) -> AgentConfig:
 
 
 class ConnectionConfigTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dispatch_preserves_safe_schema_constraints(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            agent = MatoLoopAgent(configuration(Path(temporary)), "secret")
+            for operation, arguments, expected in (
+                (
+                    "filesystem.read",
+                    {"path": str(Path(temporary) / "private"), "limit": 0},
+                    {"field": "limit", "reason": "below_minimum", "minimum": 1},
+                ),
+                (
+                    "filesystem.patch",
+                    {"patch": "private", "expectedSha256": {str(i): "a" * 64 for i in range(1001)}},
+                    {"field": "expectedSha256", "reason": "too_long", "maxProperties": 1000},
+                ),
+            ):
+                with self.subTest(operation=operation):
+                    request = Request(
+                        type="request", id=REQUEST_ID, operation=operation, arguments=arguments
+                    )
+                    with self.assertRaises(AgentError) as rejected:
+                        await agent.dispatch(request)
+                    self.assertEqual(rejected.exception.params, expected)
+
     def test_config_parent_is_data_directory_and_removed_fields_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)

@@ -431,7 +431,8 @@ async def execute_definition(
     ) as exc:
         return ToolResult.error(
             exc.code,
-            params=exc.params if isinstance(exc, (WebFetchError, ExecutionClientError)) else (
+            field=exc.field if isinstance(exc, (ExecutionClientError, RootFileError, MailError)) else None,
+            params=exc.params if isinstance(exc, (WebFetchError, ExecutionClientError, RootFileError, MailError)) else (
                 remote_error_params(exc.status_code) if isinstance(exc, (ArcaneError, TbsDeskError)) else None
             ),
         )

@@ -40,6 +40,7 @@ from mato_loop_backend.models import Credential
 from mato_loop_backend.security import CredentialCipher, load_credential, read_credential
 from mato_loop_backend.settings import IntegrationInstance
 from mato_loop_backend.tools.actions import ToolAction
+from mato_loop_backend.tools.argument_errors import invalid_argument
 from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 MEALIE_CREDENTIAL_KIND = "mealie.api_token"
@@ -121,7 +122,7 @@ def _validate_encrypted_token(value: str, model: type[BaseModel], label: str) ->
     try:
         model.model_validate(CredentialCipher().decrypt(value.encode("ascii")))
     except Exception as exc:
-        raise ValueError(f"invalid {label} token") from exc
+        raise invalid_argument("Use a token from a fresh Mealie read or search.") from exc
     return value
 
 
@@ -220,7 +221,7 @@ class RecipeImportArguments(MealieIntegrationArguments):
     @classmethod
     def validate_source_url(cls, value: HttpUrl) -> HttpUrl:
         if value.username is not None or value.password is not None or value.fragment is not None:
-            raise ValueError("recipe URL must not contain credentials or a fragment")
+            raise invalid_argument("Use a recipe URL without credentials or a fragment.", reason="invalid_format")
         return value
 
 
@@ -888,7 +889,7 @@ async def meal_plan_update(arguments: MealPlanUpdateArguments, context: Any) -> 
             if updated.recipe_id is None and not updated.title.strip():
                 from mato_loop_backend.tools.contracts import ToolResult
 
-                return ToolResult.error("tool.invalidArguments", field="title")
+                return ToolResult.error("tool.invalidArguments", field="title", params={"reason": "missing", "hint": "Provide a non-blank title when the meal plan entry has no recipe."})
             entry = await client.update_meal_plan(updated)
         try:
             return _result(

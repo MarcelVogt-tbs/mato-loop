@@ -45,6 +45,7 @@ from mato_loop_backend.settings import (
     ToolExecutionPolicy,
 )
 from mato_loop_backend.tools.actions import ToolAction
+from mato_loop_backend.tools.argument_errors import invalid_argument
 from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 BOOKSTACK_CREDENTIAL_KIND = "bookstack.token"
@@ -61,18 +62,18 @@ def _validate_book_keys(book_keys: list[str] | None) -> None:
     if book_keys is None:
         return
     if any(not _BOOK_KEY_RE.match(key) for key in book_keys):
-        raise ValueError("invalid book key")
+        raise invalid_argument("Use book keys from discovery in book:<positive integer> format.", reason="invalid_format")
     if len(set(book_keys)) != len(book_keys):
-        raise ValueError("duplicate book key")
+        raise invalid_argument("Include each book key only once.")
 
 
 def _validate_shelf_keys(shelf_keys: list[str] | None) -> None:
     if shelf_keys is None:
         return
     if any(not _SHELF_KEY_RE.match(key) for key in shelf_keys):
-        raise ValueError("invalid shelf key")
+        raise invalid_argument("Use shelf keys from discovery in shelf:<positive integer> format.", reason="invalid_format")
     if len(set(shelf_keys)) != len(shelf_keys):
-        raise ValueError("duplicate shelf key")
+        raise invalid_argument("Include each shelf key only once.")
 
 
 _READ = ToolAction(
@@ -159,7 +160,7 @@ class KnowledgeSearchArguments(KnowledgeIntegrationArguments):
             seen.add(marker)
             unique.append(cleaned)
         if not unique:
-            raise ValueError("at least one query is required")
+            raise invalid_argument("Provide at least one non-blank search query.", field="queries", reason="missing")
         self.queries = unique
         return self
 
@@ -182,7 +183,7 @@ class KnowledgeUpdatePageArguments(KnowledgeBookArguments):
     @model_validator(mode="after")
     def require_patch(self) -> KnowledgeUpdatePageArguments:
         if self.name is None and self.markdown is None:
-            raise ValueError("at least one page field is required")
+            raise invalid_argument("Provide name or markdown to update a page.", reason="missing")
         return self
 
 
@@ -206,10 +207,10 @@ class KnowledgeCreateAttachmentArguments(KnowledgeBookArguments):
     def require_single_source(self) -> KnowledgeCreateAttachmentArguments:
         has_file = self.root is not None or self.path is not None
         if has_file and (self.root is None or self.path is None):
-            raise ValueError("root and path must be provided together")
+            raise invalid_argument("Provide root and path together.", field="path")
         sources = [self.url is not None, self.link is not None, has_file]
         if sum(sources) != 1:
-            raise ValueError("exactly one of url, link, or root with path is required")
+            raise invalid_argument("Provide exactly one of url, link, or root with path.", field="url")
         return self
 
 
@@ -235,7 +236,7 @@ class KnowledgeUpdateBookArguments(KnowledgeBookArguments):
     @model_validator(mode="after")
     def require_change(self) -> KnowledgeUpdateBookArguments:
         if self.name is None and self.description is None:
-            raise ValueError("name or description is required")
+            raise invalid_argument("Provide name or description to update a book.", reason="missing")
         return self
 
 
@@ -252,7 +253,7 @@ class KnowledgeUpdateChapterArguments(KnowledgeBookArguments):
     @model_validator(mode="after")
     def require_change(self) -> KnowledgeUpdateChapterArguments:
         if self.name is None and self.description is None:
-            raise ValueError("name or description is required")
+            raise invalid_argument("Provide name or description to update a chapter.", reason="missing")
         return self
 
 
@@ -299,17 +300,17 @@ class KnowledgeUpdateShelfArguments(KnowledgeShelfArguments):
             and self.add_book_keys is None
             and self.remove_book_keys is None
         ):
-            raise ValueError("at least one shelf field is required")
+            raise invalid_argument("Provide at least one shelf field to update.", reason="missing")
         if self.book_keys is not None and (
             self.add_book_keys is not None or self.remove_book_keys is not None
         ):
-            raise ValueError("book_keys cannot be combined with add or remove")
+            raise invalid_argument("Use either book_keys or add_book_keys/remove_book_keys, not both.", field="book_keys")
         _validate_book_keys(self.book_keys)
         _validate_book_keys(self.add_book_keys)
         _validate_book_keys(self.remove_book_keys)
         overlap = set(self.add_book_keys or ()) & set(self.remove_book_keys or ())
         if overlap:
-            raise ValueError("book key cannot be added and removed at once")
+            raise invalid_argument("Do not add and remove the same book key.", field="remove_book_keys")
         return self
 
 
@@ -664,6 +665,10 @@ def _result(value: dict[str, Any]) -> Any:
 def _error(error: BookStackError) -> Any:
     from mato_loop_backend.tools.contracts import ToolResult
 
+    if error.code == "bookstack.invalidQuery":
+        return ToolResult.error("tool.invalidArguments", field="queries", params={"reason": "missing", "hint": "Provide a non-blank search query."})
+    if error.code == "bookstack.invalidPage":
+        return ToolResult.error("tool.invalidArguments", params={"reason": "missing", "hint": "Provide name or markdown to update a page."})
     return ToolResult.error(bookstack_error_code(error), params=remote_error_params(error.status_code))
 
 

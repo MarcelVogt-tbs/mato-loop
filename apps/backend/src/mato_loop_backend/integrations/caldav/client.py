@@ -28,10 +28,12 @@ CalDavComponent = Literal["VEVENT", "VTODO"]
 
 
 class CalDavError(RuntimeError):
-    def __init__(self, code: str, *, status_code: int | None = None) -> None:
+    def __init__(self, code: str, *, status_code: int | None = None, field: str | None = None, hint: str | None = None) -> None:
         super().__init__(code)
         self.code = code
         self.status_code = status_code
+        self.field = field
+        self.params = {"reason": "invalid_value", "hint": hint} if hint else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,8 +134,8 @@ class CalDavTask:
     mutation_safe: bool = True
 
 
-def _error(code: str, *, status_code: int | None = None) -> CalDavError:
-    return CalDavError(f"caldav.{code}", status_code=status_code)
+def _error(code: str, *, status_code: int | None = None, field: str | None = None, hint: str | None = None) -> CalDavError:
+    return CalDavError(f"caldav.{code}", status_code=status_code, field=field, hint=hint)
 
 
 def _origin(url: httpx.URL) -> tuple[str, str, int]:
@@ -471,7 +473,7 @@ class CalDavClient:
             or end <= start
             or end - start > MAX_QUERY_SPAN
         ):
-            raise _error("invalidTimeRange")
+            raise _error("invalidTimeRange", field="end", hint="Use timezone-aware start and end, with end after start and a query span of at most 366 days.")
         start_value = start.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
         end_value = end.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
         query = ElementTree.tostring(
@@ -750,14 +752,14 @@ class CalDavClient:
         all_day = isinstance(draft.start, date) and not isinstance(draft.start, datetime)
         end_all_day = isinstance(draft.end, date) and not isinstance(draft.end, datetime)
         if all_day != end_all_day or draft.end <= draft.start:
-            raise _error("invalidEvent")
+            raise _error("invalidEvent", field="timing", hint="Use dates for both boundaries or datetimes for both; end must be after start.")
         if not all_day and (
             draft.start.tzinfo is None
             or draft.start.utcoffset() is None
             or draft.end.tzinfo is None
             or draft.end.utcoffset() is None
         ):
-            raise _error("invalidEvent")
+            raise _error("invalidEvent", field="timing", hint="Include timezone offsets in both start and end.")
         calendar = ICalendar()
         calendar.add("prodid", "-//MatoLoop//CalDAV Client//EN")
         calendar.add("version", "2.0")
@@ -802,15 +804,15 @@ class CalDavClient:
                 or completed_at.tzinfo is None
                 or completed_at.utcoffset() is None
             ):
-                raise _error("invalidEvent")
+                raise _error("invalidEvent", hint="Task completion metadata requires a completed task and a timezone-aware completion timestamp; query the task again.")
             completed_at = completed_at.astimezone(UTC)
         created = draft.created
         if created is not None:
             if created.tzinfo is None or created.utcoffset() is None:
-                raise _error("invalidEvent")
+                raise _error("invalidEvent", hint="The task creation timestamp must be timezone-aware; query the task again.")
             created = created.astimezone(UTC)
         if draft.sequence < 0:
-            raise _error("invalidEvent")
+            raise _error("invalidEvent", hint="The task sequence must be non-negative; query the task again.")
         calendar = ICalendar()
         calendar.add("prodid", "-//MatoLoop//CalDAV Client//EN")
         calendar.add("version", "2.0")

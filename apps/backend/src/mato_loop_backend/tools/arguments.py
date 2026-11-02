@@ -15,9 +15,10 @@ from pydantic import (
 )
 from pydantic_core import PydanticCustomError
 
-from mato_loop_backend.automations import next_run_at
+from mato_loop_backend.automations import AutomationError, next_run_at
 from mato_loop_backend.models import MemoryCategory
 from mato_loop_backend.settings.models import TrustLevel, normalize_agent_display_name
+from mato_loop_backend.tools.argument_errors import invalid_argument
 
 QR_CODE_MAX_CONTENT_BYTES = 2_000
 
@@ -39,7 +40,7 @@ class ProtectedText(ToolArguments):
     @model_validator(mode="after")
     def needs_a_reference(self) -> ProtectedText:
         if not any(isinstance(part, ProtectedTextRef) for part in self.parts):
-            raise ValueError("protected text needs a value reference")
+            raise invalid_argument("Include at least one protected value reference in parts.", field="parts")
         return self
 
 
@@ -55,7 +56,7 @@ class DelegatedTask(ToolArguments):
     @classmethod
     def prompt_must_not_be_blank(cls, value: str) -> str:
         if not (cleaned := value.strip()):
-            raise ValueError("prompt must not be blank")
+            raise invalid_argument("Use non-blank text.")
         return cleaned
 
 
@@ -66,7 +67,7 @@ class TaskArguments(ToolArguments):
     def unique_sessions(self) -> TaskArguments:
         ids = [task.session_id for task in self.tasks if task.session_id is not None]
         if len(ids) != len(set(ids)):
-            raise ValueError("each subagent session may appear only once")
+            raise invalid_argument("Include each subagent session only once.", field="tasks")
         return self
 
 
@@ -78,7 +79,7 @@ class NotifyArguments(ToolArguments):
     @classmethod
     def normalize_text(cls, value: str) -> str:
         if not (value := " ".join(value.split())):
-            raise ValueError("notification text must not be blank")
+            raise invalid_argument("Use non-blank notification text.")
         return value
 
 
@@ -90,7 +91,7 @@ class TodoItem(ToolArguments):
     @classmethod
     def content_must_not_be_blank(cls, value: str) -> str:
         if not (cleaned := value.strip()):
-            raise ValueError("todo content must not be blank")
+            raise invalid_argument("Use non-blank todo content.")
         return cleaned
 
 
@@ -100,7 +101,7 @@ class TodoWriteArguments(ToolArguments):
     @model_validator(mode="after")
     def only_one_item_may_be_in_progress(self) -> TodoWriteArguments:
         if sum(item.status == "in_progress" for item in self.todos) > 1:
-            raise ValueError("only one todo may be in progress")
+            raise invalid_argument("Mark at most one todo as in_progress.", field="todos")
         return self
 
 
@@ -112,7 +113,7 @@ class QuestionOption(ToolArguments):
     @classmethod
     def label_must_not_be_blank(cls, value: str) -> str:
         if not (cleaned := value.strip()):
-            raise ValueError("label must not be blank")
+            raise invalid_argument("Use a non-blank label.")
         return cleaned
 
 
@@ -130,7 +131,7 @@ class QuestionBase(ToolArguments):
     @classmethod
     def text_must_not_be_blank(cls, value: str) -> str:
         if not (cleaned := value.strip()):
-            raise ValueError("question text must not be blank")
+            raise invalid_argument("Use non-blank question text.")
         return cleaned
 
 
@@ -162,11 +163,11 @@ class QuestionItem(QuestionBase):
     def shape_matches_type(self) -> QuestionItem:
         if self.type == "free_text":
             if self.options:
-                raise ValueError("free-text question must not have options")
+                raise invalid_argument("Omit options for free_text questions.", field="options")
             self.allow_custom = False
             return self
         if len(self.options) < 2:
-            raise ValueError("choice question requires at least two options")
+            raise invalid_argument("Provide at least two options for choice questions.", field="options", reason="too_short")
         if self.placeholder is not None:
             raise PydanticCustomError(
                 "question_placeholder_not_allowed",
@@ -174,7 +175,7 @@ class QuestionItem(QuestionBase):
             )
         labels = [option.label for option in self.options]
         if len(labels) != len(set(labels)):
-            raise ValueError("option labels must be unique")
+            raise invalid_argument("Use unique option labels.", field="options")
         return self
 
 
@@ -185,9 +186,12 @@ class QuestionArguments(ToolArguments):
     def ids_and_defaults_are_valid(self) -> QuestionArguments:
         ids = [question.id for question in self.questions]
         if len(ids) != len(set(ids)):
-            raise ValueError("question IDs must be unique")
+            raise invalid_argument("Use unique question IDs.", field="questions")
         for question in self.questions:
-            _validate_question_answer(question, question.default_answers)
+            try:
+                _validate_question_answer(question, question.default_answers)
+            except ValueError as exc:
+                raise invalid_argument("Defaults must match the question type and allowed options.", field="questions") from exc
         return self
 
 
@@ -203,7 +207,7 @@ class PersonalVariableSaveProposal(ToolArguments):
     @model_validator(mode="after")
     def target_matches_action(self) -> PersonalVariableSaveProposal:
         if (self.action == "update") != (self.variable_id is not None):
-            raise ValueError("update requires variable_id")
+            raise invalid_argument("Provide variable_id only for update; omit it for create.", field="variable_id")
         return self
 
 
@@ -221,15 +225,15 @@ class ProtectedQuestionItem(QuestionBase):
     @model_validator(mode="after")
     def type_matches_proposal(self) -> ProtectedQuestionItem:
         if self.default_answers:
-            raise ValueError("protected questions cannot have defaults")
+            raise invalid_argument("Omit defaults for protected questions.", field="default_answers")
         if self.administrator is not None and (not self.one_time or self.type != "password"):
-            raise ValueError("administrator input requires a temporary password")
+            raise invalid_argument("Administrator input requires one_time=true and type=password.", field="administrator")
         if (self.save_proposal is None) == (not self.one_time):
-            raise ValueError("protected question requires exactly one purpose")
+            raise invalid_argument("Provide either save_proposal or one_time=true, not both.", field="save_proposal")
         if self.save_proposal is not None and (
             (self.type == "password") != self.save_proposal.secret
         ):
-            raise ValueError("question type must match secret setting")
+            raise invalid_argument("Use type=password for secret values and type=value otherwise.", field="type")
         return self
 
 
@@ -240,13 +244,13 @@ class ProtectedQuestionArguments(ToolArguments):
     def purposes_and_ids_are_valid(self) -> ProtectedQuestionArguments:
         ids = [question.id for question in self.questions]
         if len(ids) != len(set(ids)):
-            raise ValueError("question IDs must be unique")
+            raise invalid_argument("Use unique question IDs.", field="questions")
         if any(question.one_time for question in self.questions) and not all(
             question.one_time for question in self.questions
         ):
-            raise ValueError("protected question purposes cannot be mixed")
+            raise invalid_argument("Do not mix saved and one-time protected questions.", field="questions")
         if not self.questions[0].one_time and len(self.questions) != 1:
-            raise ValueError("saved protected questions require exactly one item")
+            raise invalid_argument("Ask exactly one saved protected question at a time.", field="questions")
         return self
 
 
@@ -336,7 +340,7 @@ class SessionFileReadArguments(ToolArguments):
     @model_validator(mode="after")
     def session_target_requires_session_root(self) -> SessionFileReadArguments:
         if self.session_id is not None and self.root != "session":
-            raise ValueError("session_id requires root=session")
+            raise invalid_argument("Use the session files root when providing session_id.", field="session_id")
         return self
 
 
@@ -350,9 +354,9 @@ class ElevatedArguments(ToolArguments):
     @model_validator(mode="after")
     def valid_elevation(self):
         if self.sudo_password_ref is not None and not self.elevated:
-            raise ValueError("Sudo reference requires elevated execution")
+            raise invalid_argument("Set elevated=true when providing sudo_password_ref.", field="sudo_password_ref")
         if self.elevated and getattr(self, "root", "workspace") != "workspace":
-            raise ValueError("Elevated access requires the computer root")
+            raise invalid_argument("Elevated access requires the computer root.", field="root")
         return self
 
 
@@ -368,7 +372,7 @@ class ReadArguments(SessionFileReadArguments, ElevatedArguments):
     @model_validator(mode="after")
     def pdf_requires_regular_read(self) -> ReadArguments:
         if self.pdf_pages and (self.elevated or not self.path.lower().endswith(".pdf")):
-            raise ValueError("PDF pages require a non-elevated PDF read")
+            raise invalid_argument("Use pdf_pages only for non-elevated reads of PDF files.", field="pdf_pages")
         self.pdf_pages = sorted(set(self.pdf_pages))
         return self
 
@@ -394,7 +398,7 @@ class ProvideFileArguments(SessionFileReadArguments):
     @model_validator(mode="after")
     def select_source(self) -> ProvideFileArguments:
         if (self.path is None) == (self.paths is None):
-            raise ValueError("provide exactly one of path or paths")
+            raise invalid_argument("Provide exactly one of path or paths.", field="path")
         return self
 
 
@@ -414,7 +418,7 @@ class EditFileArguments(ElevatedArguments):
     @model_validator(mode="after")
     def require_change(self) -> EditFileArguments:
         if self.old_text == self.new_text:
-            raise ValueError("old_text and new_text must differ")
+            raise invalid_argument("newString must differ from oldString.", field="newString")
         return self
 
 
@@ -435,7 +439,7 @@ class ApplyPatchArguments(ToolArguments):
             or not value.startswith("*** Begin Patch\n")
             or value.rstrip("\n").split("\n")[-1] != "*** End Patch"
         ):
-            raise ValueError("patch must use the apply_patch envelope and LF text")
+            raise invalid_argument("Use LF text with *** Begin Patch and *** End Patch on separate boundary lines.", reason="invalid_format")
         return value
 
 
@@ -512,7 +516,7 @@ class ShellRunArguments(ElevatedArguments):
         if protected.intersection(value) or any(
             name.startswith(("DYLD_", "GIT_CONFIG_")) for name in value
         ):
-            raise ValueError("environment contains a protected name")
+            raise invalid_argument("Do not replace host identity or process startup environment variables.")
         return value
 
 class VariableReadArguments(ToolArguments):
@@ -555,7 +559,7 @@ class SecretInputField(ToolArguments):
     @classmethod
     def text_must_not_be_blank(cls, value: str) -> str:
         if not (cleaned := value.strip()):
-            raise ValueError("input text must not be blank")
+            raise invalid_argument("Use non-blank input text.")
         return cleaned
 
 
@@ -566,11 +570,11 @@ class SecretInputArguments(ToolArguments):
     def names_are_unique(self) -> SecretInputArguments:
         names = [item.name for item in self.inputs]
         if len(names) != len(set(names)):
-            raise ValueError("input names must be unique")
+            raise invalid_argument("Use unique input names.", field="inputs")
         if sum(item.administrator for item in self.inputs) > 1 or any(
             item.administrator and not item.masked for item in self.inputs
         ):
-            raise ValueError("administrator input requires one masked field")
+            raise invalid_argument("Use at most one administrator input and keep it masked.", field="inputs")
         return self
 
 
@@ -638,7 +642,7 @@ class JinaWebFetchArguments(WebFetchArguments):
     @model_validator(mode="after")
     def pdf_pages_use_direct_fetch(self) -> JinaWebFetchArguments:
         if self.pdf_pages and self.model_fields_set - WebFetchArguments.model_fields.keys():
-            raise ValueError("Reader options cannot be combined with direct PDF page rendering")
+            raise invalid_argument("Omit Reader-specific options when requesting direct PDF page rendering.", field="pdf_pages")
         return self
 
 
@@ -690,14 +694,14 @@ class GenerateQrCodeArguments(ToolArguments):
     @model_validator(mode="after")
     def choose_payload(self) -> GenerateQrCodeArguments:
         if (self.content is None) == (self.wifi is None):
-            raise ValueError("provide QR content or Wi-Fi credentials")
+            raise invalid_argument("Provide exactly one of content or wifi.", field="content")
         return self
 
     @field_validator("content")
     @classmethod
     def content_fits_qr_code(cls, value: str | ProtectedText | None) -> str | ProtectedText | None:
         if isinstance(value, str) and len(value.encode("utf-8")) > QR_CODE_MAX_CONTENT_BYTES:
-            raise ValueError("content exceeds the QR code byte limit")
+            raise invalid_argument("Use at most 2000 UTF-8 bytes for QR content.", reason="too_long")
         return value
 
 
@@ -735,7 +739,7 @@ class EditImageArguments(ToolArguments):
     @classmethod
     def unique_images(cls, value: list[FileReference]) -> list[FileReference]:
         if len({(item.root, item.path) for item in value}) != len(value):
-            raise ValueError("images must be unique")
+            raise invalid_argument("Reference each image only once.")
         return value
 
 
@@ -814,7 +818,7 @@ class SessionReadArguments(ToolArguments):
     @model_validator(mode="after")
     def one_position(self) -> SessionReadArguments:
         if self.after_message_id is not None and self.around_message_id is not None:
-            raise ValueError("after_message_id and around_message_id are mutually exclusive")
+            raise invalid_argument("Provide at most one of after_message_id and around_message_id.", field="around_message_id")
         return self
 
 
@@ -845,9 +849,9 @@ class ContextSearchArguments(ToolArguments):
     @model_validator(mode="after")
     def validate_scope(self) -> ContextSearchArguments:
         if self.session_id is not None and self.scope == "memories":
-            raise ValueError("session_id cannot restrict memory search")
+            raise invalid_argument("Use session_id only with scope=all or scope=sessions.", field="session_id")
         if not self.query.strip():
-            raise ValueError("query must not be blank")
+            raise invalid_argument("Use a non-blank query.", field="query")
         return self
 
 
@@ -860,7 +864,7 @@ class MemoryBrowseArguments(ToolArguments):
     @model_validator(mode="after")
     def validate_cursor(self) -> MemoryBrowseArguments:
         if (self.cursor_updated_at is None) != (self.cursor_id is None):
-            raise ValueError("both cursor fields are required together")
+            raise invalid_argument("Provide cursor_updated_at and cursor_id together.", field="cursor_id")
         return self
 
 
@@ -898,25 +902,25 @@ class MemoryWriteArguments(ToolArguments):
             return None
         cleaned = value.strip()
         if not cleaned:
-            raise ValueError("content must not be blank")
+            raise invalid_argument("Use non-blank content.")
         return cleaned
 
     @model_validator(mode="after")
     def memory_id_matches_action(self) -> MemoryWriteArguments:
         if self.action in {"update", "forget"} and self.memory_id is None:
-            raise ValueError("memory_id is required for updates and forgetting")
+            raise invalid_argument("Provide memory_id for update and forget.", field="memory_id", reason="missing")
         if self.action in {"update", "forget"} and self.expected_revision is None:
-            raise ValueError("expected_revision is required for updates and forgetting")
+            raise invalid_argument("Provide expected_revision for update and forget.", field="expected_revision", reason="missing")
         if self.action == "create":
             self.memory_id = None
             self.expected_revision = None
         if self.action in {"create", "update"} and (
             self.content is None or self.category is None
         ):
-            raise ValueError("content and category are required for creates and updates")
+            raise invalid_argument("Provide content and category for create and update.", field="content" if self.content is None else "category", reason="missing")
         if self.action == "forget":
             if self.pin:
-                raise ValueError("pin is not allowed for forgetting")
+                raise invalid_argument("Omit pin or set it to false for forget.", field="pin")
             self.content = None
             self.category = None
         return self
@@ -952,13 +956,13 @@ class MemoryRetrieveArguments(ToolArguments):
     @model_validator(mode="after")
     def query_matches_mode(self) -> MemoryRetrieveArguments:
         if self.mode == "search" and self.query is None:
-            raise ValueError("query is required for search mode")
+            raise invalid_argument("Provide query for mode=search.", field="query", reason="missing")
         if self.mode == "browse" and self.query is not None:
-            raise ValueError("query is not allowed for browse mode")
+            raise invalid_argument("Omit query for mode=browse.", field="query")
         if (self.cursor_updated_at is None) != (self.cursor_id is None):
-            raise ValueError("both cursor fields are required together")
+            raise invalid_argument("Provide cursor_updated_at and cursor_id together.", field="cursor_id")
         if self.mode == "search" and self.cursor_updated_at is not None:
-            raise ValueError("cursor is only allowed for browse mode")
+            raise invalid_argument("Use cursors only for mode=browse.", field="cursor_updated_at")
         return self
 
 
@@ -981,20 +985,23 @@ class UpdateAgentIdentityArguments(ToolArguments):
     @classmethod
     def validate_display_name(cls, value: str | None) -> str | None:
         if value is None:
-            raise ValueError("display_name must not be null")
-        return normalize_agent_display_name(value)
+            raise invalid_argument("Omit display_name to preserve it; do not send null.")
+        try:
+            return normalize_agent_display_name(value)
+        except ValueError as exc:
+            raise invalid_argument("Use a non-blank display name of at most 80 characters without control characters.") from exc
 
     @field_validator("instructions")
     @classmethod
     def normalize_instructions(cls, value: str | None) -> str | None:
         if value is None:
-            raise ValueError("instructions must not be null")
+            raise invalid_argument("Omit instructions to preserve them; do not send null.")
         return value.strip()
 
     @model_validator(mode="after")
     def require_change(self) -> UpdateAgentIdentityArguments:
         if self.display_name is None and self.instructions is None and self.set_as_default is None:
-            raise ValueError("at least one identity field is required")
+            raise invalid_argument("Provide display_name, instructions or set_as_default.", reason="missing")
         return self
 
 
@@ -1035,7 +1042,7 @@ class UpdateUserProfileArguments(ToolArguments):
         if value is None:
             return None
         if not (cleaned := value.strip()):
-            raise ValueError("profile values must not be blank")
+            raise invalid_argument("Use non-blank profile values.")
         return cleaned
 
     @model_validator(mode="after")
@@ -1050,7 +1057,7 @@ class UpdateUserProfileArguments(ToolArguments):
                 "primary_residence",
             }
         ):
-            raise ValueError("at least one profile field is required")
+            raise invalid_argument("Provide at least one profile field to update.", reason="missing")
         return self
 
 
@@ -1069,37 +1076,37 @@ class PersonalSettingsArguments(ToolArguments):
     def validate_operation(self) -> PersonalSettingsArguments:
         if self.action == "list":
             if self.changes is not None:
-                raise PydanticCustomError("personal_settings_invalid", "Changes are not allowed for list", {"field": "changes"})
+                raise invalid_argument("Omit changes for list.", field="changes")
             if self.integration_id is not None:
-                raise PydanticCustomError("personal_settings_invalid", "Integration IDs are not allowed for list", {"field": "integration_id"})
+                raise invalid_argument("Omit integration_id for list.", field="integration_id")
         elif self.area is None:
-            raise PydanticCustomError("personal_settings_invalid", "Area is required", {"field": "area"})
+            raise invalid_argument("Provide area for this action.", field="area", reason="missing")
         elif self.action in {"create", "delete"} and self.area not in {"integrations", "variables"}:
-            raise ValueError("only integrations and variables can be created or deleted")
+            raise invalid_argument("Use create and delete only for integrations or variables.", field="area")
         elif self.action in {"create", "update"} and not self.changes:
-            raise PydanticCustomError("personal_settings_invalid", "Changes are required", {"field": "changes"})
+            raise invalid_argument("Provide non-empty changes for create and update.", field="changes", reason="missing")
         elif self.action in {"get", "delete"} and self.changes is not None:
-            raise PydanticCustomError("personal_settings_invalid", "Changes are not allowed", {"field": "changes"})
+            raise invalid_argument("Omit changes for get and delete.", field="changes")
         if self.integration_id is not None and self.area != "integrations":
-            raise ValueError("integration_id requires the integrations area")
+            raise invalid_argument("Use integration_id only with area=integrations.", field="integration_id")
         if self.area == "integrations" and self.action in {"update", "delete"} and self.integration_id is None and self.adapter_type != "search_selection":
-            raise ValueError("integration_id is required")
+            raise invalid_argument("Provide integration_id for integration updates and deletion.", field="integration_id", reason="missing")
         if self.adapter_type == "search_selection" and self.action not in {"get", "update"}:
-            raise ValueError("search selection can only be read or updated")
+            raise invalid_argument("Use get or update for search_selection.", field="action")
         if self.adapter_type == "caldav_defaults" and (self.action not in {"get", "update"} or self.integration_id is None):
-            raise ValueError("CalDAV defaults require an integration")
+            raise invalid_argument("Use get or update with integration_id for caldav_defaults.", field="integration_id")
         if self.action == "create" and (self.integration_id is not None or self.variable_id is not None):
-            raise ValueError("integration_id is assigned by the server")
+            raise invalid_argument("Omit integration_id and variable_id for create; the server assigns IDs.", field="integration_id" if self.integration_id is not None else "variable_id")
         if self.adapter_type is not None and self.area != "integrations":
-            raise ValueError("adapter_type requires integrations")
+            raise invalid_argument("Use adapter_type only with area=integrations.", field="adapter_type")
         if self.area == "integrations" and self.action == "create" and self.adapter_type is None:
-            raise ValueError("adapter_type is required")
+            raise invalid_argument("Provide adapter_type when creating an integration.", field="adapter_type", reason="missing")
         if self.variable_id is not None and self.area != "variables":
-            raise ValueError("variable_id requires variables")
+            raise invalid_argument("Use variable_id only with area=variables.", field="variable_id")
         if self.area == "variables" and self.action in {"update", "delete"} and self.variable_id is None:
-            raise ValueError("variable_id is required")
+            raise invalid_argument("Provide variable_id for variable updates and deletion.", field="variable_id", reason="missing")
         if self.model_scope != "current_model" and self.area != "user_profile":
-            raise ValueError("model_scope applies only to the user profile")
+            raise invalid_argument("Use model_scope only with area=user_profile.", field="model_scope")
         return self
 
 
@@ -1113,7 +1120,7 @@ class SaveSkillArguments(ToolArguments):
     @model_validator(mode="after")
     def require_update_revision(self) -> SaveSkillArguments:
         if (self.skill_id is None) != (self.expected_revision is None):
-            raise ValueError("skill_id and expected_revision must be supplied together")
+            raise invalid_argument("Provide skill_id and expected_revision together for updates; omit both for create.", field="expected_revision")
         return self
 
 
@@ -1151,7 +1158,7 @@ class AutomationScheduleArguments(ToolArguments):
         if value is None:
             return None
         if not (cleaned := value.strip()):
-            raise ValueError("schedule value must not be blank")
+            raise invalid_argument("Use non-blank schedule values.")
         return cleaned
 
     @model_validator(mode="after")
@@ -1159,20 +1166,21 @@ class AutomationScheduleArguments(ToolArguments):
         if self.valid_until is not None and (
             self.valid_until.tzinfo is None or self.valid_until.utcoffset() is None
         ):
-            raise ValueError("valid_until must be timezone-aware")
+            raise invalid_argument("Include a timezone offset in valid_until.", field="valid_until")
         if self.run_at is None:
             if self.cron is None or self.timezone is None:
-                raise ValueError("cron and timezone are required together")
-            next_run_at(self.cron, self.timezone, datetime.now(UTC))
+                raise invalid_argument("Provide cron and timezone together.", field="cron" if self.cron is None else "timezone", reason="missing")
+            try:
+                next_run_at(self.cron, self.timezone, datetime.now(UTC))
+            except AutomationError as exc:
+                raise invalid_argument("Use a valid five-field cron expression and IANA timezone with a future occurrence.", field=exc.field) from exc
         elif (
             self.cron is not None
             or self.valid_until is not None
             or self.run_at.tzinfo is None
             or self.run_at.utcoffset() is None
         ):
-            raise ValueError(
-                "run_at must be timezone-aware and cannot use recurrence fields"
-            )
+            raise invalid_argument("Include a timezone offset in run_at and omit cron and valid_until.", field="run_at")
         else:
             self.timezone = None
         return self
@@ -1194,7 +1202,7 @@ class AutomationDefinitionArguments(ToolArguments):
     @classmethod
     def normalize_automation_text(cls, value: str) -> str:
         if not (cleaned := value.strip()):
-            raise ValueError("automation text must not be blank")
+            raise invalid_argument("Use non-blank automation text.")
         return cleaned
 
     @model_validator(mode="after")
@@ -1206,7 +1214,7 @@ class AutomationDefinitionArguments(ToolArguments):
             for item in self.schedules
         ]
         if len(keys) != len(set(keys)):
-            raise ValueError("automation schedules must be unique")
+            raise invalid_argument("Use unique automation schedules.", field="schedules")
         return self
 
 

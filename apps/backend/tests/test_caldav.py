@@ -1336,8 +1336,8 @@ async def test_task_mutation_rejects_invalid_or_wrong_binding_tokens() -> None:
         context,
     )
 
-    assert invalid.metadata == {"errorCode": "tool.invalidArguments"}
-    assert wrong_binding.metadata == {"errorCode": "tool.invalidArguments"}
+    assert invalid.metadata == {"errorCode": "integration.staleReference"}
+    assert wrong_binding.metadata == {"errorCode": "integration.staleReference"}
 
 
 def test_timed_event_schema_requires_aware_datetimes() -> None:

@@ -228,7 +228,11 @@ class FilesystemSearch:
         else:
             return_code, truncated = await self._run(path, arguments, b"\n", consume)
         if return_code == 2 and not truncated:
-            raise AgentError("request.invalid", "Invalid grep pattern")
+            raise AgentError.invalid_arguments(
+                "Use a valid ripgrep regular expression and include glob.",
+                field="pattern",
+                reason="invalid_format",
+            )
         if return_code not in {0, 1} and not truncated:
             raise AgentError("operation.failed", "Grep search failed")
         if binary:
