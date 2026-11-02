@@ -45,7 +45,8 @@ describe('auth store', () => {
     expect(auth.authenticated).toBe(true)
     expect(auth.userId).toBe('user-1')
     expect(auth.isAdmin).toBe(true)
-    expect(api.get).toHaveBeenCalledOnce()
+    await useChatStore().outboxLoadPromise
+    expect(api.get.mock.calls.map(([url]) => url)).toEqual(['/auth/status', '/sessions/message-queue'])
     expect(api.get).toHaveBeenCalledWith('/auth/status')
   })
 

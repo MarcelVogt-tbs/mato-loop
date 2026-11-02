@@ -10,7 +10,7 @@ export function retryAvailableForMessage(message, messages = [], running = false
 }
 
 export function withQueuedTranscriptMessages(messages, queuedMessages, sendingId, pendingId) {
-  const sentIds = new Set(messages.map((message) => message.id))
+  const sentIds = new Set(messages.flatMap((message) => [message.id, message.requestId]))
   const pausedEntries = new Map(queuedMessages.filter((entry) => entry.paused)
     .map((entry) => [entry.sentMessageId || entry.id, entry.id]))
   return [...messages.map((message) => pausedEntries.has(message.id)
@@ -21,6 +21,8 @@ export function withQueuedTranscriptMessages(messages, queuedMessages, sendingId
       outboxId: entry.id,
       role: 'user',
       content: entry.content,
+      commandPrompt: entry.commandPrompt,
+      sourceType: entry.sourceType,
       attachments: entry.attachments,
       deliveryStatus: entry.id === sendingId || entry.id === pendingId ? 'sending' : entry.paused ? 'failed' : 'queued'
     }))]

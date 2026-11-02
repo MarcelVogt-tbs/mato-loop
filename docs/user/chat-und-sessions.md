@@ -54,7 +54,9 @@ Einrichtung, Diffs, Branches und getrennte Arbeitskopien stehen unter [Git und W
 
 Die bisherige Antwort mit ihren Aktivitäten bleibt oberhalb deiner Direktnachricht stehen. Die Fortsetzung erscheint darunter als eigener Antwortabschnitt, auch nach dem Neuladen. Bereits laufende Tool-Aktionen bleiben ihrem ursprünglichen Abschnitt zugeordnet; der reservierte Platz unter deiner Nachricht bleibt bis zum neuen Antwortabschnitt erhalten. Technisch bleibt es derselbe Lauf.
 
-**Nach dem Lauf senden** reiht eine Nachricht für einen anschließenden Auftrag ein. Der Browser-Postausgang erhält Nachrichten und Anhänge in Reihenfolge. Fehlerhafte Sendungen bleiben für einen erneuten Versuch oder die Übernahme in den Entwurf erhalten. Abmelden oder Kontowechsel entfernt den bisherigen Postausgang dieses Browsers.
+**Nach dem Lauf senden** reiht eine Nachricht für einen anschließenden Auftrag ein. Bis zur Serverbestätigung sichert der Browser Text und Anhänge lokal. Danach übernimmt MatoLoop die gespeicherte Queue: Angenommene Nachrichten warten in Reihenfolge auf das Ende des laufenden Auftrags, auch bei offenen Freigaben oder Rückfragen. Sie bleiben nach Schließen des Browsers und einem Backend-Neustart erhalten. Abmelden oder Kontowechsel entfernt nur den lokalen Postausgang, nicht bereits angenommene Aufträge.
+
+Fehlerhafte Sendungen bleiben für einen erneuten Versuch oder die Übernahme in den Entwurf erhalten. Entferne einen vorgemerkten Auftrag vor seinem Start, wenn er nicht mehr ausgeführt werden soll. Hat er bereits begonnen, verwende den Stoppknopf. Änderst du Computer oder Arbeitsordner, hält die Queue betroffene Nachrichten an; übernimm sie in den Entwurf, prüfe den neuen Kontext und sende erneut.
 
 Der Stoppknopf beendet den Agentenlauf. Ein Browserdisconnect beendet ihn nicht; beim Wiederverbinden lädt MatoLoop den gespeicherten Zustand nach.
 

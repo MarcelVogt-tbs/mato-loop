@@ -48,7 +48,7 @@
             <section v-if="repository" aria-labelledby="git-actions-title">
               <h2 id="git-actions-title" class="text-subtitle2 q-mt-none q-mb-sm">Aktionen</h2>
               <q-card flat bordered class="app-surface overflow-hidden">
-                <GitActionList :disabled="saving || !online" :target-branch="targetBranch" @refresh="refreshCommands" />
+                <GitActionList :disabled="saving || !online" :target-branch="targetBranch" :auto-merge="autoMerge" @refresh="refreshCommands" />
               </q-card>
             </section>
             <section v-if="repository?.repository" aria-labelledby="git-settings-title">
@@ -142,6 +142,8 @@ const projectDefaults = computed(() => project.value?.defaultExecutionAgentId ==
 const remote = computed(() => boundContext.value && Object.hasOwn(binding.value, 'remote')
   ? binding.value.remote : projectDefaults.value?.gitRemote || repository.value?.defaultRemote)
 const targetBranch = computed(() => (boundContext.value ? binding.value.targetBranch : null) || projectDefaults.value?.gitTargetBranch || repository.value?.defaultBranch)
+const autoMerge = computed(() => repository.value?.worktrees?.some(item => item.path === repository.value.repository && !item.main
+  && item.path !== projectDefaults.value?.defaultCurrentDirectory))
 const activeRun = computed(() => Boolean(chat.running || chat.runId || chat.current?.activeRun))
 const busy = computed(() => saving.value || commands.busy)
 const remoteChanged = computed(() => boundContext.value && binding.value.remoteIdentity

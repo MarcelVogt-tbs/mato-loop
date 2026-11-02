@@ -194,8 +194,9 @@ Merge and PR commands initially require a managed worktree. Review also works in
 local repository; sync requires a configured or unambiguous remote and target.
 Review checks correctness, security and overengineering and reports only; it never repairs
 project files. Temporary check files outside the project remain subject to normal permissions.
-Merge and PR commands stop on conflicts, dirty trees, findings or failed checks without
-repairing them. Necessary merge commits are authorized by the merge/PR request;
+Merge resolves clear conflicts and integration findings in the task worktree and asks
+about unresolved intent; PR stops on conflicts or findings without repairing them.
+Dirty trees and unresolved failed checks block either operation. Necessary merge commits are authorized by the merge/PR request;
 pending working changes are committed only by an explicit commit request or the leading
 `--commit` option on merge/PR. That option reuses the standalone commit instructions,
 limited to selected task changes in the session checkout. Unclear selections require a
@@ -243,6 +244,39 @@ the first remote fetch.
 
 ## Agent flow contract
 
+The worktree-only **Nach Umsetzung abschließen** switch makes the frontend persist the
+next normal Build message and one `/git-finish` follow-up together in its offline buffer,
+then submit both through the [durable message queue](harness.md#message-queue). The backend
+does not generate Git follow-ups. The original request remains ordinary text. Plan,
+continuations, prepared answers and other commands do not consume the switch. `/git-finish`
+is also available as a normal command in the palette and Git app. Automatic follow-ups
+carry the generic predecessor reference and visible/model-facing follow-up provenance.
+This does not constrain the generic queue or make Plan/Build coding-only profiles.
+
+The single follow-up shares Review, Commit and Merge instruction cores: review the completed
+implementation, correct findings, recheck, commit task changes, and merge locally.
+Prompts require resolving findings and failed checks before proceeding, and asking for necessary decisions;
+questions and analysis do not authorize Git effects. There is no completion tool or phase
+progression. Standalone review remains report-only. Normal admission, permissions, profile
+selection and error handling apply; dispatch revalidates the computer, checkout, branch and
+target. Failed/cancelled predecessors pause the follow-up, including after restart. Pending
+messages survive restart, but an already-started run and its Git effects are never replayed
+automatically.
+
+Git action buttons are shortcuts to the same message queue, not direct run starters. Active
+runs and pending messages do not disable them. Draft text and attachments remain untouched.
+Workspace management retains its separate admission checks and busy state.
+
+There is no host merge queue, target reservation or workspace-occupancy inventory in model
+context. A stable instruction says that the workspace may be shared, not that another worker
+is active. When tools show ongoing work or a temporary Git lock, the model waits between
+checks and resumes on the current state. Dirty files alone are not evidence of active work.
+If the target advances, the model incorporates it and repeats review/checks before a
+fast-forward-only update through the original checkout. Clear conflicts and integration
+findings are repaired in the task worktree; unresolved intent requires options and a
+recommendation. Git effects retain normal shell authorization and run cancellation.
+Git locks and rechecks do not provide guaranteed mutual exclusion against external writers.
+
 Commands enter the existing AgentRuntime through the ordinary message path. The
 canonical user message retains the short command. Host-resolved task instructions
 and Git context are snapshotted in its private runtime metadata and projected only
@@ -256,8 +290,9 @@ also snapshot their composed task instructions plus arguments as `prompt`. Git r
 the same commit core and commit-message rules for standalone Commit and optional
 pre-commit steps; review instructions are shared by Review, Merge and PR. Prompt
 composition removes the option token and avoids conflicting commit prohibitions.
-This adds no backend Git execution or separate run. The message API
-exposes only that snapshot as `commandPrompt` for the user bubble; execution wrappers
+This adds no backend Git execution. The message API
+exposes that snapshot as `commandPrompt` for user-selected commands and a German step
+label for automatic follow-ups; execution wrappers
 and resolved runtime context remain private. The canonical message content retains
 the original invocation for undo and retry. Older messages without a prompt snapshot
 keep showing their invocation rather than rebuilding it from the current catalog.
@@ -268,15 +303,15 @@ or tooling is reported, not supplied by a new implicit integration. Project inst
 continue to govern commit conventions and checks. Review and publication safeguards
 are agent instructions plus the existing tool authorization; they are not a Git sandbox
 or a deterministic proof of review quality. The task explicitly requires non-force
-pushes of the reviewed commit, re-review after target advancement, stopping on conflicts
-or failed checks, and preservation of unrelated changes. Admission reserves only affected
-checkouts: commit, push and PR commands reserve the current checkout; merge and sync also
-reserve the original checkout. Shared Git metadata alone does not block work in independent
+pushes of the reviewed commit, re-review after target advancement, resolution of in-scope
+merge findings and failed checks, and preservation of unrelated changes. Admission reserves
+only affected checkouts: commit, push, PR and merge commands reserve the current checkout;
+sync also reserves the original checkout. Shared Git metadata alone does not block work in independent
 worktrees. Init, remote configuration and worktree management retain repository-wide
 protection using saved command resources, even if the live session selection changes.
 Checks run under the existing user-row lock until commit, include nested
 directories, and also block ordinary runs overlapping an active mutation command.
-Queued runs and runs waiting for approval or input remain active. Conflicts report the
+Queued runs and runs waiting for approval or input remain active. Admission conflicts report the
 blocking session's ID, title and run status as structured error parameters; the UI and
 Telegram explain how to finish or stop that run before retrying. External processes can
 still change the repository and must be inspected by the agent.

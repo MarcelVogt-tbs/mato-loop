@@ -25,7 +25,7 @@ def test_private_history_instruction_is_model_bound_not_session_bound() -> None:
     prompt = general_system_prompt(session, model_trust_level=TrustLevel.PUBLIC, include_local_time=False)
     session.trust_level = "public"
     assert general_system_prompt(session, model_trust_level=TrustLevel.PUBLIC, include_local_time=False) == prompt
-    assert "Do not include them in proactive discovery." in prompt
+    assert "No other proactive discovery." in prompt
 
 
 def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:

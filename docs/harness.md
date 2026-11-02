@@ -14,6 +14,42 @@ The backend runs **one worker** with one process-local run/approval coordinator.
 
 The [run-continuation contract](run-continuations.md) defines direct input, pending-interaction replacement and provider replay. Title generation is independent, tool-free and must not block the agent. Manual naming wins over a pending generated title.
 
+`BackgroundProcessing` shares lifecycle and error handling for the message queue,
+automations and Dreaming. Each processor has an independent loop and database sessions;
+long-running Dreaming work cannot hold up message delivery. Their existing service and
+persistence contracts remain separate; this is not a new job framework.
+
+### Message queue
+
+The browser submits ordinary messages through the existing message endpoints with
+`enqueue: true`. Without this opt-in, API and messaging callers retain direct admission.
+Pending requests and upload bytes persist separately from canonical messages and active runs;
+they are not model context. The queue is independent of task type and profile and has no
+scheduled delivery times, workflow phases or completion tools.
+
+Per-session identity positions define FIFO order. Delivery uses ordinary owner/session locks
+and `AgentRuntime.start()`: consuming an entry and creating its message/run commit together.
+The client request UUID deduplicates pending requests and admitted runs. Owner-scoped
+change events and initial/reconnect loads reconcile the existing queue UI; IndexedDB remains only the
+pre-acknowledgment/offline buffer, including legacy entries and their uploads. Accepted
+requests continue without an open browser. Logout clears the local buffer, not accepted
+backend requests. Session deletion cascades pending requests and uploads.
+
+Active runs, approvals and questions delay the next delivery. Admission conflicts wait;
+other admission failures pause the head entry. Changing the selected computer/directory
+requires restoring and resending that entry. An optional predecessor ID requires a completed
+run in the same session; failed/cancelled predecessors pause dependent requests rather than
+authorizing their effects. Resuming does not bypass this check. Removing a pending request
+also removes its pending dependent follow-up; removal loses the race once a run exists.
+The frontend uses the optional `after_run_id` message field for an explicit opt-in
+[`/git-finish` follow-up](commands.md#agent-flow-contract), saving both messages together
+locally before sending either. The backend generates no Git follow-ups. Queued commands
+capture their Git binding on admission and revalidate it at dispatch.
+Session admissions run independently, including messages arriving while another admission
+waits on a computer. At most one admission per session is in flight; shared background
+shutdown cancels these tasks together with the processors. Ordinary database locks remain
+the authority for admission and FIFO order.
+
 ## Profile Budgets
 
 `maxToolCalls` accepts a strict positive integer or `null` for unlimited. Booleans, zero, strings and fractions are invalid. A normal run freezes the resolved limit in its input message's private `_matoloop.maxToolCallsByRun`, keyed by run UUID. Retry adds its current limit without rewriting the failed run's snapshot; legacy single-value snapshots remain readable.
@@ -115,6 +151,13 @@ The implementation owners are `agent/prompts.py` (system parts/reminders), `agen
 Regression tests in normal backend CI protect [serialized prefixes across tool rounds and live-to-persisted follow-ups](../apps/backend/tests/test_context_manager_contract.py), [argument serialization](../apps/backend/tests/test_provider_conversion.py), [reasoning scope](../apps/backend/tests/test_provider_reasoning.py), [preparation and adapter-local routing](../apps/backend/tests/test_provider_service.py), [privacy scan reuse and isolation](../apps/backend/tests/test_pseudonymization.py), [cross-run session keys and budget finalization](../apps/backend/tests/test_runtime_budget.py), and [repository-discovery request counts and live permission checks](../apps/backend/tests/test_execution_tools.py).
 
 Run affected tests when changing these boundaries. Under unchanged authorization and context constraints, compare the retained serialized prefix and schemas without normalizing away differences; intentional invalidation needs an explicit reason. Prefer deterministic prefix and scan/request-count assertions to provider latency or cache-hit thresholds. The [dated session-cache evaluation](session-cache-evaluation-2026-10.md) records the live serialization regression and measured fix, not current performance guarantees or a new validation run.
+
+Host/profile prompt changes intentionally invalidate older prefixes. Automatic follow-ups
+append ordinary turns with host provenance. Workspace occupancy is not injected or inferred
+from stored run statuses or file timestamps. Legacy private occupancy metadata is ignored,
+intentionally removing that projection from retained prefixes. A stable instruction requires
+preserving concurrent changes, checking current files and waiting on tool-confirmed temporary
+blockers; it grants no access to other conversations.
 
 ## Typed Resource Matchers
 

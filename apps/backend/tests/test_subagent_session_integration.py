@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+import json
+from contextlib import asynccontextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -37,6 +38,8 @@ from mato_loop_backend.models import (
     Message,
     PermissionGrant,
     Project,
+    QueuedAttachment,
+    QueuedMessage,
     UserAccount,
 )
 from mato_loop_backend.security import require_user
@@ -103,6 +106,65 @@ async def test_preloaded_text_message_can_pass_voice_transcription(tree):
     _, run, message = tree.records[0]
     await AgentRuntime._transcribe_voice_messages(tree.db, run)
     assert message.attachments == []
+
+
+async def test_message_queue_persists_deduplicates_and_dispatches_fifo_with_uploads(tree, client, monkeypatch):
+    from mato_loop_backend.sessions import message_queue
+
+    db = tree.db
+    session, _, _ = tree.records[0]
+    request_id, second_id = uuid4(), uuid4()
+    response = await client.post(f"/api/sessions/{session.id}/messages/with-attachments", data={"payload": json.dumps({
+        "content": "First", "run_id": str(request_id), "enqueue": True,
+    })}, files=[("attachments", ("note.txt", b"saved upload", "text/plain"))])
+    response.raise_for_status()
+    followup = await client.post(f"/api/sessions/{session.id}/messages", json={
+        "content": "Second", "run_id": str(second_id), "enqueue": True, "after_run_id": str(request_id),
+    })
+    followup.raise_for_status()
+    duplicate = await client.post(f"/api/sessions/{session.id}/messages", json={"content": "First", "run_id": str(request_id), "enqueue": True})
+    duplicate.raise_for_status()
+    listing = (await client.get("/api/sessions/message-queue")).json()["items"]
+    assert [item["id"] for item in listing] == [str(request_id), str(second_id)]
+    assert await message_queue.list_entries(db, tree.foreign.id) == []
+    download = await client.get(listing[0]["attachments"][0]["url"])
+    assert download.content == b"saved upload"
+
+    async def accept(db, session, content, **kwargs):
+        db.add(AgentRun(id=kwargs["run_id"], session_id=session.id, status="completed"))
+        await db.commit()
+
+    start = AsyncMock(side_effect=accept)
+    monkeypatch.setattr(AgentRuntime, "start", start)
+    monkeypatch.setattr(message_queue, "AsyncSessionFactory", lambda: nullcontext(db))
+    db.expunge_all()
+    await message_queue.deliver_next(session.id)
+    assert (start.await_args.args[2], start.await_args.kwargs["attachments"][0].data) == ("First", b"saved upload")
+    assert await db.get(QueuedAttachment, (request_id, 0)) is None
+    assert [item["id"] for item in await message_queue.list_entries(db, tree.user.id)] == [str(second_id)]
+
+
+@pytest.mark.parametrize("blocker", ["workspace", "predecessor"])
+async def test_message_queue_pauses_unsafe_followups_without_losing_the_entry(tree, monkeypatch, blocker):
+    from mato_loop_backend.sessions import message_queue
+
+    db = tree.db
+    session, predecessor, _ = tree.records[0]
+    request_id = uuid4()
+    await message_queue.enqueue(db, session, request_id, {"content": "Follow up"}, after_run_id=predecessor.id)
+    if blocker == "workspace":
+        session.current_directory = "/changed"
+    else:
+        predecessor.status = "failed"
+    await db.commit()
+    start = AsyncMock()
+    monkeypatch.setattr(AgentRuntime, "start", start)
+    monkeypatch.setattr(message_queue, "AsyncSessionFactory", lambda: nullcontext(db))
+    await message_queue.deliver_next(session.id)
+    entry = await db.get(QueuedMessage, request_id)
+    assert (entry.paused, entry.error_code, start.await_count) == (
+        True, "session.queueContextChanged" if blocker == "workspace" else "session.queuePredecessorFailed", 0,
+    )
 
 
 async def test_database_spawn_constraints_and_message_relationships(tree):

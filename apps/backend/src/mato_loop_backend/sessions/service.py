@@ -1125,6 +1125,7 @@ async def create_session(
                     agent_profile_id=item.agent_profile_id,
                     trust_level=trust_level.value,
                 ))
+    request_id = payload.run_id
     await db.flush()
     try:
         await asyncio.to_thread(session_storage.provision, item_id, item_project_id, user_id=user.id)
@@ -1135,7 +1136,7 @@ async def create_session(
                 db,
                 item,
                 content,
-                run_id=payload.run_id,
+                run_id=request_id,
                 attachments=attachments,
                 active_file=await active_file_payload(payload.active_file, item, db),
             )
@@ -1319,6 +1320,22 @@ async def continue_run(
     return {"message": message_serializer(message), "runId": str(run_id)}
 
 
+async def start_message(db: AsyncSession, item: ChatSession, content: str, profile_id: UUID, **runtime_options) -> AgentRun:
+    await validate_agent_profile(db, item.user_id, profile_id)
+    ai = apply_session_ai(await load_effective_ai(db, item.user_id), item, profile_id)
+    if await db.scalar(select(Message.id).where(Message.session_id == item.id).limit(1)) is None:
+        directory, directory_policy = await validate_execution_preferences(
+            db, item.user_id, item.preferred_execution_agent_id, item.current_directory, defer_unavailable=True,
+        )
+        model = model_for_session(ai, ai.default_model_id)
+        provider = provider_for_session(ai, model)
+        await add_directory_grant(
+            db, item.id, item.preferred_execution_agent_id, directory, directory_policy,
+            profile_id, effective_model_trust(provider, model).value if provider and model else None,
+        )
+    return await AgentRuntime.start(db, item, content, **runtime_options)
+
+
 async def send_message(
     session_id: UUID,
     payload,
@@ -1342,6 +1359,20 @@ async def send_message(
     content = payload.content.strip()
     if not content and not attachments:
         raise SessionServiceError(422, "validation.required", field="content")
+    after_run_id = getattr(payload, "after_run_id", None)
+    if after_run_id is not None and not getattr(payload, "enqueue", False):
+        raise SessionServiceError(422, "validation.invalid", field="after_run_id")
+    if getattr(payload, "enqueue", False):
+        from mato_loop_backend.sessions.message_queue import enqueue
+
+        request_id = payload.run_id or uuid4()
+        await enqueue(db, item, request_id, {
+            "content": content,
+            **({"agent_profile_id": str(payload.agent_profile_id)} if payload.agent_profile_id else {}),
+            "active_file": await active_file_payload(payload.active_file, item, db),
+        }, attachments, after_run_id=after_run_id)
+        await db.commit()
+        return {"queued": True, "runId": str(request_id)}
     active = await db.scalar(
         select(AgentRun).where(
             AgentRun.session_id == session_id,
@@ -1356,24 +1387,12 @@ async def send_message(
         if "agent_profile_id" in payload.model_fields_set
         else item.agent_profile_id
     )
-    await validate_agent_profile(db, user.id, requested_profile)
-    ai = apply_session_ai(await load_effective_ai(db, user.id), item, requested_profile)
-    model_id = ai.default_model_id
-    if await db.scalar(select(Message.id).where(Message.session_id == session_id).limit(1)) is None:
-        directory, directory_policy = await validate_execution_preferences(
-            db, user.id, item.preferred_execution_agent_id, item.current_directory, defer_unavailable=True,
-        )
-        model = model_for_session(ai, model_id)
-        provider = provider_for_session(ai, model)
-        await add_directory_grant(
-            db, session_id, item.preferred_execution_agent_id, directory, directory_policy,
-            requested_profile, effective_model_trust(provider, model).value if provider and model else None,
-        )
     try:
-        run = await AgentRuntime.start(
+        run = await start_message(
             db,
             item,
             content,
+            requested_profile,
             run_id=payload.run_id,
             attachments=attachments,
             active_file=await active_file_payload(payload.active_file, item, db),

@@ -181,6 +181,8 @@ class AgentRuntime:
         source_type: str = "app",
         source_provider: str | None = None,
         source_endpoint_id: UUID | None = None,
+        message_source: str | None = None,
+        command_context_snapshot: dict | None = None,
     ) -> AgentRun:
         if (source_type, source_provider, source_endpoint_id) != ("app", None, None) and (
             source_type != "endpoint"
@@ -231,6 +233,14 @@ class AgentRuntime:
             agent_profile_id_override = command_profile_id(
                 selected_command, agent_profile_id_override or chat_session.agent_profile_id,
             )
+        if command_context_snapshot is not None:
+            from mato_loop_backend.sessions.command_contracts import command_context
+            from mato_loop_backend.sessions.git_commands import validate_git_context
+
+            try:
+                validate_git_context(command_context_snapshot, command_context(command_data or {}))
+            except SessionServiceError as exc:
+                raise AgentRunError(exc.code, params=exc.params) from exc
         profile_id = agent_profile_id_override or chat_session.agent_profile_id
         from mato_loop_backend.settings.effective import session_agent_allowed
 
@@ -308,8 +318,10 @@ class AgentRuntime:
             content=content,
             trust_level=trust_level.value,
             provider_data={"_matoloop": {
+                "requestId": str(run_id),
                 "executionAgentId": str(execution_agent.id) if execution_agent else None,
                 **({"codingCommand": command_data} if command_data else {}),
+                **({"source": {"type": message_source}} if message_source else {}),
                 **({"source": {
                     "type": "automationRun", "automationId": str(automation_run.automation_id),
                     "runId": str(automation_run.id), "trigger": automation_run.trigger,

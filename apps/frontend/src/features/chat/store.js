@@ -73,6 +73,7 @@ export const useChatStore = defineStore('chat', {
     pendingOutboxEntry: null,
     outboxLoadVersion: 0,
     outboxLoadPromise: null,
+    serverQueueVersion: 0,
     queueDrainPromise: null,
     queueDrainTimer: null,
     queueSendingEntryId: null,
@@ -129,20 +130,13 @@ export const useChatStore = defineStore('chat', {
       )
     },
     queuedSendReady() {
-      if (!this.outboxLoaded || this.queuedSendPaused) return false
+      if (!this.outboxLoaded) return false
       if (this.loading || this.sessionRequestController || this.stopping) return false
       if (this.historyActionPending || this.sessionSettingsPending > 0) return false
-      if (!this.activeQueuedMessages.length) return false
-      if (this.activeQueuedMessages[0].id === this.pendingOutboxEntry?.id) return false
-      if (this.running || this.runId) {
-        return Boolean(this.current && this.runId
-          && this.runSessionId === this.current.id
-          && this.activeQueuedMessages[0].continuationRunId === this.runId)
-      }
+      const entry = this.activeQueuedMessages.find((item) => !item.serverQueued)
+      if (!entry || entry.paused || entry.id === this.pendingOutboxEntry?.id) return false
       const sessionId = this.current?.id
       if (!sessionId) return this.selectedSessionId === null
-      if (useApprovalStore().forSession(sessionId).length) return false
-      if (useQuestionStore().forSession(sessionId).length) return false
       return true
     }
   },
@@ -232,7 +226,7 @@ export const useChatStore = defineStore('chat', {
         && snapshot.loadVersion === this.outboxLoadVersion
       ) {
         try {
-          await saveChatOutboxEntries(snapshot.entries.map((entry) => toRaw(entry)))
+          await saveChatOutboxEntries(snapshot.entries.filter((entry) => !entry.serverQueued).map((entry) => toRaw(entry)))
         } catch {
           notifyError({}, 'Vorgemerkte Nachrichten konnten nicht wiederhergestellt werden.')
         }

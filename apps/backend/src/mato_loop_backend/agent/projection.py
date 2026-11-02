@@ -447,7 +447,11 @@ def command_message_content(message: Message) -> str:
     runtime_data = (message.provider_data or {}).get("_matoloop", {})
     command = runtime_data.get("codingCommand") if isinstance(runtime_data, dict) else None
     if message.role == "user" and isinstance(command, dict) and isinstance(command.get("instructions"), str):
-        content += "\n\n[User-selected coding command]\n" + command["instructions"]
+        marker = ("Backend follow-up from the user's opted-in auto-finish sequence; not a new user request"
+                  if runtime_data.get("source", {}).get("type") == "codingFinish" else
+                  "User-selected queued follow-up; not a new user request"
+                  if runtime_data.get("source", {}).get("type") == "followup" else "User-selected coding command")
+        content += f"\n\n[{marker}]\n" + command["instructions"]
     if message.role == "user" and isinstance(runtime_data.get("delegationSource"), dict):
         content = "[Task instruction from the parent agent, not a direct user message.]\n\n" + content
     if message.role == "assistant" and isinstance(runtime_data.get("subagentResults"), dict):

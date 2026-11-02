@@ -44,6 +44,7 @@ const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, te
       findCachedSession: vi.fn((id) => sessions.find((session) => session.id === id)),
       fetchSession: vi.fn(),
       refreshSession: vi.fn().mockResolvedValue(),
+      refreshServerQueue: vi.fn().mockResolvedValue(),
       refreshSessions: vi.fn().mockResolvedValue(),
       markSessionRead: vi.fn().mockResolvedValue()
     },

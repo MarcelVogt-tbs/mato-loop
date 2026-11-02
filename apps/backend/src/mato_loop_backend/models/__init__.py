@@ -14,6 +14,8 @@ from mato_loop_backend.models.session import (
     Message,
     MessageAttachment,
     MessageSearchChunk,
+    QueuedAttachment,
+    QueuedMessage,
     TitleGenerationStatus,
     WebSearchPolicy,
 )
@@ -80,6 +82,8 @@ __all__ = [
     "ProjectPlan",
     "ProjectPlanExecution",
     "QuestionRequest",
+    "QueuedAttachment",
+    "QueuedMessage",
     "SettingRecord",
     "TitleGenerationStatus",
     "UserAccount",

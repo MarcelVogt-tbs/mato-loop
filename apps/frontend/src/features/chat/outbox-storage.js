@@ -4,6 +4,8 @@ const STORE_NAME = 'entries'
 
 export function compareChatOutboxEntries(left, right) {
   return Number(Boolean(right.interrupt)) - Number(Boolean(left.interrupt))
+    || Number(Boolean(right.serverQueued)) - Number(Boolean(left.serverQueued))
+    || (left.serverQueued && right.serverQueued ? left.queuePosition - right.queuePosition : 0)
     || left.queuedAt.localeCompare(right.queuedAt)
     || left.id.localeCompare(right.id)
 }
@@ -53,7 +55,7 @@ export async function loadChatOutbox(ownerUserId) {
   return runTransaction('readonly', (store, done) => {
     const request = store.getAll()
     request.onsuccess = () => {
-      // ponytail: queues are small; add an owner index only if this scan becomes measurable.
+      // shortcut: queues are small; add an owner index if this scan becomes measurable.
       done(request.result
         .filter((entry) => entry.ownerUserId === ownerUserId)
         .sort(compareChatOutboxEntries))

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import datetime
 from typing import Any
@@ -12,7 +11,6 @@ from sqlalchemy.orm import selectinload
 import mato_loop_backend.tools.access as tools_access
 from mato_loop_backend.automations import (
     AutomationError,
-    AutomationScheduler,
     AutomationService,
     automation_definition,
     runtime_snapshot,
@@ -460,7 +458,6 @@ async def _run_automation(
             context.session.user_id,
             expected_revision=arguments.expected_revision,
         )
-        asyncio.get_running_loop().call_soon(AutomationScheduler.start)
         return ToolResult.json(
             {
                 "automationId": str(automation.id),

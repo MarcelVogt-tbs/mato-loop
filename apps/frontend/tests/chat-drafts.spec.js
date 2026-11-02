@@ -74,17 +74,20 @@ class EventSourceMock {
 describe('chat drafts', () => {
   beforeEach(async () => {
     await clearChatOutbox('user-1')
+    api.get.mockReset().mockResolvedValue({ data: { items: [] } })
     global.window = { localStorage: createStorage() }
     controlCenterIntegrationIds.add('calendar')
     setActivePinia(createPinia())
     const chat = useChatStore()
     chat.setDraftOwner('user-1')
     await chat.outboxLoadPromise
+    chat.cancelQueueDrain()
     vi.clearAllMocks()
     EventSourceMock.instances = []
   })
 
   afterEach(() => {
+    useChatStore().cancelQueueDrain()
     controlCenterIntegrationIds.delete('calendar')
     vi.useRealTimers()
     delete global.window
@@ -811,23 +814,13 @@ describe('chat drafts', () => {
   })
 
   it('sends attachments without message text', async () => {
-    api.post.mockResolvedValue({
-      data: {
-        message: {
-          id: 'message-document',
-          role: 'user',
-          content: '',
-          attachments: [{ id: 'attachment-document', kind: 'document', mimeType: 'application/pdf' }]
-        },
-        runId: 'run-document'
-      }
-    })
+    api.post.mockResolvedValue({ data: { queued: true } })
     const document = new Blob(['PDF'], { type: 'application/pdf' })
     Object.defineProperty(document, 'name', { value: 'bericht.pdf' })
     const chat = useChatStore()
     chat.current = { id: 'session-1', messages: [] }
     chat.selectedSessionId = 'session-1'
-    vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+    vi.spyOn(chat, 'refreshSession').mockResolvedValue()
     chat.addAttachmentFiles([document])
 
     await chat.send('')
@@ -840,10 +833,11 @@ describe('chat drafts', () => {
     const formData = api.post.mock.calls[0][1]
     expect(JSON.parse(formData.get('payload'))).toMatchObject({
       content: '',
-      run_id: expect.any(String)
+      run_id: expect.any(String),
+      enqueue: true
     })
     expect(formData.getAll('attachments')).toHaveLength(1)
-    expect(chat.current.messages).toEqual([expect.objectContaining({ content: '' })])
+    expect(chat.current.messages).toEqual([])
     expect(chat.activeAttachmentDraft).toEqual([])
   })
 
@@ -1467,7 +1461,8 @@ describe('chat drafts', () => {
     chat.selectedSessionId = 'session-1'
     const watchRun = vi.spyOn(chat, 'watchRun')
 
-    const sending = chat.sendToCurrent('Nachricht an Session 1')
+    const sending = chat.send('Nachricht an Session 1')
+    await vi.waitFor(() => expect(resolveSend).toBeTypeOf('function'))
     await chat.loadSession('session-2')
     resolveSend({
       data: {
@@ -1494,13 +1489,14 @@ describe('chat drafts', () => {
     chat.current = { id: 'session-1', messages: [] }
     chat.selectedSessionId = 'session-1'
 
-    const sending = chat.sendToCurrent('Korrigierte Anfrage')
+    const sending = chat.send('Korrigierte Anfrage')
     await vi.waitFor(() => expect(acceptSend).toBeTypeOf('function'))
     await chat.refreshSession('session-1')
-    acceptSend({ data: {
-      runId: 'follow-up',
-      message: { id: 'correction', role: 'user', content: 'Korrigierte Anfrage' }
-    } })
+    api.get.mockImplementation(async (url) => ({ data: url === '/sessions/message-queue' ? { items: [] } : {
+      id: 'session-1', activeRun: { id: 'follow-up', status: 'running' },
+      messages: [{ id: 'correction', role: 'user', content: 'Korrigierte Anfrage' }]
+    } }))
+    acceptSend({ data: { queued: true } })
     await sending
 
     expect(chat.current.messages.map((message) => message.id)).toEqual(['correction'])
@@ -1555,7 +1551,11 @@ describe('chat drafts', () => {
     }
     chat.selectedSessionId = 'session-1'
 
-    await chat.sendToCurrent('Neue Nachricht')
+    api.get.mockImplementation(async (url) => ({ data: url === '/sessions/message-queue' ? { items: [] } : {
+      ...chat.current, lastMessageAt: '2026-07-24T15:00:00Z', userRequestCount: 4,
+      messages: [{ id: 'message-1', role: 'user', content: 'Neue Nachricht', createdAt: '2026-07-24T15:00:00Z' }]
+    } }))
+    await chat.send('Neue Nachricht')
 
     expect(list.items.map((session) => session.id)).toEqual(['session-1', 'session-2'])
     expect(list.items[0].lastMessageAt).toBe('2026-07-24T15:00:00Z')
@@ -1613,7 +1613,9 @@ describe('chat drafts', () => {
     const chat = useChatStore()
     const watchRun = vi.spyOn(chat, 'watchRun')
 
-    const sending = chat.startSession('Neue Nachricht')
+    await chat.queueMessage('Neue Nachricht')
+    const next = await chat.queueMessage('Danach')
+    const sending = chat.drainOutbox()
     await chat.loadSession('session-2')
     resolveSend({
       data: {
@@ -1628,6 +1630,7 @@ describe('chat drafts', () => {
     expect(chat.current.id).toBe('session-2')
     expect(chat.selectedSessionId).toBe('session-2')
     expect(watchRun).not.toHaveBeenCalled()
+    expect(chat.queuedMessages['new-session'][0].id).toBe(next.id)
   })
 
   it('does not merge a late settings response into another session', async () => {

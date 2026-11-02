@@ -4,7 +4,7 @@ import { absoluteComputerPath } from 'src/features/files/state'
 const ATTACHMENT_KINDS = new Set(['image', 'audio', 'video', 'text', 'document', 'file'])
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
 const INTERNAL_ATTACHMENT_URL = new RegExp(
-  `^/api/sessions/${UUID}/messages/${UUID}/attachments/${UUID}$`,
+  `^/api/sessions/${UUID}/(?:messages/${UUID}/attachments/${UUID}|queue/${UUID}/attachments/[0-9]+)$`,
   'i'
 )
 const INTERNAL_FILE_DOWNLOAD_PATH = '/api/workspace/files/download'

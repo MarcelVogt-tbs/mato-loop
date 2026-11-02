@@ -6,18 +6,44 @@ import { useProjectStore } from 'stores/projects'
 import { randomUuid } from 'src/utils/random-id'
 import { Notify } from 'quasar'
 import { useWorkspaceStore } from 'stores/workspace'
+import { useAgentProfileStore } from 'stores/agent-profiles'
+
+export function gitFinishEntry(entry) {
+  return {
+    id: randomUuid(), ownerUserId: entry.ownerUserId, sessionId: entry.sessionId, projectId: entry.projectId,
+    content: '/git-finish', attachments: [], activeFile: null, options: entry.options, controlCenter: entry.controlCenter,
+    agentProfileId: entry.agentProfileId || entry.options?.agentProfileId || null,
+    afterRunId: entry.id, sourceType: 'followup', paused: false,
+    queuedAt: new Date(Date.parse(entry.queuedAt) + 1).toISOString()
+  }
+}
 
 export const useGitActionStore = defineStore('git-actions', {
-  state: () => ({ managing: false }),
+  state: () => ({ managing: false, finishScope: null }),
   getters: {
+    scope() {
+      const chat = useChatStore(), context = chat.activeContext
+      return JSON.stringify([chat.current?.id || chat.sessionsProjectId, context?.preferredExecutionAgentId, context?.currentDirectory])
+    },
+    finishNext() { return this.finishScope !== null && this.finishScope === this.scope },
+    buildSelected() {
+      const id = useChatStore().activeAgentProfileId
+      return (useAgentProfileStore().byId(id)?.baseProfileId || id) === '00000000-0000-4000-8000-000000000004'
+    },
     busy() {
       const chat = useChatStore()
-      return Boolean(this.managing || chat.running || chat.runId || chat.current?.activeRun || chat.outboxSaving || chat.historyActionPending
-        || chat.sessionSettingsPending || chat.activeQueuedMessages.length || chat.queueDrainPromise
-        || !chat.outboxLoaded || chat.current?.readOnly || chat.current?.archived || chat.current?.archivedAt)
+      return Boolean(this.messageDisabled || chat.running || chat.runId || chat.current?.activeRun
+        || chat.activeQueuedMessages.length || chat.queueDrainPromise)
+    },
+    messageDisabled() {
+      const chat = useChatStore()
+      return Boolean(this.managing || chat.loading || chat.outboxSaving || chat.historyActionPending
+        || chat.sessionSettingsPending || !chat.outboxLoaded
+        || chat.current?.readOnly || chat.current?.archived || chat.current?.archivedAt)
     }
   },
   actions: {
+    setFinishNext(enabled) { this.finishScope = enabled ? this.scope : null },
     async workspaceAction(action, values = {}) {
       const chat = useChatStore(), session = chat.current
       if (!session || this.busy) return false
@@ -53,7 +79,7 @@ export const useGitActionStore = defineStore('git-actions', {
     },
     async run(name, argumentsList = [], commitFirst = false) {
       const chat = useChatStore()
-      if (this.busy) return null
+      if (this.messageDisabled) return null
       if (!chat.current) {
         const context = chat.activeContext, projectId = chat.sessionsProjectId
         if (['git-init', 'git-remote'].includes(name) && context.workspaceMode === 'worktree') {
@@ -62,14 +88,16 @@ export const useGitActionStore = defineStore('git-actions', {
         }
         const session = await chat.createEmptySession(useControlCenterStore())
         if (!session || chat.current?.id !== session.id) return null
+        await chat.waitForDraftDefaults(projectId)
+        if (chat.current?.id !== session.id) return null
       }
-      if (this.busy) return null
-      const sessionId = chat.current.id
+      if (this.messageDisabled) return null
+      const sessionId = chat.current?.id
       const commitFlag = commitFirst && ['git-merge', 'git-pr'].includes(name) ? ' --commit' : ''
-      await chat.sendToCurrent(`/${name}${commitFlag}${argumentsList.map(value => ` ${JSON.stringify(value)}`).join('')}`, [], {
-        clearDraft: false, activeFile: null, runId: randomUuid(), agentProfileId: chat.activeAgentProfileId
+      const result = await chat.send(`/${name}${commitFlag}${argumentsList.map(value => ` ${JSON.stringify(value)}`).join('')}`, {
+        preserveDraft: true, activeFile: null
       })
-      return sessionId
+      return sessionId || result?.sessionId || null
     },
     async updateTarget(values) {
       const chat = useChatStore()

@@ -87,7 +87,7 @@ it('keeps the open palette and selection stable when project polling only update
     .toEqual([1, true])
 })
 
-it('runs a selected command in the current session without consuming its draft', async () => {
+it('queues a selected command during a run without consuming its draft', async () => {
   const pinia = createPinia()
   setActivePinia(pinia)
   const commands = useCommandStore()
@@ -98,17 +98,17 @@ it('runs a selected command in the current session without consuming its draft',
   chat.current = { id: 'session', messages: [], agentProfileId: 'stored', preferredExecutionAgentId: 'agent', currentDirectory: '/repo' }
   chat.drafts.sessionAgentProfiles.session = 'selected'
   useExecutionAgentStore().items = [{ id: 'agent', connected: true }]
-  const send = vi.spyOn(chat, 'sendToCurrent').mockResolvedValue({})
+  chat.running = true
+  chat.runId = 'active-run'
+  chat.queueDrainPromise = Promise.resolve()
+  const send = vi.spyOn(chat, 'send').mockResolvedValue({})
   root = document.createElement('div')
   document.body.append(root)
   app = createApp({ render: () => h(GitActionList) })
   app.use(pinia).use(Quasar, quasarOptions).mount(root)
   await nextTick()
   root.querySelector('.q-item--clickable').click()
-  expect(send).toHaveBeenCalledWith('/git-review', [], expect.objectContaining({ clearDraft: false, activeFile: null, agentProfileId: 'selected' }))
-  chat.queueDrainPromise = Promise.resolve()
-  await nextTick()
-  expect(root.querySelector('.q-item').getAttribute('aria-disabled')).toBe('true')
+  expect(send).toHaveBeenCalledWith('/git-review', { preserveDraft: true, activeFile: null })
 })
 
 it('explains and blocks publication without a remote in the Git app', async () => {
@@ -139,7 +139,7 @@ it.each(['git-merge', 'git-pr', 'git-push', 'git-sync'])('applies the shared com
   const chat = useChatStore()
   chat.outboxLoaded = true
   chat.current = { id: 'session', messages: [], preferredExecutionAgentId: 'agent', currentDirectory: '/repo' }
-  const send = vi.spyOn(chat, 'sendToCurrent').mockResolvedValue({})
+  const send = vi.spyOn(chat, 'send').mockResolvedValue({})
   root = document.createElement('div')
   app = createApp({ render: () => h(GitActionList) })
   app.use(pinia).use(Quasar, quasarOptions).mount(root)

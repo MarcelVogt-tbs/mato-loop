@@ -427,6 +427,8 @@ def message_payload(
     runtime_data = (item.provider_data or {}).get("_matoloop", {})
     command = runtime_data.get("codingCommand") if item.role == "user" and isinstance(runtime_data, dict) else None
     command_prompt = command.get("prompt") if isinstance(command, dict) else None
+    if isinstance(command, dict) and runtime_data.get("source", {}).get("type") in {"codingFinish", "followup"}:
+        command_prompt = command.get("label")
     run_id = runtime_data.get("runId") if isinstance(runtime_data, dict) else None
     agent_profile_id = (
         runtime_data.get("agentProfileId") if isinstance(runtime_data, dict) else None
@@ -467,6 +469,7 @@ def message_payload(
     return {
         "id": str(item.id),
         "role": item.role,
+        **({"requestId": runtime_data["requestId"]} if item.role == "user" and isinstance(runtime_data.get("requestId"), str) else {}),
         "kind": "runtime_error" if error else "message",
         "state": "error" if error else "normal",
         "origin": "host" if error or runtime_data.get("origin") == "host" else item.role,
@@ -512,8 +515,8 @@ def message_payload(
             else {}
         ),
         "sourceType": (
-            "automationRun"
-            if isinstance(source, dict) and source.get("type") == "automationRun"
+            source["type"]
+            if isinstance(source, dict) and source.get("type") in {"automationRun", "codingFinish", "followup"}
             else None
         ),
         **({"automationName": source["automationName"][:240]}

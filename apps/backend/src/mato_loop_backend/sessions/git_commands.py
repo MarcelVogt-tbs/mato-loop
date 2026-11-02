@@ -21,6 +21,8 @@ from mato_loop_backend.sessions.command_contracts import (
     command_context,
 )
 
+ACTIVE_RUN_STATUSES = ("queued", "running", "waiting_approval", "waiting_input")
+
 COMMIT_RULES = (
     "Follow repository commit-message rules, including referenced guidelines, format, language and trailers. "
     "Use recent history only where no explicit rule applies. Verify each commit message. "
@@ -39,8 +41,35 @@ REVIEW_INSTRUCTIONS = (
     "Report concrete findings with file locations, separating blockers from optional simplifications. "
     "Include actual checks and limitations. "
 )
+MERGE_INSTRUCTIONS = (
+    "Perform a local merge only. Do not fetch or push. "
+    "Before starting a new merge, require clean working trees in the workspace and original project checkout, "
+    "an existing local target branch, and the original checkout on that target branch. Do not modify unrelated dirty files. "
+    "If current tools show ongoing work or a temporary lock, wait between checks and continue when it clears; "
+    "dirty files alone do not prove ongoing work. Ask only if a decision or user intervention is required. "
+    + COMMIT_RULES + "Merge the current local target into the workspace branch without rebasing. "
+    "A necessary merge commit is authorized. Resolve clear code conflicts in the workspace without discarding either task's "
+    "intended behavior. For ambiguous intent, inspect relevant project sessions within profile limits, then ask with options "
+    "and a recommendation. Leave the original checkout unchanged while asking. After waiting or an answer, finish any pending "
+    "workspace merge and incorporate newer target commits. Review the combined result for semantic merge errors. "
+    + REVIEW_INSTRUCTIONS + "Fix concrete integration findings in the workspace, rerun affected checks and commit only those repairs. "
+    "Ask if findings or failed checks cannot be resolved safely within scope. Verify the exact reviewed commit, both clean "
+    "working trees and the original checkout's target branch before updating it from its own directory with fast-forward-only merge. "
+    "If the target advanced, incorporate its new commits in the workspace and repeat review and affected checks before retrying. "
+    "Do not edit files in the original checkout, switch branches, remove "
+    "the worktree, fetch, or push. Report the integrated commit, actual checks and remaining blockers."
+)
 
 COMMANDS = (
+    Command("git-finish", "Review, Korrektur & Merge", "Umsetzung prüfen, lokal committen und übernehmen.",
+        "Finish the implementation task in this session. Verify that the requested implementation is complete before "
+        "committing or merging; finish safe in-scope work first. Ask if task scope or a necessary decision is unclear. "
+        "Review the complete task changes. " + REVIEW_INSTRUCTIONS +
+        "Fix concrete findings within that task's scope, then review again and rerun affected checks. "
+        "Wait and retry temporary blockers; ask only for a necessary decision or intervention. "
+        "Do not proceed to commit or merge with unresolved findings or failed checks. " + COMMIT_INSTRUCTIONS +
+        "After a successful commit or if no task changes remain, continue: " + MERGE_INSTRUCTIONS,
+        icon="fact_check", mutates_workspace=True),
     Command("git-init", "Git-Repository anlegen", "Git im gewählten Workspace initialisieren.",
         "Inspect the selected workspace and its parents. If it already belongs to a Git repository, report that and stop. "
         "Otherwise initialize Git in exactly the selected workspace, respecting the configured initial branch. "
@@ -52,20 +81,7 @@ COMMANDS = (
         + REVIEW_INSTRUCTIONS + "Report only: do not repair or modify the project, commit, merge, "
         "push, or create a pull request. Temporary check files outside the project are allowed by normal permissions.", icon="fact_check"),
     Command("git-merge", "Merge in Zielbranch", "Ins Projektverzeichnis mergen und prüfen. Kein Push.",
-        "Perform a local merge only. Do not fetch or push. "
-        "Before merging, require clean working trees in the workspace and original project checkout, "
-        "an existing local target branch, and the original checkout on that target branch. "
-        "Otherwise report the blocker and stop. "
-        + COMMIT_RULES +
-        "Merge the current local target into the workspace branch without rebasing. "
-        "A necessary merge commit is authorized. On conflicts, report them and stop without resolving them. "
-        "Review the combined result for semantic merge errors. "
-        + REVIEW_INSTRUCTIONS + "Stop on findings or failed checks. "
-        "Verify the exact reviewed commit and recheck that both working trees are clean and the original checkout "
-        "is still on the target branch. Update it from its own directory with fast-forward-only merge. "
-        "If its target advanced, report the blocker and stop; do not retry automatically. "
-        "Do not repair findings, switch branches, remove the worktree, fetch, or push. "
-        "Report the integrated commit, actual checks, and remaining blockers.", icon="merge", mutates_workspace=True),
+        MERGE_INSTRUCTIONS, icon="merge", mutates_workspace=True),
     Command("git-commit", "Commit", "Aufgabenänderungen lokal committen. Kein Push.",
         COMMIT_INSTRUCTIONS + COMMIT_RULES
         + "Do not fetch, merge, push, or create a pull request. Report the commit and remaining changes.",
@@ -120,8 +136,10 @@ async def prepare_git_command(db, session, command: Command, content: str | None
     prompt = command.instructions
     if command.name in {"git-merge", "git-pr"}:
         commit_step = ("First, in the session checkout only: " + COMMIT_INSTRUCTIONS
-                       + "If committing fails or needs clarification, stop. Then continue with the following action. "
-                       if commit_first else "Do not commit pending working changes; stop if the working tree is dirty. ")
+                       + "Wait and retry temporary blockers; ask if a decision or intervention is required. "
+                       "Continue with the following action only after committing succeeds or no task changes remain. "
+                        if commit_first else "Do not commit pending working changes unrelated to this requested merge. "
+                        "Do not proceed with pre-existing dirty files; resolving and committing this request's own merge is allowed. ")
         prompt = commit_step + prompt
     if arguments:
         prompt += "\n\n" + arguments
@@ -141,20 +159,22 @@ async def prepare_git_command(db, session, command: Command, content: str | None
     original = next((item.path for item in info.worktrees if item.main), binding.get("repository") or info.repository or session.current_directory)
     if project and project.default_execution_agent_id == session.preferred_execution_agent_id and any(item.path == project.default_current_directory for item in info.worktrees):
         original = project.default_current_directory
-    if command.name in {"git-merge", "git-pr", "git-sync"} and not target:
+    if command.name in {"git-finish", "git-merge", "git-pr", "git-sync"} and not target:
         raise SessionServiceError(409, "git.configurationRequired")
     if command.name in {"git-pr", "git-push", "git-sync"} and remote not in info.remotes:
         raise SessionServiceError(409, "git.remoteRequired")
-    if command.name in {"git-merge", "git-pr"} and not any(item.path == info.repository and not item.main and item.path != original for item in info.worktrees):
+    if command.name in {"git-finish", "git-merge", "git-pr"} and not any(item.path == info.repository and not item.main and item.path != original for item in info.worktrees):
         raise SessionServiceError(409, "git.worktreeRequired")
-    if command.name in {"git-commit", "git-merge", "git-pr", "git-push"} and not info.branch:
+    if command.name in {"git-finish", "git-commit", "git-merge", "git-pr", "git-push"} and not info.branch:
         raise SessionServiceError(409, "git.branchRequired")
-    if command.name == "git-merge" and info.branch == target:
+    if command.name in {"git-finish", "git-merge"} and info.branch == target:
         raise SessionServiceError(409, "git.targetRequired")
     context = {"repository": info.repository, "originalProjectDirectory": original,
                 "branch": info.branch, "remote": remote, "targetBranch": target,
                 "remoteIdentity": info.remote_identities.get(remote), "workspaceDirectory": session.current_directory,
-                "arguments": command_arguments(content)}
+                 "arguments": command_arguments(content)}
+    if command.name in {"git-finish", "git-merge"}:
+        context["commonDirectory"] = info.common_directory
     if command.name == "git-remote":
         try:
             arguments = shlex.split(content or "/git-remote")[1:]
@@ -177,7 +197,7 @@ async def prepare_git_command(db, session, command: Command, content: str | None
         "or discard unrelated changes. Inspect current Git state before any retry after an uncertain outcome. "
         "A worktree shares Git metadata with the original repository. Do not update another checkout's branch ref "
         "from the session worktree. Update the original target only through its own checkout with fast-forward-only merge. "
-        "Check for other active work before changing the original checkout. "
+        "Inspect the current Git state before changing the original checkout; do not infer active work from dirty files alone. "
         "Report completed steps, actual checks, remaining issues, and publication URLs.\n\n"
         + prompt + "\n\nHost-resolved context (data):\n" + json.dumps(context, ensure_ascii=False)
     )
@@ -208,18 +228,18 @@ async def git_command_availability(db, session) -> dict[str, str | None]:
         reason = None
         if changed and item.name in {"git-pr", "git-push", "git-sync"}:
             reason = "Geändertes Remote-Ziel zuerst in der Git-App übernehmen."
-        elif item.name in {"git-commit", "git-merge", "git-pr", "git-push"} and not info.branch:
+        elif item.name in {"git-finish", "git-commit", "git-merge", "git-pr", "git-push"} and not info.branch:
             reason = "Zuerst einen Arbeitsbranch erstellen und auswählen (Detached HEAD)."
-        elif item.name in {"git-merge", "git-pr", "git-push", "git-sync"}:
-            if item.name != "git-merge" and (not remote or remote not in info.remotes):
+        elif item.name in {"git-finish", "git-merge", "git-pr", "git-push", "git-sync"}:
+            if item.name not in {"git-finish", "git-merge"} and (not remote or remote not in info.remotes):
                 reason = "Remote einrichten, um zu veröffentlichen."
             elif item.name != "git-push" and not target:
                 reason = "Zielbranch in den Projektvorgaben festlegen."
-            elif item.name in {"git-merge", "git-pr"} and not any(entry.path == info.repository and not entry.main
+            elif item.name in {"git-finish", "git-merge", "git-pr"} and not any(entry.path == info.repository and not entry.main
                     and (not project or project.default_execution_agent_id != session.preferred_execution_agent_id
                          or entry.path != project.default_current_directory) for entry in info.worktrees):
                 reason = "Für diesen Auftrag einen Projekt-Worktree in der Git-App auswählen."
-            elif item.name == "git-merge" and info.branch == target:
+            elif item.name in {"git-finish", "git-merge"} and info.branch == target:
                 reason = "Arbeitsbranch und Zielbranch müssen unterschiedlich sein."
         results[item.name] = reason
     return results
@@ -228,12 +248,22 @@ async def git_command_availability(db, session) -> dict[str, str | None]:
 GIT_COMMAND_PROVIDER = CommandProvider("git", COMMANDS, git_command_availability, prepare_git_command)
 
 
+def validate_git_context(saved, current):
+    from mato_loop_backend.sessions.service import SessionServiceError
+
+    if any(current.get(key) != saved.get(key) for key in (
+                "repository", "originalProjectDirectory", "workspaceDirectory", "commonDirectory", "branch", "targetBranch",
+                "remote", "remoteIdentity",
+            )):
+        raise SessionServiceError(409, "git.worktreeChanged")
+
+
 def _workspace_roots(command, directory):
     name = command.get("name", "").replace("_", "-")
     context = command_context(command)
-    if context and name in {"git-review", "git-commit", "git-push", "git-pr", "git-merge", "git-sync"}:
+    if context and name in {"git-finish", "git-review", "git-commit", "git-push", "git-pr", "git-merge", "git-sync"}:
         roots = [directory, context.get("repository")]
-        if name in {"git-merge", "git-sync"}:
+        if name == "git-sync":
             roots.append(context.get("originalProjectDirectory"))
         return roots
     return [*(command.get("resources") or []), directory, context.get("originalProjectDirectory")]
@@ -245,7 +275,7 @@ async def check_workspace_admission(db, user_id, agent_id, directory, command=No
 
     if agent_id is None or directory is None:
         return
-    mutations = {"git-merge", "git-pr", "git-sync", "git-init", "git-remote", "git-commit", "git-push", "git-worktree"}
+    mutations = {"git-finish", "git-merge", "git-pr", "git-sync", "git-init", "git-remote", "git-commit", "git-push", "git-worktree"}
     name = (command or {}).get("name", "").replace("_", "-")
     mutating = name in mutations
     repository_wide = {"git-init", "git-remote", "git-worktree"}
@@ -257,7 +287,7 @@ async def check_workspace_admission(db, user_id, agent_id, directory, command=No
         Message, Message.id == AgentRun.input_message_id
     ).join(ChatSession, ChatSession.id == AgentRun.session_id).where(
         ChatSession.user_id == user_id, AgentRun.execution_agent_id == agent_id,
-        AgentRun.status.in_(("queued", "running", "waiting_approval", "waiting_input")),
+        AgentRun.status.in_(ACTIVE_RUN_STATUSES),
     )
     if exclude_run_id is not None:
         statement = statement.where(AgentRun.id != exclude_run_id)

@@ -20,7 +20,9 @@ import { useChatStore } from '../src/features/chat/store'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { useQuestionStore } from '../src/stores/questions'
 import { useWorkspaceStore } from '../src/stores/workspace'
-import { clearChatOutbox, loadChatOutbox } from '../src/utils/chat-outbox'
+import { useGitActionStore } from '../src/features/coding/git-actions-store'
+import { clearChatOutbox, loadChatOutbox, saveChatOutboxEntry } from '../src/utils/chat-outbox'
+import * as outboxStorage from '../src/features/chat/outbox-storage'
 import { buildAttachmentFormData, MAX_ATTACHMENT_DRAFT_BYTES } from '../src/features/chat/attachments'
 import { withQueuedTranscriptMessages } from '../src/utils/chat-transcript'
 
@@ -63,6 +65,11 @@ function attachment(name = 'datei.txt', size = 1) {
 describe('chat message queue', () => {
   beforeEach(async () => {
     await clearChatOutbox('user-1')
+    api.get.mockReset().mockImplementation(async (url) => ({ data: url === '/sessions/message-queue'
+      ? { items: [] } : { id: url.split('/')[2], messages: [], activeRun: null } }))
+    api.post.mockReset().mockRejectedValue(new Error('offline'))
+    api.patch.mockReset()
+    api.delete.mockReset()
     global.window = { localStorage: createStorage() }
     global.EventSource = EventSourceMock
     global.URL = { createObjectURL: vi.fn(() => 'blob:preview'), revokeObjectURL: vi.fn() }
@@ -96,7 +103,23 @@ describe('chat message queue', () => {
     expect(chat.activeDraft).toBe('')
     expect(chat.activeAttachmentDraft).toEqual([])
     expect(global.URL.revokeObjectURL).toHaveBeenCalledWith('blob:preview')
-    expect(chat.queuedSendReady).toBe(false)
+    expect(chat.queuedSendReady).toBe(true)
+  })
+
+  it('arms auto-finish through planning and consumes it only for the next Build message', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.current.agentProfileId = '00000000-0000-4000-8000-000000000003'
+    const git = useGitActionStore()
+    git.setFinishNext(true)
+    const plan = await chat.queueMessage('Besprechen')
+    const armed = git.finishNext
+    chat.current.agentProfileId = '00000000-0000-4000-8000-000000000004'
+    const build = await chat.queueMessage('Setze den Plan um')
+    const followup = await chat.queueMessage('Noch eine Frage')
+    expect([armed, (await loadChatOutbox('user-1')).map(({ content, afterRunId }) => [content, afterRunId]), git.finishNext]).toEqual([
+      true, [[plan.content, undefined], [build.content, undefined], ['/git-finish', build.id], [followup.content, undefined]], false
+    ])
   })
 
   it('queues a prepared answer without consuming the current draft or attachments', async () => {
@@ -113,6 +136,47 @@ describe('chat message queue', () => {
     expect(chat.activeDraft).toBe('Mein angefangener Text')
     expect(chat.activeAttachmentDraft).toHaveLength(1)
     expect(global.URL.revokeObjectURL).not.toHaveBeenCalled()
+  })
+
+  it('does not publish a migrated queue after switching accounts', async () => {
+    const chat = useChatStore()
+    await saveChatOutboxEntry({ id: 'legacy', ownerUserId: 'user-1', sessionId: null,
+      content: '/git-build Private task', attachments: [], queuedAt: new Date().toISOString() })
+    let finishSave
+    const save = vi.spyOn(outboxStorage, 'saveChatOutboxEntries')
+      .mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve }))
+    try {
+      const loading = chat.loadQueuedMessages()
+      await vi.waitFor(() => expect(finishSave).toBeTypeOf('function'))
+      chat.setDraftOwner('user-2')
+      await chat.outboxLoadPromise
+      finishSave()
+      await loading
+      expect(Object.values(chat.queuedMessages).flat()).toEqual([])
+    } finally { save.mockRestore() }
+  })
+
+  it('creates migrated follow-ups with clean delivery state', async () => {
+    const chat = useChatStore()
+    await saveChatOutboxEntry({ id: 'legacy', ownerUserId: 'user-1', sessionId: 'session-1',
+      content: '/git-build Task', attachments: [], queuedAt: new Date().toISOString(),
+      paused: true, sentMessageId: 'accepted-message' })
+    await chat.loadQueuedMessages()
+    chat.cancelQueueDrain()
+    const finish = (await loadChatOutbox('user-1')).find((entry) => entry.afterRunId === 'legacy')
+    expect([finish.paused, finish.sentMessageId]).toEqual([false, undefined])
+  })
+
+  it('preserves a new-chat draft when a Git shortcut creates the session', async () => {
+    const chat = useChatStore()
+    chat.setDraft('Keep my task')
+    chat.attachmentDrafts.newSession.push(attachment('notes.txt'))
+    api.post.mockImplementation(async (url) => ({ data: url === '/sessions'
+      ? { session: { id: 'session-1', projectId: null } } : { queued: true } }))
+    await useGitActionStore().run('git-review')
+    expect([chat.activeDraft, chat.activeAttachmentDraft.map((item) => item.file.name),
+      api.post.mock.calls.filter(([url]) => url.endsWith('/messages')).map(([, payload]) => payload.content)])
+      .toEqual(['Keep my task', ['notes.txt'], ['/git-review']])
   })
 
   it('preserves voice markers through IndexedDB, failed sends, retry and restore', async () => {
@@ -195,13 +259,16 @@ describe('chat message queue', () => {
         message: { id: 'message-1', role: 'user', content: 'Jetzt senden' }
       }
     })
+    api.get.mockImplementation(async (url) => ({ data: url === '/sessions/message-queue' ? { items: [] } : {
+      id: 'session-1', messages: [{ id: 'message-1', requestId: chat.activeQueuedMessages[0]?.id, role: 'user', content: 'Jetzt senden' }], activeRun: null
+    } }))
     await sending
     stopWatching()
 
     expect(chat.activeQueuedMessages).toEqual([])
     expect(displayed.every((count) => count === 1)).toBe(true)
     expect(chat.current.messages).toEqual([
-      { id: 'message-1', role: 'user', content: 'Jetzt senden', renderId: expect.any(String) }
+      { id: 'message-1', requestId: expect.any(String), role: 'user', content: 'Jetzt senden' }
     ])
   })
 
@@ -257,6 +324,7 @@ describe('chat message queue', () => {
     restored.cancelQueueDrain()
     activeSession(restored)
     restored.current.agentProfileId = 'agent-a'
+    vi.spyOn(restored, 'refreshSession').mockResolvedValue()
     vi.spyOn(restored, 'watchRun').mockImplementation(() => {})
     expect(restored.activeQueuedMessages.map((entry) => entry.agentProfileId)).toEqual(['agent-b', 'agent-a'])
     expect(restored.activeAgentProfileId).toBe('agent-b')
@@ -269,10 +337,10 @@ describe('chat message queue', () => {
     api.post.mockResolvedValueOnce({ data: {
       message: { id: 'message-1' }, runId: first.id, agentProfileId: 'agent-b'
     } })
-    await restored.resumeQueuedSend()
-    await vi.waitFor(() => expect(restored.activeQueuedMessages).toHaveLength(1))
+    restored.activeQueuedMessages[0].paused = false
+    await restored.drainOutbox()
     restored.cancelQueueDrain()
-    expect(restored.current.agentProfileId).toBe('agent-b')
+    expect(restored.current.agentProfileId).toBe('agent-a')
     expect(restored.activeAgentProfileId).toBe('agent-b')
     expect(restored.activeQueuedMessages[0].id).toBe(second.id)
 
@@ -305,7 +373,7 @@ describe('chat message queue', () => {
     await chat.drainOutbox()
 
     expect(api.post).toHaveBeenCalledWith('/sessions/session-1/messages', {
-      content: 'Im Hintergrund', run_id: entry.id, agent_profile_id: 'agent-b'
+      content: 'Im Hintergrund', run_id: entry.id, agent_profile_id: 'agent-b', enqueue: true
     }, { suppressErrorToast: true })
     expect(chat.drafts.sessionAgentProfiles['session-1']).toBeUndefined()
   })
@@ -379,6 +447,7 @@ describe('chat message queue', () => {
     expect(api.post).toHaveBeenCalledWith('/sessions/session-1/messages', {
       content: 'Mit Datei',
       run_id: entry.id,
+      enqueue: true,
       active_file: snapshot
     }, { suppressErrorToast: true })
   })
@@ -405,7 +474,7 @@ describe('chat message queue', () => {
     expect((await loadChatOutbox('user-1'))[0].activeFile).toBeNull()
   })
 
-  it('waits for pending approvals and questions before sending', async () => {
+  it('hands messages to the backend while approvals and questions are pending', async () => {
     const chat = useChatStore()
     const approvals = useApprovalStore()
     const questions = useQuestionStore()
@@ -414,7 +483,7 @@ describe('chat message queue', () => {
     approvals.pending = [{ id: 'approval-1', sessionId: 'session-1' }]
     await chat.send('Nachricht')
 
-    expect(api.post).not.toHaveBeenCalled()
+    expect(api.post).toHaveBeenCalledWith('/sessions/session-1/messages', expect.objectContaining({ enqueue: true }), expect.anything())
     expect(chat.activeQueuedMessages.map((entry) => entry.content)).toEqual(['Nachricht'])
     expect(chat.activity.phase).toBe('idle')
     expect(chat.queuedSendReady).toBe(false)
@@ -425,7 +494,7 @@ describe('chat message queue', () => {
 
     questions.pending = []
     expect(chat.messageQueueActive).toBe(true)
-    expect(chat.queuedSendReady).toBe(true)
+    expect(chat.queuedSendReady).toBe(false)
   })
 
   it('drains messages in FIFO order and keeps a newer draft', async () => {
@@ -444,71 +513,24 @@ describe('chat message queue', () => {
     await chat.drainOutbox()
 
     expect(api.post.mock.calls.map(([, payload]) => payload)).toEqual([
-      { content: 'Zuerst', run_id: first.id },
-      { content: 'Danach', run_id: second.id }
+      { content: 'Zuerst', run_id: first.id, enqueue: true },
+      { content: 'Danach', run_id: second.id, enqueue: true }
     ])
     expect(chat.activeQueuedMessages).toEqual([])
     expect(chat.activeDraft).toBe('Neuer Entwurf')
   })
 
-  it('waits for the completed run refresh before sending the next message', async () => {
+  it('retains backend acceptance when reconciliation fails and never uploads it again', async () => {
     const chat = useChatStore()
     activeSession(chat)
     chat.running = true
-    const first = await chat.queueMessage('Zuerst')
-    const second = await chat.queueMessage('Danach')
-    chat.running = false
-    api.post
-      .mockResolvedValueOnce({
-        data: {
-          message: { id: 'message-1', role: 'user', content: 'Zuerst' },
-          runId: 'run-1'
-        }
-      })
-      .mockResolvedValueOnce({
-        data: {
-          message: { id: 'message-2', role: 'user', content: 'Danach' },
-          runId: 'run-2'
-        }
-      })
-
+    await chat.queueMessage('Zuerst')
+    api.post.mockResolvedValue({ data: { queued: true } })
+    api.get.mockRejectedValue(new Error('offline'))
     await chat.drainOutbox()
-    let resolveRefresh
-    api.get.mockImplementation((url) => {
-      if (url === '/sessions/session-1') {
-        return new Promise((resolve) => { resolveRefresh = resolve })
-      }
-      return Promise.resolve({ data: url === '/sessions' ? { items: [], nextCursor: null } : [] })
-    })
-
-    chat.eventSource.listeners.get('run.completed')()
-    await vi.waitFor(() => expect(resolveRefresh).toBeTypeOf('function'))
     await chat.drainOutbox()
-
-    expect(api.post).toHaveBeenCalledTimes(1)
-    expect(chat.queuedSendReady).toBe(false)
-
-    resolveRefresh({
-      data: {
-        id: 'session-1',
-        messages: [
-          { id: 'message-1', role: 'user', content: 'Zuerst' },
-          { id: 'answer-1', role: 'assistant', content: 'Erste Antwort' }
-        ],
-        activeRun: null
-      }
-    })
-
-    await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(2))
-    expect(api.post.mock.calls.map(([, payload]) => payload)).toEqual([
-      { content: 'Zuerst', run_id: first.id },
-      { content: 'Danach', run_id: second.id }
-    ])
-    expect(chat.current.messages.map((message) => message.content)).toEqual([
-      'Zuerst',
-      'Erste Antwort',
-      'Danach'
-    ])
+    expect([api.post.mock.calls.length, chat.activeQueuedMessages[0].serverQueued, chat.activeQueuedMessages[0].paused])
+      .toEqual([1, true, false])
   })
 
   it('saves a direct message before adding it to the active run, ahead of queued messages', async () => {
@@ -806,6 +828,39 @@ describe('chat message queue', () => {
     expect(restored.activeQueuedMessages.map((entry) => entry.content)).toEqual(['Danach'])
   })
 
+  it('restores server uploads and ignores a queue response started before removal', async () => {
+    let resolveStale
+    const chat = useChatStore()
+    activeSession(chat)
+    const entry = { id: 'server-request', sessionId: 'session-1', ownerUserId: 'user-1', content: 'Bearbeiten',
+      queuedAt: new Date().toISOString(), queuePosition: 1, paused: false, serverQueued: true,
+      attachments: [{ name: 'entwurf.txt', mimeType: 'text/plain', kind: 'file' }] }
+    api.get.mockImplementation(async (url) => ({ data: url.endsWith('/attachments/0')
+      ? new Blob(['saved upload']) : { items: [entry] } }))
+    await chat.refreshServerQueue()
+    api.get.mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve }))
+    const stale = chat.refreshServerQueue()
+    api.delete.mockResolvedValue({})
+    await chat.restoreQueuedMessage(entry.id)
+    resolveStale({ data: { items: [entry] } })
+    await stale
+    expect([chat.activeDraft, await chat.activeAttachmentDraft[0].file.text(), chat.activeQueuedMessages])
+      .toEqual(['Bearbeiten', 'saved upload', []])
+  })
+
+  it('keeps the server copy when restoring cannot clean up local storage', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.queuedMessages['session-1'] = [{ id: 'server-request', sessionId: 'session-1',
+      content: 'Keep this', serverQueued: true, attachments: [] }]
+    const indexedDB = globalThis.indexedDB
+    globalThis.indexedDB = undefined
+    try {
+      await chat.restoreQueuedMessage('server-request')
+      expect(api.delete).not.toHaveBeenCalled()
+    } finally { globalThis.indexedDB = indexedDB }
+  })
+
   it('clears the persisted outbox with the owner drafts', async () => {
     const chat = useChatStore()
     activeSession(chat)
@@ -857,12 +912,14 @@ describe('chat message queue', () => {
       globalThis.indexedDB = indexedDB
     }
     const displayed = withQueuedTranscriptMessages(chat.current.messages, chat.activeQueuedMessages, null)
+    if (!newSession) await chat.refreshServerQueue()
     chat.running = false
     await chat.resumeQueuedSend()
     chat.cancelQueueDrain()
     await chat.drainOutbox()
     expect([displayed, chat.activeQueuedMessages, api.post.mock.calls.filter(([url]) => url !== '/sessions/defaults').length]).toEqual([
-      [{ id: 'accepted', role: 'user', content: entry.content, renderId: entry.id, queueRecoveryId: entry.id }], [], 1
+      newSession ? [{ id: 'accepted', role: 'user', content: entry.content, renderId: entry.id, queueRecoveryId: entry.id }]
+        : [expect.objectContaining({ id: entry.id, content: entry.content, deliveryStatus: 'queued' })], [], 1
     ])
   })
 
@@ -1010,7 +1067,8 @@ describe('chat message queue', () => {
 
     expect(api.post).toHaveBeenCalledWith('/sessions/session-1/messages', {
       content: 'Im Hintergrund',
-      run_id: entry.id
+      run_id: entry.id,
+      enqueue: true,
     }, { suppressErrorToast: true })
     expect(chat.queuedMessages['session-1']).toBeUndefined()
   })
@@ -1022,7 +1080,9 @@ describe('chat message queue', () => {
     await chat.queueMessage('Korrektur')
     activeSession(chat, 'session-2')
     chat.running = false
-    api.get.mockResolvedValue({ data: { activeRun: null } })
+    api.get.mockImplementation(async (url) => ({ data: url === '/sessions/message-queue' ? { items: [] } : {
+      id: 'session-1', messages: [{ id: 'correction', role: 'user', content: 'Korrektur' }], activeRun: { id: 'follow-up' }
+    } }))
     let acceptSend
     api.post.mockImplementation(() => new Promise((resolve) => { acceptSend = resolve }))
 
@@ -1038,7 +1098,7 @@ describe('chat message queue', () => {
     expect(chat.eventSource.url).toBe('/api/sessions/session-1/runs/follow-up/events')
   })
 
-  it('restores a background queue probe failure as paused', async () => {
+  it('restores a background upload failure as paused', async () => {
     const chat = useChatStore()
     activeSession(chat)
     chat.running = true

@@ -428,6 +428,15 @@ CODING_PROFILE_TOOL_AVAILABILITY = dict.fromkeys(
     False,
 )
 
+CODING_CONTEXT_INSTRUCTIONS = (
+    "Use supplied context when relevant. Retrieve saved memories or conversations outside the current project "
+    "only when the user explicitly requests retrieval or refers to them. Missing context alone does not justify "
+    "retrieval from those sources. For the current task, read relevant sessions in the same project when needed: "
+    "use context_search with scope=sessions and all_projects=false, then session_read for missing details. "
+    "Do not use scope=all for project context or routinely read every session. Normal permissions still apply. "
+    "Retrieval needed for an explicitly requested memory write, update, or deletion is allowed."
+)
+
 
 def plan_profile() -> AgentProfile:
     policies = {
@@ -484,11 +493,7 @@ def plan_profile() -> AgentProfile:
             "scripts, APIs, and subprocesses; shell.read does not guarantee read-only effects. "
             "When asked to implement, continue only permitted analysis and planning and explain that "
             "implementation requires Build. Do not announce implementation or mark it as started or completed. "
-            "Use supplied memory context when relevant. Retrieve saved memories or prior conversations only "
-            "when the user explicitly requests retrieval or refers to information from them. Missing context "
-            "alone does not justify retrieval. Retrieval needed for an explicitly requested memory write, "
-            "update, or deletion is allowed."
-        ),
+        ) + CODING_CONTEXT_INSTRUCTIONS,
         max_tool_calls=None,
         todo_enabled=True,
         repository_instructions_enabled=True,
@@ -530,14 +535,10 @@ def build_profile() -> AgentProfile:
             "a plan discussed earlier in the conversation, apply newer user instructions over it. A profile "
             "switch alone does not authorize implementation. Ask only for a missing user decision "
             "that materially blocks the work; decide ordinary implementation details from the project. "
+            "Reuse existing checks; add tests for concrete uncovered behavior or risks. "
             "Verify the result appropriately and report the outcome, checks, and remaining blockers concisely."
         ),
-        runtime_instructions=(
-            "Use supplied memory context when relevant. Retrieve saved memories or prior conversations only "
-            "when the user explicitly requests retrieval or refers to information from them. Missing context "
-            "alone does not justify retrieval. Retrieval needed for an explicitly requested memory write, "
-            "update, or deletion is allowed."
-        ),
+        runtime_instructions=CODING_CONTEXT_INSTRUCTIONS,
         max_tool_calls=None,
         todo_enabled=True,
         repository_instructions_enabled=True,

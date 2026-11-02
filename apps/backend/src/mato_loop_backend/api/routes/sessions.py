@@ -63,6 +63,8 @@ from mato_loop_backend.models import (
     Message,
     MessageAttachment,
     Project,
+    QueuedAttachment,
+    QueuedMessage,
     UserAccount,
     WebSearchPolicy,
 )
@@ -397,6 +399,8 @@ class SendMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     content: str = Field(max_length=200_000)
+    enqueue: StrictBool = False
+    after_run_id: UUID | None = None
     voice_attachment_indices: list[StrictInt] = Field(
         default_factory=list, alias="voiceAttachmentIndices"
     )
@@ -420,6 +424,11 @@ class ContinueRunRequest(BaseModel):
     active_file: ActiveFileRequest | None = Field(
         default=None, validation_alias=AliasChoices("active_file", "activeFile")
     )
+
+
+class QueueUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    paused: StrictBool
 
 
 class SessionReadRequest(BaseModel):
@@ -854,6 +863,73 @@ async def fork_session(
     except session_service.SessionServiceError as exc:
         _raise_api_error(exc)
     return {"id": str(item.id)}
+
+
+@router.get("/message-queue")
+async def message_queue(
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    from mato_loop_backend.sessions.message_queue import list_entries
+
+    return {"items": await list_entries(db, user.id)}
+
+
+async def _queue_session(db, session_id, user_id):
+    await db.execute(select(UserAccount.id).where(UserAccount.id == user_id).with_for_update(key_share=True))
+    session = await _mutable_session(db, session_id, user_id, for_update=True)
+    if session is None:
+        raise ApiError(404, "session.notFound")
+    return session
+
+
+@router.delete("/{session_id}/queue/{request_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_queued_message(
+    session_id: UUID, request_id: UUID,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Response:
+    from mato_loop_backend.sessions.message_queue import remove_entry
+
+    await _queue_session(db, session_id, user.id)
+    if await db.get(QueuedMessage, request_id) is None:
+        run = await db.get(AgentRun, request_id)
+        if run is not None and run.session_id == session_id:
+            raise ApiError(409, "session.runAlreadyActive")
+    await remove_entry(db, session_id, request_id)
+    await db.commit()
+    return Response(status_code=204)
+
+
+@router.patch("/{session_id}/queue/{request_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def update_queued_message(
+    session_id: UUID, request_id: UUID, payload: QueueUpdateRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Response:
+    await _queue_session(db, session_id, user.id)
+    entry = await db.get(QueuedMessage, request_id)
+    if entry is None or entry.session_id != session_id:
+        raise ApiError(404, "session.notFound")
+    entry.paused, entry.error_code = payload.paused, None
+    await db.commit()
+    return Response(status_code=204)
+
+
+@router.get("/{session_id}/queue/{request_id}/attachments/{position}")
+async def queued_attachment(
+    session_id: UUID, request_id: UUID, position: int,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Response:
+    if await _owned_session(db, session_id, user.id) is None:
+        raise ApiError(404, "session.notFound")
+    data = await db.scalar(select(QueuedAttachment.data).join(QueuedMessage).where(
+        QueuedMessage.id == request_id, QueuedMessage.session_id == session_id, QueuedAttachment.position == position,
+    ))
+    if data is None:
+        raise ApiError(404, "attachment.notFound")
+    return Response(data, media_type="application/octet-stream", headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/{session_id}")

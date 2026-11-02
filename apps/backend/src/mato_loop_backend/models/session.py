@@ -7,14 +7,17 @@ from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     Computed,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Identity,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -181,6 +184,30 @@ class ChatSession(Base):
         back_populates="chat_session", cascade="all, delete-orphan", passive_deletes=True
     )
     project: Mapped[Project | None] = relationship()
+
+
+class QueuedMessage(Base):
+    __tablename__ = "queued_messages"
+    __table_args__ = (Index("ix_queued_messages_session_position", "session_id", "position"),)
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False)
+    position: Mapped[int] = mapped_column(BigInteger, Identity(), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    error_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    after_run_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    attachments: Mapped[list[QueuedAttachment]] = relationship(cascade="all, delete-orphan", passive_deletes=True, order_by="QueuedAttachment.position")
+
+
+class QueuedAttachment(Base):
+    __tablename__ = "queued_attachments"
+
+    message_id: Mapped[UUID] = mapped_column(ForeignKey("queued_messages.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    details: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
 
 
 class Message(Base):

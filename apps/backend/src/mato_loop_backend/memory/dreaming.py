@@ -1804,33 +1804,9 @@ class DreamingService:
         await db.commit()
 
 
-class DreamingScheduler:
-    _task: asyncio.Task[None] | None = None
-
-    @classmethod
-    def start(cls) -> None:
-        if cls._task is None or cls._task.done():
-            cls._task = asyncio.create_task(cls._loop())
-
-    @classmethod
-    async def stop(cls) -> None:
-        if cls._task is None:
-            return
-        cls._task.cancel()
-        await asyncio.gather(cls._task, return_exceptions=True)
-        cls._task = None
-
-    @classmethod
-    async def _loop(cls) -> None:
-        while True:
-            try:
-                async with AsyncSessionFactory() as db:
-                    await DreamingService.requeue_compatible_blocked(db)
-                    await DreamingService.enqueue(db, trigger=MemoryDreamTrigger.SCHEDULED)
-                    while await DreamingService.process_next(db):
-                        pass
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Dreaming scheduler iteration failed")
-            await asyncio.sleep(30)
+async def process_pending() -> None:
+    async with AsyncSessionFactory() as db:
+        await DreamingService.requeue_compatible_blocked(db)
+        await DreamingService.enqueue(db, trigger=MemoryDreamTrigger.SCHEDULED)
+        while await DreamingService.process_next(db):
+            pass

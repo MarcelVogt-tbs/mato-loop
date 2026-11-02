@@ -588,7 +588,7 @@ export const sessionsActions = {
       }
       if (queued.length) {
         try {
-          await saveChatOutboxEntries(queued.map((entry) => toRaw(entry)))
+          await saveChatOutboxEntries(queued.filter((entry) => !entry.serverQueued).map((entry) => toRaw(entry)))
         } catch {
           for (const entry of queued) entry.paused = true
           this.queuedSendPausedSessions[id] = true
@@ -655,7 +655,7 @@ export const sessionsActions = {
           && loadVersion === this.outboxLoadVersion
         ) {
           try {
-            await saveChatOutboxEntries(queued.map((entry) => toRaw(entry)))
+            await saveChatOutboxEntries(queued.filter((entry) => !entry.serverQueued).map((entry) => toRaw(entry)))
           } catch {
             notifyError({}, 'Vorgemerkte Nachrichten konnten nicht wiederhergestellt werden.')
           }

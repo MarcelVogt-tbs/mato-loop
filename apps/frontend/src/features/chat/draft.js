@@ -4,7 +4,8 @@ import { useInstanceLimitsStore } from 'src/stores/instance-limits'
 import { attachmentKind, attachmentPreviewUrl, MAX_ATTACHMENT_DRAFT_BYTES, normalizedMimeType, releaseAttachmentDrafts } from 'src/features/chat/attachments'
 import { clearPersistedDrafts, defaultSessionOptions, emptyActivity, emptyDrafts, groupedOutbox, loadDrafts, newSessionQueueKey, normalizedNewSessionDraft, persistDrafts, sanitizedSessionOptions, sessionScopeKey } from 'src/features/chat/state'
 import { mergeAgentActivity } from 'src/utils/agent-activity'
-import { clearChatOutbox, loadChatOutbox } from 'src/utils/chat-outbox'
+import { clearChatOutbox, loadChatOutbox, saveChatOutboxEntries } from 'src/utils/chat-outbox'
+import { gitFinishEntry } from 'src/features/coding/git-actions-store'
 
 export const draftActions = {
     setActivity(phase, details = {}) {
@@ -63,7 +64,17 @@ export const draftActions = {
         this.outboxLoadFailed = false
       }
       try {
-        const entries = await loadChatOutbox(ownerUserId)
+        let migrated = false
+        const stored = await loadChatOutbox(ownerUserId)
+        const entries = stored.flatMap((entry) => {
+          if (!entry.gitFinish && !/^\/git-build\s+/u.test(entry.content)) return [entry]
+          migrated = true
+          const original = { ...entry, content: entry.content.replace(/^\/git-build\s+/u, '') }
+          delete original.gitFinish
+          return [original, ...(stored.some((item) => item.afterRunId === entry.id) ? [] : [gitFinishEntry(original)])]
+        })
+        if (ownerUserId !== this.draftOwnerUserId || loadVersion !== this.outboxLoadVersion) return
+        if (migrated) await saveChatOutboxEntries(entries)
         if (ownerUserId !== this.draftOwnerUserId || loadVersion !== this.outboxLoadVersion) return
         this.queuedMessages = groupedOutbox(entries.map((entry) => ({
           ...entry,
@@ -78,10 +89,15 @@ export const draftActions = {
             .map(([key]) => [key, true])
         )
         this.outboxLoaded = true
-        this.scheduleQueueDrain(0)
+        try { await this.refreshServerQueue() } catch { /* The local offline buffer remains usable. */ }
+        if (ownerUserId === this.draftOwnerUserId && loadVersion === this.outboxLoadVersion) this.scheduleQueueDrain(0)
       } catch (error) {
         if (ownerUserId === this.draftOwnerUserId && loadVersion === this.outboxLoadVersion) {
           this.outboxLoadFailed = true
+          try {
+            await this.refreshServerQueue()
+            if (ownerUserId === this.draftOwnerUserId && loadVersion === this.outboxLoadVersion) this.outboxLoaded = true
+          } catch { /* Accepted requests remain on the server until reconciliation succeeds. */ }
         }
       }
     },

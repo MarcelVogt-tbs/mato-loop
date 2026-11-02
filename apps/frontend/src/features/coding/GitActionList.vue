@@ -20,6 +20,18 @@
         <q-item-section><q-item-label class="text-caption">Vor Merge oder Pull Request committen</q-item-label></q-item-section>
       </q-item>
     </template>
+    <template v-if="autoMerge && items.some(command => command.name === 'git-commit')">
+      <q-separator />
+      <q-item tag="label" :disable="busy || Boolean(finishDisabledReason)">
+        <q-item-section avatar>
+          <q-checkbox :model-value="actions.finishNext" dense :disable="busy || Boolean(finishDisabledReason)" aria-label="Nach Umsetzung abschließen" @update:model-value="actions.setFinishNext" />
+        </q-item-section>
+        <q-item-section>
+          <q-item-label>Nach Umsetzung abschließen</q-item-label>
+          <q-item-label caption>{{ finishDisabledReason || `Review → Korrektur bei Bedarf → Commit${autoMerge ? ` → Merge in „${targetBranch}“` : ''}. Für den nächsten Umsetzungsauftrag in Build.` }}</q-item-label>
+        </q-item-section>
+      </q-item>
+    </template>
   </q-list>
 </template>
 
@@ -29,19 +41,20 @@ import { useChatStore } from 'src/features/chat/store'
 import { useCommandStore } from 'src/features/commands/store'
 import { useGitActionStore } from './git-actions-store'
 
-const props = defineProps({ disabled: Boolean, targetBranch: { type: String, default: null } })
+const props = defineProps({ disabled: Boolean, targetBranch: { type: String, default: null }, autoMerge: Boolean })
 defineEmits(['refresh'])
 const catalog = useCommandStore(), actions = useGitActionStore()
 const chat = useChatStore(), commitFirst = ref(false)
 const items = computed(() => catalog.items.filter(command => command.source === 'git' && command.name !== 'git-remote'))
+const finishDisabledReason = computed(() => items.value.find(command => command.name === 'git-finish')?.disabledReason)
 const groups = computed(() => [
   { label: 'Repository einrichten', names: ['git-init'] },
-  { label: 'Prüfen & sichern', names: ['git-review', 'git-commit'] },
+  { label: 'Prüfen & sichern', names: ['git-review', 'git-commit', 'git-finish'] },
   { label: 'Übernehmen & veröffentlichen', names: ['git-merge', 'git-pr'], commit: true },
   { label: 'Remote', names: ['git-push', 'git-sync'] }
 ].map(group => ({ ...group, items: group.names.map(name => items.value.find(command => command.name === name)).filter(Boolean) }))
   .filter(group => group.items.length))
-const busy = computed(() => props.disabled || catalog.loading || actions.busy)
+const busy = computed(() => props.disabled || (catalog.loading && !catalog.loaded) || actions.messageDisabled)
 watch(() => chat.current?.id, () => { commitFirst.value = false })
 async function run(command) {
   if (busy.value || command.disabledReason) return

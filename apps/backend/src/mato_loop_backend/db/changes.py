@@ -35,6 +35,7 @@ def _sources():
         PermissionGrant,
         Project,
         QuestionRequest,
+        QueuedMessage,
         SettingRecord,
     )
 
@@ -43,6 +44,7 @@ def _sources():
         Message: ("messages", ChatSession, "session_id"),
         ContextSummary: ("messages", ChatSession, "session_id"),
         AgentRun: ("sessions", ChatSession, "session_id"),
+        QueuedMessage: ("message_queue", ChatSession, "session_id"),
         ApprovalRequest: ("approvals", ApprovalRequest, "id"),
         QuestionRequest: ("questions", ChatSession, "session_id"),
         PermissionGrant: ("permissions", ChatSession, "session_id"),

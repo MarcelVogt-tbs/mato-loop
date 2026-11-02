@@ -1908,8 +1908,6 @@ async def test_run_automation_rechecks_revision_after_approval_and_queues_only(
     )
     enqueue = AsyncMock(return_value=run)
     monkeypatch.setattr(mock_tools_automations.AutomationService, "enqueue_manual", enqueue)
-    start = Mock()
-    monkeypatch.setattr(mock_tools_automations.AutomationScheduler, "start", start)
 
     result = await tool_registry.execute(call, context)
     await asyncio.sleep(0)
@@ -1917,7 +1915,6 @@ async def test_run_automation_rechecks_revision_after_approval_and_queues_only(
     assert not result.is_error
     assert context.ask_handler.await_args.args[0].resource_type == "automation"
     assert enqueue.await_args.kwargs["expected_revision"] == 3
-    start.assert_called_once_with()
 
 
 async def test_delete_automation_approval_calls_central_revision_checked_service(

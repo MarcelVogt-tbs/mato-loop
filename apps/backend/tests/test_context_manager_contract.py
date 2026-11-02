@@ -3538,8 +3538,12 @@ async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(
     run.current_directory_snapshot = "/current"
     records = await AgentRuntime._records(db, run.session_id)
     previous = _message(run.session_id, "user", "Earlier request")
+    records[-1].provider_data["_matoloop"].update(
+        codingCommand={"name": "git-finish", "instructions": "Review, commit and merge the completed task."},
+    )
     previous.provider_data = {"_matoloop": {
         "workspaceContext": {"executionAgentId": None, "currentDirectory": "/previous"},
+        "parallelWork": {"otherRuns": [{"runId": str(uuid4()), "directory": "/previous", "status": "running"}], "truncated": False},
         "delegationSource": {"sessionId": str(uuid4()), "runId": str(uuid4()), "toolCallId": "delegate"},
     }}
     records[-1].provider_data["_matoloop"].update(
@@ -3577,6 +3581,7 @@ async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(
                                  available_secret_references={saved_reference})
     assert json.loads(first[-1]["content"])["environment"] == {"sudo_password": saved_reference}
     assert first[1]["role"] == "user"
+    assert "Host workspace occupancy" not in str(first)
     assert "Child evidence" in str(first) and "Task instruction from the parent agent" in str(first)
     assert any("The workspace changed for this user turn." in message["content"]
                and '"currentDirectory": "/current"' in message["content"]

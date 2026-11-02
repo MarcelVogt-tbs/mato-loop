@@ -58,7 +58,11 @@ def test_coding_profiles_share_batching_guidance(profile):
 @pytest.mark.parametrize("profile", [plan_profile(), build_profile()])
 def test_coding_memory_restriction_reaches_delegated_agents(profile):
     prompt = agent_profile_runtime_instructions(profile, delegated=True)
-    assert "Missing context alone does not justify retrieval" in prompt
+    assert all(rule in prompt for rule in (
+        "Retrieve saved memories or conversations outside the current project only when the user explicitly",
+        "context_search with scope=sessions and all_projects=false",
+        "Do not use scope=all for project context",
+    ))
 
 
 def test_custom_profile_inherits_build_model_instructions():

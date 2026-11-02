@@ -6,7 +6,13 @@ import pytest
 from mato_loop_backend.agent.projection import _summary_source, message_dict
 from mato_loop_backend.api.routes.projects import ProjectRequest
 from mato_loop_backend.messaging.telegram import telegram_commands
-from mato_loop_backend.models import ChatSession, ExecutionAgent, Message, Project, UserAccount
+from mato_loop_backend.models import (
+    ChatSession,
+    ExecutionAgent,
+    Message,
+    Project,
+    UserAccount,
+)
 from mato_loop_backend.sessions.coding import (
     RepositoryResult,
     WorktreeRemovedResult,
@@ -23,6 +29,7 @@ from mato_loop_backend.sessions.git_commands import (
     COMMIT_RULES,
     REVIEW_INSTRUCTIONS,
     check_workspace_admission,
+    validate_git_context,
 )
 from mato_loop_backend.sessions.serialization import message_payload
 from mato_loop_backend.sessions.service import SessionServiceError
@@ -302,7 +309,8 @@ async def test_admission_blocks_overlap_in_both_directions(incoming_command, dir
 @pytest.mark.parametrize(("name", "other_directory", "blocked"), [
     ("git-commit", "/project", False), ("git_commit", "/project", False),
     ("git-push", "/project", False), ("git-pr", "/project", False),
-    ("git-commit", "/worktree", True), ("git-merge", "/project", True),
+    ("git-commit", "/worktree", True), ("git-merge", "/project", False),
+    ("git-finish", "/project", False), ("git-finish", "/worktree", True),
     ("git-sync", "/project", True), ("git-remote", "/other-worktree", True),
     ("git-commit", "/other-worktree", False),
 ])
@@ -332,6 +340,40 @@ async def test_admission_keeps_a_relocated_command_directory_reserved():
     }}}, None, uuid4(), "Other task", "running")]
     with pytest.raises(SessionServiceError, match="git.projectBusy"):
         await check_workspace_admission(db, uuid4(), uuid4(), "/relocated")
+
+
+async def test_queued_followup_rejects_a_predecessor_from_another_session():
+    from mato_loop_backend.sessions.message_queue import enqueue
+
+    db = AsyncMock()
+    db.get.side_effect = [None, None, Message(session_id=uuid4())]
+    with pytest.raises(SessionServiceError, match="validation.invalid"):
+        await enqueue(db, ChatSession(id=uuid4()), uuid4(), {"content": "Follow up"}, after_run_id=uuid4())
+
+
+@pytest.mark.parametrize("changed_field", [None, "targetBranch", "remote", "remoteIdentity"])
+def test_followup_revalidates_the_git_target(changed_field):
+    context = {"repository": "/worktree", "targetBranch": "main", "remote": "origin", "remoteIdentity": "a" * 64}
+    fresh = {**context, changed_field: "other"} if changed_field else context
+    if changed_field:
+        with pytest.raises(SessionServiceError, match="git.worktreeChanged"):
+            validate_git_context(context, fresh)
+    else:
+        validate_git_context(context, fresh)
+
+
+@pytest.mark.parametrize("source", ["codingFinish", "followup"])
+def test_followup_message_is_visibly_host_generated_and_preserves_model_provenance(source):
+    from mato_loop_backend.agent.projection import command_message_content
+
+    message = Message(id=uuid4(), role="user", content="/git-commit", provider_data={"_matoloop": {
+        "source": {"type": source},
+        "codingCommand": {"label": "Commit", "prompt": "Internal instructions", "instructions": "Commit task changes."},
+    }})
+    payload = message_payload(message)
+    assert (payload["sourceType"], payload["commandPrompt"], "not a new user request" in command_message_content(message)) == (
+        source, "Commit", True,
+    )
 
 
 async def test_admission_keeps_saved_git_resources_reserved_without_live_binding():

@@ -150,6 +150,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     const config = { suppressErrorToast: true }
     const requests = []
     const reload = (resource, request, sessionId = null) => requests.push({ resource, sessionId, request })
+    if (all || resources.has('message_queue')) reload('message_queue', chat.refreshServerQueue())
     if (all || resources.has('automations')) reload('automations', automations.fetchAutomations(config))
     if (all || sessionsChanged || resources.has('projects')) reload('projects', projects.fetchAll(config))
     if (all || resources.has('approvals')) reload('approvals', approvals.fetchPending(config))

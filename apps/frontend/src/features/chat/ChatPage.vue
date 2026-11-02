@@ -652,6 +652,8 @@ const liveWorkHistory = computed(() => ({
 }))
 const userMessageSource = (message) => (
   message.role !== 'user' ? ''
+    : message.sourceType === 'codingFinish' ? 'Autoabschluss · Automatischer Folgeauftrag'
+    : message.sourceType === 'followup' ? 'Automatischer Folgeauftrag'
     : message.sourceType === 'automationRun' ? `Automation${message.automationName ? ` · ${message.automationName}` : ''}`
     : message.source?.type === 'endpoint' && message.source.provider === 'telegram'
     ? 'Telegram'

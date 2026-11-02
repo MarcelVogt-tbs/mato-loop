@@ -22,6 +22,8 @@ _MESSAGES = {
     "git.fetchFailed": "The current target branch could not be fetched from the remote.",
     "git.worktreeFailed": "The session worktree could not be prepared. Inspect existing state before retrying.",
     "git.worktreeChanged": "The workspace no longer matches the selected repository or computer.",
+    "session.queueContextChanged": "The working directory or computer changed after this message was queued.",
+    "session.queuePredecessorFailed": "The preceding request did not complete successfully.",
     "git.worktreeRequired": "Select a project worktree for this command.",
     "git.worktreeLocation": "Managed worktrees must be outside the source repository.",
     "git.worktreeRemoveFailed": "The worktree could not be removed. Inspect its current state before retrying.",

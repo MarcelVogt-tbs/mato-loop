@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import nullcontext
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -6,10 +7,12 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.app as app_module
+from mato_loop_backend import automations
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.approvals import ApprovalDecisionRequest, decide_approval
 from mato_loop_backend.error_contract import describe_error
+from mato_loop_backend.memory import dreaming
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
@@ -17,6 +20,55 @@ from mato_loop_backend.models import (
     TitleGenerationStatus,
     UserAccount,
 )
+from mato_loop_backend.sessions import message_queue
+
+
+async def test_background_processors_are_independent_and_stop_together(monkeypatch):
+    started, delivered = asyncio.Event(), asyncio.Event()
+
+    async def dream():
+        started.set()
+        await asyncio.Event().wait()
+
+    async def deliver():
+        delivered.set()
+
+    monkeypatch.setattr(dreaming, "process_pending", dream)
+    monkeypatch.setattr(automations, "process_pending", AsyncMock(side_effect=RuntimeError("failed")))
+    monkeypatch.setattr(message_queue, "process_pending", deliver)
+    background = app_module.BackgroundProcessing
+    background.start()
+    tasks = list(background._tasks)
+    try:
+        await asyncio.wait_for(asyncio.gather(started.wait(), delivered.wait()), timeout=1)
+    finally:
+        await background.stop()
+    assert all(task.done() for task in tasks) and not background._tasks
+
+
+async def test_slow_message_admission_does_not_block_later_sessions(monkeypatch):
+    slow, other = uuid4(), uuid4()
+    started, delivered = asyncio.Event(), asyncio.Event()
+    db = AsyncMock()
+    db.scalars.side_effect = [[slow], [slow, other]]
+    monkeypatch.setattr(message_queue, "AsyncSessionFactory", lambda: nullcontext(db))
+
+    async def deliver(session_id):
+        if session_id == slow:
+            started.set()
+            await asyncio.Event().wait()
+        else:
+            delivered.set()
+
+    monkeypatch.setattr(message_queue, "deliver_next", deliver)
+    try:
+        await asyncio.wait_for(message_queue.process_pending(), timeout=1)
+        await asyncio.wait_for(started.wait(), timeout=1)
+        await asyncio.wait_for(message_queue.process_pending(), timeout=1)
+        await asyncio.wait_for(delivered.wait(), timeout=1)
+    finally:
+        await app_module.BackgroundProcessing.stop()
+    assert delivered.is_set() and not message_queue._deliveries
 
 
 @pytest.mark.parametrize("restored", [False, True])
@@ -50,8 +102,8 @@ async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypat
     monkeypatch.setattr(app_module.MemoryIndexScheduler, "stop", AsyncMock())
     monkeypatch.setattr(app_module.EpisodeIndexScheduler, "start", Mock())
     monkeypatch.setattr(app_module.EpisodeIndexScheduler, "stop", AsyncMock())
-    monkeypatch.setattr(app_module.AutomationScheduler, "start", Mock())
-    monkeypatch.setattr(app_module.AutomationScheduler, "stop", AsyncMock())
+    monkeypatch.setattr(app_module.BackgroundProcessing, "start", Mock())
+    monkeypatch.setattr(app_module.BackgroundProcessing, "stop", AsyncMock())
     monkeypatch.setattr(app_module.embedding_client, "close", AsyncMock())
     session_storage = Mock()
     def reconcile(*_args, **_kwargs):

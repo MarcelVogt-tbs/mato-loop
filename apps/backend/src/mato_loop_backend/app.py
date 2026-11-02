@@ -17,7 +17,8 @@ from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.request_body_limit import MediaRequestBodyLimitMiddleware
 from mato_loop_backend.api.router import api_router
-from mato_loop_backend.automations import AutomationScheduler, AutomationService
+from mato_loop_backend.automations import AutomationService
+from mato_loop_backend.background import BackgroundProcessing
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory, engine
 from mato_loop_backend.diagnostics.logs import install_backend_log_handler
@@ -27,7 +28,7 @@ from mato_loop_backend.execution.maintenance import stop_auto_updates
 from mato_loop_backend.execution.terminals import terminal_coordinator
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.media.attachments import AttachmentService
-from mato_loop_backend.memory.dreaming import DreamingScheduler, DreamingService
+from mato_loop_backend.memory.dreaming import DreamingService
 from mato_loop_backend.memory.embeddings import embedding_client
 from mato_loop_backend.memory.episode_indexing import (
     EpisodeIndexScheduler,
@@ -178,8 +179,7 @@ async def _application_lifespan(_app: FastAPI):
             await EpisodeIndexService.reconcile(db, retry_failed=True)
     except Exception:
         logger.exception("Failed to clean up stale runs and interactions during startup")
-    DreamingScheduler.start()
-    AutomationScheduler.start()
+    BackgroundProcessing.start()
     MemoryIndexScheduler.start()
     EpisodeIndexScheduler.start()
     CodingScheduler.start()
@@ -196,8 +196,7 @@ async def _application_lifespan(_app: FastAPI):
             await debug_mcp_stack.aclose()
         except Exception:
             logger.exception("Could not stop the optional debug MCP")
-        await DreamingScheduler.stop()
-        await AutomationScheduler.stop()
+        await BackgroundProcessing.stop()
         await MemoryIndexScheduler.stop()
         await EpisodeIndexScheduler.stop()
         await CodingScheduler.stop()

@@ -5,13 +5,14 @@ import { useWorkspaceStore } from 'src/stores/workspace'
 import { buildAttachmentFormData, releaseAttachmentDrafts } from 'src/features/chat/attachments'
 import { newSessionQueueKey, queueKeyForEntry, sanitizedSessionOptions, sessionCreatePayload, sessionScopeKey, sortSessions } from 'src/features/chat/state'
 import { errorDescriptor } from 'src/utils/api-errors'
-import { compareChatOutboxEntries, deleteChatOutboxEntry, deleteChatOutboxEntries, saveChatOutboxEntry } from 'src/utils/chat-outbox'
+import { compareChatOutboxEntries, deleteChatOutboxEntry, deleteChatOutboxEntries, saveChatOutboxEntry, saveChatOutboxEntries } from 'src/utils/chat-outbox'
 import { notifyError } from 'src/utils/notifications'
 import { randomUuid } from 'src/utils/random-id'
 import { OUTBOX_RETRY_MS } from 'src/features/chat/model'
+import { gitFinishEntry, useGitActionStore } from 'src/features/coding/git-actions-store'
 
 export const outboxActions = {
-    async send(content, { preserveDraft = false, interrupt = false } = {}) {
+    async send(content, { preserveDraft = false, interrupt = false, activeFile } = {}) {
       if (this.outboxSaving || this.historyActionPending) return null
       const sessionId = this.current?.id
       const ownerUserId = this.draftOwnerUserId
@@ -48,7 +49,7 @@ export const outboxActions = {
           this.setActivity('submitting', { startedAt: new Date().toISOString() })
         }
         if (this.outboxLoadPromise) await this.outboxLoadPromise
-        entry = await this.queueMessage(content, { preserveDraft, interrupt: interruptRun })
+        entry = await this.queueMessage(content, { preserveDraft, interrupt: interruptRun, activeFile })
       } finally {
         this.outboxSaving = false
       }
@@ -66,13 +67,20 @@ export const outboxActions = {
       }
       return this.drainOutbox()
     },
-    async queueMessage(content, { preserveDraft = false, interrupt = false } = {}) {
+    async queueMessage(content, { preserveDraft = false, interrupt = false, activeFile } = {}) {
       const ownerUserId = this.draftOwnerUserId
       const loadVersion = this.outboxLoadVersion
       if (!ownerUserId) return null
       const text = String(content || '').trim()
       const attachments = preserveDraft ? [] : [...this.activeAttachmentDraft]
       if (!text && !attachments.length) return null
+      const git = useGitActionStore()
+      const finishScope = git.finishNext && git.buildSelected && !interrupt && !preserveDraft && text && !text.startsWith('/')
+        ? git.finishScope : null
+      if (finishScope && useWorkspaceStore().hasDirtyEditors) {
+        notifyError({}, 'Bitte vor dem Autoabschluss die ungespeicherten Editoränderungen speichern oder verwerfen.')
+        return null
+      }
       const sessionId = this.current?.id || null
       const entry = {
         id: randomUuid(),
@@ -93,9 +101,9 @@ export const outboxActions = {
         )),
         agentProfileId: sessionId ? this.activeAgentProfileId || null : null,
         controlCenter: sessionId ? null : controlCenterRequestState(useControlCenterStore()),
-        activeFile: useWorkspaceStore().activeFileSnapshot(
+        activeFile: activeFile === undefined ? useWorkspaceStore().activeFileSnapshot(
           this.activeContext?.preferredExecutionAgentId
-        ),
+        ) : activeFile,
         queuedAt: new Date(this.activeQueuedMessages.reduce(
           (latest, item) => Math.max(latest, Date.parse(item.queuedAt) + 1), Date.now()
         )).toISOString(),
@@ -104,9 +112,10 @@ export const outboxActions = {
           ? { continuationRunId: this.runId } : {}),
         paused: false
       }
+      const entries = finishScope ? [entry, gitFinishEntry(entry)] : [entry]
       this.pendingOutboxEntry = { ...entry, preserveDraft }
       try {
-        await saveChatOutboxEntry(toRaw(entry))
+        await saveChatOutboxEntries(entries.map(toRaw))
       } catch (error) {
         notifyError({}, 'Die Nachricht konnte nicht auf diesem Gerät vorgemerkt werden.')
         return null
@@ -114,12 +123,13 @@ export const outboxActions = {
         if (this.pendingOutboxEntry?.id === entry.id) this.pendingOutboxEntry = null
       }
       if (ownerUserId !== this.draftOwnerUserId || loadVersion !== this.outboxLoadVersion) {
-        await deleteChatOutboxEntry(entry.id).catch(() => {})
+        await deleteChatOutboxEntries(entries.map((item) => item.id)).catch(() => {})
         return null
       }
+      if (finishScope && git.finishScope === finishScope) git.setFinishNext(false)
       const key = queueKeyForEntry(entry)
       if (!this.queuedMessages[key]) this.queuedMessages[key] = []
-      this.queuedMessages[key].push(entry)
+      this.queuedMessages[key].push(...entries)
       this.queuedMessages[key].sort(compareChatOutboxEntries)
       if (!this.queuedMessages[key][0].paused) delete this.queuedSendPausedSessions[key]
       if (!preserveDraft) {
@@ -137,17 +147,25 @@ export const outboxActions = {
       if (index < 0) return null
       const entry = queue[index]
       try {
-        await deleteChatOutboxEntry(entry.id)
-      } catch {
-        notifyError({}, 'Die vorgemerkte Nachricht konnte nicht entfernt werden.')
-        return null
+        await deleteChatOutboxEntries((this.queuedMessages[key] || queue)
+          .filter((item) => item.id === id || item.afterRunId === id).map((item) => item.id))
+        if (entry.serverQueued) {
+          await api.delete(`/sessions/${entry.sessionId}/queue/${entry.id}`, { suppressErrorToast: true })
+          this.serverQueueVersion += 1
+        }
+      } catch (error) {
+        if (error?.response?.status !== 404) {
+          notifyError(error)
+          return null
+        }
       }
-      queue.splice(index, 1)
+      this.queuedMessages[key] = (this.queuedMessages[key] || queue).filter((item) => item.id !== id && item.afterRunId !== id)
+      const remaining = this.queuedMessages[key]
       releaseAttachmentDrafts(entry.attachments)
-      if (!queue.length) {
+      if (!remaining.length) {
         delete this.queuedMessages[key]
         delete this.queuedSendPausedSessions[key]
-      } else if (queue[0].paused) {
+      } else if (remaining[0].paused) {
         this.queuedSendPausedSessions[key] = true
       } else {
         delete this.queuedSendPausedSessions[key]
@@ -155,6 +173,14 @@ export const outboxActions = {
       return entry
     },
     async restoreQueuedMessage(id, key = this.activeQueueKey) {
+      const queued = this.queuedMessages[key]?.find((entry) => entry.id === id)
+      if (queued?.serverQueued) {
+        queued.attachments = await Promise.all(queued.attachments.map(async (attachment, index) => {
+          if (attachment.file instanceof Blob) return attachment
+          const { data } = await api.get(`/sessions/${queued.sessionId}/queue/${id}/attachments/${index}`, { responseType: 'blob' })
+          return { ...attachment, file: markRaw(new File([data], attachment.name, { type: attachment.mimeType })) }
+        }))
+      }
       const entry = await this.removeQueuedMessage(id, key)
       if (!entry) return null
       const sessionId = entry.sessionId || null
@@ -168,7 +194,10 @@ export const outboxActions = {
     async clearQueuedMessages(key = this.activeQueueKey) {
       const entries = this.queuedMessages[key] || []
       if (!entries.length) return
-      await deleteChatOutboxEntries(entries.map((entry) => entry.id))
+      for (const entry of [...entries]) {
+        if (entry.serverQueued && !await this.removeQueuedMessage(entry.id, key)) return
+      }
+      await deleteChatOutboxEntries(entries.filter((entry) => !entry.serverQueued).map((entry) => entry.id))
       releaseAttachmentDrafts(entries.flatMap((entry) => entry.attachments))
       delete this.queuedMessages[key]
       delete this.queuedSendPausedSessions[key]
@@ -177,6 +206,11 @@ export const outboxActions = {
       if (!key) return
       const entry = this.queuedMessages[key]?.[0]
       if (entry?.paused) {
+        if (entry.serverQueued) {
+          await api.patch(`/sessions/${entry.sessionId}/queue/${entry.id}`, { paused: false })
+          await this.refreshServerQueue()
+          return
+        }
         entry.paused = false
         try {
           await saveChatOutboxEntry(toRaw(entry))
@@ -210,52 +244,52 @@ export const outboxActions = {
       } finally {
         if (this.queueDrainPromise === request) this.queueDrainPromise = null
         if (
-          this.queuedSendReady
-          || Object.values(this.queuedMessages).some((queue) => (
-            queue[0]?.sessionId && queue[0].sessionId !== this.selectedSessionId
-              && !this.queuedSendPausedSessions[queueKeyForEntry(queue[0])]
-          ))
-        ) this.scheduleQueueDrain(0)
+          Object.entries(this.queuedMessages).some(([key, queue]) => {
+            const entry = queue.find((item) => !item.serverQueued)
+            return entry && !entry.paused && (entry.sessionId || key === this.activeQueueKey)
+          })
+        ) this.scheduleQueueDrain(this.historyActionPending || this.sessionSettingsPending || this.stopping ? OUTBOX_RETRY_MS : 0)
       }
     },
     async drainNextOutboxEntry() {
       this.cancelQueueDrain()
-      let entry = this.queuedSendReady ? this.activeQueuedMessages[0] : null
-      if (!entry) {
-        const backgroundEntries = Object.values(this.queuedMessages)
-          .filter((queue) => queue[0]?.sessionId && queue[0].sessionId !== this.selectedSessionId)
-          .map((queue) => queue[0])
-          .filter((item) => !this.queuedSendPausedSessions[queueKeyForEntry(item)])
-          .sort((left, right) => left.queuedAt.localeCompare(right.queuedAt))
-        for (const candidate of backgroundEntries) {
-          try {
-            const { data } = await api.get(`/sessions/${candidate.sessionId}`, {
-              suppressErrorToast: true
-            })
-            if (!data.activeRun || candidate.continuationRunId === data.activeRun.id) {
-              entry = candidate
-              break
-            }
-          } catch (error) {
-            const key = queueKeyForEntry(candidate)
-            candidate.paused = true
-            try {
-              await saveChatOutboxEntry(toRaw(candidate))
-            } catch {
-              notifyError({}, 'Der Pausenstatus konnte nicht gespeichert werden.')
-            }
-            this.queuedSendPausedSessions[key] = true
-            notifyError(error)
-          }
-        }
-      }
-      if (!entry) {
-        if (Object.values(this.queuedMessages).some((queue) => (
-          queue[0]?.sessionId && !this.queuedSendPausedSessions[queueKeyForEntry(queue[0])]
-        ))) this.scheduleQueueDrain()
-        return null
-      }
+      if (this.historyActionPending || this.sessionSettingsPending || this.stopping) return null
+      const entry = Object.entries(this.queuedMessages)
+        .filter(([key]) => key === this.activeQueueKey || !key.startsWith('new:'))
+        .map(([, queue]) => queue.find((item) => !item.serverQueued)).filter((item) => item && !item.paused)
+        .sort(compareChatOutboxEntries)[0]
+      if (!entry) return null
       return this.submitOutboxEntry(entry)
+    },
+    async refreshServerQueue() {
+      const owner = this.draftOwnerUserId, version = this.outboxLoadVersion, requestVersion = ++this.serverQueueVersion
+      if (!owner) return
+      const { data } = await api.get('/sessions/message-queue', { suppressErrorToast: true })
+      if (owner !== this.draftOwnerUserId || version !== this.outboxLoadVersion || requestVersion !== this.serverQueueVersion) return
+      const previous = new Map(Object.values(this.queuedMessages).flat().map((entry) => [entry.id, entry]))
+      const serverIds = new Set((data.items || []).map((entry) => entry.id))
+      if ([...previous.values()].some((entry) => entry.serverQueued && entry.sessionId === this.current?.id && !serverIds.has(entry.id))) {
+        await this.refreshSession(this.current.id)
+      }
+      if (owner !== this.draftOwnerUserId || version !== this.outboxLoadVersion || requestVersion !== this.serverQueueVersion) return
+      const accepted = [...previous.values()].filter((entry) => entry.serverQueued || serverIds.has(entry.id))
+      if (accepted.length) await deleteChatOutboxEntries(accepted.map((entry) => entry.id))
+      if (owner !== this.draftOwnerUserId || version !== this.outboxLoadVersion || requestVersion !== this.serverQueueVersion) return
+      for (const [key, queue] of Object.entries(this.queuedMessages)) {
+        this.queuedMessages[key] = queue.filter((entry) => !entry.serverQueued && !serverIds.has(entry.id))
+        if (!this.queuedMessages[key].length) delete this.queuedMessages[key]
+      }
+      for (const entry of data.items || []) {
+        const old = previous.get(entry.id)
+        entry.attachments = entry.attachments.map((attachment, index) => ({ ...attachment,
+          ...(old?.attachments[index]?.file ? { file: old.attachments[index].file } : {}) }))
+        if (!this.queuedMessages[entry.sessionId]) this.queuedMessages[entry.sessionId] = []
+        this.queuedMessages[entry.sessionId].push(entry)
+        this.queuedMessages[entry.sessionId].sort(compareChatOutboxEntries)
+        if (entry.errorCode && entry.errorCode !== old?.errorCode) notifyError({ code: entry.errorCode })
+      }
+      this.queuedSendPausedSessions = Object.fromEntries(Object.entries(this.queuedMessages)
+        .filter(([, queue]) => queue[0]?.paused).map(([key]) => [key, true]))
     },
     async submitOutboxEntry(entry) {
       this.queueSendingEntryId = entry.id
@@ -298,42 +332,33 @@ export const outboxActions = {
             void this.refreshSessions(null, entry.projectId).catch(() => {})
           }
           result = { created: false, sessionId: entry.sessionId }
-        } else if (this.current?.id === entry.sessionId && this.selectedSessionId === entry.sessionId) {
-          result = await this.sendToCurrent(entry.content, entry.attachments, {
-            clearDraft: false,
-            activeFile: entry.activeFile,
-            agentProfileId: entry.agentProfileId,
-            runId: entry.id,
-            suppressErrorToast: true
-          })
         } else {
           const payload = {
             content: entry.content,
             run_id: entry.id,
+            enqueue: true,
+            ...(entry.afterRunId ? { after_run_id: entry.afterRunId } : {}),
             ...(entry.agentProfileId ? { agent_profile_id: entry.agentProfileId } : {}),
             ...(entry.activeFile ? { active_file: entry.activeFile } : {})
           }
           const config = { suppressErrorToast: true }
-          const { data } = await (entry.attachments.length
+          await (entry.attachments.length
             ? api.post(
                 `/sessions/${entry.sessionId}/messages/with-attachments`,
                 buildAttachmentFormData(payload, entry.attachments),
                 config
               )
             : api.post(`/sessions/${entry.sessionId}/messages`, payload, config))
-          entry.sentMessageId = data.message?.id
-          if (data.message) data.message.renderId = entry.id
-          if (data?.runId && this.current?.id === entry.sessionId && this.selectedSessionId === entry.sessionId) {
-            if (data.agentProfileId) this.current.agentProfileId = data.agentProfileId
-            if (data.message && !this.current.messages.some((message) => message.id === data.message.id)) {
-              this.current.messages.push(data.message)
-            }
-            if (this.runId !== data.runId || !this.eventSource) {
-              this.watchRun(entry.sessionId, data.runId, { status: 'queued', ...data })
-            }
+          entry.serverQueued = true
+          this.serverQueueVersion += 1
+          await deleteChatOutboxEntry(entry.id)
+          if (this.drafts.sessionAgentProfiles[entry.sessionId] === entry.agentProfileId
+            && !this.queuedMessages[entry.sessionId]?.some((item) => item.id !== entry.id && !item.serverQueued)) {
+            delete this.drafts.sessionAgentProfiles[entry.sessionId]
+            this.persistDrafts()
           }
-          void this.refreshSessions(null, entry.projectId).catch(() => {})
-          result = { created: false, sessionId: entry.sessionId }
+          await this.refreshServerQueue()
+          return { created: false, sessionId: entry.sessionId }
         }
         if (
           entry.sessionId
@@ -355,6 +380,7 @@ export const outboxActions = {
         return result
       } catch (error) {
         const key = queueKeyForEntry(entry)
+        if (entry.serverQueued) return { created: false, sessionId: entry.sessionId }
         const stillQueued = this.queuedMessages[key]?.some((item) => item.id === entry.id)
         if (!stillQueued) return null
         if (entry.continuationRunId && errorDescriptor(error)?.code === 'session.runInactive') {
@@ -498,14 +524,17 @@ export const outboxActions = {
         const recordings = this.getAudioDictation(null, projectId)
         if (recordings) this.setAudioDictation(recordings, session.id)
         this.resetNewDraft(projectId)
-        if (stillSelected) {
-          if (queuedEntry) {
-            const key = newSessionQueueKey(projectId)
-            const queue = this.queuedMessages[key]
-            for (const entry of queue) entry.sessionId = session.id
-            this.queuedMessages[session.id] = queue
-            delete this.queuedMessages[key]
+        if (queuedEntry) {
+          const key = newSessionQueueKey(projectId)
+          const queue = this.queuedMessages[key]
+          for (const entry of queue) {
+            entry.sessionId = session.id
+            if (entry.id !== runId) await saveChatOutboxEntry(toRaw(entry))
           }
+          this.queuedMessages[session.id] = [...(this.queuedMessages[session.id] || []), ...queue].sort(compareChatOutboxEntries)
+          delete this.queuedMessages[key]
+        }
+        if (stillSelected) {
           this.current = session
           this.selectedSessionId = session.id
           this.watchRun(session.id, data.runId, {
@@ -523,101 +552,6 @@ export const outboxActions = {
         if (
           this.sessionLoadVersion === sessionLoadVersion
           && this.selectedSessionId === selectedSessionId
-        ) {
-          this.running = false
-          this.stopping = false
-          this.cancelRequested = false
-          this.clearActivity()
-        }
-        throw error
-      }
-    },
-    async sendToCurrent(
-      content,
-      attachments = [],
-      { clearDraft = true, activeFile: requestedActiveFile, agentProfileId = null, runId = null, suppressErrorToast = false } = {}
-    ) {
-      const session = this.current
-      const sessionLoadVersion = this.sessionLoadVersion
-      this.running = !this.cancelRequested
-      this.streamContent = ''
-      this.streamResearchSources = []
-      this.streamReasoning = null
-      this.streamContextSummary = null
-      this.streamModelName = null
-      this.processOutputs = {}
-      this.completedToolCallId = null
-      this.setActivity('submitting', { startedAt: new Date().toISOString() })
-      try {
-        const activeFile = requestedActiveFile === undefined
-          ? useWorkspaceStore().activeFileSnapshot(
-              this.activeContext?.preferredExecutionAgentId
-            )
-          : requestedActiveFile
-        const payload = {
-          content,
-          ...(runId ? { run_id: runId } : {}),
-          ...(agentProfileId ? { agent_profile_id: agentProfileId } : {}),
-          ...(activeFile ? { active_file: activeFile } : {})
-        }
-        const config = suppressErrorToast ? [{ suppressErrorToast: true }] : []
-        const { data } = attachments.length
-          ? await api.post(
-              `/sessions/${session.id}/messages/with-attachments`,
-              buildAttachmentFormData(payload, attachments),
-              ...config
-            )
-          : await api.post(`/sessions/${session.id}/messages`, payload, ...config)
-        if (data.message && runId) data.message.renderId = runId
-        const queuedEntry = this.queuedMessages[session.id]?.find((entry) => entry.id === runId)
-        if (queuedEntry) queuedEntry.sentMessageId = data.message?.id
-        if (data.message) {
-          const targetSession = this.selectedSessionId === session.id && this.current?.id === session.id
-            ? this.current : session
-          if (data.agentProfileId) targetSession.agentProfileId = data.agentProfileId
-          const canonicalIndex = targetSession.messages.findIndex((message) => message.id === data.message.id)
-          if (canonicalIndex >= 0) {
-            targetSession.messages[canonicalIndex] = data.message
-          } else {
-            targetSession.messages.push(data.message)
-            if (data.message.role === 'user' && Number.isInteger(targetSession.userRequestCount)) {
-              targetSession.userRequestCount += 1
-            }
-          }
-          if (data.message.createdAt) {
-            targetSession.lastMessageAt = data.message.createdAt
-            this.updateSessionSummary(targetSession)
-          }
-        }
-        if (clearDraft) {
-          this.clearAttachmentDraft(session.id)
-          delete this.drafts.sessionMessages[session.id]
-          this.persistDrafts()
-        }
-        if (
-          this.selectedSessionId === session.id
-          && this.current?.id === session.id
-        ) {
-          if (this.runId !== data.runId || !this.eventSource) {
-            this.watchRun(session.id, data.runId, {
-              status: 'queued',
-              modelName: data.modelName,
-              agentProfileId: data.agentProfileId,
-              activeDurationMs: data.activeDurationMs,
-              activeDurationRunning: data.activeDurationRunning,
-              activeTimingRevision: data.activeTimingRevision
-            })
-          }
-          await this.cancelActiveRun()
-        } else {
-          void this.refreshSessions().catch(() => {})
-        }
-        return { created: false, sessionId: session.id }
-      } catch (error) {
-        if (
-          this.sessionLoadVersion === sessionLoadVersion
-          && this.selectedSessionId === session.id
-          && this.current?.id === session.id
         ) {
           this.running = false
           this.stopping = false

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 from datetime import UTC, datetime
@@ -539,33 +538,9 @@ class AutomationService:
         await db.commit()
 
 
-class AutomationScheduler:
-    _task: asyncio.Task[None] | None = None
-
-    @classmethod
-    def start(cls) -> None:
-        if cls._task is None or cls._task.done():
-            cls._task = asyncio.create_task(cls._loop())
-
-    @classmethod
-    async def stop(cls) -> None:
-        if cls._task is None:
-            return
-        cls._task.cancel()
-        await asyncio.gather(cls._task, return_exceptions=True)
-        cls._task = None
-
-    @classmethod
-    async def _loop(cls) -> None:
-        while True:
-            try:
-                async with AsyncSessionFactory() as db:
-                    await AutomationService.mirror_agent_runs(db)
-                    await AutomationService.enqueue_due(db)
-                    while await AutomationService.process_next(db):
-                        pass
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Automation scheduler iteration failed")
-            await asyncio.sleep(5)
+async def process_pending() -> None:
+    async with AsyncSessionFactory() as db:
+        await AutomationService.mirror_agent_runs(db)
+        await AutomationService.enqueue_due(db)
+        while await AutomationService.process_next(db):
+            pass
