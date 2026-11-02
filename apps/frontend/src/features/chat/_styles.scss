@@ -1128,33 +1128,6 @@
   display: flow-root;
 }
 
-.work-history--with-agent-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-}
-
-.work-history__agent-header {
-  min-width: 0;
-  grid-column: 1;
-  grid-row: 1;
-}
-
-.work-history--with-agent-header > .work-history__header-actions {
-  grid-column: 2;
-  grid-row: 1;
-  justify-self: end;
-  color: var(--app-muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.72rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.work-history--with-agent-header .work-history__timeline {
-  grid-column: 1 / -1;
-  grid-row: 2;
-}
-
 .work-history__meta-section {
   padding-left: 8px;
 }
@@ -1187,14 +1160,6 @@
   margin: 0 2px;
 }
 
-.work-history__children {
-  grid-column: 1 / -1;
-}
-
-.work-history__persistent-outputs {
-  grid-column: 1 / -1;
-}
-
 .work-history__entries {
   min-width: 0;
   padding: 0 0 4px;
@@ -1202,7 +1167,6 @@
 
 .work-history__tool-group-header,
 .work-history__reasoning-header,
-.work-history__reasoning-static,
 .tool-call__header {
   min-height: 24px;
   padding: 0 4px;

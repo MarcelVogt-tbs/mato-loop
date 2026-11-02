@@ -27,7 +27,6 @@ import { useSubagentStore } from '../src/stores/subagents'
 import { useApprovalStore } from '../src/stores/approvals'
 import { useQuestionStore } from '../src/stores/questions'
 import { useChatStore } from '../src/features/chat/store'
-import { useAgentProfileStore } from '../src/stores/agent-profiles'
 import { buildChatTranscript } from '../src/utils/chat-transcript'
 import { agentRunPresentation, mergeAgentActivity } from '../src/utils/agent-activity'
 import { api } from 'src/boot/axios'
@@ -321,7 +320,6 @@ describe('subagent inspector navigation and presentation', () => {
     vi.stubGlobal('EventSource', class { addEventListener() {} close() {} })
     const pinia = createPinia()
     setActivePinia(pinia)
-    useAgentProfileStore().agents = [{ id: 'agent', name: 'Allgemein' }]
     store = useSubagentStore()
     const child = { id: 'child', parentSessionId: 'parent', title: 'Dateien untersuchen', run: { id: 'run', status: 'waiting_approval' } }
     api.get.mockImplementation(async (url) => ({ data: url.endsWith('/children') ? [child]
@@ -377,10 +375,8 @@ describe('subagent inspector navigation and presentation', () => {
     expect(inspector.textContent).toContain('Ergebnis lesen')
     const historyHeader = inspector.querySelector('.work-history__toggle')
     expect(historyHeader).not.toBeNull()
-    expect([...inspector.querySelectorAll('.work-history__agent-header .chat-message__label span')].map((node) => node.textContent))
-      .toEqual(['Subagent', '·', 'Allgemein'])
-    expect(historyHeader.closest('.work-history__header-actions').previousElementSibling.classList)
-      .toContain('work-history__agent-header')
+    expect(inspector.querySelector('.work-history__agent-header, .chat-message--assistant .chat-message__label')).toBeNull()
+    expect(inspector.querySelector('.chat-message--assistant .app-sr-only')?.textContent).toBe('Assistentenantwort')
     historyHeader.click()
     await nextTick()
     expect(inspector.textContent).toContain('Ich prüfe die Datei.')
@@ -480,7 +476,7 @@ describe('subagent inspector navigation and presentation', () => {
     expect(duration.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('keeps the answer header and reveals duration on expansion when no activity entries exist', async () => {
+  it('keeps the answer and reveals duration on expansion when no activity entries exist', async () => {
     const pinia = createPinia()
     root = document.createElement('div')
     document.body.append(root)
@@ -488,14 +484,12 @@ describe('subagent inspector navigation and presentation', () => {
       render: () => h(AgentActivityPanel, {
         history: { entries: [], activeDurationMs: 4_000 }
       }, {
-        header: () => h('div', 'codemato · Allgemein'),
         default: () => h('div', 'Antwort')
       })
     })
     app.use(pinia).use(Quasar, { components })
     mountApp()
 
-    expect(root.querySelector('.work-history__agent-header').textContent).toContain('codemato · Allgemein')
     expect(root.querySelector('.work-history__timeline').textContent).toBe('Antwort')
     expect(root.querySelector('.work-history__toggle')).not.toBeNull()
     expect(root.querySelector('[role="timer"]')).toBeNull()

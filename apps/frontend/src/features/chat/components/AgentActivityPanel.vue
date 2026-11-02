@@ -1,32 +1,10 @@
 <template>
   <slot v-if="!history" />
   <div
-    v-else-if="$slots.default || $slots.header || entries.length || running || unmatchedSubagents.length"
+    v-else-if="$slots.default || entries.length || running || unmatchedSubagents.length"
     class="work-history"
-    :class="{
-      'work-history--with-agent-header': $slots.header
-    }"
   >
-    <div v-if="$slots.header" class="work-history__agent-header">
-      <slot name="header" />
-    </div>
-    <div v-if="$slots.header" class="work-history__header-actions row items-center no-wrap">
-      <TurnDuration v-if="historyExpanded" :history="running ? activity : history" :running="running" />
-      <q-btn
-        flat round dense
-        size="sm"
-        class="work-history__toggle"
-        :class="{ 'q-ml-sm': historyExpanded }"
-        icon="history"
-        :color="historyExpanded ? 'primary' : undefined"
-        :aria-expanded="historyExpanded"
-        :aria-label="historyExpanded ? 'Verlauf ausblenden' : 'Verlauf anzeigen'"
-        @click="toggleHistory"
-      >
-        <q-tooltip>{{ historyExpanded ? 'Verlauf ausblenden' : 'Verlauf anzeigen' }}</q-tooltip>
-      </q-btn>
-    </div>
-    <div v-if="!$slots.header" class="work-history__meta-section float-right row items-center no-wrap">
+    <div class="work-history__meta-section float-right row items-center no-wrap">
       <div v-if="historyExpanded" class="work-history__meta row items-center no-wrap q-gutter-xs">
         <TurnDuration :history="running ? activity : history" :running="running" />
       </div>

@@ -45,9 +45,10 @@
               :key="message.id"
               :class="['chat-message', `chat-message--${message.role}`, { 'chat-message--turn-continues': message.continuesAssistantTurn }]"
             >
-              <div v-if="message.role === 'user' || (message.showAgentLabel && !message.workHistory)" class="chat-message__label row items-center wrap q-gutter-x-sm">
-                <span>{{ message.role === 'user' ? 'Auftrag' : 'Subagent' }}</span>
+              <div v-if="message.role === 'user'" class="chat-message__label row items-center wrap q-gutter-x-sm">
+                <span>Auftrag</span>
               </div>
+              <span v-else-if="message.showAgentLabel" class="app-sr-only">Assistentenantwort</span>
               <q-banner v-if="message.kind === 'runtime_error' && message.error" rounded class="app-surface-tonal" role="alert">
                 {{ apiErrorMessage(message.error) }}
               </q-banner>
@@ -65,13 +66,6 @@
                   @rendered="followBottom"
                   @trust-image-origin="trustImageOrigin"
                 >
-                  <template v-if="message.showAgentLabel" #header>
-                    <div class="chat-message__label row items-center wrap q-gutter-x-sm">
-                      <span>Subagent</span>
-                      <span aria-hidden="true">·</span>
-                      <span>{{ agentProfileName(message) }}</span>
-                    </div>
-                  </template>
                   <MessageContent
                     v-if="message.content && message.role === 'assistant'"
                     class="chat-message__content"
@@ -112,7 +106,6 @@ import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
 import { useSubagentStore, subagentStatus } from 'stores/subagents'
 import { useApprovalStore } from 'stores/approvals'
 import { useQuestionStore } from 'stores/questions'
-import { useAgentProfileStore } from 'stores/agent-profiles'
 import { buildChatTranscript, withLiveTranscriptMessage } from 'src/utils/chat-transcript'
 import { agentRunPresentation } from 'src/utils/agent-activity'
 import { apiErrorMessage } from 'src/utils/api-errors'
@@ -123,7 +116,6 @@ const route = useRoute()
 const inspector = useSubagentStore()
 const approvals = useApprovalStore()
 const questions = useQuestionStore()
-const agentProfiles = useAgentProfileStore()
 const scrollArea = ref(null)
 const returnFocus = document.activeElement?.closest('[tabindex]:not([tabindex^="-"])') || document.activeElement
 const returnHistoryToggle = returnFocus?.closest('.work-history')?.querySelector('.work-history__toggle')
@@ -163,7 +155,6 @@ const messages = computed(() => withLiveTranscriptMessage(transcript.value.messa
   workHistory: inspector.running && !transcript.value.messages.some((message) => message.currentTurn && message.workHistory)
     ? { entries: [] } : null
 }))
-const agentProfileName = (message) => agentProfiles.byId(message.agentProfileId)?.name || 'Allgemein'
 
 function trustImageOrigin(origin) {
   if (!trustedImageOrigins.value.includes(origin)) trustedImageOrigins.value.push(origin)
