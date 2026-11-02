@@ -621,6 +621,7 @@ async def execute_loop_body(
             settings=runtime_settings,
             schemas=schemas,
             model_request=model_request,
+            user_message=next((message for message in reversed(records) if message.role == "user"), None),
             hold_response=hold_response,
             provider_turn_state=provider_turn_state,
         )

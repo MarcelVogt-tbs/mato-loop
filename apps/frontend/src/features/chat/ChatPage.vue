@@ -84,7 +84,6 @@
 
         <q-virtual-scroll
           v-else-if="chat.current || chat.activeQueuedMessages.length"
-          :key="chat.activeQueueKey"
           ref="virtualScroll"
           class="chat-transcript q-pa-md"
           :items="displayMessages"
@@ -110,7 +109,14 @@
             </q-banner>
           </template>
           <template #default="{ item: message }">
-            <div :key="message.liveMessageId || message.id" class="chat-transcript__item">
+            <div
+              :key="message.renderId || message.id"
+              class="chat-transcript__item"
+              :class="{
+                'chat-transcript__item--sending': message.reserveResponseSpace
+                  || (message.deliveryStatus === 'sending' && message.outboxId === sendingMessageId)
+              }"
+            >
             <div
               :class="[
                 'chat-message',
@@ -121,7 +127,7 @@
                 }
               ]"
               :data-message-id="message.id"
-              :data-live-message-id="message.liveMessageId || undefined"
+              :data-render-id="message.renderId || message.id"
               tabindex="-1"
             >
             <span v-if="message.role === 'user'" class="app-sr-only">Benutzernachricht</span>
@@ -235,7 +241,7 @@
                 <span v-if="message.createdAt" aria-hidden="true">·</span>
               </template>
               <time
-                v-if="message.createdAt"
+                v-if="message.createdAt && !message.deliveryStatus"
                 :datetime="message.createdAt"
                 :title="formatAbsoluteDateTime(message.createdAt)"
                 :aria-label="`Gesendet am ${formatAbsoluteDateTime(message.createdAt)}`"
@@ -345,14 +351,14 @@
       <div class="chat-input-dock q-pa-md" :class="{ 'chat-input-dock--with-todos': chat.current?.todos?.length }">
         <h2 v-if="showHome" class="text-weight-medium q-mt-none q-mb-sm" :class="$q.screen.lt.sm ? 'text-subtitle2' : 'text-subtitle1'">Neue Session</h2>
         <ComputerChoiceStrip
-          v-if="isNewConversation"
+          v-if="isNewConversation && !chat.activeQueuedMessages.length"
           :session="chat.activeContext"
           :disabled="draftProjectDisabled"
           class="q-mb-sm"
           @update="chat.updateActive"
         />
         <SessionSettingsFields
-          v-if="isNewConversation"
+          v-if="isNewConversation && !chat.activeQueuedMessages.length"
           :session="chat.activeContext"
           :disabled="draftProjectDisabled"
           :fields="['memory']"
@@ -406,7 +412,7 @@
           ref="composer"
           :autofocus="!chat.loading && !showHome"
           :session="chat.loading ? null : chat.activeContext"
-          :draft="chat.loading ? '' : chat.activeDraft"
+          :draft="chat.loading || pendingDraft ? '' : chat.activeDraft"
           :disabled="chat.loading || changingDraftProject || !chat.outboxLoaded
             || chat.outboxSaving
             || chat.historyActionPending
@@ -414,7 +420,7 @@
           :running="!chat.loading && chat.running"
           :stopping="chat.stopping"
           :queue-mode="chat.messageQueueActive"
-          :attachments="chat.loading ? emptyItems : chat.activeAttachmentDraft"
+          :attachments="chat.loading || pendingDraft ? emptyItems : chat.activeAttachmentDraft"
           @add-attachments="addAttachmentFiles"
           @remove-attachment="chat.removeAttachmentFile"
           @send="send"
@@ -543,7 +549,6 @@ import {
 import {
   buildChatTranscript,
   retryAvailableForMessage,
-  withLiveTranscriptMessage,
   withQueuedTranscriptMessages
 } from 'src/utils/chat-transcript'
 import { apiErrorMessage } from 'src/utils/api-errors'
@@ -628,6 +633,11 @@ async function setTodosCollapsed(collapsed) {
 }
 const trustedImageOriginsBySession = ref(new Map())
 const expandedWorkHistoryIds = ref(new Set())
+const pendingDraft = computed(() => chat.activePendingMessage && !chat.activePendingMessage.preserveDraft)
+const sendingMessageId = computed(() => chat.queueSendingEntryId || (
+  chat.activity.phase === 'submitting' || chat.activePendingMessage?.continuationRunId
+    ? chat.activePendingMessage?.id : null
+))
 const followingBottom = ref(true)
 const messageTimestampNow = ref(Date.now())
 const messageActionId = ref(null)
@@ -690,7 +700,6 @@ const routeMessageId = computed(() => (
 ))
 const highlightedMessageId = ref(null)
 let resizeObserver = null
-let scrollFrame = null
 let scrollTarget = null
 let lastScrollTop = 0
 let userScrollActive = false
@@ -700,11 +709,10 @@ let runAnnouncementTimer = null
 let touchActive = false
 let virtualScrollRefreshFrame = null
 let virtualScrollRefreshRequest = null
-let virtualScrollRefreshPending = null
+let virtualScrollRefreshPending = false
+let virtualScrollResetPending = false
 let searchHighlightTimer = null
 let readingAnchor = null
-let virtualScrollRefreshInProgress = false
-let virtualScrollRefreshVersion = 0
 const sessionApprovals = computed(() => chat.current ? approvals.forSession(chat.current.id) : [])
 const sessionQuestions = computed(() => chat.current ? questions.forSession(chat.current.id) : [])
 const activeQuestion = computed(() => sessionQuestions.value[0] || null)
@@ -712,18 +720,26 @@ const transcript = computed(() => buildChatTranscript(
   chat.current?.messages,
   sessionApprovals.value,
   {
-    running: chat.running,
+    running: chat.running && chat.activity.phase !== 'submitting',
     runId: chat.runId || chat.current?.activeRun?.id,
     toolExecutionActive: chat.activity.phase === 'processing_tool',
     activeToolCallId: chat.activity.toolCallId,
     completedToolCallId: chat.completedToolCallId,
     processOutputs: chat.processOutputs,
     questions: sessionQuestions.value,
-    contextSummaries: chat.current?.contextSummaries
+    contextSummaries: chat.current?.contextSummaries,
+    liveMessage: chat.running && chat.activity.phase !== 'submitting' ? {
+      id: `live-${chat.runId}`,
+      role: 'assistant',
+      userMessageId: chat.streamUserMessageId,
+      content: chat.streamContent,
+      modelName: chat.streamModelName,
+      research: { linkedSources: chat.streamResearchSources },
+      agentProfileId: chat.runAgentProfileId || chat.current?.activeRun?.agentProfileId || null,
+      streaming: Boolean(chat.streamContent),
+      workHistory: liveWorkHistory.value
+    } : null
   }
-))
-const hasCurrentAssistantTurn = computed(() => (
-  transcript.value.messages.some((message) => message.currentTurn)
 ))
 const childrenByMessage = computed(() => {
   const result = new Map()
@@ -739,30 +755,9 @@ const unmatchedChildren = computed(() => {
   const matched = new Set([...childrenByMessage.value.values()].flat().map((child) => child.id))
   return subagents.children.filter((child) => isActiveSubagent(child) && !matched.has(child.id))
 })
-const hasCurrentWorkHistory = computed(() => (
-  transcript.value.messages.some((message) => message.currentTurn && message.workHistory)
+const displayMessages = computed(() => withQueuedTranscriptMessages(
+  transcript.value.messages, chat.activeQueuedMessages, chat.queueSendingEntryId, chat.activePendingMessage?.id
 ))
-const displayMessages = computed(() => {
-  const messages = transcript.value.messages
-  const liveHistory = chat.running && chat.activity.phase !== 'submitting' && !hasCurrentWorkHistory.value
-    ? liveWorkHistory.value
-    : null
-  const liveMessage = {
-    id: `live-${chat.current?.id}`,
-    role: 'assistant',
-    content: chat.streamContent,
-    currentTurn: true,
-    modelName: chat.streamModelName,
-    research: { linkedSources: chat.streamResearchSources },
-    agentProfileId: chat.runAgentProfileId || chat.current?.activeRun?.agentProfileId || null,
-    showAgentLabel: !hasCurrentAssistantTurn.value,
-    streaming: Boolean(chat.streamContent),
-    workHistory: liveHistory
-  }
-  return withQueuedTranscriptMessages(
-    withLiveTranscriptMessage(messages, liveMessage), chat.activeQueuedMessages, chat.queueSendingEntryId
-  )
-})
 const runPresentation = computed(() => agentRunPresentation({
   runId: chat.runId || chat.current?.activeRun?.id,
   running: chat.running,
@@ -932,7 +927,7 @@ async function retryMessage(message) {
     const result = await chat.retryFailedMessage(message)
     if (!result || chat.current?.id !== sessionId) return
     await nextTick()
-    scheduleFollowScroll()
+    scheduleTranscriptLayout()
   } finally {
     messageActionId.value = null
   }
@@ -1066,7 +1061,7 @@ async function revealRouteMessage() {
     setWorkHistoryExpanded(displayedMessage.workHistory.id || displayedMessage.id, true)
   }
   followingBottom.value = false
-  cancelFollowScroll()
+  clearReadingAnchor()
   highlightedMessageId.value = displayedMessage.id
   await nextTick()
   virtualScroll.value?.scrollTo(index, 'center-force')
@@ -1096,9 +1091,8 @@ async function loadOlderHistory() {
 }
 
 function handleVirtualScroll({ from, direction }) {
-  if (virtualScrollRefreshInProgress) {
+  if (virtualScrollRefreshRequest) {
     void completeVirtualScrollRefresh()
-    return
   }
   if (!followingBottom.value) rememberReadingAnchor()
   if (
@@ -1139,14 +1133,9 @@ async function loadBackgroundData() {
 }
 
 async function send(content, options) {
-  const sessionId = chat.current?.id
   enableFollowMode()
-  const request = chat.send(content, options)
   try {
-    const result = await request
-    if (!result || !sessionId || chat.current?.id !== sessionId) return
-    await nextTick()
-    scheduleFollowScroll()
+    await chat.send(content, options)
   } finally {
     await nextTick()
     composer.value?.focus()
@@ -1156,16 +1145,6 @@ async function send(content, options) {
 async function sendPreparedAnswer(content) {
   enableFollowMode()
   await chat.send(content, { preserveDraft: true })
-  await nextTick()
-  scheduleFollowScroll()
-}
-
-async function flushQueuedMessage() {
-  if (!chat.queuedSendReady) return
-  const request = chat.drainOutbox()
-  await nextTick()
-  scheduleFollowScroll()
-  await request
 }
 
 function addAttachmentFiles(files, done, options) {
@@ -1174,40 +1153,22 @@ function addAttachmentFiles(files, done, options) {
   done?.(result)
 }
 
-function scheduleVirtualScrollRefresh(preservePosition = true, resetSizes = false) {
-  if (!virtualScroll.value || displayMessages.value.length === 0) return
-  const request = {
-    preservePosition,
-    anchor: preservePosition && !followingBottom.value
-      ? readingAnchor || captureReadingAnchor()
-      : null,
-    revealing: false,
-    resetSizes: resetSizes || virtualScrollRefreshPending?.resetSizes,
-    version: ++virtualScrollRefreshVersion
-  }
-  if (userScrollActive || virtualScrollRefreshInProgress) {
-    virtualScrollRefreshPending = request
-    return
-  }
-  startVirtualScrollRefresh(request)
-}
-
-function startVirtualScrollRefresh(request) {
-  virtualScrollRefreshRequest = request
-  virtualScrollRefreshInProgress = true
+function scheduleTranscriptLayout(resetSizes = false) {
+  virtualScrollRefreshPending = true
+  virtualScrollResetPending ||= resetSizes
+  if (userScrollActive || virtualScrollRefreshRequest || virtualScrollRefreshFrame !== null
+    || !virtualScroll.value || !displayMessages.value.length) return
   virtualScrollRefreshFrame = window.requestAnimationFrame(() => {
     virtualScrollRefreshFrame = null
-    if (virtualScrollRefreshRequest !== request) return
-    if (userScrollActive) {
-      virtualScrollRefreshPending = {
-        ...(virtualScrollRefreshPending || request),
-        resetSizes: request.resetSizes || virtualScrollRefreshPending?.resetSizes
-      }
-      finishVirtualScrollRefresh(request)
-      return
+    if (userScrollActive || !virtualScroll.value || !displayMessages.value.length) return
+    virtualScrollRefreshPending = false
+    virtualScrollRefreshRequest = {
+      anchor: followingBottom.value ? null : readingAnchor || captureReadingAnchor(),
+      revealing: false
     }
-    if (request.resetSizes) virtualScroll.value?.reset()
+    if (virtualScrollResetPending) virtualScroll.value?.reset()
     else virtualScroll.value?.refresh(-1)
+    virtualScrollResetPending = false
   })
 }
 
@@ -1217,15 +1178,17 @@ async function completeVirtualScrollRefresh() {
   await nextTick()
   await new Promise((resolve) => window.requestAnimationFrame(resolve))
   if (request !== virtualScrollRefreshRequest) return
-  if (
-    request.anchor
-    && !userScrollActive
-    && !followingBottom.value
-    && request.version === virtualScrollRefreshVersion
-  ) {
+  if (!userScrollActive && followingBottom.value) {
+    const lastMessage = displayMessages.value.at(-1)
+    if (lastMessage && !findMessageElement(lastMessage.id)) {
+      virtualScroll.value?.scrollTo(displayMessages.value.length - 1, 'end-force')
+      return
+    }
+    scrollChatToBottom(scrollTarget)
+  } else if (!userScrollActive && request.anchor) {
     const element = findMessageElement(request.anchor.id)
     if (!element && !request.revealing) {
-      const index = displayMessages.value.findIndex((message) => message.id === request.anchor.id)
+      const index = displayMessages.value.findIndex((message) => (message.renderId || message.id) === request.anchor.id)
       if (index >= 0) {
         request.revealing = true
         virtualScroll.value?.scrollTo(index, 'start-force')
@@ -1235,38 +1198,15 @@ async function completeVirtualScrollRefresh() {
     restoreChatReadingAnchor(scrollTarget, element, request.anchor)
     readingAnchor = {
       ...request.anchor,
-      id: element?.dataset.messageId || request.anchor.id
+      id: element?.dataset.renderId || request.anchor.id
     }
   }
-  finishVirtualScrollRefresh(request)
-}
-
-function finishVirtualScrollRefresh(request) {
-  if (request !== virtualScrollRefreshRequest) return
   virtualScrollRefreshRequest = null
-  virtualScrollRefreshInProgress = false
-  resumePendingVirtualScrollRefresh()
-}
-
-function resumePendingVirtualScrollRefresh() {
-  if (userScrollActive || !virtualScrollRefreshPending) return
-  const pending = virtualScrollRefreshPending
-  virtualScrollRefreshPending = null
-  // A deferred layout update must preserve where the gesture ended, not where it began.
-  pending.anchor = pending.preservePosition && !followingBottom.value
-    ? captureReadingAnchor()
-    : null
-  pending.version = ++virtualScrollRefreshVersion
-  startVirtualScrollRefresh(pending)
+  if (virtualScrollRefreshPending) scheduleTranscriptLayout()
 }
 
 function handleMessageRendered() {
-  if (followingBottom.value) {
-    scheduleVirtualScrollRefresh(false)
-    scheduleFollowScroll()
-    return
-  }
-  scheduleVirtualScrollRefresh()
+  scheduleTranscriptLayout()
 }
 
 function renderedMessageElements() {
@@ -1275,7 +1215,7 @@ function renderedMessageElements() {
 
 function findMessageElement(messageId) {
   return renderedMessageElements().find((element) => (
-    element.dataset.messageId === messageId || element.dataset.liveMessageId === messageId
+    element.dataset.messageId === messageId || element.dataset.renderId === messageId
   ))
 }
 
@@ -1284,26 +1224,23 @@ function captureReadingAnchor() {
 }
 
 function rememberReadingAnchor() {
-  if (followingBottom.value || virtualScrollRefreshInProgress) return
+  if (followingBottom.value || virtualScrollRefreshRequest) return
   readingAnchor = captureReadingAnchor() || readingAnchor
 }
 
 function clearReadingAnchor() {
   readingAnchor = null
-  virtualScrollRefreshVersion += 1
   if (virtualScrollRefreshRequest) virtualScrollRefreshRequest.anchor = null
-  if (virtualScrollRefreshPending) virtualScrollRefreshPending.anchor = null
 }
 
 function beginActivityResize() {
   if (!chat.current) return
   followingBottom.value = false
   clearReadingAnchor()
-  cancelFollowScroll()
 }
 
 function finishActivityResize() {
-  scheduleVirtualScrollRefresh(false)
+  scheduleTranscriptLayout()
 }
 
 function updateFollowState() {
@@ -1311,7 +1248,7 @@ function updateFollowState() {
   const scrollTop = scrollTarget.scrollTop
   const movedUp = scrollTop < lastScrollTop
   lastScrollTop = scrollTop
-  if (virtualScrollRefreshInProgress && !userScrollActive) return
+  if (virtualScrollRefreshRequest && !userScrollActive) return
   const atBottom = chatBottomDistance(scrollTarget) <= bottomThreshold
   const shouldFollow = chatShouldFollowBottom(
     followingBottom.value,
@@ -1324,24 +1261,16 @@ function updateFollowState() {
   }
   else if (!shouldFollow && followingBottom.value) {
     followingBottom.value = false
-    cancelFollowScroll()
   }
   if (!followingBottom.value) rememberReadingAnchor()
   if (userScrollActive && !touchActive) scheduleUserScrollEnd()
 }
 
-function cancelFollowScroll() {
-  if (scrollFrame === null) return
-  window.cancelAnimationFrame(scrollFrame)
-  scrollFrame = null
-}
-
 function beginUserScroll() {
-  if (virtualScrollRefreshInProgress) clearReadingAnchor()
+  if (virtualScrollRefreshRequest) clearReadingAnchor()
   userScrollActive = true
   clearTimeout(userScrollTimer)
   userScrollTimer = null
-  cancelFollowScroll()
 }
 
 function scheduleUserScrollEnd() {
@@ -1349,8 +1278,9 @@ function scheduleUserScrollEnd() {
   userScrollTimer = setTimeout(() => {
     userScrollTimer = null
     userScrollActive = false
-    if (!virtualScrollRefreshInProgress) resumePendingVirtualScrollRefresh()
-    scheduleFollowScroll()
+    // Capture where the gesture ended before applying deferred layout changes.
+    if (!followingBottom.value) readingAnchor = captureReadingAnchor()
+    scheduleTranscriptLayout()
   }, 180)
 }
 
@@ -1404,27 +1334,7 @@ function enableFollowMode() {
   userScrollTimer = null
   followingBottom.value = true
   clearReadingAnchor()
-  cancelFollowScroll()
-  scheduleBottomScroll()
-}
-
-function followScrollNow() {
-  if (followingBottom.value && !userScrollActive && scrollTarget) {
-    scrollChatToBottom(scrollTarget)
-  }
-}
-
-function scheduleFollowScroll() {
-  if (!followingBottom.value) return
-  scheduleBottomScroll()
-}
-
-function scheduleBottomScroll() {
-  if (showHome.value || userScrollActive || scrollFrame !== null) return
-  scrollFrame = window.requestAnimationFrame(() => {
-    scrollFrame = null
-    if (scrollTarget) scrollChatToBottom(scrollTarget)
-  })
+  scheduleTranscriptLayout()
 }
 
 function observeChatSize() {
@@ -1439,7 +1349,7 @@ function observeChatSize() {
     scrollTarget.addEventListener('wheel', handleWheel, { passive: true })
   }
   if (typeof ResizeObserver === 'undefined') return
-  resizeObserver = new ResizeObserver(() => scheduleFollowScroll())
+  resizeObserver = new ResizeObserver(() => scheduleTranscriptLayout())
   if (scrollContent.value) resizeObserver.observe(scrollContent.value)
   if (scrollTarget) resizeObserver.observe(scrollTarget)
 }
@@ -1459,41 +1369,24 @@ watch([newSessionRequested, routeProjectId], async ([requested]) => {
 })
 watch(showHome, async (shown) => {
   if (!shown) return
-  cancelFollowScroll()
   await nextTick()
   if (scrollTarget) scrollTarget.scrollTop = 0
 })
-watch(routeSessionId, (id) => {
+watch(routeSessionId, (id, previousId) => {
   approvalDraftPreview.value = null
   void subagents.loadChildren(id)
+  if (previousId === null && id && chat.current?.id === id) return
   void loadRouteSession()
 }, { immediate: true })
 watch(routeProjectId, () => void reconcileRouteProject())
 watch(routeMessageId, () => void revealRouteMessage())
 watch(() => chat.activeContext.sessionProfile?.messageSize || 'standard', () => {
-  scheduleVirtualScrollRefresh(true, true)
-  scheduleFollowScroll()
+  scheduleTranscriptLayout(true)
 }, { flush: 'pre' })
 watch(
-  [() => transcript.value.messages, () => chat.activeQueuedMessages.map((entry) => [entry.id, entry.paused, entry.sentMessageId])],
-  () => {
-    if (followingBottom.value) scheduleFollowScroll()
-    else scheduleVirtualScrollRefresh()
-  },
+  displayMessages,
+  () => scheduleTranscriptLayout(),
   { flush: 'pre' }
-)
-watch(
-  () => Boolean(chat.streamContent),
-  (streaming) => {
-    if (!followingBottom.value || userScrollActive) return
-    cancelFollowScroll()
-    if (streaming) {
-      followScrollNow()
-      return
-    }
-    scheduleFollowScroll()
-  },
-  { flush: 'post' }
 )
 watch(
   () => runPresentation.value.announcement,
@@ -1512,16 +1405,16 @@ watch(
 watch(
   () => chat.current?.id,
   async (sessionId, previousSessionId) => {
+    virtualScrollRefreshRequest = null
     if (!sessionId || sessionId === previousSessionId) return
     followingBottom.value = true
     clearReadingAnchor()
-    cancelFollowScroll()
     if (routeMessageId.value) {
       followingBottom.value = false
       return
     }
     await nextTick()
-    scheduleFollowScroll()
+    scheduleTranscriptLayout(true)
   }
 )
 watch(
@@ -1535,7 +1428,7 @@ watch(
 watch(
   () => chat.queuedSendReady,
   (ready) => {
-    if (ready) void flushQueuedMessage()
+    if (ready) void chat.drainOutbox()
   },
   { immediate: true }
 )
@@ -1568,7 +1461,7 @@ onBeforeUnmount(() => {
   draftProjectCreationContext = null
   approvalDraftPreview.value = null
   void subagents.loadChildren(null)
-  virtualScrollRefreshVersion += 1
+  virtualScrollRefreshRequest = null
   resizeObserver?.disconnect()
   scrollTarget?.removeEventListener('scroll', updateFollowState)
   scrollTarget?.removeEventListener('touchstart', handleTouchStart)
@@ -1583,6 +1476,5 @@ onBeforeUnmount(() => {
   clearTimeout(searchHighlightTimer)
   window.removeEventListener('mouseup', handleScrollAreaMouseUp)
   if (virtualScrollRefreshFrame !== null) window.cancelAnimationFrame(virtualScrollRefreshFrame)
-  cancelFollowScroll()
 })
 </script>

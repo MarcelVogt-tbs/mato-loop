@@ -6,6 +6,8 @@ Eine Session ist eine gespeicherte Unterhaltung mit eigenen Einstellungen, Datei
 
 Öffne Home oder eine neue Unterhaltung, wähle die Startvorgaben und sende eine Nachricht. Erst das Senden oder Öffnen einer sessiongebundenen Control-Center-App speichert die Session. Die feste Sessionansicht, Git-Ansicht und globale Benachrichtigungen allein erzeugen keine Session.
 
+Deine Nachricht erscheint direkt nach dem Absenden im Chat. **Wird gesendet …** bleibt sichtbar, während der Browser sie lokal sichert, Anhänge hochlädt und auf die Serverbestätigung wartet. Der Platz für den Antwortstatus wird dabei bereits freigehalten; **Verarbeite Anfrage** erscheint erst nach der Serverbestätigung. Schlägt die lokale Sicherung fehl, bleiben Text und Anhänge im Entwurf erhalten.
+
 Über das Sessionmenü kannst du anpinnen, umbenennen, einem Projekt zuordnen, archivieren oder löschen. Projektvorgaben für Vorlage, Computer und Arbeitsordner gelten für neue Sessions, nicht rückwirkend. Ein Projektwechsel übernimmt einen Entwurf nur in ein leeres Ziel, niemals über dortige Eingaben oder Warteschlangen.
 
 Ziehe Projekte in der Seitenleiste mit gedrückter Maustaste an die gewünschte Position. Auf Touch hältst du den Projektnamen kurz gedrückt und verschiebst ihn dann. Eine Linie zeigt die Einfügeposition. Die Reihenfolge bleibt für dein Konto auch nach dem Neuladen und auf anderen Geräten gespeichert; normales Wischen scrollt weiterhin die Liste.
@@ -49,6 +51,8 @@ Einrichtung, Diffs, Branches und getrennte Arbeitskopien stehen unter [Git und W
 ## Während einer Antwort eingreifen
 
 **Jetzt senden** ergänzt den laufenden Auftrag um deine Nachricht. Eine Modellanfrage wird neu aufgebaut; aktive Tool-Arbeit darf zuerst enden. Überholte Freigaben und Rückfragen des angesprochenen Laufs werden ohne unfertige Antworten geschlossen. Der Hauptagent kann dir auch antworten, während Subagenten weiterarbeiten. Deren Freigaben und Rückfragen bleiben bestehen, sofern er ihnen nicht gezielt eine Korrektur schickt. Neue Anweisungen erlauben keine gesperrten Aktionen.
+
+Die bisherige Antwort mit ihren Aktivitäten bleibt oberhalb deiner Direktnachricht stehen. Die Fortsetzung erscheint darunter als eigener Antwortabschnitt, auch nach dem Neuladen. Bereits laufende Tool-Aktionen bleiben ihrem ursprünglichen Abschnitt zugeordnet; der reservierte Platz unter deiner Nachricht bleibt bis zum neuen Antwortabschnitt erhalten. Technisch bleibt es derselbe Lauf.
 
 **Nach dem Lauf senden** reiht eine Nachricht für einen anschließenden Auftrag ein. Der Browser-Postausgang erhält Nachrichten und Anhänge in Reihenfolge. Fehlerhafte Sendungen bleiben für einen erneuten Versuch oder die Übernahme in den Entwurf erhalten. Abmelden oder Kontowechsel entfernt den bisherigen Postausgang dieses Browsers.
 

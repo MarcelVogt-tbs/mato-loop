@@ -21,6 +21,7 @@
 
 .chat-files__image {
   display: flex;
+  width: 420px;
   max-width: 100%;
   padding: 0;
   border: 0;
@@ -37,19 +38,14 @@
   outline-offset: 2px;
 }
 
-.chat-files__image img {
-  max-width: 100%;
-  max-height: clamp(300px, 42vw, 420px);
-  object-fit: contain;
-}
-
 .chat-files__image-error {
-  width: min(320px, 100%);
-  height: 240px;
+  width: 100%;
+  aspect-ratio: 4 / 3;
   gap: 6px;
 }
 
 .chat-files__video {
+  aspect-ratio: 16 / 9;
   max-height: min(62vh, 560px);
   background: #000;
   object-fit: contain;

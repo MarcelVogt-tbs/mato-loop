@@ -173,6 +173,7 @@ describe('chat message queue', () => {
     const chat = useChatStore()
     activeSession(chat)
     vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
+    chat.attachmentDrafts.sessionMessages['session-1'] = [attachment()]
     const displayed = []
     const stopWatching = watch(() => withQueuedTranscriptMessages(
       chat.current.messages, chat.activeQueuedMessages, chat.queueSendingEntryId
@@ -180,6 +181,9 @@ describe('chat message queue', () => {
 
     const sending = chat.send('Jetzt senden')
 
+    expect(withQueuedTranscriptMessages(
+      chat.current.messages, chat.activeQueuedMessages, chat.queueSendingEntryId, chat.activePendingMessage?.id
+    )).toMatchObject([{ content: 'Jetzt senden', attachments: [{ name: 'datei.txt' }], deliveryStatus: 'sending' }])
     await vi.waitFor(() => expect(api.post).toHaveBeenCalledOnce())
     expect(chat.activeQueuedMessages.map((entry) => entry.content)).toEqual(['Jetzt senden'])
     expect(chat.queueSendingEntryId).toBe(chat.activeQueuedMessages[0].id)
@@ -197,7 +201,7 @@ describe('chat message queue', () => {
     expect(chat.activeQueuedMessages).toEqual([])
     expect(displayed.every((count) => count === 1)).toBe(true)
     expect(chat.current.messages).toEqual([
-      { id: 'message-1', role: 'user', content: 'Jetzt senden' }
+      { id: 'message-1', role: 'user', content: 'Jetzt senden', renderId: expect.any(String) }
     ])
   })
 
@@ -745,6 +749,22 @@ describe('chat message queue', () => {
     expect(chat.activeQueuedMessages.map((entry) => entry.content)).toEqual(['Nur einmal'])
   })
 
+  it('keeps the draft and attachments without sending when local saving fails', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.setDraft('Nicht verlieren')
+    chat.attachmentDrafts.sessionMessages['session-1'] = [attachment()]
+    const indexedDB = globalThis.indexedDB
+    globalThis.indexedDB = undefined
+    try {
+      await chat.send('Nicht verlieren')
+      expect([chat.activeQueuedMessages, chat.activeDraft, chat.activeAttachmentDraft.length, api.post.mock.calls])
+        .toEqual([[], 'Nicht verlieren', 1, []])
+    } finally {
+      globalThis.indexedDB = indexedDB
+    }
+  })
+
   it('removes a queued message from memory and IndexedDB', async () => {
     const chat = useChatStore()
     activeSession(chat)
@@ -842,7 +862,7 @@ describe('chat message queue', () => {
     chat.cancelQueueDrain()
     await chat.drainOutbox()
     expect([displayed, chat.activeQueuedMessages, api.post.mock.calls.filter(([url]) => url !== '/sessions/defaults').length]).toEqual([
-      [{ id: 'accepted', role: 'user', content: entry.content, queueRecoveryId: entry.id }], [], 1
+      [{ id: 'accepted', role: 'user', content: entry.content, renderId: entry.id, queueRecoveryId: entry.id }], [], 1
     ])
   })
 

@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import { createApp, h, nextTick } from 'vue'
+import { createApp, h, nextTick, reactive } from 'vue'
 import { createPinia } from 'pinia'
 import { afterEach, expect, it, vi } from 'vitest'
 import ChatFiles from '../src/features/chat/components/ChatFiles.vue'
 import { supportedAttachments } from '../src/utils/attachments'
+
+vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 
 vi.mock('src/features/files/components/FileViewerPanel.vue', () => ({ default: {
   props: ['image', 'model', 'pdf'],
@@ -48,18 +50,32 @@ it.each(['audio/ogg', 'audio/mpeg', 'audio/webm', 'audio/mp4'])(
   }
 )
 
-it('previews a queued SVG without document navigation and releases its URL on unmount', () => {
+it('previews a queued SVG without document navigation and releases its URL on unmount', async () => {
   const createObjectURL = vi.fn(() => 'blob:local-image')
   const revokeObjectURL = vi.fn()
   vi.stubGlobal('URL', { createObjectURL, revokeObjectURL })
   const root = mount({ attachments: [{
     id: 'local', kind: 'image', file: new File(['<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'], 'foto.svg', { type: 'image/svg+xml' })
   }] })
+  await nextTick()
   const preview = root.querySelector('img')?.getAttribute('src')
   const navigation = root.querySelector('[target="_blank"]')
   app.unmount()
   app = null
   expect([preview, navigation, revokeObjectURL.mock.calls]).toEqual(['blob:local-image', null, [['blob:local-image']]])
+})
+
+it('updates an open local preview to the accepted attachment URL', async () => {
+  vi.stubGlobal('URL', { createObjectURL: () => 'blob:preview', revokeObjectURL: vi.fn() })
+  const props = reactive({ attachments: [{
+    id: 'local', kind: 'image', file: new File(['image'], 'photo.png', { type: 'image/png' })
+  }] })
+  const root = mount(props)
+  root.querySelector('[icon="visibility"]').click()
+  await nextTick()
+  props.attachments = [{ id: 'accepted', kind: 'image', mimeType: 'image/png', url }]
+  await nextTick()
+  expect(root.querySelector('[data-download-url]')?.getAttribute('data-download-url')).toBe(url)
 })
 
 it.each(['photo.png', 'model.stl', 'model.off', 'manual.pdf'])('opens provided %s in the shared viewer', async (filename) => {

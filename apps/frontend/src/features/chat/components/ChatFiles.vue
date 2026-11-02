@@ -1,7 +1,7 @@
 <template>
   <div v-if="items.length" class="chat-files">
     <div v-if="label" class="tool-call__section-label">{{ label }}</div>
-    <article v-for="attachment in items" :key="attachment.id" class="chat-files__item">
+    <article v-for="(attachment, index) in items" :key="attachment.kind === 'image' ? index : attachment.id" class="chat-files__item">
       <div class="chat-files__row row no-wrap items-center text-caption">
         <q-icon :name="attachmentIcon(attachment)" class="app-muted col-auto" size="18px" />
         <span class="col ellipsis" :title="attachmentMetadata(attachment)">{{ attachment.filename || 'Datei' }}</span>
@@ -40,14 +40,29 @@
         :aria-label="`${attachment.filename || 'Bild'} im Vollbild öffnen`"
         @click="openAttachment(attachment)"
       >
-        <img
-          v-if="attachment.safeUrl && !loadErrors[attachment.id]"
+        <q-img
+          v-if="attachment.safeUrl"
           :src="attachment.safeUrl"
           :alt="attachment.filename || 'Bildanhang'"
+          :ratio="4 / 3"
+          fit="contain"
+          no-transition
+          :loading-show-delay="200"
           loading="lazy"
           decoding="async"
           @error="loadErrors[attachment.id] = true"
+          @load="delete loadErrors[attachment.id]"
         >
+          <template #loading>
+            <span class="text-caption app-muted" role="status">Bild wird geladen …</span>
+          </template>
+          <template #error>
+            <span class="absolute-full column items-center justify-center text-caption app-muted">
+              <q-icon name="broken_image" size="28px" />
+              Bild konnte nicht geladen werden.
+            </span>
+          </template>
+        </q-img>
         <span v-else class="chat-files__image-error column items-center justify-center text-caption app-muted">
           <q-icon name="broken_image" size="28px" />
           Bild konnte nicht geladen werden.
@@ -87,7 +102,7 @@
       </template>
     </article>
 
-    <q-dialog v-model="attachmentDialog" :transition-duration="0" maximized @hide="selectedAttachment = null">
+    <q-dialog v-model="attachmentDialog" :transition-duration="0" maximized @hide="selectedAttachmentIndex = -1">
       <q-card v-if="selectedAttachment" class="app-file-dialog">
         <FileViewerPanel
           :image="selectedAttachment.kind === 'image' ? {
@@ -116,7 +131,8 @@
 </template>
 
 <script setup>
-import { reactive, ref, watchEffect } from 'vue'
+import { QImg } from 'quasar'
+import { computed, reactive, ref, watchEffect } from 'vue'
 import {
   attachmentIcon,
   attachmentMetadata,
@@ -161,7 +177,8 @@ watchEffect((onCleanup) => {
   onCleanup(() => urls.forEach((url) => URL.revokeObjectURL(url)))
 })
 const attachmentDialog = ref(false)
-const selectedAttachment = ref(null)
+const selectedAttachmentIndex = ref(-1)
+const selectedAttachment = computed(() => items.value[selectedAttachmentIndex.value] || null)
 
 function hasDirectPreview(attachment) {
   return attachment.safeUrl && !loadErrors[attachment.id]
@@ -171,7 +188,7 @@ function hasDirectPreview(attachment) {
 
 function openAttachment(attachment) {
   if (hasDirectPreview(attachment)) {
-    selectedAttachment.value = attachment
+    selectedAttachmentIndex.value = items.value.indexOf(attachment)
     attachmentDialog.value = true
   } else if (!props.readOnly && attachment.fileAction?.kind === 'file') {
     emit('open-file', attachment.fileAction)

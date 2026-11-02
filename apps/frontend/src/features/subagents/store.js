@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { emptyActivity } from 'src/features/chat/state'
+import { mergeMessages } from 'src/features/chat/model'
 import { mergeAgentActivity } from 'src/utils/agent-activity'
 import { notifyError } from 'src/utils/notifications'
 import { useApprovalStore } from 'src/stores/approvals'
@@ -21,10 +22,6 @@ export function subagentStatus(run) {
   })[run?.status] || 'Noch nicht gestartet'
 }
 
-function mergeById(existing = [], incoming = []) {
-  return [...new Map([...existing, ...incoming].map((item) => [item.id, item])).values()]
-}
-
 export const useSubagentStore = defineStore('subagents', () => {
   const parentId = ref(null)
   const children = ref([])
@@ -36,6 +33,7 @@ export const useSubagentStore = defineStore('subagents', () => {
   const error = ref(null)
   const olderLoading = ref(false)
   const streamContent = ref('')
+  const streamUserMessageId = ref(null)
   const streamResearchSources = ref([])
   const streamReasoning = ref(null)
   const streamContextSummary = ref(null)
@@ -136,7 +134,10 @@ export const useSubagentStore = defineStore('subagents', () => {
 
   function clearStream({ preserveResearch = false } = {}) {
     streamContent.value = ''
-    if (!preserveResearch) streamResearchSources.value = []
+    if (!preserveResearch) {
+      streamUserMessageId.value = null
+      streamResearchSources.value = []
+    }
     streamReasoning.value = null
     streamContextSummary.value = null
     warnings.value = []
@@ -202,8 +203,8 @@ export const useSubagentStore = defineStore('subagents', () => {
           const previous = resetHistory ? null : current.value
           current.value = {
             ...data,
-            messages: mergeById(previous?.messages, data.messages),
-            contextSummaries: mergeById(previous?.contextSummaries, data.contextSummaries),
+            messages: mergeMessages(previous?.messages, data.messages),
+            contextSummaries: mergeMessages(previous?.contextSummaries, data.contextSummaries),
             nextMessageCursor: previous ? previous.nextMessageCursor : data.nextMessageCursor
           }
           setRun(runData)
@@ -241,8 +242,8 @@ export const useSubagentStore = defineStore('subagents', () => {
         params: { cursor, pageSize: 20 }, signal: controller.signal
       })
       if (version !== selectionVersion || resetHistory || current.value?.nextMessageCursor !== cursor) return
-      current.value.messages = mergeById(data.items, current.value.messages)
-      current.value.contextSummaries = mergeById(data.contextSummaries, current.value.contextSummaries)
+      current.value.messages = mergeMessages(data.items, current.value.messages)
+      current.value.contextSummaries = mergeMessages(data.contextSummaries, current.value.contextSummaries)
       current.value.nextMessageCursor = data.nextCursor || null
     } catch {
       // The Axios interceptor displays the error; the cursor remains available.
@@ -294,6 +295,7 @@ export const useSubagentStore = defineStore('subagents', () => {
       void useQuestionStore().fetchPending().catch(() => {})
     })
     on('run.phase', (payload) => {
+      if (payload.phase === 'waiting_model') streamUserMessageId.value = payload.userMessageId || null
       activity.value = mergeAgentActivity(activity.value, payload)
       if (payload.phase !== 'compacting_context') streamContextSummary.value = null
     })
@@ -331,7 +333,7 @@ export const useSubagentStore = defineStore('subagents', () => {
     })
     for (const name of ['message.completed', 'message.interrupted']) on(name, (payload) => {
       if (payload.message?.id && current.value) {
-        current.value.messages = mergeById(current.value.messages, [payload.message])
+        current.value.messages = mergeMessages(current.value.messages, [payload.message])
         messageRevision += 1
       }
       clearStream({ preserveResearch: true })
@@ -425,7 +427,7 @@ export const useSubagentStore = defineStore('subagents', () => {
 
   return {
     parentId, children, childrenLoading, childrenError, current, run, running,
-    loading, error, olderLoading, streamContent, streamResearchSources, streamReasoning, streamContextSummary,
+    loading, error, olderLoading, streamContent, streamUserMessageId, streamResearchSources, streamReasoning, streamContextSummary,
     processOutputs, completedToolCallId, warnings, activity, reconnecting, loadChildren, open, close, loadOlder
   }
 })

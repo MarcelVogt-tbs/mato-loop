@@ -104,11 +104,14 @@ export const outboxActions = {
           ? { continuationRunId: this.runId } : {}),
         paused: false
       }
+      this.pendingOutboxEntry = { ...entry, preserveDraft }
       try {
         await saveChatOutboxEntry(toRaw(entry))
       } catch (error) {
         notifyError({}, 'Die Nachricht konnte nicht auf diesem Gerät vorgemerkt werden.')
         return null
+      } finally {
+        if (this.pendingOutboxEntry?.id === entry.id) this.pendingOutboxEntry = null
       }
       if (ownerUserId !== this.draftOwnerUserId || loadVersion !== this.outboxLoadVersion) {
         await deleteChatOutboxEntry(entry.id).catch(() => {})
@@ -280,6 +283,8 @@ export const outboxActions = {
           const { data } = await (entry.attachments.length
             ? api.post(`${url}/with-attachments`, buildAttachmentFormData(payload, entry.attachments), { suppressErrorToast: true })
             : api.post(url, payload, { suppressErrorToast: true }))
+          entry.sentMessageId = data.message.id
+          data.message.renderId = entry.id
           if (this.current?.id === entry.sessionId && this.selectedSessionId === entry.sessionId) {
             if (!this.current.messages.some((message) => message.id === data.message.id)) {
               const later = this.current.messages.findIndex((message) => (
@@ -317,6 +322,7 @@ export const outboxActions = {
               )
             : api.post(`/sessions/${entry.sessionId}/messages`, payload, config))
           entry.sentMessageId = data.message?.id
+          if (data.message) data.message.renderId = entry.id
           if (data?.runId && this.current?.id === entry.sessionId && this.selectedSessionId === entry.sessionId) {
             if (data.agentProfileId) this.current.agentProfileId = data.agentProfileId
             if (data.message && !this.current.messages.some((message) => message.id === data.message.id)) {
@@ -443,6 +449,7 @@ export const outboxActions = {
           ? await api.post('/sessions/with-attachments', buildAttachmentFormData(payload, attachments), ...config)
           : await api.post('/sessions', payload, ...config)
         const userMessage = data.message || { id: `local-${Date.now()}`, role: 'user', content }
+        if (runId) userMessage.renderId = runId
         const queuedEntry = this.queuedMessages[newSessionQueueKey(projectId)]?.find((entry) => entry.id === runId)
         if (queuedEntry) queuedEntry.sentMessageId = userMessage.id
         const session = {
@@ -561,6 +568,7 @@ export const outboxActions = {
               ...config
             )
           : await api.post(`/sessions/${session.id}/messages`, payload, ...config)
+        if (data.message && runId) data.message.renderId = runId
         const queuedEntry = this.queuedMessages[session.id]?.find((entry) => entry.id === runId)
         if (queuedEntry) queuedEntry.sentMessageId = data.message?.id
         if (data.message) {

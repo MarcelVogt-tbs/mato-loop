@@ -106,7 +106,7 @@ import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
 import { useSubagentStore, subagentStatus } from 'stores/subagents'
 import { useApprovalStore } from 'stores/approvals'
 import { useQuestionStore } from 'stores/questions'
-import { buildChatTranscript, withLiveTranscriptMessage } from 'src/utils/chat-transcript'
+import { buildChatTranscript } from 'src/utils/chat-transcript'
 import { agentRunPresentation } from 'src/utils/agent-activity'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
@@ -138,7 +138,14 @@ const transcript = computed(() => buildChatTranscript(inspector.current?.message
   completedToolCallId: inspector.completedToolCallId,
   processOutputs: inspector.processOutputs,
   questions: pendingQuestions.value,
-  contextSummaries: inspector.current?.contextSummaries
+  contextSummaries: inspector.current?.contextSummaries,
+  liveMessage: inspector.running ? {
+    id: `live-${props.childId}`, role: 'assistant', content: inspector.streamContent,
+    userMessageId: inspector.streamUserMessageId,
+    research: { linkedSources: inspector.streamResearchSources },
+    agentProfileId: inspector.run?.agentProfileId || null,
+    streaming: Boolean(inspector.streamContent), workHistory: { entries: [] }
+  } : null
 }))
 const presentation = computed(() => agentRunPresentation({
   runId: inspector.run?.id,
@@ -146,15 +153,7 @@ const presentation = computed(() => agentRunPresentation({
   streamReasoning: inspector.streamReasoning, streamContextSummary: inspector.streamContextSummary,
   transcript: transcript.value
 }))
-const messages = computed(() => withLiveTranscriptMessage(transcript.value.messages, {
-  id: `live-${props.childId}`, role: 'assistant', content: inspector.streamContent,
-  research: { linkedSources: inspector.streamResearchSources },
-  agentProfileId: inspector.run?.agentProfileId || null,
-  streaming: Boolean(inspector.streamContent), currentTurn: true,
-  showAgentLabel: !transcript.value.messages.some((message) => message.currentTurn),
-  workHistory: inspector.running && !transcript.value.messages.some((message) => message.currentTurn && message.workHistory)
-    ? { entries: [] } : null
-}))
+const messages = computed(() => transcript.value.messages)
 
 function trustImageOrigin(origin) {
   if (!trustedImageOrigins.value.includes(origin)) trustedImageOrigins.value.push(origin)

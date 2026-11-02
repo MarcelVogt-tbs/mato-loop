@@ -23,6 +23,7 @@ export const useChatStore = defineStore('chat', {
     stopping: false,
     cancelRequested: false,
     streamContent: '',
+    streamUserMessageId: null,
     streamResearchSources: [],
     streamReasoning: null,
     streamContextSummary: null,
@@ -69,6 +70,7 @@ export const useChatStore = defineStore('chat', {
     outboxLoaded: false,
     outboxLoadFailed: false,
     outboxSaving: false,
+    pendingOutboxEntry: null,
     outboxLoadVersion: 0,
     outboxLoadPromise: null,
     queueDrainPromise: null,
@@ -104,8 +106,14 @@ export const useChatStore = defineStore('chat', {
       ? state.attachmentDrafts.sessionMessages[state.current.id] || []
       : state.attachmentDrafts.newSession,
     activeQueueKey: (state) => state.current?.id || newSessionQueueKey(state.sessionsProjectId),
+    activePendingMessage() {
+      return this.pendingOutboxEntry && queueKeyForEntry(this.pendingOutboxEntry) === this.activeQueueKey
+        ? this.pendingOutboxEntry : null
+    },
     activeQueuedMessages() {
-      return this.queuedMessages[this.activeQueueKey] || []
+      const queue = this.queuedMessages[this.activeQueueKey] || []
+      return this.activePendingMessage
+        ? [...queue, this.activePendingMessage].sort(compareChatOutboxEntries) : queue
     },
     queuedSendPaused() {
       return Boolean(this.queuedSendPausedSessions[this.activeQueueKey])
@@ -125,6 +133,7 @@ export const useChatStore = defineStore('chat', {
       if (this.loading || this.sessionRequestController || this.stopping) return false
       if (this.historyActionPending || this.sessionSettingsPending > 0) return false
       if (!this.activeQueuedMessages.length) return false
+      if (this.activeQueuedMessages[0].id === this.pendingOutboxEntry?.id) return false
       if (this.running || this.runId) {
         return Boolean(this.current && this.runId
           && this.runSessionId === this.current.id

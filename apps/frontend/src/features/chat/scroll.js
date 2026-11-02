@@ -25,7 +25,7 @@ export function chatReadingAnchor(target, elements = []) {
   for (const element of elements) {
     const bounds = element.getBoundingClientRect()
     if (bounds.bottom <= viewport.top || bounds.top >= viewport.bottom) continue
-    const id = element.dataset?.messageId
+    const id = element.dataset?.renderId || element.dataset?.messageId
     if (id) return { id, offsetTop: bounds.top - viewport.top }
   }
   return null

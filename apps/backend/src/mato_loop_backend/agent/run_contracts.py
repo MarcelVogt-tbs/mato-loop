@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 
@@ -10,6 +11,7 @@ class _VisibleResponse:
     reasoning: dict[str, Any] | None = None
     warnings: list[str] = field(default_factory=list)
     generation_diagnostics: dict[str, Any] | None = None
+    user_message_created_at: datetime | None = None
 
     @property
     def content(self) -> str:
@@ -20,6 +22,7 @@ class _VisibleResponse:
         self.reasoning = None
         self.warnings.clear()
         self.generation_diagnostics = None
+        self.user_message_created_at = None
 
 
 class AgentRunError(RuntimeError):

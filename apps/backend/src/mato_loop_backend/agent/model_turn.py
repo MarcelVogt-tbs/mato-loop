@@ -63,10 +63,13 @@ async def complete_model_turn(
     settings: AgentRuntimeSettings,
     schemas: list[dict[str, Any]],
     model_request: int,
+    user_message: Message | None,
     hold_response: bool,
     provider_turn_state: ProviderTurnState | None = None,
 ) -> ModelTurn | None:
     visible_response.reset()
+    visible_response.user_message_created_at = user_message.created_at if user_message else None
+    user_message_id = str(user_message.id) if user_message else None
     started_at = time.monotonic()
     timing: dict[str, int | None] = {"firstReasoningMs": None, "firstTextMs": None}
     held_text: list[str] = []
@@ -128,7 +131,9 @@ async def complete_model_turn(
             "type": "run.warning", "code": code, "modelRequest": model_request,
         })
 
-    await run_support._publish_run_phase(run.id, "waiting_model", modelRequest=model_request)
+    await run_support._publish_run_phase(
+        run.id, "waiting_model", modelRequest=model_request, userMessageId=user_message_id,
+    )
     diagnostics_active = await diagnostic_access_active(db, session.user_id)
     run._diagnostics_active = diagnostics_active
 
@@ -142,6 +147,7 @@ async def complete_model_turn(
         await run_support._publish_run_phase(
             run.id, "waiting_model", modelRequest=model_request,
             providerAttempt=attempt, providerAttemptTotal=total,
+            userMessageId=user_message_id,
         )
         if diagnostics_active:
             schedule_diagnostic_event(

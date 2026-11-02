@@ -645,11 +645,14 @@ class AgentRuntime:
             await db.refresh(session)
         content = canonical_assistant_content(visible_response.content)
         if content or visible_response.reasoning:
-            received_at = await db.scalar(select(Message.created_at).where(
+            continuation = select(Message.created_at).where(
                 Message.session_id == session_id,
                 Message.role == "user",
                 Message.provider_data["_matoloop"]["continuationRunId"].as_string() == str(run_id),
-            ).order_by(Message.created_at.desc()).limit(1))
+            )
+            if visible_response.user_message_created_at is not None:
+                continuation = continuation.where(Message.created_at > visible_response.user_message_created_at)
+            received_at = await db.scalar(continuation.order_by(Message.created_at).limit(1))
             assistant = Message(
                 session_id=run.session_id,
                 role="assistant",

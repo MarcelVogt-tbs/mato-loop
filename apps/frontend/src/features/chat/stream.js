@@ -13,6 +13,7 @@ import { ACTIVE_TITLE_GENERATION_STATUSES, FILESYSTEM_MUTATION_TOOLS, controlCen
 
 export const streamActions = {
     watchRun(sessionId, runId, run = {}) {
+      this.streamUserMessageId = null
       if (this.current?.id === sessionId && this.current.latestRunId !== runId) {
         if (this.current.todos?.every((todo) => ['completed', 'cancelled'].includes(todo.status))) {
           this.current.todos = []
@@ -97,6 +98,7 @@ export const streamActions = {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
         this.streamContent = ''
+        this.streamUserMessageId = null
         this.streamReasoning = null
         this.streamContextSummary = null
         this.streamResearchSources = mergeResearchSources([], payload.researchSources)
@@ -123,6 +125,9 @@ export const streamActions = {
       source.addEventListener('run.phase', (event) => {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
+        if (payload.phase === 'waiting_model') {
+          this.streamUserMessageId = payload.userMessageId || null
+        }
         this.setActivity(payload.phase, payload)
         if (payload.phase !== 'compacting_context') this.streamContextSummary = null
       })
@@ -226,7 +231,7 @@ export const streamActions = {
             modelName: this.streamModelName
           }
           const index = messages.findIndex((item) => item.id === message.id)
-          if (index === -1) messages.push(promoted)
+          if (index === -1) this.current.messages = mergeMessages(messages, [promoted])
           else messages[index] = { ...messages[index], ...promoted }
         }
         this.streamContent = ''

@@ -333,13 +333,25 @@ describe('voice attachment composer', () => {
       chat.activeQueuedMessages[0].paused = status === 'failed'
       await nextTick()
       const message = root.querySelector('.chat-transcript .chat-message--user')
-      states.push([message?.querySelector('.chat-message__content')?.textContent, message?.querySelector('[role="status"]')?.textContent])
+      states.push([
+        message?.querySelector('.chat-message__content')?.textContent,
+        message?.querySelector('[role="status"]')?.textContent,
+        message?.parentElement.classList.contains('chat-transcript__item--sending')
+      ])
     }
     expect(states).toEqual([
-      ['Erste Nachricht', 'Noch nicht gesendet'],
-      ['Erste Nachricht', 'Wird gesendet …'],
-      ['Erste Nachricht', 'Nicht gesendet']
+      ['Erste Nachricht', 'Noch nicht gesendet', false],
+      ['Erste Nachricht', 'Wird gesendet …', true],
+      ['Erste Nachricht', 'Nicht gesendet', false]
     ])
+    const pendingRow = root.querySelector('.chat-message--user')
+    chat.activeQueuedMessages[0].sentMessageId = 'confirmed'
+    chat.current = { id: 'created', messages: [{ id: 'confirmed', renderId: entry.id, role: 'user', content: entry.content }] }
+    chat.selectedSessionId = 'created'
+    chat.queuedMessages = {}
+    await router.replace('/?session=created')
+    await nextTick()
+    expect(root.querySelector('[data-message-id="confirmed"]')).toBe(pendingRow)
   })
 
   it('renders host failures as message content with a red metadata retry action', async () => {
@@ -360,6 +372,30 @@ describe('voice attachment composer', () => {
       message.querySelector('.chat-message__meta [aria-label="Anfrage erneut starten"]')?.getAttribute('color'),
       retry.mock.calls[0]?.[0]?.id
     ]).toEqual(['Die Agent-Anfrage ist fehlgeschlagen.', 'alert', 'negative', 'failure'])
+  })
+
+  it('keeps the previous assistant reply unchanged while submitting the next message', async () => {
+    mocks.api.get.mockResolvedValue({ data: { items: [] } })
+    await router.push('/')
+    showPage.value = true
+    await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
+    chat.current = { id: 'created', messages: [
+      { id: 'first', role: 'user', content: 'Frage' },
+      { id: 'answer', role: 'assistant', content: 'Antwort', activeDurationMs: 1000 }
+    ] }
+    await nextTick()
+    const previousReply = root.querySelector('[data-message-id="answer"]')
+    chat.running = true
+    chat.setActivity('submitting')
+    await nextTick()
+    const labelDuringSend = previousReply.querySelector('.chat-message__meta-agent')?.textContent
+    const repliesDuringSend = root.querySelectorAll('.chat-message--assistant').length
+    chat.current.messages.push({ id: 'second', role: 'user', content: 'Nächste Frage' })
+    chat.setActivity('waiting_model')
+    await nextTick()
+    expect([root.querySelector('[data-message-id="answer"]') === previousReply, labelDuringSend, repliesDuringSend])
+      .toEqual([true, 'Allgemein', 1])
+    expect(root.querySelectorAll('.chat-message--assistant')).toHaveLength(2)
   })
 
   it('keeps sent-message undo and queue recovery visible after local cleanup fails', async () => {

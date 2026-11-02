@@ -32,6 +32,7 @@ export const draftActions = {
       this.clearAllAttachmentDrafts()
       this.draftOwnerUserId = ownerUserId
       this.queuedMessages = {}
+      this.pendingOutboxEntry = null
       this.queuedSendPausedSessions = {}
       this.outboxLoaded = !ownerUserId
       this.outboxLoadFailed = false
@@ -279,6 +280,7 @@ export const draftActions = {
         Object.values(this.queuedMessages).flat().flatMap((entry) => entry.attachments)
       )
       this.queuedMessages = {}
+      this.pendingOutboxEntry = null
       this.queuedSendPausedSessions = {}
       this.outboxLoaded = !ownerUserId
       this.outboxLoadVersion += 1

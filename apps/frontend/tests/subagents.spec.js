@@ -308,6 +308,28 @@ describe('read-only subagents', () => {
     expect(store.activity.toolCallId).toBe('tool')
   })
 
+  it('keeps streamed and late partial output above a child correction', async () => {
+    session.messages = [
+      { id: 'start', role: 'user', content: 'Start', createdAt: '2026-11-02T12:00:00Z' },
+      { id: 'direct', role: 'user', content: 'Correction', createdAt: '2026-11-02T12:00:01.123456Z' }
+    ]
+    await store.open('parent', 'child')
+    const source = EventSourceMock.instances[0]
+    api.get.mockImplementation(() => new Promise(() => {}))
+    source.emit('run.phase', { phase: 'waiting_model', userMessageId: 'start' })
+    source.emit('message.delta', { delta: 'Before correction' })
+    const live = buildChatTranscript(store.current.messages, [], { running: true, liveMessage: {
+      id: 'live', role: 'assistant', content: store.streamContent, userMessageId: store.streamUserMessageId
+    } }).messages.map((message) => message.content)
+    source.emit('message.completed', { message: {
+      id: 'partial', role: 'assistant', content: 'Before correction', continuationSegment: true,
+      createdAt: '2026-11-02T12:00:01.123455Z'
+    } })
+    expect([live, store.current.messages.map((message) => message.content)]).toEqual([
+      ['Start', 'Before correction', 'Correction'], ['Start', 'Before correction', 'Correction']
+    ])
+  })
+
   it('normalizes live run timing for the turn duration timer', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-12T12:00:05.000Z'))

@@ -3,12 +3,11 @@ import { describe, expect, it } from 'vitest'
 import {
   buildChatTranscript,
   groupWorkHistoryEntries,
-  retryAvailableForMessage,
-  withLiveTranscriptMessage
+  retryAvailableForMessage
 } from '../src/utils/chat-transcript'
 
 describe('chat transcript', () => {
-  it('keeps a direct in-run message inside the same assistant turn', () => {
+  it('keeps direct messages between separate assistant sections', () => {
     const transcript = buildChatTranscript([
       { id: 'start', role: 'user', content: 'Start' },
       { id: 'partial', role: 'assistant', content: 'Working', runId: 'run-1', continuationSegment: true },
@@ -16,13 +15,12 @@ describe('chat transcript', () => {
       { id: 'final', role: 'assistant', content: 'Done', runId: 'run-1' }
     ])
 
-    expect(transcript.messages.filter((message) => message.role === 'assistant').map((message) => (
-      [message.id, message.showAgentLabel, message.content]
-    ))).toEqual([['final', true, 'Working\n\nDone']])
-    expect(transcript.messages.find((message) => message.id === 'direct').content).toBe('Change course')
+    expect(transcript.messages.map((message) => [message.id, message.content])).toEqual([
+      ['start', 'Start'], ['partial', 'Working'], ['direct', 'Change course'], ['final', 'Done']
+    ])
   })
 
-  it('keeps streamed and persisted partial text in the continued answer', () => {
+  it('starts streamed and persisted continuation text below the direct message', () => {
     const messages = [
       { id: 'start', role: 'user', content: 'Start' },
       { id: 'partial', role: 'assistant', content: 'Before', runId: 'run-1', continuationSegment: true },
@@ -30,11 +28,35 @@ describe('chat transcript', () => {
     ]
     const live = { id: 'live', role: 'assistant', content: 'After', currentTurn: true }
 
-    expect(withLiveTranscriptMessage(buildChatTranscript(messages, [], { running: true, runId: 'run-1' }).messages, live)
-      .at(-1).content).toBe('Before\n\nAfter')
+    expect(buildChatTranscript(messages, [], { running: true, runId: 'run-1', liveMessage: live }).messages
+      .map((message) => message.content)).toEqual(['Start', 'Before', 'Change', 'After'])
     expect(buildChatTranscript([...messages, {
       id: 'final', role: 'assistant', content: 'After', runId: 'run-1'
-    }]).messages.at(-1).content).toBe('Before\n\nAfter')
+    }]).messages.map((message) => message.content)).toEqual(['Start', 'Before', 'Change', 'After'])
+  })
+
+  it('keeps an unfinished tool active above the direct message', () => {
+    const transcript = buildChatTranscript([
+      { id: 'start', role: 'user', content: 'Start' },
+      { id: 'tool', role: 'assistant', runId: 'run', toolCalls: [{ id: 'call', name: 'shell_run' }] },
+      { id: 'direct', role: 'user', content: 'Change', continuationRunId: 'run' }
+    ], [], { running: true, runId: 'run', activeToolCallId: 'call' })
+    expect({
+      active: transcript.messages.find((message) => message.id === 'tool').workHistory.entries[0].active,
+      reserved: transcript.messages.at(-1).reserveResponseSpace
+    }).toEqual({ active: true, reserved: true })
+  })
+
+  it('keeps live output with its source message when multiple direct messages arrive', () => {
+    const transcript = buildChatTranscript([
+      { id: 'start', role: 'user', content: 'Start' },
+      { id: 'direct-1', role: 'user', content: 'First correction' },
+      { id: 'direct-2', role: 'user', content: 'Second correction' }
+    ], [], { running: true, liveMessage: {
+      id: 'live', role: 'assistant', content: 'Before the second correction', userMessageId: 'direct-1'
+    } })
+    expect(transcript.messages.map((message) => message.content))
+      .toEqual(['Start', 'First correction', 'Before the second correction', 'Second correction'])
   })
 
   it('hides an empty redirected turn while retaining explicit stops and visible partial responses', () => {
@@ -102,14 +124,14 @@ describe('chat transcript', () => {
       { id: 'tool', role: 'assistant', toolCalls: [{ id: 'call', name: 'write_file', arguments: {} }] },
       { id: 'result', role: 'tool', toolCallId: 'call', fileActions: [action] },
       ...(!streaming ? [{ id: 'final', role: 'assistant', content: 'Fertig' }] : [])
-    ], [], { running: streaming })
-    const messages = streaming ? withLiveTranscriptMessage(transcript.messages, {
-      id: 'live', role: 'assistant', content: 'Fertig', currentTurn: true
-    }) : transcript.messages
+    ], [], { running: streaming, liveMessage: streaming ? {
+      id: 'live', role: 'assistant', content: 'Fertig', streaming: true
+    } : null })
+    const messages = transcript.messages
 
     expect(messages.filter((message) => message[field]?.length).map((message) => [
-      message.id, message[field].map((change) => change.path)
-    ])).toEqual([[streaming ? 'tool' : 'final', ['result.txt']]])
+      message.renderId, message[field].map((change) => change.path)
+    ])).toEqual([['reply-user', ['result.txt']]])
   })
 
   it('offers retry only for the current backend-approved failed response', () => {
@@ -145,21 +167,16 @@ describe('chat transcript', () => {
       workHistory: liveHistory
     }
 
-    const streaming = withLiveTranscriptMessage([user], live)
+    const streaming = buildChatTranscript([user], [], { running: true, liveMessage: live }).messages
     const canonical = { id: 'assistant-1', role: 'assistant', content: 'Antwort', currentTurn: false }
-    const completed = withLiveTranscriptMessage(
+    const completed = buildChatTranscript(
       [user, canonical],
-      { ...live, content: '' }
-    )
+      [], { liveMessage: { ...live, content: '' } }
+    ).messages
 
     expect(streaming).toHaveLength(2)
-    expect(streaming[1]).toBe(live)
     expect(completed).toHaveLength(2)
-    expect(completed[1]).toEqual({
-      ...canonical,
-      liveMessageId: live.id,
-      workHistory: liveHistory
-    })
+    expect(completed[1].renderId).toBe(streaming[1].renderId)
     expect(canonical).not.toHaveProperty('workHistory')
   })
 
@@ -520,10 +537,12 @@ describe('chat transcript', () => {
 
     expect(transcript.messages).toHaveLength(3)
     expect(transcript.messages[1]).toMatchObject({
+      renderId: 'reply-user-1',
       showAgentLabel: true,
       continuesAssistantTurn: false
     })
     expect(transcript.messages[2]).toMatchObject({
+      renderId: 'reply-automation-1',
       showAgentLabel: true,
       continuesAssistantTurn: false,
       createdAt: '2026-08-20T14:20:00Z'
@@ -593,29 +612,27 @@ describe('chat transcript', () => {
   })
 
   it('attributes a live-only context summary from the active run message', () => {
-    const transcript = buildChatTranscript([
+    const source = [
       { id: 'user', role: 'user', content: 'Weiter', createdAt: '2026-09-01T10:00:00Z' }
-    ], [], {
+    ]
+    const options = {
       running: true,
       contextSummaries: [{
         id: 'summary', content: 'Goal\nWeiter', isFallback: false,
         createdAt: '2026-09-01T10:00:01Z'
       }]
-    })
-    const messages = withLiveTranscriptMessage(transcript.messages, {
-      id: 'live-session', role: 'assistant', content: '', agentProfileId: 'profile-live'
-    })
+    }
+    const live = { id: 'live-session', role: 'assistant', content: '', agentProfileId: 'profile-live' }
+    const messages = buildChatTranscript(source, [], { ...options, liveMessage: live }).messages
 
     expect(messages[1]).toMatchObject({
       agentProfileId: 'profile-live',
       workHistory: { entries: [expect.objectContaining({ type: 'context-summary' })] }
     })
 
-    const streaming = withLiveTranscriptMessage(transcript.messages, {
-      id: 'live-session', role: 'assistant', content: 'Antwort', agentProfileId: 'profile-live'
-    })
-    expect(streaming[1].agentProfileId).toBe('profile-live')
-    expect(streaming[1].content).toBe('Antwort')
+    const streaming = buildChatTranscript(source, [], { ...options, liveMessage: { ...live, content: 'Antwort' } }).messages
+    expect(streaming.at(-1).agentProfileId).toBe('profile-live')
+    expect(streaming.at(-1).content).toBe('Antwort')
   })
 
   it('does not mix reused tool call ids across user requests', () => {

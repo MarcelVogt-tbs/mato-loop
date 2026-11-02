@@ -9,63 +9,7 @@ export function retryAvailableForMessage(message, messages = [], running = false
     && !running
 }
 
-export function withLiveTranscriptMessage(messages, liveMessage) {
-  const lastUserIndex = messages.reduce((found, message, index) => (
-    message.role === 'user' && !message.continuationRunId ? index : found
-  ), -1)
-  const currentIndex = messages.reduce((found, message, index) => (
-    message.role === 'assistant' && index > lastUserIndex ? index : found
-  ), -1)
-  if (liveMessage.content) {
-    const displayed = [...messages]
-    if (currentIndex >= 0 && displayed[currentIndex].currentTurn
-      && displayed[currentIndex].workHistory && !displayed[currentIndex].content) {
-      displayed[currentIndex] = {
-        ...displayed[currentIndex],
-        agentProfileId: displayed[currentIndex].agentProfileId || liveMessage.agentProfileId,
-        content: liveMessage.content,
-        modelName: liveMessage.modelName,
-        research: liveMessage.research,
-        streaming: true,
-        liveMessageId: liveMessage.id
-      }
-      return displayed
-    }
-    if (currentIndex >= 0 && displayed[currentIndex].continuationSegment) {
-      displayed[currentIndex] = {
-        ...displayed[currentIndex],
-        content: `${displayed[currentIndex].content}\n\n${liveMessage.content}`,
-        streaming: true,
-        liveMessageId: liveMessage.id
-      }
-      return displayed
-    }
-    if (currentIndex >= 0 && !displayed[currentIndex].agentProfileId && liveMessage.agentProfileId) {
-      displayed[currentIndex] = { ...displayed[currentIndex], agentProfileId: liveMessage.agentProfileId }
-    }
-    if (currentIndex >= 0 && displayed[currentIndex].currentTurn) {
-      const { fileChanges, providedFiles } = displayed[currentIndex]
-      liveMessage = { ...liveMessage, fileChanges, providedFiles }
-      displayed[currentIndex] = { ...displayed[currentIndex], fileChanges: [], providedFiles: [], continuesAssistantTurn: true }
-    }
-    return [...displayed, liveMessage]
-  }
-  if (currentIndex >= 0) {
-    const displayed = [...messages]
-    displayed[currentIndex] = {
-      ...displayed[currentIndex],
-      ...(liveMessage.workHistory ? { workHistory: liveMessage.workHistory } : {}),
-      ...(!displayed[currentIndex].agentProfileId && liveMessage.agentProfileId
-        ? { agentProfileId: liveMessage.agentProfileId }
-        : {}),
-      liveMessageId: liveMessage.id
-    }
-    return displayed
-  }
-  return liveMessage.workHistory ? [...messages, liveMessage] : messages
-}
-
-export function withQueuedTranscriptMessages(messages, queuedMessages, sendingId) {
+export function withQueuedTranscriptMessages(messages, queuedMessages, sendingId, pendingId) {
   const sentIds = new Set(messages.map((message) => message.id))
   const pausedEntries = new Map(queuedMessages.filter((entry) => entry.paused)
     .map((entry) => [entry.sentMessageId || entry.id, entry.id]))
@@ -78,7 +22,7 @@ export function withQueuedTranscriptMessages(messages, queuedMessages, sendingId
       role: 'user',
       content: entry.content,
       attachments: entry.attachments,
-      deliveryStatus: entry.id === sendingId ? 'sending' : entry.paused ? 'failed' : 'queued'
+      deliveryStatus: entry.id === sendingId || entry.id === pendingId ? 'sending' : entry.paused ? 'failed' : 'queued'
     }))]
 }
 
@@ -123,9 +67,21 @@ export function buildChatTranscript(
     completedToolCallId = null,
     processOutputs = {},
     questions = [],
-    contextSummaries = []
+    contextSummaries = [],
+    liveMessage = null
   } = {}
 ) {
+  if (liveMessage) {
+    const originIndex = liveMessage.userMessageId
+      ? messages.findIndex((message) => message.id === liveMessage.userMessageId)
+      : messages.findIndex((message) => message.toolCalls?.some((tool) => tool.id === activeToolCallId))
+    const nextUserIndex = originIndex >= 0
+      ? messages.findIndex((message, index) => index > originIndex && message.role === 'user') : -1
+    if (!liveMessage.userMessageId || originIndex >= 0) {
+      const index = nextUserIndex < 0 ? messages.length : nextUserIndex
+      messages = [...messages.slice(0, index), liveMessage, ...messages.slice(index)]
+    }
+  }
   const results = new Map()
   for (const message of messages) {
     if (message.role !== 'tool' || !message.toolCallId) continue
@@ -144,7 +100,7 @@ export function buildChatTranscript(
 
   let lastUserIndex = -1
   messages.forEach((message, index) => {
-    if (message.role === 'user' && !(running && message.continuationRunId === runId)) lastUserIndex = index
+    if (message.role === 'user') lastUserIndex = index
   })
 
   const matchedApprovalIds = new Set()
@@ -159,7 +115,7 @@ export function buildChatTranscript(
       content: message.error ? apiErrorMessage(message.error) : message.content,
       _sourceIndex: index,
       toolCalls: (message.toolCalls || []).map((tool, toolIndex) => {
-        const currentRound = running && index > lastUserIndex
+        const currentRound = running && (index > lastUserIndex || Boolean(runId && message.runId === runId))
         const result = results.get(tool.id)?.shift() || null
         const toolRunId = message.runId || result?.runId || (currentRound ? runId : null)
         const requestKey = `${toolRunId || ''}:${tool.id}`
@@ -240,9 +196,12 @@ export function buildChatTranscript(
   const groupedMessages = []
   let assistantSection = []
   let turnStartedAt = null
+  let turnRenderId = null
 
   function flushAssistantSection() {
     if (!assistantSection.length) return
+    const live = assistantSection.find((message) => message.id === liveMessage?.id)
+    const liveHistory = live ? liveMessage.workHistory : null
     const reversedSection = [...assistantSection].reverse()
     const modelResponses = reversedSection.filter((message) => message.kind !== 'runtime_error')
     const lastResponse = modelResponses.find((message) => message.content || message.toolCalls.length)
@@ -294,16 +253,17 @@ export function buildChatTranscript(
       Number.isInteger(message.activeDurationMs) && message.activeDurationMs >= 0
     ))?.activeDurationMs ?? null
     const currentTurn = running && assistantSection.some((message) => (
-      message._sourceIndex > lastUserIndex || message.contextSummaryEntry?.current
+      message === live || message._sourceIndex > lastUserIndex || message.contextSummaryEntry?.current
+        || message.toolCalls.some((tool) => tool.active || tool.approval || tool.question)
     ))
-    if (workEntries.length || Number.isInteger(activeDurationMs)) {
+    if (workEntries.length || Number.isInteger(activeDurationMs) || liveHistory) {
       const durations = reasoningItems.map((item) => item.observedDurationMs).filter(Number.isFinite)
       carrier.workHistory = {
-        id: `work-history-${historyCarrier.id}`,
+        id: `work-history-${turnRenderId || historyCarrier.id}`,
         entries: workEntries,
         observedDurationMs: durations.length ? durations.reduce((total, value) => total + value, 0) : null,
-        activeDurationMs,
-        activeDurationUpdatedAt: null,
+        activeDurationMs: liveHistory?.activeDurationMs ?? activeDurationMs,
+        activeDurationUpdatedAt: liveHistory?.activeDurationUpdatedAt || null,
         startedAt: turnStartedAt,
         completedAt: currentTurn ? null : finalCreatedAt
       }
@@ -344,6 +304,7 @@ export function buildChatTranscript(
     ))
     if (visibleMessages.length) {
       const finalMessage = visibleMessages.at(-1)
+      finalMessage.renderId = `reply-${turnRenderId || finalMessage.runId || finalMessage.id}`
       finalMessage.fileChanges = response.fileActions.filter((action) => action.operation !== 'provide')
       finalMessage.providedFiles = workEntries.flatMap((entry) => entry.type === 'tool'
         ? toolFileActions(entry.result).filter((action) => action.operation === 'provide')
@@ -371,25 +332,29 @@ export function buildChatTranscript(
 
   for (const message of transcriptMessages) {
     if (message.role === 'assistant') {
-      if (message.sourceType === 'automationRun') flushAssistantSection()
+      if (message.sourceType === 'automationRun') {
+        flushAssistantSection()
+        turnRenderId = message.id
+        turnStartedAt = message.createdAt || null
+      }
       assistantSection.push(message)
-      continue
-    }
-    if (
-      message.role === 'user' && message.continuationRunId
-      && assistantSection.some((entry) => entry.runId === message.continuationRunId)
-    ) {
-      delete message._sourceIndex
-      groupedMessages.push(message)
       continue
     }
     flushAssistantSection()
     delete message._sourceIndex
     delete message._timelineId
     groupedMessages.push(message)
-    if (message.role === 'user') turnStartedAt = message.createdAt || null
+    if (message.role === 'user') {
+      turnStartedAt = message.createdAt || null
+      turnRenderId = message.renderId || message.id
+    }
   }
   flushAssistantSection()
+
+  const lastMessage = groupedMessages.at(-1)
+  if (running && runId && lastMessage?.role === 'user' && lastMessage.continuationRunId === runId) {
+    lastMessage.reserveResponseSpace = true
+  }
 
   return {
     messages: groupedMessages,

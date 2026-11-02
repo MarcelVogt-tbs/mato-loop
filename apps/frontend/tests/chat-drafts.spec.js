@@ -1735,6 +1735,7 @@ describe('chat drafts', () => {
 
     source.emit('run.phase', {
       phase: 'waiting_model',
+      userMessageId: 'source-user',
       modelRequest: 1,
       providerAttempt: 2,
       providerAttemptTotal: 3,
@@ -1747,6 +1748,7 @@ describe('chat drafts', () => {
       providerAttemptTotal: 3,
       activityLabel: 'Verarbeite Anfrage'
     })
+    expect(chat.streamUserMessageId).toBe('source-user')
 
     source.emit('reasoning.updated', {
       reasoning: { kind: 'summary', text: '**Plan prüfen**', status: 'streaming' },
@@ -2411,6 +2413,21 @@ describe('chat drafts', () => {
     finishFirst(sessionPage([{ id: 'session-1', title: 'Alt' }]))
     await Promise.all([first, second, third])
     expect([api.get.mock.calls.length, chat.sessions[0].title]).toEqual([2, 'Aktuell'])
+  })
+
+  it('places a late completed partial response before the direct message', () => {
+    global.EventSource = EventSourceMock
+    api.get.mockImplementation(() => new Promise(() => {}))
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', messages: [
+      { id: 'direct', role: 'user', createdAt: '2026-07-25T14:32:02.123456+00:00', continuationRunId: 'run-1' }
+    ] }
+    chat.selectedSessionId = 'session-1'
+    chat.watchRun('session-1', 'run-1')
+    EventSourceMock.instances[0].emit('message.completed', { message: {
+      id: 'partial', role: 'assistant', content: 'Before', createdAt: '2026-07-25T14:32:02.123455+00:00', continuationSegment: true
+    } })
+    expect(chat.current.messages.map((message) => message.id)).toEqual(['partial', 'direct'])
   })
 
   it('promotes canonical completed content before refreshing the persisted message', async () => {

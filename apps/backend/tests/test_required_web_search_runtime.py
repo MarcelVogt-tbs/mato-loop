@@ -1357,6 +1357,7 @@ async def test_provider_retry_publishes_waiting_model_phase(monkeypatch) -> None
             "modelRequest": 1,
             "providerAttempt": 2,
             "providerAttemptTotal": 3,
+            "userMessageId": str(AgentRuntime._records.return_value[0].id),
         }
     ]
 
@@ -1828,6 +1829,7 @@ async def test_direct_message_restarts_only_model_request_inside_same_run(monkey
         assert "Change course" in str(requests[-1]["messages"])
         assert [item.content for item in _assistant_messages(db)] == ["Partial answer", "Updated answer"]
         assert [item["message"]["runId"] for item in events if item["type"] == "message.completed"] == [str(run.id), str(run.id)]
+        assert [item["userMessageId"] for item in events if item.get("phase") == "waiting_model"] == [str(records[0].id), str(records[-1].id)]
     finally:
         _clear_continuation_test_state(run.id)
 

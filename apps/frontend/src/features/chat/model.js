@@ -55,10 +55,16 @@ function controlCenterFileTarget(root, path, session) {
 
 function mergeMessages(existing = [], incoming = []) {
   const replacements = new Map(incoming.map((message) => [message.id, message]))
-  const merged = existing.map((message) => replacements.get(message.id) || message)
+  const merged = existing.map((message) => {
+    const replacement = replacements.get(message.id)
+    return replacement && message.renderId
+      ? { ...replacement, renderId: message.renderId } : replacement || message
+  })
   const existingIds = new Set(existing.map((message) => message.id))
   merged.push(...incoming.filter((message) => !existingIds.has(message.id)))
-  return merged
+  // Partial responses can precede a direct message by only one microsecond.
+  return merged.sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt)
+    || Number(left.createdAt?.match(/\.\d+/u)?.[0] || 0) - Number(right.createdAt?.match(/\.\d+/u)?.[0] || 0))
 }
 
 async function sessionStateAfterMutation(sessionId, messageId) {
