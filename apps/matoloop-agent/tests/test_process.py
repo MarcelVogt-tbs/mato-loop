@@ -848,6 +848,69 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
                     "write",
                 )
 
+    def test_ssh_classifies_remote_shell_without_remote_path_checks_or_prefixes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = configuration(root)
+            runner = ProcessRunner(config, Filesystem(config))
+            for arguments, categories in (
+                ("server 'cat /remote-only/file | head -8'", ["read"]),
+                ("-vvT -p22 -l user -o ConnectTimeout=5 server 'uname -a'", ["read"]),
+                (
+                    "-oUserKnownHostsFile=/remote-only/known-hosts server 'ls /remote-only'",
+                    ["read"],
+                ),
+                ("-- user@server 'echo \"rm /remote-only/file\"'", ["read"]),
+                ("server 'mkdir /remote-only/directory'", ["write"]),
+                ("server 'curl -o /remote-only/file https://example.invalid'", ["write"]),
+                ("server 'rm /remote-only/file'", ["delete"]),
+                ("server 'cat /remote-only/file; rm /remote-only/file'", ["read", "delete"]),
+                ("server 'echo value > /remote-only/file'", ["read", "write"]),
+                ("server echo ok ';' rm /remote-only/file", ["read", "delete"]),
+                ("server 'sh -c \"rm /remote-only/file\"'", ["delete"]),
+                ("server 'docker exec nested rm /remote-only/file'", ["delete"]),
+                ("server 'ssh nested \"rm /remote-only/file\"'", ["delete"]),
+                ("server", ["write"]),
+                ("server ''", ["write"]),
+                ("-N server", ["write"]),
+                ("-s server sftp", ["write"]),
+                ("-p", ["write"]),
+                ("--future server 'cat /remote-only/file'", ["write"]),
+                ("-o 'ProxyCommand=touch /tmp/file' server true", ["write"]),
+                ("-o 'LocalCommand touch /tmp/file' server true", ["write"]),
+                ("-o 'KnownHostsCommand=touch /tmp/file' server true", ["write"]),
+                ("-o RemoteCommand=rm server true", ["write"]),
+                ("server -p22 true", ["write"]),
+                ("server sh", ["write"]),
+                ("server '$COMMAND'", ["write"]),
+                ('"$SERVER" true', ["read", "write"]),
+                ("server " + shlex.quote("ssh nested " * 10 + "true"), ["write"]),
+            ):
+                command = "ssh " + arguments
+                with self.subTest(command=command):
+                    inspected = runner.inspect_shell(command, str(root))
+                    self.assertEqual(
+                        (
+                            inspected["requiredCategories"],
+                            inspected["analysisComplete"],
+                            inspected["targets"],
+                            any("prefix" in unit for unit in inspected["commands"]),
+                        ),
+                        (categories, False, [], False),
+                    )
+
+            identity = root / "identity"
+            identity.write_text("test identity\n")
+            inspected = runner.inspect_shell(
+                f"ssh -i {identity} server 'cat /remote-only/file' > output", str(root)
+            )
+            self.assertEqual(
+                {(target["path"], target["access"]) for target in inspected["targets"]},
+                {(str(identity), "read"), (str(root / "output"), "write")},
+            )
+            inspected = runner.inspect_shell(f"ssh -i {identity} -N server", str(root))
+            self.assertEqual([target["path"] for target in inspected["targets"]], [str(identity)])
+
     def test_docker_run_checks_bind_source_but_not_container_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

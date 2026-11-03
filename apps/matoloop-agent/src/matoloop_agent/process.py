@@ -593,6 +593,36 @@ def _docker_exec_payload(
     return arguments[1:], host_files
 
 
+def _ssh_payload(arguments: list[str]) -> tuple[str, list[str]] | None:
+    try:
+        options, remaining = getopt.getopt(arguments, "1246AaCfgKknqTtvXxYyb:c:e:i:J:l:m:o:p:")
+    except getopt.GetoptError:
+        return None
+    if (
+        len(remaining) < 2
+        or not remaining[0]
+        or not remaining[1].strip()
+        or remaining[1].startswith("-")
+    ):
+        return None
+    for option, value in options:
+        if option == "-o" and re.split(r"[=\s]", value.strip(), maxsplit=1)[0].lower() in {
+            "controlmaster",
+            "controlpath",
+            "dynamicforward",
+            "knownhostscommand",
+            "localcommand",
+            "localforward",
+            "proxycommand",
+            "remotecommand",
+            "remoteforward",
+            "sessiontype",
+        }:
+            return None
+    # shortcut: implicit SSH config stays opaque; inspect it when config effects need enforcement.
+    return " ".join(remaining[1:]), [value for option, value in options if option == "-i"]
+
+
 def _docker_run_host_paths(arguments: list[str]) -> list[str] | None:
     value_options = {"--mount", "--volume", "-v", "--workdir", "-w"}
     flags = {
@@ -685,7 +715,7 @@ def _container_command_categories(tokens: list[str], depth: int) -> set[str]:
                 or destination is None
                 or not re.fullmatch(r"\d+-?|-", _node_text(source, destination))
             ):
-                # Container /dev/null cannot use the host's verified discard exemption.
+                # Remote/container /dev/null cannot use the host's verified discard exemption.
                 categories.add("write")
                 if _clearing_redirect(source, redirect, operator):
                     categories.add("delete")
@@ -698,9 +728,13 @@ def _container_command_categories(tokens: list[str], depth: int) -> set[str]:
         if inner is None or len(inner) != len(words):
             categories.add("write")
             continue
-        if Path(inner[0]).name in {"docker", "sh", "bash", "dash"} and _unresolved_wrapper_words(
-            source, words
-        ):
+        if Path(inner[0]).name in {
+            "docker",
+            "ssh",
+            "sh",
+            "bash",
+            "dash",
+        } and _unresolved_wrapper_words(source, words):
             categories.add("write")
         categories.update(_container_command_categories(inner, depth + 1))
     return categories or {"read"}
@@ -813,6 +847,13 @@ def _command_categories(
 ) -> set[str]:
     executable = Path(tokens[0]).name
     arguments = tokens[1:]
+    if executable == "ssh":
+        payload = _ssh_payload(arguments) if depth <= 8 else None
+        return (
+            {"write"}
+            if payload is None
+            else _container_command_categories(["sh", "-c", payload[0]], depth + 1)
+        )
     if executable == "xargs":
         # Bound executor nesting; stdin-derived argv remains incomplete in inspection.
         if depth > 8:
@@ -1271,7 +1312,7 @@ def _command_prefix(tokens: list[str]) -> list[str] | None:
     if "/" in tokens[0]:
         return None
     executable = tokens[0]
-    if executable == "xargs":
+    if executable in {"xargs", "ssh"}:
         return None
     arguments = tokens[1:]
     if executable.startswith("python"):
@@ -1543,8 +1584,12 @@ class ProcessRunner:
                 _docker_command(tokens[1:]) if tokens and Path(tokens[0]).name == "docker" else None
             )
             if (
-                docker is not None
-                and docker[0] in _DOCKER_EXEC_COMMANDS
+                tokens
+                and (
+                    Path(tokens[0]).name == "ssh"
+                    or docker is not None
+                    and docker[0] in _DOCKER_EXEC_COMMANDS
+                )
                 and (
                     not serializable
                     or len(tokens) != len(words)
@@ -1687,7 +1732,20 @@ class ProcessRunner:
             tokens = command_unit["tokens"]
             ansi_words = {_node_text(source, word) for word in words if _has_ansi_quoting(word)}
             docker = _docker_command(tokens[1:]) if Path(tokens[0]).name == "docker" else None
-            if docker is not None and docker[0] in _DOCKER_EXEC_COMMANDS:
+            if Path(tokens[0]).name == "ssh":
+                analysis_complete = False
+                payload = _ssh_payload(tokens[1:])
+                if payload is not None:
+                    for path in payload[1]:
+                        add(
+                            path,
+                            "input",
+                            access="read",
+                            must_exist=True,
+                            literal=not _unresolved_wrapper_words(source, words),
+                        )
+                    tokens = tokens[:1]
+            elif docker is not None and docker[0] in _DOCKER_EXEC_COMMANDS:
                 # Container paths cannot be verified against the agent host filesystem.
                 analysis_complete = False
                 semantic, remaining = docker
