@@ -224,15 +224,11 @@
     display: none;
   }
 
-  .question-dock__header {
-    flex-wrap: wrap;
-  }
-
-  .question-dock__header-spacer {
+  .request-progress__spacer {
     display: none;
   }
 
-  .question-dock__progress {
+  .request-progress__bars {
     order: 3;
     max-width: none;
     flex-basis: 100%;

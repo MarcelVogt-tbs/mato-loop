@@ -327,10 +327,11 @@ QUESTION = ToolDefinition(
 
 TASK = ToolDefinition(
             "task",
-            "Delegate scoped tasks; max 4 active children per main session, no recursion. "
-            "Omit session_id to start; supply a returned sessionId to resume history or correct its active run. "
-            "Avoid write conflicts. Normally wait; direct user messages interrupt only the wait. "
-            "Children continue; results arrive later. Delivery is not completion.",
+            "Max 4 active children; no recursion. "
+            "Omit session_id to start; set it to resume or correct. "
+            "Stop: session_id, stop=true, no prompt. "
+            "User messages expire child input requests. Resume or stop awaitingInstruction children; others continue. "
+            "Normally wait. Delivery is not completion. Avoid write conflicts.",
             TaskArguments,
             _task,
             group="agent",

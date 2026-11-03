@@ -29,7 +29,9 @@
           </q-banner>
           <template v-if="inspector.current">
             <q-banner v-if="pendingApprovals.length || pendingQuestions.length || waiting" rounded class="app-surface-tonal q-mb-md" role="status">
-              Dieser Subagent wartet auf deine Entscheidung in der Hauptsession.
+              {{ pendingApprovals.length || pendingQuestions.length
+                ? 'Dieser Subagent wartet auf deine Entscheidung in der Hauptsession.'
+                : 'Dieser Subagent wartet auf eine neue Anweisung des Hauptagenten.' }}
               <div v-for="approval in pendingApprovals" :key="approval.id" class="text-body2 q-mt-xs">{{ approval.title }}</div>
               <div v-for="question in pendingQuestions" :key="question.id" class="text-body2 q-mt-xs">{{ question.questions?.[0]?.question }}</div>
             </q-banner>

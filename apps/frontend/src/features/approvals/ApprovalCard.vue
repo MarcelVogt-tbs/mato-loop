@@ -1,6 +1,6 @@
 <template>
   <q-card flat class="approval-card app-surface">
-    <SubagentRequestLink :request="approval" />
+    <slot name="navigation" />
     <q-card-section class="q-pa-md q-pb-sm">
       <div class="row items-center no-wrap">
         <q-icon :name="actionIcon" :color="isMemoryRemove ? 'negative' : 'primary'" size="24px" class="q-mr-sm" />
@@ -295,7 +295,6 @@
 import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, ref } from 'vue'
 import ToolPresentation from 'src/features/chat/components/ToolPresentation.vue'
-import SubagentRequestLink from 'src/features/subagents/SubagentRequestLink.vue'
 import { useConfirm } from 'src/composables/confirm'
 import {
   approvalResource,
@@ -310,6 +309,7 @@ import {
 import { useApprovalStore } from 'stores/approvals'
 import { useAuthStore } from 'stores/auth'
 import { useChatStore } from 'src/features/chat/store'
+import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useSkillStore } from 'stores/skills'
 
@@ -323,6 +323,7 @@ const emit = defineEmits(['open-approval-draft'])
 const approvals = useApprovalStore()
 const auth = useAuthStore()
 const chat = useChatStore()
+const executionAgents = useExecutionAgentStore()
 const workspace = useWorkspaceStore()
 const skills = useSkillStore()
 const reviewingSkill = ref(false)
@@ -342,6 +343,7 @@ const grantOptions = computed(() => approvalGrantOptions(props.approval))
 const actionDisplay = computed(() => approvalActionDisplay(props.approval))
 const grantDisplay = computed(() => {
   if (argumentEditDirty.value || props.approval.payload?.runActionOnly) return { label: 'diese Aktion mit den angezeigten Werten' }
+  if (props.approval.resourceType === 'execution_agent') return { label: resource.value.value }
   return grantOptions.value.find((option) => option.id === grantOption.value) || {
     label: (props.approval.details?.displayItems || props.approval.payload?.displayItems || [])
       .find((item) => ['Freigegebener Bereich', 'Für diese Session'].includes(item.label))?.value?.join(' · ') || ''
@@ -390,7 +392,7 @@ const actionIcon = computed(() => {
   if (props.approval.resourceType === 'session') return 'forum'
   return 'approval'
 })
-const resource = computed(() => approvalResource(props.approval, chat.cachedSessions))
+const resource = computed(() => approvalResource(props.approval, chat.cachedSessions, executionAgents.items))
 const resourceInGrant = computed(() => !argumentEditDirty.value
   && (hasDecision('allow_once') || hasDecision('allow_session'))
   && grantDisplay.value.label === resource.value.value)

@@ -196,12 +196,15 @@ async def test_task_tool_has_bounded_prompt_and_delegates(tmp_path) -> None:
                   [{"description": "Inspect", "prompt": " "}],
                   [{"description": " ", "prompt": "Inspect"}],
                   [{"description": "Inspect", "prompt": "x" * 8_001}],
-                  [{"description": "Inspect", "prompt": "x", "session_id": str(uuid4())}] * 2,
+                   [{"description": "Inspect", "prompt": "x", "session_id": str(uuid4())}] * 2,
+                   [{"description": "Stop", "stop": True}],
+                   [{"description": "Inspect"}],
                   [{"description": "Inspect", "prompt": "x", "type": "explore"}]):
         with pytest.raises(ValidationError):
             TaskArguments(tasks=tasks)
 
-    call = ToolCall("task-1", "task", {"tasks": [{"description": "Translate", "prompt": " Translate this text "}]})
+    stop = {"description": "Stop", "session_id": str(uuid4()), "stop": True, "prompt": ""}
+    call = ToolCall("task-1", "task", {"tasks": [{"description": "Translate", "prompt": " Translate this text "}, stop]})
     context = _context(tmp_path, call)
     context.task_handler = AsyncMock(return_value=ToolResult("findings", {}))
 
@@ -209,7 +212,7 @@ async def test_task_tool_has_bounded_prompt_and_delegates(tmp_path) -> None:
 
     assert result.content == "findings"
     context.task_handler.assert_awaited_once_with(TaskArguments(tasks=[
-        {"description": "Translate", "prompt": "Translate this text"}
+        {"description": "Translate", "prompt": "Translate this text"}, stop
     ]))
     schema = next(item for item in tool_registry.schemas(IntegrationSettings()) if item["name"] == "task")
     assert set(schema["parameters"]["properties"]) == {"tasks"}

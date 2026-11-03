@@ -11,10 +11,13 @@ vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), delete: v
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm }) }))
 
 import ApprovalCard from '../src/features/approvals/ApprovalCard.vue'
+import RequestDock from '../src/features/chat/components/RequestDock.vue'
 import SessionApp from '../src/features/chat/components/SessionApp.vue'
 import MemorySettingsPage from '../src/features/memory/MemorySettingsPage.vue'
 import { useApprovalStore } from '../src/stores/approvals'
+import { useQuestionStore } from '../src/stores/questions'
 import { useChatStore } from '../src/features/chat/store'
+import { useExecutionAgentStore } from '../src/stores/execution-agents'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { api } from 'src/boot/axios'
 
@@ -73,6 +76,48 @@ function button(container, label) {
   return [...container.querySelectorAll('button')].find((item) => item.textContent.includes(label))
 }
 
+it('switches mixed requests with progress bars, retains answers and advances after completion', async () => {
+  const approvals = useApprovalStore()
+  const questions = useQuestionStore()
+  approvals.pending = [responses['/approvals/pending'][0]]
+  questions.add({
+    id: 'question', sessionId: 'parent', createdAt: '2026-09-06T10:00:01Z',
+    payload: { subagentSessionId: 'child', subagentTitle: 'Agent B' },
+    questions: [
+      { id: 'detail', header: 'Detail', type: 'free_text', question: 'Welches Detail?' },
+      { id: 'extra', header: 'Zusatz', type: 'free_text', question: 'Welche Ergänzung?' }
+    ]
+  })
+  await mountView(() => h(RequestDock, { approvals: approvals.pending, questions: questions.pending }))
+  const visibleCard = () => [...root.querySelectorAll('section[aria-label="Offene Anfragen"] > .q-card')]
+    .find((card) => card.style.display !== 'none')
+
+  expect(visibleCard().textContent).toContain('Anfrage 1 von 2')
+  visibleCard().querySelector('[aria-label="Anfrage 2: Rückfrage · Agent B"]').click()
+  await nextTick()
+  expect(visibleCard().querySelector('.request-progress a').textContent.trim()).toBe('Agent B')
+  const input = visibleCard().querySelector('textarea')
+  input.value = 'Mein Entwurf'
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  const secondStep = visibleCard().querySelector('[aria-label="Frage 2: Zusatz"]')
+  expect(secondStep.textContent).toBe('2')
+  secondStep.click()
+  await nextTick()
+  expect(visibleCard().textContent).toContain('Welche Ergänzung?')
+  visibleCard().querySelector('[aria-label="Frage 1: Detail, beantwortet"]').click()
+  await nextTick()
+  visibleCard().querySelector('[aria-label="Anfrage 1: Freigabe · Hauptagent"]').click()
+  await nextTick()
+  expect(visibleCard().textContent).toContain('Datei lesen')
+  visibleCard().querySelector('[aria-label="Anfrage 2: Rückfrage · Agent B"]').click()
+  await nextTick()
+  expect(visibleCard().querySelector('textarea').value).toBe('Mein Entwurf')
+  button(visibleCard(), 'Fertig').click()
+  await vi.waitFor(() => expect(questions.pending).toEqual([]))
+  expect(visibleCard().textContent).toContain('Datei lesen')
+  expect(visibleCard().textContent).not.toContain('Anfrage 1 von')
+})
+
 async function setContent(card, value) {
   const input = card.querySelector('textarea')
   input.value = value
@@ -91,6 +136,17 @@ async function selectOption(card, label, option) {
 }
 
 describe('approval card', () => {
+  it('names the computer bound to the request instead of the current selection', async () => {
+    useChatStore().current = { id: 'parent', preferredExecutionAgentId: 'other' }
+    useExecutionAgentStore().items = [{ id: 'computer', alias: 'Notebook' }]
+    await mountApproval({
+      ...responses['/approvals/pending'][0], resourceType: 'execution_agent',
+      resourceScope: 'computer', resourceDisplay: 'Ausgewählter Computer',
+      payload: { grantOptions: [{ id: 'requested', scopeDisplay: ['Ausgewählter Computer'] }] }
+    })
+    expect(root.querySelector('.approval-grant').textContent).toContain('Notebook')
+  })
+
   it.each([
     ['shell_run', 'Shell-Zugriff freigeben'],
     ['integration_operation', 'Zugriff freigeben']

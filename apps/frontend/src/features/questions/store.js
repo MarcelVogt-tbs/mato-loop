@@ -61,8 +61,7 @@ export const useQuestionStore = defineStore('questions', {
           customOn: {},
           rememberForSession: Object.fromEntries(
             request.questions.filter((question) => question.one_time === true).map((question) => [question.id, false])
-          ),
-          minimized: false
+          )
         }
       }
       return this.drafts[request.id]

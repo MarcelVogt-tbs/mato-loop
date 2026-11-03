@@ -25,11 +25,11 @@ describe('session grouping', () => {
 })
 
 describe('session sidebar status', () => {
-  it('shares one slot and prioritizes approvals over active model work', () => {
+  it('shares one slot and prioritizes pending requests over active model work', () => {
     expect(sessionSidebarStatus({ activeRunStatus: 'running' }, 2)).toEqual({
       kind: 'approval',
       count: 2,
-      label: '2 Freigaben erforderlich'
+      label: '2 offene Anfragen'
     })
     expect(sessionSidebarStatus({ activeRunStatus: 'running' })).toEqual({
       kind: 'active',
@@ -42,5 +42,11 @@ describe('session sidebar status', () => {
       label: 'Freigabe erforderlich'
     })
     expect(sessionSidebarStatus({ activeRunStatus: null })).toBeNull()
+  })
+
+  it('counts approvals and question requests together', () => {
+    expect(sessionSidebarStatus({ activeRunStatus: 'running' }, 2, 2)).toEqual({
+      kind: 'approval', count: 4, label: '4 offene Anfragen'
+    })
   })
 })

@@ -147,6 +147,7 @@ RUN_PHASES = {
     "compacting_context",
     "waiting_model",
     "processing_tool",
+    "waiting_input",
     "finalizing",
 }
 

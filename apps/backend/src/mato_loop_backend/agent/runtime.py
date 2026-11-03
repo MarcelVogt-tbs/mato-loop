@@ -133,6 +133,7 @@ class AgentRuntime:
     _pending_continuations: set[UUID] = set()
     _continuation_wakeups: dict[UUID, asyncio.Event] = {}
     _waiting_interactions: dict[UUID, tuple[UUID | None, asyncio.Future[Any]]] = {}
+    _instruction_waits: dict[UUID, asyncio.Event] = {}
     _provider_active_runs: set[UUID] = set()
     _tool_active_runs: set[UUID] = set()
     _interrupted_runs: set[UUID] = set()
@@ -621,8 +622,12 @@ class AgentRuntime:
         if accepted:
             cls._pending_continuations.add(run_id)
             cls._continuation_wakeups.setdefault(run_id, asyncio.Event()).set()
-            for waiting_run_id, (_parent_run_id, waiter) in tuple(cls._waiting_interactions.items()):
-                if waiting_run_id == run_id and not waiter.done():
+            if instruction := cls._instruction_waits.pop(run_id, None):
+                instruction.set()
+            for waiting_run_id, (parent_run_id, waiter) in tuple(cls._waiting_interactions.items()):
+                if parent_run_id == run_id:
+                    cls._instruction_waits.setdefault(waiting_run_id, asyncio.Event())
+                if (waiting_run_id == run_id or parent_run_id == run_id) and not waiter.done():
                     waiter.set_result("superseded")
         cls._continuations.get(run_id, set()).discard(reservation)
         if not cls._continuations.get(run_id):
@@ -634,6 +639,8 @@ class AgentRuntime:
 
     @classmethod
     async def _await_continuations(cls, run_id: UUID) -> bool:
+        if instruction := cls._instruction_waits.get(run_id):
+            await instruction.wait()
         reservations = tuple(cls._continuations.get(run_id, ()))
         if reservations:
             await asyncio.gather(*(reservation.wait() for reservation in reservations))
@@ -1276,6 +1283,7 @@ class AgentRuntime:
             cls._continuations.pop(run_id, None)
             cls._pending_continuations.discard(run_id)
             cls._continuation_wakeups.pop(run_id, None)
+            cls._instruction_waits.pop(run_id, None)
             cls._provider_active_runs.discard(run_id)
             cls._tool_active_runs.discard(run_id)
 

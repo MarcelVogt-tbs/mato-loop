@@ -151,7 +151,6 @@
                 :running="chat.running && message.currentTurn"
                 :expanded="expandedWorkHistoryIds.has(message.workHistory?.id || message.id)"
                 @open-file="openToolFile"
-                @open-approval-draft="openApprovalDraft"
                 @history-expanded="setWorkHistoryExpanded(message.workHistory?.id || message.id, $event)"
                 @rendered="handleMessageRendered"
                 @resize-start="beginActivityResize"
@@ -316,18 +315,12 @@
               </template>
             </q-banner>
             <SubagentRows :children="unmatchedChildren" />
-            <ApprovalCard
-              v-for="approval in transcript.unmatchedApprovals"
-              :key="approval.id"
-              :approval="approval"
+            <RequestDock
+              :key="chat.current?.id"
+              :approvals="sessionApprovals"
+              :questions="sessionQuestions"
               class="q-mt-md"
               @open-approval-draft="openApprovalDraft"
-            />
-            <QuestionDock
-              v-for="question in transcript.unmatchedQuestions"
-              :key="question.id"
-              :request="question"
-              class="q-mt-md"
               @rendered="handleMessageRendered"
             />
           </template>
@@ -518,7 +511,7 @@ import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { copyToClipboard, useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
-import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
+import RequestDock from 'src/features/chat/components/RequestDock.vue'
 import AgentActivityPanel from 'src/features/chat/components/AgentActivityPanel.vue'
 import FileChanges from 'src/features/chat/components/FileChanges.vue'
 import HomeContent from 'src/features/home/HomeContent.vue'
@@ -533,7 +526,6 @@ import WorkspaceField from 'src/features/coding/WorkspaceField.vue'
 import ControlCenterPanel from 'src/app/control-center/ControlCenterPanel.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
 import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
-import QuestionDock from 'src/features/questions/QuestionDock.vue'
 import SubagentInspector from 'src/features/subagents/SubagentInspector.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'
 import { isActiveSubagent, useSubagentStore } from 'stores/subagents'

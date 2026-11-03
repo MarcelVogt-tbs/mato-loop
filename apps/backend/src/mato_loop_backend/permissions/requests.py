@@ -14,7 +14,7 @@ import mato_loop_backend.agent.run_support as agent_run_support
 from mato_loop_backend.agent.activity import run_activity_label
 from mato_loop_backend.agent.run_contracts import ApprovalResolution
 from mato_loop_backend.agent.run_timing import run_timing_payload, transition_run_status
-from mato_loop_backend.agent.subagents import permission_origin, provenance
+from mato_loop_backend.agent.subagents import parent_run_for_child, permission_origin, provenance
 from mato_loop_backend.events import run_events
 from mato_loop_backend.execution import ExecutionClient, ExecutionClientError, WorkspaceStatResult
 from mato_loop_backend.execution.manager import execution_agent_connections
@@ -185,8 +185,12 @@ async def request_approval(
             await enqueue_approval_prompt(db, approval)
     approval_id, run_id = approval.id, run.id
     waiter = approval_coordinator.register(approval_id)
-    cls._waiting_interactions[run_id] = (chat_session.spawned_by_run_id, waiter)
+    parent_run_id = parent_run_for_child(run_id)
+    cls._waiting_interactions[run_id] = (parent_run_id, waiter)
     if run_id in cls._pending_continuations:
+        waiter.set_result("superseded")
+    elif parent_run_id in cls._pending_continuations:
+        cls._instruction_waits.setdefault(run_id, asyncio.Event())
         waiter.set_result("superseded")
     try:
         await db.commit()
@@ -217,14 +221,17 @@ async def request_approval(
         cls._waiting_interactions.pop(run_id, None)
         approval_coordinator.discard(approval_id)
     await db.refresh(approval, with_for_update=True)
-    superseded = decision == "superseded" or run_id in cls._pending_continuations
+    paused = run_id in cls._instruction_waits
+    superseded = decision == "superseded" or run_id in cls._pending_continuations or paused
     if superseded and approval.status == "pending":
         approval.status = "expired"
         approval.resolved_at = datetime.now(UTC)
-    transition_run_status(run, "running")
+    transition_run_status(run, "waiting_input" if paused else "running")
     await db.commit()
     if superseded:
         await run_events.publish(run_id, {"type": "approval.expired", "approvalId": str(approval_id)})
+    if paused:
+        await agent_run_support._publish_run_phase(run_id, "waiting_input", activityLabel="Wartet auf Anweisung des Hauptagenten")
     await run_events.publish(
         run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)}
     )

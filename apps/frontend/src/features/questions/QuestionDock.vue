@@ -1,183 +1,146 @@
 <template>
   <q-card flat class="question-dock app-surface" @keydown="handleKeydown">
     <q-resize-observer @resize="emit('rendered')" />
-    <SubagentRequestLink :request="request" />
-    <q-card-section class="question-dock__header row items-center no-wrap">
-      <div class="row items-center no-wrap q-gutter-sm">
-        <q-icon name="help_outline" color="primary" size="20px" />
-        <span class="text-subtitle2 text-weight-bold">
-          Frage {{ draft.index + 1 }} von {{ request.questions.length }}
-        </span>
-      </div>
-      <div v-if="request.questions.length > 1" class="question-dock__progress row no-wrap">
-        <button
-          v-for="(item, index) in request.questions"
-          :key="item.id"
-          type="button"
-          class="question-dock__segment"
-          :class="{
-            'question-dock__segment--active': index === draft.index,
-            'question-dock__segment--answered': answered(index)
-          }"
-          :disabled="busy"
-          :aria-label="`Frage ${index + 1}: ${item.header}`"
-          :aria-current="index === draft.index ? 'step' : undefined"
-          @click="jump(index)"
-        >
-          <q-tooltip>{{ item.header }}</q-tooltip>
-        </button>
-      </div>
-      <q-space class="question-dock__header-spacer" />
-      <q-btn
-        flat
-        round
-        dense
-        :icon="draft.minimized ? 'keyboard_arrow_up' : 'keyboard_arrow_down'"
-        :aria-label="draft.minimized ? 'Rückfrage ausklappen' : 'Rückfrage einklappen'"
-        :disable="busy"
-        @click="draft.minimized = !draft.minimized"
-      />
-    </q-card-section>
+    <slot name="navigation" />
 
-    <q-separator />
-
-    <q-card-section class="question-dock__body" :class="{ 'question-dock__body--minimized': draft.minimized }">
-      <div :id="questionLabelId" ref="questionHeading" class="text-body1 text-weight-bold no-outline" tabindex="-1">
-        {{ current.question }}
+    <q-card-section class="question-dock__body">
+      <div class="row items-start">
+        <div :id="questionLabelId" ref="questionHeading" class="col-12 col-sm text-body1 text-weight-bold no-outline" tabindex="-1">
+          {{ current.question }}
+        </div>
+        <RequestProgress v-if="request.questions.length > 1" numbered label="Frage" class="q-ml-auto" :items="progressItems" :index="draft.index" :disabled="busy" @select="jump" />
       </div>
 
-      <template v-if="!draft.minimized">
-        <div class="text-caption app-muted q-mt-xs">
-          Du kannst Fragen leer lassen und jederzeit mit „Fertig“ abschließen.
-        </div>
-        <div v-if="current.type === 'multiple_choice'" class="text-caption app-muted q-mt-xs">
-          Du kannst mehrere Antworten auswählen.
-        </div>
-        <div v-else-if="current.type === 'single_choice'" class="text-caption app-muted q-mt-xs">
-          Wähle eine Antwort aus.
-        </div>
+      <div class="text-caption app-muted q-mt-xs">
+        Du kannst Fragen leer lassen und jederzeit mit „Fertig“ abschließen.
+      </div>
+      <div v-if="current.type === 'multiple_choice'" class="text-caption app-muted q-mt-xs">
+        Du kannst mehrere Antworten auswählen.
+      </div>
+      <div v-else-if="current.type === 'single_choice'" class="text-caption app-muted q-mt-xs">
+        Wähle eine Antwort aus.
+      </div>
 
-        <q-banner v-if="oneTime" rounded class="app-surface-tonal q-mt-sm">
-          <template #avatar><q-icon name="lock_clock" color="primary" /></template>
-          <template v-if="current.administrator">
-            Dieses Passwort dient zur Authentifizierung auf „{{ current.administrator.alias }}“ im laufenden Durchlauf.
-            Es erteilt keine Aktionsfreigabe. Zugriffe werden separat nach den wirksamen Regeln und Freigaben geprüft.
-          </template>
-          <template v-else>
-            Diese Antwort wird im laufenden Durchlauf verwendet. Du kannst sie stattdessen flüchtig für diese
-            Session merken lassen; sie wird nicht dauerhaft gespeichert.
-          </template>
-        </q-banner>
+      <q-banner v-if="oneTime" rounded class="app-surface-tonal q-mt-sm">
+        <template #avatar><q-icon name="lock_clock" color="primary" /></template>
+        <template v-if="current.administrator">
+          Dieses Passwort dient zur Authentifizierung auf „{{ current.administrator.alias }}“ im laufenden Durchlauf.
+          Es erteilt keine Aktionsfreigabe. Zugriffe werden separat nach den wirksamen Regeln und Freigaben geprüft.
+        </template>
+        <template v-else>
+          Diese Antwort wird im laufenden Durchlauf verwendet. Du kannst sie stattdessen flüchtig für diese
+          Session merken lassen; sie wird nicht dauerhaft gespeichert.
+        </template>
+      </q-banner>
 
-        <q-banner v-else-if="saveProposal" rounded class="app-surface-tonal q-mt-sm">
-          <template #avatar><q-icon :name="current.type === 'password' ? 'lock' : 'save'" color="primary" /></template>
-          Eine ausgefüllte Antwort wird dauerhaft als {{ current.type === 'password' ? 'Secret' : 'Variable' }} „{{ saveProposal.name }}“ gespeichert, bis du sie löschst.
-          Erst „Fertig“ erlaubt genau diesen Speichervorgang. Ein leeres Feld wird nicht gespeichert.
-        </q-banner>
+      <q-banner v-else-if="saveProposal" rounded class="app-surface-tonal q-mt-sm">
+        <template #avatar><q-icon :name="current.type === 'password' ? 'lock' : 'save'" color="primary" /></template>
+        Eine ausgefüllte Antwort wird dauerhaft als {{ current.type === 'password' ? 'Secret' : 'Variable' }} „{{ saveProposal.name }}“ gespeichert, bis du sie löschst.
+        Erst „Fertig“ erlaubt genau diesen Speichervorgang. Ein leeres Feld wird nicht gespeichert.
+      </q-banner>
 
+      <div
+        v-if="['single_choice', 'multiple_choice'].includes(current.type)"
+        ref="optionsElement"
+        class="question-dock__options q-mt-sm"
+        :role="current.type === 'single_choice' ? 'radiogroup' : 'group'"
+        :aria-labelledby="questionLabelId"
+      >
         <div
-          v-if="['single_choice', 'multiple_choice'].includes(current.type)"
-          ref="optionsElement"
-          class="question-dock__options q-mt-sm"
-          :role="current.type === 'single_choice' ? 'radiogroup' : 'group'"
-          :aria-labelledby="questionLabelId"
+          v-for="option in current.options"
+          :key="option.label"
+          class="question-dock__option row items-start"
         >
-          <div
-            v-for="option in current.options"
-            :key="option.label"
-            class="question-dock__option row items-start"
-          >
+          <q-radio dense
+            v-if="current.type === 'single_choice'"
+            class="question-dock__option-control col"
+            :model-value="customSelected ? null : (currentAnswers[0] || null)"
+            :tabindex="singleTabIndex(option.label)"
+            :val="option.label"
+            :label="option.label"
+            :disable="busy"
+            @update:model-value="selectSingle(option.label)"
+          />
+          <q-checkbox dense
+            v-else
+            class="question-dock__option-control col"
+            :model-value="currentAnswers.includes(option.label)"
+            :label="option.label"
+            :disable="busy"
+            @update:model-value="toggleMultiple(option.label)"
+          />
+          <span v-if="option.description" class="question-dock__option-description col text-caption app-muted q-pt-sm">
+            {{ option.description }}
+          </span>
+        </div>
+
+        <div v-if="current.allow_custom !== false" class="question-dock__option">
+          <div class="row items-start no-wrap">
             <q-radio dense
               v-if="current.type === 'single_choice'"
-              class="question-dock__option-control col"
-              :model-value="customSelected ? null : (currentAnswers[0] || null)"
-              :tabindex="singleTabIndex(option.label)"
-              :val="option.label"
-              :label="option.label"
+              :model-value="customSelected ? 'custom' : null"
+              :tabindex="customSelected ? 0 : -1"
+              val="custom"
+              label="Eigene Antwort"
               :disable="busy"
-              @update:model-value="selectSingle(option.label)"
+              @update:model-value="enableCustom"
             />
             <q-checkbox dense
               v-else
-              class="question-dock__option-control col"
-              :model-value="currentAnswers.includes(option.label)"
-              :label="option.label"
+              :model-value="customSelected"
+              label="Eigene Antwort"
               :disable="busy"
-              @update:model-value="toggleMultiple(option.label)"
-            />
-            <span v-if="option.description" class="question-dock__option-description col text-caption app-muted q-pt-sm">
-              {{ option.description }}
-            </span>
-          </div>
-
-          <div v-if="current.allow_custom !== false" class="question-dock__option">
-            <div class="row items-start no-wrap">
-              <q-radio dense
-                v-if="current.type === 'single_choice'"
-                :model-value="customSelected ? 'custom' : null"
-                :tabindex="customSelected ? 0 : -1"
-                val="custom"
-                label="Eigene Antwort"
-                :disable="busy"
-                @update:model-value="enableCustom"
-              />
-              <q-checkbox dense
-                v-else
-                :model-value="customSelected"
-                label="Eigene Antwort"
-                :disable="busy"
-                @update:model-value="toggleCustom"
-              />
-            </div>
-            <q-input
-              v-if="customSelected"
-              :ref="setCustomInput"
-              :model-value="customText"
-              outlined
-              dense
-              autogrow
-              type="textarea"
-              class="q-ml-lg q-mt-xs"
-              placeholder="Eigene Antwort eingeben"
-              :maxlength="20000"
-              :disable="busy"
-              @update:model-value="updateCustom"
-              @keydown.escape.stop.prevent="closeCustom"
+              @update:model-value="toggleCustom"
             />
           </div>
-        </div>
-
-        <template v-else-if="['free_text', 'value', 'password'].includes(current.type)">
-          <q-input dense
-            ref="freeTextInput"
-            :model-value="currentAnswers[0] || ''"
+          <q-input
+            v-if="customSelected"
+            :ref="setCustomInput"
+            :model-value="customText"
             outlined
-            :autogrow="current.type === 'free_text'"
-            :type="current.type === 'password' ? 'password' : current.type === 'value' ? 'text' : 'textarea'"
-            class="q-mt-md"
-            :placeholder="current.placeholder || 'Antwort eingeben'"
+            dense
+            autogrow
+            type="textarea"
+            class="q-ml-lg q-mt-xs"
+            placeholder="Eigene Antwort eingeben"
             :maxlength="20000"
-            :autocomplete="current.type === 'password' ? 'new-password' : current.type === 'value' ? 'off' : undefined"
             :disable="busy"
-            :aria-labelledby="questionLabelId"
-            @update:model-value="setFreeText"
+            @update:model-value="updateCustom"
+            @keydown.escape.stop.prevent="closeCustom"
           />
-          <template v-if="oneTime">
-            <q-checkbox dense
-              v-model="draft.rememberForSession[current.id]"
-              color="primary"
-              label="Für diese Session merken"
-              :disable="busy"
-              class="q-mt-sm"
-            />
-            <div class="text-caption app-muted q-ml-sm">
-              <template v-if="current.administrator">
-                Merkt nur das Passwort flüchtig, keine Zugriffsrechte.
-                Beim Löschen der Session oder beim Backend-Neustart wird es verworfen.
-              </template>
-              <template v-else>Wird beim Löschen der Session oder beim Backend-Neustart verworfen.</template>
-            </div>
-          </template>
+        </div>
+      </div>
+
+      <template v-else-if="['free_text', 'value', 'password'].includes(current.type)">
+        <q-input dense
+          ref="freeTextInput"
+          :model-value="currentAnswers[0] || ''"
+          outlined
+          :autogrow="current.type === 'free_text'"
+          :type="current.type === 'password' ? 'password' : current.type === 'value' ? 'text' : 'textarea'"
+          class="q-mt-md"
+          :placeholder="current.placeholder || 'Antwort eingeben'"
+          :maxlength="20000"
+          :autocomplete="current.type === 'password' ? 'new-password' : current.type === 'value' ? 'off' : undefined"
+          :disable="busy"
+          :aria-labelledby="questionLabelId"
+          @update:model-value="setFreeText"
+        />
+        <template v-if="oneTime">
+          <q-checkbox dense
+            v-model="draft.rememberForSession[current.id]"
+            color="primary"
+            label="Für diese Session merken"
+            :disable="busy"
+            class="q-mt-sm"
+          />
+          <div class="text-caption app-muted q-ml-sm">
+            <template v-if="current.administrator">
+              Merkt nur das Passwort flüchtig, keine Zugriffsrechte.
+              Beim Löschen der Session oder beim Backend-Neustart wird es verworfen.
+            </template>
+            <template v-else>Wird beim Löschen der Session oder beim Backend-Neustart verworfen.</template>
+          </div>
         </template>
       </template>
     </q-card-section>
@@ -229,7 +192,7 @@
 <script setup>
 import { computed, nextTick, ref } from 'vue'
 import { useQuestionStore } from 'stores/questions'
-import SubagentRequestLink from 'src/features/subagents/SubagentRequestLink.vue'
+import RequestProgress from 'src/shared/ui/RequestProgress.vue'
 
 defineOptions({ name: 'QuestionDock' })
 
@@ -268,6 +231,10 @@ const questionLabelId = computed(() => `question-${props.request.id}-${current.v
 function answered(index) {
   return Boolean(draft.answers[props.request.questions[index].id]?.some((answer) => answer.trim()))
 }
+
+const progressItems = computed(() => props.request.questions.map((item, index) => ({
+  id: item.id, label: item.header, answered: answered(index)
+})))
 
 function singleTabIndex(label) {
   if (customSelected.value) return -1

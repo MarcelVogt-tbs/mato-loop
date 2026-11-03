@@ -176,6 +176,7 @@ async def test_run_phase_event_has_stable_language_neutral_payload(monkeypatch) 
         "compacting_context",
         "waiting_model",
         "processing_tool",
+        "waiting_input",
         "finalizing",
     }
 
@@ -448,7 +449,8 @@ async def test_delegation_intersects_live_spawn_scope_and_both_permission_ceilin
 
 
 @pytest.mark.parametrize("foreign_owner", [False, True])
-async def test_delegation_rejects_unrelated_sessions_before_starting(delegated_runtime, foreign_owner):
+@pytest.mark.parametrize("stop", [False, True])
+async def test_delegation_rejects_unrelated_sessions_before_starting(delegated_runtime, foreign_owner, stop):
     session, _parent, objects, _databases, delegate = delegated_runtime
     target = ChatSession(id=uuid4(), user_id=uuid4() if foreign_owner else session.user_id,
                          parent_session_id=session.id if foreign_owner else uuid4())
@@ -456,7 +458,7 @@ async def test_delegation_rejects_unrelated_sessions_before_starting(delegated_r
     before = len(objects)
     result = await delegate(tasks=[
         {"description": "New task", "prompt": "Do not start on invalid batch."},
-        {"session_id": target.id, "description": "Follow-up", "prompt": "Do not send."},
+        {"session_id": target.id, "description": "Follow-up", "prompt": "Do not send.", "stop": stop},
     ])
     assert result.metadata["errorCode"] == "session.notFound" and len(objects) == before
 
@@ -614,31 +616,67 @@ async def test_cancel_descendants_uses_recursive_sessions_and_never_replays_orph
     schedule.assert_not_called()
 
 
+async def test_later_child_pause_is_delivered_once_without_detaching_the_child(monkeypatch, delegated_runtime):
+    session, parent, _objects, databases, _delegate = delegated_runtime
+    db = databases[0]
+    child_session = ChatSession(id=uuid4(), user_id=session.user_id, parent_session_id=session.id)
+    child = AgentRun(id=uuid4(), session_id=child_session.id, status="waiting_input")
+    db.add(child_session)
+    db.add(child)
+    task = asyncio.create_task(asyncio.Event().wait())
+    tracked = subagents.ChildTask(child_session.id, child.id, "Inspect", task)
+    monkeypatch.setitem(subagents._children, parent.id, {child.id: tracked})
+    monkeypatch.setitem(AgentRuntime._instruction_waits, child.id, asyncio.Event())
+    try:
+        await subagents.deliver_updates(db, parent, session)
+        await subagents.deliver_updates(db, parent, session)
+        updates = [call.args[0].provider_data["_matoloop"]["subagentResults"]["tasks"]
+                   for call in db.add.call_args_list if isinstance(call.args[0], Message)]
+        assert ([[item.get("awaitingInstruction") for item in update] for update in updates],
+                subagents._children[parent.id].get(child.id)) == ([[True]], tracked)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 @pytest.mark.parametrize("kind", ["approval", "question"])
-@pytest.mark.parametrize("direct_message", [False, True])
-async def test_delegated_waits_keep_parent_active_and_expire_on_cancel(monkeypatch, delegated_runtime, kind, direct_message):
+@pytest.mark.parametrize("action", ["cancel", "correct", "stop"])
+async def test_delegated_waits_expire_and_pause_for_parent_instructions(monkeypatch, delegated_runtime, kind, action):
+    from mato_loop_backend.tools.contracts import ToolCallSuperseded
+
     session, parent, objects, _databases, delegate = delegated_runtime
     entered = asyncio.Event()
+    expired = asyncio.Event()
     created = []
+    expired_ids = set()
 
     async def publish(_run_id, event):
         if event["type"] == f"{kind}.created":
             created.append(event[kind])
             if len(created) == 2:
                 entered.set()
+        if event["type"] == f"{kind}.expired":
+            expired_ids.add(event[f"{kind}Id"])
+            if len(expired_ids) == 2:
+                expired.set()
 
     async def execute(db, run, _visible):
         child = objects[ChatSession, run.session_id]
+        # Reused child sessions retain their original spawn provenance.
+        child.spawned_by_run_id = uuid4()
         call = ToolCall("call", kind, {})
-        if kind == "approval":
-            await AgentRuntime._request_approval(db, run, child, call, PermissionRequest(
-                capability="network.fetch", resource_type="url", resource_scope="https://example.org",
-                action_kind="fetch", risk_level="low", title="Read", summary="Read",
-            ))
-        else:
-            await AgentRuntime._request_question(db, run, child, call, QuestionArguments(questions=[{
-                "id": "detail", "type": "free_text", "header": "Detail", "question": "Which detail?",
-            }]))
+        try:
+            if kind == "approval":
+                await AgentRuntime._request_approval(db, run, child, call, PermissionRequest(
+                    capability="network.fetch", resource_type="url", resource_scope="https://example.org",
+                    action_kind="fetch", risk_level="low", title="Read", summary="Read",
+                ))
+            else:
+                await AgentRuntime._request_question(db, run, child, call, QuestionArguments(questions=[{
+                    "id": "detail", "type": "free_text", "header": "Detail", "question": "Which detail?",
+                }]))
+        except ToolCallSuperseded:
+            await AgentRuntime._await_continuations(run.id)
 
     monkeypatch.setattr("mato_loop_backend.notifications.NotificationService.create_for_approval", AsyncMock(return_value=None))
     monkeypatch.setattr("mato_loop_backend.notifications.NotificationService.create_for_question", AsyncMock(return_value=None))
@@ -652,14 +690,22 @@ async def test_delegated_waits_keep_parent_active_and_expire_on_cancel(monkeypat
         assert event["runId"] != str(parent.id)
         assert event["payload"]["subagentTitle"].startswith("Task ")
         assert event["payload"]["subagentSessionId"] != str(session.id)
-    if direct_message:
+    if action != "cancel":
         try:
             AgentRuntime.finish_continuation(parent.id, asyncio.Event(), accepted=True)
-            await asyncio.wait_for(task, timeout=1)
-            assert all(request.status == "pending" for (model, _key), request in objects.items()
-                       if model in {ApprovalRequest, QuestionRequest})
-            await subagents.cancel_children(AgentRuntime, parent.id)
+            results = json.loads((await asyncio.wait_for(task, timeout=1)).content)["tasks"]
+            await asyncio.wait_for(expired.wait(), timeout=1)
+            assert all(result.get("awaitingInstruction") for result in results)
+            followup = await delegate(tasks=[{
+                "session_id": result["sessionId"], "description": "Updated task",
+                **({"stop": True} if action == "stop" else {"prompt": "Use the new instruction."}),
+            } for result in results])
+            await asyncio.gather(*(child.task for child in subagents._children.get(parent.id, {}).values()))
+            runs = [objects[AgentRun, UUID(result["runId"])] for result in results]
+            assert [run.status for run in runs] == ["cancelled" if action == "stop" else "completed"] * 2
+            assert [item["runId"] for item in json.loads(followup.content)["tasks"]] == [item["runId"] for item in results]
         finally:
+            await subagents.cancel_children(AgentRuntime, parent.id)
             AgentRuntime._pending_continuations.discard(parent.id)
             AgentRuntime._continuation_wakeups.pop(parent.id, None)
     else:

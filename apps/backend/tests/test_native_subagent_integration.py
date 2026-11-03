@@ -374,9 +374,11 @@ async def test_parent_can_answer_correct_and_reuse_a_waiting_child(native_databa
 
     await send("Answer my status question now; leave the child working.")
     assert await asyncio.wait_for(answers.get(), 20) == "Still working."
+    await _events(parent_run_id, "approval.expired")
     async with fixture.factory() as db:
-        assert (await db.get(ApprovalRequest, UUID(approval["id"]))).status == "pending"
+        assert (await db.get(ApprovalRequest, UUID(approval["id"]))).status == "expired"
         assert (await db.get(AgentRun, parent_run_id)).status == "running"
+    assert calls[child_id] == 1
     await send("Tell the child to skip reading and report a corrected result.")
     assert await asyncio.wait_for(answers.get(), 20) == "Correction delivered."
     async with fixture.factory() as db:

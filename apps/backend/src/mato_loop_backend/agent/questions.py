@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import mato_loop_backend.agent.run_support as agent_run_support
 from mato_loop_backend.agent.activity import run_activity_label
 from mato_loop_backend.agent.run_timing import run_timing_payload, transition_run_status
-from mato_loop_backend.agent.subagents import permission_origin, provenance
+from mato_loop_backend.agent.subagents import parent_run_for_child, permission_origin, provenance
 from mato_loop_backend.events import run_events
 from mato_loop_backend.messaging.questions import enqueue_question_prompt
 from mato_loop_backend.models import AgentRun, ChatSession, Message, QuestionRequest
@@ -58,8 +58,12 @@ async def request_question(
             await enqueue_question_prompt(db, request)
     question_id, run_id = request.id, run.id
     waiter = question_coordinator.register(question_id)
-    cls._waiting_interactions[run_id] = (chat_session.spawned_by_run_id, waiter)
+    parent_run_id = parent_run_for_child(run_id)
+    cls._waiting_interactions[run_id] = (parent_run_id, waiter)
     if run_id in cls._pending_continuations:
+        waiter.set_result("superseded")
+    elif parent_run_id in cls._pending_continuations:
+        cls._instruction_waits.setdefault(run_id, asyncio.Event())
         waiter.set_result("superseded")
     try:
         await db.commit()
@@ -93,14 +97,17 @@ async def request_question(
         cls._waiting_interactions.pop(run_id, None)
         question_coordinator.discard(question_id)
     await db.refresh(request, with_for_update=True)
-    superseded = answers == "superseded" or run_id in cls._pending_continuations
+    paused = run_id in cls._instruction_waits
+    superseded = answers == "superseded" or run_id in cls._pending_continuations or paused
     if superseded and request.status == "pending":
         request.status = "expired"
         request.answered_at = datetime.now(UTC)
-    transition_run_status(run, "running")
+    transition_run_status(run, "waiting_input" if paused else "running")
     await db.commit()
     if superseded:
         await run_events.publish(run_id, {"type": "question.expired", "questionId": str(question_id)})
+    if paused:
+        await agent_run_support._publish_run_phase(run_id, "waiting_input", activityLabel="Wartet auf Anweisung des Hauptagenten")
     await run_events.publish(
         run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)}
     )

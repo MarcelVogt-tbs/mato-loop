@@ -34,12 +34,13 @@ from mato_loop_backend.agent.run_support import (
     TRUNCATED_TOOL_BATCH_RETRIES,
     logger,
 )
+from mato_loop_backend.agent.run_timing import run_timing_payload, transition_run_status
 from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.agent.session_settings import apply_run_session_settings
 from mato_loop_backend.agent.subagents import (
     apply_delegation_ceiling,
     delegation_snapshot,
-    deliver_completed,
+    deliver_updates,
     has_children,
     integration_ceiling_ids,
     wait_for_children,
@@ -51,6 +52,7 @@ from mato_loop_backend.auth.credentials import CredentialCipher
 from mato_loop_backend.automations import AutomationService
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.diagnostics.service import schedule_diagnostic_event
+from mato_loop_backend.events import run_events
 from mato_loop_backend.execution import execution_agent_connections
 from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.integrations.search import search_available
@@ -266,6 +268,10 @@ async def execute_loop_body(
     while True:
         continuation_received = await cls._await_continuations(run.id)
         if continuation_received:
+            if run.status == "waiting_input":
+                transition_run_status(run, "running")
+                await db.commit()
+                await run_events.publish(run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)})
             await cls._transcribe_continuation_messages(db, run)
         if continuation_received or continuation_context_stale:
             selected_execution_agent = None
@@ -273,7 +279,7 @@ async def execute_loop_body(
             if project is not None:
                 await db.refresh(project)
             continuation_context_stale = False
-        await deliver_completed(db, run, chat_session)
+        await deliver_updates(db, run, chat_session)
         tool_budget_exhausted = budget_finalization or (
             tool_call_limit is not None and tool_calls_used >= tool_call_limit
         )

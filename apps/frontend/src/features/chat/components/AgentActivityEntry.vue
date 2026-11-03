@@ -54,7 +54,6 @@
         :read-only="readOnly"
         :show-output="showOutput"
         :show-supplementary="showSupplementary"
-        @open-approval-draft="emit('open-approval-draft', $event)"
         @open-file="emit('open-file', $event)"
         @rendered="emit('rendered')"
         @resize-start="emit('resize-start')"
@@ -154,21 +153,6 @@
     />
   </div>
   <div v-if="entry.type === 'tool'">
-    <template v-if="showSupplementary">
-      <ApprovalCard
-        v-if="entry.approval && !readOnly"
-        :approval="entry.approval"
-        class="work-history__attention"
-        @open-approval-draft="emit('open-approval-draft', $event)"
-      />
-      <QuestionDock
-        v-if="entry.question && !readOnly"
-        :key="entry.question.id"
-        :request="entry.question"
-        class="work-history__attention"
-        @rendered="emit('rendered')"
-      />
-    </template>
     <div
       v-if="showOutput && (entry.output?.attachments.length || entry.output?.fileActions.length)"
       class="work-history__outputs"
@@ -186,12 +170,10 @@
 
 <script setup>
 import { computed, nextTick, useId } from 'vue'
-import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
 import AgentActivityRow from 'src/features/chat/components/AgentActivityRow.vue'
 import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
 import ShellToolOutput from 'src/features/chat/components/ShellToolOutput.vue'
-import QuestionDock from 'src/features/questions/QuestionDock.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'
 import { parseToolResult, shellCommand, toolIdentity, toolPresentation, toolStatus } from 'src/utils/tool-display'
 
@@ -206,7 +188,7 @@ const props = defineProps({
   showOutput: Boolean,
   showSupplementary: Boolean
 })
-const emit = defineEmits(['open-approval-draft', 'open-file', 'rendered', 'resize-start', 'resized', 'trust-image-origin', 'toggle-details'])
+const emit = defineEmits(['open-file', 'rendered', 'resize-start', 'resized', 'trust-image-origin', 'toggle-details'])
 const detailsId = useId()
 const isTool = computed(() => props.entry.type === 'tool')
 const isGroup = computed(() => props.entry.type === 'tool-group')

@@ -1,4 +1,5 @@
 import { cleanUrlForDisplay } from 'src/utils/webfetch'
+import { agentDisplayName } from 'src/features/computers/display'
 
 const REDACTED_KEY = /(authorization|body|content|credential|password|secret|token|api[_-]?key)/i
 const URL_KEY = /(url|uri)$/i
@@ -65,7 +66,7 @@ export function memoryApprovalDisplay(approval) {
   }
 }
 
-export function approvalResource(approval, sessions = []) {
+export function approvalResource(approval, sessions = [], computers = []) {
   const scope = String(approval?.resourceScope || '')
   if (approval?.capability === 'memory.write') {
     return { label: 'Dauerhafte Erinnerungen', value: 'Persönliche Memories' }
@@ -95,7 +96,8 @@ export function approvalResource(approval, sessions = []) {
   if (approval?.resourceType === 'execution_agent') {
     return {
       label: 'Computer',
-      value: approval?.resourceDisplay || 'Ausgewählter Computer'
+      value: agentDisplayName(computers.find((computer) => computer.id === scope))
+        || approval?.resourceDisplay || 'Ausgewählter Computer'
     }
   }
   if (approval?.resourceType === 'execution_workspace') {

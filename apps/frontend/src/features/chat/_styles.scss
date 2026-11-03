@@ -286,20 +286,29 @@
   overflow: hidden;
 }
 
-.question-dock__header {
+.request-progress {
   min-height: 52px;
-  padding: 8px 10px 8px 16px;
+  padding: 8px 16px;
   gap: 8px;
 }
 
-.question-dock__progress {
+.request-progress__source {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.request-progress__source a {
+  text-decoration: none;
+}
+
+.request-progress__bars {
   min-width: 72px;
   max-width: 240px;
   flex: 1 1 180px;
   gap: 5px;
 }
 
-.question-dock__segment {
+.request-progress__segment {
   height: 6px;
   min-width: 12px;
   flex: 1 1 28px;
@@ -310,37 +319,26 @@
   cursor: pointer;
 }
 
-.question-dock__segment--answered {
+.request-progress__segment--answered {
   background: color-mix(in srgb, var(--q-positive) 65%, var(--app-surface-border));
 }
 
-.question-dock__segment--active {
+.request-progress__segment--active {
   background: var(--q-primary);
 }
 
-.question-dock__segment:focus-visible {
+.request-progress__segment:focus-visible {
   outline: 2px solid var(--q-primary);
   outline-offset: 3px;
 }
 
-.question-dock__segment:disabled {
+.request-progress__segment:disabled {
   cursor: default;
   opacity: 0.65;
 }
 
 .question-dock__body {
   min-height: 96px;
-}
-
-.question-dock__body--minimized {
-  min-height: 0;
-}
-
-.question-dock__body--minimized > :first-child {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
 }
 
 .question-dock__options {

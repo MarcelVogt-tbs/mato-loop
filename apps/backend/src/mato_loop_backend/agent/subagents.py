@@ -41,6 +41,7 @@ class ChildTask:
     run_id: UUID
     title: str
     task: asyncio.Task[None]
+    reported_instruction_wait: asyncio.Event | None = None
 
 
 _children: dict[UUID, dict[UUID, ChildTask]] = {}
@@ -48,6 +49,10 @@ _children: dict[UUID, dict[UUID, ChildTask]] = {}
 
 def has_children(run_id: UUID) -> bool:
     return bool(_children.get(run_id))
+
+
+def parent_run_for_child(run_id: UUID) -> UUID | None:
+    return next((parent_id for parent_id, children in _children.items() if run_id in children), None)
 
 
 async def wait_for_children(
@@ -273,6 +278,7 @@ async def run_tasks(
 
     children: list[ChildTask] = []
     corrections: set[UUID] = set()
+    stopping: set[UUID] = set()
 
     async def start_children() -> ToolResult | None:
         async with AsyncSessionFactory() as child_db:
@@ -314,6 +320,8 @@ async def run_tasks(
                 active = previous is not None and previous.status in {"queued", "running", "waiting_approval", "waiting_input"}
                 if active and previous.id not in _children.get(parent.id, {}):
                     return ToolResult.error("session.runInactive")
+                if task.stop and not active:
+                    return ToolResult.error("session.runInactive")
                 targets.append((task, child_session, previous, active))
             count = await child_db.scalar(select(func.count()).select_from(AgentRun).join(
                 ChatSession, ChatSession.id == AgentRun.session_id,
@@ -341,13 +349,17 @@ async def run_tasks(
             session_ai = apply_session_ai(await load_effective_ai(child_db, session.user_id), session, parent.agent_profile_id or session.agent_profile_id)
             storage = SessionStorage()
             try:
-                for _task, _child_session, previous, active in targets:
-                    if active:
+                for task, _child_session, previous, active in targets:
+                    if active and not task.stop:
                         reservation = runtime.reserve_continuation(previous.id, queued=previous.status == "queued")
                         if reservation is None:
                             return ToolResult.error("session.runInactive")
                         reservations.append((previous.id, reservation))
                 for task, child_session, previous, active in targets:
+                    if task.stop:
+                        stopping.add(previous.id)
+                        selected_runs.append(previous.id)
+                        continue
                     child_run_id = uuid4()
                     child_snapshot = deepcopy(snapshot)
                     if child_session is None:
@@ -441,6 +453,9 @@ async def run_tasks(
                 tracked = ChildTask(child_session.id, child.id, child_session.title, runtime._schedule_run(child))
                 _children.setdefault(parent.id, {})[child.id] = tracked
             children.extend(_children[parent.id][run_id] for run_id in selected_runs)
+            for child in children:
+                if child.run_id in stopping:
+                    runtime.cancel(child.run_id)
 
     startup = asyncio.create_task(start_children())
     try:
@@ -451,6 +466,8 @@ async def run_tasks(
             raise
         if error is not None:
             return error
+        if stopping:
+            await asyncio.shield(asyncio.gather(*(child.task for child in children if child.run_id in stopping), return_exceptions=True))
         if not corrections:
             await wait_for_children(runtime, parent.id, children)
         result = await task_results(children)
@@ -470,6 +487,8 @@ async def run_tasks(
 
 
 async def task_results(children: list[ChildTask]) -> ToolResult:
+    from mato_loop_backend.agent.runtime import AgentRuntime
+
     results = []
     private_data_used = False
     async with AsyncSessionFactory() as result_db:
@@ -516,21 +535,29 @@ async def task_results(children: list[ChildTask]) -> ToolResult:
                 "result": content[:MAX_RESULT_CHARACTERS],
                 "truncated": len(content) > MAX_RESULT_CHARACTERS,
                 "errorCode": cause,
+                **({"awaitingInstruction": True} if run_id in AgentRuntime._instruction_waits else {}),
                 **({"cause": error_payload(cause)["error"], "lastToolResults": evidence} if cause else {}),
             })
+            tracked.reported_instruction_wait = AgentRuntime._instruction_waits.get(run_id)
     return ToolResult.json({"tasks": results}, metadata={"privateIntegrationData": private_data_used})
 
 
-async def deliver_completed(db: AsyncSession, parent: AgentRun, session: ChatSession) -> None:
-    children = [child for child in _children.get(parent.id, {}).values() if child.task.done()]
+async def deliver_updates(db: AsyncSession, parent: AgentRun, session: ChatSession) -> None:
+    from mato_loop_backend.agent.runtime import AgentRuntime
+
+    children = [child for child in _children.get(parent.id, {}).values() if child.task.done() or (
+        (instruction := AgentRuntime._instruction_waits.get(child.run_id)) is not None
+        and instruction is not child.reported_instruction_wait
+    )]
     if not children:
         return
+    completed = [child for child in children if child.task.done()]
     result = await task_results(children)
     if result.metadata["privateIntegrationData"]:
         session.private_integration_data_used = True
     message = Message(
         id=uuid4(), session_id=session.id, role="assistant",
-        content="Ergebnisse delegierter Aufgaben sind eingetroffen.",
+        content="Aktualisierungen delegierter Aufgaben sind eingetroffen.",
         trust_level=parent.trust_level, created_at=datetime.now(UTC), attachments=[],
         provider_data={"_matoloop": {
             "origin": "host", "runId": str(parent.id),
@@ -540,7 +567,7 @@ async def deliver_completed(db: AsyncSession, parent: AgentRun, session: ChatSes
     )
     db.add(message)
     await db.commit()
-    forget_children(parent.id, children)
+    forget_children(parent.id, completed)
     from mato_loop_backend.sessions.serialization import message_payload
 
     await run_events.publish(parent.id, {"type": "message.completed", "message": message_payload(message)})

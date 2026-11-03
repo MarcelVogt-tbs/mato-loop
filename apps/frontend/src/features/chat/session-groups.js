@@ -6,20 +6,12 @@ export function groupSessionsByRecency(sessions) {
 }
 
 export function sessionSidebarStatus(session, approvalCount = 0, questionCount = 0) {
-  if (approvalCount > 0) {
+  const count = approvalCount + questionCount
+  if (count > 0) {
     return {
       kind: 'approval',
-      count: approvalCount,
-      label: approvalCount === 1
-        ? 'Freigabe erforderlich'
-        : `${approvalCount} Freigaben erforderlich`
-    }
-  }
-  if (questionCount > 0) {
-    return {
-      kind: 'approval',
-      count: questionCount,
-      label: questionCount === 1 ? 'Antwort erforderlich' : `${questionCount} Antworten erforderlich`
+      count,
+      label: count === 1 ? '1 offene Anfrage' : `${count} offene Anfragen`
     }
   }
   if (session?.activeRunStatus === 'queued' || session?.activeRunStatus === 'running') {

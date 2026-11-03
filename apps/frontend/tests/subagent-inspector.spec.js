@@ -19,9 +19,8 @@ vi.mock('src/features/files/components/FileViewerPanel.vue', () => ({ default: {
 import SubagentInspector from '../src/features/subagents/SubagentInspector.vue'
 import SubagentRows from '../src/features/subagents/SubagentRows.vue'
 import AgentActivityPanel from '../src/features/chat/components/AgentActivityPanel.vue'
+import RequestDock from '../src/features/chat/components/RequestDock.vue'
 import FileChanges from '../src/features/chat/components/FileChanges.vue'
-import ApprovalCard from '../src/features/approvals/ApprovalCard.vue'
-import QuestionDock from '../src/features/questions/QuestionDock.vue'
 import SubagentRequestLink from '../src/features/subagents/SubagentRequestLink.vue'
 import { useSubagentStore } from '../src/stores/subagents'
 import { useApprovalStore } from '../src/stores/approvals'
@@ -844,9 +843,9 @@ describe('subagent inspector navigation and presentation', () => {
     }).messages.find((message) => message.workHistory).workHistory)
     root = document.createElement('div')
     document.body.append(root)
-    app = createApp({ render: () => h(AgentActivityPanel, {
+    app = createApp({ render: () => [h(AgentActivityPanel, {
       history: history.value, running: running.value, activity: activity.value
-    }) })
+    }), h(RequestDock, { approvals: approvals.value })] })
     app.use(pinia).use(router).use(Quasar, { components, config: { dark } })
     mountApp()
 
@@ -1207,7 +1206,7 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.textContent).toContain('Goal\nVollständiger Kontext')
   })
 
-  it('keeps timeline tool supplements beside their tool without aggregate duplicates', async () => {
+  it('keeps tool outputs beside their tool and pending requests in the shared dock', async () => {
     const pinia = createPinia()
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', name: 'chat', component: { render: () => null } }] })
     await router.push('/?session=parent')
@@ -1229,7 +1228,7 @@ describe('subagent inspector navigation and presentation', () => {
     root = document.createElement('div')
     document.body.append(root)
     app = createApp({
-      setup: () => () => h(AgentActivityPanel, {
+      setup: () => () => [h(AgentActivityPanel, {
         readOnly: readOnly.value,
         subagents: [child, { ...child, id: 'finished', title: 'Abgeschlossene Prüfung', run: { status: 'completed' } }],
         history: { entries: [
@@ -1242,7 +1241,7 @@ describe('subagent inspector navigation and presentation', () => {
           { key: 'other', type: 'tool', tool: { id: 'other', name: 'read_file', arguments: { path: 'other.txt' } }, result: {} },
            { key: 'after', type: 'commentary', message: { content: 'Nach dem Tool' } }
         ] }
-      })
+      }), !readOnly.value && h(RequestDock, { approvals: [approval] })]
     })
     app.use(pinia).use(router).use(Quasar, { components })
     mountApp()
@@ -1262,9 +1261,10 @@ describe('subagent inspector navigation and presentation', () => {
       output: Boolean(output),
       after: Boolean(after)
     }).toEqual({ approval: true, subagent: true, output: true, after: true })
-    for (const supplement of [approvalCard, subagentList, output]) {
+    for (const supplement of [subagentList, output]) {
       expect(supplement.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     }
+    expect(after.compareDocumentPosition(approvalCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(root.querySelectorAll('.approval-card')).toHaveLength(1)
     expect(root.querySelectorAll('.work-history__outputs')).toHaveLength(1)
 
@@ -1275,7 +1275,7 @@ describe('subagent inspector navigation and presentation', () => {
     expect(root.querySelector('[aria-label="result.txt herunterladen"]')).not.toBeNull()
   })
 
-  it('shows simultaneous child approval cards and questions in the main session without changing parent activity', async () => {
+  it('switches simultaneous child requests in the main session without changing parent activity', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     store = useSubagentStore()
@@ -1301,8 +1301,7 @@ describe('subagent inspector navigation and presentation', () => {
       const transcript = computed(() => buildChatTranscript([], approvals.forSession('parent'), { running: chat.running, questions: questions.forSession('parent') }))
       return () => h('main', [
         h('p', { role: 'status' }, agentRunPresentation({ runId: chat.runId, running: chat.running, activity: chat.activity, transcript: transcript.value }).label),
-        ...transcript.value.unmatchedApprovals.map((approval) => h(ApprovalCard, { key: approval.id, approval })),
-        ...questions.forSession('parent').slice(0, 1).map((request) => h(QuestionDock, { key: request.id, request }))
+        h(RequestDock, { approvals: approvals.forSession('parent'), questions: questions.forSession('parent') })
       ])
     } })
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', name: 'chat', component: Parent }] })
@@ -1314,7 +1313,10 @@ describe('subagent inspector navigation and presentation', () => {
     mountApp()
     expect(root.querySelector('[role="status"]').textContent).toBe('Subagent starten')
     expect(root.querySelectorAll('.approval-card')).toHaveLength(2)
-    expect(root.querySelectorAll('.question-dock')).toHaveLength(1)
+    expect(root.querySelectorAll('.question-dock')).toHaveLength(2)
+    const visibleCard = () => [...root.querySelectorAll('section[aria-label="Offene Anfragen"] > .q-card')]
+      .find((card) => card.style.display !== 'none')
+    expect(visibleCard().textContent).toContain('Anfrage 1 von 4')
     for (const id of ['one', 'two']) {
       expect(root.querySelector(`a[href="/?session=parent&subagent=child-${id}"]`).textContent).toContain(`Auftrag ${id}`)
     }
@@ -1324,6 +1326,8 @@ describe('subagent inspector navigation and presentation', () => {
     await vi.waitFor(() => expect(root.querySelectorAll('.approval-card')).toHaveLength(1))
     expect(root.querySelector('.approval-card').textContent).toContain('Auftrag two')
     expect(api.post).toHaveBeenCalledWith('/approvals/one/decisions', { decision: 'allow_once' })
+    visibleCard().querySelector('[aria-label="Anfrage 2: Rückfrage · Auftrag one"]').click()
+    await nextTick()
     const answer = [...root.querySelector('.question-dock').querySelectorAll('button')].find((button) => button.textContent === 'Fertig')
     answer.click()
     await vi.waitFor(() => expect(root.querySelector('.question-dock').textContent).toContain('Auftrag two'))

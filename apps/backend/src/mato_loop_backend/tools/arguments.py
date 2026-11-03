@@ -49,15 +49,24 @@ MAX_ACTIVE_SUBAGENTS = 4
 
 class DelegatedTask(ToolArguments):
     description: str = Field(min_length=1, max_length=240)
-    prompt: str = Field(min_length=1, max_length=8_000)
+    prompt: str = Field(default="", max_length=8_000)
     session_id: UUID | None = None
+    stop: bool = False
 
     @field_validator("description", "prompt")
     @classmethod
-    def prompt_must_not_be_blank(cls, value: str) -> str:
-        if not (cleaned := value.strip()):
-            raise invalid_argument("Use non-blank text.")
-        return cleaned
+    def normalize_text(cls, value: str) -> str:
+        return value.strip()
+
+    @model_validator(mode="after")
+    def needs_instruction_or_stop(self) -> DelegatedTask:
+        if not self.description:
+            raise invalid_argument("Use non-blank text.", field="description")
+        if self.stop and self.session_id is None:
+            raise invalid_argument("Stopping requires a subagent session_id.", field="session_id")
+        if not self.stop and not self.prompt:
+            raise invalid_argument("Provide an instruction or stop the subagent.", field="prompt")
+        return self
 
 
 class TaskArguments(ToolArguments):

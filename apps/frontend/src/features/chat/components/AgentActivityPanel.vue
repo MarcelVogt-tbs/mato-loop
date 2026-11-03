@@ -38,7 +38,6 @@
           :read-only="readOnly"
           :show-output="historyExpanded"
           show-supplementary
-          @open-approval-draft="emit('open-approval-draft', $event)"
           @open-file="emit('open-file', $event)"
           @rendered="emit('rendered')"
           @resize-start="emit('resize-start')"
@@ -98,7 +97,7 @@ const props = defineProps({
   running: Boolean,
   expanded: { type: Boolean, default: null }
 })
-const emit = defineEmits(['history-expanded', 'open-file', 'open-approval-draft', 'rendered', 'resize-start', 'resized', 'trust-image-origin'])
+const emit = defineEmits(['history-expanded', 'open-file', 'rendered', 'resize-start', 'resized', 'trust-image-origin'])
 const instanceLimits = useInstanceLimitsStore()
 const localHistoryExpanded = ref(false)
 const historyExpanded = computed(() => props.expanded ?? localHistoryExpanded.value)
