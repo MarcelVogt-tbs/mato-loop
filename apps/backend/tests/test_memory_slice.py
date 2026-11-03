@@ -1995,11 +1995,12 @@ async def test_dreaming_reconciliation_merges_parallel_outputs(monkeypatch) -> N
 
 def test_dreaming_system_prompt_remains_isolated_from_agent_context() -> None:
     assert "durable user-specific knowledge" in DREAMING_SYSTEM_PROMPT
-    assert "retrieval-only memories" in DREAMING_SYSTEM_PROMPT
+    assert "User confirmation does not turn task progress into durable knowledge" in DREAMING_SYSTEM_PROMPT
     assert "those belong to the maintained user profile" in DREAMING_SYSTEM_PROMPT
     assert "user's full name" in DREAMING_SYSTEM_PROMPT
-    assert "owned equipment or lasting technical capabilities" in DREAMING_SYSTEM_PROMPT
-    assert "current tasks, implementation details, or work state" in DREAMING_SYSTEM_PROMPT
+    assert "owned equipment, lasting setup, or long-term goal" in DREAMING_SYSTEM_PROMPT
+    assert "Categories context and goal do not relax this rule" in DREAMING_SYSTEM_PROMPT
+    assert "Explicit removal requests remain eligible" in DREAMING_SYSTEM_PROMPT
     assert "temporary or borrowed equipment" in DREAMING_SYSTEM_PROMPT
     assert "empty candidates array" in DREAMING_SYSTEM_PROMPT
     assert "one-off questions" in DREAMING_SYSTEM_PROMPT

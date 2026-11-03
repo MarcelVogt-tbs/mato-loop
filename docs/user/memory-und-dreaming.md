@@ -52,7 +52,9 @@ Unter **Gemeinsame Einstellungen** steuert **Automatisch verarbeiten** die zeitg
 
 ### Memory-Extraktion
 
-Die Extraktion verarbeitet geeignete abgeschlossene Chatnachrichten mit vollem Memory. Sessions mit Automationen folgen denselben Einstellungen; Subagenten und Fehlerausgaben sind keine Quellen. Extrahiert werden dauerhafte benutzerspezifische Angaben, etwa eigene Geräte, stabile Umgebungen, Beziehungen, Vorlieben oder langfristige Ziele. Aktueller Aufgabenfortschritt, vorübergehende Geräte und Implementierungsdetails bleiben im Verlauf. **Über mich** wird nicht kopiert. Die Extraktion sieht nur ihren Quellenabschnitt, keine vorhandenen Memories oder anderen Sessions.
+Die Extraktion verarbeitet geeignete abgeschlossene Chatnachrichten mit vollem Memory. Sessions mit Automationen folgen denselben Einstellungen; Subagenten und Fehlerausgaben sind keine Quellen. Extrahiert werden sollen dauerhafte benutzerspezifische Angaben, etwa eigene Geräte, stabile Umgebungen, Beziehungen, Vorlieben oder langfristige Ziele. Aktueller Aufgabenfortschritt, auch bestätigte Testergebnisse und offene Prüfungen, vorübergehende Geräte und Implementierungsdetails sollen im Verlauf bleiben. Bei unklarer Dauerhaftigkeit soll das Modell die Angabe auslassen. **Über mich** wird nicht kopiert. Die Extraktion sieht nur ihren Quellenabschnitt, keine vorhandenen Memories oder anderen Sessions.
+
+Die Einordnung trifft das Modell; Fehlentscheidungen sind weiterhin möglich, etwa bei vagen „unverändert“-Meldungen oder fehlendem Projektkontext. Prüfe gespeicherte Angaben unter **Erinnerungen** und korrigiere oder entferne unpassende Einträge.
 
 Hinweise, Änderungsrichtlinien und Kandidatenlimit findest du im Abschnitt **Memory-Extraktion**. Beim Ausschalten bleiben vorhandene Erinnerungen nutzbar und der Extraktionsfortschritt erhalten. Offene Extraktionsvorschläge verfallen. Nach dem erneuten Einschalten setzt die Extraktion am bisherigen Stand fort.
 
