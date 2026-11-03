@@ -622,7 +622,7 @@
 
 .chat-messages--small {
   --chat-message-font-size: 12px;
-  --chat-message-gap: 10px;
+  --chat-message-gap: 24px;
   --chat-message-padding: 6px 10px;
   --chat-message-line-height: 1.5;
   --chat-paragraph-gap: 0.7em;
@@ -641,11 +641,11 @@
 
 .chat-transcript__item--sending {
   // Reserve the activity row (24px + 4px padding) and its gap until the answer section exists.
-  padding-bottom: calc(28px + var(--chat-message-gap, 22px));
+  padding-bottom: calc(28px + var(--chat-message-gap, 32px));
 }
 
 .chat-message {
-  margin-bottom: var(--chat-message-gap, 22px);
+  margin-bottom: var(--chat-message-gap, 32px);
 }
 
 .chat-message--turn-continues {
@@ -656,7 +656,6 @@
   width: fit-content;
   max-width: min(720px, 88%);
   margin-left: auto;
-  margin-bottom: calc(var(--chat-message-gap, 22px) + 6px);
   padding: var(--chat-message-padding, 10px 14px);
   border-radius: 16px 16px 4px 16px;
   background: var(--app-active);
