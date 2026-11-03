@@ -194,6 +194,17 @@ Merge and PR commands initially require a managed worktree. Review also works in
 local repository; sync requires a configured or unambiguous remote and target.
 Review checks correctness, security and overengineering and reports only; it never repairs
 project files. Temporary check files outside the project remain subject to normal permissions.
+
+Git command replies start with an action/outcome heading and use short, relevant labeled
+lines or bullets. Each command specifies its useful result fields: commit identity,
+branches, publication target or PR URL, checks and remaining issues. Empty fields and
+raw logs are omitted; partial effects and blockers are explicit. Reviews briefly explain
+the change, group continuously numbered findings as required or optional, and include
+locations, concrete consequences, minimal corrections, checks, limits and a verdict.
+No-findings reviews remain short and do not claim error-free code. These are model
+instructions, not a rendered UI template or additional execution authority. Labels and
+explanations follow the global response-language contract in [the runtime reference](harness.md#profiles-and-workflow).
+
 Merge resolves clear conflicts and integration findings in the task worktree and asks
 about unresolved intent; PR stops on conflicts or findings without repairing them.
 Dirty trees and unresolved failed checks block either operation. Necessary merge commits are authorized by the merge/PR request;

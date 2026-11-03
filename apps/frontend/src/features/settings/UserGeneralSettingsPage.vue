@@ -14,7 +14,7 @@
     <q-card flat class="app-surface">
       <q-card-section>
         <AppSelect v-model="language" outlined emit-value map-options use-input label="Bevorzugte Sprache" :options="languageOptions" :disable="settings.loading || settings.saving || !settings.loaded || settings.loadFailed" @new-value="addLanguage" />
-        <p class="text-body2 app-muted q-mb-none q-mt-md">Vorgabe für Transkriptionen und die Browser-Sprache von Jina Reader. Eine ausdrücklich angegebene Sprache hat Vorrang. „Automatisch“ verwendet die Erkennung oder Vorgabe des Dienstes. Keine Übersetzung oder Änderung der Oberflächensprache.</p>
+        <p class="text-body2 app-muted q-mb-none q-mt-md">Vorgabe für Chatantworten, Transkriptionen und die Browser-Sprache von Jina Reader. Eine ausdrücklich angegebene Sprache hat Vorrang. Bei „Automatisch“ folgt der Chat deinem persönlichen Sprachprofil, sonst deiner Anfrage; Dienste verwenden ihre Erkennung oder Vorgabe. Keine Übersetzung abgerufener Inhalte oder Änderung der Oberflächensprache.</p>
         <p class="text-caption app-muted q-mb-none">Weitere Sprachen können als BCP-47-Kürzel eingegeben werden, zum Beispiel de-CH. Die Unterstützung hängt vom Dienst ab.</p>
       </q-card-section>
     </q-card>

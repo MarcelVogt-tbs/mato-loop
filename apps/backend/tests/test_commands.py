@@ -27,6 +27,8 @@ from mato_loop_backend.sessions.commands import (
 from mato_loop_backend.sessions.git_commands import (
     COMMIT_INSTRUCTIONS,
     COMMIT_RULES,
+    OUTPUT_FORMATS,
+    OUTPUT_RULES,
     REVIEW_INSTRUCTIONS,
     validate_git_context,
 )
@@ -37,6 +39,7 @@ from mato_loop_backend.tools.sessions import _message_item
 
 
 def test_browser_and_telegram_share_portable_coding_commands():
+    assert set(OUTPUT_FORMATS) == {item.name for item in registered_commands() if item.name.startswith("git-")}
     assert {command.command for command in telegram_commands() if command.command.startswith("git_")} == {
         item.name.replace("-", "_") for item in registered_commands()
     }
@@ -113,7 +116,9 @@ async def test_command_binds_worktree_target_and_displays_its_prompt_without_run
     assert '"targetBranch": "develop"' in result["content"]
     assert command["context"]["remote"] is None
     assert message.content == "/git-review only parser changes"
-    assert message_payload(message)["commandPrompt"] == definition.instructions + "\n\nonly parser changes"
+    assert message_payload(message)["commandPrompt"] == (
+        definition.instructions + "\n\n" + OUTPUT_RULES + OUTPUT_FORMATS[definition.name] + "\n\nonly parser changes"
+    )
 
 
 @pytest.mark.parametrize("name", ["git-merge", "git-pr"])

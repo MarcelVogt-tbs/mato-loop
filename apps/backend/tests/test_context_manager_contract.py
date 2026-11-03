@@ -2530,6 +2530,7 @@ def test_time_and_research_usage_do_not_change_the_cached_prompt_prefix() -> Non
             offered_tool_names=frozenset({"web_search", "webfetch"}),
             research_tool_calls_used=used,
             research_tool_call_limit=8,
+            response_language="fr",
         )
         for used in (0, 2, 5)
     ]
@@ -3457,7 +3458,7 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     work_system = general_system_prompt(session, agent_profile=build, offered_tool_names=tools)
     assert main_system == work_system
     main = main_system + "\n\n" + agent_profile_runtime_instructions(plan)
-    child = general_system_prompt(session, agent_profile=plan, delegated=True)
+    child = general_system_prompt(session, agent_profile=plan, delegated=True, response_language="fr")
     work = work_system + "\n\n" + agent_profile_runtime_instructions(build)
     general = general_system_prompt(session, agent_profile=general_profile(), offered_tool_names=tools)
 
@@ -3471,7 +3472,10 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     assert plan.instructions not in child
     assert "do not inherit the parent transcript" in child
     assert "Respond in English" in child
-    assert "Respond in the user's language" not in child
+    assert "configured response language" not in child
+    assert "Configured response language (data):" not in child
+    assert "User-facing text, including template labels" in general
+    assert "explicit language request, else configured response language, else profile primaryLanguage" in general
     assert "exact question, scope, stopping condition" in work
     assert "result format and length" in work
     assert "Do not expand research into a full plan unless assigned one" in child
@@ -3538,6 +3542,17 @@ async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(
         monkeypatch, [ProviderResult(content="Done", finish_reason="stop")],
         search_policy=WebSearchPolicy.AVAILABLE,
     )
+    from mato_loop_backend.settings import SettingsStore
+    from mato_loop_backend.settings.models import UserPreferences
+
+    load_settings = SettingsStore.load
+
+    async def load_with_language(db, settings_type, **kwargs):
+        if settings_type is UserPreferences:
+            return UserPreferences(preferred_language="fr")
+        return await load_settings(db, settings_type, **kwargs)
+
+    monkeypatch.setattr(SettingsStore, "load", load_with_language)
     run.agent_profile_id = BUILD_PROFILE_ID
     run.current_directory_snapshot = "/current"
     records = await AgentRuntime._records(db, run.session_id)
@@ -3577,6 +3592,7 @@ async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(
     secret_result.tool_call_id = "sudo-input"
     records.extend([secret_call, secret_result])
     system = projections[0]["system_prompt"]
+    assert 'Configured response language (data): "fr"' in system
     user_id = next(item.id for item in reversed(records) if item.role == "user")
     first = _projection_messages(system, None, records, TrustLevel.PRIVATE,
                                  memory_context="Earlier memory", memory_contexts={user_id: "Earlier memory"},

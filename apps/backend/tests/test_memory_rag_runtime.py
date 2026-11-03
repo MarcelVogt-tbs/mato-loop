@@ -67,7 +67,7 @@ from mato_loop_backend.settings import (
     TrustLevel,
     UserProfileSettings,
 )
-from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig, UserPreferences
 from mato_loop_backend.tools.contracts import ToolResult
 from mato_loop_backend.tools.registry import EffectiveToolSet
 
@@ -419,6 +419,7 @@ async def _runtime_setup(
             IntegrationSettings: IntegrationSettings(),
             ToolSettings: ToolSettings(),
             UserProfileSettings: UserProfileSettings(),
+            UserPreferences: UserPreferences(),
         }[settings_type]
 
     projections = []

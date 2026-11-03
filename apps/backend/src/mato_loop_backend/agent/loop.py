@@ -88,6 +88,7 @@ from mato_loop_backend.settings import (
     load_effective_integrations,
 )
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
+from mato_loop_backend.settings.language import preferred_language
 from mato_loop_backend.settings.models import ReasoningEffort, TrustLevel
 from mato_loop_backend.skills import RunSkillState, SkillService
 from mato_loop_backend.tools.discovery import expire_discoveries
@@ -132,6 +133,7 @@ async def execute_loop_body(
     user_profile = await SettingsStore.load(
         db, UserProfileSettings, user_id=chat_session.user_id
     )
+    response_language = await preferred_language(db, chat_session.user_id) if not delegated else None
     skills = await SkillService.list(db, chat_session.user_id)
     skill_state = RunSkillState.from_skills(skills)
     selected_execution_agent = (
@@ -466,6 +468,7 @@ async def execute_loop_body(
             persona=agent_identity.persona,
             agent_profile=prompt_agent_profile,
             user_profile=user_profile_payload,
+            response_language=response_language,
             project_name=project_name,
             project_instructions=project_instructions,
             project_execution_agent_id=project.default_execution_agent_id if project is not None else None,

@@ -117,6 +117,15 @@ Plan and Build offer `secret_input` by default for [protected credential input](
 
 Plan and Build share a provider-neutral response contract: answer or outcome first, short answers to questions, normally 3-7 plan steps, and implementation summaries limited to results, relevant checks and blockers. Settled decisions, work narration and code already written to files are not repeated unless requested. Explicit requests for detail and necessary risk, failure or verification information take precedence over length targets; execution and verification remain unchanged. Derived profiles inherit this guidance unless they replace `instructions`.
 
+The global host contract instructs user-facing replies, including template headings and
+status labels, to follow an explicit language request for the current task, then the
+user's preferred-language setting, then the trust-filtered maintained profile's
+`primaryLanguage`, then the current request's language. The preference is loaded once
+per run and rendered as data beside maintained user context, not in the stable host
+contract. Code, commands, paths, branch names, hashes and verbatim quotations remain
+unchanged; repository language rules still govern written code, docs and commit messages.
+Internal delegated responses remain English.
+
 `delegationEnabled`, `sessionWritePaths`, repository instruction loading and temporary-file access are inherited workflow fields. Shipped Plan/Build enable delegation; all shipped profiles have no additional managed write-path restriction (`sessionWritePaths=null`). A custom non-null list restricts managed writes to those normalized relative paths; `[]` denies them. Models and reasoning are separately resolved through [defaults/templates](session-templates.md).
 
 The optional checklist is message-backed reported progress, not authority or independent verification. Successful snapshots replace earlier state chronologically. Compaction seeds only the covered checklist checkpoint; later results supersede it, and current checklist output is not silently shortened.
@@ -163,7 +172,11 @@ Regression tests in normal backend CI protect [serialized prefixes across tool r
 
 Run affected tests when changing these boundaries. Under unchanged authorization and context constraints, compare the retained serialized prefix and schemas without normalizing away differences; intentional invalidation needs an explicit reason. Prefer deterministic prefix and scan/request-count assertions to provider latency or cache-hit thresholds. The [dated session-cache evaluation](session-cache-evaluation-2026-10.md) records the live serialization regression and measured fix, not current performance guarantees or a new validation run.
 
-Host/profile prompt changes intentionally invalidate older prefixes. Automatic follow-ups
+Host/profile prompt changes, including the global response-language contract, intentionally
+invalidate older prefixes. The configured language remains stable across tool rounds;
+changing it for a later run changes system context. Git output formats are saved with
+their command turn rather than retroactively replacing historical command instructions.
+Automatic follow-ups
 append ordinary turns with host provenance. Workspace occupancy is not injected or inferred
 from stored run statuses or file timestamps. Legacy private occupancy metadata is ignored,
 intentionally removing that projection from retained prefixes. A stable instruction requires

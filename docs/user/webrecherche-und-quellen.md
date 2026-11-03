@@ -21,10 +21,13 @@ Für Jina und SearXNG steuerst du Verfügbarkeit und Berechtigungen über die no
 ## Webseiten abrufen
 
 Unter **Einstellungen > Grundeinstellungen > Bevorzugte Sprache** hinterlegst du
-eine persönliche Sprachvorgabe. Sie gilt für Transkriptionen und die Browser-Sprache
-von Jina Reader. **Automatisch** behält die Erkennung beziehungsweise Dienstvorgabe
-bei. Ausdrückliche Sprachangaben beim Aufruf haben Vorrang. Die Einstellung übersetzt
-keine Inhalte und ändert nicht die Oberflächensprache.
+eine persönliche Sprachvorgabe. Sie gilt für Chatantworten einschließlich Überschriften
+und Git-Rückmeldungen, für Transkriptionen und die Browser-Sprache von Jina Reader.
+Eine ausdrücklich angegebene Sprache hat Vorrang. Bei **Automatisch** verwenden
+Chatantworten die bevorzugte Sprache aus deinem persönlichen Profil, sofern für das
+Modell verfügbar, sonst die Sprache deiner Anfrage; Dienste behalten ihre Erkennung
+beziehungsweise Vorgabe bei. Die Einstellung übersetzt keine abgerufenen Inhalte und
+ändert nicht die Oberflächensprache. Neue Agentenläufe übernehmen die Vorgabe beim Start.
 
 `webfetch` ruft eine konkrete HTTP- oder HTTPS-Adresse ab und ist unabhängig von der Websuche konfiguriert. Das ausgewählte Agentenprofil legt dafür getrennt für private und öffentliche Modelle eine Richtlinie fest:
 

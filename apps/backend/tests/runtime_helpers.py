@@ -39,6 +39,7 @@ from mato_loop_backend.settings.models import (
     ModelConfig,
     ModelDefaultsSettings,
     TrustLevel,
+    UserPreferences,
 )
 from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.contracts import ToolResult
@@ -224,6 +225,7 @@ async def _runtime_setup(
                 public_permissions={"policies": {"skills.load": "auto"}}
             ),
             UserProfileSettings: UserProfileSettings(),
+            UserPreferences: UserPreferences(),
         }[settings_type]
 
     async def load_optional(_db, settings_type, **_kwargs):

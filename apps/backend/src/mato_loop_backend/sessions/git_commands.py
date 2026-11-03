@@ -55,6 +55,54 @@ MERGE_INSTRUCTIONS = (
     "the worktree, fetch, or push. Report the integrated commit, actual checks and remaining blockers."
 )
 
+OUTPUT_RULES = (
+    "Final response format: start with a level-two heading '<action> · <verified outcome>'. "
+    "Use short sentences and only relevant labeled lines or bullets; omit empty fields, raw logs, introductions, "
+    "work narration and unsolicited next steps. Simple results need only one or two lines below the heading; "
+    "do not restrict reviews, failures or necessary warnings to that length. Combine completed steps in one report. "
+    "Report only verified results, actual checks and important limits; never imply that unrun checks passed. "
+    "For a blocked or partial result, state the cause, completed effects and what remains open; "
+    "do not describe the whole action as completed. For no change, give the reason without inventing work. "
+)
+OUTPUT_FORMATS = {
+    "git-review": (
+        "Use 'Review' as the action. Briefly explain the change. Group concrete findings under 'Required' and 'Optional', "
+        "omitting empty groups, and number findings continuously. Each finding needs a short title, file location, "
+        "concrete consequence and smallest correction. End with actual checks, important unchecked areas and a clear "
+        "verdict naming required finding numbers. If none, state 'No findings', what was checked and relevant limits; "
+        "do not list praise or claim the code is error-free."
+    ),
+    "git-finish": (
+        "Use 'Finish' as the action. Summarize the changes and any repairs in a few bullets. "
+        "Give the final integrated short commit hash, source and target branches, review result, actual checks "
+        "and remaining issues. Distinguish local integration from publication."
+    ),
+    "git-init": "Use 'Git initialization' as the action. Give the repository path, initial branch and missing remote setup.",
+    "git-commit": (
+        "Use 'Commit' as the action. Give the short hash and exact commit title, a brief change summary, "
+        "relevant checks and remaining changes. State that the commit is local, not pushed."
+    ),
+    "git-merge": (
+        "Use 'Merge' as the action, or 'Commit & merge' if --commit created a task commit. "
+        "Give source and target branches, final integrated short hash, review result, actual checks "
+        "and remaining issues. State that integration is local, not pushed."
+    ),
+    "git-push": "Use 'Push' as the action. Give the published remote/branch and short commit hash.",
+    "git-pr": (
+        "Use 'Pull request' as the action. State whether it was created or updated; include its URL, "
+        "source and target branches, published short hash, review result, actual checks and important limits. "
+        "If publication succeeded but PR creation failed, make that partial result explicit."
+    ),
+    "git-sync": (
+        "Use 'Pull' as the action. Give the remote/target branch, whether it advanced by fast-forward "
+        "or was already current, and the resulting short hash."
+    ),
+    "git-remote": (
+        "Use 'Remote' as the action. Give the remote name and verified credential-free address. "
+        "Note that existing sessions must explicitly adopt a changed publication target in the Git app."
+    ),
+}
+
 COMMANDS = (
     Command("git-finish", "Review, Korrektur & Merge", "Umsetzung prüfen, lokal committen und übernehmen.",
         "Finish the implementation task in this session. Verify that the requested implementation is complete before "
@@ -128,7 +176,7 @@ async def prepare_git_command(db, session, command: Command, content: str | None
         if command.name not in {"git-merge", "git-pr"}:
             raise SessionServiceError(422, "validation.invalid", field="content")
         arguments = parts[1] if len(parts) == 2 else ""
-    prompt = command.instructions
+    prompt = command.instructions + "\n\n" + OUTPUT_RULES + OUTPUT_FORMATS[command.name]
     if command.name in {"git-merge", "git-pr"}:
         commit_step = ("First, in the session checkout only: " + COMMIT_INSTRUCTIONS
                        + "Wait and retry temporary blockers; ask if a decision or intervention is required. "

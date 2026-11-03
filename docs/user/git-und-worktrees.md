@@ -51,6 +51,14 @@ Unter **Git > Repository > Aktionen** starten die [Git-Befehle](kanaele.md#codin
 
 Aktiviere bei Bedarf **Vor Merge oder Pull Request committen** direkt unterhalb dieser beiden Aktionen. Das Häkchen ist zunächst aus und wird beim Sessionwechsel zurückgesetzt. Es beauftragt den Agenten, zuerst eindeutig zur Aufgabe gehörende Änderungen im Session-Worktree zu committen. Bei unklarer Auswahl fragt er nach; fremde Änderungen und Secrets dürfen nicht mitcommittet werden. Ohne Häkchen sind uncommittete Änderungen ein Blocker. **Push** und **Pull (Fast-forward)** committen auch mit gesetztem Häkchen nichts. In der Palette oder über Telegram entspricht die Auswahl `/git-merge --commit` beziehungsweise `/git-pr --commit`.
 
+Die Rückmeldung beginnt mit Aktion und Ergebnis. Darunter nennt der Agent nur relevante
+Details wie Commit, Zielbranch, PR-Link, ausgeführte Prüfungen oder offene Punkte.
+Reviews trennen notwendige Korrekturen von optionalen Verbesserungen und nummerieren
+Befunde, damit du gezielt darauf verweisen kannst. Die Antwort folgt deiner
+[Sprachvorgabe](webrecherche-und-quellen.md#webseiten-abrufen); Git-Bezeichner und
+zitierte Commit-Titel bleiben unverändert. Bei Fehlern muss die Antwort zwischen bereits
+abgeschlossenen Schritten und dem noch offenen Teil unterscheiden.
+
 ### Nach einer Umsetzung automatisch abschließen
 
 1. Aktiviere in deiner Worktree-Session unter **Git > Repository > Aktionen** **Nach Umsetzung abschließen**.

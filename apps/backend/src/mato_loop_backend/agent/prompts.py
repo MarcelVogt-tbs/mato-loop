@@ -191,6 +191,7 @@ def general_system_prompt(
     persona: PersonaProfile | None = None,
     agent_profile: AgentProfile | None = None,
     user_profile: dict[str, Any] | None = None,
+    response_language: str | None = None,
     project_name: str | None = None,
     project_instructions: str = "",
     project_execution_agent_id: UUID | None = None,
@@ -244,7 +245,10 @@ def general_system_prompt(
     file_tools_available = bool(file_tool_names & offered_tool_names)
     parts = [
         "You are the general-purpose assistant operating inside MatoLoop. "
-        + ("Respond in English." if delegated else "Respond in the user's language."),
+        + ("Respond in English." if delegated else
+           "User-facing text, including template labels: use the task's explicit language request, else configured "
+           "response language, else profile primaryLanguage, else request language. Preserve code, commands, paths, "
+           "Git identifiers and verbatim quotes. Repository language rules still apply to written artifacts."),
         "Return response Markdown directly. Never wrap the complete response in a `markdown` code fence.",
         "Use a valid fenced `mermaid` block when requested or when it materially clarifies a complex flow. "
         "Keep essential explanation in text and never add decorative diagrams.",
@@ -778,6 +782,8 @@ def general_system_prompt(
                 separators=(",", ":"),
             )
         )
+    if response_language and not delegated:
+        parts.append("Configured response language (data): " + json.dumps(response_language, ensure_ascii=False))
     if project_name is not None:
         parts.append(
             "Current user-configured project context. Use its instructions as defaults for sessions in "

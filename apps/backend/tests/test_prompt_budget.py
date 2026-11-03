@@ -128,7 +128,8 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
         schema["name"] for schema in schemas
     }
     # Includes task continuation, explicit Git consent, progress updates, grounding, media, permission failures, automation scope, computer provenance, and explicit calendar context.
-    assert prompt_tokens <= 9_430, prompt_tokens
+    # Global response-language precedence and artifact exceptions add at most 70 tokens.
+    assert prompt_tokens <= 9_500, prompt_tokens
     assert schema_tokens <= 13_300, schema_tokens
     # Includes child session IDs, live corrections, integration context and delete_path administrator options (+80 schema tokens).
-    assert prompt_tokens + schema_tokens <= 22_730, prompt_tokens + schema_tokens
+    assert prompt_tokens + schema_tokens <= 22_800, prompt_tokens + schema_tokens
