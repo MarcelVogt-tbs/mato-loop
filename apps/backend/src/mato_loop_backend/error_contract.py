@@ -344,7 +344,7 @@ _MESSAGES = {
     "personaProfile.notFound": "The persona was not found.",
     "personaProfile.personalDisabled": "Personal personas are disabled.",
     "process.interrupted": "The process was interrupted.",
-    "process.inspectionChanged": "The shell entry points changed before execution.",
+    "process.inspectionChanged": "The command was not executed because the shell inspection result changed before startup.",
     "process.cancelled": "The process was cancelled.",
     "process.failed": "The process failed.",
     "process.notAllowed": "The requested program is not configured for execution.",

@@ -78,6 +78,7 @@ def test_execution_and_output_limits_have_controlled_fallbacks() -> None:
     assert describe_error("process.commandFailed").message == "The command exited with a nonzero status."
     assert describe_error("agent.outputLimitReached").message == "The model response was interrupted at its output limit."
     assert describe_error("process.invalidSyntax").message == "The shell command has invalid syntax."
+    assert describe_error("process.inspectionChanged").message == "The command was not executed because the shell inspection result changed before startup."
     assert describe_error("process.inspectionLimitExceeded").message == "The shell command exceeds the inspection limits."
     assert describe_error("process.unsupportedTargetQuoting").message == "The shell path target uses unsupported quoting. Use a literal path with ordinary quotes."
 

@@ -65,6 +65,9 @@ describe('API error messages', () => {
     expect(message).not.toContain('Einrichtung')
   })
   it('uses controlled shell-inspection messages instead of parser details', () => {
+    expect(apiErrorMessage({ error: { code: 'process.inspectionChanged', message: 'private inspection detail' } })).toBe(
+      'Der Befehl wurde nicht ausgeführt, weil sich das Ergebnis der Sicherheitsprüfung zwischen Prüfung und Start geändert hat.'
+    )
     expect(apiErrorMessage({ error: { code: 'process.invalidSyntax', message: 'private parser detail' } })).toBe(
       'Der Shell-Befehl enthält einen Syntaxfehler. Korrigiere den Befehl vor einem erneuten Versuch.'
     )

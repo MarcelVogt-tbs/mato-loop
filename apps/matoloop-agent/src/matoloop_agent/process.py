@@ -1836,8 +1836,20 @@ class ProcessRunner:
 
     @staticmethod
     def _inspection_revision(result: dict) -> str:
+        targets = []
+        for target in result["targets"]:
+            if target.get("kind") == "directory":
+                # Directory entry churn does not change the inspected path binding.
+                target = {
+                    key: value
+                    for key, value in target.items()
+                    if key not in {"size", "modifiedNs", "changedNs"}
+                }
+            targets.append(target)
         return hashlib.sha256(
-            json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+            json.dumps(
+                {**result, "targets": targets}, sort_keys=True, separators=(",", ":")
+            ).encode()
         ).hexdigest()
 
     def _trusted_executable(self, executable: str, current_directory: str) -> Path | None:

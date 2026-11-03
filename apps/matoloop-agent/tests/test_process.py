@@ -228,6 +228,21 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await task
 
+    def test_directory_timestamp_changes_do_not_invalidate_shell_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = configuration(root)
+            runner = ProcessRunner(config, Filesystem(config))
+            command = f"df -h . {shlex.quote(temporary)}"
+            inspected = runner.inspect_shell(command, temporary)
+            os.utime(root, ns=(0, 0))
+            _, actual = runner.execution_argv(
+                current_directory=temporary,
+                command=command,
+                expected_inspection_revision=inspected["inspectionRevision"],
+            )
+            self.assertEqual(actual["inspectionRevision"], inspected["inspectionRevision"])
+
     def test_inspection_preserves_path_boundaries_and_allows_dynamic_shell(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

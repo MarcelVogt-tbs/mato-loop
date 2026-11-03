@@ -34,6 +34,7 @@ ToolAction("example.write", "Eintrag erstellen", category="write", mutates=True)
 - Bind each request to its actual owner, computer, path, connection, and resource as applicable.
 - Connection discovery retains its integration policy target while omitting resource overrides. Additional file permissions remain independent of the connection.
 - Copying needs source-read and destination-write permission. Revalidate after approval.
+- POSIX shell execution revalidates the inspection revision before startup. Ordinary directory targets bind the path, filesystem/device identity, inode, and mode, not directory size or modification/change timestamps; unrelated entry changes must not block execution. File and executable metadata, explicit toolchain-listing fingerprints, and no-follow checks remain binding. Ordinary directory targets do not snapshot their contents.
 - Remote descriptions and MCP hints never define categories or grant authority.
 - Use `request_session_permissions` to prepare known access before enabling unattended automations or when the user explicitly requests advance permission preparation, not routinely before interactive work. Ordinary tool calls retain their execution-time authorization checks.
 - Extend existing catalog/permission tests for new classifications and resource boundaries.
