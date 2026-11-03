@@ -1,6 +1,6 @@
 # Personalisierung
 
-Unter **Einstellungen > Personalisierung** enthält **Über mich** deine gepflegten Angaben; **Personas** verwaltet Assistentenname, wiederverwendbare Personas und Agentenzuordnungen. Angaben zu deiner Person werden unter [Memory und Dreaming](memory-und-dreaming.md#uber-mich) erläutert.
+Unter **Einstellungen > Personalisierung** enthält **Über mich** deine gepflegten Angaben; **Personas** verwaltet Assistentenname, wiederverwendbare Personas und Agentenzuordnungen. Angaben zu deiner Person werden unter [Memory und Verarbeitung](memory-und-dreaming.md#uber-mich) erläutert.
 
 ## Personas und Profilzuordnungen
 

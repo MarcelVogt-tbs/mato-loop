@@ -33,6 +33,11 @@ from mato_loop_backend.permissions.policy import (
 from mato_loop_backend.settings import ToolSettings, TrustLevel
 
 
+@pytest.fixture(autouse=True)
+def memory_reconciliation(monkeypatch):
+    monkeypatch.setattr("mato_loop_backend.api.routes.approvals.MemoryService.reconcile_approvals", AsyncMock(return_value=False))
+
+
 def _approval(user_id, session_id, created_at: datetime, *, request_type="agent_action") -> ApprovalRequest:
     return ApprovalRequest(
         id=uuid4(),

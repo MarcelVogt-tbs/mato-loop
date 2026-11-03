@@ -9,12 +9,18 @@ from typing import Literal
 from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, model_validator
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Load, load_only, selectinload
 
+from mato_loop_backend.memory.dream_history import (
+    forget_memory_history,
+    memory_snapshot,
+    merge_memory_history,
+    record_change,
+)
 from mato_loop_backend.memory.indexing import MemoryIndexService
 from mato_loop_backend.models import (
     AgentRun,
@@ -28,6 +34,7 @@ from mato_loop_backend.models import (
     MemorySourceMessage,
     MemorySourceType,
     Message,
+    Notification,
 )
 from mato_loop_backend.notifications import NotificationService
 from mato_loop_backend.settings import (
@@ -442,6 +449,7 @@ class MemoryService:
             duplicate.source_run_id = run_id
             duplicate.source_dream_run_id = None
             duplicate.source_tool_call_id = tool_call_id
+            await merge_memory_history(db, [item.id], duplicate.id)
             await db.delete(item)
             await db.flush()
             return MemoryMutation(duplicate, updated=True)
@@ -458,6 +466,7 @@ class MemoryService:
         session_id: UUID,
         run_id: UUID,
         evidence_message_ids: list[UUID],
+        include_manual: bool = False,
     ) -> MemoryMutation:
         _, content_hash = normalize_content(content)
         existing = await MemoryService._duplicate_by_hash(
@@ -470,6 +479,7 @@ class MemoryService:
                 owner_id=owner_id,
                 source_audience=memory_audience_for_source(trust_level),
                 evidence_message_ids=evidence_message_ids,
+                include_manual=include_manual,
             )
             return MemoryMutation(existing, duplicate=True)
         try:
@@ -499,6 +509,7 @@ class MemoryService:
                 owner_id=owner_id,
                 source_audience=memory_audience_for_source(trust_level),
                 evidence_message_ids=evidence_message_ids,
+                include_manual=include_manual,
             )
             return MemoryMutation(duplicate, duplicate=True)
 
@@ -528,6 +539,7 @@ class MemoryService:
         )
         if target_audience is None:
             return MemoryMutation(item, conflict=True)
+        before = memory_snapshot(item)
         try:
             await MemoryService.update(
                 db,
@@ -544,6 +556,7 @@ class MemoryService:
             )
         except MemoryDuplicateError:
             return MemoryMutation(item, conflict=True)
+        record_change(db, dream_run_id, "update", before=[before], item=item)
         return MemoryMutation(item, updated=True)
 
     @staticmethod
@@ -630,6 +643,7 @@ class MemoryService:
             *(item.source_message_id for item in items if item.source_message_id is not None),
             *evidence_message_ids,
         ]
+        before = [memory_snapshot(item) for item in items]
         content_changed = survivor.normalized_content_hash != content_hash
         resulting_audience = memory_audience_intersection(
             [
@@ -657,6 +671,8 @@ class MemoryService:
         )
         if content_changed:
             await MemoryIndexService.enqueue(db, survivor)
+        await merge_memory_history(db, unique_ids, survivor.id)
+        record_change(db, dream_run_id, "merge", before=before, item=survivor)
         for item in items:
             if item.id != survivor.id:
                 await db.delete(item)
@@ -729,7 +745,9 @@ class MemoryService:
             db, item, snapshot=snapshot, owner_id=owner_id
         ):
             return MemoryMutation(item, conflict=True)
-        await db.delete(item)
+        removed = {"id": str(item.id), "category": item.category, "revision": item.revision}
+        await MemoryService.delete(db, item, owner_id=owner_id)
+        record_change(db, dream_run_id, "remove", before=[removed])
         await db.flush()
         return MemoryMutation(item, updated=True)
 
@@ -966,14 +984,14 @@ class MemoryService:
                 return existing
 
         labels = {
-            "update": ("Erinnerung ändern", "Dreaming schlägt eine Aktualisierung vor."),
+            "update": ("Erinnerung ändern", "Die Memory-Extraktion schlägt eine Aktualisierung vor."),
             "merge": (
                 "Erinnerungen zusammenführen",
-                "Dreaming schlägt eine Zusammenführung vor.",
+                "Die Memory-Extraktion schlägt eine Zusammenführung vor.",
             ),
             "remove": (
                 "Erinnerung entfernen",
-                "Dreaming schlägt vor, diese Erinnerung zu entfernen.",
+                "Die Memory-Extraktion schlägt vor, diese Erinnerung zu entfernen.",
             ),
         }
         title, summary = labels[action]
@@ -985,7 +1003,7 @@ class MemoryService:
             action_kind=action_kind,
             risk_level="high" if action in {"merge", "remove"} else "medium",
             title=title,
-            reason="Von Dreaming vorgeschlagene Memory-Änderung",
+            reason="Von der Memory-Extraktion vorgeschlagene Änderung",
             summary=summary,
             capability=f"memory.{action}",
             resource_type="memory",
@@ -1062,13 +1080,13 @@ class MemoryService:
         )
 
     @staticmethod
-    async def apply_approved_change(
+    async def _validate_approval(
         db: AsyncSession,
         approval: ApprovalRequest,
         *,
         owner_id: UUID,
-        memory_edit: MemoryApprovalEdit | None = None,
-    ) -> Literal["applied", "target_changed", "policy_changed"]:
+        for_update: bool = False,
+    ) -> tuple[MemoryApprovalPayload, str, ChatSession, MemoryDreamRun, list[MemoryRecord]] | Literal["target_changed", "policy_changed"]:
         if approval.user_id != owner_id or approval.request_type != "memory_change":
             return "target_changed"
         try:
@@ -1082,13 +1100,11 @@ class MemoryService:
         }.get(approval.action_kind)
         if action is None:
             return "target_changed"
-        if memory_edit is not None and action not in {"update", "merge"}:
-            return "target_changed"
         session = await db.get(
-            ChatSession, payload.source_session_id, with_for_update=True, populate_existing=True
+            ChatSession, payload.source_session_id, with_for_update=for_update, populate_existing=True
         )
         dream_run = await db.get(
-            MemoryDreamRun, payload.source_dream_run_id, with_for_update=True
+            MemoryDreamRun, payload.source_dream_run_id, with_for_update=for_update
         )
         if (
             session is None
@@ -1119,9 +1135,9 @@ class MemoryService:
             return "target_changed"
 
         settings = await SettingsStore.load(
-            db, MemorySettings, user_id=owner_id, for_update=True
+            db, MemorySettings, user_id=owner_id, for_update=for_update
         )
-        if not settings.enabled or session.memory_mode != MemoryMode.FULL.value:
+        if not settings.enabled or not settings.memory_extraction_enabled or session.memory_mode != MemoryMode.FULL.value:
             return "policy_changed"
         policies_match = (
             settings.dreaming_update_policy == payload.update_policy
@@ -1150,23 +1166,22 @@ class MemoryService:
         target_ids = sorted(
             {item.id for item in payload.target_memories}, key=str
         )
-        targets = list(
-            (
-                await db.scalars(
-                    select(MemoryRecord)
-                    .where(
-                        MemoryRecord.user_id == owner_id,
-                        MemoryRecord.id.in_(target_ids),
-                    )
-                    .order_by(MemoryRecord.id)
-                    .execution_options(populate_existing=True)
-                    .with_for_update()
-                )
-            ).all()
+        statement = (
+            select(MemoryRecord)
+            .where(MemoryRecord.user_id == owner_id, MemoryRecord.id.in_(target_ids))
+            .order_by(MemoryRecord.id)
+            .execution_options(populate_existing=True)
         )
+        if for_update:
+            statement = statement.with_for_update()
+        targets = list((await db.scalars(statement)).all())
         snapshots = {item.id: item for item in payload.target_memories}
         if len(targets) != len(target_ids):
             return "target_changed"
+        if not settings.dreaming_include_manual_memories and any(
+            item.source_type == MemorySourceType.MANUAL.value for item in targets
+        ):
+            return "policy_changed"
         for item in targets:
             snapshot = snapshots[item.id]
             if (
@@ -1180,27 +1195,67 @@ class MemoryService:
         if action == "remove":
             if len(targets) != 1 or payload.after is not None:
                 return "target_changed"
-            await db.delete(targets[0])
+        else:
+            if payload.after is None or (action == "update" and len(targets) != 1):
+                return "target_changed"
+            expected_audience = memory_audience_intersection(
+                [*(item.audience for item in targets), memory_audience_for_source(payload.trust_level)]
+            )
+            if payload.after.audience != expected_audience:
+                return "target_changed"
+        return payload, action, session, dream_run, targets
+
+    @staticmethod
+    async def reconcile_approvals(db: AsyncSession, *, owner_id: UUID) -> bool:
+        approvals = list((await db.scalars(select(ApprovalRequest).where(
+            ApprovalRequest.user_id == owner_id,
+            ApprovalRequest.request_type == "memory_change",
+            ApprovalRequest.status == "pending",
+        ).order_by(ApprovalRequest.id).with_for_update(skip_locked=True))).all())
+        changed = False
+        for approval in approvals:
+            if isinstance(await MemoryService._validate_approval(db, approval, owner_id=owner_id), str):
+                approval.status = "expired"
+                approval.resolved_at = datetime.now(UTC)
+                changed = True
+        await db.flush()
+        pending = select(ApprovalRequest.id).where(
+            ApprovalRequest.id == Notification.approval_id,
+            ApprovalRequest.user_id == owner_id,
+            ApprovalRequest.status == "pending",
+        ).exists()
+        removed = await db.execute(delete(Notification).where(
+            Notification.user_id == owner_id, Notification.kind == "memory.approval", ~pending,
+        ))
+        return changed or removed.rowcount > 0
+
+    @staticmethod
+    async def apply_approved_change(
+        db: AsyncSession,
+        approval: ApprovalRequest,
+        *,
+        owner_id: UUID,
+        memory_edit: MemoryApprovalEdit | None = None,
+    ) -> Literal["applied", "target_changed", "policy_changed"]:
+        if memory_edit is not None and approval.action_kind not in {"memory_update", "memory_merge"}:
+            return "target_changed"
+        context = await MemoryService._validate_approval(db, approval, owner_id=owner_id, for_update=True)
+        if isinstance(context, str):
+            return context
+        payload, action, session, dream_run, targets = context
+        target_ids = [item.id for item in targets]
+        if action == "remove":
+            removed = {"id": str(targets[0].id), "category": targets[0].category, "revision": targets[0].revision}
+            await MemoryService.delete(db, targets[0], owner_id=owner_id)
+            record_change(db, dream_run.id, "remove", before=[removed])
             await db.flush()
             dream_run.removed_memory_count = (dream_run.removed_memory_count or 0) + 1
             return "applied"
 
-        if payload.after is None:
-            return "target_changed"
-        expected_audience = memory_audience_intersection(
-            [
-                *(item.audience for item in targets),
-                memory_audience_for_source(payload.trust_level),
-            ]
-        )
-        if payload.after.audience != expected_audience:
-            return "target_changed"
         after = memory_edit if memory_edit is not None else payload.after
         try:
             async with db.begin_nested():
                 if action == "update":
-                    if len(targets) != 1:
-                        return "target_changed"
                     mutation = await MemoryService.update_dreaming(
                         db,
                         owner_id=owner_id,
@@ -1305,6 +1360,8 @@ class MemoryService:
             message_ids=evidence_message_ids or [],
         )
         await MemoryIndexService.enqueue(db, item)
+        if dream_run_id is not None:
+            record_change(db, dream_run_id, "create", item=item)
         return item
 
     @staticmethod
@@ -1458,9 +1515,12 @@ class MemoryService:
         owner_id: UUID,
         source_audience: MemoryAudience,
         evidence_message_ids: list[UUID],
+        include_manual: bool = True,
     ) -> None:
         if item.user_id != owner_id:
             raise ValueError("memory owner mismatch")
+        if not include_manual and item.source_type == MemorySourceType.MANUAL.value:
+            return
         audience = memory_audience_intersection([item.audience, source_audience])
         if audience is None:
             return
@@ -1577,6 +1637,7 @@ class MemoryService:
     ) -> None:
         if item.user_id != owner_id:
             raise ValueError("memory owner mismatch")
+        await forget_memory_history(db, item.id)
         await db.delete(item)
         await db.flush()
 

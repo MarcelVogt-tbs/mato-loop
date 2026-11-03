@@ -6,7 +6,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -14,8 +14,10 @@ from mato_loop_backend.api.errors import ApiError, register_error_handlers
 from mato_loop_backend.api.routes.approvals import (
     ApprovalDecisionRequest,
     decide_approval,
+    pending_approvals,
     router,
 )
+from mato_loop_backend.api.routes.notifications import list_notifications
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.memory.service import MemoryService, normalize_content
@@ -24,11 +26,13 @@ from mato_loop_backend.models import (
     ChatSession,
     MemoryAudience,
     MemoryCategory,
+    MemoryDreamChange,
     MemoryDreamRun,
     MemoryEmbedding,
     MemoryRecord,
     MemorySourceMessage,
     Message,
+    Notification,
     UserAccount,
 )
 from mato_loop_backend.security import require_user
@@ -47,8 +51,24 @@ EDIT = {
 }
 
 
+@pytest.mark.parametrize("proposal", ["merge"], indirect=True)
+async def test_forgetting_merged_memory_redacts_its_run_history(proposal):
+    p = proposal
+    p.db.add(MemoryDreamChange(
+        dream_run_id=p.run.id, memory_id=p.targets[-1].id, action="create",
+        after={"content": p.targets[-1].content},
+    ))
+    await p.db.flush()
+    await decide_approval(p.approval.id, ApprovalDecisionRequest(decision="approve"), p.user, p.db)
+    survivor = await p.db.scalar(select(MemoryRecord).where(MemoryRecord.user_id == p.user.id))
+    await MemoryService.delete(p.db, survivor, owner_id=p.user.id)
+    rows = (await p.db.scalars(select(MemoryDreamChange).where(MemoryDreamChange.dream_run_id == p.run.id))).all()
+    assert rows and all(item.before is None and item.after is None for item in rows)
+
+
 @pytest.fixture
-async def approval_api():
+async def approval_api(monkeypatch):
+    monkeypatch.setattr(MemoryService, "reconcile_approvals", AsyncMock(return_value=False))
     user = UserAccount(id=uuid4(), username="test", password_hash="test")
     approval = ApprovalRequest(
         id=uuid4(),
@@ -230,7 +250,7 @@ async def proposal(request):
                     db.add(MemorySourceMessage(memory_id=target.id, message_id=old_evidence.id))
                     targets.append(target)
                 await SettingsStore.save(
-                    db, MemorySettings(dreaming_update_policy="ask", dreaming_remove_policy="ask"),
+                    db, MemorySettings(dreaming_update_policy="ask", dreaming_remove_policy="ask", dreaming_include_manual_memories=True),
                     user_id=user.id,
                 )
                 approval = await MemoryService.request_dreaming_approval(
@@ -241,6 +261,7 @@ async def proposal(request):
                     evidence_message_ids=[evidence.id],
                     update_policy=ToolExecutionPolicy.ASK, remove_policy=ToolExecutionPolicy.ASK,
                 )
+                await MemoryService.reconcile_approvals(db, owner_id=user.id)
                 await db.commit()
                 yield SimpleNamespace(
                     db=db, user=user, session=session, run=run, evidence=evidence,
@@ -248,6 +269,27 @@ async def proposal(request):
                 )
     finally:
         await engine.dispose()
+
+
+@pytest.mark.parametrize("proposal", ["merge"], indirect=True)
+@pytest.mark.parametrize("entry", ["approvals", "notifications"])
+@pytest.mark.parametrize("stale", ["revision", "manual_excluded"])
+async def test_stale_memory_proposal_and_notice_are_removed_before_display(proposal, entry, stale):
+    p = proposal
+    if stale == "revision":
+        p.targets[0].revision += 1
+    else:
+        await SettingsStore.save(
+            p.db, MemorySettings(dreaming_update_policy="ask", dreaming_remove_policy="ask"), user_id=p.user.id
+        )
+    await p.db.commit()
+    if entry == "approvals":
+        items = await pending_approvals(p.user, p.db)
+    else:
+        items = (await list_notifications(p.user, p.db, page_size=20)).items
+    await p.db.refresh(p.approval)
+    notice_count = await p.db.scalar(select(func.count()).select_from(Notification).where(Notification.user_id == p.user.id))
+    assert (items, p.approval.status, notice_count) == ([], "expired", 0)
 
 
 @pytest.mark.parametrize("proposal", ["update", "merge"], indirect=True)
@@ -330,7 +372,7 @@ async def test_unedited_approval_preserves_defaults(proposal, decision, edit):
 
 @pytest.mark.parametrize("proposal", ["update", "merge"], indirect=True)
 @pytest.mark.parametrize(
-    "stale", ["revision", "content", "category", "audience", "pinned", "evidence", "source", "policy", "proposal_audience"]
+    "stale", ["revision", "content", "category", "audience", "pinned", "evidence", "source", "policy", "extraction_disabled", "proposal_audience"]
 )
 async def test_owner_edit_cannot_bypass_original_validation(proposal, stale):
     p = proposal
@@ -354,6 +396,10 @@ async def test_owner_edit_cannot_bypass_original_validation(proposal, stale):
         await SettingsStore.save(
             p.db, MemorySettings(dreaming_update_policy="auto"), user_id=p.user.id
         )
+    elif stale == "extraction_disabled":
+        await SettingsStore.save(
+            p.db, MemorySettings(memory_extraction_enabled=False, dreaming_update_policy="ask"), user_id=p.user.id
+        )
     else:
         p.approval.payload = {
             **p.approval.payload, "after": {**p.approval.payload["after"], "audience": "public_only"},
@@ -369,7 +415,7 @@ async def test_owner_edit_cannot_bypass_original_validation(proposal, stale):
             p.user, p.db,
         )
 
-    assert error.value.code == ("approval.policyChanged" if stale == "policy" else "approval.targetChanged")
+    assert error.value.code == ("approval.policyChanged" if stale in {"policy", "extraction_disabled"} else "approval.targetChanged")
     for item in p.targets:
         await p.db.refresh(item)
     await p.db.refresh(p.approval)

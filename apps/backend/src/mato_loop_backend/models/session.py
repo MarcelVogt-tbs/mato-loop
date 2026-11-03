@@ -152,6 +152,8 @@ class ChatSession(Base):
     )
     reasoning_effort: Mapped[str | None] = mapped_column(String(20), nullable=True)
     memory_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="full")
+    session_summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    summary_source_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     web_search_policy: Mapped[str] = mapped_column(
         String(20), nullable=False, default=WebSearchPolicy.AVAILABLE.value
     )

@@ -114,7 +114,7 @@
               no-caps
               color="primary"
               label="Memory verwalten"
-              :to="{ name: 'settings-memory' }"
+              :to="{ name: 'settings-memory', query: { tab: 'memories' } }"
             />
           </template>
         </q-banner>

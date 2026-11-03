@@ -146,6 +146,9 @@ class ChatHistoryService:
         removed = messages[start:]
         if not removed:
             return
+        from mato_loop_backend.memory.session_summaries import invalidate_summaries
+
+        await invalidate_summaries(db, removed[0].session_id)
         await db.execute(
             delete(Message)
             .where(Message.id.in_([message.id for message in removed]))

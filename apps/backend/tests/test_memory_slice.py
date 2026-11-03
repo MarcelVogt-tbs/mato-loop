@@ -172,6 +172,11 @@ def test_automatic_dreaming_is_independent_from_manual_dreaming() -> None:
     )
     assert dreaming_availability(settings, ai, automatic=False) == (True, None)
 
+    settings.memory_extraction_enabled = False
+    assert dreaming_availability(settings, ai, automatic=False) == (False, "memory.processingDisabled")
+    settings.session_summaries_enabled = True
+    assert dreaming_availability(settings, ai, automatic=False) == (True, None)
+
     settings.enabled = False
     assert dreaming_availability(settings, ai, automatic=False) == (
         False,
@@ -540,12 +545,13 @@ async def test_dreaming_remove_requires_user_evidence_and_hard_deletes(
     )
 
 
-async def test_private_dreaming_candidate_upgrades_public_duplicate(monkeypatch) -> None:
+@pytest.mark.parametrize("source_type,include_manual", [("dreaming", False), ("manual", False), ("manual", True)])
+async def test_private_dreaming_candidate_upgrades_only_included_duplicates(monkeypatch, source_type, include_manual) -> None:
     owner_id = uuid4()
     existing = MemoryRecord(
         id=uuid4(),
         user_id=owner_id,
-        source_type="dreaming",
+        source_type=source_type,
         pinned=False,
         audience="both",
         category="fact",
@@ -569,9 +575,14 @@ async def test_private_dreaming_candidate_upgrades_public_duplicate(monkeypatch)
         session_id=uuid4(),
         run_id=uuid4(),
         evidence_message_ids=[evidence_id],
+        include_manual=include_manual,
     )
 
     assert created.duplicate is True
+    if source_type == "manual" and not include_manual:
+        assert existing.audience == "both"
+        add_evidence.assert_not_awaited()
+        return
     assert existing.audience == "private_only"
     add_evidence.assert_awaited_once_with(
         db,
@@ -1052,6 +1063,7 @@ async def test_memory_settings_update_locks_saves_and_commits(monkeypatch) -> No
     payload = MemorySettingsRequest(
         enabled=True,
         automatic_dreaming_enabled=True,
+        memory_extraction_enabled=False,
         dreaming_instructions="Nur bestätigte Präferenzen",
         dreaming_interval_minutes=30,
         dreaming_idle_minutes=10,
@@ -1059,6 +1071,7 @@ async def test_memory_settings_update_locks_saves_and_commits(monkeypatch) -> No
         dreaming_max_candidates=5,
         dreaming_update_policy="ask",
         dreaming_remove_policy="auto",
+        dreaming_include_manual_memories=True,
         automatic_memory_snippet_limit=3,
         automatic_session_snippet_limit=4,
         recent_session_snippet_limit=5,
@@ -1080,7 +1093,9 @@ async def test_memory_settings_update_locks_saves_and_commits(monkeypatch) -> No
     assert response["effectiveAutomaticDreamingEnabled"] is False
     assert response["manualDreamingAvailable"] is False
     assert response["dreamingUpdatePolicy"] == "ask"
+    assert response["memoryExtractionEnabled"] is False
     assert response["dreamingRemovePolicy"] == "auto"
+    assert response["dreamingIncludeManualMemories"] is True
     assert "dreamingMaxPinnedMemories" not in response
     assert response["automaticMemorySnippetLimit"] == 3
     assert response["automaticSessionSnippetLimit"] == 4
@@ -2200,18 +2215,21 @@ async def test_contract_exhaustion_fails_persistent_run_without_retry(monkeypatc
 
 
 @pytest.mark.parametrize(
-    ("exact", "remove_candidate", "latest_enabled", "latest_mode"),
+    ("exact", "remove_candidate", "latest_enabled", "latest_mode", "latest_extraction", "include_manual"),
     [
-        pytest.param(True, False, True, "full", id="exact-profile-duplicate"),
-        pytest.param(False, False, True, "full", id="new-profile"),
-        pytest.param(False, False, False, "full", id="memory-disabled"),
-        pytest.param(False, False, True, "read_only", id="session-read-only"),
-        pytest.param(True, True, True, "full", id="exact-remove"),
-        pytest.param(False, True, True, "full", id="related-remove-skipped"),
+        pytest.param(True, False, True, "full", True, True, id="exact-profile-duplicate"),
+        pytest.param(False, False, True, "full", True, True, id="new-profile"),
+        pytest.param(False, False, False, "full", True, True, id="memory-disabled"),
+        pytest.param(False, False, True, "read_only", True, True, id="session-read-only"),
+        pytest.param(False, False, True, "full", False, True, id="extraction-disabled-during-generation"),
+        pytest.param(True, True, True, "full", True, True, id="exact-remove"),
+        pytest.param(False, True, True, "full", True, True, id="related-remove-skipped"),
+        pytest.param(True, False, True, "full", True, False, id="manual-duplicate-unchanged"),
+        pytest.param(True, True, True, "full", True, False, id="manual-remove-skipped"),
     ],
 )
 async def test_host_matching_routes_profile_and_remove_candidates(
-    monkeypatch, exact, remove_candidate, latest_enabled, latest_mode
+    monkeypatch, exact, remove_candidate, latest_enabled, latest_mode, latest_extraction, include_manual
 ) -> None:
     monkeypatch.setattr(
         DreamingService, "_cancel_if_inactive", AsyncMock(return_value=False)
@@ -2310,11 +2328,14 @@ async def test_host_matching_routes_profile_and_remove_candidates(
         side_effect=lambda _db, kind, **kwargs: (
             MemorySettings(
                 enabled=latest_enabled,
+                memory_extraction_enabled=latest_extraction,
+                session_summaries_enabled=True,
                 dreaming_update_policy="ask",
                 dreaming_remove_policy="auto",
+                dreaming_include_manual_memories=include_manual,
             )
             if kind is MemorySettings and kwargs.get("for_update")
-            else MemorySettings(dreaming_update_policy="auto")
+            else MemorySettings(dreaming_update_policy="auto", dreaming_include_manual_memories=include_manual)
             if kind is MemorySettings
             else UserProfileSettings()
             if kind is UserProfileSettings
@@ -2417,30 +2438,31 @@ async def test_host_matching_routes_profile_and_remove_candidates(
     assert complete.await_args.kwargs["safety_reserve_tokens"] == 128
     assert reconciliation_candidates.await_args.kwargs["owner_id"] == user_id
     blocked = not latest_enabled or latest_mode != "full"
-    if blocked:
+    if blocked or not latest_extraction:
         keep.assert_not_awaited()
         create.assert_not_awaited()
         remove.assert_not_awaited()
         approval.assert_not_awaited()
         assert state.last_processed_message_id is None
-        assert run.status == "blocked"
+        assert run.status == ("blocked" if blocked else "completed")
         return
     if remove_candidate:
-        assert reconcile.await_count == int(exact)
+        assert reconcile.await_count == int(exact and include_manual)
         keep.assert_not_awaited()
         create.assert_not_awaited()
         approval.assert_not_awaited()
-        assert remove.await_count == int(exact)
-        assert run.removed_memory_count == int(exact)
-        if exact:
+        assert remove.await_count == int(exact and include_manual)
+        assert run.removed_memory_count == int(exact and include_manual)
+        if exact and include_manual:
             assert remove.await_args.kwargs["evidence_message_ids"] == [
                 user_message.id
             ]
     elif exact:
         reconcile.assert_not_awaited()
-        keep.assert_awaited_once()
-        assert keep.await_args.kwargs["owner_id"] == user_id
-        assert keep.await_args.kwargs["evidence_message_ids"] == [user_message.id]
+        assert keep.await_count == int(include_manual)
+        if include_manual:
+            assert keep.await_args.kwargs["owner_id"] == user_id
+            assert keep.await_args.kwargs["evidence_message_ids"] == [user_message.id]
         create.assert_not_awaited()
     elif not remove_candidate:
         create.assert_awaited_once()
@@ -2457,7 +2479,8 @@ async def test_host_matching_routes_profile_and_remove_candidates(
 
 
 @pytest.mark.parametrize("policy", list(ToolExecutionPolicy))
-async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) -> None:
+@pytest.mark.parametrize("include_manual", [False, True])
+async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy, include_manual) -> None:
     monkeypatch.setattr(
         DreamingService, "_cancel_if_inactive", AsyncMock(return_value=False)
     )
@@ -2516,8 +2539,8 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
         "mato_loop_backend.memory.dreaming.load_effective_ai",
         AsyncMock(return_value=ai),
     )
-    initial_settings = MemorySettings(dreaming_update_policy="auto")
-    settings = MemorySettings(dreaming_update_policy=policy)
+    initial_settings = MemorySettings(dreaming_update_policy="auto", dreaming_include_manual_memories=True)
+    settings = MemorySettings(dreaming_update_policy=policy, dreaming_include_manual_memories=include_manual)
     load_settings = AsyncMock(
         side_effect=lambda _db, kind, **kwargs: (
             settings
@@ -2604,10 +2627,10 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy) 
         reconciliation_candidates.await_args.kwargs["owner_id"]
         == session.user_id
     )
-    assert update.await_count == (1 if policy == ToolExecutionPolicy.AUTO else 0)
-    assert approval.await_count == (1 if policy == ToolExecutionPolicy.ASK else 0)
+    assert update.await_count == int(include_manual and policy == ToolExecutionPolicy.AUTO)
+    assert approval.await_count == int(include_manual and policy == ToolExecutionPolicy.ASK)
     mutation = update if policy == ToolExecutionPolicy.AUTO else approval
-    if policy != ToolExecutionPolicy.DISABLED:
+    if include_manual and policy != ToolExecutionPolicy.DISABLED:
         assert mutation.await_args.kwargs["owner_id"] == session.user_id
         assert mutation.await_args.kwargs["trust_level"] == TrustLevel.PRIVATE
     assert any(
@@ -2982,7 +3005,7 @@ async def test_approved_update_increments_run_counter(monkeypatch) -> None:
     monkeypatch.setattr(
         SettingsStore,
         "load",
-        AsyncMock(side_effect=lambda _db, kind, **kwargs: MemorySettings(dreaming_update_policy="ask") if kind is MemorySettings else kind()),
+        AsyncMock(side_effect=lambda _db, kind, **kwargs: MemorySettings(dreaming_update_policy="ask", dreaming_include_manual_memories=True) if kind is MemorySettings else kind()),
     )
     update = AsyncMock(return_value=MemoryMutation(target, updated=True))
     monkeypatch.setattr(MemoryService, "update_dreaming", update)
@@ -3000,11 +3023,11 @@ async def test_approved_update_increments_run_counter(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize(
-    ("snapshot_current", "expected"),
-    [(True, "applied"), (False, "target_changed")],
+    ("snapshot_current", "include_manual", "expected"),
+    [(True, True, "applied"), (False, True, "target_changed"), (True, False, "policy_changed")],
 )
 async def test_approved_remove_revalidates_snapshot_and_updates_run_counter(
-    monkeypatch, snapshot_current, expected
+    monkeypatch, snapshot_current, include_manual, expected
 ) -> None:
     user_id = uuid4()
     session = ChatSession(
@@ -3070,7 +3093,7 @@ async def test_approved_remove_revalidates_snapshot_and_updates_run_counter(
     monkeypatch.setattr(
         SettingsStore,
         "load",
-        AsyncMock(side_effect=lambda _db, kind, **kwargs: MemorySettings(dreaming_remove_policy="ask") if kind is MemorySettings else kind()),
+        AsyncMock(side_effect=lambda _db, kind, **kwargs: MemorySettings(dreaming_remove_policy="ask", dreaming_include_manual_memories=include_manual) if kind is MemorySettings else kind()),
     )
 
     outcome = await MemoryService.apply_approved_change(
@@ -3078,9 +3101,9 @@ async def test_approved_remove_revalidates_snapshot_and_updates_run_counter(
     )
 
     assert outcome == expected
-    assert db.delete.await_count == (1 if snapshot_current else 0)
+    assert db.delete.await_count == int(expected == "applied")
     assert (run.updated_memory_count or 0) == 0
-    assert (run.removed_memory_count or 0) == int(snapshot_current)
+    assert (run.removed_memory_count or 0) == int(expected == "applied")
     db.commit.assert_not_awaited()
 
 
@@ -3173,6 +3196,7 @@ async def test_approved_merge_revalidates_policy_and_updates_run_counters(
             side_effect=lambda _db, kind, **kwargs: MemorySettings(
                 dreaming_update_policy=update_policy,
                 dreaming_remove_policy=remove_policy,
+                dreaming_include_manual_memories=True,
             ) if kind is MemorySettings else kind()
         ),
     )

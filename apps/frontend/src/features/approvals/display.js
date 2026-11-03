@@ -25,32 +25,32 @@ export function memoryApprovalDisplay(approval) {
   const action = {
     memory_update: {
       title: 'Erinnerung ändern',
-      summary: 'Dreaming möchte eine bestehende Erinnerung aktualisieren.',
+      summary: 'Die Memory-Extraktion möchte eine bestehende Erinnerung aktualisieren.',
       targetLabel: 'Bisherige Erinnerung',
       icon: 'psychology'
     },
     memory_merge: {
       title: 'Erinnerungen zusammenführen',
-      summary: 'Dreaming möchte mehrere Erinnerungen zu einer Erinnerung zusammenführen.',
+      summary: 'Die Memory-Extraktion möchte mehrere Erinnerungen zu einer Erinnerung zusammenführen.',
       targetLabel: 'Bisherige Erinnerungen',
       icon: 'psychology'
     },
     memory_remove: {
       title: 'Erinnerung dauerhaft entfernen',
-      summary: 'Dreaming möchte diese Erinnerung unwiderruflich löschen.',
+      summary: 'Die Memory-Extraktion möchte diese Erinnerung unwiderruflich löschen.',
       targetLabel: 'Zu entfernende Erinnerung',
       icon: 'delete_forever',
       destructive: true
     },
     memory_pin: {
       title: payload.requestedPin ? 'Erinnerung: Immer im Kontext' : 'Erinnerung: Bei passender Anfrage',
-      summary: 'Dreaming möchte die Berücksichtigung einer Erinnerung ändern.',
+      summary: 'Die Memory-Extraktion möchte die Berücksichtigung einer Erinnerung ändern.',
       targetLabel: 'Bisherige Erinnerung',
       icon: 'push_pin'
     }
   }[approval?.actionKind] || {
     title: 'Memory-Änderung prüfen',
-    summary: 'Dreaming möchte eine Erinnerung ändern.',
+    summary: 'Die Memory-Extraktion möchte eine Erinnerung ändern.',
     targetLabel: 'Bisherige Erinnerung',
     icon: 'psychology'
   }

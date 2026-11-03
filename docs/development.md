@@ -61,12 +61,15 @@ Generate migrations with `./scripts/dev.sh db revision --autogenerate -m "descri
 ./scripts/eval.sh session-cache --help
 ./scripts/eval.sh file-tools --help
 ./scripts/eval.sh project-context --help
+./scripts/eval.sh session-summary --help
 ./scripts/eval.sh coding-comparison --help
 ./scripts/eval.sh browser-performance --help
 ./scripts/eval.sh shell-decider --check
 ```
 
 Evaluator arguments are forwarded unchanged. Browser-performance uses the running backend; the other targets use disposable containers. Shell-decider adds the evaluation-only Compose overlay and builds its image on demand. Raw outputs stay under ignored `data/` paths; link published conclusions from the [documentation index](index.md).
+
+`session-summary` compares existing conversation snippets with source-linked summaries using the enabled `halogen-qwen3.8-flash-next` model by default (`--model` selects another exact model ID). It uses native retrieval and read handlers over synthetic project sessions in rollback-only transactions, including corrections, unverified claims, quoted instructions, and a continued session. Both variants share the default automatic context budget and tool access. Generation uses the production incremental prompt, tool schema, evidence validator, and bounded projection, passing only the previous summary and new messages for the continued session. It makes paid provider requests; `--check` only checks scoring without model requests. No Dreaming settings, existing sessions, or durable memories are changed. This is a provider-level retrieval comparison, not a persistent Dreaming worker or summary-ranking benchmark.
 
 `file-tools` runs one real three-turn Build session against the connected development Agent whose home is `/workspace`. It verifies create/overwrite, exact editing, an intentional failed edit followed by repair, patch update/move/delete, independent final bytes, stable tool order and observed provider cache reuse. It defaults to the enabled GPT-6.1 Sol Ultrafast configuration; `--model` selects another enabled model. It removes its successful scratch directory and test session, never existing workspaces. On failure, inspect the unique scratch path in `data/file-tools-acceptance.json`; incomplete effects may remain. Cache hits are observations, not guarantees or a performance comparison.
 

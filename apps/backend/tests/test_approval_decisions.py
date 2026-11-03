@@ -825,7 +825,8 @@ async def test_approval_ownership_is_checked_directly() -> None:
     assert db.get.await_count == 1
 
 
-async def test_memory_deny_resolves_without_calling_memory_service(monkeypatch) -> None:
+async def test_memory_deny_resolves_without_applying_memory_changes(monkeypatch) -> None:
+    monkeypatch.setattr("mato_loop_backend.api.routes.approvals.MemoryService.reconcile_approvals", AsyncMock(return_value=False))
     approval = _approval()
     approval.request_type = "memory_change"
     approval.session_id = None
@@ -862,6 +863,7 @@ async def test_memory_deny_resolves_without_calling_memory_service(monkeypatch) 
 async def test_memory_approve_dispatches_service_outcomes(
     monkeypatch, outcome, expected_code, expected_status
 ) -> None:
+    monkeypatch.setattr("mato_loop_backend.api.routes.approvals.MemoryService.reconcile_approvals", AsyncMock(return_value=False))
     approval = _approval()
     approval.request_type = "memory_change"
     approval.session_id = None

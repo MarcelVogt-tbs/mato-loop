@@ -1405,6 +1405,9 @@ class MemorySettings(SettingsDocument):
 
     enabled: bool = True
     automatic_dreaming_enabled: bool = False
+    memory_extraction_enabled: bool = True
+    session_summaries_enabled: bool = False
+    session_summaries_enabled_since: datetime | None = None
     dreaming_instructions: str = Field(default="", max_length=8_000)
     dreaming_interval_minutes: int = Field(default=60, ge=1, le=10_080)
     dreaming_idle_minutes: int = Field(default=15, ge=1, le=10_080)
@@ -1412,6 +1415,7 @@ class MemorySettings(SettingsDocument):
     dreaming_max_candidates: int = Field(default=10, ge=1, le=100)
     dreaming_update_policy: ToolExecutionPolicy = ToolExecutionPolicy.AUTO
     dreaming_remove_policy: ToolExecutionPolicy = ToolExecutionPolicy.ASK
+    dreaming_include_manual_memories: bool = False
     automatic_memory_snippet_limit: int = Field(default=2, ge=0, le=5)
     automatic_session_snippet_limit: int = Field(default=3, ge=0, le=5)
     recent_session_snippet_limit: int = Field(default=2, ge=0, le=5)

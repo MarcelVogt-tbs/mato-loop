@@ -317,7 +317,10 @@ describe('API error messages', () => {
       'Das Modell hat auch nach einem erneuten Versuch keine verwertbare Antwort geliefert.'
     )
     expect(apiErrorMessage({ error: { code: 'memory.dreamingModelUnavailable' } })).toBe(
-      'Für Dreaming ist kein verfügbares Modell eingerichtet.'
+      'Für die Verarbeitung ist kein verfügbares Modell eingerichtet.'
+    )
+    expect(apiErrorMessage({ error: { code: 'memory.processingDisabled' } })).toBe(
+      'Aktiviere Memory-Extraktion oder Session-Zusammenfassungen, um die Verarbeitung zu starten.'
     )
     expect(apiErrorMessage({ error: { code: 'memory.disabled' } })).toBe(
       'Memory ist deaktiviert.'

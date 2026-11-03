@@ -42,6 +42,7 @@ from mato_loop_backend.models import (
     MemoryDreamTrigger,
     MemoryMode,
     MemoryRecord,
+    MemorySourceType,
     Message,
     Notification,
     UserAccount,
@@ -906,6 +907,8 @@ def dreaming_availability(
         return False, "memory.disabled"
     if automatic and not memory.automatic_dreaming_enabled:
         return False, "memory.dreamingDisabled"
+    if not memory.memory_extraction_enabled and not memory.session_summaries_enabled:
+        return False, "memory.processingDisabled"
     model, provider = _model_and_provider(ai)
     if model is None or provider is None:
         return False, "memory.dreamingModelUnavailable"
@@ -1064,13 +1067,21 @@ class DreamingService:
                 continue
             messages = await DreamingService._next_messages(
                 db, session.id, state.last_processed_message_id, memory.dreaming_max_batch_messages
-            )
+            ) if memory.memory_extraction_enabled else []
             while messages and messages[-1].role != "assistant":
                 messages.pop()
             runtime_settings = await SettingsStore.load(db, AgentRuntimeSettings)
             messages = _fit_message_batch(
                 messages, model, safety_reserve_tokens=runtime_settings.safety_reserve_tokens,
             )
+            from mato_loop_backend.memory.session_summaries import prepare_summary
+
+            summary, summary_messages = await prepare_summary(
+                db, session, memory, model, explicit=session_id is not None,
+            )
+            memory_pending = bool(messages)
+            if not messages:
+                messages = summary_messages
             if not messages:
                 continue
             latest_at = messages[-1].created_at
@@ -1087,14 +1098,19 @@ class DreamingService:
                 source_from_message_id=messages[0].id,
                 source_to_message_id=messages[-1].id,
                 source_message_count=len(messages),
+                memory_completed_at=None if memory_pending else now,
+                summary_status="pending" if summary else "disabled",
+                summary=summary,
             )
             existing = await db.scalar(
                 select(MemoryDreamRun).where(
                     MemoryDreamRun.session_id == session.id,
                     MemoryDreamRun.source_from_message_id == run.source_from_message_id,
                     MemoryDreamRun.source_to_message_id == run.source_to_message_id,
+                    MemoryDreamRun.status.in_(["blocked", "failed", "cancelled"]),
+                    MemoryDreamRun.memory_completed_at.is_(None),
                 )
-            )
+            ) if memory_pending else None
             if existing is not None:
                 if (
                     trigger == MemoryDreamTrigger.MANUAL
@@ -1112,6 +1128,10 @@ class DreamingService:
                     existing.started_at = None
                     existing.completed_at = None
                     existing.next_attempt_at = None
+                    if summary is not None and (existing.summary_status != "completed" or existing.summary is None):
+                        existing.summary = summary
+                        existing.summary_status = "pending"
+                        existing.summary_error = None
                     runs.append(existing)
                 continue
             db.add(run)
@@ -1278,11 +1298,58 @@ class DreamingService:
         if session is None:
             raise RuntimeError("session.notFound")
         event = asyncio.Event()
-        DreamingService._active_users[session.user_id] = event
+        user_id = session.user_id
+        DreamingService._active_users[user_id] = event
         try:
-            await DreamingService._process_active(db, run, session)
+            if run.summary_status in {"pending", "failed"}:
+                from mato_loop_backend.memory.session_summaries import process_summary
+
+                if session.memory_mode != "full" or session.session_type != "chat" or session.parent_session_id is not None:
+                    await DreamingService._block(db, run, "memory.sessionDisabled")
+                    return
+
+                memory = await SettingsStore.load(db, MemorySettings, user_id=user_id)
+                ai = await load_effective_ai(db, user_id)
+                available, reason = dreaming_availability(
+                    memory, ai, automatic=run.trigger == "scheduled",
+                )
+                model, provider = _model_and_provider(ai)
+                if not available or model is None or provider is None:
+                    await DreamingService._block(db, run, reason or "memory.dreamingModelUnavailable")
+                    return
+                if await DreamingService._cancel_if_inactive(db, run, user_id):
+                    return
+                if not memory.session_summaries_enabled:
+                    run.summary_status = "disabled"
+                    run.summary = None
+                    await db.commit()
+                else:
+                    try:
+                        await process_summary(db, run, session, model, provider)
+                    except Exception as exc:
+                        logger.exception("Session summary for Dreaming run %s failed", run_id)
+                        await db.rollback()
+                        run = await db.get(MemoryDreamRun, run_id)
+                        if run is None or run.status == "cancelled":
+                            return
+                        session = await db.get(ChatSession, run.session_id)
+                        run.summary_status = "failed"
+                        run.summary_error = exc.public_code if isinstance(exc, ProviderError) else "memory.dreamingFailed"
+                        await db.commit()
+            if run.memory_completed_at is None:
+                await DreamingService._process_active(db, run, session)
+            if run.memory_completed_at is not None and run.status not in {"blocked", "cancelled"}:
+                if run.summary_status == "failed":
+                    run.status = "queued" if run.attempts < MAX_ATTEMPTS else "failed"
+                    run.error = run.summary_error
+                    run.next_attempt_at = datetime.now(UTC) + timedelta(minutes=2 ** (run.attempts - 1)) if run.status == "queued" else None
+                else:
+                    run.status = "completed"
+                    run.next_attempt_at = None
+                run.completed_at = datetime.now(UTC) if run.status != "queued" else None
+                await db.commit()
         finally:
-            DreamingService._active_users.pop(session.user_id, None)
+            DreamingService._active_users.pop(user_id, None)
             event.set()
 
     @staticmethod
@@ -1317,6 +1384,10 @@ class DreamingService:
             return
         if not available or model is None or provider is None:
             await DreamingService._block(db, run, reason or "memory.dreamingModelUnavailable")
+            return
+        if not memory.memory_extraction_enabled:
+            run.memory_completed_at = datetime.now(UTC)
+            await db.commit()
             return
         model_trust = effective_model_trust(provider, model)
         profile = await SettingsStore.load(
@@ -1506,8 +1577,10 @@ class DreamingService:
             zip(validated_candidates, local_matches, strict=True)
         ):
             exact = exact_matches[index]
+            if not memory.dreaming_include_manual_memories:
+                matches = [item for item in matches if item.source_type != MemorySourceType.MANUAL.value]
             if candidate.remove:
-                if exact is None:
+                if exact is None or exact not in matches:
                     skipped_remove_indices.add(index)
                 else:
                     entries.append((index, candidate, [exact]))
@@ -1601,6 +1674,10 @@ class DreamingService:
         if not available:
             await DreamingService._block(db, run, reason or "memory.dreamingModelUnavailable")
             return
+        if not memory.memory_extraction_enabled:
+            run.memory_completed_at = datetime.now(UTC)
+            await db.commit()
+            return
         session = locked_session
         created_approvals: list[ApprovalRequest] = []
 
@@ -1614,6 +1691,10 @@ class DreamingService:
                 continue
             decision = decisions[index]
             targets = [existing[memory_id] for memory_id in decision.memory_ids]
+            if not memory.dreaming_include_manual_memories and any(
+                item.source_type == MemorySourceType.MANUAL.value for item in targets
+            ):
+                continue
             if decision.action == "update":
                 assert decision.content is not None and decision.category is not None
                 if memory.dreaming_update_policy == ToolExecutionPolicy.DISABLED:
@@ -1764,6 +1845,7 @@ class DreamingService:
                 session_id=session.id,
                 run_id=run.id,
                 evidence_message_ids=candidate_evidence,
+                include_manual=memory.dreaming_include_manual_memories,
             )
             if mutation.item is None:
                 continue
@@ -1779,7 +1861,8 @@ class DreamingService:
         if await DreamingService._cancel_if_inactive(db, run, session.user_id):
             return
         state.last_processed_message_id = run.source_to_message_id
-        run.status = MemoryDreamStatus.COMPLETED.value
+        run.status = MemoryDreamStatus.RUNNING.value if run.summary_status == "failed" else MemoryDreamStatus.COMPLETED.value
+        run.memory_completed_at = datetime.now(UTC)
         run.model_config_id = model.id
         run.candidate_count = len(output.candidates)
         run.created_memory_count = created

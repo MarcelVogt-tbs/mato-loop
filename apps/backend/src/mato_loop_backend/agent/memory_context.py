@@ -60,6 +60,7 @@ class MemoryContextSnapshot(BaseModel):
     memories: dict[UUID, int] = Field(default_factory=dict)
     messages: dict[UUID, UUID] = Field(default_factory=dict)
     project_sessions: set[UUID] = Field(default_factory=set)
+    summaries: dict[UUID, int] = Field(default_factory=dict)
 
 
 def memory_context_snapshot(
@@ -83,6 +84,8 @@ def memory_context_snapshot(
         message_ids = [item["sessionReadArguments"]["around_message_id"]]
         message_ids.extend(message["id"] for message in item.get("messages", []))
         snapshot.messages.update((UUID(message_id), session_id) for message_id in message_ids)
+        if "summarySourceRevision" in item:
+            snapshot.summaries[session_id] = item["summarySourceRevision"]
     for item in payload.get("projectSessionIndex", {}).get("sessions", []):
         arguments = item["sessionReadArguments"]
         session_id = UUID(arguments["session_id"])
@@ -93,7 +96,7 @@ def memory_context_snapshot(
 
 async def historical_memory_contexts(
     db: AsyncSession, session: ChatSession, records: list[Message], *,
-    trust_level: TrustLevel, excluded_content_hashes: frozenset[str],
+    trust_level: TrustLevel, excluded_content_hashes: frozenset[str], summaries_enabled: bool = False,
 ) -> dict[UUID, str]:
     snapshots = {}
     records = _model_order([item for item in records if item.error_code is None])
@@ -137,12 +140,17 @@ async def historical_memory_contexts(
             ))
         ).all()}
     # A revoked, edited or deleted source invalidates its whole historical envelope.
+    summary_ids = {key for snapshot in snapshots.values() for key in snapshot.summaries}
+    summary_revisions = dict((await db.execute(select(
+        ChatSession.id, ChatSession.summary_source_revision,
+    ).where(ChatSession.id.in_(summary_ids), ChatSession.user_id == session.user_id))).all()) if summary_ids and summaries_enabled else {}
     return {
         record_id: snapshot.content for record_id, snapshot in snapshots.items()
         if all(revisions.get(memory_id) == revision for memory_id, revision in snapshot.memories.items())
         and all(sources.get(message_id, (None, None))[0] == session_id
                 and (session.project_id is None or sources[message_id][1] == session.project_id)
-                for message_id, session_id in snapshot.messages.items())
+                 for message_id, session_id in snapshot.messages.items())
+        and all(summary_revisions.get(key) == revision for key, revision in snapshot.summaries.items())
     }
 
 
@@ -153,12 +161,14 @@ class MemoryCache:
     recent_episodes: list[EpisodeReference] | None = None
     scope: MemoryScope | None = None
     overview_required: bool | None = None
+    session_summaries: dict | None = None
 
     def invalidate(self, *, continuation: bool = False) -> None:
         self.automatic_memories = None
         self.relevant_episodes = None
         self.recent_episodes = None
         self.scope = None
+        self.session_summaries = None
         if continuation:
             self.overview_required = None
 
@@ -195,6 +205,7 @@ async def prepare_memory_context(
             turn.historical_contexts = await historical_memory_contexts(
                 db, session, records, trust_level=trust_level,
                 excluded_content_hashes=excluded_content_hashes,
+                summaries_enabled=settings.session_summaries_enabled,
             )
         if cache.scope is None:
             cache.scope = await MemoryService.scope(
@@ -354,11 +365,22 @@ async def prepare_memory_context(
                     )
                 )[:settings.recent_session_snippet_limit]
             pinned_ids = {item.id for item in pinned_memories}
+            if settings.session_summaries_enabled:
+                from mato_loop_backend.memory.session_summaries import selected_summaries
+
+                cache.session_summaries = await selected_summaries(
+                    db, [*(cache.relevant_episodes or []), *(cache.recent_episodes or [])],
+                    owner_id=session.user_id, current_session_id=session.id,
+                    project_id=session.project_id, trust=trust_level, cached=cache.session_summaries,
+                )
+            else:
+                cache.session_summaries = {}
             automatic_payload, episode_payload, bounded_project_index = _bounded_automatic_payload(
                 [item for item in cache.automatic_memories if item.id not in pinned_ids],
                 cache.relevant_episodes or [], cache.recent_episodes or [],
                 max_characters=budget, project_session=session.project_id is not None,
                 project_sessions=project_sessions, has_more_project_sessions=has_more_project_sessions,
+                session_summaries=cache.session_summaries,
             )
             pinned_references = [("pinned", item) for item in pinned_memories]
             memory_text = _cross_session_context_text(

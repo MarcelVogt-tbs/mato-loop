@@ -199,7 +199,7 @@ describe('memory store', () => {
     await store.startDreamRun('session-1')
 
     expect(api.post).toHaveBeenCalledWith('/memories/dream-runs', { sessionId: 'session-1' })
-    expect(api.get).toHaveBeenCalledWith('/memories/dream-runs')
+    expect(api.get).toHaveBeenCalledWith('/memories/dream-runs', { params: { offset: 0, limit: 20 } })
     expect(store.dreamRuns).toEqual([
       { id: 'run-1', status: 'completed', createdMemories: 0, removedMemories: 2 }
     ])

@@ -20,7 +20,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from mato_loop_backend.db.base import Base
@@ -242,12 +242,6 @@ class MemoryDreamState(Base):
 class MemoryDreamRun(Base):
     __tablename__ = "memory_dream_runs"
     __table_args__ = (
-        UniqueConstraint(
-            "session_id",
-            "source_from_message_id",
-            "source_to_message_id",
-            name="uq_memory_dream_runs_source_range",
-        ),
         CheckConstraint(
             "status IN ('queued', 'running', 'blocked', 'completed', 'failed', 'cancelled')",
             name="status_valid",
@@ -274,6 +268,10 @@ class MemoryDreamRun(Base):
         ForeignKey("messages.id", ondelete="CASCADE"), nullable=False
     )
     model_config_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    memory_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    summary_status: Mapped[str] = mapped_column(String(20), nullable=False, default="disabled", server_default="disabled")
+    summary_error: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error: Mapped[str | None] = mapped_column(String(120), nullable=True)
     source_message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -294,3 +292,15 @@ class MemoryDreamRun(Base):
     )
 
     source_session: Mapped[ChatSession] = relationship()
+
+
+class MemoryDreamChange(Base):
+    __tablename__ = "memory_dream_changes"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    dream_run_id: Mapped[UUID] = mapped_column(ForeignKey("memory_dream_runs.id", ondelete="CASCADE"), index=True)
+    memory_id: Mapped[UUID | None] = mapped_column(ForeignKey("memories.id", ondelete="SET NULL"), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    before: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    after: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

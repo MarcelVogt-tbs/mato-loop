@@ -31,6 +31,7 @@ from mato_loop_backend.models.messaging import MessagingEndpoint, MessagingInbox
 from mato_loop_backend.models.memory import (
     MemoryAudience,
     MemoryCategory,
+    MemoryDreamChange,
     MemoryDreamRun,
     MemoryDreamState,
     MemoryDreamStatus,
@@ -60,6 +61,7 @@ __all__ = [
     "MailSendOperation",
     "MemoryAudience",
     "MemoryCategory",
+    "MemoryDreamChange",
     "MemoryRecord",
     "MemoryDreamRun",
     "MemoryDreamState",

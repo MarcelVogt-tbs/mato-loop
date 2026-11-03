@@ -58,7 +58,11 @@ export const settingsRoutes = [
   },
   {
     path: 'memory', name: 'settings-memory', component: () => import('src/features/memory/MemorySettingsPage.vue'),
-    meta: { settingsLabel: 'Memory', settingsIcon: 'psychology' }
+    meta: { settingsLabel: 'Memory', settingsIcon: 'psychology' },
+    children: [
+      { path: 'dream-runs', name: 'settings-dream-runs', component: () => import('src/features/memory/DreamRunsPage.vue') },
+      { path: 'dream-runs/:runId', name: 'settings-dream-run', component: () => import('src/features/memory/DreamRunPage.vue') }
+    ]
   },
   {
     path: 'channels', name: 'settings-channels', component: () => import('src/features/channels/ChannelSettingsPage.vue'),

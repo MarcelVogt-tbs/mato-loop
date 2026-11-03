@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from typing import Any
 
 from mato_loop_backend.memory.episode_retrieval import (
@@ -329,6 +330,33 @@ def _recent_episode_item(
     return payload, [(message, "content") for message in messages]
 
 
+def _summary_episode_item(reference, summary, recent_reference=None):
+    payload, _ = _relevant_episode_item(reference)
+    payload["source"] = "summary"
+    payload["anchorMessage"].pop("preview")
+    payload["summary"] = summary["overview"] + "\n" + "\n".join(
+        f"[{item['status']}] {item['text']}" for item in summary["items"]
+    )
+    payload["summarySourceRevision"] = summary["sourceRevision"]
+    payload["summaryCoveredThroughMessageId"] = summary["coveredThroughMessageId"]
+    payload["summaryCoveredThroughAt"] = summary["coveredThroughAt"]
+    payload["sessionReadArguments"]["around_message_id"] = summary["coveredThroughMessageId"]
+    covered_at = datetime.fromisoformat(summary["coveredThroughAt"])
+    tail, _ = _recent_episode_item(recent_reference or reference)
+    payload["messages"] = [message for message in tail["messages"]
+                           if (datetime.fromisoformat(message["createdAt"]), message["id"])
+                           > (covered_at, summary["coveredThroughMessageId"])]
+    payload["truncated"] = False
+    # Preserve newer messages before older summarized content when fitting the shared budget.
+    return payload, [*((message, "content") for message in payload["messages"]), (payload, "summary")]
+
+
+def _summary_covers_anchor(reference, summary):
+    return (reference.anchor_created_at, str(reference.anchor_message_id)) <= (
+        datetime.fromisoformat(summary["coveredThroughAt"]), summary["coveredThroughMessageId"],
+    )
+
+
 def _bounded_automatic_payload(
     memories: list[MemoryRecord],
     relevant_episodes: list[EpisodeReference],
@@ -338,11 +366,14 @@ def _bounded_automatic_payload(
     project_session: bool = False,
     project_sessions: list[ProjectSessionIndexItem] | None = None,
     has_more_project_sessions: bool = False,
+    session_summaries: dict | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]:
     payload: dict[str, Any] = {
         "durableMemories": [],
         "priorSessionEpisodes": [],
     }
+    summaries = session_summaries or {}
+    recent_by_session = {item.session_id: item for item in recent_episodes}
     if project_sessions is not None:
         payload["projectSessionIndex"] = {
             "sessions": [],
@@ -400,6 +431,15 @@ def _bounded_automatic_payload(
         {item.session_id: item for item in preferred_episodes}.values()
     )
 
+    def append_item(key, source, build):
+        if isinstance(source, EpisodeReference) and source.session_id in summaries and (
+            build is _recent_episode_item or _summary_covers_anchor(source, summaries[source.session_id])
+        ):
+            item, text_fields = _summary_episode_item(source, summaries[source.session_id], recent_by_session.get(source.session_id))
+        else:
+            item, text_fields = build(source)
+        _append_bounded(payload, key, item, text_fields, max_characters=max_characters)
+
     if project_session:
         groups = [
             ("priorSessionEpisodes", unique_preferred, _relevant_episode_item),
@@ -408,14 +448,7 @@ def _bounded_automatic_payload(
         ]
         for key, items, build in groups:
             for source in items:
-                item, text_fields = build(source)
-                _append_bounded(
-                    payload,
-                    key,
-                    item,
-                    text_fields,
-                    max_characters=max_characters,
-                )
+                append_item(key, source, build)
         return (
             payload["durableMemories"],
             payload["priorSessionEpisodes"],
@@ -431,14 +464,7 @@ def _bounded_automatic_payload(
         for key, items, build in groups:
             if index >= len(items):
                 continue
-            item, text_fields = build(items[index])
-            _append_bounded(
-                payload,
-                key,
-                item,
-                text_fields,
-                max_characters=max_characters,
-            )
+            append_item(key, items[index], build)
     return (
         payload["durableMemories"],
         payload["priorSessionEpisodes"],

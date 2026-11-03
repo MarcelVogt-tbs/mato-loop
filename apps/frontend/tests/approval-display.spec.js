@@ -22,7 +22,7 @@ describe('approval display', () => {
 
     expect(display.invalid).toBe(false)
     expect(display.title).toBe('Erinnerung dauerhaft entfernen')
-    expect(display.summary).toBe('Dreaming möchte diese Erinnerung unwiderruflich löschen.')
+    expect(display.summary).toBe('Die Memory-Extraktion möchte diese Erinnerung unwiderruflich löschen.')
     expect(display.targetLabel).toBe('Zu entfernende Erinnerung')
     expect(display.icon).toBe('delete_forever')
     expect(display.destructive).toBe(true)

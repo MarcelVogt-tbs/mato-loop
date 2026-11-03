@@ -297,6 +297,7 @@ async def test_notification_previews_remove_markdown_before_truncating(monkeypat
 
 
 async def test_notification_list_returns_cursor_target_and_global_unread_count(monkeypatch) -> None:
+    monkeypatch.setattr("mato_loop_backend.api.routes.notifications.MemoryService.reconcile_approvals", AsyncMock(return_value=False))
     user = _user()
     first = _notification(user.id)
     first.session_id = uuid4()

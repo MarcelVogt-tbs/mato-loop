@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.memory.service import MemoryService
 from mato_loop_backend.models import ChatSession, Notification, UserAccount
 from mato_loop_backend.notification_content import notification_body_preview
 from mato_loop_backend.notifications import NotificationError, NotificationService
@@ -304,6 +305,8 @@ async def list_notifications(
     cursor: str | None = None,
 ) -> NotificationListResponse:
     decoded_cursor = _decode_cursor(cursor, user.id) if cursor else None
+    if await MemoryService.reconcile_approvals(db, owner_id=user.id):
+        await db.commit()
     rows = await NotificationService.list_page(
         db, user.id, page_size=page_size, cursor=decoded_cursor
     )

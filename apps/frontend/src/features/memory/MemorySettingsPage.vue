@@ -1,10 +1,10 @@
 <template>
-  <section class="memory-page">
+  <section>
     <header class="settings-section-header">
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Memory</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">
-          Dauerhafte Erinnerungen durchsuchen, pflegen und optional mit Dreaming konsolidieren.
+          Dauerhafte Erinnerungen pflegen und Gespräche zu Memories oder Session-Zusammenfassungen verarbeiten.
         </p>
       </div>
       <q-btn
@@ -16,10 +16,17 @@
         label="Erinnerung hinzufügen"
         @click="openCreateDialog"
       />
+      <q-btn
+        v-else-if="!showRunPage"
+        unelevated no-caps color="primary" icon="save" label="Speichern"
+        :loading="memories.settingsLoading"
+        :disable="!settingsLoaded || (section === 'general' ? !contextSettingsChanged : !settingsChanged)"
+        @click="section === 'general' ? contextSettingsFormRef?.submit() : dreamingSettingsFormRef?.submit()"
+      />
     </header>
 
     <q-tabs
-      v-model="section"
+      :model-value="section"
       dense
       no-caps
       align="left"
@@ -27,41 +34,57 @@
       indicator-color="primary"
       class="memory-tabs q-mb-lg"
     >
-      <q-tab name="memories" icon="psychology" label="Erinnerungen" />
-      <q-tab name="dreaming" icon="auto_awesome" label="Dreaming" />
+      <q-tab name="general" icon="settings" label="Einstellungen" @click="selectSection('general')" />
+      <q-tab name="memories" icon="psychology" label="Erinnerungen" @click="selectSection('memories')" />
+      <q-tab name="dreaming" icon="sync" label="Verarbeitung" @click="selectSection('dreaming')" />
     </q-tabs>
 
+    <router-view v-if="showRunPage" />
     <q-tab-panels
-      v-model="section"
+      v-else
+      :model-value="section"
       class="memory-panels bg-transparent"
     >
-      <q-tab-panel name="memories" class="q-pa-none">
+      <q-tab-panel name="general" class="q-pa-none">
         <q-card flat class="app-surface memory-access-card q-mb-md">
-          <q-card-section class="memory-access-header row items-center no-wrap q-gutter-md">
-            <q-avatar rounded color="primary" text-color="white" icon="psychology" />
-            <div class="col">
-              <div class="text-subtitle1 text-weight-medium">Memory-Zugriff</div>
-              <div class="text-body2 app-muted">
-                Steuert, ob frühere Inhalte für Modellanfragen verwendet und neue Erinnerungen gespeichert werden.
-              </div>
+          <q-card-section>
+            <div class="row items-center justify-between q-gutter-md">
+              <h3 class="text-subtitle1 text-weight-bold q-my-none">Memory-Zugriff</h3>
+              <q-toggle dense
+                :model-value="settingsForm.enabled"
+                color="primary"
+                label="Memory aktiv"
+                :disable="!settingsLoaded || memories.settingsLoading"
+                @update:model-value="value => saveToggle('enabled', value, value ? 'Memory aktiviert' : 'Memory deaktiviert')"
+              />
             </div>
-            <q-toggle dense
-              :model-value="settingsForm.enabled"
-              color="primary"
-              label="Memory aktiv"
-              :disable="!settingsLoaded || memories.settingsLoading"
-              @update:model-value="toggleMemory"
-            />
-          </q-card-section>
-          <q-card-section class="q-pt-none">
-            <q-banner rounded class="app-surface-tonal">
-              <template #avatar><q-icon name="info_outline" color="primary" /></template>
-              Erinnerungen mit „Immer im Kontext“ werden bei erlaubten Anfragen vollständig eingefügt. Erinnerungen mit „Bei passender Anfrage“ bleiben dauerhaft gespeichert und erscheinen automatisch nur als kurze relevante Treffer; vollständige Details werden bei Bedarf geladen. Relevante frühere Sessions mit vollem Memory-Zugriff können als begrenzte Auszüge erscheinen. Alle Erinnerungen bleiben auch bei ausgeschaltetem Memory oder Dreaming hier verwaltbar.
-            </q-banner>
+            <p class="text-body2 app-muted q-mt-sm q-mb-sm">Steuert, ob frühere Inhalte für Modellanfragen verwendet und neue Erinnerungen gespeichert werden.</p>
+            <p class="text-caption app-muted q-mb-none">
+              Erinnerungen mit „Immer im Kontext“ werden bei erlaubten Anfragen vollständig eingefügt. Erinnerungen mit „Bei passender Anfrage“ bleiben dauerhaft gespeichert und erscheinen automatisch nur als kurze relevante Treffer; vollständige Details werden bei Bedarf geladen. Relevante frühere Sessions mit vollem Memory-Zugriff können als begrenzte Auszüge erscheinen. Alle Erinnerungen bleiben auch bei ausgeschaltetem Memory oder ausgeschalteter Verarbeitung hier verwaltbar.
+            </p>
           </q-card-section>
           <q-inner-loading :showing="memories.settingsLoading && !settingsLoaded" />
         </q-card>
 
+        <q-card flat class="app-surface q-mb-md">
+          <q-form ref="contextSettingsFormRef" aria-label="Automatischer Kontext" @submit="saveSettings('general')">
+            <q-card-section>
+              <h3 class="text-subtitle1 text-weight-bold q-mt-none q-mb-sm">Automatischer Kontext</h3>
+              <p class="text-body2 app-muted q-mb-md">
+                Begrenzt die kurzen relevanten Treffer aus Erinnerungen und früheren Sessions. In Projekten haben relevante Session-Auszüge Vorrang. Diese Einstellungen gelten unabhängig von der Verarbeitung.
+              </p>
+              <div class="settings-number-grid">
+                <q-input dense v-model.number="settingsForm.automaticMemorySnippetLimit" outlined type="number" min="0" max="5" label="Memory-Treffer bei passender Anfrage" :disable="!settingsLoaded || memories.settingsLoading" :rules="[integerRangeRule(0, 5)]" />
+                <q-input dense v-model.number="settingsForm.automaticSessionSnippetLimit" outlined type="number" min="0" max="5" label="Relevante Session-Auszüge" :disable="!settingsLoaded || memories.settingsLoading" :rules="[integerRangeRule(0, 5)]" />
+                <q-input dense v-model.number="settingsForm.recentSessionSnippetLimit" outlined type="number" min="0" max="5" label="Auszüge aus letzten Sessions" :disable="!settingsLoaded || memories.settingsLoading" :rules="[integerRangeRule(0, 5)]" />
+                <q-input dense v-model.number="settingsForm.automaticContextMaxTokens" outlined type="number" min="128" max="2048" label="Max. automatischer Kontext (Tokens)" :disable="!settingsLoaded || memories.settingsLoading" :rules="[integerRangeRule(128, 2048)]" />
+              </div>
+            </q-card-section>
+          </q-form>
+        </q-card>
+      </q-tab-panel>
+
+      <q-tab-panel name="memories" class="q-pa-none">
         <q-card flat class="app-surface memory-filter-card q-mb-md">
           <q-card-section>
             <div class="memory-category-filter row items-center q-gutter-xs q-mb-md">
@@ -140,16 +163,16 @@
         </q-card>
 
         <q-card flat class="app-surface memory-list-card">
-          <q-card-section v-if="!memories.loading && !memories.items.length" class="memory-empty">
+          <q-card-section v-if="!memories.loading && !memories.items.length" class="q-pa-xl">
             <AppStateMessage
               icon="psychology_alt"
               :title="filtersActive ? 'Keine passenden Erinnerungen' : 'Noch keine Erinnerungen'"
-              :description="filtersActive ? 'Passe die Suche oder die Filter an.' : 'Füge eine Erinnerung manuell hinzu oder nutze optional Dreaming.'"
+              :description="filtersActive ? 'Passe die Suche oder die Filter an.' : 'Füge eine Erinnerung manuell hinzu oder aktiviere die Memory-Extraktion unter Verarbeitung.'"
             />
           </q-card-section>
 
           <q-list v-else separator>
-            <q-item v-for="item in memories.items" :key="item.id" class="memory-item">
+            <q-item v-for="item in memories.items" :key="item.id" class="memory-item items-start q-py-md">
               <q-item-section>
                 <div class="memory-item__chips row items-center q-gutter-xs q-mb-sm">
                   <q-chip
@@ -165,8 +188,6 @@
                   <q-chip
                     dense
                     square
-                    :color="categoryMeta(item.category).color"
-                    text-color="white"
                     :icon="categoryMeta(item.category).icon"
                   >
                     {{ categoryMeta(item.category).label }}
@@ -177,8 +198,6 @@
                   <q-chip
                     dense
                     square
-                    :color="audienceMeta(item.audience).color"
-                    text-color="white"
                     :icon="audienceMeta(item.audience).icon"
                   >
                     {{ audienceMeta(item.audience).label }}
@@ -186,7 +205,6 @@
                   <q-badge
                     outline
                     color="primary"
-                    class="memory-status-badge"
                     :aria-label="pinnedLabel(item.pinned)"
                   >
                     <q-icon :name="item.pinned ? 'push_pin' : 'bookmark_border'" size="14px" />
@@ -203,7 +221,7 @@
                   >
                     <q-icon name="forum" /> {{ item.sourceSession.title }}
                   </router-link>
-                  <span>Aktualisiert {{ formatDate(item.updatedAt) }}</span>
+                  <span>Aktualisiert {{ formatAbsoluteDateTime(item.updatedAt) || 'unbekannt' }}</span>
                 </div>
               </q-item-section>
               <q-item-section side top class="memory-item__actions">
@@ -259,7 +277,7 @@
 
       <q-tab-panel name="dreaming" class="q-pa-none">
         <section aria-labelledby="dreaming-proposals" class="q-mb-lg">
-          <h3 id="dreaming-proposals" class="text-subtitle1 text-weight-medium q-mt-none q-mb-sm">Offene Vorschläge</h3>
+          <h3 id="dreaming-proposals" class="text-subtitle1 text-weight-bold q-mt-none q-mb-sm">Offene Vorschläge</h3>
           <q-skeleton v-if="approvals.loading && !approvals.loaded" type="text" />
           <q-banner v-if="approvals.loadFailed" rounded class="app-surface-tonal">
             Vorschläge konnten nicht geladen werden.
@@ -273,34 +291,20 @@
             <ApprovalCard :approval="proposal" :show-draft-action="false" />
           </div>
         </section>
-        <div class="dreaming-grid">
-          <q-card flat class="app-surface dreaming-settings-card">
-            <q-card-section class="dreaming-settings-header row items-start no-wrap q-gutter-md">
-              <q-avatar rounded color="deep-purple" text-color="white" icon="auto_awesome" />
-              <div class="col">
-                <div class="text-h6">Dreaming <span class="text-caption app-muted">(optional)</span></div>
-                <div class="text-body2 app-muted">Leitet aus abgeschlossenen Gesprächen dauerhafte Erinnerungen ab und konsolidiert bestehende. Memory funktioniert auch ohne Dreaming.</div>
-              </div>
-              <div v-if="settingsLoaded" class="column items-end">
-                <q-toggle dense
-                  :model-value="settingsForm.automaticDreamingEnabled"
-                  color="deep-purple"
-                  label="Automatisches Dreaming eingeschaltet"
-                  :disable="!settingsForm.enabled || memories.settingsLoading"
-                  @update:model-value="toggleAutomaticDreaming"
-                />
-                <div class="text-caption app-muted">
-                  {{ settingsForm.effectiveAutomaticDreamingEnabled ? 'Derzeit aktiv' : settingsForm.automaticDreamingEnabled ? 'Derzeit nicht verfügbar' : 'Ausgeschaltet' }}
-                </div>
-              </div>
-            </q-card-section>
-            <q-separator />
-            <q-form class="dreaming-settings-form" @submit.prevent="saveSettings" @validation-error="advancedSettingsOpen = true">
+        <section aria-label="Verarbeitungseinstellungen">
+          <q-form ref="dreamingSettingsFormRef" class="dreaming-settings-form relative-position" @submit="saveSettings('dreaming')" @validation-error="advancedSettingsOpen = true">
+            <q-card flat class="app-surface dreaming-settings-card">
               <q-card-section>
-                <q-banner v-if="settingsForm.automaticDreamingUnavailableReason" rounded class="app-surface-tonal q-mb-md">
-                  <template #avatar><q-icon name="info_outline" color="warning" /></template>
-                  {{ automaticUnavailableReasonMessage }}
-                </q-banner>
+                <h3 class="text-subtitle1 text-weight-bold q-mt-none q-mb-sm">Memory-Extraktion</h3>
+                <p class="text-body2 app-muted q-mb-sm">Leitet dauerhafte benutzerspezifische Angaben aus Gesprächen ab und gleicht sie mit vorhandenen Erinnerungen ab. Ausgeschaltet bleiben gespeicherte Erinnerungen weiterhin nutzbar und verwaltbar.</p>
+                <q-toggle
+                  :model-value="settingsForm.memoryExtractionEnabled"
+                  color="primary"
+                  label="Memories extrahieren"
+                  class="q-mb-md"
+                  :disable="!settingsLoaded || memories.settingsLoading"
+                  @update:model-value="value => saveToggle('memoryExtractionEnabled', value, value ? 'Memory-Extraktion aktiviert' : 'Memory-Extraktion deaktiviert')"
+                />
                 <q-input dense
                   v-model="settingsForm.dreamingInstructions"
                   outlined
@@ -308,25 +312,23 @@
                   type="textarea"
                   maxlength="8000"
                   counter
-                  label="Zusätzliche Dreaming-Hinweise"
+                  label="Zusätzliche Hinweise für die Memory-Extraktion"
                   hint="Kann Schwerpunkte und Kategorien festlegen. Vertrauen, Sicherheit und Evidenz bleiben hostkontrolliert."
                   class="q-mb-lg"
-                  :disable="memories.settingsLoading"
+                  :disable="!settingsForm.memoryExtractionEnabled || memories.settingsLoading"
                 />
-                <div class="text-subtitle2 text-weight-medium">Automatischer Kontext</div>
-                <div class="text-body2 app-muted q-mt-xs">
-                  Begrenzt die kurzen relevanten Treffer aus Erinnerungen und früheren Sessions. In Projekten haben relevante Session-Auszüge Vorrang. Diese Einstellungen gelten unabhängig von Dreaming.
-                </div>
-                <div class="settings-number-grid q-mt-md q-mb-lg">
-                  <q-input dense v-model.number="settingsForm.automaticMemorySnippetLimit" outlined type="number" min="0" max="5" label="Memory-Treffer bei passender Anfrage" :disable="memories.settingsLoading" :rules="[integerRangeRule(0, 5)]" />
-                  <q-input dense v-model.number="settingsForm.automaticSessionSnippetLimit" outlined type="number" min="0" max="5" label="Relevante Session-Auszüge" :disable="memories.settingsLoading" :rules="[integerRangeRule(0, 5)]" />
-                  <q-input dense v-model.number="settingsForm.recentSessionSnippetLimit" outlined type="number" min="0" max="5" label="Auszüge aus letzten Sessions" :disable="memories.settingsLoading" :rules="[integerRangeRule(0, 5)]" />
-                  <q-input dense v-model.number="settingsForm.automaticContextMaxTokens" outlined type="number" min="128" max="2048" label="Max. automatischer Kontext (Tokens)" :disable="memories.settingsLoading" :rules="[integerRangeRule(128, 2048)]" />
-                </div>
                 <div class="text-subtitle2 text-weight-medium">Änderungsrichtlinien</div>
                 <div class="text-body2 app-muted q-mt-xs q-mb-md">
-                  Legt fest, ob Dreaming Änderungen verwirft, zur Freigabe vorlegt oder automatisch anwendet.
+                  Legt fest, ob die Memory-Extraktion Änderungen verwirft, zur Freigabe vorlegt oder automatisch anwendet.
                 </div>
+                <q-toggle
+                  :model-value="settingsForm.dreamingIncludeManualMemories"
+                  color="primary"
+                  label="Manuell angelegte Erinnerungen einschließen"
+                  :disable="!settingsLoaded || !settingsForm.memoryExtractionEnabled || memories.settingsLoading"
+                  @update:model-value="value => saveToggle('dreamingIncludeManualMemories', value, value ? 'Manuelle Erinnerungen eingeschlossen' : 'Manuelle Erinnerungen geschützt')"
+                />
+                <p class="text-caption app-muted q-mt-xs q-mb-md">Ausgeschaltet werden manuell angelegte Erinnerungen weder geändert noch zusammengeführt oder entfernt. Dubletten werden weiterhin erkannt.</p>
                 <AppSelect dense
                   v-model="settingsForm.dreamingUpdatePolicy"
                   outlined
@@ -334,7 +336,7 @@
                   map-options
                   label="Bestehende Erinnerungen ändern"
                   :options="dreamingPolicyOptions"
-                  :disable="memories.settingsLoading"
+                  :disable="!settingsForm.memoryExtractionEnabled || memories.settingsLoading"
                   class="q-mb-md"
                 />
                 <AppSelect dense
@@ -344,20 +346,50 @@
                   map-options
                   label="Erinnerungen entfernen"
                   :options="dreamingPolicyOptions"
-                  :disable="memories.settingsLoading"
+                  :disable="!settingsForm.memoryExtractionEnabled || memories.settingsLoading"
                   class="q-mb-lg"
                 />
                 <div class="text-body2 app-muted q-mb-lg">
                   Das Zusammenführen von Erinnerungen benötigt sowohl das Ändern der bestehenden als auch das Entfernen der zusammengeführten Erinnerungen.
                 </div>
-                <div class="text-subtitle2 text-weight-medium">Extraktion</div>
-                <div class="text-body2 app-muted q-mt-xs">
-                  Begrenzt, wie viele Nachrichten und Erinnerungskandidaten ein Lauf verarbeitet.
-                </div>
-                <div class="settings-number-grid q-mt-md">
-                    <q-input dense v-model.number="settingsForm.dreamingMaxBatchMessages" outlined type="number" min="2" max="500" label="Max. Nachrichten pro Lauf" :disable="memories.settingsLoading" :rules="[integerRangeRule(2, 500)]" />
-                    <q-input dense v-model.number="settingsForm.dreamingMaxCandidates" outlined type="number" min="1" max="100" label="Max. Kandidaten" :disable="memories.settingsLoading" :rules="[integerRangeRule(1, 100)]" />
-                </div>
+                <q-input dense v-model.number="settingsForm.dreamingMaxCandidates" outlined type="number" min="1" max="100" label="Max. Erinnerungskandidaten pro Lauf" :disable="!settingsForm.memoryExtractionEnabled || memories.settingsLoading" :rules="[integerRangeRule(1, 100)]" />
+              </q-card-section>
+            </q-card>
+            <q-card flat class="app-surface q-mt-lg">
+              <q-card-section>
+                <h3 class="text-subtitle1 text-weight-bold q-mt-none q-mb-sm">Session-Zusammenfassungen</h3>
+                <p class="text-body2 app-muted q-mb-sm">
+                  Verdichtet frühere Gespräche als Einstieg für den Agenten. Die Originalnachrichten bleiben gezielt abrufbar.
+                </p>
+                <p class="text-body2 app-muted q-mb-md">
+                  Nutzt dasselbe Modell und denselben Zeitplan wie die Memory-Extraktion. Automatisch werden nur ab Aktivierung neue oder wieder aktive Sessions verarbeitet, kein Altbestand. Ausgeschaltet werden gespeicherte Zusammenfassungen nicht automatisch genutzt, aber nicht gelöscht. Zusätzliche Modellaufrufe können Kosten verursachen.
+                </p>
+                <q-toggle
+                  :model-value="settingsForm.sessionSummariesEnabled"
+                  color="primary"
+                  label="Session-Zusammenfassungen erstellen"
+                  :disable="!settingsLoaded || memories.settingsLoading"
+                  @update:model-value="value => saveToggle('sessionSummariesEnabled', value, value ? 'Session-Zusammenfassungen aktiviert' : 'Session-Zusammenfassungen deaktiviert')"
+                />
+              </q-card-section>
+            </q-card>
+            <q-card flat class="app-surface q-mt-lg">
+              <q-card-section>
+                <h3 class="text-subtitle1 text-weight-bold q-mt-none q-mb-sm">Gemeinsame Einstellungen</h3>
+                <p class="text-body2 app-muted q-mb-sm">Nachrichtenlimit und Zeitplan gelten für die eingeschalteten Verfahren. Der manuelle Start ist auch ohne automatische Verarbeitung möglich.</p>
+                <q-toggle
+                  :model-value="settingsForm.automaticDreamingEnabled"
+                  color="primary"
+                  label="Automatisch verarbeiten"
+                  class="q-mb-md"
+                  :disable="!settingsLoaded || !settingsForm.enabled || memories.settingsLoading"
+                  @update:model-value="value => saveToggle('automaticDreamingEnabled', value, value ? 'Automatische Verarbeitung aktiviert' : 'Automatische Verarbeitung deaktiviert')"
+                />
+                <q-banner v-if="settingsForm.automaticDreamingUnavailableReason" rounded class="app-surface-tonal q-mb-md">
+                  <template #avatar><q-icon name="info_outline" color="warning" /></template>
+                  {{ automaticUnavailableReasonMessage }}
+                </q-banner>
+                <q-input dense v-model.number="settingsForm.dreamingMaxBatchMessages" outlined type="number" min="2" max="500" label="Max. Nachrichten pro Lauf" :disable="memories.settingsLoading" :rules="[integerRangeRule(2, 500)]" />
                 <q-expansion-item v-model="advancedSettingsOpen" :duration="0" dense-toggle icon="settings" label="Erweiterte Einstellungen" class="q-mt-lg">
                   <div class="settings-number-grid q-pt-md">
                     <q-input dense v-model.number="settingsForm.dreamingIntervalMinutes" outlined type="number" min="1" max="10080" label="Intervall (Minuten)" :disable="memories.settingsLoading" :rules="[integerRangeRule(1, 10080)]" />
@@ -365,31 +397,14 @@
                   </div>
                 </q-expansion-item>
               </q-card-section>
-              <q-card-actions align="right" class="q-pa-md q-pt-none">
-                <q-btn
-                  unelevated
-                  no-caps
-                  color="primary"
-                  icon="save"
-                  label="Einstellungen speichern"
-                  type="submit"
-                  :loading="memories.settingsLoading"
-                  :disable="!settingsLoaded || !settingsChanged"
-                />
-              </q-card-actions>
-            </q-form>
+            </q-card>
             <q-inner-loading :showing="memories.settingsLoading && !settingsLoaded" />
-          </q-card>
+          </q-form>
 
-          <q-card flat class="app-surface dream-runs-card">
+          <q-card flat class="app-surface dream-runs-card q-mt-lg">
             <q-card-section>
-              <div class="row items-start q-gutter-md">
-                <q-avatar rounded color="secondary" text-color="white" icon="play_circle" />
-                <div class="col">
-                  <div class="text-h6">Verarbeitung</div>
-                  <div class="text-body2 app-muted">Dreaming sofort für alle oder eine bestimmte Session starten.</div>
-                </div>
-              </div>
+              <h3 class="text-subtitle1 text-weight-bold q-mt-none q-mb-sm">Jetzt verarbeiten</h3>
+              <p class="text-body2 app-muted q-mb-none">Die eingeschalteten Verfahren sofort für alle oder eine bestimmte Session starten.</p>
               <q-banner
                 v-if="settingsForm.manualDreamingUnavailableReason"
                 rounded
@@ -412,10 +427,10 @@
               <q-btn
                 unelevated
                 no-caps
-                color="deep-purple"
-                icon="auto_awesome"
+                color="primary"
+                icon="play_arrow"
                 label="Jetzt verarbeiten"
-                class="full-width q-mt-md"
+                class="q-mt-md"
                 :loading="memories.dreamRunStarting"
                 :disable="!canStartDreaming"
                 @click="startDreamRun"
@@ -424,23 +439,24 @@
             <q-separator />
             <q-card-section>
               <div class="row items-center q-mb-sm">
-                <div class="text-subtitle1 text-weight-medium">Letzte Läufe</div>
+                <div class="text-subtitle1 text-weight-bold">Letzte Läufe</div>
                 <q-space />
-                <q-btn flat round dense icon="refresh" aria-label="Dreaming-Läufe aktualisieren" :loading="memories.dreamRunsLoading" @click="refreshDreamRuns" />
+                <q-btn flat round dense icon="refresh" aria-label="Durchläufe aktualisieren" :loading="memories.dreamRunsLoading" @click="refreshDreamRuns" />
               </div>
               <div v-if="!memories.dreamRunsLoading && !memories.dreamRuns.length" class="text-body2 app-muted q-py-md">
-                Noch keine Dreaming-Läufe vorhanden.
+                Noch keine Durchläufe vorhanden.
               </div>
               <q-list v-else separator>
-                <q-item v-for="run in memories.dreamRuns" :key="run.id" class="q-px-none">
+                <q-item v-for="run in memories.dreamRuns.slice(0, 5)" :key="run.id" clickable :to="{ name: 'settings-dream-run', params: { runId: run.id } }" class="q-px-none">
                   <q-item-section avatar>
                     <q-icon :name="dreamRunMeta(run.status).icon" :color="dreamRunMeta(run.status).color" />
                   </q-item-section>
                   <q-item-section>
                     <q-item-label>{{ dreamRunMeta(run.status).label }}</q-item-label>
                     <q-item-label caption>
-                      {{ dreamRunSession(run) }} · {{ formatDate(run.createdAt) }}
+                      {{ dreamRunSession(run) }} · {{ formatAbsoluteDateTime(run.createdAt) || 'unbekannt' }}
                     </q-item-label>
+                    <q-item-label caption>Zusammenfassung: {{ summaryStatusLabel(run.summaryStatus) }}</q-item-label>
                     <q-item-label v-if="run.error" caption class="text-negative">
                       {{ dreamRunError(run) }}
                     </q-item-label>
@@ -451,7 +467,7 @@
                     class="items-end"
                   >
                     <q-chip v-if="run.createdMemories != null" dense square>{{ run.createdMemories }} neu</q-chip>
-                    <q-chip v-if="run.updatedMemories" dense square color="deep-purple" text-color="white">
+                    <q-chip v-if="run.updatedMemories" dense square>
                       {{ run.updatedMemories }} aktualisiert
                     </q-chip>
                     <q-chip v-if="run.removedMemories" dense square color="negative" text-color="white">
@@ -460,10 +476,11 @@
                   </q-item-section>
                 </q-item>
               </q-list>
+              <q-btn flat no-caps label="Alle Läufe ansehen" icon="history" :to="{ name: 'settings-dream-runs' }" class="q-mt-md" />
             </q-card-section>
             <q-inner-loading :showing="memories.dreamRunsLoading && !memories.dreamRuns.length" />
           </q-card>
-        </div>
+        </section>
       </q-tab-panel>
     </q-tab-panels>
 
@@ -549,6 +566,7 @@
 </template>
 
 <script setup>
+import { dreamRunMeta, summaryStatusLabel } from './dreaming'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
@@ -561,6 +579,7 @@ import { useApprovalStore } from 'stores/approvals'
 import { useMemoryStore } from 'stores/memories'
 import { useAuthStore } from 'stores/auth'
 import { apiErrorMessage } from 'src/utils/api-errors'
+import { formatAbsoluteDateTime } from 'src/utils/date-time'
 
 defineOptions({ name: 'MemorySettingsPage' })
 
@@ -572,19 +591,25 @@ const auth = useAuthStore()
 const approvals = useApprovalStore()
 const route = useRoute()
 const router = useRouter()
-const section = computed({
-  get: () => route.query.tab === 'dreaming' ? 'dreaming' : 'memories',
-  set: (tab) => router.replace({ query: { ...route.query, tab, approval: undefined } })
-})
+const showRunPage = computed(() => ['settings-dream-runs', 'settings-dream-run'].includes(route.name))
+const section = computed(() => showRunPage.value || route.query.tab === 'dreaming'
+  ? 'dreaming' : route.query.tab === 'memories' ? 'memories' : 'general')
+
+function selectSection(tab) {
+  return router.replace({ name: 'settings-memory', query: { ...route.query, tab, approval: undefined } })
+}
 const memoryProposals = computed(() => approvals.pending.filter((item) => item.requestType === 'memory_change'))
 const page = ref(1)
 const pageSize = ref(20)
 const memoryDialogOpen = ref(false)
 const memoryFormRef = ref(null)
+const contextSettingsFormRef = ref(null)
+const dreamingSettingsFormRef = ref(null)
 const editingMemory = ref(null)
 const savingMemory = ref(false)
 const settingsLoaded = ref(false)
 const savedSettings = ref(null)
+const savedContextSettings = ref(null)
 const dreamSessionId = ref(null)
 const advancedSettingsOpen = ref(false)
 const filters = reactive({ query: '', category: null, sourceType: null, audience: null, pinned: null })
@@ -598,6 +623,8 @@ const memoryForm = reactive({ content: '', category: null, audience: 'both', pin
 const settingsForm = reactive({
   enabled: false,
   automaticDreamingEnabled: false,
+  memoryExtractionEnabled: true,
+  sessionSummariesEnabled: false,
   effectiveAutomaticDreamingEnabled: false,
   dreamingInstructions: '',
   dreamingIntervalMinutes: 1,
@@ -606,6 +633,7 @@ const settingsForm = reactive({
   dreamingMaxCandidates: 1,
   dreamingUpdatePolicy: 'auto',
   dreamingRemovePolicy: 'ask',
+  dreamingIncludeManualMemories: false,
   automaticMemorySnippetLimit: 2,
   automaticSessionSnippetLimit: 3,
   recentSessionSnippetLimit: 2,
@@ -616,13 +644,13 @@ const settingsForm = reactive({
 })
 const sourceTypeOptions = [
   { label: 'Tool-Aufruf', value: 'tool_call' },
-  { label: 'Dreaming', value: 'dreaming' },
+  { label: 'Memory-Extraktion', value: 'dreaming' },
   { label: 'Manuell', value: 'manual' }
 ]
 const audienceOptions = [
-  { label: 'Nur private Modelle', value: 'private_only', icon: 'lock', color: 'deep-purple' },
-  { label: 'Nur öffentliche Modelle', value: 'public_only', icon: 'public', color: 'blue-grey-7' },
-  { label: 'Öffentliche und private Modelle', value: 'both', icon: 'groups', color: 'primary' }
+  { label: 'Nur private Modelle', value: 'private_only', icon: 'lock' },
+  { label: 'Nur öffentliche Modelle', value: 'public_only', icon: 'public' },
+  { label: 'Öffentliche und private Modelle', value: 'both', icon: 'groups' }
 ]
 const pinnedOptions = [
   { label: 'Immer im Kontext', value: true },
@@ -634,17 +662,17 @@ const dreamingPolicyOptions = [
   { label: 'Automatisch anwenden', value: 'auto' }
 ]
 const categoryOptions = [
-  { label: 'Kontext', value: 'context', icon: 'notes', color: 'blue-grey-7' },
-  { label: 'Fakt', value: 'fact', icon: 'lightbulb', color: 'blue-7' },
-  { label: 'Ziel', value: 'goal', icon: 'flag', color: 'teal-7' },
-  { label: 'Identität', value: 'identity', icon: 'person', color: 'indigo-7' },
-  { label: 'Präferenz', value: 'preference', icon: 'favorite', color: 'deep-purple-7' }
+  { label: 'Kontext', value: 'context', icon: 'notes' },
+  { label: 'Fakt', value: 'fact', icon: 'lightbulb' },
+  { label: 'Ziel', value: 'goal', icon: 'flag' },
+  { label: 'Identität', value: 'identity', icon: 'person' },
+  { label: 'Präferenz', value: 'preference', icon: 'favorite' }
 ]
 const categoryFilterOptions = [{ label: 'Alle', value: null, icon: 'apps' }, ...categoryOptions]
 const pageSizeOptions = [10, 20, 50].map((value) => ({ label: String(value), value }))
 const sourceTypeMeta = {
   tool_call: { label: 'Tool-Aufruf', icon: 'build' },
-  dreaming: { label: 'Dreaming', icon: 'auto_awesome' },
+  dreaming: { label: 'Memory-Extraktion', icon: 'auto_awesome' },
   manual: { label: 'Manuell', icon: 'edit_note' }
 }
 
@@ -669,7 +697,9 @@ const editableTechnicalSettings = computed(() => ({
   dreamingMaxBatchMessages: Number(settingsForm.dreamingMaxBatchMessages),
   dreamingMaxCandidates: Number(settingsForm.dreamingMaxCandidates),
   dreamingUpdatePolicy: settingsForm.dreamingUpdatePolicy,
-  dreamingRemovePolicy: settingsForm.dreamingRemovePolicy,
+  dreamingRemovePolicy: settingsForm.dreamingRemovePolicy
+}))
+const editableContextSettings = computed(() => ({
   automaticMemorySnippetLimit: Number(settingsForm.automaticMemorySnippetLimit),
   automaticSessionSnippetLimit: Number(settingsForm.automaticSessionSnippetLimit),
   recentSessionSnippetLimit: Number(settingsForm.recentSessionSnippetLimit),
@@ -677,6 +707,9 @@ const editableTechnicalSettings = computed(() => ({
 }))
 const settingsChanged = computed(() => (
   JSON.stringify(editableTechnicalSettings.value) !== JSON.stringify(savedSettings.value)
+))
+const contextSettingsChanged = computed(() => (
+  JSON.stringify(editableContextSettings.value) !== JSON.stringify(savedContextSettings.value)
 ))
 const canStartDreaming = computed(() => Boolean(
   settingsLoaded.value
@@ -853,37 +886,30 @@ async function togglePinned(item) {
 function assignSettings(settings) {
   Object.assign(settingsForm, settings)
   savedSettings.value = { ...editableTechnicalSettings.value }
+  savedContextSettings.value = { ...editableContextSettings.value }
   settingsLoaded.value = true
 }
 
-async function saveSettings() {
+async function saveSettings(tab) {
+  const context = tab === 'general'
   try {
-    assignSettings(await memories.saveSettings(editableTechnicalSettings.value))
-    $q.notify({ type: 'positive', message: 'Memory-Einstellungen gespeichert' })
+    const settings = await memories.saveSettings(context ? editableContextSettings.value : editableTechnicalSettings.value)
+    const draft = { ...(context ? editableTechnicalSettings.value : editableContextSettings.value) }
+    assignSettings(settings)
+    Object.assign(settingsForm, draft)
+    $q.notify({ type: 'positive', message: context ? 'Kontext-Einstellungen gespeichert' : 'Memory-Einstellungen gespeichert' })
   } catch {
     // The central API interceptor displays the error.
   }
 }
 
-async function toggleMemory(value) {
-  await saveToggle('enabled', value, value ? 'Memory aktiviert' : 'Memory deaktiviert')
-}
-
-async function toggleAutomaticDreaming(value) {
-  await saveToggle(
-    'automaticDreamingEnabled',
-    value,
-    value ? 'Automatisches Dreaming aktiviert' : 'Automatisches Dreaming deaktiviert'
-  )
-}
-
 async function saveToggle(field, value, message) {
   const previous = settingsForm[field]
-  const unsavedTechnicalSettings = { ...editableTechnicalSettings.value }
+  const unsavedSettings = { ...editableTechnicalSettings.value, ...editableContextSettings.value }
   settingsForm[field] = value
   try {
     const settings = await memories.saveSettings({ [field]: value })
-    Object.assign(settingsForm, settings, unsavedTechnicalSettings)
+    Object.assign(settingsForm, settings, unsavedSettings)
     $q.notify({ type: 'positive', message })
   } catch {
     settingsForm[field] = previous
@@ -892,7 +918,7 @@ async function saveToggle(field, value, message) {
 
 async function refreshDreamRuns() {
   const [, settingsResult] = await Promise.allSettled([
-    memories.fetchDreamRuns(),
+    memories.fetchDreamRuns({ limit: 5 }),
     memories.fetchSettings()
   ])
   if (settingsResult.status === 'fulfilled') {
@@ -909,8 +935,8 @@ async function startDreamRun() {
     $q.notify({
       type: result.queued > 0 ? 'positive' : 'info',
       message: result.queued > 0
-        ? `${result.queued} ${result.queued === 1 ? 'Dreaming-Lauf' : 'Dreaming-Läufe'} eingeplant`
-        : 'Kein neues Dreaming erforderlich'
+        ? `${result.queued} ${result.queued === 1 ? 'Durchlauf' : 'Durchläufe'} eingeplant`
+        : 'Keine neue Verarbeitung erforderlich'
     })
   } catch {
     // The central API interceptor displays the error.
@@ -956,22 +982,6 @@ function categoryMeta(value) {
     || { label: value || 'Unbekannt', icon: 'help_outline', color: 'grey-7' }
 }
 
-function formatDate(value) {
-  if (!value) return 'unbekannt'
-  return new Intl.DateTimeFormat('de-DE', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
-}
-
-function dreamRunMeta(status) {
-  return ({
-    queued: { label: 'Eingeplant', icon: 'schedule', color: 'grey-7' },
-    running: { label: 'Wird verarbeitet', icon: 'sync', color: 'primary' },
-    blocked: { label: 'Blockiert', icon: 'block', color: 'warning' },
-    completed: { label: 'Abgeschlossen', icon: 'check_circle', color: 'positive' },
-    failed: { label: 'Fehlgeschlagen', icon: 'error', color: 'negative' },
-    cancelled: { label: 'Abgebrochen', icon: 'cancel', color: 'grey-7' }
-  })[status] || { label: status || 'Unbekannt', icon: 'help', color: 'grey-7' }
-}
-
 function dreamRunSession(run) {
   return run.sourceSession?.title || run.session?.title || run.sessionId || 'Alle Sessions'
 }
@@ -980,7 +990,12 @@ function dreamRunError(run) {
   return apiErrorMessage(run.error)
 }
 
-watch(section, (value, previous) => {
+watch([showRunPage, section], ([runPage, value], [previousRunPage, previous]) => {
+  if (runPage) return
+  if (previousRunPage) {
+    loadMainPage()
+    return
+  }
   if (value === 'memories' && previous !== 'memories') {
     page.value = 1
     void loadMemories(0)
@@ -997,24 +1012,17 @@ watch([section, () => route.query.approval, () => memoryProposals.value.some((it
   proposal?.focus({ preventScroll: true })
 }, { immediate: true, flush: 'post' })
 
-onMounted(() => {
+function loadMainPage() {
+  if (showRunPage.value) return
   void refreshProposals()
   void loadMemories(0)
   void refreshDreamRuns()
   void chat.fetchSessionCatalog().catch(() => {})
-})
+}
+onMounted(loadMainPage)
 </script>
 
 <style scoped>
-.memory-page {
-  width: min(1240px, 100%);
-  margin: 0 auto;
-}
-
-.memory-tabs {
-  border-bottom: 1px solid var(--app-surface-border);
-}
-
 .memory-filter-card,
 .memory-list-card,
 .memory-access-card,
@@ -1034,21 +1042,9 @@ onMounted(() => {
   min-width: 0;
 }
 
-.memory-item {
-  align-items: flex-start;
-  padding: 20px 24px;
-}
-
 .memory-item__content {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  line-height: 1.55;
-}
-
-.memory-status-badge {
-  gap: 4px;
-  padding: 4px 7px;
-  font-weight: 500;
 }
 
 .memory-item__actions {
@@ -1061,23 +1057,12 @@ onMounted(() => {
   text-decoration: none;
 }
 
-.memory-empty {
-  padding: 64px 24px;
-}
-
 .memory-pagination {
   gap: 12px;
 }
 
 .memory-pagination .q-select {
   width: 96px;
-}
-
-.dreaming-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.8fr);
-  align-items: start;
-  gap: 20px;
 }
 
 .settings-number-grid,
@@ -1101,25 +1086,9 @@ onMounted(() => {
   .memory-search {
     grid-column: 1 / -1;
   }
-
-  .dreaming-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 @media (max-width: 700px) {
-  .memory-access-header,
-  .dreaming-settings-header {
-    align-items: flex-start;
-    flex-wrap: wrap;
-  }
-
-  .memory-access-header .q-toggle,
-  .dreaming-settings-header > .column {
-    align-items: flex-start;
-    width: 100%;
-  }
-
   .memory-filters,
   .settings-number-grid,
   .memory-dialog__fields {
@@ -1128,7 +1097,6 @@ onMounted(() => {
 
   .memory-item {
     flex-wrap: wrap;
-    padding: 16px;
   }
 
   .memory-item__actions {

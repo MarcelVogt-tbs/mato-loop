@@ -188,6 +188,8 @@ async def pending_approvals(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[dict]:
+    if await MemoryService.reconcile_approvals(db, owner_id=user.id):
+        await db.commit()
     rows = (
         await db.execute(
             select(ApprovalRequest, ChatSession)
@@ -282,6 +284,7 @@ async def _decide_memory_change(
         approval.status = "denied"
         approval.decision = decision
         approval.resolved_at = now
+        await MemoryService.reconcile_approvals(db, owner_id=user_id)
         await db.commit()
         return {"status": approval.status, "decision": decision}
 
@@ -298,6 +301,7 @@ async def _decide_memory_change(
     if error_code is not None:
         approval.status = "expired"
         approval.resolved_at = now
+        await MemoryService.reconcile_approvals(db, owner_id=user_id)
         await db.commit()
         raise ApiError(409, error_code)
     if outcome != "applied":
@@ -311,6 +315,7 @@ async def _decide_memory_change(
     approval.status = "approved"
     approval.decision = decision
     approval.resolved_at = now
+    await MemoryService.reconcile_approvals(db, owner_id=user_id)
     await db.commit()
     return {"status": approval.status, "decision": decision}
 

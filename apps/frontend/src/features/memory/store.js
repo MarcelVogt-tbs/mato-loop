@@ -14,7 +14,10 @@ export const useMemoryStore = defineStore('memories', {
     dreamRuns: [],
     dreamRunsLoading: false,
     dreamRunsRequestId: 0,
-    dreamRunStarting: false
+    dreamRunStarting: false,
+    dreamRun: null,
+    dreamRunLoading: false,
+    dreamRunRequestId: 0
   }),
   actions: {
     async fetchMemories(filters = {}) {
@@ -84,16 +87,29 @@ export const useMemoryStore = defineStore('memories', {
         this.settingsLoading = false
       }
     },
-    async fetchDreamRuns() {
+    async fetchDreamRuns({ offset = 0, limit = 20 } = {}) {
       const requestId = ++this.dreamRunsRequestId
       this.dreamRunsLoading = true
       try {
-        const { data } = await api.get('/memories/dream-runs')
+        const { data } = await api.get('/memories/dream-runs', { params: { offset, limit } })
         if (requestId !== this.dreamRunsRequestId) return null
         this.dreamRuns = data.items
         return data
       } finally {
         if (requestId === this.dreamRunsRequestId) this.dreamRunsLoading = false
+      }
+    },
+    async fetchDreamRun(id) {
+      const requestId = ++this.dreamRunRequestId
+      this.dreamRun = null
+      this.dreamRunLoading = true
+      try {
+        const { data } = await api.get(`/memories/dream-runs/${id}`)
+        if (requestId !== this.dreamRunRequestId) return null
+        this.dreamRun = data
+        return data
+      } finally {
+        if (requestId === this.dreamRunRequestId) this.dreamRunLoading = false
       }
     },
     async startDreamRun(sessionId = null) {

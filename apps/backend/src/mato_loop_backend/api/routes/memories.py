@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -21,9 +22,11 @@ from mato_loop_backend.memory.service import (
     MemoryService,
 )
 from mato_loop_backend.models import (
+    ApprovalRequest,
     ChatSession,
     MemoryAudience,
     MemoryCategory,
+    MemoryDreamChange,
     MemoryDreamRun,
     MemoryDreamTrigger,
     MemoryRecord,
@@ -64,6 +67,8 @@ class MemoryUpdateRequest(MemoryRequest):
 class MemorySettingsRequest(ApiRequest):
     enabled: bool | None = None
     automatic_dreaming_enabled: bool | None = None
+    memory_extraction_enabled: bool | None = None
+    session_summaries_enabled: bool | None = None
     dreaming_instructions: str | None = Field(default=None, max_length=8_000)
     dreaming_interval_minutes: int | None = Field(default=None, ge=1, le=10_080)
     dreaming_idle_minutes: int | None = Field(default=None, ge=1, le=10_080)
@@ -71,6 +76,7 @@ class MemorySettingsRequest(ApiRequest):
     dreaming_max_candidates: int | None = Field(default=None, ge=1, le=100)
     dreaming_update_policy: ToolExecutionPolicy | None = None
     dreaming_remove_policy: ToolExecutionPolicy | None = None
+    dreaming_include_manual_memories: bool | None = None
     automatic_memory_snippet_limit: int | None = Field(default=None, ge=0, le=5)
     automatic_session_snippet_limit: int | None = Field(default=None, ge=0, le=5)
     recent_session_snippet_limit: int | None = Field(default=None, ge=0, le=5)
@@ -145,6 +151,9 @@ def dream_run_payload(item: MemoryDreamRun) -> dict[str, Any]:
         "createdMemories": item.created_memory_count,
         "updatedMemories": item.updated_memory_count,
         "removedMemories": item.removed_memory_count,
+        "memoryCompletedAt": item.memory_completed_at.isoformat() if item.memory_completed_at else None,
+        "summaryStatus": item.summary_status or "disabled",
+        "summaryError": describe_error(item.summary_error).payload() if item.summary_error else None,
         "createdAt": item.created_at.isoformat() if item.created_at else None,
         "startedAt": item.started_at.isoformat() if item.started_at else None,
         "completedAt": item.completed_at.isoformat() if item.completed_at else None,
@@ -165,6 +174,8 @@ async def settings_payload(
     return {
         "enabled": settings.enabled,
         "automaticDreamingEnabled": settings.automatic_dreaming_enabled,
+        "memoryExtractionEnabled": settings.memory_extraction_enabled,
+        "sessionSummariesEnabled": settings.session_summaries_enabled,
         "dreamingInstructions": settings.dreaming_instructions,
         "dreamingIntervalMinutes": settings.dreaming_interval_minutes,
         "dreamingIdleMinutes": settings.dreaming_idle_minutes,
@@ -172,6 +183,7 @@ async def settings_payload(
         "dreamingMaxCandidates": settings.dreaming_max_candidates,
         "dreamingUpdatePolicy": settings.dreaming_update_policy,
         "dreamingRemovePolicy": settings.dreaming_remove_policy,
+        "dreamingIncludeManualMemories": settings.dreaming_include_manual_memories,
         "automaticMemorySnippetLimit": settings.automatic_memory_snippet_limit,
         "automaticSessionSnippetLimit": settings.automatic_session_snippet_limit,
         "recentSessionSnippetLimit": settings.recent_session_snippet_limit,
@@ -202,6 +214,8 @@ async def put_memory_settings(
         db, MemorySettings, user_id=user.id, for_update=True
     )
     for field, value in payload.model_dump(exclude_unset=True).items():
+        if field == "session_summaries_enabled" and value and not settings.session_summaries_enabled:
+            settings.session_summaries_enabled_since = datetime.now(UTC)
         setattr(settings, field, value)
     await SettingsStore.save(db, settings, user_id=user.id)
     await db.commit()
@@ -212,7 +226,12 @@ async def put_memory_settings(
 async def list_dream_runs(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> dict[str, list[dict[str, Any]]]:
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> dict[str, Any]:
+    total = await db.scalar(select(func.count(MemoryDreamRun.id)).join(
+        ChatSession, ChatSession.id == MemoryDreamRun.session_id,
+    ).where(ChatSession.user_id == user.id))
     items = list(
         (
             await db.scalars(
@@ -221,11 +240,12 @@ async def list_dream_runs(
                 .where(ChatSession.user_id == user.id)
                 .options(selectinload(MemoryDreamRun.source_session))
                 .order_by(MemoryDreamRun.created_at.desc(), MemoryDreamRun.id.desc())
-                .limit(100)
+                .offset(offset)
+                .limit(limit)
             )
         ).all()
     )
-    return {"items": [dream_run_payload(item) for item in items]}
+    return {"items": [dream_run_payload(item) for item in items], "total": total or 0, "offset": offset, "limit": limit}
 
 
 @router.get("/dream-runs/{run_id}")
@@ -243,7 +263,21 @@ async def get_dream_run(
     )
     if item is None:
         raise ApiError(404, "memory.dreamRunNotFound")
-    return dream_run_payload(item)
+    changes = (await db.scalars(select(MemoryDreamChange).where(
+        MemoryDreamChange.dream_run_id == item.id,
+    ).order_by(MemoryDreamChange.created_at, MemoryDreamChange.id))).all()
+    approvals = (await db.scalars(select(ApprovalRequest).where(
+        ApprovalRequest.user_id == user.id, ApprovalRequest.request_type == "memory_change",
+        ApprovalRequest.payload["sourceDreamRunId"].as_string() == str(item.id),
+    ).order_by(ApprovalRequest.created_at, ApprovalRequest.id))).all()
+    return {
+        **dream_run_payload(item),
+        "summary": item.summary if item.summary_status == "completed" else None,
+        "changes": [{"id": str(change.id), "action": change.action, "before": change.before,
+                     "after": change.after, "createdAt": change.created_at.isoformat()} for change in changes],
+        "proposals": [{"id": str(approval.id), "status": approval.status, "action": approval.action_kind}
+                      for approval in approvals],
+    }
 
 
 @router.post("/dream-runs", status_code=status.HTTP_202_ACCEPTED)
