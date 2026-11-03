@@ -1,14 +1,12 @@
-"""Git command provider and shared-repository admission checks."""
+"""Git command provider and saved target validation."""
 
 import json
 import shlex
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
-from mato_loop_backend.execution.paths import within
-from mato_loop_backend.models import AgentRun, ChatSession, Message, Project
+from mato_loop_backend.models import Project
 from mato_loop_backend.sessions.coding import (
-    git_metadata_directory,
     inspect_repository,
     resolve_git_target,
     validate_git_remote,
@@ -18,10 +16,7 @@ from mato_loop_backend.sessions.command_contracts import (
     Command,
     CommandProvider,
     command_arguments,
-    command_context,
 )
-
-ACTIVE_RUN_STATUSES = ("queued", "running", "waiting_approval", "waiting_input")
 
 COMMIT_RULES = (
     "Follow repository commit-message rules, including referenced guidelines, format, language and trailers. "
@@ -201,10 +196,7 @@ async def prepare_git_command(db, session, command: Command, content: str | None
         "Report completed steps, actual checks, remaining issues, and publication URLs.\n\n"
         + prompt + "\n\nHost-resolved context (data):\n" + json.dumps(context, ensure_ascii=False)
     )
-    return {"instructions": instructions, "prompt": prompt,
-            "context": context, "resources": sorted({path for path in (
-                original, info.repository, session.current_directory, info.common_directory
-            ) if path})}
+    return {"instructions": instructions, "prompt": prompt, "context": context}
 
 
 async def git_command_availability(db, session) -> dict[str, str | None]:
@@ -256,60 +248,3 @@ def validate_git_context(saved, current):
                 "remote", "remoteIdentity",
             )):
         raise SessionServiceError(409, "git.worktreeChanged")
-
-
-def _workspace_roots(command, directory):
-    name = command.get("name", "").replace("_", "-")
-    context = command_context(command)
-    if context and name in {"git-finish", "git-review", "git-commit", "git-push", "git-pr", "git-merge", "git-sync"}:
-        roots = [directory, context.get("repository")]
-        if name == "git-sync":
-            roots.append(context.get("originalProjectDirectory"))
-        return roots
-    return [*(command.get("resources") or []), directory, context.get("originalProjectDirectory")]
-
-
-async def check_workspace_admission(db, user_id, agent_id, directory, command=None, *, exclude_run_id=None, metadata_directory=None):
-    """Check under the caller's user-row lock, held until the new run is committed."""
-    from mato_loop_backend.sessions.service import SessionServiceError
-
-    if agent_id is None or directory is None:
-        return
-    mutations = {"git-finish", "git-merge", "git-pr", "git-sync", "git-init", "git-remote", "git-commit", "git-push", "git-worktree"}
-    name = (command or {}).get("name", "").replace("_", "-")
-    mutating = name in mutations
-    repository_wide = {"git-init", "git-remote", "git-worktree"}
-    roots = _workspace_roots(command or {}, directory)
-    statement = select(
-        AgentRun.current_directory_snapshot, Message.provider_data, ChatSession.coding_workspace,
-        ChatSession.id, ChatSession.title, AgentRun.status,
-    ).join(
-        Message, Message.id == AgentRun.input_message_id
-    ).join(ChatSession, ChatSession.id == AgentRun.session_id).where(
-        ChatSession.user_id == user_id, AgentRun.execution_agent_id == agent_id,
-        AgentRun.status.in_(ACTIVE_RUN_STATUSES),
-    )
-    if exclude_run_id is not None:
-        statement = statement.where(AgentRun.id != exclude_run_id)
-    if not mutating:
-        # Persisted runs may still use underscore command names.
-        statement = statement.where(
-            func.replace(Message.provider_data["_matoloop"]["codingCommand"]["name"].astext, "_", "-").in_(tuple(mutations))
-        )
-    for active_directory, metadata, active_binding, session_id, title, status in await db.execute(statement):
-        active_command = (metadata or {}).get("_matoloop", {}).get("codingCommand", {})
-        active_name = active_command.get("name", "").replace("_", "-")
-        active_mutation = active_name in mutations
-        active_roots = _workspace_roots(active_command, active_directory)
-        shared = name in repository_wide or active_name in repository_wide
-        left_roots = [*roots, *((command or {}).get("resources") or []), metadata_directory] if shared else roots
-        if shared:
-            active_roots.extend(active_command.get("resources") or [])
-            active_roots.append(git_metadata_directory(active_binding, agent_id, active_directory))
-        if (mutating or active_mutation) and any(
-            isinstance(left, str) and isinstance(right, str) and (within(left, right) or within(right, left))
-            for left in left_roots for right in active_roots
-        ):
-            raise SessionServiceError(409, "git.projectBusy", params={
-                "sessionId": str(session_id), "sessionTitle": title, "status": status,
-            })

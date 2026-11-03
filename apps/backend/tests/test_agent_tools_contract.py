@@ -542,8 +542,7 @@ async def test_execution_agent_switch_denial_keeps_existing_binding(tmp_path) ->
 
 
 @pytest.mark.parametrize("name", ["change_directory", "select_execution_agent"])
-@pytest.mark.parametrize("error", [None, "git.projectBusy"])
-async def test_workspace_tools_allow_worktree_directory_changes_and_recheck_admission(monkeypatch, tmp_path, name, error):
+async def test_workspace_tools_allow_changes_while_another_session_uses_the_destination(monkeypatch, tmp_path, name):
     from mato_loop_backend.agent.runtime import AgentRuntime
     from mato_loop_backend.agent.session_settings import RunSessionSettings
     from mato_loop_backend.execution import DirectoryResult
@@ -558,7 +557,7 @@ async def test_workspace_tools_allow_worktree_directory_changes_and_recheck_admi
     run = AgentRun(id=context.run_id, execution_agent_id=agent_id, current_directory_snapshot="/worktree")
     context.db.get.return_value = run
     context.db.scalar.return_value = ExecutionAgent(id=selected_id, user_id=context.session.user_id)
-    context.db.execute.side_effect = [None, [("/reserved" if error else "/project", {"_matoloop": {"codingCommand": {"name": "git-sync"}}}, None, uuid4(), "Other task", "running")]]
+    context.db.execute.side_effect = [None, [("/reserved", {"_matoloop": {"codingCommand": {"name": "git-sync"}}}, None, uuid4(), "Other task", "running")]]
     monkeypatch.setattr(AgentRuntime, "_session_settings", {run.id: RunSessionSettings(
         session_profile={}, memory_mode="disabled", web_search_policy="available",
         coding_workspace={"executionAgentId": str(agent_id), "path": "/worktree", "commonDirectory": "/project/.git"},
@@ -571,10 +570,7 @@ async def test_workspace_tools_allow_worktree_directory_changes_and_recheck_admi
         context.integration_settings, execution_operations=frozenset({"filesystem.resolve"}),
     ).execute(call, context)
 
-    if error:
-        assert result.metadata["errorCode"] == error
-    else:
-        assert json.loads(result.content)["currentDirectory"] == "/reserved"
+    assert json.loads(result.content)["currentDirectory"] == "/reserved"
 
 
 async def test_execution_agent_switch_rechecks_connection_after_approval(monkeypatch, tmp_path) -> None:

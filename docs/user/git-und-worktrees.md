@@ -28,7 +28,7 @@ Worktrees stehen für Projekt-Sessions mit konfiguriertem Computer, Repository u
 2. Prüfe den lokalen Zielbranch. Er muss einen Commit besitzen.
 3. Starte die Session. MatoLoop erstellt daraus eine Arbeitskopie mit eigenem Branch.
 
-Es findet kein Fetch statt und ein Remote ist nicht nötig. Uncommittete Änderungen bleiben im ursprünglichen Verzeichnis. **Lokal** und die Auswahl eines bestehenden Worktrees erstellen keinen Branch.
+Es findet kein Fetch statt und ein Remote ist nicht nötig. Uncommittete Änderungen bleiben im ursprünglichen Verzeichnis. Laufende Sessions desselben Projekts verhindern das Anlegen nicht. **Lokal** und die Auswahl eines bestehenden Worktrees erstellen keinen Branch.
 
 !!! warning "Worktrees isolieren nicht die ganze Umgebung"
     Mehrere Sessions können denselben Worktree und damit Dateien und Änderungen teilen. Worktrees teilen Git-Metadaten; das ursprüngliche Repository muss erreichbar bleiben. `.env`-Dateien, Abhängigkeiten, Prozesse, Ports und Datenbanken werden nicht automatisch kopiert oder getrennt.
@@ -57,7 +57,7 @@ Aktiviere bei Bedarf **Vor Merge oder Pull Request committen** direkt unterhalb 
 2. Wähle **Build** und sende deinen Umsetzungsauftrag. Der Schalter gilt einmalig für die nächste normale Build-Nachricht in diesem Arbeitsbereich; Plan-Nachrichten und einzelne Git-Aktionen verbrauchen ihn nicht.
 3. MatoLoop merkt direkt dahinter genau einen **Automatischer Folgeauftrag** vor: `/git-finish` (**Review, Korrektur & Merge**). Nach dem Umsetzungsauftrag prüft dieser normale Agentenlauf die Änderungen, behebt konkrete Befunde und prüft erneut. Seine Anweisungen erlauben Commit und lokalen Merge in den angezeigten Zielbranch erst ohne verbleibende Befunde, fehlgeschlagene Checks oder fehlende Entscheidungen. Fragen und reine Analysen berechtigen nicht dazu. Die Einzelaktion **Code-Review** bleibt schreibgeschützt.
 
-Du kannst `/git-finish` auch selbst über die Befehlsauswahl oder **Review, Korrektur & Merge** starten. Die Git-Aktionsbuttons reihen normale Befehlsnachrichten ein, auch während einer laufenden Antwort. Dein Entwurf und seine Anhänge bleiben dabei erhalten. Fehlende Voraussetzungen werden bei der jeweiligen Aktion erklärt; Änderungen an Branch oder Arbeitsbereich bleiben gesondert geschützt.
+Du kannst `/git-finish` auch selbst über die Befehlsauswahl oder **Review, Korrektur & Merge** starten. Die Git-Aktionsbuttons reihen normale Befehlsnachrichten ein, auch während einer laufenden Antwort. Dein Entwurf und seine Anhänge bleiben dabei erhalten. Fehlende Voraussetzungen werden bei der jeweiligen Aktion erklärt; Berechtigungen und Prüfungen des Git-Zustands gelten weiterhin.
 
 Der Folgeauftrag verwendet die [gespeicherte Nachrichtenqueue](chat-und-sessions.md#wahrend-einer-antwort-eingreifen), keinen besonderen Git-Schrittautomaten. Scheitert der Umsetzungsauftrag oder brichst du ihn ab, bleibt der Abschluss angehalten. Prüfe den tatsächlichen Arbeitsstand, bevor du ihn entfernst oder neu beauftragst; bloßes Fortsetzen umgeht diese Prüfung nicht. Änderungen an Computer, Arbeitsbereich, Branch oder Ziel werden vor dem Start erneut geprüft. Entfernst du einen noch vorgemerkten Umsetzungsauftrag, entfernt MatoLoop auch seinen vorgemerkten Abschluss.
 
@@ -67,13 +67,13 @@ Zeigen die Tools laufende Arbeit oder eine vorübergehende Git-Sperre, soll der 
 
 **Pull (Fast-forward)** holt den Remote-Zielbranch ins ursprüngliche Projektverzeichnis. Es übernimmt keine Änderungen aus dem Session-Worktree und stoppt bei lokalen Änderungen oder wenn kein Fast-forward möglich ist.
 
-Git-Aufträge reservieren ihren eigenen Arbeitsbereich; **Pull (Fast-forward)** benötigt zusätzlich das Hauptverzeichnis. Branch-/Worktree-Verwaltung und Remoteänderungen werden weiterhin gegen betroffene laufende Aufträge geprüft. Bei einem solchen Blocker nennt die Meldung die Session und ihren Status. Auch auf Freigabe oder Antwort wartende Läufe können blockieren. Der automatische Abschluss wartet bei einem vorübergehenden Zulassungskonflikt in der normalen Nachrichtenqueue.
+Sessions reservieren weder Arbeitsbereiche noch gemeinsame Git-Metadaten. Eine andere laufende oder wartende Session blockiert deshalb keine neuen Chats oder Git-Aufträge. Der Agent muss konkrete Konflikte anhand des aktuellen Zustands erkennen und behandeln. Parallele Änderungen im selben Arbeitsbereich können sich trotzdem beeinflussen; nutze für unabhängige Aufgaben getrennte Worktrees.
 
 ## Worktree entfernen
 
 Entferne einen Worktree im Arbeitsbereich-Dialog der Git-App oder aktiviere beim Löschen einer Projekt-Session **Worktree ebenfalls entfernen**. Die Option ist zunächst aus und erscheint nur, wenn der Worktree auf dem verbundenen Computer innerhalb von drei Sekunden geprüft werden kann. Ohne diese Auswahl und beim Archivieren bleibt er erhalten. Scheitert die Entfernung, wird die Session nicht gelöscht.
 
-Branch und Commits bleiben erhalten; andere betroffene Sessions wechseln nach Prüfung ins lokale Projektverzeichnis. Der Löschdialog zeigt diese Sessions an. Hat sich die Zuordnung vor dem Löschen geändert, bricht die Entfernung ab; öffne den Dialog dann erneut. Laufende Aufträge und gesperrte Worktrees verhindern die Entfernung. Bei Detached HEAD musst du zuerst einen Branch anlegen und auswählen.
+Branch und Commits bleiben erhalten; andere betroffene Sessions wechseln nach Prüfung ins lokale Projektverzeichnis. Der Löschdialog zeigt diese Sessions an. Hat sich die Zuordnung vor dem Löschen geändert, bricht die Entfernung ab; öffne den Dialog dann erneut. Aktive Aufträge mit überlappendem Arbeitspfad und gesperrte Worktrees verhindern die Entfernung; Aufträge in anderen Worktrees desselben Repositorys nicht. Auch eingereihte oder auf Freigabe beziehungsweise Antwort wartende Aufträge gelten als aktiv. Bei Detached HEAD musst du zuerst einen Branch anlegen und auswählen.
 
 !!! danger "Lokale Dateien werden unwiderruflich gelöscht"
     Beim Entfernen gehen uncommittete Änderungen sowie zusätzliche und ignorierte Dateien wie `.env` verloren. Prüfe und sichere diese vor der Bestätigung. Es gibt keinen automatischen Commit oder Stash. Auch ein späterer Fehler beim Löschen der Session stellt den entfernten Worktree nicht wieder her. Es gibt keine automatische Worktree-Bereinigung.

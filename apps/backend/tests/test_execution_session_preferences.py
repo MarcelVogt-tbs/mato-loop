@@ -335,24 +335,9 @@ async def test_start_persists_rootless_executor_snapshot(monkeypatch, revoked, c
         lambda _agent_id: frozenset({"filesystem.resolve", "filesystem.read"}),
     )
     if conflicting_command:
-        from mato_loop_backend.agent.run_contracts import AgentRunError
-
-        locked = False
-
-        async def execute(statement, **_kwargs):
-            nonlocal locked
-            if "user_accounts" in str(statement) and statement._for_update_arg is not None:
-                locked = True
-                return []
-            assert locked
-            return [("/home/user", {"_matoloop": {"codingCommand": {
-                "name": "git-sync", "resources": ["/home/user"],
-            }}}, None, uuid4(), "Other task", "running")]
-
-        db.execute.side_effect = execute
-        with pytest.raises(AgentRunError, match="git.projectBusy"):
-            await AgentRuntime.start(db, session, "Work")
-        return
+        db.execute.return_value = [("/home/user", {"_matoloop": {"codingCommand": {
+            "name": "git-sync", "resources": ["/home/user"],
+        }}}, None, uuid4(), "Other task", "running")]
     run = await AgentRuntime.start(db, session, "Work")
     assert run.execution_agent_id == agent.id
     assert run.current_directory_snapshot == "/home/user/project"
@@ -362,7 +347,6 @@ async def test_start_persists_rootless_executor_snapshot(monkeypatch, revoked, c
 @pytest.mark.parametrize(("before_execution", "command_error"), [
     (False, None), (True, None),
     (False, "git.worktreeChanged"), (True, "git.worktreeChanged"),
-    (False, "git.projectBusy"),
 ])
 async def test_retry_uses_current_computer_only_for_preflight_failure(monkeypatch, before_execution, command_error):
     session = ChatSession(id=uuid4(), user_id=uuid4(), current_directory="/home/user")
@@ -392,10 +376,8 @@ async def test_retry_uses_current_computer_only_for_preflight_failure(monkeypatc
         failed.execution_agent_id = agent.id
         failed.current_directory_snapshot = session.current_directory
         monkeypatch.setattr("mato_loop_backend.sessions.commands.prepare_command", AsyncMock(
-            side_effect=SessionServiceError(409, command_error) if command_error == "git.worktreeChanged" else None,
-            return_value={"context": command_context, "resources": [session.current_directory]},
+            side_effect=SessionServiceError(409, command_error),
         ))
-        db.execute.return_value = [("/home/user/src", {}, None, uuid4(), "Other task", "running")]
         with pytest.raises(AgentRunError, match=command_error):
             await AgentRuntime.retry(db, session, failed, before_execution=before_execution)
         return

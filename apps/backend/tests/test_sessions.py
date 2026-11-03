@@ -2365,7 +2365,6 @@ async def test_session_delete_trashes_commits_and_purges_tree(
 ) -> None:
     from mato_loop_backend.api.routes import sessions as sessions_route
     from mato_loop_backend.sessions import coding
-    from mato_loop_backend.sessions.service import SessionServiceError
 
     session_id = uuid4()
     user = _user()
@@ -2394,14 +2393,16 @@ async def test_session_delete_trashes_commits_and_purges_tree(
         monkeypatch.setattr(coding, "session_worktree", AsyncMock(return_value=info))
         affected = [ChatSession(id=uuid4())] if worktree == "joined" else []
         monkeypatch.setattr(coding, "sessions_in_worktree", AsyncMock(return_value=affected))
-        monkeypatch.setattr("mato_loop_backend.sessions.git_commands.check_workspace_admission",
-            AsyncMock(side_effect=SessionServiceError(409, "git.projectBusy") if worktree == "blocked" else None))
+        if worktree == "blocked":
+            db.scalars.side_effect = lambda statement: ["/missing/worktree/src"] if str(statement).startswith(
+                "SELECT agent_runs.current_directory_snapshot"
+            ) else active_runs_result
         client = AsyncMock()
         monkeypatch.setattr(coding, "coding_client", AsyncMock(return_value=client))
         if worktree == "changed":
             session.current_directory = "/another/worktree"
         if worktree in {"changed", "blocked", "joined"}:
-            with pytest.raises(ApiError, match="git.projectBusy" if worktree == "blocked" else "git.worktreeChanged"):
+            with pytest.raises(ApiError, match="git.worktreeInUse" if worktree == "blocked" else "git.worktreeChanged"):
                 await delete_session(session_id, user, db, worktree_impact=token)
             assert (session_path.exists(), db.delete.await_count, client.request.await_count) == (True, 0, 0)
             return

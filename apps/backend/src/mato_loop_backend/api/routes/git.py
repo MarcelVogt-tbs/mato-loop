@@ -21,7 +21,6 @@ from mato_loop_backend.sessions.coding import (
     validate_git_branch,
     validate_git_remote,
 )
-from mato_loop_backend.sessions.git_commands import check_workspace_admission
 from mato_loop_backend.sessions.service import (
     SessionServiceError,
     add_directory_grant,
@@ -96,9 +95,6 @@ async def set_target(
         binding = dict(resolve_git_target(session, None, info)[0])
         if binding.get("commonDirectory") and binding["commonDirectory"] != info.common_directory:
             raise SessionServiceError(409, "git.worktreeChanged")
-        resources = sorted({path for path in (info.repository, info.common_directory, binding.get("repository")) if path})
-        await check_workspace_admission(db, user.id, session.preferred_execution_agent_id, session.current_directory,
-                                        {"name": "git-remote", "resources": resources})
         project = await db.scalar(select(Project).where(Project.id == session.project_id, Project.user_id == user.id)) if session.project_id else None
         configured = (project is not None and project.default_execution_agent_id == session.preferred_execution_agent_id
                       and (project.default_current_directory == info.repository
@@ -154,8 +150,6 @@ async def git_action(session_id: UUID, payload: GitActionRequest,
             directory = info.repository
             if not root or not directory or not any(item.path == directory for item in info.worktrees):
                 raise SessionServiceError(409, "git.worktreeChanged")
-            await check_workspace_admission(db, user.id, session.preferred_execution_agent_id, directory,
-                {"name": "git-worktree", "resources": [directory, info.common_directory, root]})
             client = await coding_client(db, user.id, session.preferred_execution_agent_id)
             if not payload.name:
                 raise SessionServiceError(422, "validation.required", field="name")

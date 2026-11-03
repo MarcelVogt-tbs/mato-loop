@@ -22,7 +22,6 @@ import mato_loop_backend.tools.personal_integrations as personal_integrations
 import mato_loop_backend.tools.web as mock_tools_web
 import mato_loop_backend.web_push as mock_web_push
 from mato_loop_backend.agent import subagents
-from mato_loop_backend.agent.run_contracts import AgentRunError
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.routes import approvals, sessions
@@ -223,7 +222,7 @@ async def test_customize_rejects_connection_changed_before_service_save(native_d
 
 
 @pytest.mark.parametrize("command_name", ["git-merge", "git_merge"])
-async def test_coding_command_excludes_new_runs_in_nested_directories(native_database, monkeypatch, command_name):
+async def test_coding_command_does_not_block_other_sessions(native_database, monkeypatch, command_name):
     fixture = native_database
     monkeypatch.setattr(AgentRuntime, "_schedule_run", lambda run: fixture.owned_runs.add(run.id))
     async with fixture.factory() as db:
@@ -234,8 +233,8 @@ async def test_coding_command_excludes_new_runs_in_nested_directories(native_dat
                             model_config_id=fixture.model.id, preferred_execution_agent_id=agent.id,
                             current_directory="/worktree", memory_mode="disabled")
         other = ChatSession(user_id=fixture.user.id, title="Other task", agent_profile_id=BUILD_PROFILE_ID,
-                            model_config_id=fixture.model.id, preferred_execution_agent_id=agent.id,
-                            current_directory="/project/src", memory_mode="disabled")
+                             model_config_id=fixture.model.id, preferred_execution_agent_id=agent.id,
+                             current_directory="/project/src", memory_mode="disabled", title_generation_status="skipped")
         db.add_all([owner, other])
         await db.flush()
         message = Message(session_id=owner.id, role="user", content=f"/{command_name}", provider_data={
@@ -250,8 +249,8 @@ async def test_coding_command_excludes_new_runs_in_nested_directories(native_dat
         other_id = other.id
     async with fixture.factory() as db:
         other = await db.get(ChatSession, other_id)
-        with pytest.raises(AgentRunError, match="git.projectBusy"):
-            await AgentRuntime.start(db, other, "Continue normal coding.")
+        run = await AgentRuntime.start(db, other, "Continue normal coding.")
+        assert run.status == "queued"
 
 
 @pytest.mark.parametrize("with_project", [False, True], ids=["without-project", "with-project"])

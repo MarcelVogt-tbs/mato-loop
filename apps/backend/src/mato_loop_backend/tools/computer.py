@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from sqlalchemy import select
 
@@ -20,7 +20,7 @@ from mato_loop_backend.execution import (
 from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.execution.protocol import MAX_REQUEST_BYTES, RequestMessage
 from mato_loop_backend.execution.terminals import ShellOutput, terminal_coordinator
-from mato_loop_backend.models import AgentRun, ExecutionAgent, Message, UserAccount
+from mato_loop_backend.models import AgentRun, ExecutionAgent, UserAccount
 from mato_loop_backend.permissions.policy import (
     PermissionDecision,
     administrator_permission,
@@ -93,12 +93,8 @@ async def _list_execution_agents(
     ]})
 
 
-async def _validate_workspace_change(
-    context: ToolContext, agent_id: UUID, directory: str | None,
-) -> AgentRun:
+async def _workspace_run(context: ToolContext) -> AgentRun:
     from mato_loop_backend.agent.session_settings import apply_run_session_settings
-    from mato_loop_backend.sessions.coding import git_metadata_directory
-    from mato_loop_backend.sessions.git_commands import check_workspace_admission
     from mato_loop_backend.sessions.service import SessionServiceError
 
     await context.db.execute(
@@ -109,16 +105,6 @@ async def _validate_workspace_change(
     if run is None:
         raise SessionServiceError(409, "tool.unavailable")
     apply_run_session_settings(context.session, run)
-    message = await context.db.get(Message, run.input_message_id) if run.input_message_id else None
-    command = ((message.provider_data or {}).get("_matoloop", {}).get("codingCommand")
-               if message is not None else None)
-    if command:
-        command = {**command, "resources": [*(command.get("resources") or []), directory]}
-    await check_workspace_admission(
-        context.db, context.session.user_id, agent_id, directory, command,
-        exclude_run_id=run.id,
-        metadata_directory=git_metadata_directory(context.session.coding_workspace, agent_id, directory),
-    )
     return run
 
 
@@ -159,7 +145,7 @@ async def _select_execution_agent(
     if agent is None or snapshot is None:
         return ToolResult.error("executionAgent.unavailable")
     try:
-        run = await _validate_workspace_change(context, agent.id, directory)
+        run = await _workspace_run(context)
     except SessionServiceError as exc:
         return ToolResult.error(exc.code)
     run.execution_agent_id = agent.id
@@ -205,7 +191,7 @@ async def _change_directory(
     from mato_loop_backend.sessions.service import SessionServiceError
 
     try:
-        run = await _validate_workspace_change(context, client.agent_id, result.path)
+        run = await _workspace_run(context)
     except SessionServiceError as exc:
         return ToolResult.error(exc.code)
     run.current_directory_snapshot = result.path

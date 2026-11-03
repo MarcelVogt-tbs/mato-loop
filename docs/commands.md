@@ -265,7 +265,8 @@ automatically.
 
 Git action buttons are shortcuts to the same message queue, not direct run starters. Active
 runs and pending messages do not disable them. Draft text and attachments remain untouched.
-Workspace management retains its separate admission checks and busy state.
+Workspace selection retains its same-session active-run check and validates the selected
+computer, repository and directory permissions.
 
 There is no host merge queue, target reservation or workspace-occupancy inventory in model
 context. A stable instruction says that the workspace may be shared, not that another worker
@@ -274,7 +275,9 @@ checks and resumes on the current state. Dirty files alone are not evidence of a
 If the target advances, the model incorporates it and repeats review/checks before a
 fast-forward-only update through the original checkout. Clear conflicts and integration
 findings are repaired in the task worktree; unresolved intent requires options and a
-recommendation. Git effects retain normal shell authorization and run cancellation.
+recommendation. Sessions do not reserve checkouts or shared Git metadata: another session's
+queued, running or waiting run does not block chat, Git commands, worktree creation or
+workspace changes. Git effects retain normal shell authorization and run cancellation.
 Git locks and rechecks do not provide guaranteed mutual exclusion against external writers.
 
 Commands enter the existing AgentRuntime through the ordinary message path. The
@@ -304,17 +307,13 @@ continue to govern commit conventions and checks. Review and publication safegua
 are agent instructions plus the existing tool authorization; they are not a Git sandbox
 or a deterministic proof of review quality. The task explicitly requires non-force
 pushes of the reviewed commit, re-review after target advancement, resolution of in-scope
-merge findings and failed checks, and preservation of unrelated changes. Admission reserves
-only affected checkouts: commit, push, PR and merge commands reserve the current checkout;
-sync also reserves the original checkout. Shared Git metadata alone does not block work in independent
-worktrees. Init, remote configuration and worktree management retain repository-wide
-protection using saved command resources, even if the live session selection changes.
-Checks run under the existing user-row lock until commit, include nested
-directories, and also block ordinary runs overlapping an active mutation command.
-Queued runs and runs waiting for approval or input remain active. Admission conflicts report the
-blocking session's ID, title and run status as structured error parameters; the UI and
-Telegram explain how to finish or stop that run before retrying. External processes can
-still change the repository and must be inspected by the agent.
+merge findings and failed checks, and preservation of unrelated changes. Execution remains
+coordinated per session, not per repository. Worktree removal alone rejects overlapping
+active run directories on the same owner-bound computer, using run snapshots rather than
+the sessions' current directory preferences. This includes queued runs and runs waiting
+for approval or input, but not unrelated worktrees sharing Git metadata. Git-state,
+permission and deletion-consent checks remain binding. External processes can still change
+the repository and must be inspected by the agent.
 
 Git subprocesses run in a separate process group/tree. Cancellation terminates the
 tree and bounds pipe cleanup; a dispatched preparation with a lost response,

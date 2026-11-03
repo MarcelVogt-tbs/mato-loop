@@ -144,7 +144,7 @@ async def deliver_next(session_id):
             await db.rollback()
             entry = await db.scalar(select(QueuedMessage).where(QueuedMessage.id == entry_id).with_for_update())
             if entry is not None:
-                if code not in {"session.runAlreadyActive", "git.projectBusy"}:
+                if code != "session.runAlreadyActive":
                     entry.paused, entry.error_code = True, code
                 await db.commit()
 

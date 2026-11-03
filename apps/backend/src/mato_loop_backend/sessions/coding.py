@@ -118,13 +118,6 @@ class WorktreeRemovedResult(ExecutionResult):
     removed: bool
 
 
-def git_metadata_directory(binding: dict | None, agent_id: UUID | None, directory: str | None) -> str | None:
-    binding = binding or {}
-    if binding.get("executionAgentId") == str(agent_id) and directory and binding.get("path") and within(directory, binding["path"]):
-        return binding.get("commonDirectory")
-    return None
-
-
 def resolve_git_target(
     session: ChatSession, project: Project | None, info: RepositoryResult,
 ) -> tuple[dict, str | None, str | None]:
@@ -207,7 +200,6 @@ async def inspect_repository(db, user_id, agent_id, directory, target_branch=Non
 
 
 async def select_session_workspace(db, session, project, directory=None, *, create=False, worktree_id=None):
-    from mato_loop_backend.sessions.git_commands import check_workspace_admission
     from mato_loop_backend.sessions.service import (
         SessionServiceError,
         execution_filesystem_policy,
@@ -235,8 +227,6 @@ async def select_session_workspace(db, session, project, directory=None, *, crea
             raise SessionServiceError(409, "git.configurationRequired")
         if original.project_worktree_directory.rsplit("/", 1)[0] != original.worktree_root:
             raise SessionServiceError(502, "executionAgent.protocolError")
-        await check_workspace_admission(db, session.user_id, agent_id, root,
-            {"name": "git-worktree", "resources": [root, original.common_directory]})
         identity = str(worktree_id or uuid5(session.id, "worktree"))
         # Stable candidates let a repeated creation request recover its chosen destination.
         names = [identity[:8], *(uuid5(UUID(identity), str(attempt)).hex[:8] for attempt in range(1, 10))]
@@ -301,8 +291,8 @@ async def sessions_in_worktree(db, user_id, agent_id, directory):
 
 
 async def remove_worktree(db, session, info: RepositoryResult, directory, *, force=False, expected_impact=None):
-    from mato_loop_backend.sessions.git_commands import check_workspace_admission
     from mato_loop_backend.sessions.service import (
+        ACTIVE_RUN_STATUSES,
         SessionServiceError,
         add_directory_grant,
         model_for_session,
@@ -320,8 +310,15 @@ async def remove_worktree(db, session, info: RepositoryResult, directory, *, for
         raise SessionServiceError(409, "git.worktreeChanged")
     if directory == root:
         raise SessionServiceError(409, "git.mainWorktree")
-    await check_workspace_admission(db, session.user_id, session.preferred_execution_agent_id, directory,
-        {"name": "git-worktree", "resources": [directory, info.common_directory, root]})
+    active_directories = await db.scalars(select(AgentRun.current_directory_snapshot).join(
+        ChatSession, ChatSession.id == AgentRun.session_id,
+    ).where(
+        ChatSession.user_id == session.user_id,
+        AgentRun.execution_agent_id == session.preferred_execution_agent_id,
+        AgentRun.status.in_(ACTIVE_RUN_STATUSES),
+    ))
+    if any(path and (within(path, directory) or within(directory, path)) for path in active_directories):
+        raise SessionServiceError(409, "git.worktreeInUse")
     affected = await sessions_in_worktree(db, session.user_id, session.preferred_execution_agent_id, directory)
     if expected_impact is not None and worktree_removal_token(session, info, affected) != expected_impact:
         raise SessionServiceError(409, "git.worktreeChanged")
