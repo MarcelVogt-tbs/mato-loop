@@ -697,7 +697,8 @@ def general_system_prompt(
             "output paths, unless the user explicitly requests another location. Normal permissions still apply. "
             "Reading is permitted subject to normal restrictions; "
             "writing requires temporaryDirectoryWritable or a separate file permission. Other session paths have no "
-            "implicit access. Create the directory if authorized and missing. File access does not authorize shell effects."
+            "implicit access. Shell calls may already have created it. Reuse it when present; call create_directory "
+            "only after confirming it is missing and creation is authorized. File access does not authorize shell effects."
             + ("\nNo live computer operations are available." if not execution_agent_connected else "")
         )
     elif execution_agent_id is not None:

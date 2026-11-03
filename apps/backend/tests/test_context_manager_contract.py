@@ -1905,6 +1905,10 @@ def test_computer_identity_changes_prompt_only_when_binding_changes() -> None:
         "Use temporaryDirectory for temporary scripts, logs, and intermediate files, including explicit program "
         "output paths, unless the user explicitly requests another location. Normal permissions still apply."
     ) in first
+    assert (
+        "Shell calls may already have created it. Reuse it when present; call create_directory "
+        "only after confirming it is missing and creation is authorized."
+    ) in first
     assert '"temporaryDirectoryWritable": false' in without_temporary
     assert f'"id": "{agent_id}"' in first
     assert first != general_system_prompt(session, **{**options, "execution_agent_id": uuid4()})
