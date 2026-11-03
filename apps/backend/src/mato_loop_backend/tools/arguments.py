@@ -443,7 +443,7 @@ class ApplyPatchArguments(ToolArguments):
         return value
 
 
-class DeletePathArguments(ToolArguments):
+class DeletePathArguments(ElevatedArguments):
     root: Literal["session", "workspace"]
     path: str = Field(min_length=1, max_length=1_000)
     recursive: bool = False

@@ -170,6 +170,8 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
                 "limit": arguments.limit,
             }
         )
+    if kind == "symlink":
+        return ToolResult.error("file.symlinkForbidden")
     if kind != "file":
         return ToolResult.error("file.unsupportedType")
     if normalized_path.lower().endswith(".pdf"):
@@ -887,10 +889,21 @@ async def _delete_path(arguments: DeletePathArguments, context: ToolContext) -> 
         action_kind="delete_path",
         action_label="Pfad löschen",
     )
-    if not await tools_access.allow(context, request):
+    if arguments.elevated:
+        client = files_access.workspace_client(context)
+        if not client.supports("administrator.run"):
+            return ToolResult.error("executionAgent.operationUnavailable")
+        request = administrator_permission(
+            client.agent_id, client.current_directory, capability="filesystem.delete",
+            path=files_access.execution_path(context, arguments.path),
+        )
+        allowed = await administrator.authorize(context, request, arguments.sudo_password_ref)
+    else:
+        allowed = await tools_access.allow(context, request)
+    if not allowed:
         return ToolResult.error("permission.denied")
     if arguments.root == "workspace":
-        await files_access.workspace_request(
+        result = await (administrator.invoke if arguments.elevated else files_access.workspace_request)(
             context,
             "filesystem.delete",
             {
@@ -898,7 +911,10 @@ async def _delete_path(arguments: DeletePathArguments, context: ToolContext) -> 
                 "recursive": arguments.recursive,
             },
             WorkspaceDeleteResult,
+            **({"reference": arguments.sudo_password_ref} if arguments.elevated else {}),
         )
+        if isinstance(result, ToolResult):
+            return result
     else:
         await asyncio.to_thread(
             context.root_files.delete_path,
@@ -1268,7 +1284,8 @@ CREATE_DIRECTORY = ToolDefinition(
 
 DELETE_PATH = ToolDefinition(
             "delete_path",
-            "Delete one path; non-empty directories require recursive=true.",
+            "Delete a path; recursive=true for non-empty directories. "
+            "elevated=true: computer only; optional sudo_password_ref.",
             DeletePathArguments,
             _delete_path,
             tool_type="shared",

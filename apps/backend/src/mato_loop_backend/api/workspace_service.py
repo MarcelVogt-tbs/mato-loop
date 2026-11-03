@@ -61,6 +61,7 @@ _AGENT_ERROR_CODES = {
     "path.notFound": (404, "file.pathNotFound"),
     "path.unavailable": (500, "file.unavailable"),
     "path.rootMutation": (400, "file.rootMutationForbidden"),
+    "path.symlinkUnsupported": (400, "file.symlinkForbidden"),
     "path.unsupportedType": (400, "file.unsupportedType"),
     "root.stale": (503, "executionAgent.unavailable"),
     "root.unavailable": (503, "executionAgent.unavailable"),

@@ -316,6 +316,7 @@ async def changes(
                 "operation.tooLarge": "tooLarge",
                 "file.invalidEncoding": "binary",
                 "path.notFile": "unsupported",
+                "path.symlinkUnsupported": "unsupported",
                 "path.unsupportedType": "unsupported",
             }
             if exc.code not in reasons:
@@ -340,6 +341,7 @@ async def changes(
                     "file.tooLarge",
                     "file.invalidEncoding",
                     "path.notFile",
+                    "path.symlinkUnsupported",
                     "path.unsupportedType",
                     "path.notFound",
                 }:

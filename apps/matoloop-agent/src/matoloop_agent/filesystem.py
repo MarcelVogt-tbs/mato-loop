@@ -417,12 +417,22 @@ class Filesystem:
             os.close(fd)
             raise AgentError("path.accessDenied", "Directory access was denied") from exc
         except NotADirectoryError as exc:
+            try:
+                symlink = stat.S_ISLNK(os.stat(part, dir_fd=fd, follow_symlinks=False).st_mode)
+            except OSError:
+                symlink = False
             os.close(fd)
+            if symlink:
+                raise AgentError(
+                    "path.symlinkUnsupported", "Symbolic link traversal is not supported"
+                ) from exc
             raise AgentError("path.notDirectory", "Directory is unavailable") from exc
         except OSError as exc:
             os.close(fd)
             if exc.errno == errno.ELOOP:
-                raise AgentError("path.notDirectory", "Directory is unavailable") from exc
+                raise AgentError(
+                    "path.symlinkUnsupported", "Symbolic link traversal is not supported"
+                ) from exc
             raise AgentError("path.unavailable", "Directory is unavailable") from exc
 
     @staticmethod
@@ -531,7 +541,9 @@ class Filesystem:
             if "fd" in locals():
                 os.close(fd)
             if exc.errno == errno.ELOOP:
-                raise AgentError("path.notFile", "Target is not a regular file") from exc
+                raise AgentError(
+                    "path.symlinkUnsupported", "Symbolic link traversal is not supported"
+                ) from exc
             raise AgentError("path.unavailable", "File is unavailable") from exc
 
     def read(

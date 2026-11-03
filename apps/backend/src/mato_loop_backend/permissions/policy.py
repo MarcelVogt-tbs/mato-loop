@@ -1330,7 +1330,9 @@ def administrator_permission(
     return PermissionRequest(
         capability=capability, resource_type="execution_administrator",
         resource_scope=scope,
-        action_kind="shell_run" if command is not None else "read" if capability == "filesystem.read" else "edit_file",
+        action_kind="shell_run" if command is not None else {
+            "filesystem.read": "read", "filesystem.delete": "delete_path",
+        }.get(capability, "edit_file"),
         risk_level="high", title="Administratorzugriff erlauben?",
         summary="Die angezeigte Aktion wird mit Administratorrechten auf dem ausgewählten Computer ausgeführt.",
         resource_display=path or current_directory,
@@ -1479,7 +1481,7 @@ def session_grant_matches_request(
             if capability in {"shell.read", "shell.write", "shell.delete"}:
                 return grant.resource_type == "shell_action" and grant.resource_scope == scope.get("action")
             return (
-                capability in {"filesystem.read", "filesystem.write"}
+                capability in {"filesystem.read", "filesystem.write", "filesystem.delete"}
                 and grant.resource_type == "administrator_path"
                 and grant.resource_scope == execution_directory_scope(UUID(scope["agentId"]), scope["path"])
             )
@@ -1756,7 +1758,7 @@ class PermissionPolicy:
                 if (
                     set(scope) - ({"requiredCategories"} if shell else set()) != ({"agentId", "currentDirectory", "command", "action"} if shell else {"agentId", "currentDirectory", "path"})
                     or scope["currentDirectory"] != chat_session.current_directory
-                    or request.capability not in ({f"shell.{category}" for category in scope.get("requiredCategories", ["read", "write"])} if shell else {"filesystem.read", "filesystem.write"})
+                    or request.capability not in ({f"shell.{category}" for category in scope.get("requiredCategories", ["read", "write"])} if shell else {"filesystem.read", "filesystem.write", "filesystem.delete"})
                     or not isinstance(scope["command" if shell else "path"], str)
                     or not scope["command" if shell else "path"]
                     or PurePosixPath(scope["currentDirectory"]).as_posix() != scope["currentDirectory"]

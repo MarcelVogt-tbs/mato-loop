@@ -95,8 +95,9 @@ class FilesystemTests(unittest.TestCase):
         link = self.root / "link"
         link.symlink_to(real, target_is_directory=True)
         with patch.object(filesystem_module.os, "open", wraps=os.open) as opened:
-            with self.assertRaises(AgentError):
+            with self.assertRaises(AgentError) as raised:
                 self.filesystem.read(os.fspath(link / "file"), 1, 1, 100)
+        self.assertEqual(raised.exception.code, "path.symlinkUnsupported")
         component_opens = [call for call in opened.call_args_list if call.kwargs.get("dir_fd")]
         self.assertTrue(component_opens)
         self.assertTrue(all(call.args[1] & os.O_NOFOLLOW for call in component_opens))
@@ -180,9 +181,16 @@ class FilesystemTests(unittest.TestCase):
             self.assertNotIn("private detail", str(raised.exception))
 
     def test_read_missing_parent_reports_missing_path(self) -> None:
-        with self.assertRaises(AgentError) as raised:
-            self.filesystem.read(self.path("missing/file"), 1, 1, 100)
-        self.assertEqual(raised.exception.code, "path.notFound")
+        (self.root / "file").write_text("text")
+        (self.root / "link").symlink_to("file")
+        for path, code in (
+            ("missing/file", "path.notFound"),
+            ("file/child", "path.notDirectory"),
+            ("link", "path.symlinkUnsupported"),
+        ):
+            with self.subTest(path=path), self.assertRaises(AgentError) as raised:
+                self.filesystem.read(self.path(path), 1, 1, 100)
+            self.assertEqual(raised.exception.code, code)
 
     def test_export_rejects_fifo_replacement_without_blocking(self) -> None:
         source = self.root / "source"

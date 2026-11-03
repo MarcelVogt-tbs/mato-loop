@@ -444,6 +444,7 @@ class AdministratorArguments(StrictModel):
         "filesystem.write",
         "filesystem.upsert",
         "filesystem.edit",
+        "filesystem.delete",
         "shell.inspect",
         "shell.run",
     ]

@@ -23,6 +23,10 @@ Eine Ordnerauswahl erlaubt Navigation im gewählten Baum, keine Datei- oder Shel
 !!! warning "Keine Betriebssystem-Sandbox"
     Der Agent arbeitet mit den Rechten seines Betriebssystembenutzers. Deine direkten Aktionen in Computer-Dateien umgehen absichtlich Modellrichtlinien und können auf dessen erreichbare Pfade zugreifen. Eigentümer- und technische Linkprüfungen bleiben bestehen. Das Löschen deines MatoLoop-Kontos entfernt keine Computerdateien.
 
+Für geschützte Computerdateien kann das Modell Lesen, Schreiben, Bearbeiten und Löschen mit Administratorrechten anfragen, wenn dein Agent dies unterstützt. Prüfe vor einer Löschfreigabe den Zielpfad und die Angabe **Rekursiv löschen**. Eine Passwortabfrage dient nur zur Anmeldung und ersetzt keine Aktionsfreigabe. Gelöschte Computerdateien haben keine MatoLoop-Wiederherstellung; eine rekursive Löschung kann bei einem Fehler oder Abbruch teilweise ausgeführt sein.
+
+Native Linux-Dateioperationen folgen keinen symbolischen Links – auch nicht mit Administratorrechten. Das betrifft etwa viele Pfade unter `/sys/class`. Für solche Systemdiagnosen kann die Shell verwendet werden, sofern deren eigene Rechteprüfung den Zugriff erlaubt.
+
 ## Dateien hochladen und verwalten
 
 Öffne **Ablage** für Session-Dateien oder **Computer-Dateien** für den Rechner. Dort kannst du Ordner öffnen, filtern und durchsuchen, Dateien hoch- und herunterladen, anlegen, umbenennen oder löschen. Home- und absolute Pfadauswahl gehören nur zu Computer-Dateien. **Ordner als ZIP herunterladen** lädt einen Ordner samt Inhalt; große oder unsichere Dateibäume können abgelehnt werden.

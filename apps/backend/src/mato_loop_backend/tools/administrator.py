@@ -59,6 +59,10 @@ async def authorize(context: ToolContext, request: PermissionRequest, reference=
         value = context.tool_call.arguments.get(field)
         preview = value[:8000] + ("\n[Vorschau gekürzt]" if len(value) > 8000 else "") if isinstance(value, str) else "Geschützter Text"
         previews.append(PermissionDisplayItem(label, preview, "code"))
+    if context.tool_call.name == "delete_path":
+        previews.append(PermissionDisplayItem(
+            "Rekursiv löschen", "Ja" if context.tool_call.arguments.get("recursive", False) else "Nein",
+        ))
     return await access.allow(context, replace(
         request, action_kind=context.tool_call.name,
         display_items=(*request.display_items, *previews),

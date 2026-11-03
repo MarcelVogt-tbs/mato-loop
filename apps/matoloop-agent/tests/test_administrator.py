@@ -147,6 +147,17 @@ class AdministratorTests(unittest.IsolatedAsyncioTestCase):
             await self.invoke("filesystem.read")
         self.assertEqual(target.read_text(), "batchSize: 9\n")
 
+    @unittest.skipUnless(
+        os.geteuid() == 0, "The development container runs the privileged worker as root"
+    )
+    async def test_worker_deletes_tree_without_following_links(self):
+        tree = self.home / "tree"
+        tree.mkdir()
+        (tree / "file").write_text("remove")
+        (tree / "link").symlink_to(self.file)
+        await self.invoke("filesystem.delete", path=str(tree), recursive=True)
+        self.assertEqual((tree.exists(), self.file.read_text()), (False, "batchSize: 100\n"))
+
     async def test_repeated_cancellation_waits_for_privileged_write_result(self):
         reader = asyncio.StreamReader()
         process = Mock(stdout=reader, wait=AsyncMock(), returncode=0)

@@ -221,6 +221,8 @@ async def worker(payload: dict) -> dict:
             arguments.replace_all,
             arguments.expected_sha256,
         )
+    if request.operation == "filesystem.delete":
+        return files.delete(arguments.path, arguments.recursive)
     process = ProcessRunner(config, files)
     if request.operation == "shell.inspect":
         return process.inspect_shell(arguments.command, arguments.current_directory)

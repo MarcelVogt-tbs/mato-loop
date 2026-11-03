@@ -562,11 +562,11 @@ def general_system_prompt(
             "offered file tools. Never bypass denials by switching tools. "
             "Shell read does not authorize writes or deletes. "
             + (
-                "Use explicit elevation when required; a system path alone does not establish that need. "
-                "file.accessDenied is not permission.userDenied. Retry protected UTF-8 computer files "
-                "with elevated=true on read/write_file/edit_file unless shell was explicitly requested. "
-                "For operations without elevated file support, use shell_run(elevated=true). "
-                "Never bypass denied approval, disabled capabilities, or hard path boundaries. "
+                "file.accessDenied is not permission.userDenied. Use elevated=true for OS rights, not system paths: "
+                "read/write_file/edit_file (UTF-8) or delete_path. Do not repeat failed ordinary access. "
+                "Other elevation: shell_run(elevated=true). File tools reject symlinks; "
+                "Linux diagnostics may use shell with its own checks. "
+                "Never bypass denials, disabled capabilities, or hard path boundaries. "
                 if "shell_run" in offered_tool_names else ""
             )
             + "Batch read calls, not shell concatenations. Scope reads/searches; set root. "

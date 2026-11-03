@@ -352,6 +352,7 @@ _REMOTE_ERROR_CODES = {
     "path.notFound": "file.pathNotFound",
     "path.outsideRoots": "file.invalidPath",
     "path.rootMutation": "file.rootMutationForbidden",
+    "path.symlinkUnsupported": "file.symlinkForbidden",
     "path.unsupportedType": "file.unsupportedType",
     "path.unavailable": "file.unavailable",
     "process.notAllowed": "process.notAllowed",

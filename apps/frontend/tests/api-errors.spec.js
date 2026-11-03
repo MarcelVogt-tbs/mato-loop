@@ -108,6 +108,9 @@ describe('API error messages', () => {
     expect(apiErrorMessage({ error: { code: 'file.unavailable', message: 'private detail' } })).toBe(
       'Die Datei ist derzeit nicht verfügbar.'
     )
+    expect(apiErrorMessage({ error: { code: 'file.symlinkForbidden', message: 'private detail' } })).toBe(
+      'Diese Dateioperation folgt keinen symbolischen Links.'
+    )
   })
 
   it('translates stable domain error codes', () => {

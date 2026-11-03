@@ -1294,6 +1294,7 @@ def _openscad_render_api_error(exc: ExecutionClientError) -> ApiError:
     elif exc.code in {
         "file.invalidPath",
         "file.notAFile",
+        "file.symlinkForbidden",
         "file.unsupportedType",
     }:
         status_code = 400

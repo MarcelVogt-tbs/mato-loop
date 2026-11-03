@@ -1081,23 +1081,27 @@ async def test_policy_revocation_while_waiting_for_approval_stops_action(
     assert decision == PermissionDecision.DENY
 
 
-async def test_administrator_once_approval_is_reused_for_revalidation(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("tool", "capability", "arguments"), [
+    ("edit_file", "filesystem.write", {"oldString": "old", "newString": "new"}),
+    ("delete_path", "filesystem.delete", {"recursive": True}),
+])
+async def test_administrator_once_approval_is_reused_for_revalidation(tmp_path, monkeypatch, tool, capability, arguments):
     from mato_loop_backend.agent.run_contracts import ApprovalResolution
 
     agent = ExecutionAgent(id=uuid4(), user_id=uuid4(), home_directory="/home/user", home_filesystem_policy="auto", external_filesystem_policy="ask")
     session = _session(user_id=agent.user_id, preferred_execution_agent_id=agent.id, current_directory="/work")
     db = _db_with_grants()
     db.scalar.return_value = agent
-    settings = _tool_settings({"policies": {"filesystem.write": "ask", "working_directory.external": "auto"}})
+    settings = _tool_settings({"policies": {capability: "ask", "working_directory.external": "auto"}})
     monkeypatch.setattr(mock_agent_runtime, "permission_origin", AsyncMock(return_value=session))
     monkeypatch.setattr(mock_agent_runtime, "delegation_snapshot", AsyncMock(return_value=None))
     monkeypatch.setattr(mock_agent_runtime, "load_agent_profile_tools", AsyncMock(return_value=(settings, sysadmin_profile())))
     monkeypatch.setattr(mock_agent_runtime, "load_effective_integrations", AsyncMock(return_value=IntegrationSettings()))
     approve = AsyncMock(return_value=ApprovalResolution("allow_once"))
     monkeypatch.setattr(AgentRuntime, "_request_approval", approve)
-    request = administrator_permission(agent.id, "/work", capability="filesystem.write", path="/etc/demo.conf")
+    request = administrator_permission(agent.id, "/work", capability=capability, path="/etc/demo.conf")
     run = AgentRun(id=uuid4(), session_id=session.id)
-    call = ToolCall("edit", "edit_file", {"root": "computer", "path": "/etc/demo.conf", "oldString": "old", "newString": "new", "elevated": True})
+    call = ToolCall("file", tool, {"root": "computer", "path": "/etc/demo.conf", "elevated": True, **arguments})
     resolution = {}
     roots = _root_files(tmp_path, session)
     assert await AgentRuntime._authorize(db, run, session, call, request, roots, resolution) == PermissionDecision.ALLOW
@@ -1110,7 +1114,7 @@ async def test_administrator_once_approval_is_reused_for_revalidation(tmp_path, 
     assert await AgentRuntime._authorize(db, run, session, call, request, roots, resolution) == PermissionDecision.ALLOW
     assert await AgentRuntime._authorize(db, run, session, call, request, roots, resolution, check_only=True) == PermissionDecision.ALLOW
     assert approve.await_count == 1
-    settings.permissions.policies["filesystem.write"] = ToolExecutionPolicy.DISABLED
+    settings.permissions.policies[capability] = ToolExecutionPolicy.DISABLED
     assert await AgentRuntime._authorize(db, run, session, call, request, roots, resolution, check_only=True) == PermissionDecision.DENY
 
 

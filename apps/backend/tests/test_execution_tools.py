@@ -33,6 +33,7 @@ from mato_loop_backend.execution import (
     ExecutionClientError,
     ProcessResult,
     ShellInspectResult,
+    WorkspaceDeleteResult,
     WorkspacePatchResult,
     WorkspaceReadResult,
     WorkspaceWriteResult,
@@ -725,6 +726,7 @@ async def test_workspace_write_uses_upsert_without_model_revision(tmp_path) -> N
     ("read", "filesystem.read", {}, WorkspaceReadResult(content="old", lines_read=1, has_more=False, next_offset=None, truncated_lines=[], sha256="a" * 64)),
     ("write_file", "filesystem.upsert", {"content": "new"}, WorkspaceWriteResult(path="/etc/demo.conf", sha256="b" * 64, size=3)),
     ("edit_file", "filesystem.edit", {"oldString": "old", "newString": "new"}, WorkspaceWriteResult(path="/etc/demo.conf", sha256="b" * 64, size=3)),
+    ("delete_path", "filesystem.delete", {"recursive": True}, WorkspaceDeleteResult()),
 ])
 async def test_elevated_files_use_structured_worker_and_existing_permissions(tmp_path, tool, operation, arguments, response):
     call = ToolCall("file", tool, {"root": "computer", "path": "/etc/demo.conf", "elevated": True, **arguments})
@@ -733,7 +735,22 @@ async def test_elevated_files_use_structured_worker_and_existing_permissions(tmp
     result = await _tools(client.operations).execute(call, context)
     assert not result.is_error
     assert client.requests[-1][1]["operation"] == operation
-    assert context.ask_handler.await_args.args[0].capability == ("filesystem.read" if tool == "read" else "filesystem.write")
+    request = context.ask_handler.await_args.args[0]
+    assert request.capability == {"read": "filesystem.read", "delete_path": "filesystem.delete"}.get(tool, "filesystem.write")
+    if tool == "delete_path":
+        assert PermissionDisplayItem("Rekursiv löschen", "Ja") in request.display_items
+
+
+@pytest.mark.parametrize(("root", "capable", "decision", "code"), [
+    ("computer", True, PermissionDecision.USER_DENIED, "permission.denied"),
+    ("computer", False, PermissionDecision.ALLOW, "executionAgent.operationUnavailable"),
+    ("files", True, PermissionDecision.ALLOW, "tool.invalidArguments"),
+])
+async def test_elevated_delete_checks_boundaries_before_execution(tmp_path, root, capable, decision, code):
+    call = ToolCall("delete", "delete_path", {"root": root, "path": "demo", "recursive": True, "elevated": True})
+    client = FakeExecutionClient({}, {"filesystem.delete", *({"administrator.run"} if capable else set())})
+    result = await _tools(client.operations).execute(call, _context(tmp_path, call, client, decision=decision))
+    assert (result.metadata["errorCode"], client.requests) == (code, [])
 
 
 @pytest.mark.parametrize("mode", ["update", "move", "move_denied"])
@@ -916,7 +933,8 @@ def test_shell_grant_matches_access_class_agent_and_directory(tmp_path) -> None:
     assert not PermissionPolicy.grant_matches(grant, wrong_directory, context.root_files)
 
 
-async def test_administrator_grants_cover_only_exact_action_and_never_disabled_rights(tmp_path) -> None:
+@pytest.mark.parametrize("capability", ["filesystem.read", "filesystem.write", "filesystem.delete"])
+async def test_administrator_grants_cover_only_exact_action_and_never_disabled_rights(tmp_path, capability) -> None:
     client = FakeExecutionClient({}, {"shell.inspect", "shell.run", "shell.classify", "administrator.run"})
     context = _context(tmp_path, ToolCall("admin", "shell_run", {}), client)
     context.session.preferred_execution_agent_id = client.agent_id
@@ -959,8 +977,9 @@ async def test_administrator_grants_cover_only_exact_action_and_never_disabled_r
     ) == PermissionDecision.DENY
     context.db.scalar.return_value.home_directory = "/home/user"
     context.db.scalar.return_value.home_filesystem_policy = "deny"
-    file_request = administrator_permission(client.agent_id, client.current_directory, capability="filesystem.read", path="/etc/demo.conf")
+    file_request = administrator_permission(client.agent_id, client.current_directory, capability=capability, path="/etc/demo.conf")
     file_scope = file_request.effective_session_grants[0]
+    assert session_grant_matches_request(capability, file_request.resource_type, file_request.resource_scope, file_scope)
     context.db.scalars.return_value = Mock(all=Mock(return_value=[PermissionGrant(
         capability=file_scope.capability, resource_type=file_scope.resource_type, resource_scope=file_scope.resource_scope,
     )]))

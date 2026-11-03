@@ -72,6 +72,7 @@ def test_changed_file_error_has_controlled_fallback() -> None:
 def test_file_access_errors_have_controlled_fallbacks() -> None:
     assert describe_error("file.accessDenied").message == "Access to the file was denied."
     assert describe_error("file.unavailable").message == "The file is unavailable."
+    assert describe_error("file.symlinkForbidden").message == "This file operation does not follow symbolic links."
 
 
 def test_execution_and_output_limits_have_controlled_fallbacks() -> None:

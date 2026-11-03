@@ -193,6 +193,7 @@ async def test_file_context_rejects_explicit_root_outside_current_project() -> N
         ("path.notFound", 404, "file.pathNotFound"),
         ("path.accessDenied", 403, "file.accessDenied"),
         ("path.notFile", 400, "file.notAFile"),
+        ("path.symlinkUnsupported", 400, "file.symlinkForbidden"),
         ("path.unavailable", 500, "file.unavailable"),
     ],
 )

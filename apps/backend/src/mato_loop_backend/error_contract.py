@@ -198,6 +198,7 @@ _MESSAGES = {
     "file.storageFull": "There is not enough storage available for this file.",
     "file.tooLarge": "The file is too large.",
     "file.unsupportedType": "The file type is not supported for this operation.",
+    "file.symlinkForbidden": "This file operation does not follow symbolic links.",
     "file.unavailable": "The file is unavailable.",
     "file.workspaceNotSelected": "No workspace root is selected.",
     "cache.exportFailed": "The generated artifact could not be exported.",
