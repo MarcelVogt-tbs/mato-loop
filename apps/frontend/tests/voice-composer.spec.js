@@ -4,9 +4,9 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ notify: vi.fn(), api: { post: vi.fn(), get: vi.fn(), patch: vi.fn(), delete: vi.fn() }, recorder: null, mobile: false, resetMessageSizes: vi.fn() }))
+const mocks = vi.hoisted(() => ({ notify: vi.fn(), copyToClipboard: vi.fn(), api: { post: vi.fn(), get: vi.fn(), patch: vi.fn(), delete: vi.fn() }, recorder: null, mobile: false, resetMessageSizes: vi.fn() }))
 vi.mock('src/boot/axios', () => ({ api: mocks.api }))
-vi.mock('quasar', () => ({ useQuasar: () => ({ notify: mocks.notify, platform: { is: { mobile: mocks.mobile } }, screen: { gt: { xs: !mocks.mobile, sm: !mocks.mobile }, lt: { sm: mocks.mobile } } }) }))
+vi.mock('quasar', () => ({ copyToClipboard: mocks.copyToClipboard, useQuasar: () => ({ notify: mocks.notify, platform: { is: { mobile: mocks.mobile } }, screen: { gt: { xs: !mocks.mobile, sm: !mocks.mobile }, lt: { sm: mocks.mobile } } }) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: async () => true }) }))
 vi.mock('src/features/chat/audio-recorder', () => ({
   useAudioRecorder: (options) => { mocks.onAutoStopped = options.onAutoStopped; return mocks.recorder },
@@ -48,6 +48,7 @@ vi.mock('src/features/questions/QuestionDock.vue', () => ({ default: { render: (
 vi.mock('src/features/subagents/SubagentInspector.vue', () => ({ default: { render: () => null } }))
 
 import ChatComposer from '../src/features/chat/components/ChatComposer.vue'
+import { quotedMessage } from '../src/features/chat/quote-drafts'
 import ChatPage from '../src/features/chat/ChatPage.vue'
 import { useChatStore } from '../src/features/chat/store'
 import { useAgentProfileStore } from '../src/stores/agent-profiles'
@@ -56,7 +57,7 @@ import { useToolSettingsStore } from '../src/stores/tool-settings'
 import { useInstanceLimitsStore } from '../src/stores/instance-limits'
 import { useQuestionStore } from '../src/stores/questions'
 
-let app, root, chat, session, stopResolve, showPage, router, sentMessages, stoppedCount
+let app, root, chat, session, stopResolve, showPage, router, sentMessages, stoppedCount, composer
 const file = (name = 'aufnahme.wav') => new File(['wav'], name, { type: 'audio/wav' })
 
 async function click(label) {
@@ -78,6 +79,7 @@ beforeEach(async () => {
   chat.draftOwnerUserId = 'owner'
   chat.current = { id: 'session-1' }
   session = ref(chat.current)
+  composer = ref(null)
   const providers = useProviderStore()
   providers.audioTranscriptionModelId = 'audio'
   vi.spyOn(providers, 'capabilityOptions', 'get').mockReturnValue(() => [{ value: 'audio' }])
@@ -107,6 +109,7 @@ beforeEach(async () => {
   await router.push('/?session=session-1')
   app = createApp({
     render: () => showPage.value ? h(ChatPage) : h(ChatComposer, {
+      ref: composer,
       session: session.value,
       draft: chat.activeDraft,
       running: chat.running,
@@ -146,14 +149,15 @@ beforeEach(async () => {
   }))
   app.component('QInput', {
     props: ['disable', 'modelValue'],
+    emits: ['update:modelValue'],
     methods: { focus() { this.$el.focus() } },
-    render() { return h('textarea', { disabled: this.disable, value: this.modelValue }) }
+    render() { return h('textarea', { disabled: this.disable, value: this.modelValue, onInput: event => this.$emit('update:modelValue', event.target.value) }) }
   })
   app.component('QSelect', {
     props: ['modelValue', 'options', 'disable'], emits: ['update:modelValue'],
     render() { return h('select', { value: this.modelValue ?? '', disabled: this.disable, onChange: event => this.$emit('update:modelValue', event.target.value || null) }, this.options.map(option => h('option', { value: option.value ?? '' }, option.label))) }
   })
-  for (const name of ['QCard', 'QForm', 'QIcon', 'QSpace', 'QBanner', 'QTooltip', 'QSpinner', 'QChip', 'QPopupProxy', 'QToolbar', 'QToolbarTitle', 'QSeparator', 'QCardSection']) {
+  for (const name of ['QCard', 'QCardActions', 'QForm', 'QIcon', 'QSpace', 'QBanner', 'QTooltip', 'QSpinner', 'QChip', 'QPopupProxy', 'QToolbar', 'QToolbarTitle', 'QSeparator', 'QCardSection']) {
     app.component(name, { methods: { focus() {} }, render() { return h('div', this.$slots.default?.()) } })
   }
   app.directive('close-popup', {})
@@ -183,6 +187,49 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
+  it('shows the message hint only in an entirely empty composer', async () => {
+    const initial = root.querySelector('.chat-composer__input').getAttribute('placeholder')
+    await composer.value.insertQuote({ text: 'Selected answer', comment: '' })
+    expect([initial, [...root.querySelectorAll('.chat-composer__input')].map(field => field.getAttribute('placeholder'))])
+      .toEqual(['Eine Nachricht an MatoLoop senden', [null]])
+  })
+
+  it('removes a quote without changing the remaining quote or the message being sent', async () => {
+    const remaining = { type: 'quote', text: 'Keep this', comment: 'My comment' }
+    chat.setDraft(quotedMessage([{ type: 'quote', text: 'Remove this', comment: '' }, remaining, { type: 'text', text: 'My message' }]))
+    await nextTick()
+    await click('Zitat entfernen')
+    const input = root.querySelector('.chat-composer__input')
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect([input.value, sentMessages])
+      .toEqual(['My message', [{ content: quotedMessage([{ type: 'text', text: 'My message' }, remaining]), options: { interrupt: false } }]])
+  })
+
+  it('merges older draft text into one input and shows quotes in insertion order before attachments', async () => {
+    const existing = { type: 'quote', text: 'Existing answer', comment: 'Keep this comment' }
+    chat.setDraft(quotedMessage([{ type: 'text', text: 'Before' }, existing, { type: 'text', text: 'After' }]))
+    chat.addAttachmentFiles([new File(['notes'], 'notes.txt', { type: 'text/plain' })])
+    await nextTick()
+    const input = root.querySelector('.chat-composer__input')
+    await composer.value.insertQuote({ text: 'Selected answer', comment: 'Why?' })
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    const previews = [...root.querySelectorAll('.composer-attachments .composer-quote span.ellipsis, .composer-attachments strong')].map(element => element.textContent)
+    expect([root.querySelectorAll('.chat-composer__input').length, input.value, previews, sentMessages[0]?.content])
+      .toEqual([1, 'Before\n\nAfter', ['Existing answer', 'Selected answer', 'notes.txt'], quotedMessage([{ type: 'text', text: 'Before\n\nAfter' }, existing, { type: 'quote', text: 'Selected answer', comment: 'Why?' }])])
+  })
+
+  it('copies only the complete assistant answer, including Markdown', async () => {
+    mocks.api.get.mockResolvedValue({ data: { items: [] } })
+    await router.push('/')
+    showPage.value = true
+    await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
+    const content = '**Answer**\n\n```js\nconst value = 1\n```'
+    chat.current = { id: 'session-1', messages: [{ id: 'answer', role: 'assistant', content }] }
+    await nextTick()
+    await click('Antwort kopieren')
+    expect(mocks.copyToClipboard).toHaveBeenCalledWith(content)
+  })
+
   it('keeps the composer available while a question is pending', async () => {
     mocks.api.get.mockResolvedValue({ data: { items: [] } })
     await router.push('/')
@@ -295,22 +342,24 @@ describe('voice attachment composer', () => {
     await nextTick()
     expect(root.querySelector('[data-message-id="command"] .chat-message__content')?.textContent).toBe(prompt)
   })
-  it('selects a general command with the keyboard and sends it only after arguments are entered', async () => {
+  it.each([false, true])('selects a command with the keyboard, keeps attached quotes (%s), and sends it after arguments are entered', async withQuote => {
+    const quotes = withQuote ? [{ type: 'quote', text: 'Selected answer', comment: '' }] : []
     mocks.api.post.mockResolvedValue({ data: { items: [
       { name: 'example-one', description: 'Erster Auftrag', source: 'example' },
       { name: 'example-two', description: 'Zweiter Auftrag', source: 'example' }
     ] } })
-    chat.setDraft('/')
+    chat.setDraft(quotedMessage([{ type: 'text', text: '/' }, ...quotes]))
     await vi.waitFor(() => expect(root.querySelectorAll('[role="option"]')).toHaveLength(2))
     const input = root.querySelector('textarea')
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     await nextTick()
-    expect([chat.activeDraft, sentMessages]).toEqual(['/example-two ', []])
-    chat.setDraft('/example-two additional arguments')
+    expect([chat.activeDraft, sentMessages]).toEqual([quotedMessage([{ type: 'text', text: '/example-two ' }, ...quotes]), []])
+    input.value = '/example-two additional arguments'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
     await nextTick()
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    expect(sentMessages).toEqual([{ content: '/example-two additional arguments', options: { interrupt: false } }])
+    expect(sentMessages).toEqual([{ content: quotedMessage([{ type: 'text', text: '/example-two additional arguments' }, ...quotes]), options: { interrupt: false } }])
   })
   it('invalidates message heights and remounts the composer input when the session message size changes', async () => {
     mocks.api.get.mockResolvedValue({ data: { items: [] } })

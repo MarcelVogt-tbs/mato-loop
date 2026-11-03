@@ -48,6 +48,16 @@ Verlauf, Einstellungen, interne Dateien samt Versionen und Anhänge werden kopie
 
 Einrichtung, Diffs, Branches und getrennte Arbeitskopien stehen unter [Git und Worktrees](git-und-worktrees.md).
 
+## Antworten zitieren und kopieren
+
+Markiere eine Textstelle in einer fertig angezeigten Agentenantwort und wähle **Zitieren**. Auf dem Desktop bleibt die Stelle hervorgehoben; direkt darunter öffnet sich das Kommentarfeld. Auf kleinen Bildschirmen öffnet sich ein Dialog mit Zitat und Kommentar. Ergänze optional einen Kommentar und bestätige mit dem Häkchen oder Enter im Kommentarfeld. Umschalt+Enter fügt einen Zeilenumbruch ein; das Kreuz oder Escape verwirft die Eingabe.
+
+Zitate erscheinen als kompakte Karten zuerst im Anhangsbereich, in der Reihenfolge, in der du sie hinzugefügt hast. Danach folgen Dateien und Sprachnachrichten. Dein Nachrichtentext bleibt in einem normalen Textfeld. Die Karte zeigt ein Zitat-Icon mit einer einzeiligen Textvorschau und darunter den Kommentar; lange Inhalte werden mit Auslassungspunkten gekürzt. Über den Stift öffnest du den vollständigen Text und bearbeitest Zitat und Kommentar auf dem Desktop in einem Popup an der Karte, auf kleinen Bildschirmen im selben Dialog wie beim Erstellen. Die Karte bleibt dabei kompakt. Über ihr Kreuz entfernst du die Karte. Die Schrift folgt der Session-Einstellung **Nachrichtengröße**; mobile Eingabefelder behalten ihre gut bedienbare Schriftgröße.
+
+Text, Zitate, Kommentare und Anhänge bleiben mit dem Entwurf erhalten. Beim Senden stehen die Zitate mit ihren Kommentaren als Markdown unter deinem Nachrichtentext; sie werden nicht als Dateien hochgeladen. Offene Markdown-Codeblöcke im Nachrichtentext werden vor angehängten Zitaten automatisch geschlossen, damit die Zitate nicht Teil des Codes werden. Ältere Entwürfe mit Text zwischen Zitaten führen ihre Textabschnitte im gemeinsamen Textfeld zusammen und behalten alle Zitate und Kommentare. Bereits gesendete Nachrichten bleiben unverändert.
+
+Der Kopierbutton in der Metazeile übernimmt den vollständigen Markdown-Antworttext inklusive Codeblöcken, aber ohne Aktivitäten und Metadaten. Er erscheint, wenn du die Antwort mit der Maus berührst oder den Button per Tastatur fokussierst; auf Touch-Geräten bleibt er sichtbar.
+
 ## Während einer Antwort eingreifen
 
 **Jetzt senden** ergänzt den laufenden Auftrag um deine Nachricht. Eine Modellanfrage wird neu aufgebaut; aktive Tool-Arbeit darf zuerst enden. Überholte Freigaben und Rückfragen des angesprochenen Laufs werden ohne unfertige Antworten geschlossen. Der Hauptagent kann dir auch antworten, während Subagenten weiterarbeiten. Deren Freigaben und Rückfragen bleiben bestehen, sofern er ihnen nicht gezielt eine Korrektur schickt. Neue Anweisungen erlauben keine gesperrten Aktionen.
@@ -84,7 +94,6 @@ Eine Zwischenantwort des Hauptagenten beendet laufende Subagenten nicht. Er übe
 
 - **Erneut versuchen** startet einen neuen Versuch der letzten fehlgeschlagenen Host-Antwort. Voraussetzungen werden erneut geprüft; bereits gestartete Läufe behalten ihren Retry-Kontext.
 - **Rückgängig** übernimmt Text und Anhänge in den Entwurf und entfernt die Benutzernachricht mit dem folgenden Verlauf.
-- **Kopieren** übernimmt den Nachrichteninhalt.
 
 !!! warning "Externe Wirkungen bleiben bestehen"
     Rückgängig, Retry und Stopp machen ausgeführte Datei-, Integrations-, Freigabe- oder Memory-Änderungen nicht rückgängig. Prüfe unklare Ergebnisse vor einem erneuten Auftrag.

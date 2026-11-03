@@ -1,5 +1,5 @@
 <template>
-  <div class="markdown-viewer">
+  <div class="markdown-viewer relative-position">
     <div
       ref="contentRoot"
       class="chat-markdown"
@@ -8,6 +8,7 @@
       @pointerdown="handlePointerDown"
       v-html="rendered.html"
     />
+    <MessageQuoteSelection v-if="quotable && !streaming" :target="contentRoot" :message-size="messageSize" @quote="$emit('quote', $event)" />
 
     <q-dialog v-model="mermaidDialog" :transition-duration="0" maximized @hide="clearMermaidImage">
       <q-card v-if="mermaidImage" class="app-file-dialog">
@@ -29,6 +30,7 @@ import { copyToClipboard, useQuasar } from 'quasar'
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 import ImageViewerPanel from 'src/features/files/components/ImageViewerPanel.vue'
+import MessageQuoteSelection from './MessageQuoteSelection.vue'
 import { renderMarkdown } from 'src/utils/markdown'
 import { verifyExternalImage } from 'src/utils/image-verification'
 import { mermaidErrorMessage, renderMermaid } from 'src/utils/mermaid'
@@ -54,6 +56,8 @@ const props = defineProps({
     default: () => []
   },
   streaming: Boolean,
+  quotable: Boolean,
+  messageSize: { type: String, default: 'standard' },
   researchSources: {
     type: Array,
     default: () => []
@@ -67,7 +71,7 @@ const props = defineProps({
     default: () => []
   }
 })
-const emit = defineEmits(['open-file', 'prepared-reply', 'rendered', 'trust-image-origin'])
+const emit = defineEmits(['open-file', 'prepared-reply', 'quote', 'rendered', 'trust-image-origin'])
 const $q = useQuasar()
 const contentRoot = ref(null)
 const rendered = ref({ codeBlocks: [], html: '', externalImages: [], mermaidBlocks: [] })

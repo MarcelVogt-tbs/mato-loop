@@ -1,5 +1,5 @@
 <template>
-  <div class="chat-composer">
+  <div class="chat-composer" :class="{ 'chat-messages--small': session?.sessionProfile?.messageSize === 'small' }">
     <q-resize-observer @resize="resizeComposer" />
     <AppMenu
       v-if="paletteOpen" ref="commandMenu" :model-value="paletteOpen" fit no-parent-event no-focus no-refocus
@@ -24,19 +24,16 @@
         <q-input
           :key="session?.sessionProfile?.messageSize || 'standard'"
           ref="input"
-          :model-value="draft"
-          borderless
-          autogrow
-          :autofocus="autofocus"
-          type="textarea"
-          rows="1"
+          :model-value="draftText"
+          borderless dense autogrow :autofocus="autofocus" type="textarea" rows="1"
           class="chat-composer__input"
           :class="{ 'chat-composer__input--small': session?.sessionProfile?.messageSize === 'small' }"
-          :placeholder="inputPlaceholder"
-          :disable="inputDisabled"
+          :placeholder="draftHasContent ? undefined : inputPlaceholder"
+          :aria-label="inputPlaceholder"
+          :disable="inputDisabled || editingQuote !== null"
           role="combobox" aria-autocomplete="list" :aria-expanded="paletteOpen"
           :aria-controls="paletteOpen ? paletteId : undefined" :aria-activedescendant="paletteOpen ? commandList?.activeId : undefined"
-          @update:model-value="$emit('update:draft', $event)"
+          @update:model-value="updateDraft($event || '')"
           @keydown="handleComposerKeydown"
           @keydown.enter.exact.prevent="submit"
           @paste="handlePaste"
@@ -46,7 +43,16 @@
           :disabled="inputDisabled"
           class="q-mb-sm"
           @remove="$emit('remove-attachment', $event)"
-        />
+        >
+          <template v-if="draftQuotes.length" #default>
+            <ComposerQuote
+              v-for="(quote, index) in draftQuotes" :key="`${draftScope}:${index}`"
+              :quote="quote" :disabled="inputDisabled || (editingQuote !== null && editingQuote !== index)"
+              :message-size="session?.sessionProfile?.messageSize" class="composer-attachment"
+              @update="updateQuote(index, $event)" @remove="removeQuote(index)" @editing="editingQuote = $event ? index : null"
+            />
+          </template>
+        </ComposerAttachments>
         <q-banner
           v-if="currentDictation?.files?.length"
           dense
@@ -75,7 +81,7 @@
             :fields="['agent', 'model', 'reasoning']"
             compact
             @update="$emit('update', $event)"
-            @agent-popup-hide="input?.focus()"
+            @agent-popup-hide="focusInput()"
           />
           <q-space />
           <input
@@ -178,7 +184,7 @@
               type="button"
               :disable="stopping"
             >
-              <AppMenu anchor="top right" self="bottom right" auto-close @hide="input?.focus()">
+              <AppMenu anchor="top right" self="bottom right" auto-close @hide="focusInput()">
                 <q-list>
                   <q-item clickable @click="sendMode = 'interrupt'">
                     <q-item-section>Jetzt senden</q-item-section>
@@ -218,6 +224,8 @@ import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import ComposerAttachments from 'src/features/chat/components/ComposerAttachments.vue'
+import ComposerQuote from './ComposerQuote.vue'
+import { parseQuotedMessage, quotedMessage } from '../quote-drafts'
 import SessionSettingsFields from 'src/features/chat/components/SessionSettingsFields.vue'
 import { useAgentProfileStore } from 'stores/agent-profiles'
 import { useAgentIdentityStore } from 'stores/agent-identity'
@@ -251,6 +259,7 @@ const chat = useChatStore()
 const providers = useProviderStore()
 const toolSettings = useToolSettingsStore()
 const input = ref(null)
+const editingQuote = ref(null)
 const attachmentInput = ref(null)
 const fileDragDepth = ref(0)
 const settingsFields = ref(null)
@@ -259,8 +268,14 @@ const commandList = ref(null)
 const commandMenu = ref(null)
 const composerWidth = ref(0)
 const paletteId = useId()
+const draftBlocks = computed(() => parseQuotedMessage(props.draft))
+const draftText = computed(() => draftBlocks.value.filter(block => block.type === 'text' && block.text).map(block => block.text).join('\n\n'))
+const draftQuotes = computed(() => draftBlocks.value.filter(block => block.type === 'quote'))
+const messageContent = computed(() => quotedMessage([{ type: 'text', text: draftText.value }, ...draftQuotes.value]))
+const draftScope = computed(() => [chat.draftOwnerUserId, props.session?.id, chat.sessionsProjectId, props.session?.sessionProfile?.messageSize].join(':'))
+watch(draftScope, () => { editingQuote.value = null })
 const slashDismissed = ref(false)
-const slashQuery = computed(() => /^\/[a-z0-9_-]*$/iu.test(props.draft) ? props.draft : null)
+const slashQuery = computed(() => /^\/[a-z0-9_-]*$/iu.test(draftText.value) ? draftText.value : null)
 const paletteOpen = computed(() => !inputDisabled.value && !voiceActivity.value
   && !slashDismissed.value && slashQuery.value !== null)
 watch(() => props.draft, () => { slashDismissed.value = false })
@@ -329,10 +344,11 @@ const voiceSendLabel = computed(() => (
 ) ? 'Aufnahme beenden und vormerken' : 'Aufnahme beenden und senden')
 const canFinishAndSend = computed(() => (
   recording.value && !inputDisabled.value && !starting.value && !finalizing.value && !sendingRecording.value
-  && modelSupportsTools.value && (!props.running || props.queueMode)
+  && editingQuote.value === null && modelSupportsTools.value && (!props.running || props.queueMode)
 ))
 const sendDisabled = computed(() => (
   inputDisabled.value
+  || editingQuote.value !== null
   || (props.running && !props.queueMode)
   || starting.value
   || recording.value
@@ -356,10 +372,33 @@ function resizeComposer({ width }) {
 }
 
 function selectCommand(command) {
-  const argumentsText = props.draft.replace(/^\/[a-z0-9_-]*(?:\s+|$)/iu, '')
+  const argumentsText = draftText.value.replace(/^\/[a-z0-9_-]*(?:\s+|$)/iu, '')
   dismissCommands()
-  emit('update:draft', `/${command.name} ${argumentsText}`)
-  void nextTick(() => input.value?.focus())
+  updateDraft(`/${command.name} ${argumentsText}`)
+  void nextTick(() => focusInput())
+}
+
+function updateDraft(text, quotes = draftQuotes.value) {
+  emit('update:draft', quotedMessage([{ type: 'text', text }, ...quotes]))
+}
+
+function updateQuote(index, quote) {
+  updateDraft(draftText.value, draftQuotes.value.map((item, position) => position === index ? { ...quote, type: 'quote' } : item))
+}
+
+function removeQuote(index) {
+  updateDraft(draftText.value, draftQuotes.value.filter((_, position) => position !== index))
+}
+
+function focusInput() {
+  input.value?.focus()
+}
+
+async function insertQuote(quote) {
+  if (inputDisabled.value || editingQuote.value !== null) return
+  updateDraft(draftText.value, [...draftQuotes.value, { ...quote, type: 'quote' }])
+  await nextTick()
+  focusInput()
 }
 
 function submit(event) {
@@ -369,7 +408,7 @@ function submit(event) {
     void finishAndSendRecording()
     return
   }
-  const content = props.draft.trim()
+  const content = messageContent.value.trim()
   if (sendDisabled.value) return
   emit('send', content, { interrupt: props.running && sendMode.value === 'interrupt' })
 }
@@ -405,7 +444,7 @@ function handleComposerKeydown(event) {
 async function finishAndSendRecording() {
   if (!canFinishAndSend.value || !recordingScope) return
   const scope = recordingScope
-  const content = props.draft.trim()
+  const content = messageContent.value.trim()
   const interrupt = props.running && sendMode.value === 'interrupt'
   sendingRecording.value = true
   try {
@@ -457,7 +496,7 @@ function handleDrop(event) {
   event.stopPropagation()
   if (attachmentsDisabled.value) return
   emit('add-attachments', files)
-  input.value?.focus()
+  focusInput()
 }
 
 function handlePaste(event) {
@@ -494,7 +533,7 @@ function finishVoiceRecording() {
       $q.notify({ type: 'negative', message: 'Die Aufnahme konnte nicht verarbeitet werden.' })
     } finally {
       finishingRequest = null
-      input.value?.focus()
+      focusInput()
     }
   })()
   return finishingRequest
@@ -534,7 +573,7 @@ async function discardRecording(file) {
   if (!await confirm('Die Aufnahme wird unwiderruflich entfernt.', 'Aufnahme verwerfen?')) return
   if (scope.ownerUserId !== chat.draftOwnerUserId) return
   removeRecoveryFile(file, scope)
-  input.value?.focus()
+  focusInput()
 }
 
 async function cancelAudioActivity() {
@@ -571,7 +610,9 @@ onBeforeUnmount(() => {
 })
 
 defineExpose({
-  focus: () => input.value?.focus(),
+  focus: focusInput,
+  insertQuote,
+  quoteEditing: computed(() => editingQuote.value !== null),
   cancelAudioActivity,
   prepareAudioNavigation,
   hasAudioActivity: () => voiceActivity.value

@@ -173,11 +173,20 @@
                   :file-actions="message.fileActions"
                   :research-sources="message.research?.linkedSources || emptyItems"
                   :streaming="message.streaming"
+                  :quotable="canQuote"
+                  :message-size="chat.activeContext.sessionProfile?.messageSize"
                   :trusted-image-origins="trustedImageOrigins"
                   @open-file="openToolFile"
                   @rendered="handleMessageRendered"
                   @trust-image-origin="trustImageOrigin"
+                  @quote="addQuote"
                 />
+                <div v-else-if="message.quotedContent" class="chat-message__content">
+                  <template v-for="(block, index) in message.quotedContent" :key="index">
+                    <ComposerQuote v-if="block.type === 'quote'" :quote="block" :editable="false" :message-size="chat.activeContext.sessionProfile?.messageSize" class="q-my-sm" />
+                    <div v-else-if="block.text">{{ block.text }}</div>
+                  </template>
+                </div>
                 <div v-else-if="message.content" class="chat-message__content">{{ message.commandPrompt || message.content }}</div>
               </AgentActivityPanel>
             </template>
@@ -214,7 +223,7 @@
                 dense
                 size="sm"
                 icon="undo"
-                class="chat-message__meta-action chat-message__meta-action--undo"
+                class="chat-message__meta-action chat-message__meta-action--hover"
                 :loading="messageActionId === message.id"
                 :disable="message.deliveryStatus === 'sending' || (messageActionId !== null && messageActionId !== message.id)"
                 aria-label="Nachricht rückgängig machen"
@@ -288,6 +297,13 @@
               >
                 <q-tooltip>Erneut versuchen</q-tooltip>
               </q-btn>
+              <q-btn
+                v-if="message.role === 'assistant' && message.content"
+                flat round dense size="xs" icon="content_copy"
+                class="chat-message__meta-action chat-message__meta-action--hover q-ml-auto"
+                aria-label="Antwort kopieren"
+                @click.stop="copyAnswer(message.content)"
+              />
             </div>
             </div>
             </div>
@@ -500,7 +516,7 @@
 <script setup>
 import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useQuasar } from 'quasar'
+import { copyToClipboard, useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
 import AgentActivityPanel from 'src/features/chat/components/AgentActivityPanel.vue'
@@ -509,6 +525,8 @@ import HomeContent from 'src/features/home/HomeContent.vue'
 import ComputerChoiceStrip from 'src/features/chat/components/ComputerChoiceStrip.vue'
 import ProjectDialog from 'src/features/projects/ProjectDialog.vue'
 import ChatComposer from 'src/features/chat/components/ChatComposer.vue'
+import ComposerQuote from 'src/features/chat/components/ComposerQuote.vue'
+import { parseQuotedMessage } from './quote-drafts'
 import SessionTodoStrip from 'src/features/chat/components/SessionTodoStrip.vue'
 import SessionSettingsFields from 'src/features/chat/components/SessionSettingsFields.vue'
 import WorkspaceField from 'src/features/coding/WorkspaceField.vue'
@@ -635,6 +653,8 @@ async function setTodosCollapsed(collapsed) {
 const trustedImageOriginsBySession = ref(new Map())
 const expandedWorkHistoryIds = ref(new Set())
 const pendingDraft = computed(() => chat.activePendingMessage && !chat.activePendingMessage.preserveDraft)
+const canQuote = computed(() => Boolean(composer.value) && !composer.value?.quoteEditing && !chat.loading && !pendingDraft.value
+  && !changingDraftProject.value && chat.outboxLoaded && !chat.outboxSaving && !chat.historyActionPending)
 const sendingMessageId = computed(() => chat.queueSendingEntryId || (
   chat.activity.phase === 'submitting' || chat.activePendingMessage?.continuationRunId
     ? chat.activePendingMessage?.id : null
@@ -766,7 +786,11 @@ const unmatchedChildren = computed(() => {
 })
 const displayMessages = computed(() => withQueuedTranscriptMessages(
   transcript.value.messages, chat.activeQueuedMessages, chat.queueSendingEntryId, chat.activePendingMessage?.id
-))
+).map(message => {
+  if (message.role !== 'user') return message
+  const blocks = parseQuotedMessage(message.commandPrompt || message.content || '')
+  return blocks.some(block => block.type === 'quote') ? { ...message, quotedContent: blocks } : message
+}))
 const runPresentation = computed(() => agentRunPresentation({
   runId: chat.runId || chat.current?.activeRun?.id,
   running: chat.running,
@@ -868,6 +892,20 @@ function showMessageModel(message) {
 
 function canRetryMessage(message) {
   return !chat.current?.archived && retryAvailableForMessage(message, chat.current?.messages, chat.running)
+}
+
+async function addQuote(quote) {
+  if (!canQuote.value) return
+  await composer.value?.insertQuote(quote)
+}
+
+async function copyAnswer(content) {
+  try {
+    await copyToClipboard(content)
+    $q.notify({ type: 'positive', message: 'Antwort kopiert' })
+  } catch {
+    $q.notify({ type: 'negative', message: 'Die Antwort konnte nicht kopiert werden.' })
+  }
 }
 
 async function undoMessage(message) {
