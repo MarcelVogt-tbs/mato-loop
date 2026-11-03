@@ -113,6 +113,8 @@ Core profiles have protected IDs/names and workflow definitions. Administrators 
 
 Plan asks for recognized file, shell and session-file writes/deletes, but its instructions still forbid implementation. Its analysis temp directory is not permission to change a project. Build implements only an actual user request, not merely a profile switch or approval. Sysadmin inspects state and requests authorization for changes. All three automatically allow ordinary computer reads, even for public models. Plan/Build ask for file access outside the workspace; Sysadmin allows that area. Shell is workspace-independent.
 
+Plan and Build offer `secret_input` by default for [protected credential input](questions.md). Explicit tool restrictions still apply; input grants no action rights.
+
 `delegationEnabled`, `sessionWritePaths`, repository instruction loading and temporary-file access are inherited workflow fields. Shipped Plan/Build enable delegation; all shipped profiles have no additional managed write-path restriction (`sessionWritePaths=null`). A custom non-null list restricts managed writes to those normalized relative paths; `[]` denies them. Models and reasoning are separately resolved through [defaults/templates](session-templates.md).
 
 The optional checklist is message-backed reported progress, not authority or independent verification. Successful snapshots replace earlier state chronologically. Compaction seeds only the covered checklist checkpoint; later results supersede it, and current checklist output is not silently shortened.
