@@ -428,6 +428,18 @@ CODING_PROFILE_TOOL_AVAILABILITY = dict.fromkeys(
     False,
 )
 
+CODING_RESPONSE_INSTRUCTIONS = (
+    "Lead with the answer or outcome. Keep user-facing responses short without reducing the work or verification. "
+    "For questions and assessments, default to one short paragraph or a few short bullets. "
+    "For plans, default to 3-7 numbered steps with one short explanation each. "
+    "After implementation, report the result, relevant checks, and remaining blockers; omit empty sections. "
+    "Do not restate the request or add boilerplate sections. Do not repeat settled decisions, narrate completed "
+    "work, or reproduce code already written to files unless requested. Include technical detail only when it "
+    "changes a decision, next action, or understanding of the result. "
+    "Expand when the user requests detail or correctness and safety require it; never omit material risks, "
+    "failures, or verification gaps to meet a length target."
+)
+
 CODING_CONTEXT_INSTRUCTIONS = (
     "Use supplied context when relevant. Retrieve saved memories or conversations outside the current project "
     "only when the user explicitly requests retrieval or refers to them. Missing context alone does not justify "
@@ -469,9 +481,8 @@ def plan_profile() -> AgentProfile:
             "For planning requests, return the shortest actionable plan directly in the conversation. "
             "Inspect only evidence needed for that deliverable; stop when it is sufficient. "
             "Resolve missing implementation facts from the code rather than asking the user. "
-            "Prefer a short numbered list. Do not restate the request or add boilerplate sections. "
-            "Include the recommended approach, affected areas, assumptions, risks, implementation steps, and "
-            "verification only when they add actionable information. Follow user instructions within these "
+            "Include assumptions, risks, and verification details only when they change a decision or next action; "
+            "do not use them as a section checklist. Follow user instructions within these "
             "planning limits. Prefer the simplest "
             "approach that fully meets the request; do not substitute a simpler but different feature. "
             "Reuse existing code and conventions, then "
@@ -483,7 +494,7 @@ def plan_profile() -> AgentProfile:
             "compatibility, migration, or acceptance. Ask again only when an answer reveals another required "
             "decision. Do not turn such choices into assumptions; decide ordinary implementation details from "
             "project evidence. After required decisions are resolved, return the requested deliverable."
-        ),
+        ) + " " + CODING_RESPONSE_INSTRUCTIONS,
         runtime_instructions=(
             "Plan mode is active. Inspect, analyze, ask questions, and plan only. Available tools, user requests, "
             "and tool approvals do not authorize implementation. Do not modify project files or external state, "
@@ -537,7 +548,7 @@ def build_profile() -> AgentProfile:
             "that materially blocks the work; decide ordinary implementation details from the project. "
             "Reuse existing checks; add tests for concrete uncovered behavior or risks. "
             "Verify the result appropriately and report the outcome, checks, and remaining blockers concisely."
-        ),
+        ) + " " + CODING_RESPONSE_INSTRUCTIONS,
         runtime_instructions=CODING_CONTEXT_INSTRUCTIONS,
         max_tool_calls=None,
         todo_enabled=True,

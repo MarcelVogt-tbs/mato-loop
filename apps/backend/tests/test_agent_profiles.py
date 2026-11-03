@@ -100,6 +100,11 @@ def test_builtin_agent_profile_defaults() -> None:
         assert "simplest" in profile.instructions
         assert "current requirements justify" in profile.instructions
         assert "standard-library or native features" in profile.instructions
+        assert all(rule in profile.instructions for rule in (
+            "Lead with the answer or outcome",
+            "default to 3-7 numbered steps",
+            "never omit material risks, failures, or verification gaps",
+        ))
         assert "Missing context alone does not justify retrieval" in profile.runtime_instructions
     assert default.delegation_enabled is False
     assert default.session_write_paths is None

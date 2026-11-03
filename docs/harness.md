@@ -115,6 +115,8 @@ Plan asks for recognized file, shell and session-file writes/deletes, but its in
 
 Plan and Build offer `secret_input` by default for [protected credential input](questions.md). Explicit tool restrictions still apply; input grants no action rights.
 
+Plan and Build share a provider-neutral response contract: answer or outcome first, short answers to questions, normally 3-7 plan steps, and implementation summaries limited to results, relevant checks and blockers. Settled decisions, work narration and code already written to files are not repeated unless requested. Explicit requests for detail and necessary risk, failure or verification information take precedence over length targets; execution and verification remain unchanged. Derived profiles inherit this guidance unless they replace `instructions`.
+
 `delegationEnabled`, `sessionWritePaths`, repository instruction loading and temporary-file access are inherited workflow fields. Shipped Plan/Build enable delegation; all shipped profiles have no additional managed write-path restriction (`sessionWritePaths=null`). A custom non-null list restricts managed writes to those normalized relative paths; `[]` denies them. Models and reasoning are separately resolved through [defaults/templates](session-templates.md).
 
 The optional checklist is message-backed reported progress, not authority or independent verification. Successful snapshots replace earlier state chronologically. Compaction seeds only the covered checklist checkpoint; later results supersede it, and current checklist output is not silently shortened.
