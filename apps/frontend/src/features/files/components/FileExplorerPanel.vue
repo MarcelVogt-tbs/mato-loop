@@ -15,42 +15,20 @@
           <q-tooltip>Zum übergeordneten Ordner</q-tooltip>
         </q-btn>
         <q-separator vertical inset class="q-mx-xs" />
-        <q-input
-          v-if="searchOpen"
-          ref="searchInput"
-          v-model="workspace.filter"
-          class="file-explorer__filter col"
-          borderless
-          dense
-          clearable
-          placeholder="Geladene Einträge filtern"
-          aria-label="Geladene Einträge filtern"
-          :disable="!explorerAvailable"
-          @keydown.esc.stop.prevent="closeSearch"
-        />
-        <q-breadcrumbs v-else class="file-breadcrumbs col q-px-sm" gutter="xs" active-color="primary">
-          <template #separator><q-icon name="chevron_right" size="18px" /></template>
-          <q-breadcrumbs-el
-            v-for="crumb in selectedBreadcrumbs"
-            :key="crumb.path"
-            :icon="crumb.icon"
-            :label="crumb.label"
-            :aria-label="crumb.ariaLabel"
-            :class="{ 'cursor-pointer': explorerAvailable && crumb.path !== workspace.directoryPath }"
-            @click="explorerAvailable && crumb.path !== workspace.directoryPath && navigateDirectory(crumb.path)"
-          />
-        </q-breadcrumbs>
-        <q-btn
-          flat
-          round
-          dense
-          :icon="searchOpen ? 'close' : 'search'"
-          :aria-label="searchOpen ? 'Suche schließen' : 'Dateien durchsuchen'"
-          :disable="!explorerAvailable"
-          @click="toggleSearch"
-        >
-          <q-tooltip>{{ searchOpen ? 'Suche schließen' : 'Dateien durchsuchen' }}</q-tooltip>
-        </q-btn>
+        <InlineToolbarSearch v-model="workspace.filter" search-label="Dateien durchsuchen" :disable="!explorerAvailable">
+          <q-breadcrumbs class="file-breadcrumbs col q-px-sm" gutter="xs" active-color="primary">
+            <template #separator><q-icon name="chevron_right" size="18px" /></template>
+            <q-breadcrumbs-el
+              v-for="crumb in selectedBreadcrumbs"
+              :key="crumb.path"
+              :icon="crumb.icon"
+              :label="crumb.label"
+              :aria-label="crumb.ariaLabel"
+              :class="{ 'cursor-pointer': explorerAvailable && crumb.path !== workspace.directoryPath }"
+              @click="explorerAvailable && crumb.path !== workspace.directoryPath && navigateDirectory(crumb.path)"
+            />
+          </q-breadcrumbs>
+        </InlineToolbarSearch>
         <q-btn
           flat
           round
@@ -327,6 +305,7 @@
 <script setup>
 import AppMenu from 'src/shared/ui/AppMenu.vue'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
+import InlineToolbarSearch from 'src/shared/ui/InlineToolbarSearch.vue'
 import { computed, nextTick, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import FileTreeNode from 'src/features/files/components/FileTreeNode.vue'
@@ -359,8 +338,6 @@ const executionAgents = useExecutionAgentStore()
 const instanceLimits = useInstanceLimitsStore()
 const uploadInput = ref(null)
 const explorerRoot = ref(null)
-const searchInput = ref(null)
-const searchOpen = ref(Boolean(workspace.filter))
 const treeFocusPath = ref('.')
 const renameDialogOpen = ref(false)
 const renameTarget = ref(null)
@@ -515,21 +492,6 @@ function refreshFiles() {
   const requests = [workspace.refresh()]
   if (workspace.rootIdentity) requests.push(workspace.fetchStorageUsage(workspace.rootIdentity))
   return Promise.all(requests)
-}
-
-async function toggleSearch() {
-  if (searchOpen.value) {
-    closeSearch()
-    return
-  }
-  searchOpen.value = true
-  await nextTick()
-  searchInput.value?.focus()
-}
-
-function closeSearch() {
-  workspace.filter = ''
-  searchOpen.value = false
 }
 
 function openCreateDialog(kind) {

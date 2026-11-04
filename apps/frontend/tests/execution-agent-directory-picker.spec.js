@@ -3,7 +3,7 @@ import { createApp, h, ref } from 'vue'
 import { afterEach, expect, it, vi } from 'vitest'
 import {
   Quasar, QAvatar, QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions,
-  QCardSection, QDialog, QIcon, QItem, QItemLabel, QItemSection, QLinearProgress,
+  QCardSection, QDialog, QIcon, QInput, QItem, QItemLabel, QItemSection, QLinearProgress,
   QList, QSeparator, QToolbar, Dialog, Notify, Ripple
 } from 'quasar'
 
@@ -30,6 +30,7 @@ it('browses, creates and selects directories on the chosen execution agent', asy
           path: '/home/user',
           entries: [
             { name: 'projects', path: '/home/user/projects', kind: 'directory' },
+            { name: 'downloads', path: '/home/user/downloads', kind: 'directory' },
             { name: 'notes.txt', path: '/home/user/notes.txt', kind: 'file' }
           ],
           hasMore: false,
@@ -54,7 +55,7 @@ it('browses, creates and selects directories on the chosen execution agent', asy
   app.use(Quasar, {
     components: {
       QAvatar, QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions,
-      QCardSection, QDialog, QIcon, QItem, QItemLabel, QItemSection,
+      QCardSection, QDialog, QIcon, QInput, QItem, QItemLabel, QItemSection,
       QLinearProgress, QList, QSeparator, QToolbar
     },
     directives: { Ripple },
@@ -70,6 +71,16 @@ it('browses, creates and selects directories on the chosen execution agent', asy
       path: '/home/user'
     })
   }))
+
+  document.querySelector('[aria-label="Ordner durchsuchen"]').click()
+  await vi.waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toBe('Geladene Ordner filtern'))
+  const search = document.activeElement
+  search.value = 'PROJ'
+  search.dispatchEvent(new Event('input', { bubbles: true }))
+  await vi.waitFor(() => expect([...document.querySelectorAll('.q-item__label')]
+    .map((item) => item.textContent)).toEqual(['projects', '/home/user/projects']))
+  search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="Ordner durchsuchen"]')).not.toBeNull())
 
   ;[...document.querySelectorAll('.q-item')]
     .find((item) => item.textContent.includes('/home/user/projects'))
@@ -117,7 +128,7 @@ it('keeps the drive root when navigating Windows directories', async () => {
   app.use(Quasar, {
     components: {
       QAvatar, QBreadcrumbs, QBreadcrumbsEl, QBtn, QCard, QCardActions,
-      QCardSection, QDialog, QIcon, QItem, QItemLabel, QItemSection,
+      QCardSection, QDialog, QIcon, QInput, QItem, QItemLabel, QItemSection,
       QLinearProgress, QList, QSeparator, QToolbar
     },
     directives: { Ripple }
