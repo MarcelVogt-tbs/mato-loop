@@ -22,6 +22,7 @@ from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import (
     DEFAULT_SKILLS,
     WEATHER_SKILL_ID,
+    WRITING_STYLE_SKILL_ID,
     InstanceSkillsSettings,
     SettingsStore,
     SkillDefinition,
@@ -183,7 +184,7 @@ async def test_personal_gate_and_global_admin_authority(monkeypatch, admin):
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = db.scalar.return_value = user
     effective = await SkillService.list(db, user.id)
-    assert [skill.id for skill in effective] == ([shared.id, own.id] if admin else [shared.id])
+    assert [skill.id for skill in effective] == ([shared.id, WRITING_STYLE_SKILL_ID, own.id] if admin else [shared.id, WRITING_STYLE_SKILL_ID])
     if admin:
         await SkillService.require_write(db, user.id, "instance")
     else:
@@ -203,6 +204,26 @@ async def test_default_personal_override_is_separate(monkeypatch):
     skill = await SkillService.set_enabled(AsyncMock(spec=AsyncSession), user_id, WEATHER_SKILL_ID, True)
     assert skill.owner_id == user_id and skill.enabled
     assert not instance.skills[0].enabled
+
+
+async def test_writing_style_is_added_to_existing_catalog_and_personal_examples_stay_private(monkeypatch):
+    user_id = uuid4()
+    instance = InstanceSkillsSettings(skills=[store_skill(DEFAULT_SKILLS[WEATHER_SKILL_ID].model_copy())])
+    personal = SkillsSettings()
+    async def load(_db, model, **kwargs):
+        return instance if model is InstanceSkillsSettings else personal
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    db = AsyncMock(spec=AsyncSession)
+    original = await SkillService.get(db, user_id, WRITING_STYLE_SKILL_ID, "personal")
+    examples = original.instructions.replace("No personal examples stored yet. Replace this sentence when adding the first example.", "### Scheduling\nHallo, Dienstag passt. Viele Grüße!")
+    updated = await SkillService.save_package(
+        db, user_id, original.id,
+        SkillPackage({"SKILL.md": SkillFile(skill_md(original.name, original.description, examples))}),
+        expected_revision=original.revision,
+    )
+    shared = await SkillService.get(db, user_id, original.id, "instance")
+    assert (original.enabled, updated.owner_id, updated.instructions, shared.instructions) == (True, user_id, examples, original.instructions)
 
 
 def test_skill_api_uses_package_service_and_requires_admin(monkeypatch):

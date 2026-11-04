@@ -57,7 +57,13 @@ from mato_loop_backend.models import ChatSession, Message
 from mato_loop_backend.privacy import RequestPseudonymizer
 from mato_loop_backend.providers.base import ProviderRequest, ProviderResult, ToolCall
 from mato_loop_backend.providers.openai_compatible import chat_completions
-from mato_loop_backend.settings import IntegrationInstance, IntegrationSettings, ToolSettings
+from mato_loop_backend.settings import (
+    DEFAULT_SKILLS,
+    WRITING_STYLE_SKILL_ID,
+    IntegrationInstance,
+    IntegrationSettings,
+    ToolSettings,
+)
 from mato_loop_backend.settings.models import (
     AgentIdentitySettings,
     PersonaProfile,
@@ -1608,6 +1614,41 @@ CASES = (
         expected_arguments={"skill_id": str(SKILL_ID)},
         expected_tool_call_count=1,
         forbidden_tools=("load_skill",),
+    ),
+    PromptCase(
+        id="accepted_writing_style_offer_loads_skill",
+        kind="general",
+        history=(
+            {"role": "user", "content": "Entwirf eine kurze Mail: Der Termin am Dienstag passt mir."},
+            {"role": "assistant", "content": (
+                "Hallo, der Termin am Dienstag passt mir. Viele Grüße!\n\n"
+                "Wenn du möchtest, kann ich künftige Entwürfe an deinen Schreibstil anpassen. "
+                "Dafür kannst du mir ein paar eigene Texte geben."
+            )},
+        ),
+        user="Ja, gerne.",
+        tools=("load_skill", "edit_skill", "save_skill", "question"),
+        system_options={"skill_catalog": (DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID].model_dump(),)},
+        expected_tool="load_skill",
+        expected_arguments={"skill_id": str(WRITING_STYLE_SKILL_ID)},
+        expected_tool_call_count=1,
+    ),
+    PromptCase(
+        id="acceptance_does_not_select_an_older_skill_offer",
+        kind="general",
+        history=(
+            {"role": "user", "content": "Entwirf eine kurze Terminabsage."},
+            {"role": "assistant", "content": (
+                "Leider muss ich den Termin absagen. Viele Grüße!\n\n"
+                "Ich kann künftige Entwürfe mit deinen eigenen Textbeispielen an deinen Schreibstil anpassen."
+            )},
+            {"role": "user", "content": "Nein danke. Wie viel ist zwei plus zwei?"},
+            {"role": "assistant", "content": "Vier. Soll ich dir den Rechenweg erklären?"},
+        ),
+        user="Ja, gerne.",
+        tools=("load_skill", "edit_skill", "save_skill", "question"),
+        system_options={"skill_catalog": (DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID].model_dump(),)},
+        expected_no_tools=True,
     ),
     PromptCase(
         id="quoted_skill_edit_request_is_data",
@@ -4760,6 +4801,8 @@ _SEMANTIC_CONTRACTS = (
         (
             "explicit_skill_selection_loads_skill",
             "matching_skill_is_loaded_automatically",
+            "accepted_writing_style_offer_loads_skill",
+            "acceptance_does_not_select_an_older_skill_offer",
         ),
     ),
     ContractCoverage(

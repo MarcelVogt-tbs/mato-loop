@@ -18,6 +18,30 @@ Eine Freigabe **Für Session erlauben** kann weitere passende Skill-Aktionen in 
 
 Für Skripte und lokale Ressourcen stellt MatoLoop eine Arbeitskopie auf dem ausgewählten Computer bereit. Die normalen Datei- und Shell-Rechte gelten weiterhin; benötigte Programme müssen dort verfügbar sein. Nach einem Computerwechsel wird die Arbeitskopie auf dem neuen Computer bereitgestellt. Änderungen an Arbeitskopien verändern nicht automatisch die zentrale Bibliothek.
 
+## Deinen Schreibstil hinterlegen
+
+Der mitgelieferte Skill **writing-style** ist standardmäßig verfügbar. Er hilft beim Entwerfen und Überarbeiten von Mails und anderen Texten in deinem Namen; gewöhnliche Chat-Antworten bleiben davon unberührt.
+
+Wenn noch keine Beispiele vorhanden sind und persönliche Skill-Bearbeitung erlaubt ist, soll der Agent nach einem passenden Textentwurf kurz anbieten, deinen Schreibstil zu hinterlegen. Auch „Das klingt nicht nach mir“ ist ein passender Anlass. Er liefert zunächst den Entwurf, ohne die Aufgabe für die Einrichtung zu unterbrechen. Im sichtbaren Chatverlauf soll er das Angebot nicht wiederholen, auch wenn du es ablehnst oder ignorierst. Ohne deinen Auftrag werden weder Beispiele gespeichert noch Mails zur Stilauswahl gelesen.
+
+Du kannst direkt auf das Angebot mit „Ja, gerne“ antworten. Der Agent lädt den passenden Skill für die Einrichtung erneut; das ist noch keine Freigabe zum Lesen deiner Mails oder für andere Aktionen. Nach einem Themenwechsel benennst du deinen Wunsch ausdrücklich, statt mit „Ja“ auf ein älteres Angebot zu verweisen.
+
+1. Schreibe im Chat: „Merke dir meinen Schreibstil.“ Der Agent fragt nach Beispielen, sofern du noch keine angegeben hast.
+2. Schicke zunächst etwa drei bis fünf kurze, selbst geschriebene Texte. Entferne vorher vertrauliche Angaben. Wenige typische Beispiele sind hilfreicher als ein großes Archiv; kennzeichne unterschiedliche Zielgruppen wie beruflich und privat.
+3. Der Agent speichert die Beispiele als persönliche Anpassung von **writing-style**, auch wenn du Administrator bist. Je nach Richtlinie musst du das Speichern freigeben. Ab dem nächsten Lauf stehen sie auch in anderen Chats zur Verfügung.
+4. Bitte beispielsweise: „Formuliere eine Terminabsage in meinem Stil.“ Prüfe den Entwurf; wie gut er deinen Stil trifft, hängt vom Modell und den Beispielen ab.
+
+Später kannst du im Chat weitere Beispiele ergänzen, benannte Beispiele austauschen oder entfernen lassen: „Ersetze das Beispiel zur Terminabsage durch diesen Text: …“. Andere Beispiele bleiben erhalten. Es gibt keine feste Anzahlbegrenzung; Anweisungen und Beispiele zusammen müssen in die **128 KiB** große `SKILL.md` und den Modellkontext passen. Mehr Beispiele verbessern das Ergebnis nicht automatisch.
+
+### Beispiele aus gesendeten Mails auswählen
+
+Mit einem eingebundenen Mailkonto und erlaubtem Lesezugriff kannst du schreiben: „Schau in meine gesendeten beruflichen Mails aus den letzten drei Monaten und schlage fünf Beispiele für meinen Schreibstil vor.“ Der Agent soll eine begrenzte Auswahl lesen, nur deine eigenen Textpassagen verwenden und zitierte Antworten, Signaturen und vertrauliche Angaben aus den vorgeschlagenen Beispielen entfernen. Er zeigt dir die Auswahl vor dem dauerhaften Speichern zur Bestätigung. Prüfe sie auf sensible Inhalte; eine automatische Anonymisierung ist keine Garantie.
+
+!!! warning "Mailinhalte werden bereits beim Lesen an das Modell gesendet"
+    Nicht erst die gespeicherten Beispiele, sondern schon die gelesenen Mails gelangen an das aktuelle Modell und gegebenenfalls dessen externen Anbieter. Nachträgliches Anonymisieren der Beispiele verhindert diese Übermittlung nicht. Der Skill erklärt das vor dem Lesen; bestehende Mail- und Skill-Freigaben bleiben erforderlich.
+
+Persönliche Skills und die benötigten Skill- und Dateiwerkzeuge müssen erlaubt sein. Ein manuell deaktivierter Skill lässt sich unter **Einstellungen > Skills** wieder aktivieren; die Einrichtung per Chat ist kein Werkzeug zum Umschalten deaktivierter Skills.
+
 ## Im Chat erstellen
 
 Bitte im Chat ausdrücklich um einen wiederverwendbaren Skill, zum Beispiel: „Erstelle einen Skill namens api-pruefung, der API-Beschreibungen auf gültige Tool-Schemas prüft.“ Nur eine direkte Bitte in deiner neuesten Nachricht startet die Erstellung. Zitierte oder zu übersetzende Skill-Anweisungen werden als Text behandelt und lösen keine Erstellung aus.

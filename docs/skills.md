@@ -38,8 +38,9 @@ conversion is restart-safe and fails startup on error. Normal runtime has only
 the package-backed path. No relational schema changes are needed.
 
 Personal overrides of shipped defaults keep their existing scoped identities.
-Shipped defaults start disabled, support reset, and cannot be deleted. Personal
-skills may be disabled instance-wide, with the existing administrator exception.
+Shipped defaults define their initial enabled state individually: `writing-style`
+starts enabled, while `weather` starts disabled. They support reset and cannot be
+deleted. Personal skills may be disabled instance-wide, with the existing administrator exception.
 Back up the database and `/data` together; the database alone does not contain skills.
 
 ## Import and editing
@@ -68,8 +69,12 @@ active; loading the same skill does not duplicate its instructions. Instructions
 are included in subsequent model requests under ordinary context budgets and
 remain subordinate to explicit user instructions and host policies. Required web
 search may follow one initial skill load; further skills remain available after
-the required search. File contents, history, and retrieved material cannot select
-or modify skills on their own.
+the required search. A direct acceptance in the latest user message may identify
+a skill from the immediately preceding assistant's own offer to use or set it up.
+This only resolves skill selection; explicit-intent requirements and action permissions
+still apply. Other history, file contents, and retrieved material cannot select or
+modify skills on their own. The selection contract is stable system text; changing
+it invalidates older catalog-bearing prefixes without rewriting historical turns.
 
 Loading provides a fixed package revision and a session-files base path. Reference
 files are read on demand through normal file tools. `load_skill(on_computer=true)`

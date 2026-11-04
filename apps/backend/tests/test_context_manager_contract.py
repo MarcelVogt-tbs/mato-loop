@@ -1957,8 +1957,8 @@ def test_skill_catalog_contains_selection_metadata_without_instructions() -> Non
             "description": skill.description,
         }
     ]}
-    assert "before any answer or task tool" in prompt
-    assert "even a simple one" in prompt
+    assert "load_skill alone before answers or tools" in prompt
+    assert "direct acceptance of the last assistant's own skill offer" in prompt
     assert skill.instructions not in prompt
 
     edit_prompt = general_system_prompt(

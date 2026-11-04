@@ -2190,7 +2190,7 @@ async def test_required_search_transitions_to_the_shared_streaming_loop(monkeypa
     await AgentRuntime._execute_loop(db, run)
 
     assert [request["tool_choice"] for request in requests] == ["required", "auto"]
-    assert [tool["name"] for tool in requests[0]["tools"]] == ["web_search"]
+    assert [tool["name"] for tool in requests[0]["tools"]] == ["load_skill", "edit_skill", "web_search"]
     assert {tool["name"] for tool in requests[1]["tools"]} >= {
         "read",
         "web_search",
