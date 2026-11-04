@@ -133,7 +133,7 @@ The frontend translates centrally in `apps/frontend/src/utils/api-errors.js`. Ax
 
 Notifications are owner-scoped pointers/previews of canonical messages or requests, created with their source transaction. Reading or deleting one does not resolve an approval, change a session or undo work. Response and live-request notices disappear after acknowledgement; durable agent/Memory notices may retain read history. Push is only an optional delivery accelerator.
 
-Focused-session presence and read watermarks govern acknowledgement. Run-local explicit notify/silence markers control completion notices without suppressing errors or interaction requests. [The handbook](user/anmeldung-und-oberflaeche.md#benachrichtigungen) describes the user-facing lifecycle.
+Focused-session presence and read watermarks govern acknowledgement. Run-local explicit notify/silence markers control completion notices without suppressing errors or interaction requests. Silenced responses also do not contribute to session/project unread indicators or unread-response priority; earlier unread responses remain unread. [The handbook](user/anmeldung-und-oberflaeche.md#benachrichtigungen) describes the user-facing lifecycle.
 
 ## Automations
 

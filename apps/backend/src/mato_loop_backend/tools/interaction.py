@@ -305,9 +305,9 @@ NOTIFY = ToolDefinition(
 
 SILENCE = ToolDefinition(
     "silence",
-    "Suppress this run's automatic completion notification, but keep the final response in the session. "
+    "Suppress this run's completion notification and unread indicators. Keep its final response in the session. "
     "Use for automation checks with no reportable change, or when the user asks for a quiet response. "
-    "Do not silence a normal chat response merely because it is short. Still provide a final response. "
+    "Do not silence normal chat merely because the response is short. "
     "Errors, approvals, questions, and explicit notify notices are unaffected.",
     ToolArguments, _silence, group="agent", label="Abschluss ohne Benachrichtigung", icon="notifications_off",
 )
