@@ -49,29 +49,65 @@ Eine Remoteänderung betrifft alle Worktrees. Bestehende Sessions müssen das ge
 
 Unter **Git > Repository > Aktionen** starten die [Git-Befehle](kanaele.md#coding-befehle) direkt einen Agentenauftrag. **Prüfen & sichern** enthält **Code-Review** und **Commit**, **Übernehmen & veröffentlichen** enthält **Merge in „Zielbranch“** und **Pull Request erstellen**, **Remote** enthält **Push** und **Pull (Fast-forward)**. Die Befehlspalette setzt den Auftrag zunächst ein. Toolrechte gelten unabhängig davon. Ein positives Review ist kein Nachweis der Fehlerfreiheit; es prüft auch auf Overengineering.
 
+Die Git-Befehle bleiben auch ohne Remote, passenden Worktree oder verbundenen Computer
+auswählbar. Der Agent prüft die Git-Voraussetzungen bei der Bearbeitung und erklärt fehlende
+Voraussetzungen oder fragt nach. Für Abschluss, Merge und Pull Request brauchst du einen
+separaten Worktree mit einem anderen Arbeitsbranch als dem Zielbranch. Fehlt er, fordert dich
+der Agent zur Auswahl in der Git-App auf; er wechselt den Arbeitsbereich nicht eigenmächtig.
+Ist ein ausgewählter Computer nicht erreichbar, kann die normale Nachrichtenqueue den Versand
+anhalten. Stelle die Verbindung wieder her und setze den Versand fort. Schreibgeschützte
+Sessions und die Prüfungen für Zugriff, Arbeitsbereich und geänderte Publikationsziele bleiben geschützt.
+
 Aktiviere bei Bedarf **Vor Merge oder Pull Request committen** direkt unterhalb dieser beiden Aktionen. Das Häkchen ist zunächst aus und wird beim Sessionwechsel zurückgesetzt. Es beauftragt den Agenten, zuerst eindeutig zur Aufgabe gehörende Änderungen im Session-Worktree zu committen. Bei unklarer Auswahl fragt er nach; fremde Änderungen und Secrets dürfen nicht mitcommittet werden. Ohne Häkchen sind uncommittete Änderungen ein Blocker. **Push** und **Pull (Fast-forward)** committen auch mit gesetztem Häkchen nichts. In der Palette oder über Telegram entspricht die Auswahl `/git-merge --commit` beziehungsweise `/git-pr --commit`.
 
 Die Rückmeldung beginnt mit Aktion und Ergebnis. Darunter nennt der Agent nur relevante
 Details wie Commit, Zielbranch, PR-Link, ausgeführte Prüfungen oder offene Punkte.
+Zu jedem als Ergebnis genannten Commit zeigt er neben dem Hash die vollständige gespeicherte
+Commit-Nachricht aus Git: Titel, gegebenenfalls Beschreibung und Trailer wie `Release-Note`.
+Der Text bleibt unverändert, auch wenn eine spätere Integration blockiert ist.
 Reviews trennen notwendige Korrekturen von optionalen Verbesserungen und nummerieren
 Befunde, damit du gezielt darauf verweisen kannst. Die Antwort folgt deiner
 [Sprachvorgabe](webrecherche-und-quellen.md#webseiten-abrufen); Git-Bezeichner und
 zitierte Commit-Titel bleiben unverändert. Bei Fehlern muss die Antwort zwischen bereits
 abgeschlossenen Schritten und dem noch offenen Teil unterscheiden.
 
+Code-Review, Autoabschluss und die Prüfungen bei Merge oder Pull Request folgen denselben
+Kriterien: Fehler, Sicherheit und Datenerhalt, parallele Nutzung und erwartete Last,
+fehlende Tests für riskante Logik, relevante Geschwindigkeitsprobleme und unnötige Komplexität.
+Ein Befund braucht einen konkreten Nachteil und die kleinste vollständige Korrektur.
+Vorhandene Lösungen wiederverwenden und unnötigen Code entfernen geht vor neuen Abstraktionen;
+notwendige Schutzprüfungen bleiben erhalten. Optionale Vereinfachungen blockieren keinen Merge
+und erlauben keine zusätzlichen Umbauten. Das einzelne **Code-Review** ändert weiterhin nichts.
+
 ### Nach einer Umsetzung automatisch abschließen
 
-1. Aktiviere in deiner Worktree-Session unter **Git > Repository > Aktionen** **Nach Umsetzung abschließen**.
-2. Wähle **Build** und sende deinen Umsetzungsauftrag. Der Schalter gilt einmalig für die nächste normale Build-Nachricht in diesem Arbeitsbereich; Plan-Nachrichten und einzelne Git-Aktionen verbrauchen ihn nicht. Bei ungespeicherten Editoränderungen kannst du im Dialog **Ohne Autoabschluss senden** wählen; für diese Nachricht wird kein Abschluss vorgemerkt und der Schalter wird ausgeschaltet.
-3. MatoLoop merkt direkt dahinter genau einen **Automatischer Folgeauftrag** vor: `/git-finish` (**Review, Korrektur & Merge**). Nach dem Umsetzungsauftrag prüft dieser normale Agentenlauf die Änderungen, behebt konkrete Befunde und prüft erneut. Seine Anweisungen erlauben Commit und lokalen Merge in den angezeigten Zielbranch erst ohne verbleibende Befunde, fehlgeschlagene Checks oder fehlende Entscheidungen. Fragen und reine Analysen berechtigen nicht dazu. Die Einzelaktion **Code-Review** bleibt schreibgeschützt.
+1. Sende deinen Umsetzungsauftrag in **Build**.
+2. Aktiviere in deiner Worktree-Session unter **Git > Repository > Aktionen** **Nach Umsetzung abschließen**. Der Haken plant sofort die normale Nachricht `/git-finish` ein, genau wie eine manuelle Eingabe. Ohne laufende Antwort kann der Auftrag sofort starten.
+3. Entferne den Haken, wenn du die noch nicht gesendete Nachricht wieder entfernen möchtest. Dafür muss der Computer nicht verbunden sein. Auch das normale Entfernen der Nachricht im Chat entfernt den Haken. Nach dem Senden zeigt der Chat den tatsächlich übermittelten Prompt statt des Kurzbefehls.
+
+Der Auftrag prüft die Änderungen, behebt notwendige Befunde innerhalb der Aufgabe und prüft erneut. Seine Anweisungen erlauben Commit und lokalen Merge in den angezeigten Zielbranch erst ohne verbleibende notwendige Korrekturen, fehlgeschlagene Checks oder fehlende Entscheidungen. Fragen und reine Analysen berechtigen nicht dazu. Die Einzelaktion **Code-Review** bleibt schreibgeschützt.
 
 Du kannst `/git-finish` auch selbst über die Befehlsauswahl oder **Review, Korrektur & Merge** starten. Die Git-Aktionsbuttons reihen normale Befehlsnachrichten ein, auch während einer laufenden Antwort. Dein Entwurf und seine Anhänge bleiben dabei erhalten. Fehlende Voraussetzungen werden bei der jeweiligen Aktion erklärt; Berechtigungen und Prüfungen des Git-Zustands gelten weiterhin.
 
-Der Folgeauftrag verwendet die [gespeicherte Nachrichtenqueue](chat-und-sessions.md#wahrend-einer-antwort-eingreifen), keinen besonderen Git-Schrittautomaten. Scheitert der Umsetzungsauftrag oder brichst du ihn ab, bleibt der Abschluss angehalten. Prüfe den tatsächlichen Arbeitsstand, bevor du ihn entfernst oder neu beauftragst; bloßes Fortsetzen umgeht diese Prüfung nicht. Änderungen an Computer, Arbeitsbereich, Branch oder Ziel werden vor dem Start erneut geprüft. Entfernst du einen noch vorgemerkten Umsetzungsauftrag, entfernt MatoLoop auch seinen vorgemerkten Abschluss.
+Der Haken verwendet die [gespeicherte Nachrichtenqueue](chat-und-sessions.md#wahrend-einer-antwort-eingreifen), keinen besonderen Git-Schrittautomaten und keine Vormerkung für eine spätere Build-Nachricht. Auch nach einem abgebrochenen oder fehlgeschlagenen Auftrag kann die normale Queue den Abschluss starten. Entferne die vorgemerkte Nachricht, wenn du das nicht möchtest. Änderungen an Computer, Arbeitsbereich, Branch oder Ziel werden vor dem Start erneut geprüft.
 
 Klare Codekonflikte und Integrationsfehler behebt der Agent im eigenen Worktree und prüft erneut. Sind die beabsichtigten Änderungen nicht eindeutig vereinbar, erklärt er kurz das Problem und fragt mit Optionen und Empfehlung nach. Relevante Sessions desselben Projekts darf er dafür gezielt lesen; gespeicherte Memories und projektfremde Unterhaltungen bleiben an einen ausdrücklichen Abrufauftrag gebunden. Ungespeicherte Editoränderungen musst du vorher sichern. Es gibt keinen automatischen Push, Pull Request oder Worktree-Abbau. Die Prüfungen sind Agentenarbeit, kein unabhängiger Nachweis der Fehlerfreiheit.
 
-Zeigen die Tools laufende Arbeit oder eine vorübergehende Git-Sperre, soll der Agent warten, später erneut prüfen und selbstständig fortfahren. Geänderte Dateien allein belegen keine laufende Arbeit. Ist der Zielbranch inzwischen weitergelaufen, arbeitet der Agent den neuen Stand im eigenen Worktree ein und prüft erneut, bevor er das ursprüngliche Projektverzeichnis per Fast-forward aktualisiert. Nur notwendige Entscheidungen oder Eingriffe führen zu einer Rückfrage; mit dem normalen Stoppknopf brichst du ab. Es gibt keine zusätzliche Merge-Warteschlange oder garantierte Sperre gegen externe Schreibzugriffe. Nach einem Backend-Neustart werden unterbrochene Läufe als fehlgeschlagen gemeldet; prüfe vor einem neuen Versuch den tatsächlichen Git-Zustand.
+Der Agent kann den committeten Zielbranch in seinen sauberen Worktree einarbeiten und dort prüfen,
+während im ursprünglichen Verzeichnis noch uncommittete Änderungen liegen oder ein anderer Branch
+ausgecheckt ist. Dieses Verzeichnis bleibt dabei unverändert. Erst direkt vor der Rückintegration
+müssen beide Arbeitsbäume sauber und das ursprüngliche Verzeichnis auf dem Zielbranch sein.
+Ist der Zielbranch inzwischen weitergelaufen, übernimmt und prüft der Agent die neuen Commits erneut.
+
+Vor einer Rückfrage wegen des ursprünglichen Verzeichnisses prüft der Agent aktuelle Tool-Hinweise
+auf laufende Arbeit oder vorübergehende Git-Sperren. Sind diese bestätigt, soll er warten, später
+erneut prüfen und selbstständig fortfahren; unabhängige erlaubte Schritte erledigt er inzwischen.
+Geänderte Dateien allein belegen keine laufende Arbeit. Fremde Änderungen werden nicht automatisch
+committet, gestasht, zurückgesetzt oder verworfen. Nur notwendige Entscheidungen oder Eingriffe
+führen zu einer Rückfrage; mit dem normalen Stoppknopf brichst du ab. Es gibt keine zusätzliche
+Merge-Warteschlange, automatische Erkennung externer Agenten oder garantierte Sperre gegen externe
+Schreibzugriffe. Nach einem Backend-Neustart werden unterbrochene Läufe als fehlgeschlagen gemeldet;
+prüfe vor einem neuen Versuch den tatsächlichen Git-Zustand.
 
 **Pull (Fast-forward)** holt den Remote-Zielbranch ins ursprüngliche Projektverzeichnis. Es übernimmt keine Änderungen aus dem Session-Worktree und stoppt bei lokalen Änderungen oder wenn kein Fast-forward möglich ist.
 

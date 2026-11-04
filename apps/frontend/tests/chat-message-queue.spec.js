@@ -107,30 +107,29 @@ describe('chat message queue', () => {
     expect(chat.queuedSendReady).toBe(true)
   })
 
-  it('arms auto-finish through planning and consumes it only for the next Build message', async () => {
+  it('adds and removes the ordinary queued finish command without consuming the draft', async () => {
     const chat = useChatStore()
     activeSession(chat)
-    chat.current.agentProfileId = '00000000-0000-4000-8000-000000000003'
+    chat.running = true
+    chat.setDraft('Mein nächster Auftrag')
+    chat.attachmentDrafts.sessionMessages['session-1'] = [attachment()]
+    let queued = []
+    api.post.mockImplementation(async (_url, payload) => {
+      queued = [{ id: payload.run_id, sessionId: 'session-1', content: payload.content,
+        attachments: [], serverQueued: true, commandPrompt: 'Review, Korrektur & Merge' }]
+      return { data: { queued: true } }
+    })
+    api.get.mockImplementation(async () => ({ data: { items: queued } }))
     const git = useGitActionStore()
-    git.setFinishNext(true)
-    const plan = await chat.queueMessage('Besprechen')
-    const armed = git.finishNext
-    chat.current.agentProfileId = '00000000-0000-4000-8000-000000000004'
-    const build = await chat.queueMessage('Setze den Plan um')
-    const followup = await chat.queueMessage('Noch eine Frage')
-    expect([armed, (await loadChatOutbox('user-1')).map(({ content, afterRunId }) => [content, afterRunId]), git.finishNext]).toEqual([
-      true, [[plan.content, undefined], [build.content, undefined], ['/git-finish', build.id], [followup.content, undefined]], false
+    await git.setFinishQueued(true)
+    const entry = git.finishEntry
+    const displayed = withQueuedTranscriptMessages([], chat.activeQueuedMessages)
+    await git.setFinishQueued(false)
+    expect([displayed.map(message => message.commandPrompt || message.content),
+      api.delete.mock.calls.map(([url]) => url), Boolean(git.finishEntry), chat.activeQueuedMessages,
+      chat.activeDraft, chat.activeAttachmentDraft.length]).toEqual([
+      ['/git-finish'], [`/sessions/session-1/queue/${entry.id}`], false, [], 'Mein nächster Auftrag', 1
     ])
-  })
-
-  it('can send without auto-finish while an editor has unsaved changes', async () => {
-    const chat = useChatStore()
-    activeSession(chat)
-    chat.current.agentProfileId = '00000000-0000-4000-8000-000000000004'
-    useGitActionStore().setFinishNext(true)
-    useWorkspaceStore().editorDirty = true
-    await chat.queueMessage('Weiterarbeiten')
-    expect((await loadChatOutbox('user-1')).map(entry => entry.content)).toEqual(['Weiterarbeiten'])
   })
 
   it('queues a prepared answer without consuming the current draft or attachments', async () => {
@@ -816,6 +815,22 @@ describe('chat message queue', () => {
     expect(restored.activeQueuedMessages).toEqual([])
   })
 
+  it('does not send a message while its local deletion is pending', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    const entry = await chat.queueMessage('/git-finish')
+    let finishDeletion
+    const deletion = vi.spyOn(outboxStorage, 'deleteChatOutboxEntries')
+      .mockReturnValueOnce(new Promise(resolve => { finishDeletion = resolve }))
+    try {
+      const removing = chat.removeQueuedMessage(entry.id)
+      await chat.drainNextOutboxEntry()
+      finishDeletion()
+      await removing
+      expect(api.post).not.toHaveBeenCalled()
+    } finally { deletion.mockRestore() }
+  })
+
   it('restores a queued message with attachments to the composer', async () => {
     const chat = useChatStore()
     activeSession(chat)
@@ -863,12 +878,12 @@ describe('chat message queue', () => {
     const chat = useChatStore()
     activeSession(chat)
     chat.queuedMessages['session-1'] = [{ id: 'server-request', sessionId: 'session-1',
-      content: 'Keep this', serverQueued: true, attachments: [] }]
+      content: 'Keep this', serverQueued: true, paused: false, attachments: [] }]
     const indexedDB = globalThis.indexedDB
     globalThis.indexedDB = undefined
     try {
       await chat.restoreQueuedMessage('server-request')
-      expect(api.delete).not.toHaveBeenCalled()
+      expect([api.delete.mock.calls.length, chat.activeQueuedMessages[0].paused]).toEqual([0, false])
     } finally { globalThis.indexedDB = indexedDB }
   })
 

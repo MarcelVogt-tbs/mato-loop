@@ -51,7 +51,7 @@ async def enqueue(db, session, request_id, payload, attachments=(), *, after_run
     command = parse_command(payload["content"])
     if command is not None:
         prepared = await prepare_command(db, session, command, payload["content"])
-        payload = {**payload, "_command_context": prepared["context"], "_label": command.label}
+        payload = {**payload, "_command_context": prepared["context"]}
     entry = QueuedMessage(id=request_id, session_id=session.id, after_run_id=after_run_id,
                           payload={**payload, "_workspace": workspace_binding(session)}, attachments=[])
     for position, attachment in enumerate(attachments or ()):
@@ -77,7 +77,7 @@ def entry_payload(entry, session):
         "activeFile": entry.payload.get("active_file"), "queuedAt": entry.created_at.isoformat(), "queuePosition": entry.position,
         "paused": entry.paused, "errorCode": entry.error_code, "serverQueued": True,
         "afterRunId": str(entry.after_run_id) if entry.after_run_id else None,
-        "commandPrompt": entry.payload.get("_label"), "sourceType": entry.payload.get("_source"),
+        "sourceType": entry.payload.get("_source"),
         "attachments": [{"id": f"{entry.id}:{item.position}", "name": item.details.get("filename") or "datei", "filename": item.details.get("filename"),
                          "kind": item.details["kind"], "mimeType": item.details["mime_type"], "size": item.details["size"],
                          "sizeBytes": item.details["size"], "voiceMessage": bool((item.details.get("metadata") or {}).get("voiceMessage")),

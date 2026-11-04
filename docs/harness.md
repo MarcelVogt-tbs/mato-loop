@@ -41,10 +41,11 @@ requires restoring and resending that entry. An optional predecessor ID requires
 run in the same session; failed/cancelled predecessors pause dependent requests rather than
 authorizing their effects. Resuming does not bypass this check. Removing a pending request
 also removes its pending dependent follow-up; removal loses the race once a run exists.
-The frontend uses the optional `after_run_id` message field for an explicit opt-in
-[`/git-finish` follow-up](commands.md#agent-flow-contract), saving both messages together
-locally before sending either. The backend generates no Git follow-ups. Queued commands
-capture their Git binding on admission and revalidate it at dispatch.
+The Git checkbox queues or removes an ordinary
+[`/git-finish` message](commands.md#agent-flow-contract), without adding a predecessor binding.
+The backend generates no Git follow-ups. Queued commands capture their Git binding on
+admission and revalidate it at dispatch. The UI shows the slash invocation while pending
+and the captured transmitted prompt after admission, without a special follow-up label.
 Session admissions run independently, including messages arriving while another admission
 waits on a computer. At most one admission per session is in flight; shared background
 shutdown cancels these tasks together with the processors. Ordinary database locks remain
@@ -177,8 +178,10 @@ Run affected tests when changing these boundaries. Under unchanged authorization
 
 Host/profile prompt changes, including the global response-language contract, intentionally
 invalidate older prefixes. The configured language remains stable across tool rounds;
-changing it for a later run changes system context. Git output formats are saved with
-their command turn rather than retroactively replacing historical command instructions.
+changing it for a later run changes system context. Git review/merge instructions and output
+formats are saved with their command turn rather than retroactively replacing historical
+command instructions. Updating these contracts changes newly prepared command turns, not
+earlier snapshots or the shared system prefix.
 Automatic follow-ups
 append ordinary turns with host provenance. Workspace occupancy is not injected or inferred
 from stored run statuses or file timestamps. Legacy private occupancy metadata is ignored,

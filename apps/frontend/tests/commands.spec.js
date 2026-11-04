@@ -112,7 +112,28 @@ it('queues a selected command during a run without consuming its draft', async (
   expect(send).toHaveBeenCalledWith('/git-review', { preserveDraft: true, activeFile: null })
 })
 
-it('explains and blocks publication without a remote in the Git app', async () => {
+it('allows removing a queued finish command without a connected computer or repository catalog', async () => {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const chat = useChatStore()
+  chat.outboxLoaded = true
+  chat.current = { id: 'session', preferredExecutionAgentId: 'agent', currentDirectory: '/repo' }
+  chat.queuedMessages.session = [{ id: 'finish', content: '/git-finish' }]
+  useExecutionAgentStore().items = [{ id: 'agent', connected: false }]
+  const remove = vi.spyOn(chat, 'removeQueuedMessage').mockImplementation(async () => {
+    chat.queuedMessages.session = []
+  })
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp({ render: () => h(GitApp) })
+  app.use(pinia).use(Quasar, quasarOptions).mount(root)
+  ;[...root.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === 'Repository').click()
+  await vi.waitFor(() => expect(root.querySelector('[aria-label="Nach Umsetzung abschließen"]')).not.toBeNull())
+  root.querySelector('[aria-label="Nach Umsetzung abschließen"]').click()
+  await vi.waitFor(() => expect(remove.mock.calls).toEqual([['finish']]))
+})
+
+it('queues publication without a remote or a connected computer in the Git app', async () => {
   const pinia = createPinia()
   setActivePinia(pinia)
   const commands = useCommandStore(), chat = useChatStore()
@@ -120,16 +141,16 @@ it('explains and blocks publication without a remote in the Git app', async () =
   commands.items = [{ source: 'git', name: 'git-sync', label: 'Pull (Fast-forward)', disabledReason: 'Remote einrichten, um zu veröffentlichen.' }, { source: 'git', name: 'git-remote', label: 'Remote einrichten' }]
   chat.outboxLoaded = true
   chat.current = { id: 'session', preferredExecutionAgentId: 'agent', currentDirectory: '/repo', workspaceMode: 'local' }
-  useExecutionAgentStore().items = [{ id: 'agent', connected: true }]
-  const run = vi.spyOn(useGitActionStore(), 'run')
+  useExecutionAgentStore().items = [{ id: 'agent', connected: false }]
+  const send = vi.spyOn(chat, 'send').mockResolvedValue({})
   root = document.createElement('div')
   document.body.append(root)
-  app = createApp({ render: () => h(GitActionList) })
+  app = createApp({ render: () => h(GitApp) })
   app.use(pinia).use(Quasar, quasarOptions).mount(root)
+  ;[...root.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === 'Repository').click()
   await nextTick()
   root.querySelector('.q-item').click()
-  expect([root.textContent.includes('Remote einrichten, um zu veröffentlichen.'), root.textContent.includes('/git-'), root.querySelectorAll('.q-item').length, run.mock.calls.length])
-    .toEqual([true, false, 1, 0])
+  expect(send).toHaveBeenCalledWith('/git-sync', { preserveDraft: true, activeFile: null })
 })
 
 it.each(['git-merge', 'git-pr', 'git-push', 'git-sync'])('applies the shared commit checkbox only to merge and PR (%s)', async name => {
