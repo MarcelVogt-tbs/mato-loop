@@ -14,6 +14,7 @@ from mato_loop_backend.providers.base import ProviderResult
 from mato_loop_backend.tools.catalog import tool_registry
 
 
+@pytest.mark.usefixtures("skill_library")
 @pytest.mark.parametrize("failure", ["length", "max_tokens", "max_output_tokens", "MAX_TOKENS", "after_generation", "after_commit", "next_request"])
 async def test_canonical_error_retains_only_current_safe_generation_diagnostics(monkeypatch, failure):
     result = ProviderResult(
@@ -53,6 +54,7 @@ async def test_canonical_error_retains_only_current_safe_generation_diagnostics(
         monkeypatch.setattr(_mock_target, 'AsyncSessionFactory', _mock_value)
     monkeypatch.setattr(AgentRuntime, "_ensure_user_active", AsyncMock())
     monkeypatch.setattr(AgentRuntime, "_terminalize_incomplete_tool_calls", AsyncMock())
+    monkeypatch.setattr("mato_loop_backend.automations.AutomationService.enqueue_event", AsyncMock())
     monkeypatch.setattr(mock_agent_runtime.NotificationService, "deliver_message_after_commit", AsyncMock())
     if failure == "after_generation":
         monkeypatch.setattr(mock_agent_runtime.EpisodeIndexService, "enqueue", AsyncMock(side_effect=RuntimeError("private")))

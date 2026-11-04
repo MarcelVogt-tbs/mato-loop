@@ -26,7 +26,7 @@ from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.tools.catalog import tool_registry
 
 
-async def test_native_coding_replays_patch_repairs_checks_and_diff(tmp_path, monkeypatch):
+async def test_native_coding_replays_patch_repairs_checks_and_diff(tmp_path, monkeypatch, skill_library):
     agent_id = uuid4()
     directory = "/home/test/project"
     revision = "a" * 64

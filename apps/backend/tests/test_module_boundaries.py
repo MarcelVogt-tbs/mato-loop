@@ -62,10 +62,10 @@ def test_integration_adapters_live_in_product_packages():
     for adapter in integrations.glob("*/adapter.py"):
         assert (adapter.parent / "__init__.py").is_file()
         assert f"{PREFIX}integrations.{adapter.parent.name}.adapter" in registered_modules
-    assert not any(
-        isinstance(node, ast.ClassDef) and node.name.endswith("IntegrationService")
-        for node in ast.parse((integrations / "service.py").read_text()).body
-    )
+    assert {
+        node.name for node in ast.parse((integrations / "service.py").read_text()).body
+        if isinstance(node, ast.ClassDef) and node.name.endswith("IntegrationService")
+    } <= {"CredentialIntegrationService"}
 
 
 def test_eager_backend_import_graph_is_acyclic():

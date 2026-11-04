@@ -45,10 +45,10 @@
           <div class="q-pa-md q-gutter-y-md">
             <div v-if="!repository" class="app-muted" role="status">{{ loading ? 'Repository wird geprüft …' : 'Wähle einen Computer und Workspace mit installiertem Git.' }}</div>
             <div v-else-if="!repository.repository" class="app-muted" role="status">Im gewählten Workspace ist noch kein Git-Repository vorhanden.</div>
-            <section v-if="repository" aria-labelledby="git-actions-title">
+            <section aria-labelledby="git-actions-title">
               <h2 id="git-actions-title" class="text-subtitle2 q-mt-none q-mb-sm">Aktionen</h2>
               <q-card flat bordered class="app-surface overflow-hidden">
-                <GitActionList :disabled="saving || !online" :target-branch="targetBranch" :auto-merge="autoMerge" @refresh="refreshCommands" />
+                <GitActionList :disabled="saving" :target-branch="targetBranch" :auto-merge="autoMerge" @refresh="refreshCommands" />
               </q-card>
             </section>
             <section v-if="repository?.repository" aria-labelledby="git-settings-title">

@@ -185,13 +185,29 @@ selection and ingress semantics.
 | `/git-review` | Review working changes and unpublished commits without editing or publishing. |
 | `/git-commit` | Inspect and explicitly commit selected task changes without fetching or pushing. |
 | `/git-merge [--commit]` | Optionally commit task changes, merge the local target into the worktree, review, check, and fast-forward the clean original checkout. No fetch or push. |
-| `/git-push` | Publish the existing current branch without committing, fetching or merging. |
+| `/git-push` | Publish existing commits to a project-appropriate remote branch without committing, fetching or merging. |
 | `/git-pr [--commit]` | Optionally commit task changes, fetch and integrate the remote target, review, check, publish and create or update the PR. |
 | `/git-sync` | Fetch and fast-forward the clean original project checkout without switching branches or discarding work. |
 | `/git-remote [name] [url]` | Configure only the explicitly requested remote through normal agent tools; ask for missing values. |
 
-Merge and PR commands initially require a managed worktree. Review also works in a
-local repository; sync requires a configured or unambiguous remote and target.
+The Git catalog is fixed and does not probe repositories or disable commands for missing
+Git prerequisites. The agent checks those prerequisites when processing the command and
+explains blockers or asks for a decision. Finish, Merge and PR require a separate worktree
+and different source/target branches before effects; the agent asks the user to select a
+suitable worktree in the Git app rather than creating or switching one implicitly.
+Review also works in a local repository; sync needs a remote and target.
+MatoLoop owns worktree creation/selection/removal and owner/path/target binding safeguards,
+not a second Git workflow. Missing Git prerequisites do not reject command admission;
+access, repository identity and changed publication-target checks remain enforced.
+An unavailable selected computer can still pause queue admission through the normal error path.
+
+Push and PR follow repository publication conventions and appropriate existing branch/upstream
+mappings on the configured remote. Technical worktree names are not automatically exported
+as remote branches. The agent asks if the publication branch or name is unclear; a different
+remote branch name does not require renaming the local branch. Publishing worktree commits
+does not require prior Finish or local integration. Push leaves pending working changes
+untouched and never commits, fetches, merges, rebases, discards work or force-pushes.
+
 Review checks correctness, security and overengineering and reports only; it never repairs
 project files. Temporary check files outside the project remain subject to normal permissions.
 
@@ -255,27 +271,36 @@ the first remote fetch.
 
 ## Agent flow contract
 
-The worktree-only **Nach Umsetzung abschließen** switch makes the frontend persist the
-next normal Build message and one `/git-finish` follow-up together in its offline buffer,
-then submit both through the [durable message queue](harness.md#message-queue). The backend
-does not generate Git follow-ups. The original request remains ordinary text. Plan,
-continuations, prepared answers and other commands do not consume the switch. `/git-finish`
-is also available as a normal command in the palette and Git app. Automatic follow-ups
-carry the generic predecessor reference and visible/model-facing follow-up provenance.
-This does not constrain the generic queue or make Plan/Build coding-only profiles.
+The worktree-only **Nach Umsetzung abschließen** checkbox reflects a pending `/git-finish`
+message in the current session. Checking it submits that ordinary command through the
+[durable message queue](harness.md#message-queue); unchecking removes the pending message.
+Removal stays available without a connected computer or a loaded repository catalog.
+There is no next-Build flag or generated follow-up. Without an active run the command can
+start immediately, exactly like manual submission. Draft text and attachments remain untouched.
+Queued commands display their original slash invocation; sent commands display the captured
+prompt actually submitted. `/git-finish` is also available in the palette and Git app.
 
-The single follow-up shares Review, Commit and Merge instruction cores: review the completed
-implementation, correct findings, recheck, commit task changes, and merge locally.
-Prompts require resolving findings and failed checks before proceeding, and asking for necessary decisions;
+The command shares Review, Commit and Merge instruction cores: review the completed
+implementation, correct required findings, recheck, commit task changes, and merge locally.
+Review, Finish, Merge and PR use the same risk-first review criteria: affected code, callers,
+dependencies, tests and documented load; correctness, security/data loss, concurrency/scaling,
+missing protection for risky logic, significant performance problems, then unnecessary complexity.
+Findings require a confirmed code path, a concrete failure case or maintenance cost, and the
+smallest complete fix. Reusing existing helpers and deleting unnecessary code take precedence
+over new abstractions or test infrastructure; safeguards and documented tradeoffs remain.
+Optional simplifications neither block integration nor authorize unrelated refactoring.
+Prompts require resolving required findings and failed checks before proceeding, and asking for necessary decisions;
 questions and analysis do not authorize Git effects. There is no completion tool or phase
 progression. Standalone review remains report-only. Normal admission, permissions, profile
 selection and error handling apply; dispatch revalidates the computer, checkout, branch and
-target. Failed/cancelled predecessors pause the follow-up, including after restart. Pending
+target. Predecessor-bound queue entries retain their failed/cancelled-predecessor checks. Pending
 messages survive restart, but an already-started run and its Git effects are never replayed
 automatically.
 
 Git action buttons are shortcuts to the same message queue, not direct run starters. Active
-runs and pending messages do not disable them. Draft text and attachments remain untouched.
+runs, pending messages, missing Git prerequisites and an offline computer do not disable them.
+The action list remains visible without repository discovery; message-submission restrictions
+such as read-only sessions still apply. Draft text and attachments remain untouched.
 Workspace selection retains its same-session active-run check and validates the selected
 computer, repository and directory permissions.
 
@@ -283,9 +308,16 @@ There is no host merge queue, target reservation or workspace-occupancy inventor
 context. A stable instruction says that the workspace may be shared, not that another worker
 is active. When tools show ongoing work or a temporary Git lock, the model waits between
 checks and resumes on the current state. Dirty files alone are not evidence of active work.
-If the target advances, the model incorporates it and repeats review/checks before a
-fast-forward-only update through the original checkout. Clear conflicts and integration
-findings are repaired in the task worktree; unresolved intent requires options and a
+Workspace preparation requires a clean session worktree and an existing local target branch,
+not a clean original checkout or its target-branch checkout. The original remains untouched
+while its committed target is incorporated and the combined result is reviewed in the worktree.
+Only immediately before the fast-forward-only update through the original checkout must both
+working trees be clean, the original be on the target branch and the reviewed commit be verified.
+If the target advances, the model incorporates it and repeats review/checks before retrying.
+Before asking about a blocked original checkout, the model checks current tool evidence for
+temporary activity or Git locks and completes independent permitted work. It never makes the
+original ready by committing, stashing, resetting or discarding unrelated changes.
+Clear conflicts and required integration findings are repaired in the task worktree; unresolved intent requires options and a
 recommendation. Sessions do not reserve checkouts or shared Git metadata: another session's
 queued, running or waiting run does not block chat, Git commands, worktree creation or
 workspace changes. Git effects retain normal shell authorization and run cancellation.
@@ -305,11 +337,15 @@ the same commit core and commit-message rules for standalone Commit and optional
 pre-commit steps; review instructions are shared by Review, Merge and PR. Prompt
 composition removes the option token and avoids conflicting commit prohibitions.
 This adds no backend Git execution. The message API
-exposes that snapshot as `commandPrompt` for user-selected commands and a German step
-label for automatic follow-ups; execution wrappers
+exposes that snapshot as `commandPrompt`, including for predecessor-bound commands; execution wrappers
 and resolved runtime context remain private. The canonical message content retains
 the original invocation for undo and retry. Older messages without a prompt snapshot
 keep showing their invocation rather than rebuilding it from the current catalog.
+
+Git results include the short hash and full stored message of each reported resulting commit,
+read from Git and quoted verbatim in a text block, including body and trailers. This includes
+all commits created by the action even if a later integration step is blocked. Output brevity
+does not truncate commit messages; local integration and publication remain separate outcomes.
 
 The agent uses ordinary file, shell and available integration tools. Git credentials
 and host CLIs such as `gh` belong on the selected computer. Missing PR authentication
