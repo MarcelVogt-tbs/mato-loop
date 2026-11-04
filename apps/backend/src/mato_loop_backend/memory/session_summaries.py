@@ -18,6 +18,7 @@ from mato_loop_backend.sessions.trust import effective_session_trust, session_vi
 from mato_loop_backend.settings import (
     AgentRuntimeSettings,
     MemorySettings,
+    ReasoningEffort,
     SettingsStore,
     TrustLevel,
 )
@@ -121,7 +122,7 @@ async def prepare_summary(db, session, settings, model, *, explicit: bool) -> tu
     return manifest, messages
 
 
-async def process_summary(db: AsyncSession, run, session, model, provider) -> None:
+async def process_summary(db: AsyncSession, run, session, model, provider, *, reasoning_effort: ReasoningEffort | None = None) -> None:
     from mato_loop_backend.memory.dreaming import DreamingService, _dreaming_reasoning_effort
 
     manifest = dict(run.summary or {})
@@ -152,7 +153,7 @@ async def process_summary(db: AsyncSession, run, session, model, provider) -> No
         messages=[{"role": "system", "content": SUMMARY_PROMPT},
                   {"role": "user", "content": json.dumps(source, ensure_ascii=False, sort_keys=True)}],
         tools=[summary_tool()], timeout=90, max_output_tokens=4_096,
-        reasoning_effort=_dreaming_reasoning_effort(model),
+        reasoning_effort=_dreaming_reasoning_effort(model, reasoning_effort),
     )
     content = validated_summary(result.tool_calls, evidence)
     locked = await db.get(ChatSession, session.id, with_for_update=True, populate_existing=True)

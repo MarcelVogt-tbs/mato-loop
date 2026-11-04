@@ -48,11 +48,13 @@ Beim Ändern von **privat** auf **öffentlich** warnt MatoLoop, weil diese Einst
 
 Unter **Memory > Verarbeitung** schaltest du **Memories extrahieren** und **Session-Zusammenfassungen erstellen** unabhängig voneinander ein. Du kannst eines der Verfahren oder beide verwenden. Die Memory-Extraktion ist zunächst eingeschaltet, Session-Zusammenfassungen sind ausgeschaltet.
 
-Unter **Gemeinsame Einstellungen** steuert **Automatisch verarbeiten** die zeitgesteuerten Läufe. Dieser Schalter ist zunächst ausgeschaltet. Nachrichtenlimit, Intervall und Leerlauf gelten für die eingeschalteten Verfahren. **Jetzt verarbeiten** startet sie auch ohne Automatik. Sind beide Verfahren ausgeschaltet, ist kein Start möglich. Die Modelleinstellung bleibt unter **Standardmodelle > Memory / Dreaming**.
+Unter **Gemeinsame Einstellungen** steuert **Automatisch verarbeiten** die zeitgesteuerten Läufe. Dieser Schalter ist zunächst ausgeschaltet. Nachrichtenlimit, Intervall und Leerlauf gelten für die eingeschalteten Verfahren. **Jetzt verarbeiten** startet sie auch ohne Automatik. Sind beide Verfahren ausgeschaltet, ist kein Start möglich. Modell und Reasoning-Stufe wählst du unter [**Standardmodelle > Memory / Dreaming**](provider-und-modelle.md#standardmodelle-und-sessionvorlagen).
 
 ### Memory-Extraktion
 
 Die Extraktion verarbeitet geeignete abgeschlossene Chatnachrichten mit vollem Memory. Sessions mit Automationen folgen denselben Einstellungen; Subagenten und Fehlerausgaben sind keine Quellen. Extrahiert werden sollen dauerhafte benutzerspezifische Angaben, etwa eigene Geräte, stabile Umgebungen, Beziehungen, Vorlieben oder langfristige Ziele. Aktueller Aufgabenfortschritt, auch bestätigte Testergebnisse und offene Prüfungen, vorübergehende Geräte und Implementierungsdetails sollen im Verlauf bleiben. Bei unklarer Dauerhaftigkeit soll das Modell die Angabe auslassen. **Über mich** wird nicht kopiert. Die Extraktion sieht nur ihren Quellenabschnitt, keine vorhandenen Memories oder anderen Sessions.
+
+Anforderungen an eine bestimmte Anwendung, Review-Abläufe und Automationsaufträge sollen nicht als persönliche Vorlieben oder langfristige Ziele gespeichert werden. Auch wiederholte Ausführungen ändern das nicht. Deine langfristige Mitarbeit an einem Projekt, bestehende Umgebungen und allgemeine Arbeitsweisen bleiben dagegen geeignet; eine klare Aussage genügt. Enthält eine Nachricht beides, sollen die dauerhaften Angaben erhalten bleiben und die Auftragsdetails entfallen. Unsichere Überlegungen sollen nicht zu festen Vorlieben werden.
 
 Die Einordnung trifft das Modell; Fehlentscheidungen sind weiterhin möglich, etwa bei vagen „unverändert“-Meldungen oder fehlendem Projektkontext. Prüfe gespeicherte Angaben unter **Erinnerungen** und korrigiere oder entferne unpassende Einträge.
 

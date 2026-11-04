@@ -62,12 +62,15 @@ Generate migrations with `./scripts/dev.sh db revision --autogenerate -m "descri
 ./scripts/eval.sh file-tools --help
 ./scripts/eval.sh project-context --help
 ./scripts/eval.sh session-summary --help
+./scripts/eval.sh memory-extraction --check
 ./scripts/eval.sh coding-comparison --help
 ./scripts/eval.sh browser-performance --help
 ./scripts/eval.sh shell-decider --check
 ```
 
 Evaluator arguments are forwarded unchanged. Browser-performance uses the running backend; the other targets use disposable containers. Shell-decider adds the evaluation-only Compose overlay and builds its image on demand. Raw outputs stay under ignored `data/` paths; link published conclusions from the [documentation index](index.md).
+
+`memory-extraction` compares the pre-adoption extraction prompt with the short experimental addition or, with `--refined`, the adopted artifact/user boundary. It uses the production default candidate limit, message serializer, provider adapter, candidate validator, and automatic Dreaming reasoning selection. `--reasoning-effort` selects a supported explicit level instead; recorded requests include the resulting effort and thinking switch. It defaults to `qwen3.8-27b` at `http://192.168.1.102:13306/v1` and three repetitions; `--holdout` selects independently worded cases. Use a new `--output` path for each run; existing artifacts are never overwritten. Requests are serial and tool calls are scored but never executed. No application database, settings, sessions, or memories are accessed. `--check` checks paired inputs and reasoning settings, verifies that the refined prompt equals the production prompt, and rejects empty output for a positive case without contacting the model.
 
 `session-summary` compares existing conversation snippets with source-linked summaries using the enabled `halogen-qwen3.8-flash-next` model by default (`--model` selects another exact model ID). It uses native retrieval and read handlers over synthetic project sessions in rollback-only transactions, including corrections, unverified claims, quoted instructions, and a continued session. Both variants share the default automatic context budget and tool access. Generation uses the production incremental prompt, tool schema, evidence validator, and bounded projection, passing only the previous summary and new messages for the continued session. It makes paid provider requests; `--check` only checks scoring without model requests. No Dreaming settings, existing sessions, or durable memories are changed. This is a provider-level retrieval comparison, not a persistent Dreaming worker or summary-ranking benchmark.
 

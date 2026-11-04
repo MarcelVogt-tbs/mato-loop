@@ -108,7 +108,7 @@ async def source(request):
 async def test_incremental_summary_keeps_checkpoint_on_invalid_output(source, monkeypatch):
     p = source
     provider = LlmProviderConfig(name="Test", adapter_type="openai-compatible")
-    model = ModelConfig(provider_id=provider.id, model_id="test")
+    model = ModelConfig(provider_id=provider.id, model_id="qwen3.8-27b")
     complete = AsyncMock()
     monkeypatch.setattr(ProviderService, "complete", complete)
 
@@ -118,13 +118,14 @@ async def test_incremental_summary_keeps_checkpoint_on_invalid_output(source, mo
                              source_from_message_id=messages[0].id, source_to_message_id=messages[-1].id, summary=manifest)
         p.db.add(run)
         await p.db.flush()
-        await process_summary(p.db, run, p.session, model, provider)
+        await process_summary(p.db, run, p.session, model, provider, reasoning_effort="medium")
         return run
 
     # Enabling summaries must not silently backfill an inactive old session.
     assert await prepare_summary(p.db, p.session, p.settings, model, explicit=False) == (None, [])
     complete.return_value = ProviderResult(tool_calls=[ToolCall("summary", "record_session_summary", summary_content(p.messages[0].id))])
     await generate()
+    assert complete.await_args.kwargs["reasoning_effort"] == "medium"
     previous = p.session.session_summary
     correction = Message(session_id=p.session.id, role="user", content="Jetzt gilt Port 20563; COLD-BOOT ist erfolgreich.",
                          created_at=datetime.now(UTC) - timedelta(minutes=20))

@@ -909,6 +909,7 @@ async def test_model_delete_clears_defaults_and_sessions_in_its_scope(
     settings_type = AiProviderSettings if scope == "instance" else UserAiSettings
     settings = settings_type(providers=[provider], models=[model])
     defaults = (ModelDefaultsSettings if scope == "instance" else UserModelDefaultsSettings)(**{field: model.id for field in default_fields})
+    defaults.dreaming_reasoning_effort = "low"
     instance = settings if scope == "instance" else AiSettings(personal_providers_enabled=True)
 
     async def load(_db, loaded_type, **_kwargs):
@@ -926,6 +927,7 @@ async def test_model_delete_clears_defaults_and_sessions_in_its_scope(
 
     assert settings.models == []
     assert all(getattr(defaults, field) is None for field in default_fields)
+    assert defaults.dreaming_reasoning_effort is None
     statement = db.execute.await_args.args[0]
     sql = str(statement)
     assert ("chat_sessions.user_id" in sql) is (scope == "personal")

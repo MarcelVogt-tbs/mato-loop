@@ -184,10 +184,11 @@ def test_automatic_dreaming_is_independent_from_manual_dreaming() -> None:
     )
 
 
-def test_dreaming_disables_reasoning_only_when_the_model_supports_it() -> None:
+@pytest.mark.parametrize(("configured", "expected"), [(None, None), (ReasoningEffort.MEDIUM, ReasoningEffort.MEDIUM), (ReasoningEffort.NONE, ReasoningEffort.NONE), (ReasoningEffort.ULTRA, None)])
+def test_dreaming_reasoning_uses_supported_override_or_model_default(configured, expected) -> None:
     assert _dreaming_reasoning_effort(
-        ModelConfig(provider_id=uuid4(), model_id="Qwen/Qwen3.8-27B-Q4_K_M.gguf")
-    ) == ReasoningEffort.NONE
+        ModelConfig(provider_id=uuid4(), model_id="Qwen/Qwen3.8-27B-Q4_K_M.gguf"), configured,
+    ) == expected
     assert _dreaming_reasoning_effort(
         ModelConfig(
             provider_id=uuid4(),
@@ -1488,7 +1489,7 @@ async def test_dreaming_repairs_invalid_candidate_tool_arguments(
         name="Lokal", adapter_type="openai-compatible", trust_level="private"
     )
     model = ModelConfig(
-        provider_id=provider.id, model_id="model",
+        provider_id=provider.id, model_id="qwen3.8-27b",
         max_output_tokens=manual, discovered_max_output_tokens=discovered,
     )
     complete = AsyncMock(
@@ -1540,12 +1541,14 @@ async def test_dreaming_repairs_invalid_candidate_tool_arguments(
         max_candidates=10,
         evidence_ids={evidence_id},
         user_evidence_ids={evidence_id},
+        reasoning_effort=ReasoningEffort.MEDIUM,
     )
 
     assert output.candidates[0].content == "Der Nutzer ist verheiratet und hat ein Kind."
     assert complete.await_count == 2
     assert [call.kwargs["max_output_tokens"] for call in complete.await_args_list] == [expected] * 2
     assert [call.kwargs["safety_reserve_tokens"] for call in complete.await_args_list] == [128] * 2
+    assert [call.kwargs["reasoning_effort"] for call in complete.await_args_list] == [ReasoningEffort.MEDIUM] * 2
     retry_messages = complete.await_args_list[1].kwargs["messages"]
     assert retry_messages[-1]["role"] == "tool"
     assert "memory, category, evidence, and remove" in retry_messages[-1]["content"]
@@ -1810,7 +1813,7 @@ async def test_dreaming_reconciliation_repairs_invalid_output(
         name="Lokal", adapter_type="openai-compatible", trust_level="private"
     )
     model = ModelConfig(
-        provider_id=provider.id, model_id="model",
+        provider_id=provider.id, model_id="qwen3.8-27b",
         max_output_tokens=manual, discovered_max_output_tokens=discovered,
     )
     complete = AsyncMock(
@@ -1856,9 +1859,11 @@ async def test_dreaming_reconciliation_repairs_invalid_output(
         candidate_local_ids=[{memory_id}],
         candidate_remove=[False],
         safety_reserve_tokens=128,
+        reasoning_effort=ReasoningEffort.MEDIUM,
     )
 
     assert result.decisions[0].action == "unchanged"
+    assert [call.kwargs["reasoning_effort"] for call in complete.await_args_list] == [ReasoningEffort.MEDIUM] * 2
     assert complete.await_count == 2
     assert [call.kwargs["max_output_tokens"] for call in complete.await_args_list] == [expected] * 2
     assert [call.kwargs["safety_reserve_tokens"] for call in complete.await_args_list] == [128] * 2
@@ -2000,6 +2005,7 @@ def test_dreaming_system_prompt_remains_isolated_from_agent_context() -> None:
     assert "user's full name" in DREAMING_SYSTEM_PROMPT
     assert "owned equipment, lasting setup, or long-term goal" in DREAMING_SYSTEM_PROMPT
     assert "Categories context and goal do not relax this rule" in DREAMING_SYSTEM_PROMPT
+    assert "specifications of an artifact the user is designing" in DREAMING_SYSTEM_PROMPT
     assert "Explicit removal requests remain eligible" in DREAMING_SYSTEM_PROMPT
     assert "temporary or borrowed equipment" in DREAMING_SYSTEM_PROMPT
     assert "empty candidates array" in DREAMING_SYSTEM_PROMPT

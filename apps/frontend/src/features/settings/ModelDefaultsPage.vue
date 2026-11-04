@@ -14,7 +14,10 @@
       <q-card-section class="q-gutter-md">
         <ChatModelFields :model-value="modelChoice" :inherited="inheritedChoice" :disabled="blocked || profileUnavailable" @update:model-value="setChoice" />
         <template v-if="!profileId">
-          <AppSelect v-for="field in fields" :key="field.key" :model-value="form[field.key] ?? null" outlined dense emit-value map-options :label="field.label" :options="options(field)" :disable="blocked" :hint="form[field.key] ? undefined : effectiveLabel(field)" @update:model-value="form[field.key] = $event" />
+          <template v-for="field in fields" :key="field.key">
+            <ChatModelFields v-if="field.key === 'dreamingModelId'" :model-value="dreamingChoice" :inherited="inheritedDreamingChoice" model-label="Memory / Dreaming" :disabled="blocked" @update:model-value="setDreamingChoice" />
+            <AppSelect v-else :model-value="form[field.key] ?? null" outlined dense emit-value map-options :label="field.label" :options="options(field)" :disable="blocked" :hint="form[field.key] ? undefined : effectiveLabel(field)" @update:model-value="form[field.key] = $event" />
+          </template>
           <AppSelect :model-value="form.titleVisionFallbackEnabled ?? null" outlined dense emit-value map-options label="Titel bei Bildinhalten mit Visionmodell erzeugen" :options="[{ label: 'Automatische Auswahl', value: null }, { label: 'An', value: true }, { label: 'Aus', value: false }]" :hint="form.titleVisionFallbackEnabled == null ? `Effektiv: ${store.inherited.titleVisionFallbackEnabled === false ? 'Aus' : 'An'}` : undefined" :disable="blocked" @update:model-value="form.titleVisionFallbackEnabled = $event" />
         </template>
       </q-card-section>
@@ -52,6 +55,11 @@ const inheritedChoice = computed(() => {
   const profile = inherited.profileModels?.[profileId.value]
   return { modelId: profile?.modelId || form.value.defaultModelId || inherited.defaultModelId || store.automaticModelId, reasoningEffort: profile?.reasoningEffort || form.value.reasoningEffort || inherited.reasoningEffort }
 })
+const dreamingChoice = computed(() => ({ modelId: form.value.dreamingModelId, reasoningEffort: form.value.dreamingReasoningEffort }))
+const inheritedDreamingChoice = computed(() => ({
+  modelId: store.inherited.dreamingModelId || form.value.defaultModelId || store.inherited.defaultModelId || store.automaticModelId,
+  reasoningEffort: store.inherited.dreamingReasoningEffort
+}))
 const fields = [
   { key: 'compactionModelId', label: 'Komprimierung' }, { key: 'titleGenerationModelId', label: 'Titel' },
   { key: 'dreamingModelId', label: 'Memory / Dreaming', tools: true },
@@ -67,6 +75,10 @@ function setChoice(choice) {
   const overrides = form.value.profileModels ||= {}
   if (choice.modelId || choice.reasoningEffort) overrides[profileId.value] = { modelId: choice.modelId || null, reasoningEffort: choice.reasoningEffort || null }
   else delete overrides[profileId.value]
+}
+function setDreamingChoice(choice) {
+  form.value.dreamingModelId = choice.modelId
+  form.value.dreamingReasoningEffort = choice.reasoningEffort
 }
 function assignForm() {
   form.value = JSON.parse(JSON.stringify(store.configured))

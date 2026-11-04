@@ -236,6 +236,8 @@ async def clear_invalid_model_defaults(
                 setattr(document, field, None)
                 if field == "default_model_id":
                     document.reasoning_effort = None
+                elif field == "dreaming_model_id":
+                    document.dreaming_reasoning_effort = None
                 changed = True
         for profile_id, choice in list(document.profile_models.items()):
             if choice.model_id in candidate_ids and not model_reference_available(settings, "default_model_id", choice.model_id):

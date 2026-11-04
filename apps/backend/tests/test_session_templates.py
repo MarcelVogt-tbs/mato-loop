@@ -80,9 +80,10 @@ async def test_profile_defaults_inherit_independently_below_session_choices(docu
     provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
     models = [ModelConfig(provider_id=provider.id, model_id=name, discovery_metadata={"reasoning_efforts": ["low", "high"], "default_reasoning_effort": "low"}) for name in ("default", "profile", "personal", "session")]
     documents[AiProviderSettings, None] = AiProviderSettings(providers=[provider], models=models)
-    await save_defaults(ModelDefaults(default_model_id=models[0].id, title_generation_model_id=models[0].id, profile_models={PLAN_PROFILE_ID: ChatModelOverride(model_id=models[1].id, reasoning_effort="low")}), user, db, "instance")
-    await save_defaults(ModelDefaults(default_model_id=models[2].id, profile_models={PLAN_PROFILE_ID: ChatModelOverride(reasoning_effort="high")}), user, db, "personal")
+    await save_defaults(ModelDefaults(default_model_id=models[0].id, title_generation_model_id=models[0].id, dreaming_model_id=models[1].id, dreaming_reasoning_effort="low", profile_models={PLAN_PROFILE_ID: ChatModelOverride(model_id=models[1].id, reasoning_effort="low")}), user, db, "instance")
+    await save_defaults(ModelDefaults(default_model_id=models[2].id, dreaming_reasoning_effort="high", profile_models={PLAN_PROFILE_ID: ChatModelOverride(reasoning_effort="high")}), user, db, "personal")
     ai = await load_effective_ai(db, user.id)
+    assert (ai.dreaming_model_id, ai.dreaming_reasoning_effort) == (models[1].id, "high")
     session = ChatSession(agent_profile_id=PLAN_PROFILE_ID, model_config_id=models[3].id if session_model else None)
     selected = apply_session_ai(ai, session)
     other = apply_session_ai(ai, session, BUILD_PROFILE_ID)
@@ -145,6 +146,18 @@ async def test_profile_defaults_validate_profile_and_chat_model(documents, inval
     choice = ChatModelOverride(model_id=uuid4() if invalid == "model" else model.id, reasoning_effort="high" if invalid == "reasoning" else None)
     with pytest.raises(ApiError, match={"profile": "agentProfile.selectedUnavailable", "model": "session.modelUnavailable", "tools": "session.modelUnavailable", "reasoning": "validation.invalidChoice"}[invalid]):
         await save_defaults(ModelDefaults(profile_models={uuid4() if invalid == "profile" else PLAN_PROFILE_ID: choice}), user, AsyncMock(spec=AsyncSession), "instance")
+
+
+@pytest.mark.parametrize("scope", ["instance", "personal"])
+async def test_dreaming_defaults_reject_unsupported_reasoning(documents, scope):
+    user = UserAccount(id=uuid4(), username="owner", password_hash="hash", is_admin=True)
+    provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="qwen3.8-27b")
+    documents[AiProviderSettings, None] = AiProviderSettings(providers=[provider], models=[model])
+    documents[ModelDefaultsSettings, None] = ModelDefaultsSettings(dreaming_model_id=model.id)
+    with pytest.raises(ApiError) as error:
+        await save_defaults(ModelDefaults(dreaming_model_id=model.id, dreaming_reasoning_effort="ultra"), user, AsyncMock(spec=AsyncSession), scope)
+    assert (error.value.code, error.value.field) == ("validation.invalidChoice", "dreamingReasoningEffort")
 
 
 async def test_preview_resolves_the_current_draft_not_the_original_template(documents):

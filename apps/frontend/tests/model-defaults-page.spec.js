@@ -25,7 +25,7 @@ it('edits and resets profile overrides while retaining the standard models', asy
   }
   const inventory = {
     providers: [{ id: 'provider', name: 'Provider', enabled: true }],
-    models: ['default', 'profile', 'title'].map((id) => ({ id, name: id, modelId: id, providerId: 'provider', enabled: true, supportsTools: true, reasoningEfforts: ['low', 'high'] }))
+    models: ['default', 'profile', 'title'].map((id) => ({ id, name: id, modelId: id, providerId: 'provider', enabled: true, supportsTools: true, reasoningEffort: 'high', reasoningEfforts: ['none', 'low', 'high'] }))
   }
   api.get.mockImplementation(async (url) => ({ data: url === '/model-defaults' ? defaults : inventory }))
   api.put.mockImplementation(async (_url, configured) => ({ data: { ...defaults, configured: JSON.parse(JSON.stringify(configured)) } }))
@@ -47,10 +47,15 @@ it('edits and resets profile overrides while retaining the standard models', asy
   page.profileId = null
   await nextTick()
   expect(root.textContent).toContain('Komprimierung')
+  expect(root.textContent).toContain('Memory / Dreaming')
+  const memoryField = [...root.querySelectorAll('.q-field')].find((field) => field.textContent.includes('Memory / Dreaming'))
+  expect(memoryField.parentElement.textContent).toContain('Effektiv: Hoch')
+  page.setDreamingChoice({ modelId: 'default', reasoningEffort: 'high' })
   page.profileId = 'plan'
   await page.save()
   expect(api.put.mock.calls[0][1]).toMatchObject({
     defaultModelId: 'default', titleGenerationModelId: 'title',
+    dreamingModelId: 'default', dreamingReasoningEffort: 'high',
     profileModels: { plan: { modelId: 'profile', reasoningEffort: 'high' } }
   })
   useProviderStore().models.find((model) => model.id === 'profile').reasoningEfforts = []

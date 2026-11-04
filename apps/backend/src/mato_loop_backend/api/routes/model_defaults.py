@@ -87,6 +87,11 @@ async def save_defaults(payload: ModelDefaults, user: Annotated[UserAccount, Dep
                 validate_chat_model(ai, choice, profile_model_id, defer_unavailable=unchanged)
     except SessionServiceError as exc:
         raise ApiError(exc.status_code, exc.code, field=exc.field) from exc
+    try:
+        dreaming_model_id = payload.dreaming_model_id or (instance.dreaming_model_id if scope == "personal" else None) or payload.default_model_id or inherited_model_id
+        validate_chat_model(ai, ChatModelOverride(reasoning_effort=payload.dreaming_reasoning_effort), dreaming_model_id)
+    except SessionServiceError as exc:
+        raise ApiError(exc.status_code, exc.code, field="dreamingReasoningEffort") from exc
     for field in ModelDefaults.model_fields:
         if field == "profile_models" and field not in payload.model_fields_set:
             continue

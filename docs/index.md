@@ -41,6 +41,6 @@ These are dated measurements or proposals, **not current contracts or evidence o
 - October 2026, context/tools: [tool contracts](tool-contracts-evaluation-2026-10.md), [context search](context-search-evaluation-2026-10.md), [session caching](session-cache-evaluation-2026-10.md), [file routing/delegation](file-routing-delegation-evaluation-2026-10.md).
 - October 2026, profiles: [authority](profile-authority-evaluation-2026-10.md), [continuation](profile-continuation-evaluation-2026-10.md), [message metadata](profile-message-metadata-evaluation-2026-10.md), [roles](profile-role-evaluation-2026-10.md), [switching](profile-switch-evaluation-2026-10.md), [temporal follow-ups](profile-temporal-followup-evaluation-2026-10.md).
 - October 2026, shell: [CPU decider](shell-decider-cpu-evaluation-2026-10.md), [classifier comparison](shell-classifier-qwen-vs-jevk5-2026-10.md), [inspector hardening](shell-inspector-hardening-2026-10.md).
-- November 2026: [session-summary prototype](session-summary-evaluation-2026-11.md).
+- November 2026: [session-summary prototype](session-summary-evaluation-2026-11.md), [memory-extraction prompt comparison](memory-extraction-evaluation-2026-11.md).
 - [Browser performance measurements](browser-performance.md).
 - Proposals: [Memory approvals](plans/memory-dreaming-approvals.md), [projects](plans/opencode-projects.md).
