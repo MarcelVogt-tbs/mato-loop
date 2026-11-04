@@ -314,17 +314,17 @@ function handleImageError(event) {
 }
 
 watch(
-  () => [
-    props.allowImages,
-    props.content,
-    props.forceLight,
-    props.interactive,
+  [
+    () => props.allowImages,
+    () => props.content,
+    () => props.forceLight,
+    () => props.interactive,
     // Only filenames affect markup; clicks resolve the current file targets.
-    JSON.stringify(props.fileActions.map((action) => action.filename)),
-    props.researchSources,
-    props.streaming,
-    props.trustedImageOrigins,
-    $q.dark.isActive
+    () => JSON.stringify(props.fileActions.map((action) => action.filename)),
+    () => props.researchSources,
+    () => props.streaming,
+    () => props.trustedImageOrigins,
+    () => $q.dark.isActive
   ],
   scheduleRender,
   { immediate: true }

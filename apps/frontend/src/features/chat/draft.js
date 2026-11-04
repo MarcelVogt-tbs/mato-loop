@@ -29,6 +29,14 @@ export const draftActions = {
     setDraftOwner(userId) {
       const ownerUserId = typeof userId === 'string' && userId ? userId : null
       if (ownerUserId === this.draftOwnerUserId) return
+      this.sessionRequestController?.abort()
+      this.sessionRequestController = null
+      this.sessionLoadVersion += 1
+      this.sessionLoadPromise = null
+      this.sessionDetails = []
+      this.current = null
+      this.selectedSessionId = null
+      this.loading = false
       this.cancelQueueDrain()
       this.clearAllAttachmentDrafts()
       this.draftOwnerUserId = ownerUserId

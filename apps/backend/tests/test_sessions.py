@@ -347,7 +347,7 @@ async def test_session_list_next_page_uses_full_keyset_and_preserves_order(sort)
         id=uuid4(),
         user_id=user.id,
         title="Angeheftet",
-        is_pinned=True,
+        is_pinned=sort == "pinned",
         memory_mode="disabled",
         created_at=datetime(2026, 7, 20, 8, 0, tzinfo=UTC),
     )
@@ -360,7 +360,7 @@ async def test_session_list_next_page_uses_full_keyset_and_preserves_order(sort)
     )
     first_result = MagicMock()
     first_result.all.return_value = [
-        (pinned, None, None, None, pinned.created_at),
+        (pinned, None, pinned.created_at if sort == "recent" else None, None, pinned.created_at),
         (overflow, None, None, None, overflow.created_at),
     ]
     first_db = AsyncMock(spec=AsyncSession)
@@ -389,10 +389,15 @@ async def test_session_list_next_page_uses_full_keyset_and_preserves_order(sort)
     else:
         assert "chat_sessions.is_pinned IS" not in sql
         assert "chat_sessions.is_pinned DESC" not in str(first_db.execute.await_args.args[0]) + sql
-    assert "coalesce(anon_1.last_message_at, chat_sessions.created_at) <" in sql
-    assert "coalesce(anon_1.last_message_at, chat_sessions.created_at) =" in sql
+        assert "chat_sessions.last_read_at IS NULL" in sql
+        assert "anon_1.last_assistant_message_at > chat_sessions.last_read_at" in sql
+        assert "THEN anon_1.last_assistant_message_at ELSE coalesce(anon_1.last_user_message_at, chat_sessions.created_at) END" in sql
+        assert "IS false OR" in sql and "IS true AND" in sql
+    activity_sql = str(statement.selected_columns["activity_at"].element)
+    assert f"{activity_sql} <" in sql
+    assert f"{activity_sql} =" in sql
     assert "chat_sessions.id <" in sql
-    assert sql.index("coalesce(anon_1.last_message_at, chat_sessions.created_at) DESC") < sql.index("chat_sessions.id DESC")
+    assert sql.index(f"{activity_sql} DESC") < sql.index("chat_sessions.id DESC")
     assert user.id in statement.compile().params.values()
     assert pinned.created_at in statement.compile().params.values()
     assert pinned.id in statement.compile().params.values()
@@ -1070,14 +1075,22 @@ async def test_session_detail_contains_active_run_and_aggregate_metrics(todo_sta
     )
     db.execute.side_effect = [anchors, aggregate]
     db.scalar.return_value = run
-    todo_messages = MagicMock()
-    todo_messages.all.return_value = [Message(
+    todo_messages = AsyncMock()
+    snapshot = Message(
         session_id=session_id,
         role="tool",
         content='{"todos":[{"content":"Prüfen","status":"' + todo_status + '"}]}',
         provider_data={"_matoloop": {"toolName": "todo_write", "runId": str(run.id if same_run else uuid4())}},
-    )]
-    db.scalars.return_value = todo_messages
+    )
+
+    async def snapshots():
+        yield Message(role="tool", content="invalid", provider_data={"_matoloop": {"toolName": "todo_write"}})
+        yield Message(role="tool", content=snapshot.content, error_code="tool.failed")
+        yield snapshot
+        raise AssertionError("Older todo snapshots must not be consumed after a valid snapshot")
+
+    todo_messages.__aiter__.side_effect = snapshots
+    db.stream_scalars.return_value = todo_messages
 
     result = await get_session(session_id, user, db)
 

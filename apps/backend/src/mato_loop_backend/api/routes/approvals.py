@@ -331,8 +331,9 @@ async def list_permissions(
         raise ApiError(404, "session.notFound")
     grants = list(
         (
-            await db.scalars(
-                select(PermissionGrant)
+            await db.execute(
+                select(PermissionGrant, ApprovalRequest)
+                .outerjoin(ApprovalRequest, ApprovalRequest.id == PermissionGrant.source_approval_id)
                 .where(PermissionGrant.session_id == session_id)
                 .where(PermissionGrant.run_id.is_(None) | PermissionGrant.run_id.in_(
                     select(AgentRun.id).where(AgentRun.status.in_(ACTIVE_RUN_STATUSES))
@@ -350,12 +351,7 @@ async def list_permissions(
         for name, reference in session_secrets.references(session.id).items()
     ]
     binding = await _permission_binding(db, session)
-    for item in grants:
-        source = (
-            await db.get(ApprovalRequest, item.source_approval_id)
-            if item.source_approval_id is not None
-            else None
-        )
+    for item, source in grants:
         payloads.append({**await _permission_payload(db, user, item, source, session, binding),
                          "sessionId": str(session.id), "source": "approval", "scope": "session"})
     from mato_loop_backend.execution.manager import execution_agent_connections

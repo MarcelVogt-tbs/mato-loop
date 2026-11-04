@@ -4,7 +4,7 @@
       <SessionSettingsFields
         :session="chat.activeContext"
         :agent-profile-id="chat.activeAgentProfileId"
-        :disabled="chat.historyActionPending || chat.outboxSaving"
+        :disabled="chat.loading || chat.historyActionPending || chat.outboxSaving"
         :fields="['template', 'messageSize', 'agent', 'computer', 'memory', 'trust', 'webSearch', 'model', 'reasoning']"
         grouped
         show-warning
@@ -55,7 +55,7 @@
               <q-tooltip>Alle Session-Freigaben widerrufen</q-tooltip>
             </q-btn>
           </div>
-          <q-card v-if="approvals.grantsLoading && loadedGrantContext !== grantContext" flat class="app-surface">
+          <q-card v-if="loadedGrantContext !== grantContext && !approvals.grantsLoadFailed" flat class="app-surface">
             <q-card-section class="row items-center no-wrap q-gutter-md">
               <q-skeleton type="QAvatar" />
               <div class="col"><q-skeleton type="text" width="35%" /><q-skeleton type="text" width="75%" /></div>
@@ -131,7 +131,8 @@ const controlCenter = useControlCenterStore()
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const revokingId = ref(null)
-const sessionGrants = computed(() => approvals.grantsForSession(chat.current?.id))
+const sessionGrants = computed(() => loadedGrantContext.value === grantContext.value
+  ? approvals.grantsForSession(chat.current?.id) : [])
 const explicitGrants = computed(() => sessionGrants.value.filter(grant => !grant.derived && !grant.readOnly && grant.source !== 'session_input'))
 const grantContext = computed(() => JSON.stringify([
   chat.current?.id, chat.current?.agentProfileId, chat.current?.modelId, chat.current?.sessionProfile,
@@ -150,11 +151,11 @@ const defaultChannel = computed(() => {
 const grantDisplay = (grant) => permissionGrantDisplay(grant, chat.cachedSessions)
 
 async function loadGrants() {
-  if (!chat.current?.id) return
+  if (!chat.current?.id || chat.loading) return
   const context = grantContext.value
   try {
-    await approvals.fetchGrants({ suppressErrorToast: true }, chat.current.id)
-    if (context === grantContext.value && !approvals.grantsLoadFailed) loadedGrantContext.value = context
+    const loaded = await approvals.fetchGrants({ suppressErrorToast: true }, chat.current.id)
+    if (loaded && context === grantContext.value && !approvals.grantsLoadFailed) loadedGrantContext.value = context
   } catch { /* The retry state is displayed inline. */ }
 }
 
@@ -199,10 +200,10 @@ async function revokeAll() {
 }
 
 watch(
-  [grantContext, () => chat.runId, () => chat.current?.activeRun?.id, visible],
+  [grantContext, () => chat.runId, () => chat.current?.activeRun?.id, visible, () => chat.loading],
   ([context], previous = []) => {
     if (context !== previous[0]) loadedGrantContext.value = null
-    if (visible.value) void loadGrants()
+    if (visible.value && !chat.loading) void loadGrants()
   },
   { immediate: true }
 )

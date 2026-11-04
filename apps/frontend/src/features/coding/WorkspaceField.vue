@@ -41,9 +41,9 @@ const { repository, loading, error, refresh } = useRepositoryProbe(
   () => !props.session.id && available.value && Boolean(project.value),
   () => project.value?.gitTargetBranch
 )
-watch([repository, () => controlCenter.gitAutoOpened], ([info]) => {
+watch([repository, () => controlCenter.gitAutoAdded], ([info]) => {
   if (props.session.id || !project.value) return
-  void controlCenter.autoOpenGit(info?.repository).catch(() => {})
+  void controlCenter.autoAddGit(info?.repository).catch(() => {})
 })
 function select(value) {
   emit('update', { workspace_mode: value === 'local' ? 'local' : 'worktree', workspace_path: ['local', 'new'].includes(value) ? null : value })

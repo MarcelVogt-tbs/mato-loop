@@ -11,7 +11,6 @@ from mato_loop_backend.agent.run_support import approval_payload
 from mato_loop_backend.agent.session_secrets import SessionSecretStore
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.approvals import (
-    _permission_payload,
     all_permissions,
     delete_session_secret,
     list_permissions,
@@ -67,7 +66,7 @@ async def test_permissions_include_effective_session_scratch_rights(monkeypatch,
     db = AsyncMock(spec=AsyncSession)
     db.get.side_effect = lambda model, _id: session if model is ChatSession else agent
     db.scalar.return_value = agent
-    db.scalars.return_value = MagicMock(all=lambda: [])
+    db.execute.return_value = MagicMock(all=lambda: [])
     settings = ToolSettings()
     settings._temporary_files_enabled = writable
     monkeypatch.setattr("mato_loop_backend.api.routes.approvals._permission_binding", AsyncMock(return_value=(None, TrustLevel.PRIVATE)))
@@ -90,7 +89,7 @@ async def test_permissions_include_only_names_of_remembered_session_values(monke
     monkeypatch.setattr("mato_loop_backend.api.routes.approvals._permission_binding", AsyncMock(return_value=(None, TrustLevel.PRIVATE)))
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
-    db.scalars.return_value = MagicMock(all=lambda: [])
+    db.execute.return_value = MagicMock(all=lambda: [])
 
     assert await list_permissions(session.id, user, db) == [
         {
@@ -251,7 +250,7 @@ async def test_all_permissions_include_owned_session_context(monkeypatch) -> Non
 
 @pytest.mark.parametrize("kind", ["execution_directory", "execution_path", "administrator_path", "shell_action", "shell_computer", "run_action"])
 @pytest.mark.parametrize("same_computer", [True, False])
-async def test_permission_target_display_does_not_require_source_approval(kind, same_computer):
+async def test_permission_target_display_does_not_require_source_approval(monkeypatch, kind, same_computer):
     user = UserAccount(id=uuid4())
     computer = ExecutionAgent(id=uuid4(), user_id=user.id, alias="Server")
     session = ChatSession(id=uuid4(), user_id=user.id, current_directory="/work",
@@ -270,8 +269,10 @@ async def test_permission_target_display_does_not_require_source_approval(kind, 
         source.resource_type, source.resource_scope, source.capability = request.resource_type, request.resource_scope, request.capability
         grant.source_approval_id, grant.resource_scope = source.id, "a" * 64
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = computer
-    payload = await _permission_payload(db, user, grant, source, session, (None, TrustLevel.PUBLIC))
+    db.get.side_effect = lambda model, _id: session if model is ChatSession else computer
+    db.execute.return_value = MagicMock(all=lambda: [(grant, source)])
+    monkeypatch.setattr("mato_loop_backend.api.routes.approvals._permission_binding", AsyncMock(return_value=(None, TrustLevel.PUBLIC)))
+    payload = (await list_permissions(session.id, user, db))[0]
     assert (payload["resourceDisplay"], payload["executionAgentName"], payload["applicable"], payload.get("command"), payload.get("elevated", False)) == (
         "Shell" if kind == "shell_computer" else "/work", "Server", same_computer, "cat /root/.ssh/config" if kind == "run_action" else "pwd" if kind == "shell_action" else None,
         kind in {"administrator_path", "run_action"},

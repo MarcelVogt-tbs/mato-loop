@@ -19,6 +19,8 @@ import { useChatStore } from '../src/features/chat/store'
 import { useControlCenterStore } from '../src/stores/control-center'
 import { useWorkspaceStore } from '../src/stores/workspace'
 import { useExecutionAgentStore } from '../src/stores/execution-agents'
+import { useMailStore } from '../src/stores/mail'
+import { mailControlCenterAvailable } from '../src/app/control-center/manifest'
 
 let app, root, chat
 const initialRevision = 'a'.repeat(64)
@@ -49,6 +51,7 @@ async function mountPage({ actionKind = 'build_skill', rootIdentity, reply } = {
     if (url === '/workspace/files/preview') return reply ? await reply() : { data: { kind: 'text', content: source, revision: initialRevision } }
     if (url === '/sessions/parent') return { data: { id: 'parent', projectId: 'parent-project', messages: [] } }
     if (url === '/approvals/pending') return { data: [approval] }
+    if (url === '/mail/accounts') return { data: [{ id: 'mail-1' }] }
     if (url === '/questions/pending' || url.endsWith('/children')) return { data: [] }
     return { data: {} }
   })
@@ -96,17 +99,22 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-it('opens Git when repository detection finishes after a new session has attached', async () => {
+it('loads mail availability when opening chat', async () => {
+  await mountPage()
+  expect(mailControlCenterAvailable(useMailStore())).toBe(true)
+})
+
+it('adds Git when repository detection finishes after a new session has attached', async () => {
   await mountPage()
   const controlCenter = useControlCenterStore()
-  const open = vi.spyOn(controlCenter, 'openApp').mockResolvedValue()
+  const add = vi.spyOn(controlCenter, 'ensureApp').mockResolvedValue()
   await chat.loadSession(null)
   await controlCenter.attachCreatedSession('created', controlCenter)
   useExecutionAgentStore().items = [{ id: 'computer', connected: true, operations: ['git.changes'] }]
   api.get.mockResolvedValue({ data: { repository: '/worktree', files: [], truncated: false } })
   chat.selectedSessionId = 'created'
   chat.current = { id: 'created', projectId: 'project', preferredExecutionAgentId: 'computer', currentDirectory: '/worktree', messages: [] }
-  await vi.waitFor(() => expect(open).toHaveBeenCalledWith('git'))
+  await vi.waitFor(() => expect(add).toHaveBeenCalledWith('git'))
 })
 
 describe('child skill draft previews', () => {

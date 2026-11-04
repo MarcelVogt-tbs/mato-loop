@@ -18,6 +18,7 @@ export const useChatStore = defineStore('chat', {
     sessionCatalogVersion: 0,
     sessionsProjectId: null,
     current: null,
+    sessionDetails: [],
     loading: false,
     running: false,
     stopping: false,
@@ -175,6 +176,7 @@ export const useChatStore = defineStore('chat', {
       }
     },
     removeCachedSession(id) {
+      this.sessionDetails = this.sessionDetails.filter((session) => session.id !== id)
       for (const list of Object.values(this.sessionLists)) {
         if (!list.items.some((session) => session.id === id)) continue
         list.version += 1

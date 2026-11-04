@@ -34,7 +34,7 @@ async function mount(value = definition(), selected = value ? 'automation' : 'ne
   mocks.stores = {
     automations: store,
     chat: reactive({ current: { id: 'session', title: 'Meine Session' }, running: false }),
-    controlCenter: reactive({ sessionId: 'session', activeAppId: 'automation', ensureApp: vi.fn(), setOpen: vi.fn() })
+    controlCenter: reactive({ sessionId: 'session', open: true, activeAppId: 'automation', activeContentId: 'automation', ensureApp: vi.fn(), setOpen: vi.fn() })
   }
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/', name: 'chat', component: AutomationApp }
@@ -51,6 +51,29 @@ async function mount(value = definition(), selected = value ? 'automation' : 'ne
 }
 
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); mocks.confirm.mockClear() })
+
+it('defers hidden overview reads until opening the app in the latest session', async () => {
+  const { store } = await mount(null, null)
+  store.fetchForSession.mockClear()
+  const center = mocks.stores.controlCenter
+  center.open = false
+  center.sessionId = 'intermediate'
+  await nextTick()
+  center.sessionId = 'other'
+  await nextTick()
+  center.open = true
+  await vi.waitFor(() => expect(store.fetchForSession.mock.calls).toEqual([['other']]))
+})
+
+it('retains an edited automation when hiding and reopening the app', async () => {
+  const { page, store } = await mount()
+  page.form.task = 'Unsaved edit'
+  mocks.stores.controlCenter.open = false
+  await nextTick()
+  mocks.stores.controlCenter.open = true
+  await nextTick()
+  expect([page.form.task, store.fetchForSession.mock.calls.length]).toEqual(['Unsaved edit', 1])
+})
 
 it('creates an automation in the current session without runtime copies or output configuration', async () => {
   const { page, store } = await mount(null)

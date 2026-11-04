@@ -18,7 +18,7 @@ export const sessionsActions = {
         notifyError({}, 'Öffne eine aktive Hauptsession, um sie zu kopieren.')
         return null
       }
-      if (this.historyActionPending) return null
+      if (this.loading || this.historyActionPending) return null
       const owner = this.draftOwnerUserId
       this.historyActionPending = true
       try {
@@ -306,6 +306,9 @@ export const sessionsActions = {
       }
     },
     async loadSession(id) {
+      if (id && this.selectedSessionId === id && this.loading && this.sessionLoadPromise) {
+        return (await this.sessionLoadPromise).data
+      }
       this.sessionRequestController?.abort()
       this.selectedSessionId = id
       this.sessionLoadPromise = null
@@ -314,14 +317,14 @@ export const sessionsActions = {
       const loadVersion = this.sessionLoadVersion
       const controller = id ? markRaw(new AbortController()) : null
       this.sessionRequestController = controller
-      this.current = null
+      this.current = this.sessionDetails.find((session) => session.id === id) || null
       this.olderMessagesLoading = false
       this.olderMessagesLoadFailed = false
       this.olderMessagesPromise = null
       this.loadError = null
       const controlCenter = useControlCenterStore()
       if (id) {
-        controlCenter.bindSession(this.findCachedSession(id) || { id })
+        controlCenter.bindSession(this.current || this.findCachedSession(id) || { id })
       } else {
         controlCenter.resetDraft()
       }
@@ -365,6 +368,8 @@ export const sessionsActions = {
         }
       } catch (error) {
         if (controller.signal.aborted || this.sessionLoadVersion !== loadVersion) return
+        this.current = null
+        this.sessionDetails = this.sessionDetails.filter((session) => session.id !== id)
         this.loadError = error
         throw error
       } finally {
@@ -431,6 +436,7 @@ export const sessionsActions = {
       return data
     },
     async loadOlderMessages(id = this.current?.id) {
+      if (this.loading) return []
       const session = this.current
       const cursor = session?.id === id ? session.nextMessageCursor : null
       if (this.olderMessagesPromise) return await this.olderMessagesPromise
@@ -469,6 +475,7 @@ export const sessionsActions = {
       }
     },
     async loadThroughMessage(messageId) {
+      if (this.loading) return false
       while (
         this.current
         && !this.current.messages?.some((message) => message.id === messageId)
@@ -479,6 +486,7 @@ export const sessionsActions = {
       return Boolean(this.current?.messages?.some((message) => message.id === messageId))
     },
     async updateActive(patch, { draftOnly = false } = {}) {
+      if (this.loading) return
       if (this.current) {
         const sessionId = this.current.id
         if (
@@ -534,7 +542,7 @@ export const sessionsActions = {
     },
     async updateCurrent(patch) {
       const session = this.current
-      if (!session) return
+      if (!session || this.loading) return
       const normalizedPatch = { ...patch }
       if (
         Object.hasOwn(patch, 'preferred_execution_agent_id')
@@ -718,6 +726,14 @@ export const sessionsActions = {
     applySessionResult(session) {
       this.current = session
       this.updateSessionSummary(session)
+      if (!session.archived && !session.readOnly) {
+        // Keep only recent display data; every opening still reconciles with the server.
+        this.sessionDetails = [{
+          ...session,
+          messages: session.messages?.slice(-SESSION_PAGE_SIZE),
+          contextSummaries: session.contextSummaries?.slice(-SESSION_PAGE_SIZE)
+        }, ...this.sessionDetails.filter((item) => item.id !== session.id)].slice(0, 5)
+      }
     },
     async markSessionRead(session) {
       if (!session?.id) return
@@ -741,7 +757,7 @@ export const sessionsActions = {
     },
     async undoUserMessage(message) {
       const session = this.current
-      if (!session || message?.role !== 'user' || this.historyActionPending) return null
+      if (!session || this.loading || message?.role !== 'user' || this.historyActionPending) return null
       this.historyActionPending = true
       try {
         let files
@@ -822,7 +838,7 @@ export const sessionsActions = {
     },
     async retryFailedMessage(message) {
       const session = this.current
-      if (!session || message?.kind !== 'runtime_error' || this.historyActionPending) return null
+      if (!session || this.loading || message?.kind !== 'runtime_error' || this.historyActionPending) return null
       this.historyActionPending = true
       try {
         let data
