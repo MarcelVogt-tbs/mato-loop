@@ -1,5 +1,5 @@
 <template>
-  <div class="chat-composer" :class="{ 'chat-messages--small': session?.sessionProfile?.messageSize === 'small' }">
+  <div class="chat-composer" :class="{ 'chat-messages--small': session?.sessionProfile?.messageSize === 'small' }" @pointerdown.capture="updateQueueModifier">
     <q-resize-observer @resize="resizeComposer" />
     <AppMenu
       v-if="paletteOpen" ref="commandMenu" :model-value="paletteOpen" fit no-parent-event no-focus no-refocus
@@ -165,9 +165,9 @@
               round
               dense
               class="composer-action"
-              :color="sendMode === 'queue' ? 'secondary' : 'primary'"
-              :icon="sendMode === 'queue' ? 'schedule_send' : 'arrow_upward'"
-              :aria-label="voiceActivity ? voiceSendLabel : sendMode === 'queue' ? 'Nachricht vormerken' : 'Nachricht jetzt senden'"
+              :color="queueSend ? 'secondary' : 'primary'"
+              :icon="queueSend ? 'schedule_send' : 'arrow_upward'"
+              :aria-label="voiceActivity ? voiceSendLabel : queueSend ? 'Nachricht vormerken' : 'Nachricht jetzt senden'"
               type="button"
               :loading="sendingRecording || starting || finalizing"
               :disable="stopping || (voiceActivity && !canFinishAndSend)"
@@ -203,9 +203,9 @@
               round
               dense
               class="composer-action"
-              :color="queueMode ? 'secondary' : 'primary'"
-              :icon="queueMode ? 'schedule_send' : 'arrow_upward'"
-              :aria-label="voiceActivity ? voiceSendLabel : queueMode ? 'Nachricht vormerken' : 'Nachricht senden'"
+              :color="queueSend ? 'secondary' : 'primary'"
+              :icon="queueSend ? 'schedule_send' : 'arrow_upward'"
+              :aria-label="voiceActivity ? voiceSendLabel : queueSend ? 'Nachricht vormerken' : 'Nachricht senden'"
               :type="voiceActivity ? 'button' : 'submit'"
               :loading="sendingRecording || starting || finalizing"
               :disable="voiceActivity ? !canFinishAndSend : sendDisabled"
@@ -221,7 +221,7 @@
 
 <script setup>
 import AppMenu from 'src/shared/ui/AppMenu.vue'
-import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import ComposerAttachments from 'src/features/chat/components/ComposerAttachments.vue'
 import ComposerQuote from './ComposerQuote.vue'
@@ -264,6 +264,8 @@ const attachmentInput = ref(null)
 const fileDragDepth = ref(0)
 const settingsFields = ref(null)
 const sendMode = ref('interrupt')
+const queueModifier = ref(false)
+const queueSend = computed(() => queueModifier.value || (props.running ? sendMode.value === 'queue' : props.queueMode))
 const commandList = ref(null)
 const commandMenu = ref(null)
 const composerWidth = ref(0)
@@ -339,9 +341,7 @@ watch([attachmentsDisabled, () => props.session?.id, () => chat.sessionsProjectI
 const draftHasContent = computed(() => Boolean(props.draft.trim() || props.attachments.length))
 const inputPlaceholder = computed(() => `Eine Nachricht an ${identity.displayName} senden`)
 const voiceActivity = computed(() => starting.value || recording.value || finalizing.value || sendingRecording.value)
-const voiceSendLabel = computed(() => (
-  props.running ? sendMode.value === 'queue' : props.queueMode
-) ? 'Aufnahme beenden und vormerken' : 'Aufnahme beenden und senden')
+const voiceSendLabel = computed(() => queueSend.value ? 'Aufnahme beenden und vormerken' : 'Aufnahme beenden und senden')
 const canFinishAndSend = computed(() => (
   recording.value && !inputDisabled.value && !starting.value && !finalizing.value && !sendingRecording.value
   && editingQuote.value === null && modelSupportsTools.value && (!props.running || props.queueMode)
@@ -410,7 +410,15 @@ function submit(event) {
   }
   const content = messageContent.value.trim()
   if (sendDisabled.value) return
-  emit('send', content, { interrupt: props.running && sendMode.value === 'interrupt' })
+  emit('send', content, { interrupt: props.running && !queueSend.value })
+}
+
+function updateQueueModifier(event) {
+  queueModifier.value = event.ctrlKey || event.metaKey
+}
+
+function resetQueueModifier() {
+  queueModifier.value = false
 }
 
 function handleComposerKeydown(event) {
@@ -420,6 +428,12 @@ function handleComposerKeydown(event) {
     else commandList.value?.move(event.key === 'ArrowDown' ? 1 : -1)
     event.preventDefault()
     event.stopPropagation()
+    return
+  }
+  if (!event.defaultPrevented && !event.isComposing && !event.altKey && !event.shiftKey
+    && (event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+    event.preventDefault()
+    if (!event.repeat) submit(event)
     return
   }
   if (
@@ -445,7 +459,7 @@ async function finishAndSendRecording() {
   if (!canFinishAndSend.value || !recordingScope) return
   const scope = recordingScope
   const content = messageContent.value.trim()
-  const interrupt = props.running && sendMode.value === 'interrupt'
+  const interrupt = props.running && !queueSend.value
   sendingRecording.value = true
   try {
     const recordedFile = await finishVoiceRecording()
@@ -605,8 +619,17 @@ watch([() => props.session?.id, () => chat.sessionsProjectId, () => chat.draftOw
   else void prepareAudioNavigation()
 }, { flush: 'sync' })
 
+onMounted(() => {
+  window.addEventListener('keydown', updateQueueModifier, true)
+  window.addEventListener('keyup', updateQueueModifier, true)
+  window.addEventListener('blur', resetQueueModifier)
+})
+
 onBeforeUnmount(() => {
   unmounted = true
+  window.removeEventListener('keydown', updateQueueModifier, true)
+  window.removeEventListener('keyup', updateQueueModifier, true)
+  window.removeEventListener('blur', resetQueueModifier)
 })
 
 defineExpose({

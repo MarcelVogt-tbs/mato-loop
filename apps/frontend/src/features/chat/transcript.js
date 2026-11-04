@@ -21,7 +21,6 @@ export function withQueuedTranscriptMessages(messages, queuedMessages, sendingId
       outboxId: entry.id,
       role: 'user',
       content: entry.content,
-      commandPrompt: entry.commandPrompt,
       sourceType: entry.sourceType,
       attachments: entry.attachments,
       deliveryStatus: entry.id === sendingId || entry.id === pendingId ? 'sending' : entry.paused ? 'failed' : 'queued'
