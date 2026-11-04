@@ -19,6 +19,8 @@ from mato_loop_backend.tools.catalog import tool_registry
 from mato_loop_backend.tools.contracts import ToolResult
 from mato_loop_backend.tools.registry import ToolRegistry
 
+pytestmark = pytest.mark.usefixtures("skill_library")
+
 
 def read_call(identifier, path="note.txt", **extra):
     return ToolCall(identifier, "read", {"root": "files", "path": path, **extra})

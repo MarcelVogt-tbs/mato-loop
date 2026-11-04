@@ -173,7 +173,7 @@ async def test_search_prioritizes_original_mcp_names_over_verbose_neighbor_descr
     assert json.loads(result.content)["tools"][0]["name"] == mcp_model_tool_name(instance.id, "ha_get_state")
 
 
-async def test_runtime_persists_search_results_before_offering_discovered_tools(monkeypatch):
+async def test_runtime_persists_search_results_before_offering_discovered_tools(monkeypatch, skill_library):
     from runtime_helpers import _runtime_setup
 
     instance = IntegrationInstance(name="Desk", integration_type="mcp", adapter_type="mcp_streamable_http", config={

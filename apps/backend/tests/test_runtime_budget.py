@@ -34,6 +34,8 @@ from mato_loop_backend.tools.contracts import ToolResult
 from mato_loop_backend.tools.registry import ToolRegistry
 from mato_loop_backend.tools.secrets import resolve_sudo_password
 
+pytestmark = pytest.mark.usefixtures("skill_library")
+
 
 @pytest.mark.parametrize("transmitted", [30_000, None])
 async def test_runtime_passes_projection_reserve_and_records_provider_allocation(monkeypatch, transmitted):

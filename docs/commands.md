@@ -185,7 +185,7 @@ selection and ingress semantics.
 | `/git-review` | Review working changes and unpublished commits without editing or publishing. |
 | `/git-commit` | Inspect and explicitly commit selected task changes without fetching or pushing. |
 | `/git-merge [--commit]` | Optionally commit task changes, merge the local target into the worktree, review, check, and fast-forward the clean original checkout. No fetch or push. |
-| `/git-push` | Publish the existing current branch without committing, fetching or merging. |
+| `/git-push` | Publish existing commits to a project-appropriate remote branch without committing, fetching or merging. |
 | `/git-pr [--commit]` | Optionally commit task changes, fetch and integrate the remote target, review, check, publish and create or update the PR. |
 | `/git-sync` | Fetch and fast-forward the clean original project checkout without switching branches or discarding work. |
 | `/git-remote [name] [url]` | Configure only the explicitly requested remote through normal agent tools; ask for missing values. |
@@ -200,6 +200,14 @@ MatoLoop owns worktree creation/selection/removal and owner/path/target binding 
 not a second Git workflow. Missing Git prerequisites do not reject command admission;
 access, repository identity and changed publication-target checks remain enforced.
 An unavailable selected computer can still pause queue admission through the normal error path.
+
+Push and PR follow repository publication conventions and appropriate existing branch/upstream
+mappings on the configured remote. Technical worktree names are not automatically exported
+as remote branches. The agent asks if the publication branch or name is unclear; a different
+remote branch name does not require renaming the local branch. Publishing worktree commits
+does not require prior Finish or local integration. Push leaves pending working changes
+untouched and never commits, fetches, merges, rebases, discards work or force-pushes.
+
 Review checks correctness, security and overengineering and reports only; it never repairs
 project files. Temporary check files outside the project remain subject to normal permissions.
 

@@ -55,6 +55,15 @@ def test_git_merge_and_pr_follow_explicit_commit_message_rules():
     assert all(COMMIT_RULES in parse_command(f"/{name}").instructions for name in ("git-commit", "git-merge", "git-pr"))
 
 
+@pytest.mark.parametrize("name", ["git-push", "git-pr"])
+def test_publication_uses_project_branches_without_exporting_technical_worktree_names(name):
+    assert all(text in parse_command(f"/{name}").instructions for text in (
+        "repository publication and branch conventions", "existing branch/upstream mappings",
+        "ask if its target or name is unclear", "Do not automatically publish technical worktree branch names",
+        "prior Finish or local integration is not required", "normal non-force push",
+    ))
+
+
 @pytest.mark.parametrize("name", ["git-review", "git-finish", "git-merge", "git-pr"])
 def test_git_reviews_share_risk_and_simplicity_criteria_without_optional_blockers(name):
     instructions = parse_command(f"/{name}").instructions

@@ -41,6 +41,13 @@ REVIEW_INSTRUCTIONS = (
     "missing protection. Separate required corrections from optional suggestions. Optional simplifications do not block "
     "integration or authorize expanding the task. Report actual checks and unchecked limits. "
 )
+PUBLICATION_INSTRUCTIONS = (
+    "Inspect repository publication and branch conventions and existing branch/upstream mappings. "
+    "Choose an appropriate publication branch on the configured remote; ask if its target or name is unclear. "
+    "Do not automatically publish technical worktree branch names such as worktree-77946357. "
+    "Use a project-appropriate remote branch name without requiring a local branch rename. "
+    "Unmerged worktree commits may be published; prior Finish or local integration is not required. "
+)
 MERGE_INSTRUCTIONS = (
     "Perform a local merge only. Do not fetch or push. "
     "Before incorporating the local target, require a clean workspace and an existing local target branch. "
@@ -141,20 +148,20 @@ COMMANDS = (
         + "Do not fetch, merge, push, or create a pull request. Report the commit and remaining changes.",
         icon="save", mutates_workspace=True),
     Command("git-push", "Push", "Vorhandene Commits pushen. Erstellt keinen Commit.",
-        "Require a clean working tree and a named current branch. Otherwise report the blocker and stop. "
-        "Push the existing current branch to the configured remote under the same branch name with a normal non-force push. "
-        "Do not commit working changes, fetch, merge, rebase, or update another branch. "
+        PUBLICATION_INSTRUCTIONS + "Inspect the current branch and existing commits before publishing. "
+        "Push only those commits to the selected remote branch with a normal non-force push. "
+        "Leave pending working changes untouched. Do not commit, fetch, merge, rebase, discard work, or update local branches. "
         "On rejection, report the blocker and stop without retrying or repairing. Report the published branch and commit.",
         icon="cloud_upload", mutates_workspace=True),
     Command("git-pr", "Pull Request erstellen", "Zielbranch einarbeiten, prüfen, pushen und PR erstellen oder aktualisieren.",
-        "Inspect pending changes and unpublished commits against the configured remote target. "
+        PUBLICATION_INSTRUCTIONS + "Inspect pending changes and unpublished commits against the configured remote target. "
         "Require a clean working tree; otherwise report the blocker and stop. "
         + COMMIT_RULES +
         "Fetch the configured remote target and merge that target into the workspace branch, without rebasing. "
         "A necessary merge commit is authorized. Do not resolve conflicts or repair findings. "
         "Review the complete proposed changes. " + REVIEW_INSTRUCTIONS +
         "Stop on required findings, conflicts, or failed checks. "
-        "Verify the reviewed commit before pushing the session branch with a normal non-force push. "
+        "Verify the reviewed commit before pushing it to the selected publication branch with a normal non-force push. "
         "Use an installed authenticated host CLI or available integration to find an existing pull request for this exact "
         "repository, source branch and target. Update it or create one, never duplicate it blindly. "
         "Generate an accurate title and description including actual checks and limitations. Return the pull request URL. "

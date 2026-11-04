@@ -58,6 +58,14 @@ Ist ein ausgewählter Computer nicht erreichbar, kann die normale Nachrichtenque
 anhalten. Stelle die Verbindung wieder her und setze den Versand fort. Schreibgeschützte
 Sessions und die Prüfungen für Zugriff, Arbeitsbereich und geänderte Publikationsziele bleiben geschützt.
 
+**Push** veröffentlicht vorhandene Commits nach den Projektregeln und passenden bestehenden
+Branch-/Upstream-Zuordnungen am ausgewählten Remote. Technische Worktree-Namen wie
+`worktree-77946357` werden auch für Pull Requests nicht automatisch als Remote-Branch übernommen.
+Ist der Veröffentlichungsbranch oder sein Name unklar, fragt der Agent nach. Ein anderer
+Remote-Branchname erfordert keine lokale Umbenennung. Du darfst Worktree-Commits bereits vor
+einem Abschluss oder lokalen Merge veröffentlichen. Push lässt uncommittete Änderungen
+unberührt und führt keinen Commit, Fetch, Merge, Rebase, Reset oder Force-Push aus.
+
 Aktiviere bei Bedarf **Vor Merge oder Pull Request committen** direkt unterhalb dieser beiden Aktionen. Das Häkchen ist zunächst aus und wird beim Sessionwechsel zurückgesetzt. Es beauftragt den Agenten, zuerst eindeutig zur Aufgabe gehörende Änderungen im Session-Worktree zu committen. Bei unklarer Auswahl fragt er nach; fremde Änderungen und Secrets dürfen nicht mitcommittet werden. Ohne Häkchen sind uncommittete Änderungen ein Blocker. **Push** und **Pull (Fast-forward)** committen auch mit gesetztem Häkchen nichts. In der Palette oder über Telegram entspricht die Auswahl `/git-merge --commit` beziehungsweise `/git-pr --commit`.
 
 Die Rückmeldung beginnt mit Aktion und Ergebnis. Darunter nennt der Agent nur relevante
