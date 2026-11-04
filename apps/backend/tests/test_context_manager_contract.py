@@ -39,6 +39,7 @@ from mato_loop_backend.agent.repository_instructions import (
     check_repository_instruction_targets,
     repository_instructions_prompt,
 )
+from mato_loop_backend.agent.run_support import _project_ephemeral_images
 from mato_loop_backend.agent.turn_context import build_turn_context
 from mato_loop_backend.execution import (
     ExecutionClient,
@@ -57,7 +58,7 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.permissions.policy import PermissionDecision, execution_directory_permission
 from mato_loop_backend.providers import service as service_module
-from mato_loop_backend.providers.base import ProviderError, ProviderResult
+from mato_loop_backend.providers.base import ProviderError, ProviderImageInput, ProviderResult
 from mato_loop_backend.providers.output_budget import (
     IMAGE_INPUT_RESERVE_TOKENS,
     allocate_output_tokens,
@@ -147,6 +148,23 @@ def _attach_image(
     )
     message.attachments = [attachment]
     return attachment
+
+
+def test_memory_image_references_do_not_displace_current_pdf_previews() -> None:
+    earlier = _message(uuid4(), "user", "Earlier upload")
+    _attach_image(earlier, "old.png")
+    current = _message(earlier.session_id, "user", "Read both newly uploaded four-page PDFs.")
+    messages = _projection_messages(
+        "System", None, [earlier, current], TrustLevel.PUBLIC,
+        memory_context="The user once worked on `old.png`.",
+    )
+    images = {
+        (current.id, 0, f"pdf-upload:{document}", page): ProviderImageInput(0, b"preview", "public")
+        for document in ("first", "second") for page in range(1, 5)
+    }
+    model = ModelConfig(provider_id=uuid4(), model_id="vision", supports_image_input=True)
+    _, selected = _project_ephemeral_images(messages, images, model=model, target_trust_level=TrustLevel.PUBLIC)
+    assert len(selected) == 8
 
 
 def test_audio_projection_uses_reference_marker_without_file_data() -> None:
@@ -3105,10 +3123,9 @@ async def test_existing_summary_boundary_excludes_covered_history() -> None:
     assert [message["role"] for message in projection.messages] == [
         "system",
         "system",
-        "assistant",
         "user",
     ]
-    assert projection.messages[-1]["content"] == "neu"
+    assert projection.messages[-1]["content"] == "[Host memory context begins]\nMemory\n[Host memory context ends]\n\nneu"
     assert "Kurzfassung" in projection.messages[1]["content"]
     assert "Memory" in projection.messages[2]["content"]
     summarize.assert_not_awaited()
@@ -3599,6 +3616,7 @@ async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(
                                  runtime_instructions=projections[0]["runtime_instructions"],
                                  live_tool_calls={tool_message.id: live_calls},
                                  available_secret_references={saved_reference})
+    assert [message["role"] for message in first if "Earlier memory" in message["content"]] == ["user"]
     assert json.loads(first[-1]["content"])["environment"] == {"sudo_password": saved_reference}
     assert first[1]["role"] == "user"
     assert "Host workspace occupancy" not in str(first)

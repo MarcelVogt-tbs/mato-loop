@@ -94,11 +94,10 @@ def test_responses_input_keeps_function_call_and_output() -> None:
     assert items[1] == {"type": "function_call_output", "call_id": "call-1", "output": "[]"}
 
 
-def test_provider_protocols_preserve_assistant_memory_envelope_order() -> None:
+def test_provider_protocols_keep_memory_in_user_input() -> None:
     messages = [
         {"role": "system", "content": "Stable host prompt"},
-        {"role": "assistant", "content": "Dynamic memory context"},
-        {"role": "user", "content": "Question"},
+        {"role": "user", "content": "[Host memory context begins]\nDynamic memory context\n[Host memory context ends]\n\nQuestion"},
     ]
 
     assert _chat_messages(messages) == messages
@@ -106,10 +105,9 @@ def test_provider_protocols_preserve_assistant_memory_envelope_order() -> None:
     assert instructions == "Stable host prompt"
     assert items == [
         {
-            "role": "assistant",
-            "content": [{"type": "output_text", "text": "Dynamic memory context"}],
+            "role": "user",
+            "content": [{"type": "input_text", "text": messages[1]["content"]}],
         },
-        {"role": "user", "content": [{"type": "input_text", "text": "Question"}]}
     ]
 
 

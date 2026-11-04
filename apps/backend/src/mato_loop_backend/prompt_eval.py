@@ -6573,10 +6573,7 @@ def _general_case(
             }
         )
     messages.extend(case.history)
-    if memory_prompt is not None and message_layout in {
-        "current",
-        "memory-assistant-envelope",
-    }:
+    if memory_prompt is not None and message_layout == "memory-assistant-envelope":
         messages.append(
             {
                 "role": "assistant",
@@ -6610,6 +6607,13 @@ def _general_case(
     )
     if profile_instructions:
         user_content += "\n\n<system-reminder>\n" + profile_instructions + "\n</system-reminder>"
+    if memory_prompt is not None and message_layout == "current":
+        user_content = (
+            "[Host memory context begins]\n"
+            + memory_prompt
+            + "\n[Host memory context ends]\n\n"
+            + user_content
+        )
     messages.append(
         {
             "role": "user",

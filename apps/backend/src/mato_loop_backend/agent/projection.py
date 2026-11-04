@@ -780,21 +780,6 @@ def _projection_messages(
     previous_memory_context = None
     for record_index, item in enumerate(records):
         turn_memory = memory_context if item.id == latest_user_id else (memory_contexts or {}).get(item.id)
-        if item.role == "user" and turn_memory is not None and turn_memory != previous_memory_context:
-            if len(messages) == 1:
-                # Keep provider prefix checkpoints ahead of changing first-turn memory.
-                messages.append({"role": "user", "content": "[Host context initialization; no user request.]"})
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": (
-                        "[Host memory context begins]\n"
-                        + turn_memory
-                        + "\n[Host memory context ends]"
-                    ),
-                }
-            )
-            previous_memory_context = turn_memory
         projected = message_dict(
             item,
             tool_results=tool_results_by_message.get(item.id),
@@ -808,6 +793,18 @@ def _projection_messages(
                 and item.id == latest_user_id
             ),
         )
+        if item.role == "user" and turn_memory is not None and turn_memory != previous_memory_context:
+            if len(messages) == 1:
+                # Keep provider prefix checkpoints ahead of changing first-turn memory.
+                messages.append({"role": "user", "content": "[Host context initialization; no user request.]"})
+            memory_prefix = (
+                "[Host memory context begins]\n"
+                + turn_memory
+                + "\n[Host memory context ends]\n\n"
+            )
+            projected["image_reference_offset"] = len(memory_prefix)
+            projected["content"] = memory_prefix + projected["content"]
+            previous_memory_context = turn_memory
         if live_tool_calls is not None and item.id in live_tool_calls:
             projected["tool_calls"] = _model_tool_calls(live_tool_calls[item.id])
         if item.role == "assistant":

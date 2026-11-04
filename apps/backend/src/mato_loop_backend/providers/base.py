@@ -115,7 +115,7 @@ def select_provider_images(
         default=-1,
     )
     reference_texts = [
-        (index, str(message.get("content") or ""))
+        (index, str(message.get("content") or "")[message.get("image_reference_offset", 0):])
         for index, message in enumerate(messages)
         if index == latest_user_index
         or (index > latest_user_index and message.get("role") == "tool")
