@@ -206,6 +206,8 @@ it('confirms eligible bulk updates once, continues after errors and uses the exi
   dialogButton('Aktualisieren').click()
   await vi.waitFor(() => expect(document.querySelector('input[type="password"]')).not.toBeNull())
   expect(updateButton().disabled).toBe(true)
+  expect([root.querySelector('[aria-label="Aktuell verwalten"]').disabled,
+    [...root.querySelectorAll('header button')].find(button => button.textContent.includes('Computer hinzufügen')).disabled]).toEqual([false, false])
   expect(document.body.textContent).toContain('Desktop:')
   const password = document.querySelector('input[type="password"]')
   expect(password.closest('.q-dialog').textContent).toContain('„Laptop“')

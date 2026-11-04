@@ -66,6 +66,20 @@ it.each([[1400, false], [390, true]])('keeps website navigation available in the
   expect(root.textContent).not.toContain('Browseroberfläche anzeigen')
 })
 
+it('opens saved downloads while the agent controls the browser', async () => {
+  await mount()
+  browser.busy = true
+  browser.downloads = [{ id: 'download', status: 'saved', path: 'result.txt', filename: 'result.txt' }]
+  await nextTick()
+  root.querySelector('[aria-label="Downloads"]').click()
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="result.txt herunterladen"]')?.disabled).toBe(false))
+  browser.busy = false
+  api.get.mockResolvedValueOnce({ data: { entries: [{ kind: 'file', name: 'available.txt', path: 'available.txt' }] } })
+  await nextTick()
+  document.querySelector('[aria-label="Dateien aktualisieren"]').click()
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog').textContent).toContain('available.txt'))
+})
+
 it('renders a website prompt as text and returns only the explicit human answer', async () => {
   await mount()
   browser.dialog = { type: 'prompt', message: '<script>untrusted</script>', defaultValue: 'Answer' }

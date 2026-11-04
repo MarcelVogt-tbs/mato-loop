@@ -135,7 +135,7 @@
                 clickable
                 v-ripple
                 v-close-popup
-                :disable="chat.running"
+                :disable="chat.historyActionPending || chat.outboxSaving"
                 @click="setWorkdir"
               >
                 <q-item-section avatar><q-icon name="home_work" /></q-item-section>

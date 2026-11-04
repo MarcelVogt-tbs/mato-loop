@@ -43,7 +43,7 @@ Unsent drafts are browser-local. Sending a first message creates the session, in
 
 The owner-scoped browser outbox uses stable request IDs and FIFO follow-up delivery. A retry after an unknown HTTP outcome returns canonical state rather than starting duplicate work. Accepted direct messages join the active run, supersede pending interactions and replan after active tool work finishes. Completed effects remain. Runtime model/profile settings are frozen for the active run; live availability and permission boundaries still apply. This is not resumable backend execution. See [run continuations](run-continuations.md).
 
-`/fork` creates an independent session and managed-file history, not a second workspace. It does not copy approvals, grants, automations or children. Reusing the computer directory means local files remain shared. Undo and retry remove their defined history suffix, never reverse external effects.
+`/fork` creates an independent session and completed managed-file history, not a second workspace. During an active run, the copied conversation ends before that run's input message; the original run continues. It does not copy pending file writes, the message queue, approvals, grants, automations or children. Reusing the computer directory means local files remain shared. Undo and retry remove their defined history suffix, never reverse external effects.
 
 ## PWA and Push Boundary
 

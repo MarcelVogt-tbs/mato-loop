@@ -399,7 +399,7 @@ export const useBrowserStore = defineStore('browser', {
       this.pickerContext = null
     },
     openPicker(context) {
-      if (!this.manual || context?.sessionId !== this.sessionId) return false
+      if (!this.ownsDisplay || context?.sessionId !== this.sessionId) return false
       this.resetPicker()
       this.pickerContext = { ...context, currentDirectory: context.currentDirectory || context.homeDirectory || '/' }
       this.pickerDirectories = {
@@ -532,7 +532,7 @@ export const useBrowserStore = defineStore('browser', {
       }
     },
     async download(file) {
-      if (!this.manual) return
+      if (this.transferring || !this.ownsDisplay || (file.status !== 'saved' && !this.manual)) return
       const generation = this.generation
       const viewGeneration = this.viewGeneration
       const displayGeneration = this.displayGeneration

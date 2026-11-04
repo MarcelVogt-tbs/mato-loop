@@ -18,17 +18,13 @@ export const sessionsActions = {
         notifyError({}, 'Öffne eine aktive Hauptsession, um sie zu kopieren.')
         return null
       }
-      if (this.running || this.stopping || this.runId || this.activeQueuedMessages.length || this.queueDrainPromise || this.historyActionPending) {
-        notifyError({}, 'Warte, bis der laufende Auftrag und die Nachrichtenwarteschlange abgeschlossen sind.')
-        return null
-      }
-      const version = this.sessionLoadVersion
+      if (this.historyActionPending) return null
       const owner = this.draftOwnerUserId
       this.historyActionPending = true
       try {
         const { data } = await api.post(`/sessions/${source.id}/fork`)
         if (this.draftOwnerUserId !== owner) return null
-        if (this.current?.id === source.id && this.sessionLoadVersion === version) {
+        if (this.current?.id === source.id && this.selectedSessionId === source.id) {
           if (this.drafts.sessionMessages[source.id]?.trim().toLowerCase() === '/fork') {
             delete this.drafts.sessionMessages[source.id]
           }

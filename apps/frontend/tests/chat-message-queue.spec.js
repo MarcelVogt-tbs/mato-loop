@@ -14,6 +14,7 @@ const { api } = vi.hoisted(() => ({
 
 vi.mock('src/boot/axios', () => ({ api }))
 vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
+vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: vi.fn().mockResolvedValue(true) }) }))
 
 import { useApprovalStore } from '../src/stores/approvals'
 import { useChatStore } from '../src/features/chat/store'
@@ -120,6 +121,16 @@ describe('chat message queue', () => {
     expect([armed, (await loadChatOutbox('user-1')).map(({ content, afterRunId }) => [content, afterRunId]), git.finishNext]).toEqual([
       true, [[plan.content, undefined], [build.content, undefined], ['/git-finish', build.id], [followup.content, undefined]], false
     ])
+  })
+
+  it('can send without auto-finish while an editor has unsaved changes', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    chat.current.agentProfileId = '00000000-0000-4000-8000-000000000004'
+    useGitActionStore().setFinishNext(true)
+    useWorkspaceStore().editorDirty = true
+    await chat.queueMessage('Weiterarbeiten')
+    expect((await loadChatOutbox('user-1')).map(entry => entry.content)).toEqual(['Weiterarbeiten'])
   })
 
   it('queues a prepared answer without consuming the current draft or attachments', async () => {

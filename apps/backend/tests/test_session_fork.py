@@ -11,7 +11,13 @@ from mato_loop_backend.agent.projection import _projection_messages, _summary_ev
 from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.media.attachments import AttachmentService, latest_image_references
-from mato_loop_backend.models import ChatSession, ContextSummary, Message, MessageAttachment
+from mato_loop_backend.models import (
+    AgentRun,
+    ChatSession,
+    ContextSummary,
+    Message,
+    MessageAttachment,
+)
 from mato_loop_backend.sessions import fork
 from mato_loop_backend.sessions.serialization import message_payload
 from mato_loop_backend.sessions.service import SessionServiceError
@@ -19,7 +25,7 @@ from mato_loop_backend.settings import InstanceLimits, TrustLevel
 
 
 @pytest.mark.parametrize("project", [False, True])
-@pytest.mark.parametrize("failure", [None, "flush", "commit", "symlink", "quota", "pending"])
+@pytest.mark.parametrize("failure", [None, "flush", "commit", "symlink", "quota"])
 async def test_fork_copies_conversation_and_files_and_handles_transaction_failures(tmp_path, monkeypatch, project, failure):
     user_id, session_id, project_id = uuid4(), uuid4(), uuid4() if project else None
     storage = SessionStorage(tmp_path / "sessions")
@@ -76,9 +82,7 @@ async def test_fork_copies_conversation_and_files_and_handles_transaction_failur
             (root / "files" / "escape").symlink_to(tmp_path)
         elif failure == "quota":
             (root / "files" / "large.bin").write_bytes(b"x" * 1024 * 1024)
-        else:
-            RootFileService(session_id, project_id=project_id, session_storage=storage, run_id=uuid4()).create_output_file("pending.txt", b"pending")
-        error = {"symlink": "file.symlinkForbidden", "quota": "file.userQuotaExceeded", "pending": "file.changed"}.get(failure)
+        error = {"symlink": "file.symlinkForbidden", "quota": "file.userQuotaExceeded"}.get(failure)
         with pytest.raises(SessionServiceError if error else RuntimeError, match=error or "Database transaction failed"):
             await fork.fork_session(db, session_id, user_id)
         target = db.add.call_args_list[0].args[0]
@@ -109,6 +113,34 @@ async def test_fork_copies_conversation_and_files_and_handles_transaction_failur
           fallback_prefix + _summary_evidence(_model_order(copied_messages)))
     storage.remove_session(session_id, project_id)
     assert AttachmentService(storage).read_derived_text(copied_attachment, target.id) == "original"
+
+
+@pytest.mark.parametrize("finalized", [False, True])
+async def test_fork_during_run_copies_only_completed_history_and_file_revisions(tmp_path, monkeypatch, finalized):
+    user_id, session_id, run_id = uuid4(), uuid4(), uuid4()
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(session_id, user_id=user_id)
+    files = RootFileService(session_id, session_storage=storage, user_id=user_id)
+    files.write_file("session", "note.txt", "completed")
+    working = RootFileService(session_id, session_storage=storage, user_id=user_id, run_id=run_id)
+    working.write_file("session", "note.txt", "unfinished", mode="replace", expected_sha256=files.working_revision("note.txt").sha256)
+    working.create_output_file("new.txt", b"x" * 4 * 1024 * 1024)
+    if finalized:
+        working.finalize_run(run_id)
+    messages = [Message(id=uuid4(), role=role, content=content, attachments=[], created_at=datetime.now(UTC))
+                for role, content in [("user", "Earlier"), ("assistant", "Done"), ("user", "Continue"), ("assistant", "Working")]]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [ChatSession(id=session_id, user_id=user_id, title="Source"),
+                             AgentRun(id=run_id, input_message_id=messages[2].id)]
+    db.scalars.side_effect = [Mock(all=Mock(return_value=messages)), Mock(all=Mock(return_value=[]))]
+    monkeypatch.setattr(fork, "SessionStorage", lambda: storage)
+    monkeypatch.setattr(fork.SettingsStore, "load", AsyncMock(return_value=InstanceLimits(user_quota_mib=10)))
+
+    target = await fork.fork_session(db, session_id, user_id)
+
+    copied = [call.args[0].content for call in db.add.call_args_list if isinstance(call.args[0], Message)]
+    root = storage.session_path(target.id) / "files"
+    assert (copied, (root / "note.txt").read_text(), (root / "new.txt").exists()) == (["Earlier", "Done"], "completed", False)
 
 
 async def test_fork_remaps_stored_resource_references(tmp_path, monkeypatch):
@@ -220,7 +252,7 @@ def test_foreign_image_revisions_keep_only_the_current_image_visible(tmp_path):
 
 @pytest.mark.parametrize(("state", "code"), [
     ("missing", "session.notFound"), ("child", "session.readOnly"),
-    ("busy", "session.runAlreadyActive"), ("archived", "session.archived"),
+    ("archived", "session.archived"),
 ])
 async def test_fork_rejects_unavailable_sources_without_creating_data(state, code):
     user_id, session_id = uuid4(), uuid4()
@@ -228,7 +260,7 @@ async def test_fork_rejects_unavailable_sources_without_creating_data(state, cod
                          parent_session_id=uuid4() if state == "child" else None,
                          archived_at=datetime.now(UTC) if state == "archived" else None)
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [None if state == "missing" else source, uuid4() if state == "busy" else None]
+    db.scalar.side_effect = [None if state == "missing" else source, None]
     with pytest.raises(SessionServiceError) as error:
         await fork.fork_session(db, session_id, user_id)
     assert (error.value.code, db.add.call_count) == (code, 0)

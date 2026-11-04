@@ -35,7 +35,7 @@ Es findet kein Fetch statt und ein Remote ist nicht nötig. Uncommittete Änderu
 
 ## Arbeitsbereich oder Branch wechseln
 
-Unter **Git > Repository** findest du unterhalb der **Aktionen** die **Einstellungen**. Dort öffnen die Bearbeiten-Symbole die Dialoge für Arbeitsbereich, Branches und Remote. Markiere einen Arbeitsbereich und wähle **⋮ > Aktivieren**; bei Branches übernimmt **Wechseln** die Auswahl. Ein Wechsel verschiebt keine Dateien und kopiert keine Freigaben. Beende laufende Aufträge und speichere Editoränderungen vorher.
+Unter **Git > Repository** findest du unterhalb der **Aktionen** die **Einstellungen**. Dort öffnen die Bearbeiten-Symbole die Dialoge für Arbeitsbereich, Branches und Remote. Die Arbeitsbereich- und Branchlisten kannst du auch während eines Auftrags durchsuchen und schließen. Markiere einen Arbeitsbereich und wähle **⋮ > Aktivieren**; bei Branches übernimmt **Wechseln** die Auswahl. Ein Wechsel verschiebt keine Dateien und kopiert keine Freigaben. Beende laufende Aufträge vor dem Wechsel. Speichere vor einem Branchwechsel die Editoränderungen im betroffenen Arbeitsbereich; ein neuer Branch ohne Checkout benötigt das nicht. Vor dem Wechsel des Session-Arbeitsbereichs müssen weiterhin alle Editorentwürfe gesichert sein.
 
 **Geändert** kennzeichnet uncommittete Änderungen einschließlich neuer, nicht ignorierter Dateien. Prüfe bei Bedarf mit **Aktualisieren**; nicht prüfbar bedeutet nicht sauber. Sessionlinks zeigen andere Unterhaltungen am selben Arbeitspfad, reservieren aber keinen Worktree.
 
@@ -62,7 +62,7 @@ abgeschlossenen Schritten und dem noch offenen Teil unterscheiden.
 ### Nach einer Umsetzung automatisch abschließen
 
 1. Aktiviere in deiner Worktree-Session unter **Git > Repository > Aktionen** **Nach Umsetzung abschließen**.
-2. Wähle **Build** und sende deinen Umsetzungsauftrag. Der Schalter gilt einmalig für die nächste normale Build-Nachricht in diesem Arbeitsbereich; Plan-Nachrichten und einzelne Git-Aktionen verbrauchen ihn nicht.
+2. Wähle **Build** und sende deinen Umsetzungsauftrag. Der Schalter gilt einmalig für die nächste normale Build-Nachricht in diesem Arbeitsbereich; Plan-Nachrichten und einzelne Git-Aktionen verbrauchen ihn nicht. Bei ungespeicherten Editoränderungen kannst du im Dialog **Ohne Autoabschluss senden** wählen; für diese Nachricht wird kein Abschluss vorgemerkt und der Schalter wird ausgeschaltet.
 3. MatoLoop merkt direkt dahinter genau einen **Automatischer Folgeauftrag** vor: `/git-finish` (**Review, Korrektur & Merge**). Nach dem Umsetzungsauftrag prüft dieser normale Agentenlauf die Änderungen, behebt konkrete Befunde und prüft erneut. Seine Anweisungen erlauben Commit und lokalen Merge in den angezeigten Zielbranch erst ohne verbleibende Befunde, fehlgeschlagene Checks oder fehlende Entscheidungen. Fragen und reine Analysen berechtigen nicht dazu. Die Einzelaktion **Code-Review** bleibt schreibgeschützt.
 
 Du kannst `/git-finish` auch selbst über die Befehlsauswahl oder **Review, Korrektur & Merge** starten. Die Git-Aktionsbuttons reihen normale Befehlsnachrichten ein, auch während einer laufenden Antwort. Dein Entwurf und seine Anhänge bleiben dabei erhalten. Fehlende Voraussetzungen werden bei der jeweiligen Aktion erklärt; Berechtigungen und Prüfungen des Git-Zustands gelten weiterhin.

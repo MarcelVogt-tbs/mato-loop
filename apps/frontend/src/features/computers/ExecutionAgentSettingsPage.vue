@@ -11,9 +11,9 @@
         <q-btn
           v-if="updateCandidates.length || maintenanceBusy" outline no-caps color="primary" icon="system_update"
           :label="`Agents aktualisieren (${updateCandidates.length})`" :loading="maintenanceBusy"
-          :disable="agents.loading || actionBusy || maintenanceBusy" @click="maintain(null, 'update')"
+          :disable="agents.loading || actionBusy.size > 0 || maintenanceBusy" @click="maintain(null, 'update')"
         />
-        <q-btn color="primary" unelevated no-caps icon="add" label="Computer hinzufügen" :disable="maintenanceBusy" @click="openCreate" />
+        <q-btn color="primary" unelevated no-caps icon="add" label="Computer hinzufügen" @click="openCreate" />
       </div>
     </header>
 
@@ -40,7 +40,7 @@
       </template>
       <template #body-cell-name="props">
         <q-td :props="props">
-          <q-btn flat no-caps color="primary" padding="none" :label="agentDisplayName(props.row)" :disable="actionBusy || maintenanceBusy" @click="openManage(props.row)" />
+          <q-btn flat no-caps color="primary" padding="none" :label="agentDisplayName(props.row)" @click="openManage(props.row)" />
           <div v-if="props.row.id === agents.defaultExecutionAgentId" class="text-caption app-muted">Standardcomputer</div>
         </q-td>
       </template>
@@ -65,8 +65,8 @@
       </template>
       <template #body-cell-actions="props">
         <q-td :props="props">
-          <q-btn flat round icon="settings" color="primary" :aria-label="`${agentDisplayName(props.row)} verwalten`" :disable="actionBusy || maintenanceBusy" @click="openManage(props.row)" />
-          <q-btn flat round icon="delete_outline" color="negative" :aria-label="`${agentDisplayName(props.row)} entfernen`" :disable="actionBusy || maintenanceBusy" @click="revoke(props.row)" />
+          <q-btn flat round icon="settings" color="primary" :aria-label="`${agentDisplayName(props.row)} verwalten`" @click="openManage(props.row)" />
+          <q-btn flat round icon="delete_outline" color="negative" :aria-label="`${agentDisplayName(props.row)} entfernen`" :disable="actionBusy.has(props.row.id)" @click="revoke(props.row)" />
         </q-td>
       </template>
     </q-table>
@@ -74,7 +74,7 @@
     <ExecutionAgentConfigDialog
       :model-value="configDialogOpen && (!managedAgentId || Boolean(managedAgent))"
       :agent="managedAgent"
-      :busy="actionBusy || maintenanceBusy"
+      :busy="actionBusy.has(managedAgentId)"
       @update:model-value="configDialogOpen = $event"
       @created="showPairingToken"
       @copy-command="copy($event, 'Installationsbefehl')"
@@ -113,11 +113,11 @@
             <q-item-section avatar><q-icon name="update" /></q-item-section>
             <q-item-section>Agent aktualisieren</q-item-section>
           </q-item>
-          <q-item v-if="managedAgent.pairingState !== 'paired'" clickable :disable="actionBusy || maintenanceBusy" @click="openPairingToken(managedAgent)">
+          <q-item v-if="managedAgent.pairingState !== 'paired'" clickable :disable="actionBusy.has(managedAgentId)" @click="openPairingToken(managedAgent)">
             <q-item-section avatar><q-icon name="key" /></q-item-section>
             <q-item-section>Neuen Kopplungstoken erstellen</q-item-section>
           </q-item>
-          <q-item v-else clickable :disable="actionBusy || maintenanceBusy" @click="unpair(managedAgent)">
+          <q-item v-else clickable :disable="actionBusy.has(managedAgentId)" @click="unpair(managedAgent)">
             <q-item-section avatar><q-icon name="link_off" color="negative" /></q-item-section>
             <q-item-section>Computer entkoppeln</q-item-section>
           </q-item>
@@ -125,7 +125,7 @@
             <q-item-section avatar><q-icon name="delete_sweep" color="negative" /></q-item-section>
             <q-item-section>Agent deinstallieren</q-item-section>
           </q-item>
-          <q-item clickable :disable="actionBusy || maintenanceBusy" @click="revoke(managedAgent)">
+          <q-item clickable :disable="actionBusy.has(managedAgentId)" @click="revoke(managedAgent)">
             <q-item-section avatar><q-icon name="delete_outline" color="negative" /></q-item-section>
             <q-item-section>Computer entfernen</q-item-section>
           </q-item>
@@ -230,11 +230,11 @@ const pairingResult = ref(null)
 const pairingDurationSeconds = ref(null)
 const saving = ref(false)
 const maintenanceBusy = ref(false)
-const actionBusy = ref(false)
+const actionBusy = ref(new Set())
 const managedAgentId = ref(null)
 const managedAgent = computed(() => agents.byId(managedAgentId.value))
 const maintenanceDisabled = computed(() => (
-  actionBusy.value || maintenanceBusy.value || !canMaintain(managedAgent.value)
+  actionBusy.value.has(managedAgentId.value) || maintenanceBusy.value || !canMaintain(managedAgent.value)
 ))
 const updateCandidates = computed(() => agents.items.filter(needsUpdate))
 const columns = [
@@ -316,12 +316,12 @@ async function unpair(agent) {
     { okLabel: 'Entkoppeln', okColor: 'negative' }
   )
   if (!accepted) return
-  actionBusy.value = true
+  actionBusy.value.add(agent.id)
   try {
     await agents.unpair(agent.id)
     $q.notify({ type: 'positive', message: 'Computer entkoppelt' })
   } finally {
-    actionBusy.value = false
+    actionBusy.value.delete(agent.id)
   }
 }
 
@@ -332,14 +332,16 @@ async function revoke(agent) {
     { okLabel: 'Entfernen', okColor: 'negative' }
   )
   if (!accepted) return
-  actionBusy.value = true
+  actionBusy.value.add(agent.id)
   try {
     await agents.revoke(agent.id)
-    configDialogOpen.value = false
-    managedAgentId.value = null
+    if (managedAgentId.value === agent.id) {
+      configDialogOpen.value = false
+      managedAgentId.value = null
+    }
     $q.notify({ type: 'positive', message: 'Computer entfernt' })
   } finally {
-    actionBusy.value = false
+    actionBusy.value.delete(agent.id)
   }
 }
 
@@ -352,7 +354,7 @@ function maintenanceLabel(job) {
 }
 
 async function maintain(agent, action) {
-  if (actionBusy.value || maintenanceBusy.value) return
+  if ((agent ? actionBusy.value.has(agent.id) : actionBusy.value.size) || maintenanceBusy.value) return
   const selected = agent ? [agent] : [...updateCandidates.value]
   if (!selected.length) return
   maintenanceBusy.value = true

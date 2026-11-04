@@ -37,7 +37,7 @@ Die Benutzernachricht zeigt den aufgelösten Auftrag. Rückgängig stellt den ur
 
 ### Eine Unterhaltung kopieren
 
-Mit `/fork` kopierst du eine ruhende gespeicherte Session und schreibst unabhängig weiter. Warte zuvor auf laufende und vorgemerkte Aufträge; der Befehl nimmt keine Argumente oder neuen Anhänge an und startet keinen Modellaufruf.
+Mit `/fork` kopierst du eine gespeicherte Session und schreibst unabhängig weiter. Das funktioniert auch während eines laufenden Auftrags: Die Kopie endet dann vor dessen Benutzernachricht; der Auftrag läuft im Original weiter. Vorgemerkte Nachrichten und noch nicht abgeschlossene Dateiänderungen werden nicht übernommen. Der Befehl nimmt keine Argumente oder neuen Anhänge an und startet keinen Modellaufruf.
 
 Verlauf, Einstellungen, interne Dateien samt Versionen und Anhänge werden kopiert. Änderungen an den kopierten Session-Dateien wirken nicht aufs Original. Freigaben, offene Fragen, Automationen und Subagenten werden nicht übernommen. Kopien brauchen zusätzlichen Speicher und unterliegen deinem Speicherlimit.
 

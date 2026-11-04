@@ -32,8 +32,7 @@ export const useGitActionStore = defineStore('git-actions', {
     },
     busy() {
       const chat = useChatStore()
-      return Boolean(this.messageDisabled || chat.running || chat.runId || chat.current?.activeRun
-        || chat.activeQueuedMessages.length || chat.queueDrainPromise)
+      return Boolean(this.messageDisabled || chat.running || chat.runId || chat.current?.activeRun)
     },
     messageDisabled() {
       const chat = useChatStore()
@@ -44,10 +43,14 @@ export const useGitActionStore = defineStore('git-actions', {
   },
   actions: {
     setFinishNext(enabled) { this.finishScope = enabled ? this.scope : null },
-    async workspaceAction(action, values = {}) {
+    async workspaceAction(action, values = {}, repository = null) {
       const chat = useChatStore(), session = chat.current
-      if (!session || this.busy) return false
-      if (useWorkspaceStore().hasDirtyEditors) {
+      if (!session || this.messageDisabled || (!['branch-create', 'branch-delete', 'remove'].includes(action) && this.busy)) return false
+      const workspace = useWorkspaceStore()
+      if ((action === 'select' && workspace.hasDirtyEditors)
+        || (['branch-switch', 'remove'].includes(action) && workspace.hasDirtyFiles(
+          session.preferredExecutionAgentId, action === 'remove' ? values.directory : repository || session.currentDirectory
+        ))) {
         Notify.create({ type: 'warning', message: 'Bitte zuerst die ungespeicherten Editoränderungen speichern oder verwerfen.' })
         return false
       }

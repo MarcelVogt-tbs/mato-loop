@@ -250,8 +250,9 @@ it('keeps setup independent of chat/browser authority and never starts installat
 })
 
 
-it('downloads saved browser results from the session files rather than worker staging', async () => {
+it('downloads saved browser results even while the agent controls the browser', async () => {
   await open()
+  browser.busy = true
   vi.useFakeTimers()
   vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:download'), revokeObjectURL: vi.fn() })
   vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})

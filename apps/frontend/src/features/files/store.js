@@ -61,6 +61,17 @@ export const useWorkspaceStore = defineStore('workspace', {
     fileTabDirty: (state) => (tabId) => state.activeFileTabId === tabId
       ? state.editorDirty
       : state.fileTabStates[tabId]?.editorDirty === true,
+    hasDirtyFiles() {
+      return (agentId, directory) => {
+        if (!agentId || !directory) return false
+        const prefix = directory.replace(/\/+$/u, '') + '/'
+        const affected = target => target?.scope === 'filesystem' && target.executionAgentId === agentId
+          && (target.path === directory || target.path.startsWith(prefix))
+        return useControlCenterStore().fileTabs.some(tab => this.fileTabDirty(tab.tabId) && affected(tab.fileTarget))
+          || (this.editorDirty && affected({ scope: this.scope,
+            executionAgentId: this.workspaceContext?.executionAgentId, path: this.viewedEntry?.path || '' }))
+      }
+    },
     operationAvailable: (state) => (operation) => (
       state.scope === 'session'
         ? Boolean(state.sessionId)

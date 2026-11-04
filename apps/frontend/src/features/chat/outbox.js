@@ -10,6 +10,7 @@ import { notifyError } from 'src/utils/notifications'
 import { randomUuid } from 'src/utils/random-id'
 import { OUTBOX_RETRY_MS } from 'src/features/chat/model'
 import { gitFinishEntry, useGitActionStore } from 'src/features/coding/git-actions-store'
+import { useConfirm } from 'src/composables/confirm'
 
 export const outboxActions = {
     async send(content, { preserveDraft = false, interrupt = false, activeFile } = {}) {
@@ -70,16 +71,23 @@ export const outboxActions = {
     async queueMessage(content, { preserveDraft = false, interrupt = false, activeFile } = {}) {
       const ownerUserId = this.draftOwnerUserId
       const loadVersion = this.outboxLoadVersion
+      const queueKey = this.activeQueueKey
       if (!ownerUserId) return null
       const text = String(content || '').trim()
       const attachments = preserveDraft ? [] : [...this.activeAttachmentDraft]
       if (!text && !attachments.length) return null
       const git = useGitActionStore()
-      const finishScope = git.finishNext && git.buildSelected && !interrupt && !preserveDraft && text && !text.startsWith('/')
+      const requestedFinishScope = git.finishNext && git.buildSelected && !interrupt && !preserveDraft && text && !text.startsWith('/')
         ? git.finishScope : null
+      let finishScope = requestedFinishScope
       if (finishScope && useWorkspaceStore().hasDirtyEditors) {
-        notifyError({}, 'Bitte vor dem Autoabschluss die ungespeicherten Editoränderungen speichern oder verwerfen.')
-        return null
+        if (!await useConfirm().confirm(
+          'Es gibt ungespeicherte Editoränderungen. Möchtest du die Nachricht diesmal ohne automatischen Abschluss senden?',
+          'Ohne Autoabschluss senden?', { okLabel: 'Ohne Autoabschluss senden', okColor: 'primary' }
+        )) return null
+        if (ownerUserId !== this.draftOwnerUserId || loadVersion !== this.outboxLoadVersion
+          || queueKey !== this.activeQueueKey || git.scope !== requestedFinishScope) return null
+        finishScope = null
       }
       const sessionId = this.current?.id || null
       const entry = {
@@ -126,7 +134,7 @@ export const outboxActions = {
         await deleteChatOutboxEntries(entries.map((item) => item.id)).catch(() => {})
         return null
       }
-      if (finishScope && git.finishScope === finishScope) git.setFinishNext(false)
+      if (requestedFinishScope && git.finishScope === requestedFinishScope) git.setFinishNext(false)
       const key = queueKeyForEntry(entry)
       if (!this.queuedMessages[key]) this.queuedMessages[key] = []
       this.queuedMessages[key].push(...entries)

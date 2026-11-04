@@ -23,14 +23,14 @@
         :readonly="!browser.canNavigate || !browser.activeTab" :loading="browser.ownsDisplay && browser.navigationPending" @focus="editAddress" @blur="resetAddress" @update:model-value="editAddress"
         @keydown.enter.prevent="submitAddress" @keydown.esc.prevent="resetAddress" />
       <template v-if="!$q.screen.lt.sm">
-        <q-btn v-for="action in fileActions" :key="action.label" flat round dense :icon="action.icon" :aria-label="action.label" :disable="!browser.manual" @click="action.run"><q-tooltip>{{ action.label }}</q-tooltip></q-btn>
+        <q-btn v-for="action in fileActions" :key="action.label" flat round dense :icon="action.icon" :aria-label="action.label" :disable="action.disabled" @click="action.run"><q-tooltip>{{ action.label }}</q-tooltip></q-btn>
       </template>
       <q-btn ref="controlsButton" flat round dense icon="more_vert" aria-label="Weitere Browseraktionen">
         <q-tooltip>Weitere Browseraktionen</q-tooltip>
         <AppMenu anchor="bottom right" self="top right" max-width="calc(100vw - 24px)">
           <q-list padding>
             <template v-if="$q.screen.lt.sm">
-              <q-item v-for="action in fileActions" :key="action.label" clickable v-close-popup :disable="!browser.manual" @click="action.run"><q-item-section avatar><q-icon :name="action.icon" /></q-item-section><q-item-section>{{ action.label }}</q-item-section></q-item>
+              <q-item v-for="action in fileActions" :key="action.label" clickable v-close-popup :disable="action.disabled" @click="action.run"><q-item-section avatar><q-icon :name="action.icon" /></q-item-section><q-item-section>{{ action.label }}</q-item-section></q-item>
               <q-separator />
             </template>
             <q-item v-if="options.length > 1"><q-item-section>
@@ -125,7 +125,7 @@
             <q-item v-for="file in browser.downloads" :key="file.id">
               <q-item-section avatar><q-icon :name="downloadIcon(file)" :color="downloadColor(file)" /></q-item-section>
               <q-item-section><q-item-label>{{ file.filename }}</q-item-label><q-item-label caption>{{ downloadLabel(file) }}</q-item-label><q-item-label v-if="downloadPath(file)" caption class="ellipsis" :title="downloadPath(file)">{{ downloadPath(file) }}</q-item-label></q-item-section>
-              <q-item-section v-if="downloadCanFetch(file)" side><q-btn flat round icon="download" :aria-label="`${file.filename} herunterladen`" :disable="!browser.manual" @click="download(file)" /></q-item-section>
+              <q-item-section v-if="downloadCanFetch(file)" side><q-btn flat round icon="download" :aria-label="`${file.filename} herunterladen`" :disable="browser.transferring || (file.status !== 'saved' && !browser.manual)" @click="download(file)" /></q-item-section>
             </q-item>
             <q-item v-if="!browser.downloads.length"><q-item-section>Noch keine Downloads.</q-item-section></q-item>
           </q-list>
@@ -187,10 +187,10 @@ let clipboardDialog = 0
 const filesOpen = ref(false)
 const uploadInput = ref(null)
 let uploadTrigger = null
-const fileActions = [
-  { label: 'Datei hochladen', icon: 'upload_file', run: () => openFiles() },
-  { label: 'Downloads', icon: 'download', run: showDownloads }
-]
+const fileActions = computed(() => [
+  { label: 'Datei hochladen', icon: 'upload_file', disabled: !browser.manual, run: () => openFiles() },
+  { label: 'Downloads', icon: 'download', disabled: !browser.ownsDisplay, run: showDownloads }
+])
 const options = computed(() => integrations.browser.instances.filter((item) => item.enabled && item.executionAgentId === chat.current?.preferredExecutionAgentId).map((item) => ({ label: item.name, value: item.id })))
 const available = computed(() => Boolean(chat.current?.id && integrations.adapterAvailable('browser', 'personal') && agents.byId(chat.current.preferredExecutionAgentId)?.connected && options.value.some((item) => item.value === selectedId.value)))
 const pickerContext = computed(() => ({
@@ -469,7 +469,7 @@ function respondDialog(accept) {
 function openFiles(downloads = false) {
   if (!browser.openPicker(pickerContext.value)) return
   filesOpen.value = true
-  if (downloads) void refreshDownloads()
+  if (downloads && browser.manual) void refreshDownloads()
 }
 function showDownloads() { openFiles(true) }
 function openPickerDirectory(path) { browser.openPickerDirectory(path) }

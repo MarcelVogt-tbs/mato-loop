@@ -26,23 +26,23 @@
     </q-card-actions>
   </q-card>
 
-  <q-dialog :model-value="Boolean(picker)" :transition-duration="0" :maximized="$q.screen.lt.sm" :persistent="busy" @update:model-value="picker = $event ? picker : null">
+  <q-dialog :model-value="Boolean(picker)" :transition-duration="0" :maximized="$q.screen.lt.sm" @update:model-value="picker = $event ? picker : null">
     <q-card class="integration-dialog app-surface column">
       <q-card-section class="row items-center no-wrap q-gutter-x-sm">
         <div class="col text-h6">{{ picker === 'workspace' ? 'Arbeitsbereich' : 'Branches' }}</div>
         <q-btn v-if="picker === 'workspace'" flat dense round icon="add" aria-label="Worktree erstellen" :disable="busy || !canCreate" @click="selectWorkspace(null, true)" />
-        <q-btn v-else flat dense round icon="add" aria-label="Branch erstellen" :disable="busy || !chat.current" @click="promptBranch(false)" />
-        <q-btn flat dense round icon="close" aria-label="Schließen" :disable="busy" v-close-popup />
+        <q-btn v-else flat dense round icon="add" aria-label="Branch erstellen" :disable="actions.messageDisabled || !chat.current" @click="promptBranch(false)" />
+        <q-btn flat dense round icon="close" aria-label="Schließen" v-close-popup />
       </q-card-section>
       <q-card-section class="q-pt-none">
-        <q-input v-model="search" outlined dense clearable :label="picker === 'workspace' ? 'Arbeitsbereich suchen' : 'Branch suchen'" :disable="busy" />
+        <q-input v-model="search" outlined dense clearable :label="picker === 'workspace' ? 'Arbeitsbereich suchen' : 'Branch suchen'" />
         <div v-if="picker === 'workspace' && !worktreesEnabled" class="text-caption app-muted q-mt-xs">Worktrees sind in der Sessionvorlage deaktiviert.</div>
       </q-card-section>
       <q-list class="col scroll">
         <template v-if="picker === 'workspace'">
           <template v-for="(item, index) in filteredWorkspaces" :key="item.path">
             <q-separator v-if="index" />
-            <q-item clickable manual-focus :focused="selected === item.path" :disable="busy"
+            <q-item clickable manual-focus :focused="selected === item.path"
               :aria-label="`Arbeitsbereich ${item.path} markieren`" @click="selected = item.path">
               <q-item-section>
                 <q-item-label class="ellipsis">{{ workspaceName(item.path) }}</q-item-label>
@@ -53,7 +53,7 @@
               </q-item-section>
               <q-item-section side>
                 <q-btn flat dense round icon="more_vert"
-                  :aria-label="item.main ? 'Aktionen für lokalen Arbeitsbereich' : `Aktionen für Worktree ${baseName(item.path)}`" :disable="busy" @click.stop>
+                  :aria-label="item.main ? 'Aktionen für lokalen Arbeitsbereich' : `Aktionen für Worktree ${baseName(item.path)}`" @click.stop>
                   <AppMenu>
                     <q-list dense>
                       <q-item v-close-popup clickable :aria-label="`Arbeitsbereich ${item.path} aktivieren`"
@@ -63,7 +63,7 @@
                         <q-item-section>Aktivieren</q-item-section>
                       </q-item>
                       <q-separator v-if="!item.main" />
-                      <q-item v-if="!item.main" v-close-popup clickable :disable="busy || item.locked" class="text-negative"
+                      <q-item v-if="!item.main" v-close-popup clickable :disable="actions.messageDisabled || item.locked" class="text-negative"
                         :aria-label="`Worktree ${baseName(item.path)} entfernen`" @click="removeWorktree(item.path)">
                         <q-item-section side><q-icon name="delete_outline" /></q-item-section>
                         <q-item-section>Entfernen</q-item-section>
@@ -77,7 +77,7 @@
           <q-item v-if="!filteredWorkspaces.length"><q-item-section class="app-muted">Keine Arbeitsbereiche gefunden.</q-item-section></q-item>
         </template>
         <template v-else>
-          <q-item v-for="name in filteredBranches" :key="name" clickable :active="selected === name" :disable="busy"
+          <q-item v-for="name in filteredBranches" :key="name" clickable :active="selected === name"
             :aria-label="`Branch ${name} markieren`" @click="selected = name">
             <q-item-section>
               <q-item-label class="row no-wrap">
@@ -90,7 +90,7 @@
               <q-icon name="check" role="img" aria-hidden="false" aria-label="Aktueller Branch" />
             </q-item-section>
             <q-item-section side>
-              <q-btn flat dense round icon="more_vert" :aria-label="`Aktionen für Branch ${name}`" :disable="busy" @click.stop>
+              <q-btn flat dense round icon="more_vert" :aria-label="`Aktionen für Branch ${name}`" @click.stop>
                 <AppMenu>
                   <q-list dense>
                     <q-item v-if="name === currentBranch" v-close-popup clickable :disable="busy" aria-label="Aktuellen Branch umbenennen" @click="promptBranch(true)">
@@ -98,7 +98,7 @@
                       <q-item-section>Umbenennen</q-item-section>
                     </q-item>
                     <q-item v-else v-close-popup clickable class="text-negative" :aria-label="`Branch ${name} löschen`"
-                      :disable="busy || name === targetBranch || worktrees.some(item => item.branch === name)" @click="removeBranch(name)">
+                      :disable="actions.messageDisabled || name === targetBranch || worktrees.some(item => item.branch === name)" @click="removeBranch(name)">
                       <q-item-section side><q-icon name="delete_outline" /></q-item-section>
                       <q-item-section>Löschen</q-item-section>
                     </q-item>
@@ -131,14 +131,14 @@
         </template>
       </q-card-section>
       <q-card-actions align="right">
-        <q-btn flat no-caps :label="picker === 'workspace' ? 'Schließen' : 'Abbrechen'" :disable="busy" v-close-popup />
+        <q-btn flat no-caps :label="picker === 'workspace' ? 'Schließen' : 'Abbrechen'" v-close-popup />
         <q-btn v-if="picker === 'branch'" unelevated no-caps color="primary" label="Wechseln" aria-label="Branch wechseln"
           :disable="busy || !selected || !repository?.localBranches?.includes(selected) || selected === currentBranch || Boolean(branchWorktree(selected))" @click="selectBranch(selected)" />
       </q-card-actions>
     </q-card>
   </q-dialog>
 
-  <q-dialog v-model="targetOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" :persistent="busy">
+  <q-dialog v-model="targetOpen" :transition-duration="0" :maximized="$q.screen.lt.sm">
     <q-card class="integration-dialog app-surface">
       <q-form @submit.prevent="setTarget(targetDraft)">
         <q-card-section><div class="text-h6">Zielbranch</div></q-card-section>
@@ -147,7 +147,7 @@
             use-input new-value-mode="add-unique" :disable="busy" />
         </q-card-section>
         <q-card-actions align="right">
-          <q-btn flat no-caps label="Abbrechen" :disable="busy" v-close-popup />
+          <q-btn flat no-caps label="Abbrechen" v-close-popup />
           <q-btn unelevated no-caps color="primary" type="submit" label="Speichern" :disable="busy || !targetDraft || targetDraft === targetBranch" />
         </q-card-actions>
       </q-form>
@@ -180,7 +180,7 @@ const targetOpen = ref(false), targetDraft = ref(null)
 const available = computed(() => props.project && agents.byId(context.value.preferredExecutionAgentId)?.connected
   && agents.byId(context.value.preferredExecutionAgentId)?.operations?.includes('git.branch'))
 const busy = computed(() => actions.busy || props.loading)
-const disabled = computed(() => busy.value || !available.value || !chat.current)
+const disabled = computed(() => !available.value || !chat.current)
 const worktrees = computed(() => props.repository?.worktrees || [])
 const workspaceOptions = computed(() => [...worktrees.value]
   .sort((a, b) => Number(b.path === props.repository?.repository) - Number(a.path === props.repository?.repository)
@@ -202,7 +202,7 @@ const filteredBranches = computed(() => (props.repository?.localBranches || [])
   .sort((a, b) => Number(b === currentBranch.value) - Number(a === currentBranch.value)))
 const rows = computed(() => [
   { label: 'Branch', icon: 'call_split', value: currentBranch.value || 'Losgelöster Stand', disabled: disabled.value, edit: () => openPicker('branch') },
-  { label: 'Zielbranch', icon: 'arrow_forward', value: props.targetBranch || 'Nicht eingerichtet', disabled: disabled.value, edit: () => { targetDraft.value = props.targetBranch; targetOpen.value = true } },
+  { label: 'Zielbranch', icon: 'arrow_forward', value: props.targetBranch || 'Nicht eingerichtet', disabled: disabled.value || busy.value, edit: () => { targetDraft.value = props.targetBranch; targetOpen.value = true } },
   { label: 'Remote', icon: 'cloud_queue', value: props.remote || 'Nicht eingerichtet', disabled: props.remoteDisabled, edit: () => emit('edit-remote') }
 ])
 watch(() => chat.current?.id, () => { picker.value = null; targetOpen.value = false })
@@ -223,9 +223,8 @@ async function copyPath() {
   catch { $q.notify({ type: 'negative', message: 'Der Pfad konnte nicht kopiert werden.' }) }
 }
 async function run(action, values = {}) {
-  if (busy.value) return false
   try {
-    if (await actions.workspaceAction(action, values)) {
+    if (await actions.workspaceAction(action, values, props.repository?.repository)) {
       emit('changed')
       $q.notify({ type: 'positive', message: 'Git-Aktion abgeschlossen.' })
       return true

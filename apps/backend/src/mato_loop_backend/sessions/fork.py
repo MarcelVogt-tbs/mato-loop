@@ -72,10 +72,15 @@ async def _fork_session(db: AsyncSession, session_id: UUID, user_id: UUID) -> Ch
         raise SessionServiceError(404, "session.notFound")
     if await is_session_archived(db, source):
         raise SessionServiceError(409, "session.archived")
-    if await ChatHistoryService._active_run(db, source.id) is not None:
-        raise SessionServiceError(409, "session.runAlreadyActive")
+    active_run = await ChatHistoryService._active_run(db, source.id)
     messages = await ChatHistoryService._messages(db, source.id)
+    if active_run is not None:
+        boundary = next((index for index, message in enumerate(messages)
+                         if message.id == active_run.input_message_id), 0)
+        messages = messages[:boundary]
     summaries = list((await db.scalars(select(ContextSummary).where(ContextSummary.session_id == source.id))).all())
+    message_ids = {message.id for message in messages}
+    summaries = [summary for summary in summaries if summary.covered_through_message_id in message_ids]
     target = ChatSession(
         id=uuid4(), user_id=user_id, project_id=source.project_id,
         title="Kopie: " + source.title[:233], title_generation_status=TitleGenerationStatus.PENDING.value,
@@ -105,7 +110,8 @@ async def _fork_session(db: AsyncSession, session_id: UUID, user_id: UUID) -> Ch
         db.add(target)
         await db.flush()
         await asyncio.to_thread(storage.provision, target.id, target.project_id, user_id=user_id)
-        await asyncio.to_thread(target_files.copy_session_from, source_files)
+        await asyncio.to_thread(target_files.copy_session_from, source_files,
+                                excluded_run_id=active_run.id if active_run else None)
         for original in messages:
             data = deepcopy(original.provider_data or {})
             data.pop("continuation_scope", None)

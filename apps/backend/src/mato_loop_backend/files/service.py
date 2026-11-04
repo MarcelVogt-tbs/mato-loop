@@ -2420,7 +2420,9 @@ class RootFileService:
             os.close(source_descriptor)
 
     @classmethod
-    def _copy_tree(cls, source: Path, destination: Path) -> None:
+    def _copy_tree(cls, source: Path, destination: Path, *, excluded: set[Path] | None = None) -> None:
+        if excluded and source in excluded:
+            return
         metadata = cls._metadata(source)
         if stat.S_ISLNK(metadata.st_mode):
             raise RootFileError("file.symlinkForbidden", "Symlinks are not followed")
@@ -2432,7 +2434,7 @@ class RootFileService:
         destination.mkdir(mode=0o700)
         try:
             for item in source.iterdir():
-                cls._copy_tree(item, destination / item.name)
+                cls._copy_tree(item, destination / item.name, excluded=excluded)
         except BaseException:
             shutil.rmtree(destination)
             raise
@@ -2553,8 +2555,8 @@ class RootFileService:
                 ) for item in index["revisions"]
             }
 
-    def copy_session_from(self, source: RootFileService) -> None:
-        """Copy an idle session's files and revisions into an empty, independently owned store."""
+    def copy_session_from(self, source: RootFileService, *, excluded_run_id: UUID | None = None) -> None:
+        """Copy completed file revisions into an empty, independently owned store."""
         if self.session_id == source.session_id or self.user_id != source.user_id:
             raise RootFileError("file.invalidDestination", "Invalid session copy destination")
         with self._session_operation_lock(FileRoot.SESSION, quota_check=True):
@@ -2564,17 +2566,58 @@ class RootFileService:
             origin = source.session_storage.session_path(source.session_id, project_id=source.project_id)
             if not origin.exists() and not origin.is_symlink():
                 return
-            source._root_path(FileRoot.SESSION)
-            if source.session_storage.pending_run_ids(source.session_id, source.project_id):
-                raise RootFileError("file.changed", "Session has pending run files")
-            self._assert_user_quota(source._session_usage())
+            excluded = {origin / "revisions" / ".ownership"}
+            metadata = {}
+            working_copies = []
+            revisions = {}
+            for directory, index in source._revision_indexes():
+                # A run can finish while its conversation snapshot is being copied.
+                boundary = next((position for position, item in enumerate(index["revisions"])
+                                 if excluded_run_id is not None and item.get("runId") == str(excluded_run_id)), len(index["revisions"]))
+                retained = index["revisions"][:boundary]
+                owner = index.pop("run", {})
+                excluded.add(directory / "index.json")
+                if owner.get("state", "final") != "final" or boundary < len(index["revisions"]):
+                    working = origin / "files" / index["path"]
+                    if not index.get("deleted", False):
+                        excluded.add(working)
+                    if not retained:
+                        excluded.add(directory)
+                        continue
+                    for item in index["revisions"][boundary:]:
+                        excluded.add(directory / str(item["revision"]))
+                        excluded.add(directory / "derived" / str(item["revision"]))
+                    index["revisions"] = retained
+                    current = next((item for item in retained if item["revision"] == index["currentRevision"]), retained[-1])
+                    index["currentRevision"] = current["revision"]
+                    if not index.get("deleted", False):
+                        working_copies.append((directory, current, target / "files" / index["path"]))
+                index.pop("runReceipts", None)
+                metadata[directory.relative_to(origin) / "index.json"] = self._index_bytes(index)
+                revisions[index["fileId"]] = {item["revision"] for item in retained}
+            for child, link in source._derived_links().items():
+                bindings = [binding for binding in link["bindings"]
+                            if binding["source"] in revisions.get(link["sourceFileId"], set())
+                            and binding["derived"] in revisions.get(child, set())]
+                if bindings:
+                    metadata[Path("revisions/.ownership") / f"{child}.json"] = self._index_bytes({**link, "bindings": bindings})
+            omitted_bytes = sum(self._tree_usage(path, operation_limits=False).bytes for path in excluded
+                                if not any(parent in excluded for parent in path.parents)
+                                and (path.exists() or path.is_symlink()))
+            self._assert_user_quota(source._session_usage() - omitted_bytes
+                                    + sum(len(data) for data in metadata.values())
+                                    + sum(item["sizeBytes"] for _, item, _ in working_copies))
             for name in ("files", "revisions"):
                 for entry in (origin / name).iterdir():
-                    self._copy_tree(entry, target / name / entry.name)
-            for directory, index in self._revision_indexes():
-                index.pop("run", None)
-                index.pop("runReceipts", None)
-                self._replace_private_file(directory / "index.json", self._index_bytes(index))
+                    self._copy_tree(entry, target / name / entry.name, excluded=excluded)
+            for path, data in metadata.items():
+                destination = target / path
+                destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                self._write_private_file(destination, data)
+            for directory, current, working in working_copies:
+                working.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                with _open_regular_file(directory, (str(current["revision"]),), RootFileError) as handle:
+                    self._copy_private_file(handle, working, current["sizeBytes"], current["sha256"])
             self._assert_user_quota(0)
 
     def move_path(

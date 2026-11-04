@@ -27,6 +27,7 @@ import { useGitChangesStore } from '../src/features/files/git-store'
 import { api } from 'src/boot/axios'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { useSidebarSessions } from '../src/features/chat/useSidebarSessions'
+import { useWorkspaceStore } from '../src/stores/workspace'
 
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.useRealTimers() })
@@ -351,6 +352,19 @@ it('keeps the selected workspace unchanged after a failed switch', async () => {
   expect(chat.current.currentDirectory).toBe('/original')
 })
 
+it.each(['/repo/file.py', '/other/file.py'])('protects only dirty editors in the affected checkout (%s)', async path => {
+  setActivePinia(createPinia())
+  const chat = useChatStore()
+  chat.outboxLoaded = true
+  chat.current = { id: 'session', preferredExecutionAgentId: 'agent', currentDirectory: '/repo/src' }
+  useControlCenterStore().tabs = [{ kind: 'file', tabId: 'dirty', fileTarget: { scope: 'filesystem', executionAgentId: 'agent', path } }]
+  useWorkspaceStore().fileTabStates.dirty = { editorDirty: true }
+  vi.spyOn(chat, 'refreshSession').mockResolvedValue()
+  api.post.mockResolvedValue({ data: {} })
+  await useGitActionStore().workspaceAction('branch-switch', { name: 'task' }, '/repo')
+  expect(api.post.mock.calls.length).toBe(path.startsWith('/repo/') ? 0 : 1)
+})
+
 it('creates a branch from the workspace panel using the standard prompt', async () => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   const pinia = createPinia()
@@ -358,6 +372,8 @@ it('creates a branch from the workspace panel using the standard prompt', async 
   const chat = useChatStore()
   chat.outboxLoaded = true
   chat.current = { id: 'session', projectId: 'project', preferredExecutionAgentId: 'agent', currentDirectory: '/repo' }
+  chat.running = true
+  useWorkspaceStore().editorDirty = true
   useProjectStore().items = [{ id: 'project', defaultExecutionAgentId: 'agent', defaultCurrentDirectory: '/repo' }]
   useExecutionAgentStore().items = [{ id: 'agent', connected: true, operations: ['git.repository', 'git.branch'] }]
   useControlCenterStore().$patch({ open: true, activeAppId: 'git' })
@@ -388,6 +404,19 @@ it('creates a branch from the workspace panel using the standard prompt', async 
   }))
 })
 
+it('keeps branch inspection searchable and closable during a run', async () => {
+  const chat = mountPanel({ repository: { repository: '/repo', localBranches: ['main', 'task'] } })
+  chat.running = true
+  root.querySelector('[aria-label="Branch bearbeiten"]').click()
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog input')).not.toBeNull())
+  const search = document.querySelector('.q-dialog input')
+  search.value = 'task'
+  search.dispatchEvent(new Event('input', { bubbles: true }))
+  await nextTick()
+  document.querySelector('[aria-label="Schließen"]').click()
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog')).toBeNull())
+})
+
 it('shows where an occupied branch is checked out and switches only after confirmation', async () => {
   mountPanel({
     repository: { repository: '/repo', branch: 'main', localBranches: ['main', 'occupied', 'free'], worktrees: [
@@ -410,7 +439,7 @@ it('shows where an occupied branch is checked out and switches only after confir
   const rowActions = select.mock.calls.length
   document.querySelector('[aria-label="Branch wechseln"]').click()
   await vi.waitFor(() => expect([locationVisible, blocked, rowActions, select.mock.calls]).toEqual([
-    true, true, 0, [['branch-switch', { name: 'free' }]]
+    true, true, 0, [['branch-switch', { name: 'free' }, '/repo']]
   ]))
   await nextTick()
   root.querySelector('[aria-label="Arbeitsbereich bearbeiten"]').click()
@@ -435,7 +464,7 @@ it('lists the current workspace first and only activates a workspace through its
   document.querySelector('[aria-label="Aktionen für Worktree first"]').click()
   await vi.waitFor(() => expect(document.querySelector('[aria-label="Arbeitsbereich /worktrees/first aktivieren"]')).not.toBeNull())
   document.querySelector('[aria-label="Arbeitsbereich /worktrees/first aktivieren"]').click()
-  await vi.waitFor(() => expect([parentPath, rowActions, select.mock.calls]).toEqual(['/worktrees/', 0, [['select', { directory: '/worktrees/first', create: false }]]]))
+  await vi.waitFor(() => expect([parentPath, rowActions, select.mock.calls]).toEqual(['/worktrees/', 0, [['select', { directory: '/worktrees/first', create: false }, '/worktrees/selected']]]))
 })
 
 it('edits the target separately from branch switching', async () => {
