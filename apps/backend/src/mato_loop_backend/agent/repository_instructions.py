@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import posixpath
 from collections import OrderedDict
@@ -49,14 +50,17 @@ async def repository_instructions_prompt(
     if not cwd:
         return ""
 
-    async def stat(path: str) -> tuple[WorkspaceStatResult | None, str]:
+    async def stat_permission(path: str) -> str:
         request = execution_directory_permission(
             client.agent_id, path, capability="filesystem.read", action_kind="read",
             title="Projektanweisungen lesen?", summary=f"Der Agent möchte {path} prüfen.",
         )
         decision = await authorize(request)
         if decision != PermissionDecision.ALLOW:
-            return None, "approval_required" if decision == PermissionDecision.ASK else "denied"
+            return "approval_required" if decision == PermissionDecision.ASK else "denied"
+        return "allowed"
+
+    async def request_stat(path: str) -> tuple[WorkspaceStatResult | None, str]:
         try:
             result = await client.request("filesystem.stat", {"path": path}, WorkspaceStatResult)
             if result.path != path:
@@ -64,6 +68,10 @@ async def repository_instructions_prompt(
             return result, "found"
         except ExecutionClientError as exc:
             return None, "missing" if exc.code == "file.pathNotFound" else exc.code
+
+    async def stat(path: str) -> tuple[WorkspaceStatResult | None, str]:
+        status = await stat_permission(path)
+        return await request_stat(path) if status == "allowed" else (None, status)
 
     # Find a Git boundary only through already authorized paths. Without one, stay at cwd.
     ancestors = []
@@ -135,9 +143,20 @@ async def repository_instructions_prompt(
     entries = []
     used_bytes = 0
     ordered = sorted(directories, key=lambda path: (path.count("/"), path))
+    permissions = []
+    # Keep authorization errors unwrapped and database access sequential.
     for directory in ordered[:MAX_DIRECTORIES]:
+        permissions.append(await stat_permission(posixpath.join(directory, "AGENTS.md")))
+    observations = []
+    async with asyncio.TaskGroup() as group:
+        for directory, status in zip(ordered[:MAX_DIRECTORIES], permissions, strict=True):
+            path = posixpath.join(directory, "AGENTS.md")
+            observations.append(
+                group.create_task(request_stat(path)) if status == "allowed" else (None, status)
+            )
+    for directory, observation in zip(ordered[:MAX_DIRECTORIES], observations, strict=True):
         path = posixpath.join(directory, "AGENTS.md")
-        info, status = await stat(path)
+        info, status = observation.result() if isinstance(observation, asyncio.Task) else observation
         entry = {"path": path, "directory": directory, "status": status}
         if info is not None:
             try:

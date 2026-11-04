@@ -1,11 +1,12 @@
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
 
+import mato_loop_backend.tools.discovery as discovery_module
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.integrations.mcp.adapter import mcp_model_tool_name
 from mato_loop_backend.models import ContextSummary, Message, WebSearchPolicy
@@ -82,13 +83,19 @@ def test_general_profile_native_default_uses_registered_adapter_not_transport(ki
     assert integration_tool_loading(instance, general_profile()) == expected
 
 
-async def test_search_reloads_persisted_tools_without_changing_initial_prefix():
+async def test_search_reloads_persisted_tools_without_changing_initial_prefix(monkeypatch):
+    words = Mock(wraps=discovery_module._words)
+    monkeypatch.setattr(discovery_module, "_words", words)
     instance = calendar()
     profile = AgentProfile(name="Agent", instructions="Task")
     initial = offer([instance], profile)
+    words.assert_not_called()
     assert "read" in initial.tools and "tasks_create" not in initial.tools
     context = SimpleNamespace(current_integrations=AsyncMock(return_value=IntegrationSettings(instances=[instance])))
     result = await initial.tools["search_tools"].definition.handler(SearchToolsArguments(query="tasks_create"), context)
+    words.reset_mock()
+    await initial.tools["search_tools"].definition.handler(SearchToolsArguments(query="calendar"), context)
+    assert words.call_count == 1
     record = discovery(result)
     reloaded = offer([instance], profile, [record])
     assert "tasks_create" in reloaded.tools
@@ -110,7 +117,10 @@ async def test_shared_tool_schema_loads_only_pinned_accounts_and_search_rechecks
     schema = initial.tools["tasks_create"].schema()
     assert schema["parameters"]["properties"]["integration_id"]["enum"] == [str(pinned.id)]
     assert str(disabled.id) not in json.dumps(initial.schemas())
-    context = SimpleNamespace(current_integrations=AsyncMock(return_value=IntegrationSettings(instances=[])))
+    context = SimpleNamespace(current_integrations=AsyncMock(side_effect=[
+        IntegrationSettings(instances=[pinned, deferred]), IntegrationSettings(instances=[]),
+    ]))
+    await initial.tools["search_tools"].definition.handler(SearchToolsArguments(query="tasks_create"), context)
     result = await initial.tools["search_tools"].definition.handler(SearchToolsArguments(query="tasks_create"), context)
     assert json.loads(result.content)["tools"] == []
 

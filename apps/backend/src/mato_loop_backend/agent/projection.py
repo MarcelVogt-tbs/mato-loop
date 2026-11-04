@@ -960,6 +960,8 @@ def _projection_messages(
     if available_records is not None:
         historical_references = []
         for order, item in enumerate(available_records):
+            if not any(attachment.kind == "image" for attachment in model_attachments(item)):
+                continue
             projected = message_dict(item, include_attachment_markers=False)
             for attachment in projected.get("attachments") or []:
                 if str(attachment.get("id") or "") in projected_attachment_ids:

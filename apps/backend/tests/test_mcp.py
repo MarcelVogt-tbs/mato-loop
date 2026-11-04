@@ -1,8 +1,9 @@
 import asyncio
 import json
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import httpx
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 from jsonschema import ValidationError as JsonSchemaValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import mato_loop_backend.integrations.mcp.adapter as adapter_module
 import mato_loop_backend.integrations.mcp.client as client_module
 import mato_loop_backend.integrations.mcp.oauth as oauth_module
 import mato_loop_backend.integrations.mcp.service as service_module
@@ -480,6 +482,28 @@ def test_dynamic_mcp_schema_keeps_file_roots_and_allows_only_local_refs() -> Non
 
 def test_mcp_result_json_does_not_translate_file_root_values() -> None:
     assert ToolResult.raw_json({"root": "session"}).content == '{"root": "session"}'
+
+
+def test_unchanged_mcp_schema_reuses_meta_validation(monkeypatch):
+    monkeypatch.setattr(adapter_module, "_VALIDATED_SCHEMAS", OrderedDict())
+    validator = Mock(wraps=adapter_module.validator_for)
+    monkeypatch.setattr(adapter_module, "validator_for", validator)
+    for _ in range(2):
+        adapter_module.validate_mcp_schema({"type": "object"}, require_object=True)
+    assert validator.call_count == 1
+
+
+@pytest.mark.parametrize("schema,updated,require_object", [
+    ({"type": "object"}, {"type": "invalid"}, True),
+    ({"type": "string"}, {"type": "string"}, True),
+    ({"enum": ["x"]}, {"enum": ("x",)}, False),
+])
+def test_cached_mcp_schema_cannot_bypass_validation(schema, updated, require_object):
+    adapter_module.validate_mcp_schema(schema, require_object=False)
+    schema.clear()
+    schema.update(updated)
+    with pytest.raises(ValueError):
+        adapter_module.validate_mcp_schema(schema, require_object=require_object)
 
 
 @pytest.mark.parametrize("adapter", [MCP_ADAPTER, SONOBIN_ADAPTER])

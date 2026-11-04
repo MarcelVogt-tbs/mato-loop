@@ -21,7 +21,7 @@ from mato_loop_backend.agent.repository_instructions import (
     check_repository_instruction_targets,
     repository_instructions_prompt,
 )
-from mato_loop_backend.agent.run_contracts import ApprovalResolution
+from mato_loop_backend.agent.run_contracts import AgentRunError, ApprovalResolution
 from mato_loop_backend.agent.run_support import _external_working_directory_policy, _tool_policy
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.agent.session_secrets import SessionSecretStore, session_secrets
@@ -499,6 +499,43 @@ async def test_repository_prefetch_reuses_historical_target_discovery() -> None:
         client, records, authorize, checked, discovery_scope=scope,
     )
     assert (warm_requests, len(client.requests) - warm_requests) == (3, 4)
+
+
+async def test_repository_prefetch_preserves_authorization_errors() -> None:
+    client = FakeExecutionClient({"filesystem.stat": lambda arguments: WorkspaceStatResult(
+        path=arguments["path"], kind="directory", size=0, modified_at=0.0,
+    )}, {"filesystem.stat"}, "/work")
+    authorize = AsyncMock(side_effect=[PermissionDecision.ALLOW, AgentRunError("session.notFound")])
+    with pytest.raises(AgentRunError, match="session.notFound"):
+        await repository_instructions_prompt(client, [], authorize)
+
+
+async def test_repository_prefetch_overlaps_authorized_instruction_stats() -> None:
+    def stat(arguments):
+        path = arguments["path"]
+        if path.endswith("AGENTS.md"):
+            raise ExecutionClientError("file.pathNotFound")
+        return WorkspaceStatResult(path=path, kind="file", size=1, modified_at=0.0)
+
+    client = FakeExecutionClient({"filesystem.stat": stat}, {"filesystem.stat"}, "/work")
+    original_request = client.request
+    active = maximum = 0
+
+    async def request(operation, arguments, result_model):
+        nonlocal active, maximum
+        if arguments["path"].endswith("AGENTS.md"):
+            active += 1
+            maximum = max(maximum, active)
+            await asyncio.sleep(0)
+            active -= 1
+        return await original_request(operation, arguments, result_model)
+
+    client.request = request
+    await repository_instructions_prompt(
+        client, [], AsyncMock(return_value=PermissionDecision.ALLOW),
+        target_paths=("/work/a/main.py", "/work/b/main.py"),
+    )
+    assert maximum == 3
 
 
 async def test_repository_prefetch_does_not_defer_unchanged_aggregate_size_omissions() -> None:

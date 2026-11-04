@@ -107,15 +107,19 @@ def offer_integration_tools(
     catalog_names = {mcp_model_tool_name(item.id, entry["name"]): entry["name"]
                      for item in instances.values() for entry in item.config.get("tools", [])
                      if isinstance(entry, dict) and isinstance(entry.get("name"), str)}
-    documents, name_words = {}, {}
-    for name, tool in candidates.items():
-        sources = " ".join(f"{instances[key].name} {instances[key].integration_type}" for key in _source_ids(tool) if key in instances)
-        name_words[name] = _words(catalog_names.get(name, name))
-        documents[name] = name_words[name] | _words(sources + " " + (tool.definition.label or "") + " " + json.dumps(tool.schema(), ensure_ascii=False))
-    frequency = Counter(word for document in documents.values() for word in document)
+    index = None
 
     async def search(arguments: SearchToolsArguments, context):
+        nonlocal index
         current_ids = {str(item.id) for item in (await context.current_integrations()).instances if item.enabled}
+        if index is None:
+            documents, name_words = {}, {}
+            for name, tool in candidates.items():
+                sources = " ".join(f"{instances[key].name} {instances[key].integration_type}" for key in _source_ids(tool) if key in instances)
+                name_words[name] = _words(catalog_names.get(name, name))
+                documents[name] = name_words[name] | _words(sources + " " + (tool.definition.label or "") + " " + json.dumps(tool.schema(), ensure_ascii=False))
+            index = documents, name_words, Counter(word for document in documents.values() for word in document)
+        documents, name_words, frequency = index
         terms = _words(arguments.query)
         scores = {name: sum(math.log1p(len(documents) / frequency[word]) * (4 if word in name_words[name] else 1)
                             for word in terms & document)

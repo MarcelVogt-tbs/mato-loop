@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import OrderedDict
 from collections.abc import Mapping
+from threading import Lock
 from typing import Any
 
 from jsonschema.exceptions import SchemaError
@@ -31,36 +33,54 @@ MCP_ACTION = ToolAction(
     "mcp.call", "MCP-Tool aufrufen", category="write"
 )
 MAX_MCP_SCHEMA_DEPTH = 64
+MAX_CACHED_SCHEMA_VALIDATIONS = 4096
+_VALIDATED_SCHEMAS: OrderedDict[bytes, None] = OrderedDict()
+_SCHEMA_VALIDATION_LOCK = Lock()
 
 
-def _validate_schema_value(value: Any, depth: int = 0) -> None:
+def _validate_schema_value(value: Any, depth: int = 0) -> bool:
     if depth > MAX_MCP_SCHEMA_DEPTH:
         raise ValueError("MCP schema exceeds maximum depth")
+    # Only exact JSON types can safely share a serialized validation fingerprint.
+    cacheable = type(value) in (dict, list, str, int, float, bool, type(None))
     if isinstance(value, dict):
+        cacheable = cacheable and all(type(key) is str for key in value)
         reference = value.get("$ref")
         if reference is not None and (
             not isinstance(reference, str) or not reference.startswith("#")
         ):
             raise ValueError("MCP schemas may only contain fragment references")
         for item in value.values():
-            _validate_schema_value(item, depth + 1)
+            cacheable = _validate_schema_value(item, depth + 1) and cacheable
     elif isinstance(value, list):
         for item in value:
-            _validate_schema_value(item, depth + 1)
+            cacheable = _validate_schema_value(item, depth + 1) and cacheable
+    return cacheable
 
 
 def validate_mcp_schema(value: dict[str, Any], *, require_object: bool) -> dict[str, Any]:
-    _validate_schema_value(value)
+    cacheable = _validate_schema_value(value)
     try:
-        json.dumps(value, ensure_ascii=True, separators=(",", ":"), allow_nan=False)
+        serialized = json.dumps(value, ensure_ascii=True, separators=(",", ":"), allow_nan=False)
     except (TypeError, ValueError) as exc:
         raise ValueError("MCP schema must be finite JSON") from exc
-    try:
-        validator_for(value).check_schema(value)
-    except SchemaError as exc:
-        raise ValueError("MCP schema is invalid") from exc
+    fingerprint = hashlib.sha256(serialized.encode()).digest() if cacheable else None
+    with _SCHEMA_VALIDATION_LOCK:
+        cached = fingerprint is not None and fingerprint in _VALIDATED_SCHEMAS
+        if cached:
+            _VALIDATED_SCHEMAS.move_to_end(fingerprint)
+    if not cached:
+        try:
+            validator_for(value).check_schema(value)
+        except SchemaError as exc:
+            raise ValueError("MCP schema is invalid") from exc
     if require_object and value.get("type") not in (None, "object"):
         raise ValueError("MCP tool input schema must describe an object")
+    if fingerprint is not None and not cached:
+        with _SCHEMA_VALIDATION_LOCK:
+            _VALIDATED_SCHEMAS[fingerprint] = None
+            if len(_VALIDATED_SCHEMAS) > MAX_CACHED_SCHEMA_VALIDATIONS:
+                _VALIDATED_SCHEMAS.popitem(last=False)
     return value
 
 
