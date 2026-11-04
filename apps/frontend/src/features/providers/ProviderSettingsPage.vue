@@ -306,7 +306,7 @@ import {
   modelCapabilityLabel,
   modelSupportsCapability,
   normalizeModelCapabilities
-} from 'src/utils/provider-models'
+} from 'src/features/providers/models'
 import { useProviderStore } from 'stores/providers'
 import { useAuthStore } from 'stores/auth'
 import PersonalSettingsGate from 'src/features/settings/PersonalSettingsGate.vue'

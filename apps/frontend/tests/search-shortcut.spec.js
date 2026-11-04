@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { searchShortcutAction } from '../src/utils/search-shortcut'
+import { searchShortcutAction } from '../src/features/search/shortcut'
 
 describe('global search shortcut', () => {
   it.each([

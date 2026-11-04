@@ -4,7 +4,7 @@ import {
   attachmentDraftIcon,
   attachmentDraftLabel,
   clipboardAttachmentFiles
-} from '../src/utils/attachment-drafts'
+} from '../src/features/chat/attachment-drafts'
 
 describe('attachment drafts', () => {
   it('extracts clipboard images and gives screenshots a stable display name', () => {

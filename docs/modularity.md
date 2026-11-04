@@ -118,11 +118,11 @@ respective feature modules; dialogs remain mounted alongside the drawer.
 domains. Common utilities such as API error formatting, date formatting, and
 input encoding remain under `utils/` until they have a single domain owner.
 
-Existing `stores/*` and moved `utils/*` imports remain stable re-export facades.
-The facades contain no state or duplicate implementation. Cross-feature
-coordination uses the existing Pinia actions and the explicit Control Center
-manifest. Store IDs, browser-storage keys, route URLs, component templates,
-and styles retain their behavior through this extraction.
+Existing `stores/*` imports remain stable re-export facades without state or
+duplicate implementation. Import feature-owned helpers directly from their
+`features/<domain>/` modules; do not add compatibility facades under `utils/`.
+Cross-feature coordination uses Pinia actions and the explicit Control Center
+manifest. Store IDs, browser-storage keys and route URLs remain stable.
 
 ## Standalone Agent
 

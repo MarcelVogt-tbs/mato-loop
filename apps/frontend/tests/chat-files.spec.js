@@ -3,7 +3,7 @@ import { createApp, h, nextTick, reactive } from 'vue'
 import { createPinia } from 'pinia'
 import { afterEach, expect, it, vi } from 'vitest'
 import ChatFiles from '../src/features/chat/components/ChatFiles.vue'
-import { supportedAttachments } from '../src/utils/attachments'
+import { supportedAttachments } from '../src/features/files/attachments'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 

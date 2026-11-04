@@ -301,11 +301,11 @@ import {
   approvalActionDisplay,
   approvalGrantOptions,
   memoryApprovalDisplay
-} from 'src/utils/approval-display'
+} from 'src/features/approvals/display'
 import {
   approvalPresentationKind as resolveApprovalPresentationKind,
   toolPresentation
-} from 'src/utils/tool-display'
+} from 'src/features/chat/tool-display'
 import { useApprovalStore } from 'stores/approvals'
 import { useAuthStore } from 'stores/auth'
 import { useChatStore } from 'src/features/chat/store'

@@ -7,7 +7,7 @@ import {
   agentRunPresentation,
   formatActivityDuration,
   runWarningEntries
-} from '../src/utils/agent-activity'
+} from '../src/features/chat/agent-activity'
 
 describe('agent activity', () => {
   it('shows a persisted tool-limit handoff without treating it as a verified success', () => {

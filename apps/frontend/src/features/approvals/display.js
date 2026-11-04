@@ -1,4 +1,4 @@
-import { cleanUrlForDisplay } from 'src/utils/webfetch'
+import { cleanUrlForDisplay } from 'src/shared/url-display'
 import { agentDisplayName } from 'src/features/computers/display'
 
 const REDACTED_KEY = /(authorization|body|content|credential|password|secret|token|api[_-]?key)/i

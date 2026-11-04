@@ -83,7 +83,7 @@ import { useQuasar } from 'quasar'
 import { useConfirm } from 'src/composables/confirm'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
 import PermissionFields from 'src/features/settings/PermissionFields.vue'
-import { policyOverride, setPolicyOverride } from 'src/utils/agent-permissions'
+import { policyOverride, setPolicyOverride } from 'src/features/agent-profiles/policy'
 
 const permissions = defineModel({ type: Object, required: true })
 const props = defineProps({ data: { type: Object, required: true }, profileId: { type: String, default: null }, modelTrustEnabled: Boolean, disabled: Boolean })

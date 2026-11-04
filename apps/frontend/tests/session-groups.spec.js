@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { groupSessionsByRecency, sessionSidebarStatus } from '../src/utils/session-groups'
+import { groupSessionsByRecency, sessionSidebarStatus } from '../src/features/chat/session-groups'
 
 describe('session grouping', () => {
   it('keeps pinned sessions first and preserves the server order within each group', () => {

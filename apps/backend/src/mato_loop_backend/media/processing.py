@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import subprocess
@@ -678,16 +677,3 @@ def process_attachment(
             metadata,
         )
     return None
-
-
-def derived_metadata(files: dict[str, bytes]) -> dict[str, Any]:
-    if not files:
-        return {}
-    if len(files) != 1:
-        raise ValueError("Exactly one derivative is required per attachment")
-    name, data = next(iter(files.items()))
-    return {
-        "derivedName": name,
-        "derivedSizeBytes": len(data),
-        "derivedSha256": hashlib.sha256(data).hexdigest(),
-    }

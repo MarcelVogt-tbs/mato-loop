@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { canonicalResearchSourceUrl, mergeResearchSources } from '../src/utils/research-sources'
+import { canonicalResearchSourceUrl, mergeResearchSources } from '../src/features/chat/research-sources'
 
 describe('research sources', () => {
   it('normalizes source URLs for inline citation matching', () => {

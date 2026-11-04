@@ -31,9 +31,9 @@ import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 import ImageViewerPanel from 'src/features/files/components/ImageViewerPanel.vue'
 import MessageQuoteSelection from './MessageQuoteSelection.vue'
-import { renderMarkdown } from 'src/utils/markdown'
-import { verifyExternalImage } from 'src/utils/image-verification'
-import { mermaidErrorMessage, renderMermaid } from 'src/utils/mermaid'
+import { renderMarkdown } from 'src/features/chat/markdown'
+import { verifyExternalImage } from 'src/features/chat/image-verification'
+import { mermaidErrorMessage, renderMermaid } from 'src/features/chat/mermaid'
 
 defineOptions({ name: 'MessageContent' })
 

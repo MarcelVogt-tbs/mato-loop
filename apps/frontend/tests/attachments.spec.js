@@ -15,7 +15,7 @@ import {
   toolOpenFileActions,
   toolOutputAttachments,
   videoMimeTypeSupported
-} from '../src/utils/attachments'
+} from '../src/features/files/attachments'
 
 const url = '/api/sessions/550e8400-e29b-41d4-a716-446655440000/messages/550e8400-e29b-41d4-a716-446655440001/attachments/550e8400-e29b-41d4-a716-446655440002'
 const executionAgentId = '550e8400-e29b-41d4-a716-446655440003'

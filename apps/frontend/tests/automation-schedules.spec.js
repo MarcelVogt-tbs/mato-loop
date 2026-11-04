@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applySchedulePreset, browserTimezone, cronPreset, scheduleDraft, scheduleError, schedulePayload, scheduleSummary } from '../src/utils/automation-schedules'
+import { applySchedulePreset, browserTimezone, cronPreset, scheduleDraft, scheduleError, schedulePayload, scheduleSummary } from '../src/features/automations/schedules'
 
 describe('automation schedule presets', () => {
   it.each([

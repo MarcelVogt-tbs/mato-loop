@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { automationStatus, automationTiming } from '../src/utils/automation-status'
+import { automationStatus, automationTiming } from '../src/features/automations/status'
 
 it('distinguishes manual, paused, exhausted and scheduled definitions from running work', () => {
   const automation = { enabled: true, scheduleCount: 0, effectiveState: { enabled: false, activeRunStatus: null, nextRunAt: null } }

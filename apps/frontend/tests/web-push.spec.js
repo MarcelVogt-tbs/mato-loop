@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applicationServerKey, parsePushPayload, pushTargetPath } from '../src/utils/web-push'
+import { applicationServerKey, parsePushPayload, pushTargetPath } from '../src/features/notifications/push'
 
 const SESSION_ID = '3e6e1d85-4c5e-4fb9-8b8b-77542d0e24ad'
 const AUTOMATION_ID = 'e97be71c-7b81-45f5-8705-2c94f44882f0'

@@ -3,7 +3,7 @@ import { api } from 'src/boot/axios'
 import { queueRefresh } from 'src/utils/queued-refresh'
 import { notifyError } from 'src/utils/notifications'
 import { randomUuid } from 'src/utils/random-id'
-import { applicationServerKey } from 'src/utils/web-push'
+import { applicationServerKey } from 'src/features/notifications/push'
 
 const PAGE_SIZE = 20
 const DEVICE_ID_KEY = 'matoLoopPushDeviceId'

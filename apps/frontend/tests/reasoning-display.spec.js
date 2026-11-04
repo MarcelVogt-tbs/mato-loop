@@ -5,7 +5,7 @@ import {
   reasoningBlocks,
   reasoningHistoryPresentation,
   reasoningStatusLabel
-} from '../src/utils/reasoning-display'
+} from '../src/features/chat/reasoning-display'
 
 describe('reasoning display', () => {
   it('formats observed durations without inventing missing values', () => {

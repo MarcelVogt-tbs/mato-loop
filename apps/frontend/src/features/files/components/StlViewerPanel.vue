@@ -40,8 +40,8 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import { apiErrorMessage } from 'src/utils/api-errors'
-import { parseOffBuffer } from 'src/utils/off'
-import { StlValidationError, validateStlBuffer, validateStlGeometry } from 'src/utils/stl'
+import { parseOffBuffer } from 'src/features/files/off'
+import { StlValidationError, validateStlBuffer, validateStlGeometry } from 'src/features/files/stl'
 
 defineOptions({ name: 'StlViewerPanel' })
 

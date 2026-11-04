@@ -14,7 +14,7 @@ let updates
 
 beforeEach(async () => {
   vi.resetModules()
-  updates = await import('../src/utils/pwa-update')
+  updates = await import('../src/app/pwa-update')
 })
 
 afterEach(() => {

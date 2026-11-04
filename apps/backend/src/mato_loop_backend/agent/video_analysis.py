@@ -25,10 +25,8 @@ from mato_loop_backend.media.video_processing import (
     extract_video_frames,
     probe_video,
 )
-from mato_loop_backend.providers.media import resolve_media_target
 from mato_loop_backend.settings.models import (
     AiSettings,
-    ModelCapability,
     ModelInputModality,
     TrustLevel,
 )
@@ -109,19 +107,6 @@ def video_analysis_available(
     return (
         resolve_native_video_target(settings, active_model_id=active_model_id) is not None
         or bool(resolve_video_vision_targets(settings, active_model_id=active_model_id))
-    )
-
-
-def video_transcription_available(
-    settings: AiSettings, *, active_model_id: UUID | None
-) -> bool:
-    return (
-        resolve_media_target(
-            settings,
-            ModelCapability.AUDIO_TRANSCRIPTION,
-            active_model_id=active_model_id,
-        )
-        is not None
     )
 
 

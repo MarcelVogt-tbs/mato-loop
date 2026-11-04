@@ -11,7 +11,7 @@
 import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed } from 'vue'
 import { useProviderStore } from 'stores/providers'
-import { modelReasoningEffortOptions, reasoningEffortLabel } from 'src/utils/model-runtime'
+import { modelReasoningEffortOptions, reasoningEffortLabel } from 'src/features/providers/model-runtime'
 
 const props = defineProps({ modelValue: { type: Object, required: true }, inherited: { type: Object, default: () => ({}) }, modelLabel: { type: String, default: 'Agentmodell' }, disabled: Boolean })
 const emit = defineEmits(['update:modelValue'])

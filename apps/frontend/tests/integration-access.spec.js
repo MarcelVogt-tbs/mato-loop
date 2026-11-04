@@ -5,7 +5,7 @@ import {
   calendarResources,
   groupResources,
   taskListResources
-} from '../src/utils/integration-access'
+} from '../src/features/integrations/access'
 
 const actions = [
   { capability: 'calendar.read' },

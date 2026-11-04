@@ -8,8 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.integrations.caldav.adapter import CALDAV_CREDENTIAL_KIND
 from mato_loop_backend.integrations.contracts import IntegrationResource
-from mato_loop_backend.integrations.registry import integration_adapter, validate_integration
+from mato_loop_backend.integrations.registry import integration_adapter
 from mato_loop_backend.integrations.service import (
+    CredentialIntegrationService,
     IntegrationSettingsDocument,
     IntegrationSettingsError,
     ToolSettingsDocument,
@@ -19,10 +20,8 @@ from mato_loop_backend.integrations.service import (
     _save_settings,
 )
 from mato_loop_backend.security import (
-    delete_credential,
     load_credential,
     read_credential,
-    store_credential,
 )
 from mato_loop_backend.settings import (
     DefaultCalendarSettings,
@@ -35,7 +34,11 @@ logger = logging.getLogger(__name__)
 _RESOURCE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,499}$")
 
 
-class CalDavIntegrationService:
+class CalDavIntegrationService(CredentialIntegrationService):
+    integration_type = "calendar"
+    adapter_type = "caldav"
+    credential_kind = CALDAV_CREDENTIAL_KIND
+
     @staticmethod
     async def _save(
         db: AsyncSession,
@@ -91,18 +94,9 @@ class CalDavIntegrationService:
             enabled=enabled,
             config={"base_url": base_url, "username": username},
         )
-        instance.owner_id = owner_id
-        validate_integration(instance)
-        credential = await store_credential(
-            db,
-            owner_id=instance.owner_id,
-            kind=CALDAV_CREDENTIAL_KIND,
-            label=name,
-            payload={"password": password},
+        return await cls._create(
+            db, settings, instance, {"password": password}, owner_id=owner_id,
         )
-        instance.credential_id = credential.id
-        settings.instances.append(instance)
-        return await cls._save(db, settings, owner_id=owner_id)
 
     @classmethod
     async def update(
@@ -119,72 +113,17 @@ class CalDavIntegrationService:
         expected_instance: IntegrationInstance | None = None,
     ) -> IntegrationSettings:
         settings = await _load_integrations(db, owner_id, for_update=True, expected_instance=expected_instance)
-        instance = next(
-            (
-                item
-                for item in settings.instances
-                if item.id == integration_id
-                and item.integration_type == "calendar"
-                and item.adapter_type == "caldav"
-            ),
-            None,
-        )
+        instance = cls._find(settings, integration_id)
         if instance is None:
             raise IntegrationSettingsError("integration.notFound")
         if password == "":
             raise IntegrationSettingsError("validation.required")
 
         config = {"base_url": base_url, "username": username}
-        connection_changed = instance.config != config
-        old_credential_id = instance.credential_id
-        instance.name = name
-        instance.enabled = enabled
-        instance.config = config
-        validate_integration(instance)
-        if password is not None:
-            credential = await store_credential(
-                db,
-                owner_id=instance.owner_id,
-                kind=CALDAV_CREDENTIAL_KIND,
-                label=name,
-                payload={"password": password},
-            )
-            instance.credential_id = credential.id
-            if old_credential_id is not None:
-                await delete_credential(
-                    db, old_credential_id, owner_id=instance.owner_id
-                )
-        return await cls._save(
-            db,
-            settings,
-            owner_id=owner_id,
-            clear_policies=integration_id if connection_changed else None,
-        )
-
-    @classmethod
-    async def delete(
-        cls, db: AsyncSession, integration_id: UUID, *, owner_id: UUID | None = None
-    ) -> IntegrationSettings:
-        settings = await _load_integrations(db, owner_id, for_update=True)
-        instance = next(
-            (
-                item
-                for item in settings.instances
-                if item.id == integration_id
-                and item.integration_type == "calendar"
-                and item.adapter_type == "caldav"
-            ),
-            None,
-        )
-        if instance is None:
-            raise IntegrationSettingsError("integration.notFound")
-        settings.instances = [item for item in settings.instances if item.id != integration_id]
-        if instance.credential_id is not None:
-            await delete_credential(
-                db, instance.credential_id, owner_id=instance.owner_id
-            )
-        return await cls._save(
-            db, settings, owner_id=owner_id, clear_policies=integration_id
+        return await cls._update(
+            db, settings, instance, name=name, config=config, enabled=enabled,
+            payload={"password": password} if password is not None else None,
+            owner_id=owner_id, connection_changed=instance.config != config,
         )
 
 

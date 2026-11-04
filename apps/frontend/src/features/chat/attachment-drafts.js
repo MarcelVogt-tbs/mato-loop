@@ -1,4 +1,4 @@
-import { attachmentIcon } from 'src/utils/attachments'
+import { attachmentIcon } from 'src/features/files/attachments'
 
 function clipboardFilename(file, now) {
   if (String(file?.name || '').trim() && file.name !== 'image.png') return file

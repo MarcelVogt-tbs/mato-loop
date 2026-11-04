@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -35,6 +34,13 @@ from mato_loop_backend.integrations.contracts import (
     ToolContribution,
     remote_error_params,
 )
+from mato_loop_backend.integrations.execution import (
+    bound_integration_ids as _bound_ids,
+)
+from mato_loop_backend.integrations.execution import (
+    operation_key as _operation_key,
+)
+from mato_loop_backend.integrations.execution import selected_integration_binding
 from mato_loop_backend.models import Credential
 from mato_loop_backend.security import CredentialCipher, load_credential, read_credential
 from mato_loop_backend.settings import (
@@ -424,44 +430,10 @@ def caldav_error_code(error: CalDavError) -> str:
     return _CALDAV_ERROR_CODES.get(error.code, "integration.unavailable")
 
 
-def _bound_ids(context: Any) -> set[str]:
-    value = context.bound_options.get("integration_ids")
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except json.JSONDecodeError:
-            return set()
-    if not isinstance(value, (list, tuple)) or not all(
-        isinstance(item, str) for item in value
-    ):
-        return set()
-    return set(value)
-
-
 def _binding(context: Any, integration_id: UUID) -> tuple[IntegrationInstance, str]:
-    selected_id = context.bound_options.get("integration_id")
-    revision = context.bound_options.get("binding_revision")
-    if selected_id != str(integration_id) or not isinstance(revision, str):
-        raise ValueError("missing selected integration binding")
-    instance = next(
-        (
-            item
-            for item in context.integration_settings.instances
-            if str(item.id) == selected_id
-            and item.enabled
-            and item.integration_type == "calendar"
-            and item.adapter_type == "caldav"
-        ),
-        None,
+    return selected_integration_binding(
+        context, integration_id, integration_type="calendar", adapter_type="caldav",
     )
-    if instance is None or json.dumps(
-        instance.binding_data(),
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ) != revision:
-        raise ValueError("stale selected integration binding")
-    return instance, revision
 
 
 def _credential_payload(record: Credential | None) -> dict[str, Any]:
@@ -1368,16 +1340,6 @@ async def tasks_delete(arguments: TaskDeleteArguments, context: Any) -> Any:
         return ToolResult.error("integration.staleReference", field="task_token")
     except CalDavError as exc:
         return _error(exc)
-
-
-def _operation_key(name: str, arguments: BaseModel) -> str:
-    material = json.dumps(
-        arguments.model_dump(mode="json", exclude_unset=True),
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    return f"{name}:{hashlib.sha256(material.encode()).hexdigest()}"
 
 
 def _permission(

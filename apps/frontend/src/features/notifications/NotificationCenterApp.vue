@@ -125,7 +125,7 @@ import { useAuthStore } from 'stores/auth'
 import { useControlCenterStore } from 'stores/control-center'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-time'
-import { notificationTargetRoute } from 'src/utils/notification-target'
+import { notificationTargetRoute } from 'src/features/notifications/target'
 
 defineOptions({ name: 'NotificationCenterApp' })
 

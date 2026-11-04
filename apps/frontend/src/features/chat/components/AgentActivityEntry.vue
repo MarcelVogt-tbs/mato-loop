@@ -175,7 +175,7 @@ import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
 import ShellToolOutput from 'src/features/chat/components/ShellToolOutput.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'
-import { parseToolResult, shellCommand, toolIdentity, toolPresentation, toolStatus } from 'src/utils/tool-display'
+import { parseToolResult, shellCommand, toolIdentity, toolPresentation, toolStatus } from 'src/features/chat/tool-display'
 
 defineOptions({ name: 'AgentActivityEntry' })
 

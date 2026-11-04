@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { policyOverride, setPolicyOverride } from '../src/utils/agent-permissions'
+import { policyOverride, setPolicyOverride } from '../src/features/agent-profiles/policy'
 
 describe('agent permission overrides', () => {
   it('stores only explicit policies and prunes empty hierarchy entries on inherit', () => {

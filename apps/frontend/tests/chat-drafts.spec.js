@@ -25,7 +25,7 @@ import {
   clearChatOutbox,
   loadChatOutbox,
   saveChatOutboxEntry
-} from '../src/utils/chat-outbox'
+} from '../src/features/chat/outbox-storage'
 
 const originalURL = globalThis.URL
 

@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { queueRefresh } from 'src/utils/queued-refresh'
 import { errorDescriptor } from 'src/utils/api-errors'
-import { validRelativePath } from 'src/utils/attachments'
+import { validRelativePath } from 'src/features/files/attachments'
 
 const TERMINAL_DECISION_ERRORS = new Set([
   'approval.policyChanged',

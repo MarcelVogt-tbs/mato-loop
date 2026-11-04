@@ -11,7 +11,7 @@ vi.mock('stores/automations', () => ({ useAutomationStore: () => mocks.stores.au
 vi.mock('src/features/chat/store', () => ({ useChatStore: () => mocks.stores.chat }))
 vi.mock('stores/control-center', () => ({ useControlCenterStore: () => mocks.stores.controlCenter }))
 import AutomationApp from '../src/features/automations/AutomationApp.vue'
-import { scheduleDraft } from '../src/utils/automation-schedules'
+import { scheduleDraft } from '../src/features/automations/schedules'
 
 let app, root
 const definition = () => ({

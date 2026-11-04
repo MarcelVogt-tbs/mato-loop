@@ -53,7 +53,7 @@
 <script setup>
 import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed } from 'vue'
-import { applySchedulePreset, browserTimezone, schedulePresets, scheduleSummary, weekdays } from 'src/utils/automation-schedules'
+import { applySchedulePreset, browserTimezone, schedulePresets, scheduleSummary, weekdays } from 'src/features/automations/schedules'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
 
 const schedule = defineModel({ type: Object, required: true })

@@ -30,7 +30,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { useBrowserSetupStore } from 'stores/browser-setup'
-import { browserStatusLabel } from 'src/utils/browser'
+import { browserStatusLabel } from 'src/features/browser/helpers'
 import { useConfirm } from 'src/composables/confirm'
 
 const props = defineProps({ modelValue: Boolean, integrationId: { type: String, required: true } })

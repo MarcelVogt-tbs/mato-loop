@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { useBrowserStore } from '../src/stores/browser'
 import { useBrowserSetupStore } from '../src/stores/browser-setup'
-import { browserNavigationUrl, browserSocketUrl, clipboardFits } from '../src/utils/browser'
+import { browserNavigationUrl, browserSocketUrl, clipboardFits } from '../src/features/browser/helpers'
 import { FakeWebSocket } from './terminal-websocket'
 
 const { api, notifyError, viewers } = vi.hoisted(() => ({

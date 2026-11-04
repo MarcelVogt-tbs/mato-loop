@@ -67,7 +67,7 @@
 <script setup>
 import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed } from 'vue'
-import { attachmentIcon } from 'src/utils/attachments'
+import { attachmentIcon } from 'src/features/files/attachments'
 import { useWorkspaceStore } from 'stores/workspace'
 
 defineOptions({ name: 'FileTreeNode' })

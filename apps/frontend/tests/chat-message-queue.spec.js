@@ -22,10 +22,10 @@ import { useControlCenterStore } from '../src/stores/control-center'
 import { useQuestionStore } from '../src/stores/questions'
 import { useWorkspaceStore } from '../src/stores/workspace'
 import { useGitActionStore } from '../src/features/coding/git-actions-store'
-import { clearChatOutbox, loadChatOutbox, saveChatOutboxEntry } from '../src/utils/chat-outbox'
+import { clearChatOutbox, loadChatOutbox, saveChatOutboxEntry } from '../src/features/chat/outbox-storage'
 import * as outboxStorage from '../src/features/chat/outbox-storage'
 import { buildAttachmentFormData, MAX_ATTACHMENT_DRAFT_BYTES } from '../src/features/chat/attachments'
-import { withQueuedTranscriptMessages } from '../src/utils/chat-transcript'
+import { withQueuedTranscriptMessages } from '../src/features/chat/transcript'
 
 const originalURL = globalThis.URL
 

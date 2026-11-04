@@ -3,8 +3,8 @@ import { api } from 'src/boot/axios'
 import { useInstanceLimitsStore } from 'src/stores/instance-limits'
 import { attachmentKind, attachmentPreviewUrl, MAX_ATTACHMENT_DRAFT_BYTES, normalizedMimeType, releaseAttachmentDrafts } from 'src/features/chat/attachments'
 import { clearPersistedDrafts, defaultSessionOptions, emptyActivity, emptyDrafts, groupedOutbox, loadDrafts, newSessionQueueKey, normalizedNewSessionDraft, persistDrafts, sanitizedSessionOptions, sessionScopeKey } from 'src/features/chat/state'
-import { mergeAgentActivity } from 'src/utils/agent-activity'
-import { clearChatOutbox, loadChatOutbox, saveChatOutboxEntries } from 'src/utils/chat-outbox'
+import { mergeAgentActivity } from 'src/features/chat/agent-activity'
+import { clearChatOutbox, loadChatOutbox, saveChatOutboxEntries } from 'src/features/chat/outbox-storage'
 import { gitFinishEntry } from 'src/features/coding/git-actions-store'
 
 export const draftActions = {

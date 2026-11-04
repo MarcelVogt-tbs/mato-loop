@@ -379,7 +379,7 @@ async def test_service_stores_the_token_outside_integration_settings(monkeypatch
     store = AsyncMock(return_value=SimpleNamespace(id=credential_id))
     monkeypatch.setattr(mealie_service_module, "_load_integrations", load)
     monkeypatch.setattr(service_module, "_save_settings", save)
-    monkeypatch.setattr(mealie_service_module, "store_credential", store)
+    monkeypatch.setattr(service_module, "store_credential", store)
     db = AsyncMock()
 
     result = await MealieIntegrationService.create(
@@ -404,6 +404,24 @@ async def test_service_stores_the_token_outside_integration_settings(monkeypatch
     )
     save.assert_awaited_once_with(db, settings, owner_id)
     db.commit.assert_awaited_once()
+
+
+async def test_service_replaces_only_the_owned_previous_credential(monkeypatch) -> None:
+    account = _account()
+    previous = account.credential_id
+    delete = AsyncMock()
+    monkeypatch.setattr(mealie_service_module, "_load_integrations", AsyncMock(return_value=IntegrationSettings(instances=[account])))
+    monkeypatch.setattr(service_module, "store_credential", AsyncMock(return_value=SimpleNamespace(id=uuid4())))
+    monkeypatch.setattr(service_module, "delete_credential", delete)
+    monkeypatch.setattr(service_module, "_save_settings", AsyncMock())
+    db = AsyncMock()
+
+    await MealieIntegrationService.update(
+        db, account.id, name=account.name, base_url=account.config["base_url"],
+        token="replacement", enabled=True, owner_id=account.owner_id,
+    )
+
+    delete.assert_awaited_once_with(db, previous, owner_id=account.owner_id)
 
 
 def test_tokens_are_encrypted_secret_and_binding_scoped() -> None:

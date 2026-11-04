@@ -6,7 +6,7 @@ import {
   modelOption,
   modelSupportsCapability,
   normalizeModelCapabilities
-} from '../src/utils/provider-models'
+} from '../src/features/providers/models'
 
 const provider = { id: 'provider-1', name: 'Lokal', enabled: true, adapterType: 'openai-compatible' }
 const model = {

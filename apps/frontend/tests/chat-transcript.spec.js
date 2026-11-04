@@ -4,7 +4,7 @@ import {
   buildChatTranscript,
   groupWorkHistoryEntries,
   retryAvailableForMessage
-} from '../src/utils/chat-transcript'
+} from '../src/features/chat/transcript'
 
 describe('chat transcript', () => {
   it('keeps direct messages between separate assistant sections', () => {

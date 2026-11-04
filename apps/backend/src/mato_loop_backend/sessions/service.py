@@ -1811,12 +1811,6 @@ async def session_delete_impact(
     return impact
 
 
-async def _external_file_reference_count(
-    db: AsyncSession, session_id: UUID
-) -> int:
-    return await _external_file_reference_count_for_roots(db, [session_id])
-
-
 async def _external_file_reference_count_for_roots(
     db: AsyncSession, session_ids: list[UUID]
 ) -> int:
@@ -1832,14 +1826,6 @@ async def _external_file_reference_count_for_roots(
         )
         or 0
     )
-
-
-async def _ensure_files_not_referenced(db: AsyncSession, session_id: UUID) -> None:
-    count = await _external_file_reference_count(db, session_id)
-    if count:
-        raise SessionServiceError(
-            409, "session.filesReferenced", params={"referenceCount": count}
-        )
 
 
 async def _ensure_session_move_has_no_external_file_references(

@@ -1,6 +1,6 @@
 /* eslint-env serviceworker */
 
-import { parsePushPayload, pushTargetPath } from '../src/utils/web-push'
+import { parsePushPayload, pushTargetPath } from '../src/features/notifications/push'
 import {
   cleanupOutdatedCaches,
   getCacheKeyForURL,

@@ -316,7 +316,7 @@ import { useSearchStore } from 'stores/search'
 import { useProjectStore } from 'stores/projects'
 import { useWorkspaceStore } from 'stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
-import { automationStatus } from 'src/utils/automation-status'
+import { automationStatus } from 'src/features/automations/status'
 
 const props = defineProps({ confirmDiscardedEdit: { type: Function, required: true } })
 const drawerOpen = defineModel({ type: Boolean, required: true })

@@ -60,7 +60,7 @@
 
 <script setup>
 import { computed, nextTick, ref } from 'vue'
-import { attachmentIcon } from 'src/utils/attachments'
+import { attachmentIcon } from 'src/features/files/attachments'
 import { useExecutionAgentStore } from 'src/features/computers/store'
 
 const props = defineProps({

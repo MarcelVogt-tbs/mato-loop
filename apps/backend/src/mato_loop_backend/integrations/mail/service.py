@@ -5,33 +5,21 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.integrations.mail.adapter import MAIL_CREDENTIAL_KIND, MailConfig
-from mato_loop_backend.integrations.registry import validate_integration
 from mato_loop_backend.integrations.service import (
+    CredentialIntegrationService,
     IntegrationSettingsDocument,
     IntegrationSettingsError,
     _clear_integration_policies,
     _load_integrations,
     _save_settings,
 )
-from mato_loop_backend.security import delete_credential, store_credential
 from mato_loop_backend.settings import IntegrationInstance, IntegrationSettings
 
 
-class MailIntegrationService:
-    @staticmethod
-    def _find(
-        settings: IntegrationSettingsDocument, integration_id: UUID
-    ) -> IntegrationInstance | None:
-        return next(
-            (
-                item
-                for item in settings.instances
-                if item.id == integration_id
-                and item.integration_type == "mail"
-                and item.adapter_type == "imap_smtp"
-            ),
-            None,
-        )
+class MailIntegrationService(CredentialIntegrationService):
+    integration_type = "mail"
+    adapter_type = "imap_smtp"
+    credential_kind = MAIL_CREDENTIAL_KIND
 
     @staticmethod
     def _ensure_unique(
@@ -97,18 +85,9 @@ class MailIntegrationService:
             enabled=enabled,
             config=config,
         )
-        instance.owner_id = owner_id
-        validate_integration(instance)
-        credential = await store_credential(
-            db,
-            owner_id=owner_id,
-            kind=MAIL_CREDENTIAL_KIND,
-            label=name,
-            payload={"password": password},
+        return await cls._create(
+            db, settings, instance, {"password": password}, owner_id=owner_id,
         )
-        instance.credential_id = credential.id
-        settings.instances.append(instance)
-        return await cls._save(db, settings, owner_id=owner_id)
 
     @classmethod
     async def update(
@@ -134,40 +113,8 @@ class MailIntegrationService:
             MailConfig.model_validate(instance.config).model_dump(exclude={"signature"})
             != MailConfig.model_validate(config).model_dump(exclude={"signature"})
         )
-        old_credential_id = instance.credential_id
-        instance.name = name
-        instance.config = config
-        instance.enabled = enabled
-        validate_integration(instance)
-        if password is not None:
-            credential = await store_credential(
-                db,
-                owner_id=owner_id,
-                kind=MAIL_CREDENTIAL_KIND,
-                label=name,
-                payload={"password": password},
-            )
-            instance.credential_id = credential.id
-            if old_credential_id is not None:
-                await delete_credential(db, old_credential_id, owner_id=owner_id)
-        return await cls._save(
-            db,
-            settings,
-            owner_id=owner_id,
-            clear_policies=integration_id if connection_changed else None,
-        )
-
-    @classmethod
-    async def delete(
-        cls, db: AsyncSession, integration_id: UUID, *, owner_id: UUID | None = None
-    ) -> IntegrationSettings:
-        settings = await _load_integrations(db, owner_id, for_update=True)
-        instance = cls._find(settings, integration_id)
-        if instance is None:
-            raise IntegrationSettingsError("integration.notFound")
-        settings.instances = [item for item in settings.instances if item.id != integration_id]
-        if instance.credential_id is not None:
-            await delete_credential(db, instance.credential_id, owner_id=owner_id)
-        return await cls._save(
-            db, settings, owner_id=owner_id, clear_policies=integration_id
+        return await cls._update(
+            db, settings, instance, name=name, config=config, enabled=enabled,
+            payload={"password": password} if password is not None else None,
+            owner_id=owner_id, connection_changed=connection_changed,
         )

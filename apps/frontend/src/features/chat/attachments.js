@@ -1,5 +1,5 @@
 import { api } from 'src/boot/axios'
-import { safeAttachmentUrl } from 'src/utils/attachments'
+import { safeAttachmentUrl } from 'src/features/files/attachments'
 
 export const MAX_ATTACHMENT_DRAFTS = 8
 export const MAX_ATTACHMENT_BYTES = 1024 * 1024 * 1024

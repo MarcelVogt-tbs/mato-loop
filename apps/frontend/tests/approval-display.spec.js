@@ -7,7 +7,7 @@ import {
   memoryApprovalDisplay,
   permissionGrantDisplay,
   technicalDetailsDisplay
-} from '../src/utils/approval-display'
+} from '../src/features/approvals/display'
 
 describe('approval display', () => {
   it('accepts and marks a removal approval without an after state as destructive', () => {

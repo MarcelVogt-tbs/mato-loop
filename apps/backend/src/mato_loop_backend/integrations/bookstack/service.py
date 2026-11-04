@@ -5,44 +5,18 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.integrations.bookstack.adapter import BOOKSTACK_CREDENTIAL_KIND
-from mato_loop_backend.integrations.registry import validate_integration
 from mato_loop_backend.integrations.service import (
-    IntegrationSettingsDocument,
+    CredentialIntegrationService,
     IntegrationSettingsError,
     _load_integrations,
-    save_with_policy_cleanup,
 )
-from mato_loop_backend.security import delete_credential, store_credential
 from mato_loop_backend.settings import IntegrationInstance, IntegrationSettings
 
 
-class BookStackIntegrationService:
-    @staticmethod
-    async def _save(
-        db: AsyncSession,
-        settings: IntegrationSettingsDocument,
-        *,
-        owner_id: UUID | None = None,
-        clear_policies: UUID | None = None,
-    ) -> IntegrationSettings:
-        return await save_with_policy_cleanup(
-            db, settings, owner_id=owner_id, clear_policies=clear_policies
-        )
-
-    @staticmethod
-    def _find(
-        settings: IntegrationSettings, integration_id: UUID
-    ) -> IntegrationInstance | None:
-        return next(
-            (
-                item
-                for item in settings.instances
-                if item.id == integration_id
-                and item.integration_type == "knowledge"
-                and item.adapter_type == "bookstack"
-            ),
-            None,
-        )
+class BookStackIntegrationService(CredentialIntegrationService):
+    integration_type = "knowledge"
+    adapter_type = "bookstack"
+    credential_kind = BOOKSTACK_CREDENTIAL_KIND
 
     @classmethod
     async def create(
@@ -60,24 +34,13 @@ class BookStackIntegrationService:
             raise IntegrationSettingsError("validation.required")
         settings = await _load_integrations(db, owner_id, for_update=True)
         instance = IntegrationInstance(
-            name=name,
-            integration_type="knowledge",
-            adapter_type="bookstack",
-            enabled=enabled,
-            config={"base_url": base_url},
+            name=name, integration_type=cls.integration_type, adapter_type=cls.adapter_type,
+            enabled=enabled, config={"base_url": base_url},
         )
-        instance.owner_id = owner_id
-        validate_integration(instance)
-        credential = await store_credential(
-            db,
-            owner_id=instance.owner_id,
-            kind=BOOKSTACK_CREDENTIAL_KIND,
-            label=name,
-            payload={"token_id": token_id, "token_secret": token_secret},
+        return await cls._create(
+            db, settings, instance, {"token_id": token_id, "token_secret": token_secret},
+            owner_id=owner_id,
         )
-        instance.credential_id = credential.id
-        settings.instances.append(instance)
-        return await cls._save(db, settings, owner_id=owner_id)
 
     @classmethod
     async def update(
@@ -101,47 +64,9 @@ class BookStackIntegrationService:
             raise IntegrationSettingsError("validation.required")
         if (token_id is None) != (token_secret is None):
             raise IntegrationSettingsError("validation.required")
-
         config = {"base_url": base_url}
-        connection_changed = instance.config != config
-        old_credential_id = instance.credential_id
-        instance.name = name
-        instance.enabled = enabled
-        instance.config = config
-        validate_integration(instance)
-        if token_id is not None and token_secret is not None:
-            credential = await store_credential(
-                db,
-                owner_id=instance.owner_id,
-                kind=BOOKSTACK_CREDENTIAL_KIND,
-                label=name,
-                payload={"token_id": token_id, "token_secret": token_secret},
-            )
-            instance.credential_id = credential.id
-            if old_credential_id is not None:
-                await delete_credential(
-                    db, old_credential_id, owner_id=instance.owner_id
-                )
-        return await cls._save(
-            db,
-            settings,
-            owner_id=owner_id,
-            clear_policies=integration_id if connection_changed else None,
-        )
-
-    @classmethod
-    async def delete(
-        cls, db: AsyncSession, integration_id: UUID, *, owner_id: UUID | None = None
-    ) -> IntegrationSettings:
-        settings = await _load_integrations(db, owner_id, for_update=True)
-        instance = cls._find(settings, integration_id)
-        if instance is None:
-            raise IntegrationSettingsError("integration.notFound")
-        settings.instances = [item for item in settings.instances if item.id != integration_id]
-        if instance.credential_id is not None:
-            await delete_credential(
-                db, instance.credential_id, owner_id=instance.owner_id
-            )
-        return await cls._save(
-            db, settings, owner_id=owner_id, clear_policies=integration_id
+        return await cls._update(
+            db, settings, instance, name=name, config=config, enabled=enabled,
+            payload={"token_id": token_id, "token_secret": token_secret} if token_id is not None else None,
+            owner_id=owner_id, connection_changed=instance.config != config,
         )

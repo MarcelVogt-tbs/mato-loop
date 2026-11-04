@@ -7,7 +7,7 @@ import {
   chatShouldFollowBottom,
   restoreChatReadingAnchor,
   scrollChatToBottom
-} from '../src/utils/chat-scroll'
+} from '../src/features/chat/scroll'
 
 describe('chat scroll geometry', () => {
   it('calculates the remaining distance and clamps non-scrollable content', () => {

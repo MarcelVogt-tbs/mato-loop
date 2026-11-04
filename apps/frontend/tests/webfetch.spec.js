@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   cleanUrlForDisplay
-} from '../src/utils/webfetch'
+} from '../src/shared/url-display'
 
 describe('webfetch display', () => {
   it('removes credentials while preserving query values', () => {

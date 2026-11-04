@@ -6,7 +6,7 @@ import {
   isModelPresent,
   modelOption,
   modelSupportsCapability
-} from 'src/utils/provider-models'
+} from 'src/features/providers/models'
 
 function assignProviderPayload(store, payload) {
   if (!payload || !Array.isArray(payload.providers) || !Array.isArray(payload.models)) return

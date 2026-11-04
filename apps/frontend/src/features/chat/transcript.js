@@ -1,5 +1,5 @@
-import { runWarningEntries } from 'src/utils/agent-activity'
-import { toolFileActions, toolOpenFileActions } from 'src/utils/attachments'
+import { runWarningEntries } from 'src/features/chat/agent-activity'
+import { toolFileActions, toolOpenFileActions } from 'src/features/files/attachments'
 import { apiErrorMessage } from 'src/utils/api-errors'
 
 export function retryAvailableForMessage(message, messages = [], running = false) {

@@ -26,8 +26,8 @@ import { useSubagentStore } from '../src/stores/subagents'
 import { useApprovalStore } from '../src/stores/approvals'
 import { useQuestionStore } from '../src/stores/questions'
 import { useChatStore } from '../src/features/chat/store'
-import { buildChatTranscript } from '../src/utils/chat-transcript'
-import { agentRunPresentation, mergeAgentActivity } from '../src/utils/agent-activity'
+import { buildChatTranscript } from '../src/features/chat/transcript'
+import { agentRunPresentation, mergeAgentActivity } from '../src/features/chat/agent-activity'
 import { api } from 'src/boot/axios'
 
 const { components } = quasarOptions

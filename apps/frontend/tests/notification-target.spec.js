@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { notificationTargetRoute } from '../src/utils/notification-target'
+import { notificationTargetRoute } from '../src/features/notifications/target'
 
 describe('notification target navigation', () => {
   it('keeps session navigation unchanged', () => {

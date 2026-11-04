@@ -48,26 +48,6 @@ export function sessionCreatePayload(options, projectId, controlCenter) {
   }
 }
 
-export function optionsFromSession(session) {
-  return sanitizedSessionOptions({
-    agentProfileId: session.agentProfileId ?? null,
-    sessionTemplateId: session.sessionProfile?.templateId || null,
-    sessionProfile: session.sessionProfile || null,
-    modelId: session.modelId,
-    reasoningEffort: session.reasoningEffort ?? null,
-    memoryMode: session.memoryMode,
-    trustLevel: session.trustLevel ?? null,
-    effectiveMemoryMode: session.effectiveMemoryMode,
-    memoryToolsAvailable: session.memoryToolsAvailable,
-    memoryUnavailableReason: session.memoryUnavailableReason,
-    webSearchPolicy: session.webSearchPolicy,
-    preferredExecutionAgentId: session.preferredExecutionAgentId,
-    currentDirectory: session.currentDirectory,
-    workspaceMode: session.workspaceMode || 'local',
-    workspaceContext: session.workspaceContext || null
-  })
-}
-
 export function emptyDrafts() {
   const newSession = { message: '', options: defaultSessionOptions() }
   return {

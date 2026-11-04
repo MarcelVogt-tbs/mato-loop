@@ -1,5 +1,5 @@
 import { register } from 'register-service-worker'
-import { announcePwaUpdate, observePwaUpdates } from '../src/utils/pwa-update'
+import { announcePwaUpdate, observePwaUpdates } from '../src/app/pwa-update'
 
 const UPDATE_INTERVAL_MS = 60 * 60 * 1000
 let registration = null

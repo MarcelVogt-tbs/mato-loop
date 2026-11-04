@@ -1607,22 +1607,6 @@ class RootFileService:
             for name in files
         }
 
-    def revision_derived_path(
-        self, file_id: UUID, revision: int, name: str
-    ) -> Path:
-        validate_upload_filename(name)
-        with self._session_operation_lock(FileRoot.SESSION):
-            history = self._history_for_id(file_id)
-            if history is None or not any(
-                item["revision"] == revision for item in history[1]["revisions"]
-            ):
-                raise RootFileError("file.revisionNotFound", "Revision not found")
-            path = history[0] / "derived" / str(revision) / name
-            metadata = self._metadata(path)
-            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
-                raise RootFileError("file.revisionInvalid", "Invalid revision derivative")
-            return path
-
     def file_revision(self, file_id: UUID, revision: int) -> FileRevision:
         with self._session_operation_lock(FileRoot.SESSION):
             history = self._history_for_id(file_id)

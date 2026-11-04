@@ -1,5 +1,5 @@
-import { reasoningBlocks, reasoningHistoryPresentation, reasoningStatusLabel } from 'src/utils/reasoning-display'
-import { toolActivityLabel, toolSummary } from 'src/utils/tool-display'
+import { reasoningBlocks, reasoningHistoryPresentation, reasoningStatusLabel } from 'src/features/chat/reasoning-display'
+import { toolActivityLabel, toolSummary } from 'src/features/chat/tool-display'
 
 const LABELS = {
   submitting: 'Verarbeite Anfrage',

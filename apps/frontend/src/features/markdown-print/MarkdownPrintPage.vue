@@ -43,7 +43,7 @@ import { useRoute } from 'vue-router'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
 import { api } from 'src/boot/axios'
 import { apiErrorMessage } from 'src/utils/api-errors'
-import { markdownPrintRequest } from 'src/utils/markdown-print'
+import { markdownPrintRequest } from 'src/features/markdown-print/request'
 
 defineOptions({ name: 'MarkdownPrintPage' })
 

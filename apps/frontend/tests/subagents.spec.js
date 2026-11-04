@@ -10,8 +10,8 @@ import { useSubagentStore, subagentStatus } from '../src/stores/subagents'
 import { useChatStore } from '../src/features/chat/store'
 import { useApprovalStore } from '../src/stores/approvals'
 import { useQuestionStore } from '../src/stores/questions'
-import { buildChatTranscript } from '../src/utils/chat-transcript'
-import { activityDurationMs, agentRunPresentation } from '../src/utils/agent-activity'
+import { buildChatTranscript } from '../src/features/chat/transcript'
+import { activityDurationMs, agentRunPresentation } from '../src/features/chat/agent-activity'
 
 class EventSourceMock {
   static instances = []

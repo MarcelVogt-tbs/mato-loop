@@ -57,7 +57,7 @@
 import { computed, ref } from 'vue'
 import SidebarNavItem from 'src/shared/ui/SidebarNavItem.vue'
 import SidebarSessionItem from './SidebarSessionItem.vue'
-import { groupSessionsByRecency } from 'src/utils/session-groups'
+import { groupSessionsByRecency } from 'src/features/chat/session-groups'
 
 defineOptions({ name: 'SidebarSessionList' })
 

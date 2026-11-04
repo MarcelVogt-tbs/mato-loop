@@ -7,7 +7,7 @@ import { useInAppNotificationStore } from 'src/stores/in-app-notifications'
 import { useProjectStore } from 'src/stores/projects'
 import { downloadMessageAttachmentFiles, releaseAttachmentDrafts } from 'src/features/chat/attachments'
 import { defaultSessionOptions, lastAssistantMessage, sanitizedSessionOptions, sessionBeforeFailedResponse, sessionBeforeUserMessage, sessionCreatePayload, sessionScopeKey, sessionScopeParams, sortSessions } from 'src/features/chat/state'
-import { deleteChatOutboxEntries, saveChatOutboxEntries } from 'src/utils/chat-outbox'
+import { deleteChatOutboxEntries, saveChatOutboxEntries } from 'src/features/chat/outbox-storage'
 import { notifyError } from 'src/utils/notifications'
 import { SESSION_PAGE_SIZE, ACTIVE_TITLE_GENERATION_STATUSES, mergeMessages, sessionStateAfterMutation } from 'src/features/chat/model'
 

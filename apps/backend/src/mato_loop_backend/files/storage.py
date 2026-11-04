@@ -333,14 +333,6 @@ class SessionStorage:
         elif target.is_dir():
             shutil.rmtree(target)
 
-    @staticmethod
-    def _remove_empty_legacy_directories(target: Path) -> None:
-        for name in ("attachments", "generated", "downloads", "derived"):
-            try:
-                (target / name).rmdir()
-            except FileNotFoundError:
-                pass
-
     def cleanup_legacy_attachment_storage(
         self, session_locations: dict[UUID, UUID | None]
     ) -> int:
@@ -670,10 +662,6 @@ class SessionStorage:
             target_project_id,
         )
         return self.finalize_session_move(receipt)
-
-    def remove_project(self, project_id: UUID | str) -> bool:
-        trashed = self.trash_project(project_id)
-        return self.purge_trashed(trashed)
 
     def trash_project(self, project_id: UUID | str) -> Path | None:
         normalized = self.normalize_project_id(project_id)

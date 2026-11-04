@@ -3,13 +3,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import hljs from 'highlight.js/lib/common'
 
-import { verifyExternalImage } from '../src/utils/image-verification'
+import { verifyExternalImage } from '../src/features/chat/image-verification'
 import {
   classifyMarkdownImageUrl,
   renderMarkdown,
   safeMarkdownLinkUrl
-} from '../src/utils/markdown'
-import { markdownPrintRequest } from '../src/utils/markdown-print'
+} from '../src/features/chat/markdown'
+import { markdownPrintRequest } from '../src/features/markdown-print/request'
 import {
   MAX_MERMAID_CACHE_ENTRIES,
   MAX_MERMAID_SOURCE_LENGTH,
@@ -17,7 +17,7 @@ import {
   renderMermaid,
   sanitizeMermaidSvg,
   validateMermaidSource
-} from '../src/utils/mermaid'
+} from '../src/features/chat/mermaid'
 
 const internalImage = '/api/sessions/550e8400-e29b-41d4-a716-446655440000/messages/550e8400-e29b-41d4-a716-446655440001/attachments/550e8400-e29b-41d4-a716-446655440002'
 

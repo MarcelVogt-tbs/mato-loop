@@ -450,126 +450,49 @@ def _provider_payload(provider: IntegrationInstance) -> dict:
     }
 
 
-def search_settings_payload(settings: IntegrationSettingsDocument) -> dict:
-    providers = [
-        instance for instance in settings.instances if instance.integration_type == "search"
+def _integration_settings_payload(
+    settings: IntegrationSettingsDocument, integration_type: str,
+    adapter_type: str | None, collection: str,
+) -> dict:
+    instances = [
+        item for item in settings.instances
+        if item.integration_type == integration_type
+        and (adapter_type is None or item.adapter_type == adapter_type)
     ]
+    personal = _personal_settings_payload(settings) if isinstance(settings, IntegrationSettings) else None
     return {
-        **(
-            {
-                "personalIntegrationsEnabled": _personal_settings_payload(settings)[
-                    "enabled"
-                ],
-                "allowedPersonalAdapterTypes": _personal_settings_payload(settings)[
-                    "allowedAdapterTypes"
-                ],
-            }
-            if isinstance(settings, IntegrationSettings)
-            else {}
-        ),
-        "configured": bool(providers),
+        **({
+            "personalIntegrationsEnabled": personal["enabled"],
+            "allowedPersonalAdapterTypes": personal["allowedAdapterTypes"],
+        } if personal is not None else {}),
+        "configured": bool(instances),
+        collection: [_provider_payload(item) for item in instances],
+    }
+
+
+def search_settings_payload(settings: IntegrationSettingsDocument) -> dict:
+    return {
+        **_integration_settings_payload(settings, "search", None, "providers"),
         "enabled": True,
         "effectiveEnabled": True,
         "unavailableReason": None,
-        "providers": [_provider_payload(provider) for provider in providers],
     }
 
 
 def calendar_settings_payload(settings: IntegrationSettings) -> dict:
-    accounts = [
-        instance
-        for instance in settings.instances
-        if instance.integration_type == "calendar" and instance.adapter_type == "caldav"
-    ]
-    return {
-        **(
-            {
-                "personalIntegrationsEnabled": _personal_settings_payload(settings)[
-                    "enabled"
-                ],
-                "allowedPersonalAdapterTypes": _personal_settings_payload(settings)[
-                    "allowedAdapterTypes"
-                ],
-            }
-            if isinstance(settings, IntegrationSettings)
-            else {}
-        ),
-        "configured": bool(accounts),
-        "accounts": [_provider_payload(account) for account in accounts],
-    }
+    return _integration_settings_payload(settings, "calendar", "caldav", "accounts")
 
 
 def mail_settings_payload(settings: IntegrationSettingsDocument) -> dict:
-    accounts = [
-        instance
-        for instance in settings.instances
-        if instance.integration_type == "mail" and instance.adapter_type == "imap_smtp"
-    ]
-    return {
-        **(
-            {
-                "personalIntegrationsEnabled": _personal_settings_payload(settings)[
-                    "enabled"
-                ],
-                "allowedPersonalAdapterTypes": _personal_settings_payload(settings)[
-                    "allowedAdapterTypes"
-                ],
-            }
-            if isinstance(settings, IntegrationSettings)
-            else {}
-        ),
-        "configured": bool(accounts),
-        "accounts": [_provider_payload(account) for account in accounts],
-    }
+    return _integration_settings_payload(settings, "mail", "imap_smtp", "accounts")
 
 
 def knowledge_settings_payload(settings: IntegrationSettings) -> dict:
-    bases = [
-        instance
-        for instance in settings.instances
-        if instance.integration_type == "knowledge"
-        and instance.adapter_type == "bookstack"
-    ]
-    return {
-        **(
-            {
-                "personalIntegrationsEnabled": _personal_settings_payload(settings)[
-                    "enabled"
-                ],
-                "allowedPersonalAdapterTypes": _personal_settings_payload(settings)[
-                    "allowedAdapterTypes"
-                ],
-            }
-            if isinstance(settings, IntegrationSettings)
-            else {}
-        ),
-        "configured": bool(bases),
-        "bases": [_provider_payload(base) for base in bases],
-    }
+    return _integration_settings_payload(settings, "knowledge", "bookstack", "bases")
 
 
 def recipe_settings_payload(settings: IntegrationSettingsDocument) -> dict:
-    accounts = [
-        instance
-        for instance in settings.instances
-        if instance.integration_type == "recipes" and instance.adapter_type == "mealie"
-    ]
-    return {
-        **(
-            {
-                "personalIntegrationsEnabled": _personal_settings_payload(settings)[
-                    "enabled"
-                ],
-                "allowedPersonalAdapterTypes": _personal_settings_payload(settings)[
-                    "allowedAdapterTypes"
-                ],
-            }
-            if isinstance(settings, IntegrationSettings)
-            else {}
-        ),
-        "configured": bool(accounts),
-        "accounts": [_provider_payload(account) for account in accounts],
-    }
+    return _integration_settings_payload(settings, "recipes", "mealie", "accounts")
 
 
 def sonobin_settings_payload(settings: IntegrationSettingsDocument) -> dict:

@@ -143,7 +143,7 @@ import IntegrationPermissionEditor from './IntegrationPermissionEditor.vue'
 import {
   calendarResources,
   taskListResources
-} from 'src/utils/integration-access'
+} from 'src/features/integrations/access'
 import { useIntegrationStore } from 'stores/integrations'
 import { useAuthStore } from 'stores/auth'
 

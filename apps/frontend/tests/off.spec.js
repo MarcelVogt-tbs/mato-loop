@@ -6,7 +6,7 @@ import {
   MAX_OFF_TRIANGLES,
   MAX_OFF_VERTICES,
   parseOffBuffer
-} from '../src/utils/off'
+} from '../src/features/files/off'
 
 function buffer(content) {
   return new TextEncoder().encode(content).buffer

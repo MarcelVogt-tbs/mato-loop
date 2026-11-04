@@ -77,20 +77,10 @@ class BrowserIdArguments(WireModel):
     browser_id: UUID = Field(strict=False)
 
 
-class BrowserOpenArguments(BrowserOwnerArguments, BrowserIdArguments):
-    session_id: UUID = Field(strict=False)
-    color_scheme: Literal["light", "dark"] = "light"
-
-
 class BrowserOpenResult(BrowserResult):
     upgrade_fields = frozenset({"protocol"})
     browser_id: UUID = Field(strict=False)
     protocol: Literal["chat-browser-v1"]
-
-
-class BrowserViewArguments(BrowserIdArguments):
-    relay_id: UUID = Field(strict=False)
-    relay_token: str = Field(min_length=16, max_length=8192, repr=False)
 
 
 class BrowserControlResult(BrowserResult):
@@ -126,13 +116,6 @@ def _setup_data(value: str) -> str:
     if len(decoded) > 65536:
         raise ValueError("setup data exceeds limit")
     return value
-
-
-class BrowserSetupReadArguments(WireModel):
-    setup_id: UUID = Field(strict=False)
-    offset: int = Field(ge=0)
-    max_bytes: int = Field(default=65536, ge=1, le=65536)
-    wait_seconds: float = Field(default=0, ge=0, le=5)
 
 
 class BrowserSetupReadResult(BrowserResult):

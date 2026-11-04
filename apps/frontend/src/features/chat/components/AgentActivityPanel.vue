@@ -74,10 +74,10 @@ import {
   toolOutputAttachments,
   toolFileActions,
   toolFileAttachment
-} from 'src/utils/attachments'
-import { agentRunPresentation, hiddenToolRepair, runWarningEntries } from 'src/utils/agent-activity'
-import { groupWorkHistoryEntries } from 'src/utils/chat-transcript'
-import { reasoningBlocks, reasoningHistoryPresentation } from 'src/utils/reasoning-display'
+} from 'src/features/files/attachments'
+import { agentRunPresentation, hiddenToolRepair, runWarningEntries } from 'src/features/chat/agent-activity'
+import { groupWorkHistoryEntries } from 'src/features/chat/transcript'
+import { reasoningBlocks, reasoningHistoryPresentation } from 'src/features/chat/reasoning-display'
 import { useInstanceLimitsStore } from 'stores/instance-limits'
 
 defineOptions({ name: 'AgentActivityPanel' })

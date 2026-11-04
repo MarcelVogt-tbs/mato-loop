@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
 import { useIntegrationStore } from 'stores/integrations'
-import { browserSocketUrl } from 'src/utils/browser'
+import { browserSocketUrl } from 'src/features/browser/helpers'
 import { encodedInputChunks } from 'src/utils/input-encoding'
 import { notifyError } from 'src/utils/notifications'
 

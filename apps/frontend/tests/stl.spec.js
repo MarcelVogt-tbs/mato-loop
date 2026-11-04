@@ -5,7 +5,7 @@ import {
   MAX_STL_TRIANGLES,
   validateStlBuffer,
   validateStlGeometry
-} from '../src/utils/stl'
+} from '../src/features/files/stl'
 
 function binaryStl(triangles) {
   const buffer = new ArrayBuffer(84 + triangles * 50)

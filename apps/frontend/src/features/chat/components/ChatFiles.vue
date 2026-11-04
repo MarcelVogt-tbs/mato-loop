@@ -140,7 +140,7 @@ import {
   providedFileAttachments,
   supportedAttachments,
   videoMimeTypeSupported
-} from 'src/utils/attachments'
+} from 'src/features/files/attachments'
 import FileViewerPanel from 'src/features/files/components/FileViewerPanel.vue'
 import { useInstanceLimitsStore } from 'stores/instance-limits'
 

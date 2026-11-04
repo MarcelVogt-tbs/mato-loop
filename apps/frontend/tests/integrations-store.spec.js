@@ -333,6 +333,19 @@ describe('integration store', () => {
     expect(store.calendar.accounts).toHaveLength(1)
   })
 
+  it('does not reload another scope when an integration mutation finishes late', async () => {
+    let resolveCreate
+    api.post.mockImplementation(() => new Promise((resolve) => { resolveCreate = resolve }))
+    const store = useIntegrationStore()
+    const creating = store.createSearch({ name: 'Intern' })
+    store.selectScope('personal')
+
+    resolveCreate({ data: searchResponse })
+    await creating
+
+    expect(api.get).not.toHaveBeenCalled()
+  })
+
   it('omits a blank password when updating a calendar account', async () => {
     api.get.mockResolvedValue({ data: calendarResponse })
     api.put.mockResolvedValue({ data: calendarResponse })

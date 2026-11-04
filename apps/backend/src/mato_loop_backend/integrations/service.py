@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.security import delete_credential, store_credential
 from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
@@ -103,7 +104,7 @@ async def save_with_policy_cleanup(
     db: AsyncSession,
     settings: IntegrationSettingsDocument,
     *,
-    owner_id: UUID | None,
+    owner_id: UUID | None = None,
     clear_policies: UUID | None = None,
 ) -> IntegrationSettingsDocument:
     if clear_policies is not None:
@@ -117,3 +118,76 @@ async def save_with_policy_cleanup(
     await _save_settings(db, settings, owner_id)
     await db.commit()
     return settings
+
+
+class CredentialIntegrationService:
+    integration_type: str
+    adapter_type: str
+    credential_kind: str
+    _save = staticmethod(save_with_policy_cleanup)
+
+    @classmethod
+    def _find(
+        cls, settings: IntegrationSettingsDocument, integration_id: UUID,
+    ) -> IntegrationInstance | None:
+        return next((item for item in settings.instances
+                     if item.id == integration_id
+                     and item.integration_type == cls.integration_type
+                     and item.adapter_type == cls.adapter_type), None)
+
+    @classmethod
+    async def _replace_credential(
+        cls, db: AsyncSession, instance: IntegrationInstance,
+        payload: dict[str, Any], *, owner_id: UUID | None,
+    ) -> None:
+        previous = instance.credential_id
+        credential = await store_credential(
+            db, owner_id=owner_id, kind=cls.credential_kind,
+            label=instance.name, payload=payload,
+        )
+        instance.credential_id = credential.id
+        if previous is not None:
+            await delete_credential(db, previous, owner_id=owner_id)
+
+    @classmethod
+    async def _create(
+        cls, db: AsyncSession, settings: IntegrationSettingsDocument,
+        instance: IntegrationInstance, payload: dict[str, Any], *, owner_id: UUID | None,
+    ) -> IntegrationSettingsDocument:
+        from mato_loop_backend.integrations.registry import validate_integration
+
+        instance.owner_id = owner_id
+        validate_integration(instance)
+        await cls._replace_credential(db, instance, payload, owner_id=owner_id)
+        settings.instances.append(instance)
+        return await cls._save(db, settings, owner_id=owner_id)
+
+    @classmethod
+    async def _update(
+        cls, db: AsyncSession, settings: IntegrationSettingsDocument,
+        instance: IntegrationInstance, *, name: str, config: dict, enabled: bool,
+        payload: dict[str, Any] | None, owner_id: UUID | None, connection_changed: bool,
+    ) -> IntegrationSettingsDocument:
+        from mato_loop_backend.integrations.registry import validate_integration
+
+        instance.name, instance.config, instance.enabled = name, config, enabled
+        validate_integration(instance)
+        if payload is not None:
+            await cls._replace_credential(db, instance, payload, owner_id=owner_id)
+        return await cls._save(
+            db, settings, owner_id=owner_id,
+            clear_policies=instance.id if connection_changed else None,
+        )
+
+    @classmethod
+    async def delete(
+        cls, db: AsyncSession, integration_id: UUID, *, owner_id: UUID | None = None,
+    ) -> IntegrationSettingsDocument:
+        settings = await _load_integrations(db, owner_id, for_update=True)
+        instance = cls._find(settings, integration_id)
+        if instance is None:
+            raise IntegrationSettingsError("integration.notFound")
+        settings.instances = [item for item in settings.instances if item.id != integration_id]
+        if instance.credential_id is not None:
+            await delete_credential(db, instance.credential_id, owner_id=owner_id)
+        return await cls._save(db, settings, owner_id=owner_id, clear_policies=integration_id)

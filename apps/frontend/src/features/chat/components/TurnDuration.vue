@@ -12,7 +12,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { activityDurationMs, formatActivityDuration } from 'src/utils/agent-activity'
+import { activityDurationMs, formatActivityDuration } from 'src/features/chat/agent-activity'
 
 defineOptions({ name: 'TurnDuration' })
 

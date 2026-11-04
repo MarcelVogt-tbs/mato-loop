@@ -3,12 +3,12 @@ import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { emptyActivity } from 'src/features/chat/state'
 import { mergeMessages } from 'src/features/chat/model'
-import { mergeAgentActivity } from 'src/utils/agent-activity'
+import { mergeAgentActivity } from 'src/features/chat/agent-activity'
 import { notifyError } from 'src/utils/notifications'
 import { useApprovalStore } from 'src/stores/approvals'
 import { useQuestionStore } from 'src/stores/questions'
-import { mergeResearchSources } from 'src/utils/research-sources'
-import { parseToolResult } from 'src/utils/tool-display'
+import { mergeResearchSources } from 'src/features/chat/research-sources'
+import { parseToolResult } from 'src/features/chat/tool-display'
 
 const ACTIVE = new Set(['queued', 'running', 'waiting_approval', 'waiting_input'])
 

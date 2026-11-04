@@ -41,7 +41,7 @@ import {
   pwaUpdateSnoozeRemaining,
   requestPwaUpdate,
   snoozePwaUpdate
-} from 'src/utils/pwa-update'
+} from 'src/app/pwa-update'
 
 defineOptions({ name: 'App' })
 

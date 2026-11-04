@@ -5,7 +5,7 @@ import {
   modelReasoningEffortOptions,
   modelRuntimeForm,
   modelRuntimePayload
-} from '../src/utils/model-runtime'
+} from '../src/features/providers/model-runtime'
 
 describe('model runtime configuration', () => {
   it('uses safe defaults for a new model', () => {

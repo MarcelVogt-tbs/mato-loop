@@ -1,4 +1,4 @@
-import { normalizeModelCapabilities } from 'src/utils/provider-models'
+import { normalizeModelCapabilities } from 'src/features/providers/models'
 
 export const REASONING_EFFORT_OPTIONS = Object.freeze([
   { label: 'Providerstandard', value: null },

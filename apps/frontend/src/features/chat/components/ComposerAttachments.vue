@@ -30,8 +30,8 @@
 
 <script setup>
 import ComposerItemCard from './ComposerItemCard.vue'
-import { attachmentDraftIcon, attachmentDraftLabel } from 'src/utils/attachment-drafts'
-import { formatAttachmentSize } from 'src/utils/attachments'
+import { attachmentDraftIcon, attachmentDraftLabel } from 'src/features/chat/attachment-drafts'
+import { formatAttachmentSize } from 'src/features/files/attachments'
 
 defineOptions({ name: 'ComposerAttachments' })
 

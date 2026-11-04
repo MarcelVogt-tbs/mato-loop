@@ -1,6 +1,6 @@
-import { technicalDetailsDisplay } from 'src/utils/approval-display'
+import { technicalDetailsDisplay } from 'src/features/approvals/display'
 import { apiErrorMessage, errorDescriptor } from 'src/utils/api-errors'
-import { cleanUrlForDisplay } from 'src/utils/webfetch'
+import { cleanUrlForDisplay } from 'src/shared/url-display'
 
 const TOOL_DISPLAY = {
   task: { label: 'Subagent starten', icon: 'account_tree' },

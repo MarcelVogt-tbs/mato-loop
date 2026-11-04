@@ -15,10 +15,10 @@ import mato_loop_backend.api.integration_resources as api_integration_resources
 import mato_loop_backend.api.routes.integrations as api_routes_integrations
 import mato_loop_backend.integrations.bookstack.adapter as integrations_bookstack_adapter
 import mato_loop_backend.integrations.caldav.adapter as integrations_caldav_adapter
-import mato_loop_backend.integrations.caldav.service as caldav_service_module
 import mato_loop_backend.integrations.registry as integration_registry
 import mato_loop_backend.integrations.search as search_module
 import mato_loop_backend.integrations.searxng.client as searxng_client
+import mato_loop_backend.integrations.service as integration_service_module
 import mato_loop_backend.security as security
 from mato_loop_backend.api.errors import ApiError, register_error_handlers
 from mato_loop_backend.api.routes.integrations import (
@@ -37,6 +37,7 @@ from mato_loop_backend.api.routes.integrations import (
     visible_instance_integrations,
 )
 from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.integrations.arcane.service import ArcaneIntegrationService
 from mato_loop_backend.integrations.bookstack.service import BookStackIntegrationService
 from mato_loop_backend.integrations.caldav.client import CalDavError
 from mato_loop_backend.integrations.contracts import (
@@ -404,6 +405,29 @@ async def test_bookstack_policy_cleanup_removes_resource_labels(monkeypatch) -> 
     )
 
     assert str(integration_id) not in tools.resource_labels
+
+
+async def test_arcane_key_rotation_clears_permissions_without_url_change(monkeypatch) -> None:
+    instance = IntegrationInstance(
+        name="Docker", integration_type="infrastructure", adapter_type="arcane",
+        config={"base_url": "https://arcane.example.test"}, credential_id=uuid4(),
+    )
+    instance.permissions.private_permissions.policies = {"arcane.read": ToolExecutionPolicy.AUTO}
+    settings = IntegrationSettings(instances=[instance])
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=[settings, ToolSettings()]))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    monkeypatch.setattr(
+        integration_service_module, "store_credential", AsyncMock(return_value=Mock(id=uuid4()))
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = Mock(user_id=None)
+
+    await ArcaneIntegrationService.update(
+        db, instance.id, name=instance.name, base_url=instance.config["base_url"],
+        api_key="replacement-key", enabled=True,
+    )
+
+    assert not instance.permissions.private_permissions.policies
 
 
 async def test_nonadmin_cannot_read_instance_integration_or_use_credential_test(
@@ -1328,7 +1352,7 @@ async def test_caldav_account_crud_rotates_secret_and_keeps_accounts_independent
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=load_settings))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     monkeypatch.setattr(
-        caldav_service_module, "store_credential", store_credential
+        integration_service_module, "store_credential", store_credential
     )
 
     first_payload = await create_calendar_integration(_calendar_request(), db)

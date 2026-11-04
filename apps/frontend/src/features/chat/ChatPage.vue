@@ -549,19 +549,19 @@ import { useInstanceLimitsStore } from 'stores/instance-limits'
 import { useWorkspaceStore } from 'stores/workspace'
 import { gitContext, gitContextKey, useGitChangesStore } from 'src/features/files/git-store'
 import { useConfirm } from 'src/composables/confirm'
-import { agentRunPresentation } from 'src/utils/agent-activity'
+import { agentRunPresentation } from 'src/features/chat/agent-activity'
 import {
   chatBottomDistance,
   chatReadingAnchor,
   chatShouldFollowBottom,
   restoreChatReadingAnchor,
   scrollChatToBottom
-} from 'src/utils/chat-scroll'
+} from 'src/features/chat/scroll'
 import {
   buildChatTranscript,
   retryAvailableForMessage,
   withQueuedTranscriptMessages
-} from 'src/utils/chat-transcript'
+} from 'src/features/chat/transcript'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { notifyError } from 'src/utils/notifications'
 import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-time'

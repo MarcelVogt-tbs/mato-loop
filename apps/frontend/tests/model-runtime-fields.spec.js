@@ -7,7 +7,7 @@ import { quasarOptions } from './quasar-options'
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 
 import ModelRuntimeFields from '../src/features/providers/ModelRuntimeFields.vue'
-import { modelRuntimeForm, modelRuntimePayload } from '../src/utils/model-runtime'
+import { modelRuntimeForm, modelRuntimePayload } from '../src/features/providers/model-runtime'
 
 let app, root
 afterEach(() => { app?.unmount(); root?.remove() })

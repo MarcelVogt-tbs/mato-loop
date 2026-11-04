@@ -11,7 +11,7 @@ import {
   toolPresentation,
   toolStatus,
   toolSummary
-} from '../src/utils/tool-display'
+} from '../src/features/chat/tool-display'
 
 describe('tool display', () => {
   it('shows shell commands exactly as requested', () => {

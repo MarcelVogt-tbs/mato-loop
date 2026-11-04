@@ -518,7 +518,7 @@ async def test_mail_service_stores_only_encrypted_password_credential(monkeypatc
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     monkeypatch.setattr(
-        "mato_loop_backend.integrations.mail.service.store_credential", store_credential
+        "mato_loop_backend.integrations.service.store_credential", store_credential
     )
     db = AsyncMock(spec=AsyncSession)
 
