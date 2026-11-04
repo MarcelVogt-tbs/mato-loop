@@ -64,7 +64,7 @@ async def fetch(
     timeout = timeout if timeout is not None else config.timeout_seconds
     headers = {
         "Accept": "application/json", "Accept-Encoding": "identity", "DNT": "1",
-        "X-Respond-With": format, "X-Timeout": str(max(1, timeout - 10)),
+        "X-Respond-With": format,
         "X-User-Agent": user_agent, "X-Engine": engine,
         "X-Remove-Overlay": str(config.remove_overlay if remove_overlay is None else remove_overlay).lower(),
     }

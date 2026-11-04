@@ -59,8 +59,11 @@ block matching fetches, but remain replaceable or removable. Do not manually
 re-encode a cookie to pass validation: that changes the value expected by its site.
 
 Direct Webfetch defaults to a 30-second total deadline. Jina defaults to 90 seconds
-total, reserving 10 seconds from that budget for transfer and conversion. An explicit
-tool timeout overrides the total deadline.
+total, including transfer and conversion. An explicit tool timeout overrides the
+total deadline. MatoLoop does not send `X-Timeout`: that Reader header changes
+response timing to network idle rather than merely bounding request duration.
+Reader keeps its default early-response behavior; selectors can explicitly wait
+for required content.
 Target HTTP statuses are read from `httpStatus` or, when absent, Reader's
 `Target URL returned error <status>:` warning line. Target failures are returned as
 controlled errors, not citation sources, even when Reader itself responds with HTTP

@@ -45,7 +45,7 @@ async def test_reader_formats_keep_sources_and_bound_credentials(monkeypatch, fo
         assert request.headers["Authorization"] == "Bearer test-key"
         assert json.loads(request.content)["url"] == "https://target.test/page#route"
         assert request.headers["X-Respond-With"] == format
-        assert (request.headers["X-Timeout"], request.extensions["timeout"]["read"]) == ("80", 90)
+        assert (request.headers.get("X-Timeout"), request.extensions["timeout"]["read"]) == (None, 90)
         assert {key: request.headers[key] for key in (
             "X-Engine", "X-Remove-Overlay", "X-No-Cache", "X-Locale", "X-Target-Selector", "X-Wait-For-Selector", "X-Remove-Selector",
         )} == {"X-Engine": "browser", "X-Remove-Overlay": "false", "X-No-Cache": "true", "X-Locale": "de-DE", "X-Target-Selector": r".caf\e9 ", "X-Wait-For-Selector": ".ready", "X-Remove-Selector": "nav"}
