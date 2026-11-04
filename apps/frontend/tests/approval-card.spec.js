@@ -252,6 +252,18 @@ describe('approval card', () => {
     expect([...counts, count()]).toEqual([0, 1, 1, 2])
   })
 
+  it('shows grants from a queued refresh after the initial view request fails', async () => {
+    useChatStore().current = { id: 'session-1' }
+    let failFirst
+    api.get.mockReturnValueOnce(new Promise((resolve, reject) => { failFirst = reject }))
+      .mockResolvedValue({ data: [{ id: 'grant-1', sessionId: 'session-1', resourceDisplay: '/work/file' }] })
+    await mountView(() => h(SessionApp))
+    const refresh = useApprovalStore().fetchGrants({ suppressErrorToast: true }, 'session-1')
+    failFirst(new Error('offline'))
+    await refresh
+    await vi.waitFor(() => expect(root.querySelector('[aria-labelledby="session-permissions-title"]').textContent).toContain('/work/file'))
+  })
+
   it.each(['run', null])('keeps loaded grants visible when the active run changes to %s', async (nextRunId) => {
     const chat = useChatStore()
     chat.runId = nextRunId ? null : 'run'

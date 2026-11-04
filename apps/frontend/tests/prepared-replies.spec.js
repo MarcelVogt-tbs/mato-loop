@@ -27,8 +27,10 @@ describe('prepared Markdown replies', () => {
     app.use(Quasar, { components: { QCard, QDialog } })
     app.mount(root)
     await nextTick()
+    await nextTick()
     rendered.mockClear()
     fileActions.value = fileActions.value.map((action) => ({ ...action }))
+    await nextTick()
     await nextTick()
     const unchangedRenders = rendered.mock.calls.length
     fileActions.value = [{ filename: 'Other.md' }]

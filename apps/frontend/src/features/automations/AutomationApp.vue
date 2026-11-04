@@ -140,6 +140,8 @@ const chat = useChatStore()
 const controlCenter = useControlCenterStore()
 const sessionId = computed(() => controlCenter.sessionId)
 const selectedId = computed(() => typeof route.query.automation === 'string' ? route.query.automation : null)
+const visible = computed(() => controlCenter.open && controlCenter.activeContentId === 'automation')
+const loadSessionId = computed(() => !chat.loading && (visible.value || selectedId.value) ? sessionId.value : null)
 const definition = ref(null)
 const formRef = ref(null)
 const loading = ref(false)
@@ -337,7 +339,10 @@ function beforeUnload(event) {
 
 onBeforeRouteUpdate((to, from) => to.query.session !== from.query.session || (to.query.automation === from.query.automation && to.query.run === from.query.run) || confirmDiscard())
 watch(dirty, (value) => { automations.dirty = value }, { flush: 'sync' })
-watch([sessionId, selectedId, () => route.query.run], () => { if (sessionId.value) void load(); else version += 1 }, { immediate: true })
+watch([loadSessionId, selectedId, () => route.query.run], () => {
+  if (loadSessionId.value) void load()
+  else { version += 1; loading.value = false }
+}, { immediate: true })
 watch(() => automations.items, (items, previous) => {
   if (!saving.value && previous.some((item) => item.id === selectedId.value) && !items.some((item) => item.id === selectedId.value)) {
     version += 1
@@ -348,7 +353,7 @@ watch(() => automations.items, (items, previous) => {
   }
 })
 watch(() => automations.items.filter((item) => item.executionSessionId === sessionId.value).map((item) => `${item.id}:${item.revision}`).join(','), () => {
-  if (sessionId.value && !selectedId.value && !loading.value && !saving.value) void load()
+  if (visible.value && !chat.loading && sessionId.value && !selectedId.value && !loading.value && !saving.value) void load()
 })
 window.addEventListener('beforeunload', beforeUnload)
 onBeforeUnmount(() => { version += 1; automations.dirty = false; window.removeEventListener('beforeunload', beforeUnload) })

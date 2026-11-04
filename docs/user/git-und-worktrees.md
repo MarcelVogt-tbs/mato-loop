@@ -5,7 +5,7 @@ Git läuft auf dem ausgewählten Computer mit dessen Git-Installation und Anmeld
 ## Ein Repository verwenden
 
 1. Wähle einen verbundenen Computer und einen zugänglichen Arbeitsordner mit Git-Repository.
-2. Bei neuen Projekt-Sessions öffnet sich **Git** automatisch, sobald im gewählten Projekt-Arbeitsordner ein Repository erkannt wird. Sonst öffne **Control Center > Git > Repository**. Unter **Aktionen** bietet **Git-Repository anlegen** ohne vorhandenes Repository einen Agentenauftrag zur Initialisierung; er legt weder Commit noch Remote an.
+2. Bei neuen Projekt-Sessions wird **Git** automatisch zum Control Center hinzugefügt, sobald im gewählten Projekt-Arbeitsordner ein Repository erkannt wird. Die App öffnet sich dabei nicht. Öffne **Control Center > Git > Repository**, um das Repository anzusehen. Unter **Aktionen** bietet **Git-Repository anlegen** ohne vorhandenes Repository einen Agentenauftrag zur Initialisierung; er legt weder Commit noch Remote an.
 3. Für Projektvorgaben wähle in **Projekt bearbeiten** die Repository-Wurzel und speichere **Standard-Zielbranch** und **Standard-Arbeitsbereich**. Ein später angelegtes Repository wird beim erneuten Öffnen oder Prüfen erkannt.
 
 Git-App und Befehlspalette allein erzeugen keinen Chat. Erst Sessionstart oder Agentenauftrag speichert die Unterhaltung.

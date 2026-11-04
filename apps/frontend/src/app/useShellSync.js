@@ -69,7 +69,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   const presenceClientId = randomUuid(window.crypto)
   const focused = ref(appIsFocused())
   const visibleSessionId = computed(() => (
-    focused.value && route.name === 'chat' && !route.query.subagent
+    focused.value && !chat.loading && route.name === 'chat' && !route.query.subagent
     && routeSessionId.value === chat.current?.id
     && !(controlCenterVisible.value && $q.screen.lt.md)
     && !(drawerOpen.value && $q.screen.lt.md)

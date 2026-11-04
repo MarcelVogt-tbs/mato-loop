@@ -124,6 +124,18 @@ duplicate implementation. Import feature-owned helpers directly from their
 Cross-feature coordination uses Pinia actions and the explicit Control Center
 manifest. Store IDs, browser-storage keys and route URLs remain stable.
 
+Session navigation keeps recent display snapshots for up to five sessions in the
+current owner's RAM, with at most 20 messages and 20 context summaries per snapshot.
+Reopening shows that snapshot while an authoritative server read runs; sending,
+history changes and session settings wait for that read. Failed reads discard the
+snapshot. Account changes and session/project deletion clear the affected entries.
+Permission refreshes serialize and coalesce concurrent invalidations without
+caching authorization decisions or dropping updates received during a read.
+Hidden Automation-app overviews defer reads until visible; explicitly selected
+automations and run links still load. Hiding an editor keeps its unsaved draft.
+Markdown components compare their effective render inputs separately, so replacing
+file targets with equivalent filenames does not reparse unchanged message text.
+
 ## Standalone Agent
 
 The standalone `matoloop_agent` package remains independent of backend Python

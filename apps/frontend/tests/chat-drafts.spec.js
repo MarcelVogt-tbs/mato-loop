@@ -982,6 +982,7 @@ describe('chat drafts', () => {
       { id: 'session-catalog', projectId: 'project-1' },
       { id: 'session-keep', projectId: 'project-2' }
     ]
+    chat.sessionDetails = [{ id: 'session-keep', projectId: 'project-1' }]
     chat.current = { id: 'session-current', projectId: 'project-1' }
     chat.selectedSessionId = 'session-current'
     chat.runSessionId = 'session-current'
@@ -1223,6 +1224,32 @@ describe('chat drafts', () => {
     finishLoad({ data: { id: 'session-1', messages: [] } })
     await Promise.all([loading, refreshing])
     expect(chat.current.messages.map((message) => message.id)).toEqual(['new'])
+  })
+
+  it('shows a recent session immediately and shares its in-flight reconciliation', async () => {
+    const chat = useChatStore()
+    chat.applySessionResult({ id: 'session-1', messages: [{ id: 'cached' }], nextMessageCursor: 'older' })
+    await chat.loadSession(null)
+    let finishLoad
+    api.get.mockReturnValueOnce(new Promise((resolve) => { finishLoad = resolve }))
+    const first = chat.loadSession('session-1')
+    const second = chat.loadSession('session-1')
+    const opening = [chat.current.messages[0].id, chat.loading, await chat.loadThroughMessage('older'), api.get.mock.calls.length]
+    finishLoad({ data: { id: 'session-1', messages: [{ id: 'fresh' }] } })
+    await Promise.all([first, second])
+    expect([opening, chat.current.messages[0].id]).toEqual([['cached', true, false, 1], 'fresh'])
+  })
+
+  it('drops cached details and pending session responses when the owner changes', async () => {
+    const chat = useChatStore()
+    chat.applySessionResult({ id: 'session-1', messages: [{ id: 'private' }] })
+    let finishLoad
+    api.get.mockReturnValueOnce(new Promise((resolve) => { finishLoad = resolve }))
+    const loading = chat.loadSession('session-1')
+    chat.setDraftOwner(null)
+    finishLoad({ data: { id: 'session-1', messages: [{ id: 'private' }] } })
+    await loading
+    expect([chat.current, chat.sessionDetails]).toEqual([null, []])
   })
 
   it.each([true, false])('acknowledges the session with or without an unread assistant message (%s)', async (hasMessage) => {

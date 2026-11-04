@@ -33,7 +33,7 @@
       @mousedown="handleScrollAreaMouseDown"
     >
       <div ref="scrollContent" class="chat-page__scroll-content" :class="{ 'chat-messages--small': chat.activeContext.sessionProfile?.messageSize === 'small', 'chat-page__scroll-content--mobile-home': $q.screen.lt.md && showHome && !runPresentation.showActivity && !chat.loading && !chat.loadError }">
-        <div v-if="chat.loading" class="chat-transcript q-pa-md" aria-label="Session wird geladen">
+        <div v-if="chat.loading && !chat.current" class="chat-transcript q-pa-md" aria-label="Session wird geladen">
           <div v-for="width in ['42%', '86%', '64%']" :key="width" class="chat-session-skeleton">
             <q-skeleton type="text" width="88px" />
             <q-skeleton type="text" :width="width" height="24px" />
@@ -224,7 +224,7 @@
                 icon="undo"
                 class="chat-message__meta-action chat-message__meta-action--hover"
                 :loading="messageActionId === message.id"
-                :disable="message.deliveryStatus === 'sending' || (messageActionId !== null && messageActionId !== message.id)"
+                :disable="chat.loading || message.deliveryStatus === 'sending' || (messageActionId !== null && messageActionId !== message.id)"
                 aria-label="Nachricht rückgängig machen"
                 @click.stop="message.outboxId ? undoQueuedMessage(message.outboxId) : undoMessage(message)"
               >
@@ -290,7 +290,7 @@
                 color="negative"
                 class="chat-message__meta-action chat-message__meta-action--retry"
                 :loading="messageActionId === message.id"
-                :disable="messageActionId !== null && messageActionId !== message.id"
+                :disable="chat.loading || (messageActionId !== null && messageActionId !== message.id)"
                 aria-label="Anfrage erneut starten"
                 @click.stop="retryMessage(message)"
               >
@@ -607,9 +607,9 @@ const currentGit = computed(() => {
     ? state
     : null
 })
-watch([currentGit, () => controlCenter.gitAutoOpened, () => chat.loading], ([state]) => {
+watch([currentGit, () => controlCenter.gitAutoAdded, () => chat.loading], ([state]) => {
   if (chat.loading || !chat.current?.projectId || state?.currentDirectory !== chat.current.currentDirectory) return
-  void controlCenter.autoOpenGit(state?.repository).catch(() => {})
+  void controlCenter.autoAddGit(state?.repository).catch(() => {})
 })
 watch([
   () => gitContextKey(currentGitContext.value), gitAvailable, () => chat.running

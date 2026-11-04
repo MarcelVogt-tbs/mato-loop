@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { markRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { queueRefresh } from 'src/utils/queued-refresh'
 import { errorDescriptor } from 'src/utils/api-errors'
@@ -27,6 +28,7 @@ export const useApprovalStore = defineStore('approvals', {
     grantsLoaded: false,
     grantsLoadFailed: false,
     grantRevision: 0,
+    grantRefreshPromise: null,
     grantSessionId: null
   }),
   getters: {
@@ -108,20 +110,34 @@ export const useApprovalStore = defineStore('approvals', {
     },
     async fetchGrants(config = {}, sessionId = this.grantSessionId) {
       this.grantSessionId = sessionId
-      const revision = ++this.grantRevision
-      this.grantsLoading = true
-      this.grantsLoadFailed = false
-      try {
-        const { data } = await api.get(sessionId ? `/approvals/sessions/${sessionId}/permissions` : '/approvals/permissions', config)
-        if (revision !== this.grantRevision || !Array.isArray(data)) return
-        this.grants = data
-        this.grantsLoaded = true
-      } catch (error) {
-        if (revision === this.grantRevision) this.grantsLoadFailed = true
-        throw error
-      } finally {
-        if (revision === this.grantRevision) this.grantsLoading = false
-      }
+      let request = queueRefresh(this, { ...config, sessionId }, async (revision) => {
+        this.grantsLoading = true
+        this.grantsLoadFailed = false
+        try {
+          const { data } = await api.get(sessionId ? `/approvals/sessions/${sessionId}/permissions` : '/approvals/permissions', { timeout: 30_000, ...config })
+          if (revision !== this.grantRevision || !Array.isArray(data)) return
+          this.grants = data
+          this.grantsLoaded = true
+          return true
+        } catch (error) {
+          if (revision === this.grantRevision) this.grantsLoadFailed = true
+          throw error
+        } finally {
+          if (revision === this.grantRevision) this.grantsLoading = false
+        }
+      }, 'grantRevision')
+      this.grantRefreshPromise = markRaw(request)
+      let loaded
+      // A view waiting for grants must also wait for invalidations received during its read.
+      do {
+        request = this.grantRefreshPromise
+        try {
+          loaded = await request
+        } catch (error) {
+          if (this.grantRefreshPromise === request) throw error
+        }
+      } while (this.grantRefreshPromise !== request)
+      return loaded && this.grantSessionId === sessionId
     },
     async revoke(sessionId, grantId) {
       const resource = grantId.startsWith('session-secret:')

@@ -14,7 +14,7 @@ import { useConfirm } from 'src/composables/confirm'
 
 export const outboxActions = {
     async send(content, { preserveDraft = false, interrupt = false, activeFile } = {}) {
-      if (this.outboxSaving || this.historyActionPending) return null
+      if (this.loading || this.outboxSaving || this.historyActionPending) return null
       const sessionId = this.current?.id
       const ownerUserId = this.draftOwnerUserId
       const draft = this.drafts.newSession

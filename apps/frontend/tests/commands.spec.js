@@ -177,7 +177,7 @@ it('does not recheck a repository when computer polling replaces unchanged agent
   expect(api.post).toHaveBeenCalledTimes(1)
 })
 
-it('opens Git once per new project draft without creating a session', async () => {
+it('adds Git once per new project draft without opening it or creating a session', async () => {
   const pinia = createPinia()
   setActivePinia(pinia)
   const chat = useChatStore(), controlCenter = useControlCenterStore()
@@ -190,14 +190,15 @@ it('opens Git once per new project draft without creating a session', async () =
   root = document.createElement('div')
   app = createApp({ render: () => h(WorkspaceField, { projectId: 'project', session: chat.activeContext }) })
   app.use(pinia).use(Quasar, quasarOptions).mount(root)
-  await vi.waitFor(() => expect(controlCenter.activeAppId).toBe('git'))
+  await vi.waitFor(() => expect([controlCenter.tabs.some(tab => tab.appId === 'git'), controlCenter.activeAppId, controlCenter.open])
+    .toEqual([true, 'session', false]))
   await controlCenter.removeIntegration('git')
   useProjectStore().items = [...useProjectStore().items]
   await nextTick()
   expect([controlCenter.open, controlCenter.tabs.some(tab => tab.appId === 'git'), create.mock.calls.length])
-    .toEqual([true, false, 0])
+    .toEqual([false, false, 0])
   controlCenter.resetDraft()
-  await vi.waitFor(() => expect(controlCenter.activeAppId).toBe('git'))
+  await vi.waitFor(() => expect(controlCenter.tabs.some(tab => tab.appId === 'git')).toBe(true))
 })
 
 it.each([false, true])('offers optional worktree removal when deleting an unopened session (selected: %s)', async remove => {

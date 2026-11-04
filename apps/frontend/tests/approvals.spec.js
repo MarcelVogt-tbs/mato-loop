@@ -158,7 +158,7 @@ describe('inline approvals', () => {
 
     await approvals.fetchGrants({ suppressErrorToast: true })
 
-    expect(api.get).toHaveBeenCalledWith('/approvals/permissions', { suppressErrorToast: true })
+    expect(api.get).toHaveBeenCalledWith('/approvals/permissions', { timeout: 30_000, suppressErrorToast: true })
     expect(approvals.grants).toEqual([{ id: 'grant-1', sessionId: 'session-1' }])
     expect(approvals.grantsLoaded).toBe(true)
     expect(approvals.grantsLoadFailed).toBe(false)

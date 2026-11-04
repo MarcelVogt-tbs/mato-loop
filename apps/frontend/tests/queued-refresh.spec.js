@@ -11,6 +11,7 @@ vi.mock('src/boot/axios', () => ({ api }))
 it.each([
   [useProjectStore, 'fetchAll', 'items', (items) => ({ items })],
   [useApprovalStore, 'fetchPending', 'pending', (items) => items],
+  [useApprovalStore, 'fetchGrants', 'grants', (items) => items],
   [useQuestionStore, 'fetchPending', 'pending', (items) => items],
   [useInAppNotificationStore, 'fetchLatest', 'items', (items) => ({ items })]
 ])('batches overlapping %s reads and retains a fresh follow-up', async (useStore, action, field, response) => {
@@ -42,7 +43,10 @@ it('retains an invalidation after a local mutation supersedes the queued read', 
   expect(store.pending).toEqual([{ id: 'new' }])
 })
 
-it('releases a stalled read on its HTTP timeout and runs the queued reload', async () => {
+it.each([
+  ['fetchPending', 'loaded'],
+  ['fetchGrants', 'grantsLoaded']
+])('releases stalled %s on its HTTP timeout and runs the queued reload', async (action, loadedField) => {
   setActivePinia(createPinia())
   vi.useFakeTimers()
   api.get.mockReset().mockImplementationOnce((url, { timeout }) => new Promise((resolve, reject) => {
@@ -50,12 +54,13 @@ it('releases a stalled read on its HTTP timeout and runs the queued reload', asy
   }))
     .mockResolvedValue({ data: [] })
   const store = useApprovalStore()
-  const failed = expect(store.fetchPending()).rejects.toThrow('timeout')
-  const refresh = store.fetchPending()
+  const first = store[action]()
+  const failed = action === 'fetchPending' ? expect(first).rejects.toThrow('timeout') : first
+  const refresh = store[action]()
   try {
     await vi.advanceTimersByTimeAsync(30_000)
     await Promise.all([failed, refresh])
-    expect(store.loaded).toBe(true)
+    expect(store[loadedField]).toBe(true)
   } finally {
     vi.useRealTimers()
   }

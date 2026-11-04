@@ -14,6 +14,8 @@ Die Seitenleiste enthält Home, Suche, Projekte und Unterhaltungen, Automationen
 
 Home zeigt zuletzt aktive Unterhaltungen, offene Anfragen, kommende Automationen und Computerstatus. Manche Übersichtselemente sind auf kleinen Bildschirmen ausgeblendet; der Chat bleibt nutzbar. Eine ausdrückliche neue Unterhaltung öffnet einen leeren Entwurf.
 
+Unter **Zuletzt aktiv** stehen Sessions mit ungelesenen Agent-Antworten oben, neueste Antwort zuerst. Darunter folgen die übrigen Sessions nach deiner letzten Nachricht, neueste zuerst. Sobald du eine Antwort liest, richtet sich der Platz der Session wieder nach deiner letzten Nachricht. Bei leeren Sessions zählt der Erstellungszeitpunkt.
+
 ### Suche
 
 Die Suche findet eigene Projekte, Sessions und Nachrichten ab zwei Zeichen. **Strg+F** bzw. **Cmd+F** öffnet die Anwendungssuche; ist sie bereits offen, bleibt die Browsersuche verfügbar. Ohne Embedding-Dienst funktioniert die lexikalische Suche weiter. Suchergebnisse öffnen den passenden Gesprächskontext.
