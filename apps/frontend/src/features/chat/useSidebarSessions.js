@@ -265,7 +265,7 @@ export function useSidebarSessions({
       const selection = await new Promise(resolve => {
         $q.dialog({
           title: 'Session löschen', transitionDuration: 0,
-          message: `Session „${title || 'Ohne Titel'}“ löschen? Optional kannst du auch den Worktree „${impact.worktree.path}“ entfernen. Dabei werden nicht committete Änderungen sowie zusätzliche und ignorierte Dateien wie .env unwiderruflich gelöscht. Branch und Commits bleiben erhalten.${others.length ? ` ${others.length} weitere Session${others.length === 1 ? '' : 's'} wechseln zu Lokal: ${others.map(item => item.title || 'Ohne Titel').join(', ')}.` : ''}`,
+          message: `Session „${title || 'Ohne Titel'}“ löschen? Optional kannst du auch den Worktree „${impact.worktree.path}“ entfernen. Dabei werden nicht committete Änderungen sowie zusätzliche und ignorierte Dateien wie .env unwiderruflich gelöscht. Commits, die durch keinen Branch gesichert sind, können danach verloren gehen. Vorhandene Branches bleiben erhalten.${others.length ? ` ${others.length} weitere Session${others.length === 1 ? '' : 's'} wechseln zu Lokal: ${others.map(item => item.title || 'Ohne Titel').join(', ')}.` : ''}`,
           options: { type: 'checkbox', model: [], items: [{ label: 'Worktree ebenfalls entfernen', value: impact.worktree.impact }] },
           ok: { label: 'Löschen', color: 'negative', unelevated: true, noCaps: true },
           cancel: { label: 'Abbrechen', flat: true, noCaps: true }

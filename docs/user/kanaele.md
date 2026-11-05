@@ -34,11 +34,11 @@ folgende Befehle zur Verfügung:
 - `/git_init`: Git im gewählten Workspace anlegen, ohne Commit oder Veröffentlichung.
 - `/git_review`: Änderungen einschließlich noch nicht übernommener Commits prüfen.
 - `/git_commit`: Ausgewählte Arbeitsänderungen ausdrücklich committen, ohne Push.
-- `/git_merge`: Bereits committete Änderungen mit dem lokalen Zielbranch
+- `/git_merge`: Aufgabenänderungen bei Bedarf committen und mit dem lokalen Zielbranch
   zusammenführen, reviewen, prüfen und das ursprüngliche Checkout per Fast-forward
   aktualisieren. Kein Fetch oder Push; ein Remote ist nicht erforderlich.
-- `/git_push`: Vorhandene Commits des aktuellen Branches veröffentlichen, ohne Commit oder Merge.
-- `/git_pr`: Den Remote-Zielstand in den Arbeitsbranch integrieren, prüfen,
+- `/git_push`: Vorhandene Commits veröffentlichen, ohne Commit oder Merge; bei bereits integriertem Worktree den aktuellen Zielbranch.
+- `/git_pr`: Aufgabenänderungen bei Bedarf committen, den Remote-Zielstand integrieren, prüfen und ohne lokalen Branchwechsel
   veröffentlichen und einen Pull Request erstellen
   beziehungsweise den vorhandenen aktualisieren.
 - `/git_sync`: Den ursprünglichen Projekt-Checkout aktualisieren, wenn er sauber,
@@ -51,9 +51,11 @@ folgende Befehle zur Verfügung:
 Wähle vorher mit `/sessions` und `/use <ID>` die gewünschte Coding-Session.
 Die Befehle starten normale Agentenläufe auf dem Computer dieser Session; die
 vorhandenen Tool-Rechte, Rückfragen und Freigaben gelten weiter. Merge und PR
-benötigen einen ausgewählten Projekt-Worktree. Arbeitsänderungen werden dabei nicht
-automatisch committet. Konflikte, Review-Befunde und fehlgeschlagene Tests halten
-den Auftrag an; sie werden nicht automatisch repariert. Für PRs müssen ein
+benötigen einen ausgewählten Projekt-Worktree. Beide dürfen eindeutig zugehörige Aufgabenänderungen
+vorher committen und beachten Repository-Konventionen sowie ausdrückliche Einschränkungen wie
+„nur vorhandene Commits übernehmen“. Bei unklarer Auswahl fragt der Agent nach. Merge kann klare
+Integrationskonflikte und -fehler beheben; PR stoppt bei Konflikten, notwendigen Review-Befunden
+oder fehlgeschlagenen Checks, statt sie zu reparieren. Für PRs müssen ein
 geeignetes Werkzeug und die Anmeldung beim Git-Hoster auf dem Computer vorhanden
 sein. Ein laufender Auftrag wird durch diese Befehle nicht unterbrochen.
 

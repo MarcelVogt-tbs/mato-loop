@@ -83,6 +83,10 @@ Durch das frühere reine Transkriptionsverhalten verworfene Mikrofonaufnahmen we
 
 Ermittle das frühere Volume `<compose-projekt>_execution_agent_data` mit `docker volume ls`. Stoppe den alten Dienst und kopiere dessen vollständigen Inhalt mit Eigentümern und Rechten in den neuen Agent-Datenpfad. Prüfe insbesondere `agent-state/credential.json` (`0600`) und das private Elternverzeichnis (`0700`). Pairingzustand liegt im Credentialobjekt, nicht in `credential.pending.json`. Bei verlorenem Zugang entkopple und kopple erneut.
 
+### Git-Aufträge mit vorherigem Commit
+
+**Merge in Zielbranch** und **Pull Request erstellen** erlauben jetzt einen Aufgabencommit bei Bedarf ohne zusätzliches Häkchen. Prüfe die [aktuellen Git-Abläufe](git-und-worktrees.md#remote-einrichten-und-veroffentlichen), bevor du die Aktionen erneut startest. Der frühere führende Zusatz `--commit` bleibt für `/git-merge` und `/git-pr` lesbar, ist aber nicht mehr nötig. Bereits gesendete Auftrags-Prompts werden nicht nachträglich umgeschrieben.
+
 ### Entfernte Git-Integration {#removed-git-integration}
 
 Vor dem ersten Neustart eines betroffenen alten Agents:

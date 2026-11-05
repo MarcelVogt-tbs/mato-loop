@@ -111,12 +111,10 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
         self.git("remote", "add", "origin", "https://127.0.0.1:1/unavailable.git", cwd=source)
         arguments = self.arguments(source)
         result = await prepare_worktree(self.config, self.fs, arguments)
+        current = await repository(self.fs, result["path"])
         self.assertEqual(
-            (result["path"], result["branch"]),
-            (
-                arguments.destinations[0],
-                f"worktree-{arguments.session_id[:8]}",
-            ),
+            (result["path"], result["branch"], current["branch"], current["localBranches"]),
+            (arguments.destinations[0], None, None, ["develop"]),
         )
 
     async def test_project_folders_reuse_short_ids_and_disambiguate_collisions(self):
@@ -193,6 +191,23 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
                         ),
                     )
                 self.assertEqual(error.exception.code, code)
+
+    async def test_management_removes_detached_work_without_requiring_a_safety_branch(self):
+        source = self.local_source()
+        path = self.root / "external"
+        self.git("worktree", "add", "--detach", str(path), cwd=source)
+        self.git("commit", "--allow-empty", "-m", "Detached work", cwd=path)
+        await remove_worktree(
+            self.config,
+            self.fs,
+            GitWorktreeRemoveArguments(
+                path=str(path),
+                repository=str(source),
+                commonDirectory=str(source / ".git"),
+                force=True,
+            ),
+        )
+        self.assertFalse(path.exists())
 
     async def test_management_does_not_overwrite_ignored_files_when_switching_branches(self):
         source = self.local_source()
@@ -313,11 +328,11 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
         await prepare_worktree(self.config, self.fs, args)
         self.assertEqual((worktree / "file.txt").read_text(), "session work\n")
 
-    async def test_worktree_chooses_another_name_when_the_branch_exists(self):
+    async def test_worktree_does_not_reserve_a_technical_branch_name(self):
         source, args = await self.managed_source()
         self.git("branch", f"worktree-{args.session_id[:8]}", cwd=source)
         result = await prepare_worktree(self.config, self.fs, args)
-        self.assertEqual(result["path"], args.destinations[1])
+        self.assertEqual(result["path"], args.destinations[0])
 
     async def test_worktree_chooses_another_name_when_the_directory_exists(self):
         source, args = await self.managed_source()
@@ -333,8 +348,11 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
     async def test_worktree_stops_when_all_candidate_names_are_occupied(self):
         source = self.local_source()
         args = self.arguments(source)
+        folder = Path(args.destinations[0]).parent
+        folder.mkdir(parents=True)
+        (folder / ".matoloop-project").write_text(args.project_id)
         for destination in args.destinations:
-            self.git("branch", f"worktree-{Path(destination).name}", cwd=source)
+            Path(destination).mkdir(parents=True)
         with self.assertRaises(AgentError) as error:
             await prepare_worktree(self.config, self.fs, args)
         self.assertEqual(error.exception.code, "git.worktreeFailed")
@@ -398,7 +416,7 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
         for option in ("smudge", "process"):
             self.git("config", "--file", str(filters), f"filter.probe.{option}", script)
         self.git("config", "--file", str(filters), "filter.probe.required", "true")
-        self.git("config", "includeIf.onbranch:worktree-*.path", str(filters), cwd=source)
+        self.git("config", "include.path", str(filters), cwd=source)
         await prepare_worktree(self.config, self.fs, args)
         self.assertFalse(marker.exists())
 
@@ -477,7 +495,7 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
         result = await prepare_worktree(self.config, self.fs, args)
         destination = Path(result["path"])
         destination.rename(self.root / "saved-work")
-        self.git("init", "-b", result["branch"], str(destination))
+        self.git("init", "-b", "replacement", str(destination))
         with self.assertRaises(AgentError) as error:
             await prepare_worktree(self.config, self.fs, args)
         self.assertEqual(error.exception.code, "git.worktreeChanged")
@@ -495,8 +513,9 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
             await prepare_worktree(self.config, self.fs, args)
         self.assertEqual((Path(result["path"]) / "file.txt").read_text(), "old\n")
 
-    async def test_retry_rejects_a_branch_created_after_failed_checkout(self):
+    async def test_retry_uses_the_frozen_base_after_failed_checkout(self):
         source, args = await self.managed_source()
+        base = self.git("rev-parse", "HEAD", cwd=source)
         original = git_module._git
 
         async def fail_checkout(directory, *arguments, **kwargs):
@@ -506,10 +525,22 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(git_module, "_git", fail_checkout), self.assertRaises(AgentError):
             await prepare_worktree(self.config, self.fs, args)
-        self.git("branch", f"worktree-{args.session_id[:8]}", cwd=source)
-        with self.assertRaises(AgentError) as error:
-            await prepare_worktree(self.config, self.fs, args)
-        self.assertEqual(error.exception.code, "git.worktreeChanged")
+        self.git("commit", "--allow-empty", "-m", "New target", cwd=source)
+        result = await prepare_worktree(self.config, self.fs, args)
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=result["path"]), base)
+
+    async def test_recovery_keeps_existing_branch_based_worktrees(self):
+        source, args = await self.managed_source()
+        result = await prepare_worktree(self.config, self.fs, args)
+        branch = f"worktree-{Path(result['path']).name}"
+        self.git("checkout", "-b", branch, cwd=result["path"])
+        state_path = (
+            self.config.data_dir / "worktree-state" / f"{args.owner_id}-{args.session_id}.json"
+        )
+        state = json.loads(state_path.read_text())
+        state["branch"] = branch
+        state_path.write_text(json.dumps(state))
+        self.assertEqual((await prepare_worktree(self.config, self.fs, args))["branch"], branch)
 
     async def test_git_timeout_terminates_children_and_finishes_cleanup(self):
         self.git("init")

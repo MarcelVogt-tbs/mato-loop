@@ -1,6 +1,6 @@
 <template>
-  <q-card flat bordered class="app-surface">
-    <q-card-section>
+  <q-card flat bordered class="app-surface git-workspace-panel">
+    <q-card-section v-if="repository?.repository" class="q-py-sm">
       <div class="text-caption app-muted"><q-icon name="folder_open" class="q-mr-xs" />Arbeitsbereich</div>
       <div class="row items-center no-wrap q-gutter-x-sm">
         <span class="col text-weight-medium git-workspace-path">{{ context.currentDirectory || 'Nicht ausgewählt' }}</span>
@@ -11,19 +11,30 @@
         <q-btn flat dense round class="col-auto" icon="edit" aria-label="Arbeitsbereich bearbeiten" :disable="disabled" @click="openPicker('workspace')" />
       </div>
     </q-card-section>
-    <q-separator />
-    <q-card-section class="git-workspace-status">
+    <q-separator v-if="repository?.repository" />
+    <q-card-section v-if="repository?.repository" class="git-workspace-status q-py-sm">
       <div v-for="row in rows" :key="row.label" class="overflow-hidden">
         <div class="text-caption app-muted q-mb-xs"><q-icon :name="row.icon" class="q-mr-xs" />{{ row.label }}</div>
         <div class="row items-center no-wrap q-gutter-x-sm">
-          <span class="text-weight-medium ellipsis">{{ row.value }}</span>
+          <span class="col text-weight-medium git-workspace-path">{{ row.value }}</span>
           <q-btn flat dense round class="col-auto" icon="edit" :aria-label="`${row.label} bearbeiten`" :disable="row.disabled" @click="row.edit" />
         </div>
       </div>
     </q-card-section>
-    <q-card-actions v-if="project" class="q-px-md q-pb-md q-pt-none">
-      <q-btn flat no-caps icon="tune" label="Projektvorgaben" @click="emit('project-defaults')" />
-    </q-card-actions>
+    <q-card-section v-if="finishAvailable || project" class="git-workspace-footer items-start q-pa-sm">
+      <q-item v-if="finishAvailable" tag="label" :disable="finishDisabled" class="q-px-sm">
+        <q-item-section side top class="q-pr-sm">
+          <q-checkbox :model-value="Boolean(actions.finishEntry)" dense :disable="finishDisabled" aria-label="Review, Commit & Merge einplanen" @update:model-value="emit('finish-queued', $event)" />
+        </q-item-section>
+        <q-item-section>
+          <q-item-label>Review, Commit &amp; Merge einplanen</q-item-label>
+          <q-item-label caption>{{ actions.finishEntry ? 'Eingeplant. Abwählen entfernt den Auftrag.' : 'Mit nötigen Korrekturen. Startet ohne laufende Antwort sofort.' }}</q-item-label>
+        </q-item-section>
+      </q-item>
+      <div v-if="project">
+        <q-btn flat no-caps icon="tune" label="Projektvorgaben" @click="emit('project-defaults')" />
+      </div>
+    </q-card-section>
   </q-card>
 
   <q-dialog :model-value="Boolean(picker)" :transition-duration="0" :maximized="$q.screen.lt.sm" @update:model-value="picker = $event ? picker : null">
@@ -168,9 +179,10 @@ import { useGitActionStore } from './git-actions-store'
 
 const props = defineProps({
   project: { type: Object, default: null }, repository: { type: Object, default: null }, loading: Boolean,
-  targetBranch: { type: String, default: null }, remote: { type: String, default: null }, remoteDisabled: Boolean
+  targetBranch: { type: String, default: null }, remote: { type: String, default: null }, remoteDisabled: Boolean,
+  finishAvailable: Boolean, finishDisabled: Boolean
 })
-const emit = defineEmits(['changed', 'edit-remote', 'project-defaults', 'inspect-worktrees'])
+const emit = defineEmits(['changed', 'edit-remote', 'project-defaults', 'inspect-worktrees', 'finish-queued'])
 const $q = useQuasar(), { confirm } = useConfirm()
 const router = useRouter()
 const chat = useChatStore(), agents = useExecutionAgentStore(), actions = useGitActionStore()
@@ -239,12 +251,14 @@ async function removeWorktree(path) {
   const active = props.repository?.repository === path
   const sessions = worktrees.value.find(item => item.path === path)?.sessions || []
   const impact = sessions.length ? ` ${sessions.length} Session${sessions.length === 1 ? '' : 's'} wechseln zu Lokal: ${sessions.map(item => item.title || 'Ohne Titel').join(', ')}.` : ''
-  const message = `Worktree „${path}“ entfernen? Nicht committete Änderungen sowie zusätzliche und ignorierte Dateien wie .env werden unwiderruflich gelöscht. Branch, Commits und Sessions bleiben erhalten.${impact}`
+  const message = `Worktree „${path}“ entfernen? Nicht committete Änderungen sowie zusätzliche und ignorierte Dateien wie .env werden unwiderruflich gelöscht. Commits, die durch keinen Branch gesichert sind, können danach verloren gehen. Vorhandene Branches und Sessions bleiben erhalten.${impact}`
   if (!await confirm(message, 'Worktree entfernen', { okLabel: 'Entfernen' })) return
   if (await run('remove', { directory: path, force: true }) && active) picker.value = null
 }
 async function selectBranch(name) {
-  if (name !== currentBranch.value && await run('branch-switch', { name })) picker.value = null
+  if (name === currentBranch.value) return
+  if (!currentBranch.value && !await confirm(`Zu Branch „${name}“ wechseln? Commits des losgelösten Stands, die durch keinen Branch gesichert sind, können danach verloren gehen. Sichere sie bei Bedarf zuerst mit „Branch erstellen“.`, 'Losgelösten Stand verlassen', { okLabel: 'Wechseln' })) return
+  if (await run('branch-switch', { name })) picker.value = null
 }
 async function removeBranch(name) {
   if (await confirm(`Lokalen Branch „${name}“ löschen? Der Branch muss vollständig im Zielbranch enthalten sein.`, 'Branch löschen', { okLabel: 'Löschen' })) await run('branch-delete', { name, target_branch: props.targetBranch })
@@ -269,10 +283,25 @@ async function setTarget(target) {
 </script>
 
 <style scoped>
-.git-workspace-status {
+.git-workspace-panel {
+  container-type: inline-size;
+}
+
+.git-workspace-status,
+.git-workspace-footer {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px 16px;
+}
+
+@container (min-width: 36rem) {
+  .git-workspace-status {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .git-workspace-footer {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .git-workspace-path {

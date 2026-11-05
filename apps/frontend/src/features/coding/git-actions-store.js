@@ -82,7 +82,7 @@ export const useGitActionStore = defineStore('git-actions', {
         await this.updateTarget({ target_branch: targetBranch })
       } finally { chat.sessionSettingsPending -= 1 }
     },
-    async run(name, argumentsList = [], commitFirst = false) {
+    async run(name, argumentsList = []) {
       const chat = useChatStore()
       if (this.messageDisabled) return null
       if (!chat.current) {
@@ -98,8 +98,7 @@ export const useGitActionStore = defineStore('git-actions', {
       }
       if (this.messageDisabled) return null
       const sessionId = chat.current?.id
-      const commitFlag = commitFirst && ['git-merge', 'git-pr'].includes(name) ? ' --commit' : ''
-      const result = await chat.send(`/${name}${commitFlag}${argumentsList.map(value => ` ${JSON.stringify(value)}`).join('')}`, {
+      const result = await chat.send(`/${name}${argumentsList.map(value => ` ${JSON.stringify(value)}`).join('')}`, {
         preserveDraft: true, activeFile: null
       })
       return sessionId || result?.sessionId || null

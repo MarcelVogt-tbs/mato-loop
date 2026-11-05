@@ -55,18 +55,30 @@ def test_git_merge_and_pr_follow_explicit_commit_message_rules():
     assert all(COMMIT_RULES in parse_command(f"/{name}").instructions for name in ("git-commit", "git-merge", "git-pr"))
 
 
-@pytest.mark.parametrize("name", ["git-push", "git-pr"])
-def test_publication_uses_project_branches_without_exporting_technical_worktree_names(name):
-    assert all(text in parse_command(f"/{name}").instructions for text in (
+def test_pr_preserves_the_branch_binding_for_retries_and_publishes_detached_work_explicitly():
+    assert all(text in parse_command("/git-pr").instructions for text in (
         "repository publication and branch conventions", "existing branch/upstream mappings",
         "ask if its target or name is unclear", "Do not automatically publish technical worktree branch names",
         "prior Finish or local integration is not required", "normal non-force push",
+        "Keep the current branch or detached HEAD; do not create or switch local branches",
+        "merge that target into the workspace HEAD", "<reviewed-commit>:refs/heads/<publication-branch>",
+        "pass the publication branch explicitly as the PR source",
+    ))
+
+
+def test_push_resolves_integrated_detached_and_named_work_without_requiring_a_pr():
+    assert all(text in parse_command("/git-push").instructions for text in (
+        "push that target branch's current commit", "not the worktree HEAD",
+        "Use a non-technical current branch name", "For detached HEAD or a technical worktree branch, ask",
+        "unless the user already selected one", "Explicit authorization to publish a technical branch name is sufficient",
+        "Prior local integration or a pull request is not required", "normal non-force push",
     ))
 
 
 @pytest.mark.parametrize("name", ["git-review", "git-finish", "git-merge", "git-pr"])
 def test_git_reviews_share_risk_and_simplicity_criteria_without_optional_blockers(name):
     instructions = parse_command(f"/{name}").instructions
+    assert instructions.count(REVIEW_INSTRUCTIONS) == 1
     assert all(text in instructions for text in (
         REVIEW_INSTRUCTIONS, "concurrency and scaling at the expected load", "missing tests for risky logic",
         "significant performance problems", "smallest complete fix", "Optional simplifications do not block integration",
@@ -159,8 +171,8 @@ async def test_command_binds_worktree_target_and_displays_its_prompt_without_run
 
 
 @pytest.mark.parametrize("name", ["git-merge", "git-pr"])
-@pytest.mark.parametrize("commit_first", [False, True])
-async def test_worktree_command_uses_the_current_branch_and_optional_commit_prompt(monkeypatch, name, commit_first):
+@pytest.mark.parametrize("legacy_commit_flag", [False, True])
+async def test_worktree_command_uses_the_current_branch_and_commits_task_changes_by_default(monkeypatch, name, legacy_commit_flag):
     agent_id = uuid4()
     remote = "origin" if name == "git-pr" else None
     session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=agent_id,
@@ -173,11 +185,14 @@ async def test_worktree_command_uses_the_current_branch_and_optional_commit_prom
         worktrees=[{"path": "/project", "branch": "develop", "main": True, "locked": False},
                    {"path": "/worktree", "branch": "renamed", "main": False, "locked": False}],
     )))
-    content = f"/{name}" + (" --commit" if commit_first else "")
+    content = f"/{name}" + (" --commit" if legacy_commit_flag else "")
     command = await prepare_command(AsyncMock(), session, parse_command(content), content)
     assert (command["context"]["branch"], command["context"]["remote"], command["context"]["targetBranch"]) == ("renamed", remote, "develop")
-    assert (COMMIT_INSTRUCTIONS in command["prompt"], "Do not commit pending working changes" in command["prompt"]) == (commit_first, not commit_first)
-    assert ("Do not proceed with pre-existing dirty files in the session checkout;" in command["prompt"]) == (not commit_first)
+    assert all(text in command["prompt"] for text in (
+        COMMIT_INSTRUCTIONS, "this action authorizes a task commit when needed",
+        "Explicit user restrictions on creating commits take precedence",
+        "only after the session checkout is clean", "never commit or discard unrelated changes",
+    ))
     assert command["prompt"].count(COMMIT_RULES) == command["prompt"].count(REVIEW_INSTRUCTIONS) == 1
     message = Message(id=uuid4(), role="user", content=content, provider_data={"_matoloop": {"codingCommand": command}})
     assert message_payload(message)["commandPrompt"] in message_dict(message)["content"]
@@ -236,7 +251,8 @@ async def test_worktree_checks_destination_policy_before_creating_files(monkeypa
 
 
 @pytest.mark.parametrize("outside", [False, True])
-async def test_worktree_creation_binds_an_independent_identity_without_a_remote(monkeypatch, outside):
+@pytest.mark.parametrize("attached", [False, True])
+async def test_worktree_creation_binds_an_independent_identity_without_a_remote(monkeypatch, outside, attached):
     from mato_loop_backend.sessions.coding import select_session_workspace
 
     agent_id = uuid4()
@@ -248,7 +264,7 @@ async def test_worktree_creation_binds_an_independent_identity_without_a_remote(
     client = AsyncMock()
     client.request.return_value = WorktreeResult(
         repository="/project", path="/outside" if outside else destination,
-        branch=f"worktree-{name}",
+        branch=f"worktree-{name}" if attached else None,
         baseCommit="a" * 40, targetBranch="develop", commonDirectory="/project/.git",
         gitDirectory="/project/.git/worktrees/session",
     )
@@ -407,8 +423,16 @@ async def test_git_commands_are_prepared_without_git_prerequisites(monkeypatch, 
     )))
     task = await prepare_command(AsyncMock(), session, parse_command(f"/{name}"))
     assert task["context"]["workspaceDirectory"] == directory
+    assert all(text in task["instructions"] for text in (
+        "Read and follow current repository instructions and referenced guidelines",
+        "Reuse reviews and successful checks only when their evidence still covers the current code",
+        "A commit alone does not invalidate a review of unchanged content",
+        "When this action requires review or checks",
+        "If required evidence is missing, incomplete or stale, perform the necessary review and checks",
+        "Reuse never bypasses current permission and target checks",
+    ))
     assert (
-        "Finish, Merge and PR require a separate worktree and a source branch different from the target. "
+        "Finish, Merge and PR require a separate worktree; if attached, its source branch must differ from the target. "
         "Otherwise stop and ask the user to select a suitable worktree in the Git app."
     ) in task["instructions"]
 

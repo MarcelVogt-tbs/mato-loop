@@ -103,7 +103,7 @@ class RepositoryResult(ExecutionResult):
 class WorktreeResult(ExecutionResult):
     repository: str
     path: str
-    branch: str
+    branch: str | None
     base_commit: str = Field(pattern=r"^[0-9a-f]{40,64}$")
     target_branch: str
     common_directory: str
@@ -245,7 +245,7 @@ async def select_session_workspace(db, session, project, directory=None, *, crea
         except ExecutionClientError as exc:
             raise SessionServiceError(409, exc.code) from exc
         if (created.path not in paths or created.repository != root or created.common_directory != original.common_directory
-                or created.target_branch != target or created.branch != f"worktree-{created.path.rsplit('/', 1)[-1]}"):
+                or created.target_branch != target or created.branch not in {None, f"worktree-{created.path.rsplit('/', 1)[-1]}"}):
             raise SessionServiceError(502, "executionAgent.protocolError")
         directory = created.path
         info = original

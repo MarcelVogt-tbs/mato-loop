@@ -63,7 +63,7 @@ const options = computed(() => {
     { label: 'Lokal', value: 'local' },
     { label: 'Neuer Worktree', value: 'new', disable: Boolean(creationReason), caption: creationReason },
     ...(project.value ? (repository.value?.worktrees || []).filter(item => item.path !== project.value.defaultCurrentDirectory).map((item, index) => ({
-      label: `${item.path.split('/').pop()} · ${item.branch || 'Detached HEAD'}`, value: item.path,
+      label: `${item.path.split('/').pop()} · ${item.branch || 'Losgelöster Stand'}`, value: item.path,
       separatorBefore: index === 0, disable: Boolean(reason) || item.locked, caption: item.locked ? 'Worktree ist in Git gesperrt.' : null
     })) : [])
   ]
