@@ -35,6 +35,7 @@ from mato_loop_backend.sessions.cleanup import descendant_sessions
 from mato_loop_backend.sessions.coding import validate_git_branch, validate_git_remote
 from mato_loop_backend.sessions.service import (
     SessionServiceError,
+    unread_response_clause,
     validate_execution_preferences,
 )
 from mato_loop_backend.sessions.templates import load_template
@@ -305,7 +306,7 @@ def _unread_project_sessions():
     return select(ChatSession.id).join(Message, Message.session_id == ChatSession.id).where(
         ChatSession.project_id == Project.id, ChatSession.user_id == Project.user_id,
         ChatSession.parent_session_id.is_(None), ChatSession.archived_at.is_(None),
-        Message.role == "assistant",
+        unread_response_clause(),
         or_(ChatSession.last_read_at.is_(None), Message.created_at > ChatSession.last_read_at),
     ).correlate(Project).exists()
 

@@ -714,10 +714,6 @@ async def remove_worktree(config, filesystem, arguments: GitWorktreeRemoveArgume
             raise AgentError("git.mainWorktree", "The original checkout cannot be removed")
         if item["locked"]:
             raise AgentError("git.worktreeLocked", "The worktree is locked")
-        if item["branch"] is None:
-            raise AgentError(
-                "git.branchRequired", "Create a branch to retain detached commits before removal"
-            )
         await asyncio.to_thread(_check_metadata, info["commonDirectory"])
         current = await repository(filesystem, arguments.path, executor=_preparation_executor)
         if current["commonDirectory"] != info["commonDirectory"]:
@@ -792,24 +788,18 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
         if (
             not isinstance(state, dict)
             or state.get("path") not in candidates
-            or state.get("branch") != f"worktree-{PurePosixPath(state['path']).name}"
+            or "branch" not in state
+            or state["branch"] not in (None, f"worktree-{PurePosixPath(state['path']).name}")
         ):
             raise AgentError("git.worktreeChanged", "Invalid preparation binding")
         path, branch = state["path"], state["branch"]
     else:
         for candidate in candidates:
-            name = f"worktree-{PurePosixPath(candidate).name}"
-            code, _, _ = await _git(root, "show-ref", "--verify", "--quiet", f"refs/heads/{name}")
-            if code not in {0, 1}:
-                raise AgentError(
-                    "git.worktreeFailed", "The preparation branch could not be inspected"
-                )
             if (
-                code == 1
-                and not os.path.lexists(candidate)
+                not os.path.lexists(candidate)
                 and f"worktree {candidate}".encode() not in registered
             ):
-                path, branch = candidate, name
+                path, branch = candidate, None
                 break
         else:
             raise AgentError("git.worktreeFailed", "No available worktree name was found")
@@ -871,11 +861,18 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
         raise AgentError("git.worktreeChanged", "The preparation base changed")
     state["baseCommit"] = base
     if not exists:
-        code, _, _ = await _git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")
-        if code == 0:
-            raise AgentError("git.worktreeChanged", "The preparation branch changed or is in use")
-        if code not in {0, 1}:
-            raise AgentError("git.worktreeFailed", "The preparation branch could not be inspected")
+        if branch is not None:
+            code, _, _ = await _git(
+                root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"
+            )
+            if code == 0:
+                raise AgentError(
+                    "git.worktreeChanged", "The preparation branch changed or is in use"
+                )
+            if code not in {0, 1}:
+                raise AgentError(
+                    "git.worktreeFailed", "The preparation branch could not be inspected"
+                )
         if os.path.lexists(path):
             filesystem.resolve_directory(path)
             if any(Path(path).iterdir()):
@@ -890,8 +887,7 @@ async def _prepare_worktree(config, filesystem, arguments, state_directory) -> d
             "worktree",
             "add",
             "--no-checkout",
-            "-b",
-            branch,
+            *(("-b", branch) if branch is not None else ("--detach",)),
             "--",
             path,
             base,

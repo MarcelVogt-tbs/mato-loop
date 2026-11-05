@@ -6,7 +6,6 @@ import { useProjectStore } from 'stores/projects'
 import { randomUuid } from 'src/utils/random-id'
 import { Notify } from 'quasar'
 import { useWorkspaceStore } from 'stores/workspace'
-import { useAgentProfileStore } from 'stores/agent-profiles'
 
 export function gitFinishEntry(entry) {
   return {
@@ -19,16 +18,10 @@ export function gitFinishEntry(entry) {
 }
 
 export const useGitActionStore = defineStore('git-actions', {
-  state: () => ({ managing: false, finishScope: null }),
+  state: () => ({ managing: false }),
   getters: {
-    scope() {
-      const chat = useChatStore(), context = chat.activeContext
-      return JSON.stringify([chat.current?.id || chat.sessionsProjectId, context?.preferredExecutionAgentId, context?.currentDirectory])
-    },
-    finishNext() { return this.finishScope !== null && this.finishScope === this.scope },
-    buildSelected() {
-      const id = useChatStore().activeAgentProfileId
-      return (useAgentProfileStore().byId(id)?.baseProfileId || id) === '00000000-0000-4000-8000-000000000004'
+    finishEntry() {
+      return useChatStore().activeQueuedMessages.find(entry => entry.content.trim() === '/git-finish')
     },
     busy() {
       const chat = useChatStore()
@@ -42,7 +35,16 @@ export const useGitActionStore = defineStore('git-actions', {
     }
   },
   actions: {
-    setFinishNext(enabled) { this.finishScope = enabled ? this.scope : null },
+    async setFinishQueued(enabled) {
+      if (this.messageDisabled) return
+      if (enabled) {
+        if (!this.finishEntry) await this.run('git-finish')
+      } else if (this.finishEntry) {
+        this.managing = true
+        try { await useChatStore().removeQueuedMessage(this.finishEntry.id) }
+        finally { this.managing = false }
+      }
+    },
     async workspaceAction(action, values = {}, repository = null) {
       const chat = useChatStore(), session = chat.current
       if (!session || this.messageDisabled || (!['branch-create', 'branch-delete', 'remove'].includes(action) && this.busy)) return false
@@ -80,7 +82,7 @@ export const useGitActionStore = defineStore('git-actions', {
         await this.updateTarget({ target_branch: targetBranch })
       } finally { chat.sessionSettingsPending -= 1 }
     },
-    async run(name, argumentsList = [], commitFirst = false) {
+    async run(name, argumentsList = []) {
       const chat = useChatStore()
       if (this.messageDisabled) return null
       if (!chat.current) {
@@ -96,8 +98,7 @@ export const useGitActionStore = defineStore('git-actions', {
       }
       if (this.messageDisabled) return null
       const sessionId = chat.current?.id
-      const commitFlag = commitFirst && ['git-merge', 'git-pr'].includes(name) ? ' --commit' : ''
-      const result = await chat.send(`/${name}${commitFlag}${argumentsList.map(value => ` ${JSON.stringify(value)}`).join('')}`, {
+      const result = await chat.send(`/${name}${argumentsList.map(value => ` ${JSON.stringify(value)}`).join('')}`, {
         preserveDraft: true, activeFile: null
       })
       return sessionId || result?.sessionId || null

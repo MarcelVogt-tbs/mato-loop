@@ -1344,6 +1344,7 @@ APPLY_PATCH = ToolDefinition(
             "In update hunks, prefix unchanged lines with a space, removals with -, additions with +. "
             "Separate hunks with @@; the first @@ is optional. @@ exact-line searches after that "
             "unique line. Context must match exactly and uniquely; hunks follow source order. "
+            "Context-only hunks are allowed, but an update must change text or move the file. "
             "*** End of File anchors the last hunk at the file end. A hunk containing only + lines "
             "appends to the file, including an empty file; use context for other insertions. "
             "Example:\n*** Begin Patch\n*** Update File: app.py\n@@\n-old()\n+new()\n*** End Patch\n"

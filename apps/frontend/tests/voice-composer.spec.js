@@ -551,6 +551,7 @@ describe('voice attachment composer', () => {
         bubbles: true, cancelable: true, ...options
       })
       input.dispatchEvent(event)
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: options.metaKey ? 'Meta' : 'Control' }))
       return event
     }
 
@@ -679,6 +680,37 @@ describe('voice attachment composer', () => {
     expect(mainButton().dataset.icon).toBe('arrow_upward')
     await click('Nachricht jetzt senden')
     expect(sentMessages[2].options).toEqual({ interrupt: true })
+  })
+
+  it.each([['Control', 'ctrlKey'], ['Meta', 'metaKey']])('temporarily queues with %s, Enter or a send click', async (key, modifier) => {
+    chat.running = true
+    chat.runId = 'run-1'
+    chat.setDraft('Später senden')
+    await nextTick()
+    const input = root.querySelector('.chat-composer__input')
+    const press = () => input.dispatchEvent(new KeyboardEvent('keydown', { key, [modifier]: true, bubbles: true }))
+    press()
+    await nextTick()
+    expect(root.querySelector('button[aria-label="Nachricht vormerken"]').dataset.icon).toBe('schedule_send')
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', [modifier]: true, bubbles: true, cancelable: true }))
+    await click('Nachricht vormerken')
+    expect(sentMessages.map(message => message.options.interrupt)).toEqual([false, false])
+
+    window.dispatchEvent(new KeyboardEvent('keyup', { key }))
+    await nextTick()
+    expect(root.querySelector('button[aria-label="Nachricht jetzt senden"]').dataset.icon).toBe('arrow_upward')
+    const newline = new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true, cancelable: true })
+    input.dispatchEvent(newline)
+    expect(newline.defaultPrevented).toBe(false)
+
+    press()
+    window.dispatchEvent(new Event('blur'))
+    await nextTick()
+    const sendButton = root.querySelector('button[aria-label="Nachricht jetzt senden"]')
+    sendButton.dispatchEvent(new MouseEvent('pointerdown', { [modifier]: true, bubbles: true }))
+    sendButton.click()
+    await nextTick()
+    expect(sentMessages.at(-1).options.interrupt).toBe(false)
   })
 
   it('shows a disabled composer during loading and hides it before redirecting a child session', async () => {

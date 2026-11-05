@@ -305,9 +305,9 @@ NOTIFY = ToolDefinition(
 
 SILENCE = ToolDefinition(
     "silence",
-    "Suppress this run's automatic completion notification, but keep the final response in the session. "
+    "Suppress this run's completion notification and unread indicators. Keep its final response in the session. "
     "Use for automation checks with no reportable change, or when the user asks for a quiet response. "
-    "Do not silence a normal chat response merely because it is short. Still provide a final response. "
+    "Do not silence normal chat merely because the response is short. "
     "Errors, approvals, questions, and explicit notify notices are unaffected.",
     ToolArguments, _silence, group="agent", label="Abschluss ohne Benachrichtigung", icon="notifications_off",
 )
@@ -350,6 +350,7 @@ TODO_WRITE = ToolDefinition(
             group="agent",
             label="Aufgaben aktualisieren",
             icon="checklist",
+            output_preview=False,
         )
 
 VARIABLE_READ = ToolDefinition(
@@ -392,6 +393,7 @@ SECRET_INPUT = ToolDefinition(
             "Durable storage via customize_matoloop requires an explicit user request.",
             SecretInputArguments,
             collect_secret_input,
+            output_preview=False,
             group="agent",
             label="Secret einmalig abfragen",
             icon="password",

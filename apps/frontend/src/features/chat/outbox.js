@@ -5,12 +5,10 @@ import { useWorkspaceStore } from 'src/stores/workspace'
 import { buildAttachmentFormData, releaseAttachmentDrafts } from 'src/features/chat/attachments'
 import { newSessionQueueKey, queueKeyForEntry, sanitizedSessionOptions, sessionCreatePayload, sessionScopeKey, sortSessions } from 'src/features/chat/state'
 import { errorDescriptor } from 'src/utils/api-errors'
-import { compareChatOutboxEntries, deleteChatOutboxEntry, deleteChatOutboxEntries, saveChatOutboxEntry, saveChatOutboxEntries } from 'src/features/chat/outbox-storage'
+import { compareChatOutboxEntries, deleteChatOutboxEntry, deleteChatOutboxEntries, saveChatOutboxEntry } from 'src/features/chat/outbox-storage'
 import { notifyError } from 'src/utils/notifications'
 import { randomUuid } from 'src/utils/random-id'
 import { OUTBOX_RETRY_MS } from 'src/features/chat/model'
-import { gitFinishEntry, useGitActionStore } from 'src/features/coding/git-actions-store'
-import { useConfirm } from 'src/composables/confirm'
 
 export const outboxActions = {
     async send(content, { preserveDraft = false, interrupt = false, activeFile } = {}) {
@@ -71,24 +69,10 @@ export const outboxActions = {
     async queueMessage(content, { preserveDraft = false, interrupt = false, activeFile } = {}) {
       const ownerUserId = this.draftOwnerUserId
       const loadVersion = this.outboxLoadVersion
-      const queueKey = this.activeQueueKey
       if (!ownerUserId) return null
       const text = String(content || '').trim()
       const attachments = preserveDraft ? [] : [...this.activeAttachmentDraft]
       if (!text && !attachments.length) return null
-      const git = useGitActionStore()
-      const requestedFinishScope = git.finishNext && git.buildSelected && !interrupt && !preserveDraft && text && !text.startsWith('/')
-        ? git.finishScope : null
-      let finishScope = requestedFinishScope
-      if (finishScope && useWorkspaceStore().hasDirtyEditors) {
-        if (!await useConfirm().confirm(
-          'Es gibt ungespeicherte Editoränderungen. Möchtest du die Nachricht diesmal ohne automatischen Abschluss senden?',
-          'Ohne Autoabschluss senden?', { okLabel: 'Ohne Autoabschluss senden', okColor: 'primary' }
-        )) return null
-        if (ownerUserId !== this.draftOwnerUserId || loadVersion !== this.outboxLoadVersion
-          || queueKey !== this.activeQueueKey || git.scope !== requestedFinishScope) return null
-        finishScope = null
-      }
       const sessionId = this.current?.id || null
       const entry = {
         id: randomUuid(),
@@ -120,10 +104,9 @@ export const outboxActions = {
           ? { continuationRunId: this.runId } : {}),
         paused: false
       }
-      const entries = finishScope ? [entry, gitFinishEntry(entry)] : [entry]
       this.pendingOutboxEntry = { ...entry, preserveDraft }
       try {
-        await saveChatOutboxEntries(entries.map(toRaw))
+        await saveChatOutboxEntry(toRaw(entry))
       } catch (error) {
         notifyError({}, 'Die Nachricht konnte nicht auf diesem Gerät vorgemerkt werden.')
         return null
@@ -131,13 +114,12 @@ export const outboxActions = {
         if (this.pendingOutboxEntry?.id === entry.id) this.pendingOutboxEntry = null
       }
       if (ownerUserId !== this.draftOwnerUserId || loadVersion !== this.outboxLoadVersion) {
-        await deleteChatOutboxEntries(entries.map((item) => item.id)).catch(() => {})
+        await deleteChatOutboxEntry(entry.id).catch(() => {})
         return null
       }
-      if (requestedFinishScope && git.finishScope === requestedFinishScope) git.setFinishNext(false)
       const key = queueKeyForEntry(entry)
       if (!this.queuedMessages[key]) this.queuedMessages[key] = []
-      this.queuedMessages[key].push(...entries)
+      this.queuedMessages[key].push(entry)
       this.queuedMessages[key].sort(compareChatOutboxEntries)
       if (!this.queuedMessages[key][0].paused) delete this.queuedSendPausedSessions[key]
       if (!preserveDraft) {
@@ -154,6 +136,9 @@ export const outboxActions = {
       const index = queue ? queue.findIndex((entry) => entry.id === id) : -1
       if (index < 0) return null
       const entry = queue[index]
+      const paused = entry.paused
+      // Block background delivery before waiting for local deletion.
+      entry.paused = true
       try {
         await deleteChatOutboxEntries((this.queuedMessages[key] || queue)
           .filter((item) => item.id === id || item.afterRunId === id).map((item) => item.id))
@@ -163,10 +148,13 @@ export const outboxActions = {
         }
       } catch (error) {
         if (error?.response?.status !== 404) {
+          entry.paused = paused
+          if (!paused) this.scheduleQueueDrain(0)
           notifyError(error)
           return null
         }
       }
+      entry.paused = paused
       this.queuedMessages[key] = (this.queuedMessages[key] || queue).filter((item) => item.id !== id && item.afterRunId !== id)
       const remaining = this.queuedMessages[key]
       releaseAttachmentDrafts(entry.attachments)
@@ -177,6 +165,7 @@ export const outboxActions = {
         this.queuedSendPausedSessions[key] = true
       } else {
         delete this.queuedSendPausedSessions[key]
+        this.scheduleQueueDrain(0)
       }
       return entry
     },

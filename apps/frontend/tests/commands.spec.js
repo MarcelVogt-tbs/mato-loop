@@ -8,7 +8,7 @@ import { quasarOptions } from './quasar-options'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() } }))
-vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: vi.fn().mockResolvedValue(true) }) }))
+vi.mock('src/composables/confirm', () => ({ useConfirm: vi.fn(() => ({ confirm: vi.fn().mockResolvedValue(true) })) }))
 
 import GitActionList from '../src/features/coding/GitActionList.vue'
 import GitApp from '../src/features/coding/GitApp.vue'
@@ -28,6 +28,7 @@ import { api } from 'src/boot/axios'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { useSidebarSessions } from '../src/features/chat/useSidebarSessions'
 import { useWorkspaceStore } from '../src/stores/workspace'
+import { useConfirm } from 'src/composables/confirm'
 
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.useRealTimers() })
@@ -112,7 +113,30 @@ it('queues a selected command during a run without consuming its draft', async (
   expect(send).toHaveBeenCalledWith('/git-review', { preserveDraft: true, activeFile: null })
 })
 
-it('explains and blocks publication without a remote in the Git app', async () => {
+it('allows removing a queued finish command without a connected computer or repository catalog', async () => {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const chat = useChatStore()
+  chat.outboxLoaded = true
+  chat.current = { id: 'session', projectId: 'project', preferredExecutionAgentId: 'agent', currentDirectory: '/repo' }
+  chat.queuedMessages.session = [{ id: 'finish', content: '/git-finish' }]
+  useProjectStore().items = [{ id: 'project', name: 'Projekt' }]
+  useExecutionAgentStore().items = [{ id: 'agent', connected: false }]
+  const remove = vi.spyOn(chat, 'removeQueuedMessage').mockImplementation(async () => {
+    chat.queuedMessages.session = []
+  })
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp({ render: () => h(GitApp) })
+  app.use(pinia).use(Quasar, quasarOptions).mount(root)
+  ;[...root.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === 'Repository').click()
+  await vi.waitFor(() => expect(root.querySelector('[aria-labelledby="git-settings-title"] [aria-label="Review, Commit & Merge einplanen"]')
+    ?.closest('.git-workspace-footer')?.textContent).toContain('Projektvorgaben'))
+  root.querySelector('[aria-label="Review, Commit & Merge einplanen"]').click()
+  await vi.waitFor(() => expect(remove.mock.calls).toEqual([['finish']]))
+})
+
+it('queues publication without a remote or a connected computer in the Git app', async () => {
   const pinia = createPinia()
   setActivePinia(pinia)
   const commands = useCommandStore(), chat = useChatStore()
@@ -120,22 +144,22 @@ it('explains and blocks publication without a remote in the Git app', async () =
   commands.items = [{ source: 'git', name: 'git-sync', label: 'Pull (Fast-forward)', disabledReason: 'Remote einrichten, um zu veröffentlichen.' }, { source: 'git', name: 'git-remote', label: 'Remote einrichten' }]
   chat.outboxLoaded = true
   chat.current = { id: 'session', preferredExecutionAgentId: 'agent', currentDirectory: '/repo', workspaceMode: 'local' }
-  useExecutionAgentStore().items = [{ id: 'agent', connected: true }]
-  const run = vi.spyOn(useGitActionStore(), 'run')
+  useExecutionAgentStore().items = [{ id: 'agent', connected: false }]
+  const send = vi.spyOn(chat, 'send').mockResolvedValue({})
   root = document.createElement('div')
   document.body.append(root)
-  app = createApp({ render: () => h(GitActionList) })
+  app = createApp({ render: () => h(GitApp) })
   app.use(pinia).use(Quasar, quasarOptions).mount(root)
+  ;[...root.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === 'Repository').click()
   await nextTick()
   root.querySelector('.q-item').click()
-  expect([root.textContent.includes('Remote einrichten, um zu veröffentlichen.'), root.textContent.includes('/git-'), root.querySelectorAll('.q-item').length, run.mock.calls.length])
-    .toEqual([true, false, 1, 0])
+  expect(send).toHaveBeenCalledWith('/git-sync', { preserveDraft: true, activeFile: null })
 })
 
-it.each(['git-merge', 'git-pr', 'git-push', 'git-sync'])('applies the shared commit checkbox only to merge and PR (%s)', async name => {
+it.each(['git-merge', 'git-pr'])('submits the default integration action without commit options (%s)', async name => {
   const pinia = createPinia()
   setActivePinia(pinia)
-  useCommandStore().items = ['git-review', 'git-commit', 'git-merge', 'git-pr', 'git-push', 'git-sync']
+  useCommandStore().items = ['git-review', 'git-commit', 'git-merge', 'git-finish', 'git-pr', 'git-push', 'git-sync']
     .map(name => ({ name, label: name, source: 'git' }))
   const chat = useChatStore()
   chat.outboxLoaded = true
@@ -145,16 +169,45 @@ it.each(['git-merge', 'git-pr', 'git-push', 'git-sync'])('applies the shared com
   app = createApp({ render: () => h(GitActionList) })
   app.use(pinia).use(Quasar, quasarOptions).mount(root)
   const action = [...root.querySelectorAll('.q-item--clickable')].find(item => item.querySelector('.q-item__label').textContent === name)
-  expect(root.querySelector('[role="checkbox"]').closest('.q-item').previousElementSibling.textContent).toContain('git-pr')
   action.click()
-  await nextTick()
-  root.querySelector('[role="checkbox"]').click()
-  await nextTick()
-  action.click()
-  await nextTick()
-  expect(send.mock.calls.map(([content]) => content)).toEqual([
-    `/${name}`, `/${name}${['git-merge', 'git-pr'].includes(name) ? ' --commit' : ''}`
+  expect(send).toHaveBeenCalledWith(`/${name}`, { preserveDraft: true, activeFile: null })
+})
+
+it('groups Git actions without finish scheduling in the daily actions', async () => {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  useChatStore().outboxLoaded = true
+  useCommandStore().items = ['git-init', 'git-review', 'git-commit', 'git-merge', 'git-finish', 'git-pr', 'git-push', 'git-sync']
+    .map(name => ({ name, label: name, source: 'git' }))
+  root = document.createElement('div')
+  app = createApp({ render: () => h(GitActionList) })
+  app.use(pinia).use(Quasar, quasarOptions).mount(root)
+  expect([
+    [...root.querySelectorAll('[role="heading"]')].map(item => item.textContent),
+    [...root.querySelectorAll('.q-item--clickable:not(label)')].map(item => item.querySelector('.q-item__label').textContent),
+    [...root.querySelectorAll('[role="checkbox"]')].map(item => item.getAttribute('aria-label'))
+  ]).toEqual([
+    ['Prüfen & sichern', 'Übernehmen', 'Remote'],
+    ['git-review', 'git-commit', 'git-merge', 'git-finish', 'git-pr', 'git-push', 'git-sync'],
+    []
   ])
+})
+
+it('offers repository initialization in settings rather than daily actions', async () => {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const chat = useChatStore()
+  chat.outboxLoaded = true
+  chat.current = { id: 'session', preferredExecutionAgentId: 'agent', currentDirectory: '/folder' }
+  useCommandStore().items = [{ name: 'git-init', label: 'Git-Repository anlegen', source: 'git' }]
+  const run = vi.spyOn(useGitActionStore(), 'run').mockResolvedValue('session')
+  root = document.createElement('div')
+  app = createApp({ render: () => h(GitApp) })
+  app.use(pinia).use(Quasar, quasarOptions).mount(root)
+  ;[...root.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === 'Repository').click()
+  await nextTick()
+  root.querySelector('[aria-labelledby="git-settings-title"] .q-item--clickable').click()
+  expect([root.querySelector('[aria-label="Agentenaufträge"]').textContent, run.mock.calls]).toEqual(['', [['git-init']]])
 })
 
 it('does not recheck a repository when computer polling replaces unchanged agents', async () => {
@@ -223,6 +276,7 @@ it.each([false, true])('offers optional worktree removal when deleting an unopen
   await vi.waitFor(() => expect(document.querySelector('.q-dialog [role="checkbox"]')).not.toBeNull())
   const checkbox = document.querySelector('.q-dialog [role="checkbox"]')
   expect(checkbox.getAttribute('aria-checked')).toBe('false')
+  expect(document.querySelector('.q-dialog').textContent).toContain('Commits, die durch keinen Branch gesichert sind, können danach verloren gehen.')
   if (remove) checkbox.click()
   await nextTick()
   ;[...document.querySelectorAll('.q-dialog button')].find(button => button.textContent === 'Löschen').click()
@@ -468,6 +522,24 @@ it('lists the current workspace first and only activates a workspace through its
   await vi.waitFor(() => expect([parentPath, rowActions, select.mock.calls]).toEqual(['/worktrees/', 0, [['select', { directory: '/worktrees/first', create: false }, '/worktrees/selected']]]))
 })
 
+it.each([false, true])('asks before leaving a detached HEAD and respects the decision (%s)', async accepted => {
+  const confirm = vi.fn().mockResolvedValue(accepted)
+  vi.mocked(useConfirm).mockReturnValueOnce({ confirm })
+  mountPanel({ repository: { repository: '/repo', branch: null, localBranches: ['task'] } })
+  const select = vi.spyOn(useGitActionStore(), 'workspaceAction').mockResolvedValue(true)
+  root.querySelector('[aria-label="Branch bearbeiten"]').click()
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="Branch task markieren"]')).not.toBeNull())
+  document.querySelector('[aria-label="Branch task markieren"]').click()
+  await nextTick()
+  document.querySelector('[aria-label="Branch wechseln"]').click()
+  await vi.waitFor(() => expect(confirm).toHaveBeenCalledWith(
+    expect.stringContaining('Commits des losgelösten Stands, die durch keinen Branch gesichert sind, können danach verloren gehen.'),
+    'Losgelösten Stand verlassen', { okLabel: 'Wechseln' }
+  ))
+  await nextTick()
+  expect(select.mock.calls).toEqual(accepted ? [['branch-switch', { name: 'task' }, '/repo']] : [])
+})
+
 it('edits the target separately from branch switching', async () => {
   const chat = mountPanel({
     repository: { repository: '/repo', branch: 'main', localBranches: ['main', 'develop'] }, targetBranch: 'main'
@@ -490,7 +562,7 @@ it('removes an inactive worktree from the workspace dialog without selecting it'
   const chat = mountPanel({ project: { defaultExecutionAgentId: 'other-agent', defaultCurrentDirectory: '/other' },
     repository: { repository: '/repo', branch: 'main', localBranches: ['main'],
     worktrees: [{ path: '/repo', branch: 'main', main: true, locked: false },
-      { path: '/worktrees/task', branch: 'task', main: false, locked: false }] } })
+      { path: '/worktrees/task', branch: null, main: false, locked: false }] } })
   vi.spyOn(chat, 'refreshSession').mockResolvedValue()
   api.post.mockResolvedValue({ data: { ok: true } })
   root.querySelector('[aria-label="Arbeitsbereich bearbeiten"]').click()

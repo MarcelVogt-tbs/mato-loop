@@ -20,6 +20,7 @@ from mato_loop_backend.sessions.coding import (
     inspect_repository,
 )
 from mato_loop_backend.sessions.commands import (
+    command_catalog,
     parse_command,
     prepare_command,
     registered_commands,
@@ -38,17 +39,65 @@ from mato_loop_backend.settings import AiSettings, TrustLevel
 from mato_loop_backend.tools.sessions import _message_item
 
 
-def test_browser_and_telegram_share_portable_coding_commands():
+async def test_browser_and_telegram_share_portable_coding_commands(monkeypatch):
     assert set(OUTPUT_FORMATS) == {item.name for item in registered_commands() if item.name.startswith("git-")}
     assert {command.command for command in telegram_commands() if command.command.startswith("git_")} == {
         item.name.replace("-", "_") for item in registered_commands()
     }
     assert (parse_command("/git-review").name, parse_command("/git_review@my_bot").name) == ("git-review", "git-review")
     assert parse_command("Explain /git-merge") is None
+    monkeypatch.setattr("mato_loop_backend.sessions.git_commands.inspect_repository", AsyncMock(side_effect=AssertionError("Catalog must not probe Git")))
+    catalog = await command_catalog(AsyncMock(), ChatSession(user_id=uuid4()))
+    assert {item["name"]: item["disabledReason"] for item in catalog if item["source"] == "git"} == dict.fromkeys(OUTPUT_FORMATS)
 
 
 def test_git_merge_and_pr_follow_explicit_commit_message_rules():
     assert all(COMMIT_RULES in parse_command(f"/{name}").instructions for name in ("git-commit", "git-merge", "git-pr"))
+
+
+def test_pr_preserves_the_branch_binding_for_retries_and_publishes_detached_work_explicitly():
+    assert all(text in parse_command("/git-pr").instructions for text in (
+        "repository publication and branch conventions", "existing branch/upstream mappings",
+        "ask if its target or name is unclear", "Do not automatically publish technical worktree branch names",
+        "prior Finish or local integration is not required", "normal non-force push",
+        "Keep the current branch or detached HEAD; do not create or switch local branches",
+        "merge that target into the workspace HEAD", "<reviewed-commit>:refs/heads/<publication-branch>",
+        "pass the publication branch explicitly as the PR source",
+    ))
+
+
+def test_push_resolves_integrated_detached_and_named_work_without_requiring_a_pr():
+    assert all(text in parse_command("/git-push").instructions for text in (
+        "push that target branch's current commit", "not the worktree HEAD",
+        "Use a non-technical current branch name", "For detached HEAD or a technical worktree branch, ask",
+        "unless the user already selected one", "Explicit authorization to publish a technical branch name is sufficient",
+        "Prior local integration or a pull request is not required", "normal non-force push",
+    ))
+
+
+@pytest.mark.parametrize("name", ["git-review", "git-finish", "git-merge", "git-pr"])
+def test_git_reviews_share_risk_and_simplicity_criteria_without_optional_blockers(name):
+    instructions = parse_command(f"/{name}").instructions
+    assert instructions.count(REVIEW_INSTRUCTIONS) == 1
+    assert all(text in instructions for text in (
+        REVIEW_INSTRUCTIONS, "concurrency and scaling at the expected load", "missing tests for risky logic",
+        "significant performance problems", "smallest complete fix", "Optional simplifications do not block integration",
+    ))
+    assert "unresolved findings" not in instructions and "Stop on concrete findings" not in instructions
+
+
+@pytest.mark.parametrize("name", ["git-merge", "git-finish"])
+def test_git_merge_prepares_the_workspace_before_requiring_a_clean_original(name):
+    instructions = parse_command(f"/{name}").instructions
+    assert instructions.index("original checkout may remain dirty") < instructions.index("Merge the current local target")
+    assert instructions.index("Only before updating the original checkout") < instructions.index("both clean working trees")
+    assert "fast-forward-only merge" in instructions
+
+
+def test_git_results_include_full_stored_commit_messages_even_when_integration_is_blocked():
+    assert all(text in OUTPUT_RULES for text in (
+        "full stored message from Git", "subject, body and trailers verbatim", "even if later integration is blocked",
+    ))
 
 
 @pytest.mark.parametrize("branch", ["--upload-pack=bad", "main..other", "main:other", "bad\nbranch"])
@@ -69,7 +118,7 @@ async def test_non_git_provider_supports_arguments_without_a_computer(monkeypatc
     parsed = commands.parse_command("/example-task some arguments")
     catalog = await commands.command_catalog(AsyncMock(), session)
     await commands.prepare_command(AsyncMock(), session, parsed, "/example-task some arguments")
-    assert (parsed, [item["source"] for item in catalog], prepare.await_args.args[-1]) == (command, ["example"], "/example-task some arguments")
+    assert (parsed, [item["source"] for item in catalog if item["name"] == command.name], prepare.await_args.args[-1]) == (command, ["example"], "/example-task some arguments")
 
 
 def test_command_registration_rejects_underscore_names():
@@ -122,8 +171,8 @@ async def test_command_binds_worktree_target_and_displays_its_prompt_without_run
 
 
 @pytest.mark.parametrize("name", ["git-merge", "git-pr"])
-@pytest.mark.parametrize("commit_first", [False, True])
-async def test_worktree_command_uses_the_current_branch_and_optional_commit_prompt(monkeypatch, name, commit_first):
+@pytest.mark.parametrize("legacy_commit_flag", [False, True])
+async def test_worktree_command_uses_the_current_branch_and_commits_task_changes_by_default(monkeypatch, name, legacy_commit_flag):
     agent_id = uuid4()
     remote = "origin" if name == "git-pr" else None
     session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=agent_id,
@@ -136,10 +185,14 @@ async def test_worktree_command_uses_the_current_branch_and_optional_commit_prom
         worktrees=[{"path": "/project", "branch": "develop", "main": True, "locked": False},
                    {"path": "/worktree", "branch": "renamed", "main": False, "locked": False}],
     )))
-    content = f"/{name}" + (" --commit" if commit_first else "")
+    content = f"/{name}" + (" --commit" if legacy_commit_flag else "")
     command = await prepare_command(AsyncMock(), session, parse_command(content), content)
     assert (command["context"]["branch"], command["context"]["remote"], command["context"]["targetBranch"]) == ("renamed", remote, "develop")
-    assert (COMMIT_INSTRUCTIONS in command["prompt"], "Do not commit pending working changes" in command["prompt"]) == (commit_first, not commit_first)
+    assert all(text in command["prompt"] for text in (
+        COMMIT_INSTRUCTIONS, "this action authorizes a task commit when needed",
+        "Explicit user restrictions on creating commits take precedence",
+        "only after the session checkout is clean", "never commit or discard unrelated changes",
+    ))
     assert command["prompt"].count(COMMIT_RULES) == command["prompt"].count(REVIEW_INSTRUCTIONS) == 1
     message = Message(id=uuid4(), role="user", content=content, provider_data={"_matoloop": {"codingCommand": command}})
     assert message_payload(message)["commandPrompt"] in message_dict(message)["content"]
@@ -165,7 +218,7 @@ async def test_command_ignores_a_git_target_from_another_computer(monkeypatch):
 
 
 async def test_local_command_rejects_a_changed_publication_target(monkeypatch):
-    session = ChatSession(id=uuid4(), user_id=uuid4(), current_directory="/project", workspace_mode="local")
+    session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=uuid4(), current_directory="/project", workspace_mode="local")
     info = RepositoryResult(
         repository="/project", remotes=["origin"], defaultRemote="origin", defaultBranch="main", branch="main",
         remoteIdentities={"origin": "a" * 64},
@@ -198,7 +251,8 @@ async def test_worktree_checks_destination_policy_before_creating_files(monkeypa
 
 
 @pytest.mark.parametrize("outside", [False, True])
-async def test_worktree_creation_binds_an_independent_identity_without_a_remote(monkeypatch, outside):
+@pytest.mark.parametrize("attached", [False, True])
+async def test_worktree_creation_binds_an_independent_identity_without_a_remote(monkeypatch, outside, attached):
     from mato_loop_backend.sessions.coding import select_session_workspace
 
     agent_id = uuid4()
@@ -210,7 +264,7 @@ async def test_worktree_creation_binds_an_independent_identity_without_a_remote(
     client = AsyncMock()
     client.request.return_value = WorktreeResult(
         repository="/project", path="/outside" if outside else destination,
-        branch=f"worktree-{name}",
+        branch=f"worktree-{name}" if attached else None,
         baseCommit="a" * 40, targetBranch="develop", commonDirectory="/project/.git",
         gitDirectory="/project/.git/worktrees/session",
     )
@@ -317,7 +371,7 @@ def test_followup_revalidates_the_git_target(changed_field):
 
 
 @pytest.mark.parametrize("source", ["codingFinish", "followup"])
-def test_followup_message_is_visibly_host_generated_and_preserves_model_provenance(source):
+def test_followup_message_shows_the_sent_prompt_and_preserves_model_provenance(source):
     from mato_loop_backend.agent.projection import command_message_content
 
     message = Message(id=uuid4(), role="user", content="/git-commit", provider_data={"_matoloop": {
@@ -326,7 +380,7 @@ def test_followup_message_is_visibly_host_generated_and_preserves_model_provenan
     }})
     payload = message_payload(message)
     assert (payload["sourceType"], payload["commandPrompt"], "not a new user request" in command_message_content(message)) == (
-        source, "Commit", True,
+        source, "Internal instructions", True,
     )
 
 
@@ -359,13 +413,28 @@ def test_command_task_survives_compaction_and_model_session_retrieval():
     assert all(marker in text for text in (summary, retrieved["content"]))
 
 
-async def test_init_is_prepared_for_a_workspace_without_a_repository(monkeypatch):
-    session = ChatSession(id=uuid4(), user_id=uuid4(), current_directory="/project", workspace_mode="local")
+@pytest.mark.parametrize("name", list(OUTPUT_FORMATS))
+@pytest.mark.parametrize("directory", [None, "/project"])
+async def test_git_commands_are_prepared_without_git_prerequisites(monkeypatch, name, directory):
+    session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=uuid4() if directory else None,
+                          current_directory=directory, workspace_mode="local")
     monkeypatch.setattr("mato_loop_backend.sessions.git_commands.inspect_repository", AsyncMock(return_value=RepositoryResult(
         repository=None, remotes=[], defaultRemote=None, defaultBranch=None, branch=None,
     )))
-    task = await prepare_command(AsyncMock(), session, parse_command("/git-init"))
-    assert task["context"]["workspaceDirectory"] == "/project"
+    task = await prepare_command(AsyncMock(), session, parse_command(f"/{name}"))
+    assert task["context"]["workspaceDirectory"] == directory
+    assert all(text in task["instructions"] for text in (
+        "Read and follow current repository instructions and referenced guidelines",
+        "Reuse reviews and successful checks only when their evidence still covers the current code",
+        "A commit alone does not invalidate a review of unchanged content",
+        "When this action requires review or checks",
+        "If required evidence is missing, incomplete or stale, perform the necessary review and checks",
+        "Reuse never bypasses current permission and target checks",
+    ))
+    assert (
+        "Finish, Merge and PR require a separate worktree; if attached, its source branch must differ from the target. "
+        "Otherwise stop and ask the user to select a suitable worktree in the Git app."
+    ) in task["instructions"]
 
 
 def test_existing_session_cannot_change_workspace_mode():

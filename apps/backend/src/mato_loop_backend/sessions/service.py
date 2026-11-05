@@ -361,6 +361,22 @@ async def get_owned_session(
     return item
 
 
+def unread_response_clause():
+    tool_message = aliased(Message, name="silence_message")
+    silenced = select(tool_message.id).where(
+        tool_message.session_id == Message.session_id,
+        tool_message.role == "tool",
+        tool_message.provider_data["_matoloop"]["runId"].as_string()
+        == Message.provider_data["_matoloop"]["runId"].as_string(),
+        tool_message.provider_data["_matoloop"]["toolName"].as_string() == "silence",
+        tool_message.provider_data["_matoloop"]["suppressResponseNotification"].as_boolean().is_(True),
+    ).correlate(Message).exists()
+    return and_(
+        Message.role == "assistant",
+        or_(Message.error_code.is_not(None), ~silenced),
+    )
+
+
 def has_unread_messages(
     item: ChatSession, last_assistant_message_at: datetime | None
 ) -> bool:
@@ -428,7 +444,7 @@ async def session_detail_payload(
                 func.max(Message.created_at).filter(
                     Message.role.in_(VISIBLE_MESSAGE_ROLES)
                 ),
-                func.max(Message.created_at).filter(Message.role == "assistant"),
+                func.max(Message.created_at).filter(unread_response_clause()),
                 func.count(Message.id).filter(Message.role == "user"),
                 latest_performance_provider_data,
             ).where(Message.session_id == item.id)
@@ -886,7 +902,7 @@ async def list_sessions(
             Message.session_id.label("session_id"),
             func.max(Message.created_at).label("last_message_at"),
             func.max(Message.created_at)
-            .filter(Message.role == "assistant")
+            .filter(unread_response_clause())
             .label("last_assistant_message_at"),
             func.max(Message.created_at)
             .filter(Message.role == "user")

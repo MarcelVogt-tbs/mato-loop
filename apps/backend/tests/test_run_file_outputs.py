@@ -710,7 +710,7 @@ def test_hidden_artifact_references_are_omitted_without_redacting_technical_hist
     ("reused-one-image", True), ("reused-two-images", True),
 ])
 async def test_runtime_ephemeral_images_survive_requests_without_files(
-    tmp_path, monkeypatch, terminal, vision,
+    tmp_path, monkeypatch, terminal, vision, skill_library,
 ):
 
     reused_ids = terminal.startswith("reused-")
@@ -925,7 +925,7 @@ async def test_ephemeral_images_preserve_the_provider_prefix_across_tool_rounds(
 
 @pytest.mark.parametrize("export_stl", [False, True])
 async def test_runtime_two_previews_are_internal_and_explicit_stl_is_retained(
-    tmp_path, monkeypatch, export_stl
+    tmp_path, monkeypatch, export_stl, skill_library
 ):
 
     finalize = AgentRuntime._finalize_run_files
@@ -1431,7 +1431,7 @@ async def test_recovery_finalizes_live_files_and_pending_json_before_errors(
     assert files.pending_run_ids() == ()
 
 
-async def test_runtime_publishes_attachment_rows_only_before_final_assistant(tmp_path, monkeypatch):
+async def test_runtime_publishes_attachment_rows_only_before_final_assistant(tmp_path, monkeypatch, skill_library):
 
     finalize = AgentRuntime._finalize_run_files
     db, run, requests, _, events = await _runtime_setup(

@@ -20,6 +20,7 @@ from mato_loop_backend.integrations.registry import (
     effective_integration_contributions,
     installed_integration_tools,
     integration_adapter,
+    integration_output_preview,
 )
 from mato_loop_backend.permissions.policy import PermissionDecision, PermissionRequest
 from mato_loop_backend.providers.base import ToolCall
@@ -289,6 +290,13 @@ class ToolRegistry:
         self._allow_handler = allow_handler
         self.actions_by_capability = {action.capability: action for action in self.policy_actions()}
 
+    def output_preview(self, name: str | None, *, recorded: bool | None = None) -> bool:
+        definition = self._definitions.get(name) or self._operation_definitions.get(name)
+        if definition is not None:
+            return definition.output_preview
+        declared = integration_output_preview(name)
+        return declared if declared is not None else recorded is not False
+
     async def allow(
         self, context: ToolContext, request: PermissionRequest
     ) -> bool:
@@ -388,6 +396,7 @@ class ToolRegistry:
             approval_edit_fields=contribution.approval_edit_fields,
             permission_reason_instruction=contribution.permission_reason_instruction,
             snapshot_policy=contribution.snapshot_policy,
+            output_preview=contribution.output_preview,
         )
 
     def inactive_capability_groups(
@@ -857,4 +866,8 @@ class ToolRegistry:
     ) -> ToolResult:
         from mato_loop_backend.tools.executor import execute_definition
 
-        return await execute_definition(self, call, context, tool)
+        result = await execute_definition(self, call, context, tool)
+        result.metadata.pop("outputPreview", None)
+        if tool.source_type == "integration" and not tool.definition.output_preview:
+            result.metadata["outputPreview"] = False
+        return result

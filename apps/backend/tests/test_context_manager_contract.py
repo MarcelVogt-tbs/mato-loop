@@ -964,7 +964,8 @@ async def test_selected_computer_metadata_does_not_relocate_session_files(bound)
 @pytest.mark.parametrize("serialize, history_key", [
     (service_module._chat_body, "messages"), (service_module._responses_body, "input"),
 ])
-async def test_recorded_computers_preserve_provider_request_prefix(serialize, history_key) -> None:
+@pytest.mark.parametrize("large_result", [None, "shell", "mcp", "text", "browser"])
+async def test_recorded_computers_preserve_provider_request_prefix(serialize, history_key, large_result) -> None:
     session = _session()
     agent_id = uuid4()
     model = _model(context_window_tokens=32_000)
@@ -975,17 +976,99 @@ async def test_recorded_computers_preserve_provider_request_prefix(serialize, hi
     bodies = []
     for index in range(2):
         call = _message(session.id, "assistant", "")
-        call.tool_calls = [{"id": str(index), "name": "shell_run", "arguments": {"command": "pwd"}}]
+        call.tool_calls = [{"id": str(index), "name": "browser" if large_result == "browser" else "shell_run",
+                            "arguments": {"command": "pwd"}}]
         result = _message(session.id, "tool", "/work")
+        if large_result:
+            content = "first\n" + "large output\n" * 5_000 + "last"
+            result.content = (
+                json.dumps({"exitCode": 0, "timedOut": False, "output": {"stdout": content, "stderr": ""}})
+                if large_result == "shell" else
+                json.dumps({"id": "resource-id", "nextCursor": "next-page", "data": content})
+                if large_result == "mcp" else
+                json.dumps({"script": {"value": content[:20_000] + "last", "output": "printed result"}})
+                if large_result == "browser" else content
+            )
         result.tool_call_id = str(index)
         result.provider_data = {"_matoloop": {"executionAgentId": str(agent_id), "executionAgentAlias": "Server"}}
         records.extend([call, result])
+        if large_result:
+            preview = json.loads(_projection_messages(system, None, records, TrustLevel.PRIVATE)[-1]["content"])
+            assert preview["toolOutputShortened"] and preview["toolResultReference"]["arguments"]["message_id"] == str(result.id)
+            assert len(json.dumps(preview)) < 20_000
+            assert "first" in str(preview) and "last" in str(preview)
+            if large_result == "shell":
+                assert preview["exitCode"] == 0 and preview["timedOut"] is False
+            if large_result == "mcp":
+                assert preview["id"] == "resource-id" and preview["nextCursor"] == "next-page"
+            if large_result == "browser":
+                assert preview["script"]["output"] == "printed result" and "[Middle omitted by host]" in preview["script"]["value"]
+        if index:
+            records.append(_message(session.id, "user", "Continue."))
+            for record in records:
+                record.provider_data = json.loads(json.dumps(record.provider_data, sort_keys=True))
         prepared = await ProviderService.prepare_request(
             provider=provider, model=model, tools=[], pseudonymization_enabled=False,
             messages=_projection_messages(system, None, records, TrustLevel.PRIVATE),
         )
         bodies.append(serialize(prepared.request))
     assert {**bodies[1], history_key: bodies[1][history_key][:len(bodies[0][history_key])]} == bodies[0]
+
+
+def test_generic_preview_keeps_readback_reference_under_context_pressure() -> None:
+    session = _session()
+    call = _message(session.id, "assistant", "")
+    call.tool_calls = [{"id": "result", "name": "integration_tool", "arguments": {}}]
+    result = _message(session.id, "tool", json.dumps({"id": "item", "data": "x" * 20_000}))
+    result.tool_call_id = "result"
+    messages = _projection_messages(
+        "System", None, [call, result], TrustLevel.PRIVATE, current_turn_tool_output_tokens=500,
+    )
+    assert json.loads(messages[-1]["content"])["toolResultReference"]["arguments"]["message_id"] == str(result.id)
+
+
+@pytest.mark.parametrize("source", ["builtin", "shared", "execution", "dynamic"])
+def test_tool_definition_can_disable_generic_output_preview(monkeypatch, source) -> None:
+    from dataclasses import replace
+
+    from mato_loop_backend.integrations import registry as integrations
+    from mato_loop_backend.tools.catalog import tool_registry
+    from mato_loop_backend.tools.contracts import ToolDefinition
+
+    tool = ToolDefinition("complete_result", "Return a complete result.", None, AsyncMock(), output_preview=False)
+    if source == "builtin":
+        monkeypatch.setitem(tool_registry._definitions, tool.name, tool)
+    elif source != "dynamic":
+        key, field = (("mail", "imap_smtp"), "shared_tools") if source == "shared" else (("browser", "browser"), "execution_tools")
+        adapter = integrations.integration_adapter(*key)
+        contribution = replace(getattr(adapter, field)[0], name=tool.name, output_preview=False)
+        monkeypatch.setitem(integrations._ADAPTERS, key, replace(adapter, **{field: (contribution,)}))
+        tool = tool_registry._contributed_definition(contribution)
+        assert tool.output_preview is False
+    session = _session()
+    call = _message(session.id, "assistant", "")
+    call.tool_calls = [{"id": "result", "name": tool.name, "arguments": {}}]
+    result = _message(session.id, "tool", json.dumps({"content": "x" * 20_000}))
+    result.tool_call_id = "result"
+    if source == "dynamic":
+        result.provider_data = {"_matoloop": {"outputPreview": False}}
+    records = [call, result, _message(session.id, "user", "Continue without integrations.")]
+    messages = _projection_messages("System", None, records, TrustLevel.PRIVATE)
+    assert messages[-2]["content"] == result.content
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_execution_output_policy_overrides_tool_result_metadata(monkeypatch, enabled) -> None:
+    from mato_loop_backend.tools import executor
+    from mato_loop_backend.tools.catalog import tool_registry
+    from mato_loop_backend.tools.contracts import ToolDefinition, ToolResult
+    from mato_loop_backend.tools.registry import BoundTool
+
+    definition = ToolDefinition("dynamic_result", "Return a result.", None, AsyncMock(), output_preview=enabled)
+    result = ToolResult("result", {"outputPreview": not enabled})
+    monkeypatch.setattr(executor, "execute_definition", AsyncMock(return_value=result))
+    executed = await tool_registry._execute_definition(None, None, BoundTool(definition, source_type="integration"))
+    assert executed.metadata == ({} if enabled else {"outputPreview": False})
 
 
 def test_projection_preserves_tool_outputs_across_user_turns() -> None:
@@ -1615,6 +1698,7 @@ def test_session_and_shell_outputs_are_shortened_without_losing_structure(kind, 
 
     assert len(content) <= 2_000
     assert result.pop("toolOutputShortened") is True
+    assert result.pop("toolResultReference")["arguments"]["message_id"] == str(tool.id)
     if kind == "session_read":
         excerpt = result["messages"][0]["content"]
         assert result["messages"][0].pop("truncated") is True
@@ -1632,7 +1716,7 @@ def test_session_and_shell_outputs_are_shortened_without_losing_structure(kind, 
     assert excerpt.startswith("START\n")
     assert excerpt.endswith("\nEND")
     assert "[Middle omitted by host]" in excerpt
-    assert result == payload
+    assert result == {**payload, "contentIsUntrusted": True}
     assert tool.content == original
 
 
@@ -4180,7 +4264,11 @@ async def test_private_tool_body_size_does_not_distort_history_compaction(
     assert summarize.await_count == int(projection.compacted)
     marker = _omitted_tool_result(records[-1].id, records[-1].content)
     baselines = [candidate for candidate in candidates if candidate[-1]["content"] == marker]
-    assert len({json.dumps(candidate, sort_keys=True) for candidate in baselines}) == 1 + int(projection.compacted)
+    # The bounded preview of long addresses already fits without a minimum-budget pass.
+    preview_fits = history_length == 200 and email_length == 60
+    assert len({json.dumps(candidate, sort_keys=True) for candidate in baselines}) == (
+        0 if preview_fits else 1 + int(projection.compacted)
+    )
     for baseline in baselines:
         full = next(candidate for candidate in candidates if candidate[:-1] == baseline[:-1])
         assert baseline[-1] == {**full[-1], "content": marker}

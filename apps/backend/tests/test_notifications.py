@@ -539,16 +539,18 @@ async def test_agent_notification_uses_current_owner_and_session(monkeypatch) ->
     deliver.assert_awaited_once_with(create.return_value)
 
 
-@pytest.mark.parametrize("outcome", ["notify", "silence", "normal", "other_run", "tool_error", "runtime_error"])
+@pytest.mark.parametrize("outcome", ["notify", "silence", "normal", "other_run", "tool_error", "runtime_error", "earlier_unread"])
 async def test_response_notification_uses_persisted_current_run_tool_outcome(request, monkeypatch, outcome) -> None:
     if not request.config.getoption("--memory-db"):
         pytest.skip("requires the migrated development PostgreSQL database")
     from types import SimpleNamespace
 
     from mato_loop_backend.agent.tool_round import persist_tool_result
+    from mato_loop_backend.api.routes.projects import _unread_project_sessions
     from mato_loop_backend.media.attachments import AttachmentService
-    from mato_loop_backend.models import AgentRun
+    from mato_loop_backend.models import AgentRun, Project
     from mato_loop_backend.providers.base import ToolCall
+    from mato_loop_backend.sessions.service import list_sessions
     from mato_loop_backend.settings import InstanceLimits, TrustLevel
     from mato_loop_backend.tools.arguments import NotifyArguments, ToolArguments
     from mato_loop_backend.tools.contracts import ToolResult
@@ -565,9 +567,14 @@ async def test_response_notification_uses_persisted_current_run_tool_outcome(req
                 user.username = f"quiet-{user.id}"
                 db.add(user)
                 await db.flush()
-                session = ChatSession(user_id=user.id, title="Check", last_read_at=datetime.now(UTC) - timedelta(seconds=1))
+                project = Project(user_id=user.id, name="Check")
+                db.add(project)
+                await db.flush()
+                session = ChatSession(user_id=user.id, project_id=project.id, title="Check", last_read_at=datetime.now(UTC) - timedelta(seconds=1))
                 db.add(session)
                 await db.flush()
+                if outcome == "earlier_unread":
+                    db.add(Message(session_id=session.id, role="assistant", content="Earlier unread answer"))
                 run = AgentRun(id=uuid4(), session_id=session.id)
                 db.add(run)
                 await db.flush()
@@ -596,6 +603,18 @@ async def test_response_notification_uses_persisted_current_run_tool_outcome(req
                 await db.flush()
                 await NotificationService.create_for_message(db, message)
                 kinds = list((await db.scalars(select(Notification.kind).where(Notification.user_id == user.id))).all())
-                assert kinds == ([] if outcome in {"notify", "silence"} else ["session.response"])
+                assert kinds == ([] if outcome in {"notify", "silence", "earlier_unread"} else ["session.response"])
+
+                async def serialize(_db, item, **kwargs):
+                    return {"id": str(item.id), "unread": kwargs["has_unread_messages"]}
+
+                summaries = await list_sessions(
+                    db, user.id, page_size=10, cursor=None, project_id=project.id,
+                    standalone=False, session_serializer=serialize, sort="recent",
+                )
+                project_unread = await db.scalar(
+                    select(_unread_project_sessions()).select_from(Project).where(Project.id == project.id)
+                )
+                assert (summaries["items"][0]["unread"], project_unread) == (outcome != "silence",) * 2
     finally:
         await engine.dispose()

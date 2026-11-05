@@ -41,10 +41,11 @@ requires restoring and resending that entry. An optional predecessor ID requires
 run in the same session; failed/cancelled predecessors pause dependent requests rather than
 authorizing their effects. Resuming does not bypass this check. Removing a pending request
 also removes its pending dependent follow-up; removal loses the race once a run exists.
-The frontend uses the optional `after_run_id` message field for an explicit opt-in
-[`/git-finish` follow-up](commands.md#agent-flow-contract), saving both messages together
-locally before sending either. The backend generates no Git follow-ups. Queued commands
-capture their Git binding on admission and revalidate it at dispatch.
+The Git checkbox queues or removes an ordinary
+[`/git-finish` message](commands.md#agent-flow-contract), without adding a predecessor binding.
+The backend generates no Git follow-ups. Queued commands capture their Git binding on
+admission and revalidate it at dispatch. The UI shows the slash invocation while pending
+and the captured transmitted prompt after admission, without a special follow-up label.
 Session admissions run independently, including messages arriving while another admission
 waits on a computer. At most one admission per session is in flight; shared background
 shutdown cancels these tasks together with the processors. Ordinary database locks remain
@@ -161,6 +162,7 @@ The implementation owners are `agent/prompts.py` (system parts/reminders), `agen
   Moving Memory envelopes from synthetic assistant answers into their user messages intentionally invalidates older prefixes from the changed contract onward. It preserves turn snapshots, consecutive-envelope deduplication and subsequent serialized-prefix reuse without migrating stored messages.
 - **Freeze retrieved session summaries with their turn.** Dreaming may update the current snapshot, but that does not replace cached tool-round context or historical Memory envelopes. History invalidation changes the source revision; summary regeneration alone does not. Summary reading hints stay in the turn-local envelope, and disabled-summary requests keep the existing prompt contract unchanged. [Session-summary tests](../apps/backend/tests/test_session_summaries.py) compare Chat Completions and Responses prefixes across tool rounds and database-loaded follow-ups.
 - **Compare serialized input, not just object equality.** Chat Completions and Responses encode tool arguments with sorted JSON keys, including nested objects, so JSONB roundtrips do not change equivalent argument strings. Preserve semantic array/tool order and omit host-only projection fields from provider payloads.
+- **Bound new tool evidence, not its age.** Large text results receive a deterministic per-result preview (16,000 characters plus retrieval framing) with an exact `session_tool_result_read` reference. Canonical content stays unchanged. Known result shapes retain structured outcomes; other results use explicitly partial preview text with bounded metadata. Browser scripts retain short printed output and bounded text excerpts of returned values; tiny budgets may retain only effect metadata. Further shortening of generic previews keeps the exact read-back reference instead of cutting JSON. Tool definitions and integration contributions declare the host-only `output_preview` policy, enabled by default. Checklist state, secret references, already-bounded result-reader pages and Webfetch's dedicated excerpt explicitly disable the generic preview in their definitions. The policy is not a model argument or profile setting and never bypasses visibility checks or context-pressure fitting. Historical results use current installed shared/Agent declarations, independent of enabled instances or current tool availability. Execution records opt-outs in private message metadata for dynamically contributed tools without a static declaration, including after their integration is removed; current static declarations take precedence. Unknown historical names without a recorded opt-out use previews. Remote MCP schemas and response data cannot set the policy. Previews are rebuilt from currently authorized content identically across tool rounds and persisted follow-ups; existing context-pressure omission remains separate. This intentionally changes older oversized result prefixes; the patch context-hunk clarification also changes its offered schema description. Tool ordering, routing and preparation reuse remain unchanged.
 - **Avoid unnecessary schema churn.** Plan/Build share focused availability defaults. Discoveries belong to the session, not the selected profile; current profile availability and delegation limits still restrict them. Stable eligible tools retain registry/discovery order; required search, resource policy and availability still restrict offers. Budget exhaustion retains previously offered still-available schemas with `tool_choice=auto`; the executor independently prohibits effects. Schemas in a server's chat template may precede history, so legitimate new discoveries can invalidate its prefix.
   Adding explicit administrator options to `delete_path` and its shared file guidance intentionally changes the stable prefix for requests offering these contracts; subsequent rounds retain the same schemas and guidance.
 - **Append delegated updates.** Parent-agent instructions and deferred child results retain their originating messages on replay. Changing the stable delegation contract/schema intentionally invalidates older prefixes; follow-up instructions and results do not rewrite retained exchanges.
@@ -177,8 +179,10 @@ Run affected tests when changing these boundaries. Under unchanged authorization
 
 Host/profile prompt changes, including the global response-language contract, intentionally
 invalidate older prefixes. The configured language remains stable across tool rounds;
-changing it for a later run changes system context. Git output formats are saved with
-their command turn rather than retroactively replacing historical command instructions.
+changing it for a later run changes system context. Git review/merge instructions and output
+formats are saved with their command turn rather than retroactively replacing historical
+command instructions. Updating these contracts changes newly prepared command turns, not
+earlier snapshots or the shared system prefix.
 Automatic follow-ups
 append ordinary turns with host provenance. Workspace occupancy is not injected or inferred
 from stored run statuses or file timestamps. Legacy private occupancy metadata is ignored,

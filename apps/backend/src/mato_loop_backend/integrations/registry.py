@@ -110,6 +110,15 @@ def installed_integration_tools(
     return tuple(tools.values())
 
 
+def integration_output_preview(name: str | None) -> bool | None:
+    # Use installed host declarations, not enabled instances or remote MCP schemas.
+    for adapter in _ADAPTERS.values():
+        for tool in (*adapter.shared_tools, *adapter.execution_tools):
+            if tool.name == name:
+                return tool.output_preview
+    return None
+
+
 def validate_integration(instance: IntegrationInstance) -> None:
     adapter = integration_adapter(instance.integration_type, instance.adapter_type)
     if adapter is None:

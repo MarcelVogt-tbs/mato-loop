@@ -427,8 +427,6 @@ def message_payload(
     runtime_data = (item.provider_data or {}).get("_matoloop", {})
     command = runtime_data.get("codingCommand") if item.role == "user" and isinstance(runtime_data, dict) else None
     command_prompt = command.get("prompt") if isinstance(command, dict) else None
-    if isinstance(command, dict) and runtime_data.get("source", {}).get("type") in {"codingFinish", "followup"}:
-        command_prompt = command.get("label")
     run_id = runtime_data.get("runId") if isinstance(runtime_data, dict) else None
     agent_profile_id = (
         runtime_data.get("agentProfileId") if isinstance(runtime_data, dict) else None

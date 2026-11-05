@@ -45,18 +45,31 @@
           <div class="q-pa-md q-gutter-y-md">
             <div v-if="!repository" class="app-muted" role="status">{{ loading ? 'Repository wird geprüft …' : 'Wähle einen Computer und Workspace mit installiertem Git.' }}</div>
             <div v-else-if="!repository.repository" class="app-muted" role="status">Im gewählten Workspace ist noch kein Git-Repository vorhanden.</div>
-            <section v-if="repository" aria-labelledby="git-actions-title">
+            <section aria-labelledby="git-actions-title">
               <h2 id="git-actions-title" class="text-subtitle2 q-mt-none q-mb-sm">Aktionen</h2>
               <q-card flat bordered class="app-surface overflow-hidden">
-                <GitActionList :disabled="saving || !online" :target-branch="targetBranch" :auto-merge="autoMerge" @refresh="refreshCommands" />
+                <GitActionList :disabled="saving" :target-branch="targetBranch" @refresh="refreshCommands" />
               </q-card>
             </section>
-            <section v-if="repository?.repository" aria-labelledby="git-settings-title">
+            <section v-if="repository?.repository || initCommand || finishAvailable" aria-labelledby="git-settings-title">
               <h2 id="git-settings-title" class="text-subtitle2 q-mt-none q-mb-sm">Einstellungen</h2>
-              <GitWorkspacePanel :project="project" :repository="repository" :loading="loading" :target-branch="targetBranch"
+              <GitWorkspacePanel v-if="repository?.repository || finishAvailable" :project="project" :repository="repository" :loading="loading" :target-branch="targetBranch"
                 :remote="remote" :remote-disabled="busy || !online" @changed="refresh" @edit-remote="openRemote"
+                :finish-available="finishAvailable" :finish-disabled="finishDisabled" @finish-queued="setFinishQueued"
                 @inspect-worktrees="refreshRepository({ worktreeDetails: true })"
                 @project-defaults="projectOpen = true" />
+              <q-card v-if="!repository?.repository && initCommand" flat bordered class="app-surface">
+                <q-list>
+                  <q-item clickable :disable="saving || commands.messageDisabled" @click="initRepository">
+                    <q-item-section avatar><q-icon :name="initCommand.icon" color="primary" /></q-item-section>
+                    <q-item-section>
+                      <q-item-label>{{ initCommand.label }}</q-item-label>
+                      <q-item-label caption>{{ initCommand.description }}</q-item-label>
+                    </q-item-section>
+                    <q-item-section side><q-icon name="play_arrow" /></q-item-section>
+                  </q-item>
+                </q-list>
+              </q-card>
             </section>
           </div>
         </q-scroll-area>
@@ -121,7 +134,8 @@ const additions = computed(() => gitState.value?.files.some(file => file.additio
 const deletions = computed(() => gitState.value?.files.some(file => file.deletions == null) ? '–' : (gitState.value?.files || []).reduce((sum, file) => sum + file.deletions, 0))
 const fileFilter = ref('')
 const filteredFiles = computed(() => (gitState.value?.files || []).filter(file => file.path.toLocaleLowerCase().includes((fileFilter.value || '').toLocaleLowerCase())))
-const { refresh: refreshCommands } = useCommandCatalog(visible)
+const { commands: catalog, refresh: refreshCommands } = useCommandCatalog(visible)
+const initCommand = computed(() => catalog.items.find(command => command.name === 'git-init'))
 const saving = ref(false), remoteOpen = ref(false), projectOpen = ref(false)
 const remoteName = ref('origin'), remoteUrl = ref('')
 const remoteScope = ref(null)
@@ -142,8 +156,12 @@ const projectDefaults = computed(() => project.value?.defaultExecutionAgentId ==
 const remote = computed(() => boundContext.value && Object.hasOwn(binding.value, 'remote')
   ? binding.value.remote : projectDefaults.value?.gitRemote || repository.value?.defaultRemote)
 const targetBranch = computed(() => (boundContext.value ? binding.value.targetBranch : null) || projectDefaults.value?.gitTargetBranch || repository.value?.defaultBranch)
-const autoMerge = computed(() => repository.value?.worktrees?.some(item => item.path === repository.value.repository && !item.main
-  && item.path !== projectDefaults.value?.defaultCurrentDirectory))
+const finishAvailable = computed(() => Boolean(commands.finishEntry || (catalog.items.some(command => command.source === 'git' && command.name === 'git-finish')
+  && repository.value?.worktrees?.some(item => item.path === repository.value.repository && !item.main
+    && item.path !== projectDefaults.value?.defaultCurrentDirectory))))
+const finishDisabled = computed(() => commands.finishEntry
+  ? commands.messageDisabled || commands.finishEntry.id === chat.queueSendingEntryId
+  : saving.value || (catalog.loading && !catalog.loaded) || commands.messageDisabled)
 const activeRun = computed(() => Boolean(chat.running || chat.runId || chat.current?.activeRun))
 const busy = computed(() => saving.value || commands.busy)
 const remoteChanged = computed(() => boundContext.value && binding.value.remoteIdentity
@@ -168,6 +186,12 @@ watch(() => chat.current?.id, (id, previous) => {
 watch(scopeKey, () => { remoteOpen.value = false; projectOpen.value = false })
 
 function selectRemote(name) { remoteUrl.value = repository.value?.remoteUrls?.[name] || '' }
+async function setFinishQueued(enabled) {
+  try { await commands.setFinishQueued(enabled) } catch { /* Central API toast. */ }
+}
+async function initRepository() {
+  try { await commands.run('git-init') } catch { /* Central API toast. */ }
+}
 function openRemote() {
   remoteScope.value = scopeKey.value
   remoteName.value = remote.value || repository.value?.defaultRemote || 'origin'

@@ -54,6 +54,8 @@ Forgejo Runner does not own host Docker retention. Configure image, layer, Build
 
 Each workflow uses its host's Actions cache for locked UV and Yarn package downloads. Yarn's global cache override is disabled so `YARN_CACHE_FOLDER` selects the persisted cache in CI and development containers. Cache misses only make dependency installation slower; they never skip `uv sync --frozen` or `yarn install --immutable`. Docker image builds separately reuse normal builder layers and BuildKit package-cache mounts, whose retention remains a runner-administrator responsibility.
 
+The backend test job uses a separate UV cache key for its development and documentation dependencies, distinct from the migration job's production-only install. It saves a new cache immediately after successful dependency installation, even if later checks or tests fail. Backend system and Python installation have separate steps so their timings remain visible; native system packages use `--no-install-recommends`, matching the backend images.
+
 Backend and agent test jobs report their slowest tests using the test runners' built-in duration reporting. Develop publication checks the current branch head before building and again before publishing; superseded revisions skip unnecessary image builds, and revisions superseded during a build skip publication.
 
 Develop and release publication workflows share one serialized concurrency group without automatic cancellation: a release and develop push can reference the same immutable version. Superseded develop revisions still skip building or publishing through the branch-head checks. Other refs supersede older runs of that ref. Interrupted publication can leave an incomplete image pair; only use tags from successful runs. Retries reuse validated existing fixed images. Runs already queued with an older workflow retain its concurrency settings.
@@ -73,6 +75,8 @@ Passing the default suites does not imply all integration tests ran. Backend Pos
 Keep tests with the behavior they exercise. Approval-card interactions share one component suite; notification-center tests cover the notification UI. Reused backend setup lives in domain-specific `tests/*_helpers.py` modules, not in another test module. Prefer standard-library helpers such as `contextlib.nullcontext` to no-op session context classes; retain custom fakes when their lifecycle is itself under test.
 
 Backend tests with incomplete database mocks explicitly request `mock_db_settings`; settings behavior is not patched automatically for the entire suite. Frontend component tests reuse `tests/quasar-options.js` for real Quasar components and directives. Supply required router context and mock only browser APIs unavailable in jsdom instead of suppressing Vue warnings.
+
+Runtime tests that resolve default skills explicitly request `skill_library`, which publishes the bundled packages into a per-test temporary directory. They must pass with an empty `MATO_LOOP_DATA_DIR`, without relying on initialized development storage.
 
 Keep compatibility cases only for a concrete supported boundary: persisted user data, supported upgrades, or active interfaces. Retire obsolete fixtures with their removed feature. A guard that rejects an obsolete pending approval is still a safety boundary, not an alternate execution path to preserve for its own sake.
 

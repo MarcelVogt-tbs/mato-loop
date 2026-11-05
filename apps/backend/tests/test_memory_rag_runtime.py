@@ -71,7 +71,7 @@ from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig, Us
 from mato_loop_backend.tools.contracts import ToolResult
 from mato_loop_backend.tools.registry import EffectiveToolSet
 
-pytestmark = pytest.mark.usefixtures("mock_db_settings")
+pytestmark = pytest.mark.usefixtures("mock_db_settings", "skill_library")
 
 
 @pytest.mark.parametrize("change", [None, "revision", "memory_access", "session_access", "project", "episode_project", "trust", "compacted"])
