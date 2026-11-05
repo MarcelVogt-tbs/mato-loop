@@ -146,22 +146,12 @@ class OpenScadIntegrationService:
         db: AsyncSession,
         integration_id: UUID,
         *,
-        user_id: UUID,
         settings_owner_id: UUID | None = None,
     ) -> IntegrationSettings:
-        initial = await _load_integrations(db, settings_owner_id)
-        current = cls._find(initial, integration_id)
-        if current is None:
-            raise IntegrationSettingsError("integration.notFound")
-        if current.execution_agent_id is None:
-            raise IntegrationSettingsError("executionAgent.notFound")
-        await cls._owned_agent(db, user_id, current.execution_agent_id)
         settings = await _load_integrations(db, settings_owner_id, for_update=True)
         instance = cls._find(settings, integration_id)
         if instance is None:
             raise IntegrationSettingsError("integration.notFound")
-        if instance.execution_agent_id != current.execution_agent_id:
-            raise IntegrationSettingsError("integration.changed")
         settings.instances = [item for item in settings.instances if item.id != integration_id]
         await _save_settings(db, settings, settings_owner_id)
         await db.commit()

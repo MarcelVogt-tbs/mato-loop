@@ -750,6 +750,7 @@ async def test_openscad_crud_payload_and_ownership_shape(monkeypatch) -> None:
     request.config.binary_path = "/opt/openscad"
     updated = await update_openscad_integration(integration_id, request, user, db)
     assert updated["instances"][0]["config"] == {"binaryPath": "/opt/openscad"}
+    db.scalar.return_value = None
     await delete_openscad_integration(integration_id, user, db)
     assert settings.instances == []
     assert db.commit.await_count == 3

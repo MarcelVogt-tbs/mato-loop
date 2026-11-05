@@ -22,6 +22,8 @@ Session layout stores bounded app/tab IDs, validated file targets and explorer p
 
 `backend` adapters execute inside MatoLoop and cannot be assigned an Agent. `agent` adapters bind exactly one owned Agent, require its selected live connection and a statically known advertised operation. At most one instance of an Agent-adapter kind exists per Agent. A separate authorized computer-switch call may change the run binding between model steps; integration arguments cannot choose a different executor.
 
+Deleting a stored integration requires authorization for its settings scope, not a live or still registered Agent.
+
 The backend owns validation, policies, credentials, approvals and canonical results even when the Agent performs the operation. There is no automatic failover, backend fallback, retry or redelivery after an uncertain effect.
 
 ## Resource Policies

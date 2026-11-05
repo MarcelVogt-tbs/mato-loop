@@ -913,7 +913,6 @@ async def delete_openscad_integration(
         await OpenScadIntegrationService.delete(
             db,
             integration_id,
-            user_id=user.id,
             settings_owner_id=owner_id,
         )
     except IntegrationSettingsError as exc:
