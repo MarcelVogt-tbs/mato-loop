@@ -90,6 +90,7 @@ class ToolContribution:
     approval_edit_fields: tuple[ApprovalEditField, ...] = ()
     permission_reason_instruction: str | None = None
     snapshot_policy: ToolSnapshotPolicy | None = None
+    output_preview: bool = True
 
 
 @dataclass(frozen=True, slots=True)

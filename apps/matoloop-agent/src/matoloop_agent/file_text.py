@@ -183,7 +183,6 @@ def parse_patch(
                         line=start + body_index + 1,
                     )
                 old, new = [], []
-                changed = False
                 end_of_file = False
                 while body_index < len(body) and not body[body_index].startswith("@@"):
                     line = body[body_index]
@@ -210,14 +209,19 @@ def parse_patch(
                         old.append(line[1:])
                     if line[0] in " +":
                         new.append(line[1:])
-                    changed |= line[0] in "+-"
-                if not changed or old == new:
+                if not old and not new:
                     raise AgentError.invalid_arguments(
-                        "Each hunk must add or remove text and produce an actual change.",
+                        "Each hunk must contain context, added or removed lines.",
                         field="patchText",
                         line=start + body_index,
                     )
                 hunks.append((locator, tuple(old), tuple(new), end_of_file))
+            if hunks and destination is None and all(old == new for _, old, new, _ in hunks):
+                raise AgentError.invalid_arguments(
+                    "Include at least one actual change in an update.",
+                    field="patchText",
+                    line=start,
+                )
             if not hunks and destination is None:
                 raise AgentError.invalid_arguments(
                     "Provide an update hunk or *** Move to: destination.",

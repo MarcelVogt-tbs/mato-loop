@@ -24,6 +24,7 @@ class PatchTextTests(unittest.TestCase):
             ("old\r\n", "@@\n+last\n*** End of File", "old\r\nlast\r\n"),
             ("a\nb\nc\n", "@@\n+last\n@@\n a\n-b\n-c\n+B", "a\nB\nlast\n"),
             ("a\nb\nc\n", "@@ a\n-b\n+B\n@@\n-c\n+C", "a\nB\nC\n"),
+            ("a\nb\nc\n", "@@\n a\n@@\n-c\n+C", "a\nb\nC\n"),
             ("a\n\n", "@@\n-\n+last\n*** End of File", "a\nlast\n"),
             ("a\r\n", "@@\n-a\n+A", "A\r\n"),
         ]

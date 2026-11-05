@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
 MAX_ATTACHMENT_EXCERPT_CHARACTERS = 20_000
 MAX_WEBFETCH_CONTENT_CHARACTERS = 15_000
+MAX_TOOL_PREVIEW_CHARACTERS = 16_000
 SESSION_TOOL_RESULT_CHUNK_CHARACTERS = 12_000
 
 
@@ -222,6 +223,38 @@ def _model_file_tool_result(content: str) -> str:
         if translated != payload
         else content
     )
+
+
+def _model_tool_preview(message_id: UUID, content: str) -> str:
+    if len(content) <= MAX_TOOL_PREVIEW_CHARACTERS:
+        return content
+    shortened = _shorten_evidence_output(content, MAX_TOOL_PREVIEW_CHARACTERS)
+    if shortened is None or shortened == '{"toolOutputOmitted":true}':
+        try:
+            original = json.loads(content)
+        except (TypeError, json.JSONDecodeError):
+            original = None
+        # Keep small metadata (IDs, cursors, status) outside the explicitly partial text preview.
+        payload = {}
+        metadata_budget = 2_000
+        for key, value in original.items() if isinstance(original, dict) else ():
+            size = len(json.dumps({key: value}, ensure_ascii=False))
+            if size <= min(512, metadata_budget):
+                payload[key] = value
+                metadata_budget -= size
+        half = MAX_TOOL_PREVIEW_CHARACTERS // 2
+        payload["preview"] = content[:half] + _SHORTENED_CONTENT + content[-half:]
+        while len(json.dumps(payload, ensure_ascii=False)) > MAX_TOOL_PREVIEW_CHARACTERS:
+            half //= 2
+            payload["preview"] = content[:half] + _SHORTENED_CONTENT + content[-half:]
+    else:
+        payload = json.loads(shortened)
+        if not isinstance(payload, dict):
+            payload = {"preview": payload}
+    return json.dumps({
+        **payload, "toolOutputShortened": True, "contentIsUntrusted": True,
+        "toolResultReference": _tool_result_reference(message_id, content),
+    }, ensure_ascii=False, separators=(",", ":"))
 
 
 def _model_browser_inspection(content: str) -> str:
@@ -684,6 +717,8 @@ def _projection_messages(
     omitted_tool_result_ids: set[UUID] | None = None,
     available_secret_references: set[str] | None = None,
 ) -> list[dict[str, Any]]:
+    from mato_loop_backend.tools.catalog import tool_registry
+
     records = [item for item in records if item.error_code is None]
     if available_records is not None:
         available_records = [item for item in available_records if item.error_code is None]
@@ -856,6 +891,10 @@ def _projection_messages(
             )
             if not omitted and tool_name in {"browser", "browser_snapshot"} and item.tool_call_id in browser_inspect_calls:
                 projected["content"] = _model_browser_inspection(projected["content"])
+            if not omitted and tool_registry.output_preview(
+                tool_name, recorded=(item.provider_data or {}).get("_matoloop", {}).get("outputPreview"),
+            ):
+                projected["content"] = _model_tool_preview(item.id, projected["content"])
             if tool_name == "todo_write":
                 projected[_HOST_CHECKLIST_RESULT] = True
             elif record_index < latest_user_index or omitted:
@@ -1062,11 +1101,13 @@ def _shorten_evidence_output(
             return omitted_marker
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
+    fields = None
+    browser_outcome = None
     if isinstance(payload, dict) and any(key in payload for key in ("batch", "script", "playwrightCode")):
         try:
             browser = BrowserActionResult.model_validate({
                 key: value for key, value in payload.items()
-                if key not in {"toolOutputShortened", "scriptValueOmitted"}
+                if key not in {"toolOutputShortened", "scriptValueOmitted", "contentIsUntrusted", "toolResultReference"}
             })
         except (TypeError, ValueError, RecursionError):
             pass
@@ -1093,7 +1134,18 @@ def _shorten_evidence_output(
                             "truncated": True, "errorCode": browser.playwright_code.error_code,
                         }
                 # Effect/outcome metadata is irreducible, even under a tiny soft text budget.
-                return serialized(outcome)
+                if preserve_tool_result_reference and isinstance(payload.get("toolResultReference"), dict):
+                    outcome["toolResultReference"] = payload["toolResultReference"]
+                if browser.script is None:
+                    return serialized(outcome)
+                browser_outcome = serialized(outcome)
+                outcome["script"]["output"] = browser.script.output
+                outcome["script"]["value"] = (
+                    browser.script.value if isinstance(browser.script.value, str)
+                    else serialized(browser.script.value)
+                )
+                fields = [(outcome["script"], key) for key in ("output", "value")]
+                payload = outcome
 
     def shortened_content(value: str, keep: int, output_format: object) -> str:
         if keep >= len(value):
@@ -1181,10 +1233,30 @@ def _shorten_evidence_output(
             return omitted if len(omitted) <= max_characters else None
         return None
 
+    if fields is None and (
+        isinstance(payload, dict)
+        and isinstance(payload.get("session"), dict)
+        and isinstance(payload.get("messages"), list)
+    ):
+        fields = [
+            (item, "content") for item in payload["messages"]
+            if isinstance(item, dict) and isinstance(item.get("content"), str)
+        ]
+    elif fields is None and (
+        isinstance(payload, dict)
+        and "exitCode" in payload
+        and isinstance(payload.get("output"), dict)
+    ):
+        fields = [
+            (payload["output"], key) for key in ("stdout", "stderr")
+            if isinstance(payload["output"].get(key), str)
+        ]
+
     if (
         preserve_tool_result_reference
         and isinstance(payload, dict)
         and isinstance(payload.get("toolResultReference"), dict)
+        and fields is None
         and not (
             isinstance(payload.get("sourceId"), str)
             and isinstance(payload.get("url"), str)
@@ -1202,25 +1274,6 @@ def _shorten_evidence_output(
     if payload == {"toolOutputOmitted": True}:
         return serialized(payload)
 
-    fields = None
-    if (
-        isinstance(payload, dict)
-        and isinstance(payload.get("session"), dict)
-        and isinstance(payload.get("messages"), list)
-    ):
-        fields = [
-            (item, "content") for item in payload["messages"]
-            if isinstance(item, dict) and isinstance(item.get("content"), str)
-        ]
-    elif (
-        isinstance(payload, dict)
-        and "exitCode" in payload
-        and isinstance(payload.get("output"), dict)
-    ):
-        fields = [
-            (payload["output"], key) for key in ("stdout", "stderr")
-            if isinstance(payload["output"].get(key), str)
-        ]
     if fields is not None:
         result = serialized(payload)
         if len(result) <= max_characters:
@@ -1244,11 +1297,12 @@ def _shorten_evidence_output(
                     text[:head] + _SHORTENED_CONTENT + (text[-tail:] if tail else "")
                     if keep else ""
                 )
-                flag_overhead = 0 if "truncated" in original else len(',"truncated":true')
+                flag = "outputTruncated" if browser_outcome is not None else "truncated"
+                flag_overhead = 0 if flag in original else len(serialized({flag: True})) - 1
                 if len(serialized(shortened)) + flag_overhead >= len(serialized(text)):
                     continue
                 item[key] = shortened
-                item["truncated"] = True
+                item[flag] = True
             result = serialized(payload)
             if len(result) <= max_characters:
                 best = result
@@ -1256,7 +1310,7 @@ def _shorten_evidence_output(
             else:
                 high = keep - 1
         # No smaller envelope fits: omit the whole result explicitly, never a partial page.
-        return best if best is not None else serialized({"toolOutputOmitted": True})
+        return best if best is not None else browser_outcome or serialized({"toolOutputOmitted": True})
 
     if (
         isinstance(payload, dict)

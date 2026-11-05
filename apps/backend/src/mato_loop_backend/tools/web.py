@@ -388,6 +388,7 @@ WEBFETCH = ToolDefinition(
             "(verbatim text or escaped HTML). No audio/video/captions.",
             WebFetchArguments,
             _webfetch,
+            output_preview=False,
             requires_webfetch=True,
             group="web",
             label="Webseite abrufen",

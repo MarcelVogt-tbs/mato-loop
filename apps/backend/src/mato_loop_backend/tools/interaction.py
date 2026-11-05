@@ -350,6 +350,7 @@ TODO_WRITE = ToolDefinition(
             group="agent",
             label="Aufgaben aktualisieren",
             icon="checklist",
+            output_preview=False,
         )
 
 VARIABLE_READ = ToolDefinition(
@@ -392,6 +393,7 @@ SECRET_INPUT = ToolDefinition(
             "Durable storage via customize_matoloop requires an explicit user request.",
             SecretInputArguments,
             collect_secret_input,
+            output_preview=False,
             group="agent",
             label="Secret einmalig abfragen",
             icon="password",

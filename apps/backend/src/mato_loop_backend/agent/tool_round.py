@@ -99,6 +99,7 @@ async def persist_tool_result(
             "_matoloop": {
                 "runId": str(run.id),
                 "toolName": call.name,
+                **({"outputPreview": False} if metadata.get("outputPreview") is False else {}),
                 **(execution_binding or {}),
                 **({"shellExecution": metadata["shellExecution"]}
                    if call.name == "shell_run" and isinstance(metadata.get("shellExecution"), dict) else {}),

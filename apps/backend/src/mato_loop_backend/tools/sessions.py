@@ -504,6 +504,7 @@ SESSION_TOOL_RESULT_READ = ToolDefinition(
             "Read a bounded chunk of a persisted tool result without executing the original tool.",
             SessionToolResultReadArguments,
             _session_tool_result_read,
+            output_preview=False,
             group="sessions",
             label="Tool-Ergebnis lesen",
             icon="history",
