@@ -136,6 +136,7 @@ const messages = {
   'git.fetchFailed': () => 'Der aktuelle Zielbranch konnte nicht vom Server abgerufen werden. Prüfe Remote und Git-Anmeldung auf dem Computer.',
   'git.worktreeFailed': () => 'Der Worktree konnte nicht vorbereitet werden. Prüfe vorhandene Worktrees vor einem erneuten Versuch.',
   'git.worktreeRemoveFailed': () => 'Der Worktree konnte nicht entfernt werden. Prüfe seinen Zustand vor einem erneuten Versuch.',
+  'git.worktreePermissionDenied': ({ params }) => `Worktree nicht entfernt: Fehlende Löschrechte${params?.path ? ` bei „${params.path}“` : ''}. Prüfe Zugriffsrechte und Eigentümer.`,
   'git.worktreeInUse': () => 'Eine andere Session oder ein laufender Auftrag verwendet diesen Worktree noch.',
   'git.worktreeChanged': () => 'Der Arbeitsbereich passt nicht mehr zum ausgewählten Repository oder Computer. Bitte aktualisieren und erneut auswählen.',
   'git.worktreeRequired': () => 'Wähle für diese Aktion einen Projekt-Worktree in der Git-App.',

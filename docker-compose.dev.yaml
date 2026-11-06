@@ -73,6 +73,9 @@ services:
     environment:
       UV_PROJECT_ENVIRONMENT: /opt/mato-loop/backend/venv
       UV_CACHE_DIR: /opt/mato-loop/backend/uv-cache
+      PYTHONPYCACHEPREFIX: /tmp/python-cache
+      PYTEST_ADDOPTS: -o cache_dir=/tmp/pytest-cache
+      RUFF_CACHE_DIR: /tmp/ruff-cache
       MATO_LOOP_DATA_DIR: /data
       MATO_LOOP_STATIC_DIR: /tmp/mato-loop-static
       MATO_LOOP_BIND_BACKEND_PORT: ${MATO_LOOP_BIND_BACKEND_PORT:-6020}
@@ -155,6 +158,8 @@ services:
       UV_PROJECT_ENVIRONMENT: /opt/matoloop-agent/venv
       MATOLOOP_AGENT_CONTAINER: "1"
       UV_CACHE_DIR: /opt/matoloop-agent/uv-cache
+      PYTHONPYCACHEPREFIX: /tmp/python-cache
+      RUFF_CACHE_DIR: /tmp/ruff-cache
       MATOLOOP_AGENT_BACKEND_URL: ws://backend:${MATO_LOOP_BIND_BACKEND_PORT:-6020}/api/execution-agents/connect
       MATOLOOP_AGENT_ID: ${MATOLOOP_AGENT_ID:-}
       MATOLOOP_AGENT_PAIRING_TOKEN: ${MATOLOOP_AGENT_PAIRING_TOKEN:-}

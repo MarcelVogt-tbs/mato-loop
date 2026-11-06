@@ -239,6 +239,7 @@ class GitChangesArguments(PathArguments):
 
 
 class GitRepositoryArguments(PathArguments):
+    check_removal: bool = Field(default=False, alias="checkRemoval")
     target_branch: str | None = Field(
         default=None, alias="targetBranch", min_length=1, max_length=300
     )

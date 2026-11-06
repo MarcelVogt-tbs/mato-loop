@@ -2336,7 +2336,7 @@ async def test_attachment_download_has_secure_headers_and_checks_hierarchy(
     assert response.headers["content-disposition"].startswith("inline;")
 
 
-@pytest.mark.parametrize("computer", ["online", "offline", "slow"])
+@pytest.mark.parametrize("computer", ["online", "offline", "slow", "permission"])
 async def test_session_delete_impact_discovers_the_worktree_without_waiting_for_an_unavailable_computer(monkeypatch, computer):
     import asyncio
 
@@ -2347,9 +2347,10 @@ async def test_session_delete_impact_discovers_the_worktree_without_waiting_for_
         preferred_execution_agent_id=uuid4(), current_directory="/worktree/src", workspace_mode="local")
     other = ChatSession(id=uuid4(), title="Other work", current_directory="/worktree")
     info = coding.RepositoryResult(repository="/worktree", commonDirectory="/project/.git", remotes=[],
-        defaultRemote=None, defaultBranch="main", branch="task",
+        defaultRemote=None, defaultBranch="main", branch="task", removalChecked=True,
+        removalError={"code": "git.worktreePermissionDenied", "params": {"path": "/worktree/cache"}} if computer == "permission" else None,
         worktrees=[{"path": "/worktree", "branch": "task", "main": False, "locked": False}])
-    async def inspect(*args):
+    async def inspect(*args, **kwargs):
         if computer == "offline":
             raise SessionServiceError(409, "executionAgent.unavailable")
         if computer == "slow":
@@ -2366,13 +2367,14 @@ async def test_session_delete_impact_discovers_the_worktree_without_waiting_for_
     result = await asyncio.wait_for(session_delete_impact(
         session.id, session.user_id, db, owned_session_query=AsyncMock(return_value=session),
     ), timeout=0.5)
-    assert result["worktree"] == (None if computer != "online" else {
+    assert result["worktree"] == (None if computer not in {"online", "permission"} else {
         "path": "/worktree", "impact": coding.worktree_removal_token(session, info, [other]),
+        "removalError": info.removal_error,
         "sessions": [{"id": str(other.id), "title": other.title}],
     })
 
 
-@pytest.mark.parametrize("worktree", [None, "remove", "changed", "blocked", "joined"])
+@pytest.mark.parametrize("worktree", [None, "remove", "changed", "blocked", "joined", "permission"])
 async def test_session_delete_trashes_commits_and_purges_tree(
     tmp_path: Path, monkeypatch, worktree
 ) -> None:
@@ -2412,6 +2414,16 @@ async def test_session_delete_trashes_commits_and_purges_tree(
             ) else active_runs_result
         client = AsyncMock()
         monkeypatch.setattr(coding, "coding_client", AsyncMock(return_value=client))
+        if worktree == "permission":
+            from mato_loop_backend.execution.client import ExecutionClientError
+
+            client.request.side_effect = ExecutionClientError("git.worktreePermissionDenied", {"path": "/missing/worktree/cache"})
+            with pytest.raises(ApiError) as error:
+                await delete_session(session_id, user, db, worktree_impact=token)
+            assert (error.value.code, error.value.params, session_path.exists(), db.delete.await_count) == (
+                "git.worktreePermissionDenied", {"path": "/missing/worktree/cache"}, True, 0,
+            )
+            return
         if worktree == "changed":
             session.current_directory = "/another/worktree"
         if worktree in {"changed", "blocked", "joined"}:

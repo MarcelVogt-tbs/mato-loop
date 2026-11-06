@@ -263,7 +263,7 @@ class MatoLoopAgent:
                 self.filesystem, arguments.path, arguments.file, status_only=arguments.status_only
             )
         if request.operation == "git.repository":
-            from .git import project_worktree_directory, repository
+            from .git import _check_removal_permissions, project_worktree_directory, repository
 
             result = {
                 **await repository(
@@ -271,6 +271,21 @@ class MatoLoopAgent:
                 ),
                 "worktreeRoot": (self.config.data_dir / "worktrees").as_posix(),
             }
+            if arguments.check_removal and result["repository"] is not None:
+                result["removalChecked"] = True
+                result["removalError"] = None
+                try:
+                    await asyncio.to_thread(
+                        _check_removal_permissions,
+                        result["repository"],
+                        result["gitDirectory"]
+                        if result["gitDirectory"] != result["commonDirectory"]
+                        else None,
+                    )
+                except AgentError as exc:
+                    if exc.code != "git.worktreePermissionDenied":
+                        raise
+                    result["removalError"] = {"code": exc.code, "params": exc.params}
             if arguments.project_id is not None:
                 result["projectWorktreeDirectory"] = (
                     await asyncio.to_thread(

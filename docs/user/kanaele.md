@@ -32,15 +32,14 @@ ordnet diese Schreibweise automatisch demselben Befehl zu. In Telegram stehen
 folgende Befehle zur Verfügung:
 
 - `/git_init`: Git im gewählten Workspace anlegen, ohne Commit oder Veröffentlichung.
-- `/git_review`: Änderungen einschließlich noch nicht übernommener Commits prüfen.
+- `/git_review` (**Prüfen**): Änderungen einschließlich noch nicht übernommener Commits prüfen, ohne Projektdateien zu ändern.
+- `/git_finish` (**Abschließen**): Fehlende oder veraltete Reviews und betroffene Checks ergänzen, sichere Korrekturen innerhalb der Aufgabe und nötige Aufgabencommits erledigen. Auf dem konfigurierten Zielbranch endet der Auftrag lokal; sonst folgt die getrennte Worktree-Integration per Rebase nur bei Bedarf und Fast-forward. Kein Push.
 - `/git_commit`: Ausgewählte Arbeitsänderungen ausdrücklich committen, ohne Push.
 - `/git_merge`: Aufgabenänderungen bei Bedarf committen, eigene unveröffentlichte Commits auf den lokalen Zielbranch
   rebasen, reviewen, prüfen und das ursprüngliche Checkout per Fast-forward
   aktualisieren. Kein Fetch oder Push; ein Remote ist nicht erforderlich.
-- `/git_push`: Vorhandene Commits veröffentlichen, ohne Commit oder Merge; bei bereits integriertem Worktree den aktuellen Zielbranch.
-- `/git_pr`: Aufgabenänderungen bei Bedarf committen, den Remote-Zielstand integrieren, prüfen und ohne lokalen Branchwechsel
-  veröffentlichen und einen Pull Request erstellen
-  beziehungsweise den vorhandenen aktualisieren.
+- `/git_push` (**Pushen**): Vorhandene Commits veröffentlichen, ohne Commit oder Merge; bei bereits integriertem Worktree den aktuellen Zielbranch.
+- `/git_pr` (**Pull Request**): Aufgabenänderungen bei Bedarf committen, den Remote-Zielstand im Quell-Worktree einarbeiten, prüfen, normal auf den gewählten Veröffentlichungsbranch pushen und einen Pull Request erstellen beziehungsweise den vorhandenen aktualisieren. Kein lokales Zielupdate und kein automatischer PR-Merge.
 - `/git_sync`: Den ursprünglichen Projekt-Checkout aktualisieren, wenn er sauber,
   auf dem Zielbranch und ohne zusätzliche Zusammenführung aktualisierbar ist.
 - `/git_remote [Name] [Adresse]`: Einen Remote über den Agenten einrichten oder
@@ -50,12 +49,27 @@ folgende Befehle zur Verfügung:
 
 Wähle vorher mit `/sessions` und `/use <ID>` die gewünschte Coding-Session.
 Die Befehle starten normale Agentenläufe auf dem Computer dieser Session; die
-vorhandenen Tool-Rechte, Rückfragen und Freigaben gelten weiter. Merge und PR
-benötigen einen ausgewählten Projekt-Worktree. Beide dürfen eindeutig zugehörige Aufgabenänderungen
-vorher committen und beachten Repository-Konventionen sowie ausdrückliche Einschränkungen wie
-„nur vorhandene Commits übernehmen“. Bei unklarer Auswahl fragt der Agent nach. Merge kann klare
-Integrationskonflikte und -fehler beheben; PR stoppt bei Konflikten, notwendigen Review-Befunden
-oder fehlgeschlagenen Checks, statt sie zu reparieren. Für PRs müssen ein
+vorhandenen Tool-Rechte, Rückfragen und Freigaben gelten weiter. In der Git-App sind
+**Prüfen**, **Abschließen**, **Pushen** und **Pull Request** die Hauptaktionen;
+Commit, lokale Integration und Pull stehen unter dem eingeklappten **Weitere Git-Aktionen**.
+Init und Remote bleiben unter **Einstellungen**. Dort kannst du **Abschluss einplanen**
+lokal oder im Worktree verwenden; das plant die normale Nachricht `/git-finish` ein.
+
+Merge und PR benötigen einen separaten Projekt-Worktree; ein vorhandener Quellbranch
+muss sich vom Zielbranch unterscheiden, ein losgelöster Stand ist erlaubt. Abschluss
+braucht diesen Worktree nur, wenn das aktuelle Checkout nicht bereits auf dem konfigurierten
+Zielbranch ist. Der Agent wechselt keine Branches automatisch und verschiebt keine Benutzerarbeit.
+Finish, Merge und PR dürfen eindeutig zugehörige Aufgabenänderungen vorher committen und
+beachten Repository-Konventionen sowie ausdrückliche Einschränkungen wie
+„nur vorhandene Commits übernehmen“. Bei unklarer Auswahl fragt der Agent nach.
+Gültige Review- und Check-Ergebnisse werden weiterverwendet; nur fehlende, veraltete oder
+betroffene Bereiche werden erneut geprüft. Merge kann klare Integrationskonflikte und
+-fehler beheben; PR stoppt bei Konflikten, notwendigen Review-Befunden oder fehlgeschlagenen
+Checks, statt sie zu reparieren. Nur eigene unveröffentlichte Aufgabencommits werden bei
+Bedarf rebasiert. Veröffentlichte, geteilte, fremde oder Merge-Commits sowie ein unklarer
+Veröffentlichungsstand erfordern vor dem Umschreiben eine Rückfrage. Es gibt weder neue
+Merge-Commits noch Force-Push. Für die spätere PR-Übernahme beim Hoster verwende Squash
+oder Rebase statt eines Merge-Commits. Für PRs müssen ein
 geeignetes Werkzeug und die Anmeldung beim Git-Hoster auf dem Computer vorhanden
 sein. Ein laufender Auftrag wird durch diese Befehle nicht unterbrochen.
 

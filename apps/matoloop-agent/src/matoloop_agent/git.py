@@ -700,6 +700,43 @@ def _check_worktree_session(filesystem, git_directory: str, owner: str, session:
         raise AgentError("git.worktreeChanged", "The worktree session identity changed")
 
 
+def _check_removal_permissions(path: str, git_directory: str | None = None) -> None:
+    def denied(directory):
+        raise AgentError(
+            "git.worktreePermissionDenied",
+            "Worktree removal requires directory access rights",
+            {"path": os.fspath(directory)},
+        )
+
+    def on_error(error):
+        if isinstance(error, PermissionError):
+            denied(error.filename)
+        raise error
+
+    access_options = {"effective_ids": True} if os.access in os.supports_effective_ids else {}
+
+    def check_sticky(parent, children):
+        if os.name != "posix":
+            return
+        metadata = Path(parent).stat(follow_symlinks=False)
+        uid = os.geteuid()
+        if metadata.st_mode & stat.S_ISVTX and uid not in {0, metadata.st_uid}:
+            for child in children:
+                if Path(child).stat(follow_symlinks=False).st_uid != uid:
+                    denied(child)
+
+    for target in (path, git_directory) if git_directory else (path,):
+        parent = Path(target).parent
+        if not os.access(parent, os.W_OK | os.X_OK, **access_options):
+            denied(parent)
+        check_sticky(parent, [target])
+        for directory, directories, files in os.walk(target, followlinks=False, onerror=on_error):
+            required = os.R_OK | os.X_OK | (os.W_OK if directories or files else 0)
+            if not os.access(directory, required, **access_options):
+                denied(directory)
+            check_sticky(directory, (Path(directory) / name for name in directories + files))
+
+
 async def remove_worktree(config, filesystem, arguments: GitWorktreeRemoveArguments) -> dict:
     async with _locked_worktrees(config, filesystem):
         info = await repository(filesystem, arguments.repository, executor=_preparation_executor)
@@ -727,6 +764,7 @@ async def remove_worktree(config, filesystem, arguments: GitWorktreeRemoveArgume
             config=await _disabled_filters(arguments.path),
         ):
             raise AgentError("git.dirty", "The worktree contains changes or additional files")
+        await asyncio.to_thread(_check_removal_permissions, arguments.path, current["gitDirectory"])
         code, _, _ = await _git(
             arguments.repository,
             "worktree",

@@ -560,6 +560,7 @@ class ExecutionClient:
                 "git.worktreeChanged", "git.worktreeLocation",
                 "git.localRemoteUnsupported", "git.localBranchRequired",
                 "git.worktreeRemoveFailed", "git.worktreeInUse",
+                "git.worktreePermissionDenied",
                 "git.dirty", "git.branchRequired", "git.branchInUse", "git.branchPublished",
                 "git.branchUnmerged", "git.targetRequired", "git.worktreeLocked", "git.mainWorktree",
                 "git.actionFailed", "git.configurationRequired",

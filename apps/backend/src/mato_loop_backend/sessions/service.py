@@ -1833,10 +1833,11 @@ async def session_delete_impact(
     }
     try:
         async with asyncio.timeout(3):
-            info = await session_worktree(db, item)
+            info = await session_worktree(db, item, check_removal=True)
             if info is not None:
                 affected = await sessions_in_worktree(db, user_id, item.preferred_execution_agent_id, info.repository)
                 impact["worktree"] = {"path": info.repository, "impact": worktree_removal_token(item, info, affected),
+                                     "removalError": info.removal_error if info.removal_checked else {"code": "executionAgent.updateRequired"},
                                      "sessions": [{"id": str(other.id), "title": other.title} for other in affected if other.id != item.id]}
     except (SessionServiceError, TimeoutError):
         # Session-only deletion must not depend on optional computer discovery.

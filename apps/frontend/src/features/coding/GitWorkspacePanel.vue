@@ -24,11 +24,11 @@
     <q-card-section v-if="finishAvailable || project" class="git-workspace-footer items-start q-pa-sm">
       <q-item v-if="finishAvailable" tag="label" :disable="finishDisabled" class="q-px-sm">
         <q-item-section side top class="q-pr-sm">
-          <q-checkbox :model-value="Boolean(actions.finishEntry)" dense :disable="finishDisabled" aria-label="Review, Commit & Merge einplanen" @update:model-value="emit('finish-queued', $event)" />
+          <q-checkbox :model-value="Boolean(actions.finishEntry)" dense :disable="finishDisabled" aria-label="Abschluss einplanen" @update:model-value="emit('finish-queued', $event)" />
         </q-item-section>
         <q-item-section>
-          <q-item-label>Review, Commit &amp; Merge einplanen</q-item-label>
-          <q-item-label caption>{{ actions.finishEntry ? 'Eingeplant. Abwählen entfernt den Auftrag.' : 'Mit nötigen Korrekturen. Startet ohne laufende Antwort sofort.' }}</q-item-label>
+          <q-item-label>Abschluss einplanen</q-item-label>
+          <q-item-label caption>{{ actions.finishEntry ? 'Eingeplant. Abwählen entfernt den Auftrag.' : 'Prüfen und lokal abschließen, ohne Push. Startet ohne laufende Antwort sofort.' }}</q-item-label>
         </q-item-section>
       </q-item>
       <div v-if="project">

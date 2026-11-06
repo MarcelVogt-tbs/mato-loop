@@ -40,6 +40,8 @@ Existing stacks are not adopted automatically. Keep an older stack on its origin
 
 Agent tests use a disposable source copy inside the container, including current uncommitted code and a host-resolved version stamp. Only that copy is made readable to the isolated browser user; private checkout permissions remain unchanged and external worktree Git metadata need not be mounted.
 
+Backend and Agent development containers keep Python bytecode and lint/test caches under `/tmp`, not in the host checkout. This also applies to running services, preventing root-owned caches from blocking later worktree removal. Existing host caches are not repaired automatically.
+
 ## Data
 
 The selected Compose project owns `app_data` (backend files and secrets), `db_data`, `embedding_cache`, `backend_uv_data`, `frontend_node_modules`, `frontend_yarn_cache`, `matoloop_agent_dependency_data`, `matoloop_agent_data` (Agent state and pairing), and `matoloop_agent_workspace` (Agent home at `/workspace`). The development stack does not use `MATOLOOP_AGENT_DATA` or `MATOLOOP_AGENT_HOME`. Infinity's pinned model download can take minutes on first start. Its model cache is reproducible; lexical search remains available during embedding degradation.

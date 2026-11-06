@@ -130,9 +130,9 @@ it('allows removing a queued finish command without a connected computer or repo
   app = createApp({ render: () => h(GitApp) })
   app.use(pinia).use(Quasar, quasarOptions).mount(root)
   ;[...root.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === 'Repository').click()
-  await vi.waitFor(() => expect(root.querySelector('[aria-labelledby="git-settings-title"] [aria-label="Review, Commit & Merge einplanen"]')
+  await vi.waitFor(() => expect(root.querySelector('[aria-labelledby="git-settings-title"] [aria-label="Abschluss einplanen"]')
     ?.closest('.git-workspace-footer')?.textContent).toContain('Projektvorgaben'))
-  root.querySelector('[aria-label="Review, Commit & Merge einplanen"]').click()
+  root.querySelector('[aria-label="Abschluss einplanen"]').click()
   await vi.waitFor(() => expect(remove.mock.calls).toEqual([['finish']]))
 })
 
@@ -152,7 +152,9 @@ it('queues publication without a remote or a connected computer in the Git app',
   app.use(pinia).use(Quasar, quasarOptions).mount(root)
   ;[...root.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === 'Repository').click()
   await nextTick()
-  root.querySelector('.q-item').click()
+  root.querySelector('.q-expansion-item > .q-expansion-item__container > .q-item').click()
+  await nextTick()
+  ;[...root.querySelectorAll('.q-item--clickable')].find(item => item.textContent.includes('Pull (Fast-forward)')).click()
   expect(send).toHaveBeenCalledWith('/git-sync', { preserveDraft: true, activeFile: null })
 })
 
@@ -168,12 +170,16 @@ it.each(['git-merge', 'git-pr'])('submits the default integration action without
   root = document.createElement('div')
   app = createApp({ render: () => h(GitActionList) })
   app.use(pinia).use(Quasar, quasarOptions).mount(root)
+  if (name === 'git-merge') {
+    root.querySelector('.q-expansion-item > .q-expansion-item__container > .q-item').click()
+    await nextTick()
+  }
   const action = [...root.querySelectorAll('.q-item--clickable')].find(item => item.querySelector('.q-item__label').textContent === name)
   action.click()
   expect(send).toHaveBeenCalledWith(`/${name}`, { preserveDraft: true, activeFile: null })
 })
 
-it('groups Git actions without finish scheduling in the daily actions', async () => {
+it('shows four primary Git actions and expands the individual actions', async () => {
   const pinia = createPinia()
   setActivePinia(pinia)
   useChatStore().outboxLoaded = true
@@ -182,13 +188,16 @@ it('groups Git actions without finish scheduling in the daily actions', async ()
   root = document.createElement('div')
   app = createApp({ render: () => h(GitActionList) })
   app.use(pinia).use(Quasar, quasarOptions).mount(root)
+  expect([...root.querySelectorAll('.q-list > .q-item--clickable')].map(item => item.querySelector('.q-item__label').textContent))
+    .toEqual(['git-review', 'git-finish', 'git-push', 'git-pr'])
+  expect(root.querySelector('.q-expansion-item > .q-expansion-item__container > .q-item').getAttribute('aria-expanded')).toBe('false')
+  root.querySelector('.q-expansion-item > .q-expansion-item__container > .q-item').click()
+  await nextTick()
   expect([
-    [...root.querySelectorAll('[role="heading"]')].map(item => item.textContent),
     [...root.querySelectorAll('.q-item--clickable:not(label)')].map(item => item.querySelector('.q-item__label').textContent),
     [...root.querySelectorAll('[role="checkbox"]')].map(item => item.getAttribute('aria-label'))
   ]).toEqual([
-    ['Prüfen & sichern', 'Übernehmen', 'Remote'],
-    ['git-review', 'git-commit', 'git-merge', 'git-finish', 'git-pr', 'git-push', 'git-sync'],
+    ['git-review', 'git-finish', 'git-push', 'git-pr', 'Weitere Git-Aktionen', 'git-commit', 'git-merge', 'git-sync'],
     []
   ])
 })
@@ -254,12 +263,13 @@ it('adds Git once per new project draft without opening it or creating a session
   await vi.waitFor(() => expect(controlCenter.tabs.some(tab => tab.appId === 'git')).toBe(true))
 })
 
-it.each([false, true])('offers optional worktree removal when deleting an unopened session (selected: %s)', async remove => {
+it.each([false, true, 'blocked'])('offers optional worktree removal when deleting an unopened session (selected: %s)', async remove => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   const pinia = createPinia()
   setActivePinia(pinia)
   const chat = useChatStore(), impact = 'a'.repeat(64)
-  vi.spyOn(chat, 'sessionDeleteImpact').mockResolvedValue({ worktree: { path: '/worktree', impact, sessions: [] } })
+  vi.spyOn(chat, 'sessionDeleteImpact').mockResolvedValue({ worktree: { path: '/worktree', impact, sessions: [],
+    removalError: remove === 'blocked' ? { code: 'git.worktreePermissionDenied', params: { path: '/worktree/cache' } } : null } })
   const deleted = vi.spyOn(chat, 'deleteSession').mockResolvedValue()
   root = document.createElement('div')
   document.body.append(root)
@@ -276,12 +286,15 @@ it.each([false, true])('offers optional worktree removal when deleting an unopen
   await vi.waitFor(() => expect(document.querySelector('.q-dialog [role="checkbox"]')).not.toBeNull())
   const checkbox = document.querySelector('.q-dialog [role="checkbox"]')
   expect(checkbox.getAttribute('aria-checked')).toBe('false')
+  if (remove === 'blocked') {
+    expect([checkbox.getAttribute('aria-disabled'), document.querySelector('.q-dialog').textContent.includes('/worktree/cache')]).toEqual(['true', true])
+  }
   expect(document.querySelector('.q-dialog').textContent).toContain('Commits, die durch keinen Branch gesichert sind, können danach verloren gehen.')
   if (remove) checkbox.click()
   await nextTick()
   ;[...document.querySelectorAll('.q-dialog button')].find(button => button.textContent === 'Löschen').click()
   await vi.waitFor(() => expect(deleted).toHaveBeenCalledWith('other', {
-    automationMode: null, automationImpact: null, worktreeImpact: remove ? impact : null
+    automationMode: null, automationImpact: null, worktreeImpact: remove === true ? impact : null
   }))
 })
 

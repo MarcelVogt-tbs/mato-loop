@@ -197,6 +197,46 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
         path = self.root / "external"
         self.git("worktree", "add", "--detach", str(path), cwd=source)
         self.git("commit", "--allow-empty", "-m", "Detached work", cwd=path)
+        cache = path / "cache"
+        cache.mkdir()
+        (cache / "bytecode").touch()
+        (source / ".git" / "info" / "exclude").write_text("cache/\n")
+        access = os.access
+        with patch.object(
+            git_module.os,
+            "access",
+            side_effect=lambda target, mode, **kw: False
+            if os.fspath(target) == str(cache)
+            else access(target, mode, **kw),
+        ):
+            with self.assertRaises(AgentError) as error:
+                await remove_worktree(
+                    self.config,
+                    self.fs,
+                    GitWorktreeRemoveArguments(
+                        path=str(path),
+                        repository=str(source),
+                        commonDirectory=str(source / ".git"),
+                        force=True,
+                    ),
+                )
+        self.assertEqual(
+            (
+                error.exception.code,
+                error.exception.params,
+                str(path) in self.git("worktree", "list", "--porcelain", cwd=source).decode(),
+            ),
+            ("git.worktreePermissionDenied", {"path": str(cache)}, True),
+        )
+        (cache / "bytecode").unlink()
+        with patch.object(
+            git_module.os,
+            "access",
+            side_effect=lambda target, mode, **kw: False
+            if os.fspath(target) == str(cache) and mode & os.W_OK
+            else access(target, mode, **kw),
+        ):
+            git_module._check_removal_permissions(str(path))
         await remove_worktree(
             self.config,
             self.fs,
@@ -208,6 +248,40 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.assertFalse(path.exists())
+
+    def test_removal_checks_sticky_entries_and_metadata_parent(self):
+        path = self.root / "worktree"
+        path.mkdir()
+        cache = path / "cache"
+        cache.mkdir()
+        cache.chmod(0o1777)
+        blocked = cache / "foreign"
+        blocked.touch()
+        metadata = self.root / "metadata" / "worktree"
+        metadata.mkdir(parents=True)
+        access = os.access
+        for scenario in ("sticky", "metadata") if os.name == "posix" else ("metadata",):
+            with self.subTest(scenario=scenario):
+                with (
+                    patch.object(git_module.os, "geteuid", return_value=123456, create=True),
+                    patch.object(
+                        git_module.os,
+                        "access",
+                        side_effect=lambda target, mode, scenario=scenario, **kw: False
+                        if scenario == "metadata" and Path(target) == metadata.parent
+                        else access(target, mode, **kw),
+                    ),
+                ):
+                    if scenario == "metadata":
+                        cache.chmod(0o777)
+                    with self.assertRaises(AgentError) as error:
+                        git_module._check_removal_permissions(str(path), str(metadata))
+                self.assertEqual(
+                    error.exception.params,
+                    {
+                        "path": str(blocked if scenario == "sticky" else metadata.parent),
+                    },
+                )
 
     async def test_management_does_not_overwrite_ignored_files_when_switching_branches(self):
         source = self.local_source()

@@ -49,7 +49,7 @@ Unter **Git > Repository > Einstellungen** wählst du einen vorhandenen Remote o
 
 Eine Remoteänderung betrifft alle Worktrees. Bestehende Sessions müssen das geänderte Ziel über **Ziel übernehmen** bestätigen. Ein nachträglicher Remote setzt den Worktree nicht zurück. Veröffentlichung, Pull Requests und Remote-Synchronisierung benötigen ihn, lokale Arbeit und Review nicht.
 
-Unter **Git > Repository > Aktionen** starten die [Git-Befehle](kanaele.md#coding-befehle) direkt einen Agentenauftrag. **Prüfen & sichern** enthält **Code-Review** und **Commit**, **Übernehmen** enthält **Merge in „Zielbranch“**, **Prüfen, committen & mergen** und **Pull Request erstellen**, **Remote** enthält **Push** und **Pull (Fast-forward)**. Merge committet Aufgabenänderungen bei Bedarf, übernimmt sie lokal und prüft die Integration; **Prüfen, committen & mergen** umfasst zusätzlich das vollständige Aufgabenreview und nötige Korrekturen. Beide bleiben lokal, ohne Push. Die Befehlspalette setzt den Auftrag zunächst ein. Toolrechte gelten unabhängig davon. Ein positives Review ist kein Nachweis der Fehlerfreiheit; es prüft auch auf Overengineering.
+Unter **Git > Repository > Aktionen** findest du vier Hauptaktionen: **Prüfen** (`/git-review`), **Abschließen** (`/git-finish`), **Pushen** (`/git-push`) und **Pull Request** (`/git-pr`). Unter dem zunächst eingeklappten **Weitere Git-Aktionen** stehen **Commit**, die lokale Integration mit `/git-merge` und **Pull (Fast-forward)**. Repository und Remote richtest du weiterhin unter **Einstellungen** ein. Die [Git-Befehle](kanaele.md#coding-befehle) starten normale Agentenaufträge; die Befehlspalette setzt den Auftrag zunächst ein. Toolrechte gelten unabhängig davon. **Prüfen** berichtet nur und ändert keine Projektdateien. Ein positives Review ist kein Nachweis der Fehlerfreiheit; es prüft auch auf Overengineering.
 
 Vor der Übernahme setzt der Agent eigene, unveröffentlichte Aufgabencommits per Rebase auf den Zielstand und prüft das kombinierte Ergebnis. Ist der Zielstand bereits enthalten, entfällt der Rebase. Veröffentlichte, geteilte, fremde oder Merge-Commits sowie ein unklarer Veröffentlichungsstand führen vor dem Umschreiben zu einer Rückfrage. Es gibt keinen automatischen Ersatz durch einen Merge oder Force-Push. Die Übernahme ins ursprüngliche Checkout bleibt ein Fast-forward; bestehende Zielcommits werden nicht umgeschrieben.
 
@@ -57,14 +57,17 @@ Die Aufträge bauen auf nachvollziehbaren Ergebnissen dieser Unterhaltung auf. S
 
 Die Git-Befehle bleiben auch ohne Remote, passenden Worktree oder verbundenen Computer
 auswählbar. Der Agent prüft die Git-Voraussetzungen bei der Bearbeitung und erklärt fehlende
-Voraussetzungen oder fragt nach. Für Abschluss, Merge und Pull Request brauchst du einen
+Voraussetzungen oder fragt nach. **Abschließen** funktioniert direkt im aktuellen Checkout,
+wenn dort bereits der konfigurierte Zielbranch ausgecheckt ist: Nach nötigem Review, sicheren
+Korrekturen innerhalb der Aufgabe, betroffenen Checks und Aufgabencommit ist Schluss, ohne
+Integration, separaten Worktree oder Push. Andernfalls brauchst du dafür wie für Merge und Pull Request einen
 separaten Worktree. Er darf auf einem losgelösten Stand stehen; ein vorhandener Arbeitsbranch muss sich vom Zielbranch unterscheiden. Fehlt ein passender Worktree, fordert dich
 der Agent zur Auswahl in der Git-App auf; er wechselt den Arbeitsbereich nicht eigenmächtig.
 Ist ein ausgewählter Computer nicht erreichbar, kann die normale Nachrichtenqueue den Versand
 anhalten. Stelle die Verbindung wieder her und setze den Versand fort. Schreibgeschützte
 Sessions und die Prüfungen für Zugriff, Arbeitsbereich und geänderte Publikationsziele bleiben geschützt.
 
-**Push** prüft den aktuellen Stand: Ist der Worktree-Commit bereits vollständig im lokalen
+**Pushen** prüft den aktuellen Stand: Ist der Worktree-Commit bereits vollständig im lokalen
 Zielbranch enthalten, veröffentlicht der Agent den aktuellen Zielbranch. Dabei werden auch
 zwischenzeitlich integrierte Commits anderer Aufgaben veröffentlicht. Andernfalls veröffentlicht
 er den Worktree-Stand unter dem von dir genannten Branch, einer passenden bestehenden
@@ -77,12 +80,14 @@ Commit unter dem gewählten Remote-Branch und verwendet diesen ausdrücklich als
 Der lokale Branch oder losgelöste Stand bleibt erhalten, damit ein erneuter Versuch nicht am eigenen Branchwechsel scheitert.
 Ein anderer Remote-Branchname erfordert keine Umbenennung eines bestehenden lokalen Branches.
 Du darfst Worktree-Commits bereits vor einem Abschluss oder lokalen Merge veröffentlichen;
-auch ein vorhandener Pull Request ist dafür nicht nötig. Push lässt uncommittete Änderungen
+auch ein vorhandener Pull Request ist dafür nicht nötig. **Pushen** lässt uncommittete Änderungen
 unberührt und führt keinen Commit, Fetch, Merge, Rebase, Reset oder Force-Push aus.
 
-**Merge in „Zielbranch“** und **Pull Request erstellen** beauftragen den Agenten, eindeutig zur Aufgabe gehörende Änderungen im Session-Worktree bei Bedarf vorher zu committen. Dafür ist kein Häkchen nötig. Sind die Änderungen bereits committet, fährt er ohne weiteren Aufgabencommit fort. Bei unklarer Auswahl fragt er nach; fremde Änderungen, bestehende fremde Staging-Auswahlen und Secrets dürfen nicht mitcommittet werden. Die aktuellen Repository-Anweisungen und referenzierten Richtlinien gelten für Branches, Commit-Nachrichten einschließlich Sprache und Trailern, Integration, Veröffentlichung und nötige Prüfungen. Bei widersprüchlichen Vorgaben fragt der Agent nach.
+**Abschließen**, die lokale Integration mit `/git-merge` und **Pull Request** erlauben nötige Commits eindeutig zugehöriger Aufgabenänderungen im Session-Checkout. Dafür ist kein Häkchen nötig. Sind die Änderungen bereits committet, fährt der Agent ohne weiteren Aufgabencommit fort. Bei unklarer Auswahl fragt er nach; fremde Änderungen, bestehende fremde Staging-Auswahlen und Secrets dürfen nicht mitcommittet werden. Die aktuellen Repository-Anweisungen und referenzierten Richtlinien gelten für Branches, Commit-Nachrichten einschließlich Sprache und Trailern, Integration, Veröffentlichung und nötige Prüfungen. Bei widersprüchlichen Vorgaben fragt der Agent nach.
 
-Du kannst im Auftrag ausdrücklich nur vorhandene Commits freigeben, beispielsweise `/git-merge nur vorhandene Commits übernehmen`. Diese Einschränkung geht vor. Verhindern verbleibende Änderungen einen sauberen Worktree, stoppt der Agent, statt sie zu committen oder zu verwerfen. **Code-Review** bleibt schreibgeschützt; **Push**, **Pull (Fast-forward)** und die Einrichtung von Repository oder Remote erstellen keine Commits.
+**Pull Request** arbeitet im getrennten Quell-Worktree: Der Agent übernimmt bei Bedarf den abgefragten Remote-Zielstand, prüft die Änderungen, pusht den geprüften Commit normal auf den gewählten Veröffentlichungsbranch und erstellt oder aktualisiert den vorhandenen PR. Bei Konflikten, notwendigen Review-Befunden oder fehlgeschlagenen Checks stoppt er ohne Reparatur. Der lokale Zielbranch bleibt unverändert; der PR wird nicht automatisch gemergt. Verwende für die spätere Übernahme beim Hoster Squash oder Rebase statt eines Merge-Commits.
+
+Du kannst im Auftrag ausdrücklich nur vorhandene Commits freigeben, beispielsweise `/git-merge nur vorhandene Commits übernehmen`. Diese Einschränkung geht vor. Verhindern verbleibende Änderungen einen sauberen Worktree, stoppt der Agent, statt sie zu committen oder zu verwerfen. **Prüfen** bleibt schreibgeschützt; **Pushen**, **Pull (Fast-forward)** und die Einrichtung von Repository oder Remote erstellen keine Commits.
 
 Die Rückmeldung beginnt mit Aktion und Ergebnis. Darunter nennt der Agent nur relevante
 Details wie Commit, Zielbranch, PR-Link, ausgeführte Prüfungen oder offene Punkte.
@@ -95,33 +100,33 @@ Befunde, damit du gezielt darauf verweisen kannst. Die Antwort folgt deiner
 zitierte Commit-Titel bleiben unverändert. Bei Fehlern muss die Antwort zwischen bereits
 abgeschlossenen Schritten und dem noch offenen Teil unterscheiden.
 
-Code-Review, Autoabschluss und die Prüfungen bei Merge oder Pull Request folgen denselben
+**Prüfen**, **Abschließen** und die Prüfungen bei Merge oder Pull Request folgen denselben
 Kriterien: Fehler, Sicherheit und Datenerhalt, parallele Nutzung und erwartete Last,
 fehlende Tests für riskante Logik, relevante Geschwindigkeitsprobleme und unnötige Komplexität.
 Ein Befund braucht einen konkreten Nachteil und die kleinste vollständige Korrektur.
 Vorhandene Lösungen wiederverwenden und unnötigen Code entfernen geht vor neuen Abstraktionen;
 notwendige Schutzprüfungen bleiben erhalten. Optionale Vereinfachungen blockieren keinen Merge
-und erlauben keine zusätzlichen Umbauten. Das einzelne **Code-Review** ändert weiterhin nichts.
+und erlauben keine zusätzlichen Umbauten.
 
 ### Nach einer Umsetzung automatisch abschließen
 
 1. Sende deinen Umsetzungsauftrag in **Build**.
-2. Aktiviere in deiner Worktree-Session unter **Git > Repository > Einstellungen** die Option **Review, Commit & Merge einplanen** neben **Projektvorgaben** (bei wenig Platz darüber). Der Haken plant sofort die normale Nachricht `/git-finish` ein, genau wie eine manuelle Eingabe. Ohne laufende Antwort kann der Auftrag sofort starten.
+2. Aktiviere unter **Git > Repository > Einstellungen** die Option **Abschluss einplanen** neben **Projektvorgaben** (bei wenig Platz darüber). Sie ist lokal und im Worktree verfügbar. Der Haken plant sofort die normale Nachricht `/git-finish` ein, genau wie eine manuelle Eingabe. Ohne laufende Antwort kann der Auftrag sofort starten.
 3. Entferne den Haken, wenn du die noch nicht gesendete Nachricht wieder entfernen möchtest. Dafür muss der Computer nicht verbunden sein. Auch das normale Entfernen der Nachricht im Chat entfernt den Haken. Nach dem Senden zeigt der Chat den tatsächlich übermittelten Prompt statt des Kurzbefehls.
 
-Der Auftrag ergänzt die noch nötigen Reviews und Checks, behebt notwendige Befunde innerhalb der Aufgabe und prüft betroffene Bereiche erneut. Gültige Vorarbeiten verwendet er wie die Einzelaktionen weiter. Seine Anweisungen erlauben Commit und lokalen Merge in den angezeigten Zielbranch erst ohne verbleibende notwendige Korrekturen, fehlgeschlagene Checks oder fehlende Entscheidungen. Fragen und reine Analysen berechtigen nicht dazu. Die Einzelaktion **Code-Review** bleibt schreibgeschützt.
+Der Auftrag ergänzt nur fehlende oder veraltete Review- und Check-Ergebnisse, behebt notwendige Befunde sicher innerhalb der Aufgabe und prüft betroffene Bereiche erneut. Gültige Vorarbeiten verwendet er wie die Einzelaktionen weiter. Erst ohne notwendige Korrekturen, fehlgeschlagene Checks oder fehlende Entscheidungen darf er Aufgabenänderungen committen. Auf dem konfigurierten Zielbranch endet der Abschluss damit lokal. Andernfalls folgt die getrennte Worktree-Integration per Rebase nur bei Bedarf und Fast-forward ins ursprüngliche Checkout. Neue Merge-Commits entstehen nicht. Fragen und reine Analysen berechtigen nicht zu diesen Git-Schritten.
 
-Du kannst `/git-finish` auch selbst über die Befehlsauswahl oder **Prüfen, committen & mergen** starten. Die Git-Aktionsbuttons reihen normale Befehlsnachrichten ein, auch während einer laufenden Antwort. Dein Entwurf und seine Anhänge bleiben dabei erhalten. Fehlende Voraussetzungen werden bei der jeweiligen Aktion erklärt; Berechtigungen und Prüfungen des Git-Zustands gelten weiterhin.
+Du kannst `/git-finish` auch selbst über die Befehlsauswahl oder **Abschließen** starten. Die Git-Aktionsbuttons reihen normale Befehlsnachrichten ein, auch während einer laufenden Antwort. Dein Entwurf und seine Anhänge bleiben dabei erhalten. Fehlende Voraussetzungen werden bei der jeweiligen Aktion erklärt; Berechtigungen und Prüfungen des Git-Zustands gelten weiterhin.
 
 Der Haken verwendet die [gespeicherte Nachrichtenqueue](chat-und-sessions.md#wahrend-einer-antwort-eingreifen), keinen besonderen Git-Schrittautomaten und keine Vormerkung für eine spätere Build-Nachricht. Auch nach einem abgebrochenen oder fehlgeschlagenen Auftrag kann die normale Queue den Abschluss starten. Entferne die vorgemerkte Nachricht, wenn du das nicht möchtest. Änderungen an Computer, Arbeitsbereich, Branch oder Ziel werden vor dem Start erneut geprüft.
 
 Klare Codekonflikte und Integrationsfehler behebt der Agent im eigenen Worktree und prüft erneut. Sind die beabsichtigten Änderungen nicht eindeutig vereinbar, erklärt er kurz das Problem und fragt mit Optionen und Empfehlung nach. Relevante Sessions desselben Projekts darf er dafür gezielt lesen; gespeicherte Memories und projektfremde Unterhaltungen bleiben an einen ausdrücklichen Abrufauftrag gebunden. Ungespeicherte Editoränderungen musst du vorher sichern. Es gibt keinen automatischen Push, Pull Request oder Worktree-Abbau. Die Prüfungen sind Agentenarbeit, kein unabhängiger Nachweis der Fehlerfreiheit.
 
-Der Agent kann den committeten Zielbranch in seinen sauberen Worktree einarbeiten und dort prüfen,
+Bei der getrennten lokalen Integration kann der Agent den committeten Zielbranch in seinen sauberen Worktree einarbeiten und dort prüfen,
 während im ursprünglichen Verzeichnis noch uncommittete Änderungen liegen oder ein anderer Branch
 ausgecheckt ist. Dieses Verzeichnis bleibt dabei unverändert. Erst direkt vor der Rückintegration
 müssen beide Arbeitsbäume sauber und das ursprüngliche Verzeichnis auf dem Zielbranch sein.
-Ist der Zielbranch inzwischen weitergelaufen, übernimmt und prüft der Agent die neuen Commits erneut.
+Ist der Zielbranch inzwischen weitergelaufen, übernimmt er die neuen Commits und prüft die betroffenen Integrationsbereiche erneut. Er wechselt keine Branches automatisch und verschiebt keine Benutzerarbeit.
 
 Vor einer Rückfrage wegen des ursprünglichen Verzeichnisses prüft der Agent aktuelle Tool-Hinweise
 auf laufende Arbeit oder vorübergehende Git-Sperren. Sind diese bestätigt, soll er warten, später
@@ -140,6 +145,8 @@ Sessions reservieren weder Arbeitsbereiche noch gemeinsame Git-Metadaten. Eine a
 ## Worktree entfernen
 
 Entferne einen Worktree im Arbeitsbereich-Dialog der Git-App oder aktiviere beim Löschen einer Projekt-Session **Worktree ebenfalls entfernen**. Die Option ist zunächst aus und erscheint nur, wenn der Worktree auf dem verbundenen Computer innerhalb von drei Sekunden geprüft werden kann. Ohne diese Auswahl und beim Archivieren bleibt er erhalten. Scheitert die Entfernung, wird die Session nicht gelöscht.
+
+Fehlen Löschrechte in einem Verzeichnis, ist **Worktree ebenfalls entfernen** im Löschdialog deaktiviert; der Grund nennt den betroffenen Pfad. Die Session kannst du ohne Worktree entfernen. Vor der tatsächlichen Entfernung werden die Rechte erneut geprüft. Prüfe Zugriffsrechte und Eigentümer; MatoLoop ändert keine Rechte automatisch. Gleichzeitige Dateiänderungen können trotz Vorprüfung zu einem späteren Fehler führen.
 
 Vorhandene Branches bleiben erhalten; andere betroffene Sessions wechseln nach Prüfung ins lokale Projektverzeichnis. Der Löschdialog zeigt diese Sessions an. Hat sich die Zuordnung vor dem Löschen geändert, bricht die Entfernung ab; öffne den Dialog dann erneut. Aktive Aufträge mit überlappendem Arbeitspfad und gesperrte Worktrees verhindern die Entfernung; Aufträge in anderen Worktrees desselben Repositorys nicht. Auch eingereihte oder auf Freigabe beziehungsweise Antwort wartende Aufträge gelten als aktiv. Ein losgelöster Stand verhindert die bestätigte Entfernung nicht; ein vorheriger Merge oder Sicherungsbranch ist nicht vorgeschrieben.
 

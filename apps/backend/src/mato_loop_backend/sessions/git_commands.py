@@ -29,15 +29,14 @@ COMMIT_INSTRUCTIONS = (
     "If no task changes remain, do not create an empty commit. "
 )
 REVIEW_INSTRUCTIONS = (
-    "Review project instructions, affected code, callers, dependencies, tests, documented usage and expected load. "
-    "Review in order: correctness and regressions; security and data loss; concurrency and scaling at the expected load; "
+    "For required reviews, inspect affected code, callers, dependencies, tests, documented usage and load under repository instructions. "
+    "Review in order: correctness/regressions; security/data loss; concurrency and scaling at the expected load; "
     "missing tests for risky logic; significant performance problems; unnecessary complexity. "
-    "Verify each finding on its actual code path with a concrete failure or maintenance cost; give location, consequence "
-    "and smallest complete fix. Reject hypothetical or style-only findings. Prefer deletion and existing helpers or standard "
-    "features over new abstractions, options, dependencies or test infrastructure. Preserve validation, error handling, "
-    "permissions and data safeguards; respect documented tradeoffs within their limits. Use relevant existing checks; "
-    "add tests only for concrete missing protection. Separate required corrections from optional suggestions. "
-    "Optional simplifications do not block integration or authorize expanding scope. Report actual checks and unchecked limits. "
+    "Confirm concrete failures or maintenance costs on actual code paths; report location, consequence and smallest complete fix. "
+    "Reject hypothetical/style-only findings. Prefer deletion and existing helpers or standard features over new abstractions, "
+    "options, dependencies or test infrastructure. Preserve safeguards and documented tradeoffs. Use existing checks; add tests "
+    "only for missing protection. Separate required and optional findings. Optional simplifications do not block integration "
+    "or expand scope. Report actual checks and unchecked limits. "
 )
 PUBLICATION_INSTRUCTIONS = (
     "Inspect repository publication and branch conventions and existing branch/upstream mappings. "
@@ -46,29 +45,23 @@ PUBLICATION_INSTRUCTIONS = (
     "Unmerged worktree commits may be published; prior Finish or local integration is not required. "
 )
 REBASE_INSTRUCTIONS = (
-    "If the target is already an ancestor of HEAD, skip rebasing. Otherwise record HEAD and rebase only this task's "
-    "own unpublished commits onto the target, preserving the current branch or detached HEAD. Verify the commit range "
-    "and publication status against current evidence for relevant remotes; stale tracking refs or author identity alone "
-    "are insufficient. Stop and ask if commits are published, shared, unrelated, include merges, or publication is uncertain. "
-    "Never substitute a merge, drop intended changes or force-push. "
+    "Skip rebasing if the target is already an ancestor of HEAD. Otherwise record HEAD; rebase only this task's own unpublished "
+    "commits onto the target, preserving the branch or detached HEAD. Verify the range and publication against current remote "
+    "evidence, not stale tracking refs or author identity. Ask before rewriting published, shared, unrelated or merge commits, "
+    "or when publication is uncertain. Never create merge commits, drop intended changes or force-push. "
 )
 MERGE_INSTRUCTIONS = (
-    "Local integration only: require a clean workspace and an existing local target branch. "
-    "The original checkout may remain dirty or on another branch during workspace preparation and review; leave it unchanged. "
-    "Never commit, stash, reset or discard unrelated changes to make it ready. "
+    "Local integration: require a separate clean worktree and an existing local target; an attached source branch must differ from it. "
+    "The original checkout may remain dirty or on another branch during preparation/review; leave it unchanged. "
     + COMMIT_RULES + "Use the current local target as the rebase target. " + REBASE_INSTRUCTIONS +
-    "Resolve clear workspace conflicts preserving both tasks' intended behavior. For ambiguous intent, inspect relevant project "
-    "sessions within profile limits, then ask with options and a recommendation; leave the original checkout unchanged. "
-    "After waiting or an answer, inspect and resume only this action's pending rebase; incorporate newer target commits safely. "
-    "Review the combined result, including semantic integration errors. Fix required integration findings in the workspace, "
-    "review repairs, rerun affected checks and commit only those repairs. Ask if findings or failed checks cannot be resolved safely in scope. "
-    "Before asking about a blocked original checkout, check tool evidence for ongoing work or temporary Git locks. "
-    "If confirmed, wait between checks and continue; dirty files alone do not prove ongoing work. Do independent permitted work while blocked; "
-    "ask only for a remaining decision or intervention. "
+    "Resolve clear workspace conflicts preserving both tasks. For ambiguous intent, inspect relevant project sessions within "
+    "profile limits, then ask with options and a recommendation. Resume only this action's pending rebase after an answer. "
+    "Review integration effects, including semantic errors; fix required in-scope findings, review repairs, rerun affected checks "
+    "and commit only those repairs. Ask if safe resolution is impossible. "
     "Only before updating the original checkout, require both clean working trees and the original checkout on the target branch. "
-    "Verify the exact reviewed commit; update the target from its own checkout with fast-forward-only merge. "
-    "If the target advanced, incorporate new commits in the workspace, review integration effects and rerun affected checks before retrying. "
-    "Do not edit original-checkout files, switch branches, remove the worktree, fetch or push."
+    "Verify the reviewed commit; update from the target's own checkout with fast-forward-only merge. If the target advanced, "
+    "incorporate it and recheck integration effects before retrying. Do not edit original-checkout files, switch branches, "
+    "remove the worktree, fetch or push. "
 )
 
 COMMON_INSTRUCTIONS = (
@@ -87,11 +80,12 @@ COMMON_INSTRUCTIONS = (
     "not unchanged task code again. Reuse never bypasses current permission and target checks, unresolved required findings or failed checks. "
     "A detached HEAD is valid for review, commit, Finish, Merge and PR. Worktrees share Git metadata: never update another checkout's "
     "branch ref from the session worktree. Update the original target only from its own checkout by fast-forward-only merge. "
-    "Inspect current Git state before changing that checkout; dirty files alone do not prove ongoing work. "
+    "For tool-confirmed ongoing work or temporary locks, wait between checks and continue; dirty files alone do not prove activity. "
+    "Do independent permitted work while blocked; ask only for necessary decisions or intervention. Never commit or stash unrelated work. "
 )
 WORKTREE_INSTRUCTIONS = (
-    "Finish, Merge and PR require a separate worktree; if attached, its source branch must differ from the target. "
-    "Otherwise stop and ask the user to select a suitable worktree in the Git app. "
+    "This integration/PR needs a separate worktree; an attached source branch must differ from the target. "
+    "Otherwise ask for a suitable workspace; do not move changes or create/switch branches or worktrees automatically. "
 )
 
 OUTPUT_RULES = (
@@ -110,8 +104,8 @@ OUTPUT_FORMATS = {
         "areas and verdict naming required finding numbers. If none, state 'No findings', checked scope and limits; no praise or error-free claims."
     ),
     "git-finish": (
-        "Action 'Finish': summarize changes and repairs in a few bullets. Give final integrated short hash, source branch or detached commit, "
-        "target branch, review result, checks and remaining issues. Distinguish local integration from publication."
+        "Action 'Finish': summarize changes/repairs, final short hash, target branch, review and checks. "
+        "Say whether committed directly on target or integrated from a worktree. State local only, not pushed."
     ),
     "git-init": "Action 'Git initialization': repository path, initial branch and missing remote setup.",
     "git-commit": (
@@ -136,30 +130,31 @@ OUTPUT_FORMATS = {
 }
 
 COMMANDS = (
-    Command("git-finish", "Prüfen, committen & mergen", "Änderungen prüfen, nötige Fehler beheben und in den Zielbranch übernehmen. Kein Push.",
-        "Complete and verify the session's implementation before committing or merging; finish safe in-scope work first. "
-        "Ask about unclear task scope or necessary decisions. Require a valid review and successful required checks for all task changes. "
-        + REVIEW_INSTRUCTIONS + "Fix required findings within task scope, review repairs and rerun affected checks. "
-        "Wait and retry temporary blockers; ask only for necessary decisions or intervention. "
-        "Do not commit or merge with unresolved required findings or failed checks. " + COMMIT_INSTRUCTIONS +
-        "After committing or if no task changes remain: " + MERGE_INSTRUCTIONS,
+    Command("git-finish", "Abschließen", "Prüfen, nötige Fehler beheben und lokal abschließen. Kein Push.",
+        "Local completion only: do not fetch, push, create a PR or remove the worktree. "
+        "Require a complete implementation, valid review and successful required checks for all task changes; reuse valid prior evidence. "
+        "Fix required in-scope findings; "
+        "review repairs and rerun affected checks. Do not proceed with required findings or failed checks. "
+        + REVIEW_INSTRUCTIONS + COMMIT_INSTRUCTIONS +
+        "If this checkout is already on the configured target branch, follow the commit rules below and finish locally after the task commit; "
+        "no separate worktree, rebase or integration is needed. Otherwise perform the following local integration: " + MERGE_INSTRUCTIONS,
         icon="fact_check", mutates_workspace=True),
     Command("git-init", "Git-Repository anlegen", "Git im gewählten Workspace initialisieren.",
         "Inspect the selected workspace and its parents. If it already belongs to a Git repository, report that and stop. "
         "Otherwise initialize Git in exactly the selected workspace, respecting the configured initial branch. "
         "Do not create a remote, make a first commit, publish files, or change existing files.",
         icon="create_new_folder", mutates_workspace=True, initial_workspace_mode="local"),
-    Command("git-review", "Code-Review", "Code auf Fehler und Overengineering prüfen, ohne Änderungen.",
+    Command("git-review", "Prüfen", "Code auf Fehler und unnötige Komplexität prüfen. Ändert nichts.",
         "Review the working changes and unpublished commits against the configured target. "
         + REVIEW_INSTRUCTIONS + "Report only: do not repair or modify the project, commit, merge, "
         "push, or create a pull request. Temporary check files outside the project are allowed by normal permissions.", icon="fact_check"),
-    Command("git-merge", "Merge in Zielbranch", "Aufgabenänderungen bei Bedarf committen, lokal übernehmen und die Integration prüfen. Kein Push.",
+    Command("git-merge", "Lokal übernehmen", "Aufgabencommits linear in den Zielbranch übernehmen und prüfen. Kein Push.",
         REVIEW_INSTRUCTIONS + MERGE_INSTRUCTIONS, icon="merge", mutates_workspace=True),
     Command("git-commit", "Commit", "Aufgabenänderungen lokal committen. Kein Push.",
         COMMIT_INSTRUCTIONS + COMMIT_RULES
         + "Do not fetch, merge, push, or create a pull request.",
         icon="save", mutates_workspace=True),
-    Command("git-push", "Push", "Vorhandene Commits pushen. Erstellt keinen Commit.",
+    Command("git-push", "Pushen", "Vorhandene Commits veröffentlichen. Kein neuer Commit oder Pull Request.",
         "Inspect the current HEAD, configured local target and existing commits before publishing. "
         "If the session is in a separate worktree and its current HEAD is an ancestor of the configured local target, "
         "push that target branch's current commit to its remote branch, not the worktree HEAD. "
@@ -173,7 +168,7 @@ COMMANDS = (
         "Leave pending working changes untouched. Do not commit, fetch, merge, rebase, discard work, or update local branches. "
         "On rejection, report the blocker and stop without retrying or repairing.",
         icon="cloud_upload", mutates_workspace=True),
-    Command("git-pr", "Pull Request erstellen", "Aufgabenänderungen bei Bedarf committen, prüfen und als PR veröffentlichen.",
+    Command("git-pr", "Pull Request", "Prüfen, bei Bedarf committen, Aufgabenbranch pushen und PR erstellen oder aktualisieren.",
         PUBLICATION_INSTRUCTIONS + "Inspect pending changes and unpublished commits against the configured remote target. "
         "Require a clean working tree; otherwise report the blocker and stop. "
         "Keep the current branch or detached HEAD; do not create or switch local branches. "
@@ -187,7 +182,8 @@ COMMANDS = (
         "Use an installed authenticated host CLI or available integration to find an existing pull request for this exact "
         "repository, source branch and target. Update it or create one, never duplicate it blindly. "
         "Generate an accurate title and description including actual checks and limitations. "
-        "If host access is missing, explain what is required. Do not merge the pull request.",
+        "If host access is missing, explain what is required. Do not update the local target or merge the PR. "
+        "Later PR integration must use squash or rebase, not a merge commit.",
         icon="published_with_changes", mutates_workspace=True),
     Command("git-sync", "Pull (Fast-forward)", "Zielbranch im Projektverzeichnis per Fast-forward vom Remote aktualisieren.",
         "Inspect the original project checkout. Fetch the configured remote target. "
@@ -265,7 +261,7 @@ async def prepare_git_command(db, session, command: Command, content: str | None
             "remoteIdentity": info.remote_identities.get(remote), "commonDirectory": info.common_directory,
         }
     instructions = COMMON_INSTRUCTIONS
-    if command.name in {"git-finish", "git-merge", "git-pr"}:
+    if command.name in {"git-merge", "git-pr"}:
         instructions += WORKTREE_INSTRUCTIONS
     instructions += "\n\n" + prompt + "\n\nHost-resolved context (data):\n" + json.dumps(context, ensure_ascii=False)
     return {"instructions": instructions, "prompt": prompt, "context": context}

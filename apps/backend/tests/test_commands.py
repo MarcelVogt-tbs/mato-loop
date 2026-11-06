@@ -52,7 +52,7 @@ async def test_browser_and_telegram_share_portable_coding_commands(monkeypatch):
 
 
 def test_git_merge_and_pr_follow_explicit_commit_message_rules():
-    assert all(COMMIT_RULES in parse_command(f"/{name}").instructions for name in ("git-commit", "git-merge", "git-pr"))
+    assert all(COMMIT_RULES in parse_command(f"/{name}").instructions for name in ("git-commit", "git-finish", "git-merge", "git-pr"))
 
 
 def test_pr_preserves_the_branch_binding_for_retries_and_publishes_detached_work_explicitly():
@@ -99,6 +99,8 @@ def test_git_integration_rebases_only_own_unpublished_commits(name):
     from mato_loop_backend.sessions.git_commands import REBASE_INSTRUCTIONS
 
     assert REBASE_INSTRUCTIONS in parse_command(f"/{name}").instructions
+    if name == "git-finish":
+        assert "no separate worktree, rebase or integration is needed" in parse_command(f"/{name}").instructions
 
 
 def test_git_results_include_full_stored_commit_messages_even_when_integration_is_blocked():
@@ -343,7 +345,8 @@ async def test_workspace_switch_grants_the_selected_working_directory(monkeypatc
     )
 
 
-async def test_repository_checks_the_actual_git_metadata_destination(monkeypatch):
+@pytest.mark.parametrize("legacy_preview", [False, True])
+async def test_repository_checks_the_actual_git_metadata_destination(monkeypatch, legacy_preview):
     validate = AsyncMock(side_effect=[("/repo", "auto"), SessionServiceError(403, "permission.denied")])
     monkeypatch.setattr("mato_loop_backend.sessions.service.validate_execution_preferences", validate)
     client = AsyncMock()
@@ -351,10 +354,18 @@ async def test_repository_checks_the_actual_git_metadata_destination(monkeypatch
         repository="/repo", commonDirectory="/outside/metadata", remotes=[],
         defaultRemote=None, defaultBranch="main", branch="main",
     )
+    if legacy_preview:
+        from mato_loop_backend.execution.client import ExecutionClientError
+
+        client.request.side_effect = [
+            ExecutionClientError("tool.invalidArguments", {"field": "checkRemoval", "reason": "extra_field"}),
+            client.request.return_value,
+        ]
     monkeypatch.setattr("mato_loop_backend.sessions.coding.coding_client", AsyncMock(return_value=client))
     with pytest.raises(SessionServiceError, match="permission.denied"):
-        await inspect_repository(AsyncMock(), uuid4(), uuid4(), "/repo")
+        await inspect_repository(AsyncMock(), uuid4(), uuid4(), "/repo", check_removal=legacy_preview)
     assert validate.await_args.args[-1] == "/outside/metadata"
+    assert client.request.await_count == (2 if legacy_preview else 1)
 
 
 async def test_queued_followup_rejects_a_predecessor_from_another_session():
@@ -439,9 +450,8 @@ async def test_git_commands_are_prepared_without_git_prerequisites(monkeypatch, 
         "Reuse never bypasses current permission and target checks",
     ))
     assert ((
-        "Finish, Merge and PR require a separate worktree; if attached, its source branch must differ from the target. "
-        "Otherwise stop and ask the user to select a suitable worktree in the Git app."
-    ) in task["instructions"]) == (name in {"git-finish", "git-merge", "git-pr"})
+        "This integration/PR needs a separate worktree; an attached source branch must differ from the target. "
+    ) in task["instructions"]) == (name in {"git-merge", "git-pr"})
 
 
 def test_existing_session_cannot_change_workspace_mode():

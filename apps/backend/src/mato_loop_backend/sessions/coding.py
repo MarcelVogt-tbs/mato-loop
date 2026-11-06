@@ -93,6 +93,8 @@ class RepositoryResult(ExecutionResult):
     worktree_root: str | None = Field(default=None, max_length=4096)
     project_worktree_directory: str | None = Field(default=None, max_length=4096)
     target_has_commit: bool | None = None
+    removal_checked: bool = False
+    removal_error: dict | None = None
     worktrees: list[WorktreeEntry] = Field(default_factory=list, max_length=1000)
 
     _repository_path = field_validator("repository", "common_directory", "git_directory", "worktree_root", "project_worktree_directory")(
@@ -153,7 +155,7 @@ async def coding_client(db: AsyncSession, user_id: UUID, agent_id: UUID | None) 
     return ExecutionClient(agent_id, operations)
 
 
-async def inspect_repository(db, user_id, agent_id, directory, target_branch=None, *, project=None, worktree_details=False) -> RepositoryResult:
+async def inspect_repository(db, user_id, agent_id, directory, target_branch=None, *, project=None, worktree_details=False, check_removal=False) -> RepositoryResult:
     from mato_loop_backend.sessions.service import (
         SessionServiceError,
         validate_execution_preferences,
@@ -163,9 +165,18 @@ async def inspect_repository(db, user_id, agent_id, directory, target_branch=Non
     if directory is None:
         raise SessionServiceError(409, "file.workspaceNotSelected")
     client = await coding_client(db, user_id, agent_id)
+    arguments = {"path": directory, **({"targetBranch": target_branch} if target_branch else {}),
+                 **({"projectId": str(project.id)} if project else {}),
+                 **({"checkRemoval": True} if check_removal else {})}
     try:
-        result = await client.request("git.repository", {"path": directory, **({"targetBranch": target_branch} if target_branch else {}),
-            **({"projectId": str(project.id)} if project else {})}, RepositoryResult)
+        try:
+            result = await client.request("git.repository", arguments, RepositoryResult)
+        except ExecutionClientError as exc:
+            if not (check_removal and exc.code == "tool.invalidArguments"
+                    and exc.field == "checkRemoval" and (exc.params or {}).get("reason") == "extra_field"):
+                raise
+            arguments.pop("checkRemoval")
+            result = await client.request("git.repository", arguments, RepositoryResult)
     except ExecutionClientError as exc:
         raise SessionServiceError(409, exc.code) from exc
     if result.repository is not None:
@@ -268,10 +279,11 @@ async def select_session_workspace(db, session, project, directory=None, *, crea
     return directory_policy
 
 
-async def session_worktree(db, session) -> RepositoryResult | None:
+async def session_worktree(db, session, *, check_removal=False) -> RepositoryResult | None:
     if not session.project_id or not session.preferred_execution_agent_id or not session.current_directory:
         return None
-    info = await inspect_repository(db, session.user_id, session.preferred_execution_agent_id, session.current_directory)
+    info = await inspect_repository(db, session.user_id, session.preferred_execution_agent_id, session.current_directory,
+                                    **({"check_removal": True} if check_removal else {}))
     return info if any(item.path == info.repository and not item.main for item in info.worktrees) else None
 
 
@@ -343,7 +355,7 @@ async def remove_worktree(db, session, info: RepositoryResult, directory, *, for
             "path": directory, "repository": root, "commonDirectory": info.common_directory, "force": force,
         }, WorktreeRemovedResult, timeout=180)
     except ExecutionClientError as exc:
-        raise SessionServiceError(409, exc.code) from exc
+        raise SessionServiceError(409, exc.code, params=exc.params) from exc
     for item in affected:
         item.coding_workspace = {**(item.coding_workspace or {}), "mode": "local",
             "executionAgentId": str(item.preferred_execution_agent_id),

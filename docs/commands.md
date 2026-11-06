@@ -187,10 +187,10 @@ selection and ingress semantics.
 | `/git-init` | Initialize Git in the selected workspace without committing, adding a remote, or publishing. |
 | `/git-review` | Review working changes and unpublished commits without editing or publishing. |
 | `/git-commit` | Inspect and explicitly commit selected task changes without fetching or pushing. |
-| `/git-finish` | Complete missing review, repairs, checks, task commits and local integration without publishing. |
+| `/git-finish` | Complete missing review, safe in-scope repairs, affected checks and task commits; integrate locally only when not already on the target branch. Never publish. |
 | `/git-merge` | Commit task changes if needed, rebase own unpublished commits onto the local target, review, check, and fast-forward the clean original checkout. No fetch or push. |
 | `/git-push` | Publish existing commits to a project-appropriate remote branch without committing, fetching or merging. |
-| `/git-pr` | Commit task changes if needed, fetch and integrate the remote target, review, check, publish and create or update the PR. |
+| `/git-pr` | Commit task changes if needed, incorporate the fetched remote target in the source worktree, review, check, normally push to the selected publication branch and create or update the PR. Never update the local target or merge the PR. |
 | `/git-sync` | Fetch and fast-forward the clean original project checkout without switching branches or discarding work. |
 | `/git-remote [name] [url]` | Configure only the explicitly requested remote through normal agent tools; ask for missing values. |
 
@@ -200,10 +200,13 @@ unresolved decisions require a question, not an inferred exception.
 
 The Git catalog is fixed and does not probe repositories or disable commands for missing
 Git prerequisites. The agent checks those prerequisites when processing the command and
-explains blockers or asks for a decision. Finish, Merge and PR require a separate worktree;
-an attached source branch must differ from the target. Detached HEAD is valid for review,
-commit, Finish, Merge and PR. PR preserves the current branch or detached HEAD, rebases own
-unpublished commits onto the fetched target and publishes the reviewed commit with an explicit remote-branch refspec. The selected
+explains blockers or asks for a decision. Finish works in the current checkout when it is
+already on the configured target branch: after review, safe in-scope repairs, affected checks
+and any needed task commit, it stops without integration, a separate worktree or push.
+Otherwise Finish, like Merge and PR, requires a separate worktree; an attached source
+branch must differ from the target. Detached HEAD is valid for review, commit, Finish,
+Merge and PR. PR preserves the current branch or detached HEAD, rebases own unpublished
+commits onto the fetched target only when needed and publishes the reviewed commit with an explicit remote-branch refspec. The selected
 remote publication branch is passed explicitly as the PR source; no local branch is created or switched,
 so the saved branch binding remains valid on retry. If a suitable worktree
 is missing, the agent asks the user to select a
@@ -250,9 +253,12 @@ No-findings reviews remain short and do not claim error-free code. These are mod
 instructions, not a rendered UI template or additional execution authority. Labels and
 explanations follow the global response-language contract in [the runtime reference](harness.md#profiles-and-workflow).
 
-Merge resolves clear conflicts and integration findings in the task worktree and asks
-about unresolved intent; PR stops on conflicts or findings without repairing them.
-Merge and PR authorize task commits when needed, using the standalone commit instructions only
+Finish makes safe in-scope repairs; local integration resolves clear conflicts and integration
+findings in the task worktree and asks about unresolved intent. PR stops on conflicts,
+required findings or failed checks without repairing them. It creates or updates the existing
+PR after a normal push, without updating the local target or automatically merging the PR.
+Later hosted integration should use squash or rebase, not a merge commit.
+Finish, Merge and PR authorize task commits when needed, using the standalone commit instructions only
 in the session checkout. Explicit user restrictions on creating commits take precedence;
 pending changes remain untouched if committing is restricted. Unclear selections require a
 question; unrelated work, staged changes and secrets are excluded. Already committed work needs
@@ -261,7 +267,7 @@ If the target is already an ancestor of HEAD, no rebase is needed. Otherwise onl
 unpublished commits may be rebased. The agent records HEAD and verifies the range and publication
 status with current remote evidence; stale tracking refs or author identity alone are insufficient.
 Published, shared, unrelated or merge commits, or uncertain publication status, require a question
-before rewriting. No merge or force-push is substituted. Existing target history stays unchanged.
+before rewriting. No new merge commit or force-push is substituted. Existing target history stays unchanged.
 Review stays report-only; Push, fast-forward Pull, Init and Remote do not create commits.
 Telegram users select an existing coding session with `/sessions` and `/use <ID>`;
 messaging commands never create an unrelated empty session. Web submission can
@@ -287,11 +293,13 @@ when the card is wide enough and stack in narrow panels. Its footer places finis
 on the left and project defaults on the right, stacking them in narrow panels. The changes tab shows known positive addition totals in green
 and deletion totals in red; zero and unknown totals are omitted. Existing repositories start in the
 changes view; missing repositories use the repository tab for setup.
-Actions use Git terms in one compact list with headings and separators between three groups: **Prüfen & sichern** (Code-Review,
-Commit), **Übernehmen** (Merge, Prüfen, committen & mergen, Pull Request), and **Remote** (Push,
-Pull (Fast-forward)). Merge and PR descriptions disclose their task-commit authorization;
-there is no commit checkbox or additional UI mode. Finish includes task review and necessary
-repairs before committing and integrating; Merge focuses on integration. Push and Pull never commit.
+The primary actions are **Prüfen** (`git-review`), **Abschließen** (`git-finish`),
+**Pushen** (`git-push`) and **Pull Request** (`git-pr`). The initially collapsed
+**Weitere Git-Aktionen** section contains Commit, local integration (`git-merge`) and
+Pull (Fast-forward). Command IDs remain unchanged. Finish includes missing task review,
+safe in-scope repairs, affected checks and task commits; Merge focuses on integration.
+Merge and PR descriptions disclose their task-commit authorization; there is no commit
+checkbox or additional UI mode. Push and Pull never commit.
 Repository initialization is offered under **Einstellungen** when no repository is detected,
 not among daily actions. It remains available through the shared command palette.
 The overview keeps a separate store context from the active editor so
@@ -309,7 +317,7 @@ the first remote fetch.
 
 ## Agent flow contract
 
-Under **Einstellungen**, the worktree-only **Review, Commit & Merge einplanen** checkbox reflects a pending `/git-finish`
+Under **Einstellungen**, **Abschluss einplanen** is available in local checkouts and worktrees and reflects a pending `/git-finish`
 message in the current session. Checking it submits that ordinary command through the
 [durable message queue](harness.md#message-queue); unchecking removes the pending message.
 Removal stays available without a connected computer or a loaded repository catalog.
@@ -318,9 +326,12 @@ start immediately, exactly like manual submission. Draft text and attachments re
 Queued commands display their original slash invocation; sent commands display the captured
 prompt actually submitted. `/git-finish` is also available in the palette and Git app.
 
-The command shares Review, Commit and Merge instruction cores: complete missing review of the
-implementation, correct required findings, recheck affected areas, commit task changes, and merge locally.
-Valid prior work is reused under the shared Git evidence rules above.
+The command shares Review, Commit and Merge instruction cores: complete only missing or stale
+review/check evidence, safely correct required in-scope findings, recheck affected areas and
+commit task changes. On the configured target branch it stops there; otherwise it integrates
+through a separate worktree and a fast-forward-only update of the original target checkout.
+Valid prior work is reused under the shared Git evidence rules above; no automatic branch
+switching or moving user work makes a checkout ready.
 Review, Finish, Merge and PR use the same risk-first review criteria: affected code, callers,
 dependencies, tests and documented load; correctness, security/data loss, concurrency/scaling,
 missing protection for risky logic, significant performance problems, then unnecessary complexity.
@@ -328,7 +339,8 @@ Findings require a confirmed code path, a concrete failure case or maintenance c
 smallest complete fix. Reusing existing helpers and deleting unnecessary code take precedence
 over new abstractions or test infrastructure; safeguards and documented tradeoffs remain.
 Optional simplifications neither block integration nor authorize unrelated refactoring.
-Prompts require resolving required findings and failed checks before proceeding, and asking for necessary decisions;
+Finish and Merge require resolving required findings and failed checks before proceeding;
+PR reports these blockers without repairs. All ask for necessary decisions;
 questions and analysis do not authorize Git effects. There is no completion tool or phase
 progression. Standalone review remains report-only. Normal admission, permissions, profile
 selection and error handling apply; dispatch revalidates the computer, checkout, branch and
@@ -347,12 +359,12 @@ There is no host merge queue, target reservation or workspace-occupancy inventor
 context. A stable instruction says that the workspace may be shared, not that another worker
 is active. When tools show ongoing work or a temporary Git lock, the model waits between
 checks and resumes on the current state. Dirty files alone are not evidence of active work.
-Workspace preparation requires a clean session worktree and an existing local target branch,
+For separate-worktree local integration, preparation requires a clean session worktree and an existing local target branch,
 not a clean original checkout or its target-branch checkout. The original remains untouched
 while its committed target is incorporated and the combined result is reviewed in the worktree.
 Only immediately before the fast-forward-only update through the original checkout must both
 working trees be clean, the original be on the target branch and the reviewed commit be verified.
-If the target advances, the model incorporates it and repeats review/checks before retrying.
+If the target advances, the model incorporates it and reviews/checks affected integration areas before retrying.
 Before asking about a blocked original checkout, the model checks current tool evidence for
 temporary activity or Git locks and completes independent permitted work. It never makes the
 original ready by committing, stashing, resetting or discarding unrelated changes.
@@ -373,7 +385,7 @@ The private metadata key `codingCommand` is retained for compatibility with exis
 histories and retries; it carries any prepared command contribution. New commands
 also snapshot their composed task instructions plus arguments as `prompt`. Git reuses
 the same commit core and commit-message rules for standalone Commit and optional
-pre-commit steps; review instructions are shared by Review, Merge and PR. Prompt
+pre-commit steps; review instructions are shared by Review, Finish, Merge and PR. Prompt
 composition removes the option token and avoids conflicting commit prohibitions.
 This adds no backend Git execution. The message API
 exposes that snapshot as `commandPrompt`, including for predecessor-bound commands; execution wrappers
@@ -392,8 +404,8 @@ or tooling is reported, not supplied by a new implicit integration. Project inst
 continue to govern commit conventions and checks. Review and publication safeguards
 are agent instructions plus the existing tool authorization; they are not a Git sandbox
 or a deterministic proof of review quality. The task explicitly requires non-force
-pushes of the reviewed commit, re-review after target advancement, resolution of in-scope
-merge findings and failed checks, and preservation of unrelated changes. Execution remains
+pushes of the reviewed commit, affected review/checks after target advancement, resolution of
+in-scope local integration findings and failed checks (PR stops instead), and preservation of unrelated changes. Execution remains
 coordinated per session, not per repository. Worktree removal alone rejects overlapping
 active run directories on the same owner-bound computer, using run snapshots rather than
 the sessions' current directory preferences. This includes queued runs and runs waiting

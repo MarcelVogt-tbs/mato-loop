@@ -48,7 +48,7 @@
             <section aria-labelledby="git-actions-title">
               <h2 id="git-actions-title" class="text-subtitle2 q-mt-none q-mb-sm">Aktionen</h2>
               <q-card flat bordered class="app-surface overflow-hidden">
-                <GitActionList :disabled="saving" :target-branch="targetBranch" @refresh="refreshCommands" />
+                <GitActionList :disabled="saving" @refresh="refreshCommands" />
               </q-card>
             </section>
             <section v-if="repository?.repository || initCommand || finishAvailable" aria-labelledby="git-settings-title">
@@ -157,8 +157,7 @@ const remote = computed(() => boundContext.value && Object.hasOwn(binding.value,
   ? binding.value.remote : projectDefaults.value?.gitRemote || repository.value?.defaultRemote)
 const targetBranch = computed(() => (boundContext.value ? binding.value.targetBranch : null) || projectDefaults.value?.gitTargetBranch || repository.value?.defaultBranch)
 const finishAvailable = computed(() => Boolean(commands.finishEntry || (catalog.items.some(command => command.source === 'git' && command.name === 'git-finish')
-  && repository.value?.worktrees?.some(item => item.path === repository.value.repository && !item.main
-    && item.path !== projectDefaults.value?.defaultCurrentDirectory))))
+  && repository.value?.repository)))
 const finishDisabled = computed(() => commands.finishEntry
   ? commands.messageDisabled || commands.finishEntry.id === chat.queueSendingEntryId
   : saving.value || (catalog.loading && !catalog.loaded) || commands.messageDisabled)
