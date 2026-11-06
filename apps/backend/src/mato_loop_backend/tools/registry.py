@@ -629,7 +629,6 @@ class ToolRegistry:
             # Keep legacy direct calls and saved policies, but offer one settings tool to models.
             definitions.pop("update_agent_identity", None)
             definitions.pop("update_user_profile", None)
-            definitions.pop("variable_write", None)
         if "context_search" in definitions:
             definitions.pop("memory_retrieve", None)
             definitions.pop("session_search", None)
@@ -662,6 +661,8 @@ class ToolRegistry:
                 item.name != "webfetch" or webfetch_provider_available(integration_settings)
             )
         }
+        if "customize_matoloop" in available_names:
+            available_names.discard("variable_write")
         if "context_search" in available_names and tool_settings is not None:
             from mato_loop_backend.tools.context_search import source_available
 

@@ -423,7 +423,6 @@ CODING_PROFILE_TOOL_AVAILABILITY = dict.fromkeys(
         "run_automation", "delete_automation",
         "memory_write", "memory_browse",
         "save_skill", "edit_skill",
-        "variable_read", "variable_write",
         "customize_matoloop",
     ),
     False,

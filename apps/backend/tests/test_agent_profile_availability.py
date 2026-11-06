@@ -72,9 +72,9 @@ def test_coding_profiles_share_slim_overridable_tool_baseline(profile):
     for name in ("task", "web_search", "webfetch", "search_tools", "memory_retrieve", "update_agent_identity"):
         assert profile.tool_availability.get(name) is not False
     assert source_available(ToolSettings(tool_availability=profile.tool_availability), "memories")
-    assert "secret_input" in tool_registry.effective(
+    assert {"secret_input", "variable_read", "variable_write"} <= tool_registry.effective(
         IntegrationSettings(), tool_settings=ToolSettings(tool_availability=profile.tool_availability),
-    ).tools
+    ).tools.keys()
     for name in ("memory_write", "list_automations", "select_execution_agent", "save_skill"):
         assert profile.tool_availability[name] is False
     overridden = apply_profile_overrides(profile, AgentProfileAccessOverrides(
