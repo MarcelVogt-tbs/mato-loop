@@ -56,13 +56,17 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 ## Development Environment
 
 - Use only `docker-compose.dev.yaml` through `./scripts/dev.sh` for development work.
+- Run commands from the intended worktree using its own scripts. Stack names are worktree-local and Docker assigns host ports; use the URLs printed by `up` or `status`, not fixed ports. See [the development guide](docs/development.md#parallel-worktrees) for configuration and existing-stack migration.
+- Start services only when the selected check needs them. Ordinary checks and unit tests do not require a full running stack.
+- Before browser validation, verify that the target instance mounts the intended worktree. A running Agent container does not prove that it is paired with this instance.
+- Do not share another instance's database, Agent state, credentials or pairing state, or bypass checkout ownership checks. Keep existing instances untouched unless explicitly asked to operate on them.
 - Run evaluations through `./scripts/eval.sh`; it delegates to `./scripts/dev.sh compose` and adds `docker-compose.eval.yaml` only for evaluation-specific services.
 - Start the prepared production stack only when explicitly requested.
 - The development stack consists of `db`, `embedding`, `backend`, `frontend`, and `matoloop-agent`.
-- Backend development data lives in the `db_data` and `app_data` named volumes. MatoLoop Agent state uses the configured host bind mount; its `/workspace` home uses the `matoloop_agent_workspace` named volume.
+- Backend development data lives in the `db_data` and `app_data` named volumes. MatoLoop Agent state uses `matoloop_agent_data`; its `/workspace` home uses `matoloop_agent_workspace`.
 - Python and frontend dependencies also live in named volumes.
 - The repository bind mounts at `/workspace` (backend/frontend) and `/source` (Agent) exist only for HMR and live code changes.
-- `./scripts/dev.sh reset-storage` deletes persistent development data and must never be run incidentally.
+- `down` retains data. Run `reset-storage` or `down --volumes` only on explicit user request to delete the affected instance's data; confirmation flags are not authorization. These operations also delete Agent state and pairing stored in named volumes.
 
 ## Backend
 

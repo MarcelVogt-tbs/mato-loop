@@ -1,5 +1,6 @@
 .env
 .env.*.override
+.docker/
 .idea/
 .vscode/
 .pytest_cache/

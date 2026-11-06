@@ -12,30 +12,37 @@ Use `./scripts/dev.sh` from the repository root for all development containers, 
 ./scripts/dev.sh doctor
 ```
 
-Default endpoints are the Web UI at `http://localhost:10020`, handbook at `/docs/`, API at `http://localhost:6020/api`, and OpenAPI at `/api/docs` on the backend. `up --pwa --build -d` enables the installable web-app development mode. Mobile PWA tests require HTTPS.
+Requirements on the development host are Bash, Python 3, sha256sum, and Docker Compose v2.24 or newer. `up` starts detached, waits for service readiness (up to 15 minutes), and prints the worktree, stack name, Web UI URL and API URL. `-d` remains accepted but is redundant. Use `logs` to follow output. The handbook is at `/docs/` on the Web UI and OpenAPI at `/api/docs` on the backend. `up --pwa --build` enables the installable web-app development mode. Mobile PWA tests require HTTPS.
 
 Python and frontend sources reload from the repository mount. Agent Python changes restart its in-memory runtime, including running browsers; durable Agent data and profiles remain.
 
 ## Parallel worktrees
 
-The tracked `.env.dev` sets the Compose project name to `mato-loop`; it is **not automatically worktree-local**. Before starting another checkout, create a gitignored `.env.dev.override` with a unique project name and unused host ports, for example:
+Run the same commands inside each worktree. `dev.sh` derives the project name from the checkout path; Docker assigns available host ports. `up` and `status` show the current URLs through `docker compose port`. Ports can change when containers are recreated, including after `down`. Container ports remain 6020 and 10020; set explicit host ports in `.env.dev.override` only when stable URLs are needed.
+
+Each project has its own containers, network, named volumes, development image tags and session cookie name. Agent state and pairing use the project-local `matoloop_agent_data` named volume; source code remains bind-mounted for live reload. `status` shows the checkout, URLs and service health; `doctor` additionally checks backend/frontend responses, pgvector and embeddings. Commands reject a project whose containers or labeled volumes belong to another checkout.
+
+The first Web UI visit offers the normal account setup. Create a separate test account, configure a model, and pair this instance's Agent through the normal setup workflow. Existing accounts, provider credentials and pairing state are not copied. Starting a container does not prove that its Agent is paired; inspect `logs matoloop-agent` when testing Agent functionality. See the [handbook](user/index.md) for application configuration.
+
+Configuration precedence is shell environment, `.env.dev.override`, then tracked `.env.dev`. The path-derived project name is the default. Use `.env.dev.override` for deliberate instance overrides, for example:
 
 ```dotenv
 MATO_LOOP_COMPOSE_PROJECT_NAME=mato-loop-my-task
 MATO_LOOP_HOST_BACKEND_PORT=16020
 MATO_LOOP_HOST_FRONTEND_PORT=16021
-MATOLOOP_AGENT_DATA=./data/my-task-agent
 ```
 
-Choose unused values for your host. Relative bind paths resolve within that checkout; do not point them at another Agent's state. The Agent workspace volume follows the Compose project name. Backend/frontend image names follow the Compose project; the development Agent image has the shared tag `matoloop-agent-dev`, so coordinate Agent image rebuilds between worktrees. A documentation-only `compose run --no-deps backend` does not need the Agent or exposed service ports.
+Choose unused host ports and unique project/image names. Relative bind paths resolve within that checkout. `compose` accepts `-f <overlay>` and `--profile <name>` before its subcommand; configure instance overrides in the file above rather than passing project/directory/environment-file flags. `config --format json` is available for automation. Resolved configuration can contain credentials; do not publish its output.
 
-`dev.sh check` and `test` mask installed dependency environments with temporary anonymous volumes, while named download caches follow the selected Compose project. These commands do not make the database, service containers, or bind-mounted Agent state worktree-local by themselves.
+Existing stacks are not adopted automatically. Keep an older stack on its original checkout and development script until you deliberately migrate it. For new development, start an isolated stack and use the normal account/model/Agent setup; do not reuse an old project name or Agent state. To preserve old application data, back it up and restore it into a separately verified isolated instance. Unlabeled or foreign volumes are rejected, not relabeled or deleted. Before moving a checkout, remove its containers from the old path; the new path derives a different stack name.
+
+`dev.sh check` and `test` mask installed dependency environments with temporary anonymous volumes, while named download caches follow the selected Compose project. A documentation-only `compose run --no-deps backend` needs neither the Agent nor exposed service ports.
 
 ## Data
 
-The selected Compose project owns `app_data` (backend files and secrets), `db_data`, `embedding_cache`, `backend_uv_data`, `frontend_node_modules`, `frontend_yarn_cache`, `matoloop_agent_dependency_data`, and `matoloop_agent_workspace` (Agent home at `/workspace`). Agent state remains a bind mount under `MATOLOOP_AGENT_DATA`. The development workspace no longer uses `MATOLOOP_AGENT_HOME`. Infinity's pinned model download can take minutes on first start. Its model cache is reproducible; lexical search remains available during embedding degradation.
+The selected Compose project owns `app_data` (backend files and secrets), `db_data`, `embedding_cache`, `backend_uv_data`, `frontend_node_modules`, `frontend_yarn_cache`, `matoloop_agent_dependency_data`, `matoloop_agent_data` (Agent state and pairing), and `matoloop_agent_workspace` (Agent home at `/workspace`). The development stack does not use `MATOLOOP_AGENT_DATA` or `MATOLOOP_AGENT_HOME`. Infinity's pinned model download can take minutes on first start. Its model cache is reproducible; lexical search remains available during embedding degradation.
 
-`stop` stops services; `down` removes containers. **`reset-storage` removes all named development volumes, including accounts, database, secrets, backend files, and the Agent workspace.** It does not remove the Agent state bind path. Never run it as incidental cleanup, especially where checkouts share a project name.
+`stop` stops services; `down` removes containers while retaining data. **`reset-storage` removes containers and all named development volumes, including accounts, database, secrets, backend files, Agent state, pairing and the Agent workspace.** It prints the affected instance and requires typing its project name. Non-interactive callers must explicitly pass `reset-storage --yes`. `down --volumes` also requires confirmation. Never use these commands as incidental cleanup. After a reset, set up the account and pair the Agent again. Old host bind directories are not deleted or migrated automatically.
 
 ## Checks, migrations, and evaluations
 

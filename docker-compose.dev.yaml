@@ -1,4 +1,8 @@
-name: ${MATO_LOOP_COMPOSE_PROJECT_NAME:-mato-loop}
+name: ${MATO_LOOP_COMPOSE_PROJECT_NAME:-${MATO_LOOP_DEV_PROJECT_NAME:?Use ./scripts/dev.sh}}
+
+x-dev-volume: &dev-volume
+  labels:
+    matoloop.dev.worktree: ${MATO_LOOP_DEV_WORKTREE:?Use ./scripts/dev.sh}
 
 services:
   db:
@@ -71,12 +75,14 @@ services:
       UV_CACHE_DIR: /opt/mato-loop/backend/uv-cache
       MATO_LOOP_DATA_DIR: /data
       MATO_LOOP_STATIC_DIR: /tmp/mato-loop-static
+      MATO_LOOP_BIND_BACKEND_PORT: ${MATO_LOOP_BIND_BACKEND_PORT:-6020}
+      MATO_LOOP_SESSION_COOKIE_NAME: ${MATO_LOOP_SESSION_COOKIE_NAME:-${COMPOSE_PROJECT_NAME}_session}
     volumes:
       - .:/workspace
       - app_data:/data
       - backend_uv_data:/opt/mato-loop/backend
     ports:
-      - "${MATO_LOOP_HOST_BACKEND_PORT:-6020}:${MATO_LOOP_BIND_BACKEND_PORT:-6020}"
+      - "${MATO_LOOP_HOST_BACKEND_PORT:-0}:${MATO_LOOP_BIND_BACKEND_PORT:-6020}"
     depends_on:
       db:
         condition: service_healthy
@@ -112,7 +118,7 @@ services:
       - frontend_node_modules:/workspace/apps/frontend/node_modules
       - frontend_yarn_cache:/opt/mato-loop/yarn-cache
     ports:
-      - "${MATO_LOOP_HOST_FRONTEND_PORT:-10020}:${MATO_LOOP_BIND_FRONTEND_PORT:-10020}"
+      - "${MATO_LOOP_HOST_FRONTEND_PORT:-0}:${MATO_LOOP_BIND_FRONTEND_PORT:-10020}"
     depends_on:
       backend:
         condition: service_healthy
@@ -126,8 +132,15 @@ services:
     networks:
       - mato-loop
 
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:' + process.env.MATO_LOOP_BIND_FRONTEND_PORT).then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
   matoloop-agent:
-    image: ${MATOLOOP_AGENT_DEV_IMAGE:-matoloop-agent-dev}
+    image: ${MATOLOOP_AGENT_DEV_IMAGE:-${COMPOSE_PROJECT_NAME}-matoloop-agent-dev}
     build:
       context: ./apps/matoloop-agent
       dockerfile: Dockerfile.dev
@@ -147,7 +160,7 @@ services:
       MATOLOOP_AGENT_PAIRING_TOKEN: ${MATOLOOP_AGENT_PAIRING_TOKEN:-}
     volumes:
       - .:/source
-      - ${MATOLOOP_AGENT_DATA:-./data/matoloop-agent}:/data
+      - matoloop_agent_data:/data
       - matoloop_agent_workspace:/workspace
       - matoloop_agent_dependency_data:/opt/matoloop-agent
     depends_on:
@@ -165,14 +178,24 @@ services:
 
 volumes:
   app_data:
+    <<: *dev-volume
   db_data:
+    <<: *dev-volume
   embedding_cache:
+    <<: *dev-volume
   backend_uv_data:
+    <<: *dev-volume
   frontend_node_modules:
+    <<: *dev-volume
   frontend_yarn_cache:
+    <<: *dev-volume
   matoloop_agent_dependency_data:
+    <<: *dev-volume
   matoloop_agent_workspace:
+    <<: *dev-volume
+  matoloop_agent_data:
+    <<: *dev-volume
 
 networks:
   mato-loop:
-    name: ${MATO_LOOP_COMPOSE_PROJECT_NAME:-mato-loop}_default
+    name: ${COMPOSE_PROJECT_NAME}_default

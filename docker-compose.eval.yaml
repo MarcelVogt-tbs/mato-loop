@@ -25,3 +25,5 @@ services:
 
 volumes:
   shell_decider_eval_cache:
+    labels:
+      matoloop.dev.worktree: ${MATO_LOOP_DEV_WORKTREE:?Use ./scripts/eval.sh}

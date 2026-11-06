@@ -101,16 +101,11 @@ Use the Docker development stack from the repository root:
 ./scripts/dev.sh up --build -d
 ```
 
-| Endpoint | Default URL |
-| --- | --- |
-| Web UI | http://localhost:10020 |
-| User handbook | http://localhost:10020/docs/ |
-| Backend API | http://localhost:6020/api |
-| OpenAPI | http://localhost:6020/api/docs |
+The command starts detached, waits for readiness, and prints the worktree-specific Web UI and API URLs. The handbook is at `/docs/` on the Web UI; OpenAPI is at `/api/docs` on the backend. Use `./scripts/dev.sh status` to see the URLs again.
 
 The stack uses FastAPI, Pydantic v2, async SQLAlchemy, PostgreSQL/pgvector, Infinity, Vue 3, Quasar, Pinia, and Vue Router. Dependencies are managed with `uv` and Yarn 4.
 
-`.env.dev` is ready to use. Put local settings in the gitignored `.env.dev.override`; start from `.env.dev.override.example`. **Parallel checkouts need distinct Compose project names, ports, and Agent state bind paths**; see [development and documentation maintenance](docs/development.md).
+`.env.dev` is ready to use. Stack names, host ports, data volumes and development image tags are automatically isolated per checkout. Put deliberate local overrides in the gitignored `.env.dev.override`; start from `.env.dev.override.example`. For existing stacks, follow the [development guide's ownership and configuration steps](docs/development.md#parallel-worktrees) before switching.
 
 Use the [development guide](docs/development.md) for checks, migrations, logs, data storage and evaluations. `check` and `test` accept a component target; without one they run all components. Never use `reset-storage` as routine cleanup: it deletes persistent development data.
 

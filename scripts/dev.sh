@@ -1,16 +1,50 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-COMPOSE_FILE="docker-compose.dev.yaml"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 compose() {
-    local args=(docker compose --env-file .env.dev)
-    if [[ -f .env.dev.override ]]; then
-        args+=(--env-file .env.dev.override)
+    export MATO_LOOP_DEV_WORKTREE="$PROJECT_ROOT"
+    export MATO_LOOP_DEV_PROJECT_NAME="mato-loop-$(printf '%s' "$PROJECT_ROOT" | sha256sum | cut -c1-12)"
+    local command=(docker compose --env-file .env.dev)
+    if [[ -f .env.dev.override ]]; then command+=(--env-file .env.dev.override); fi
+    command+=(-f docker-compose.dev.yaml)
+    # Only overlays/profiles precede the subcommand; Compose handles service arguments.
+    while [[ "${1:-}" == -f || "${1:-}" == --profile ]]; do
+        command+=("$1" "${2:?Missing Compose option value}"); shift 2
+    done
+    [[ "${1:-}" != -* ]] || { echo 'Use .env.dev.override for instance settings.' >&2; return 1; }
+    local config arg project answer deleting=false
+    config="$("${command[@]}" config --format json)"
+    python3 "$PROJECT_ROOT/scripts/dev-instance.py" "$PROJECT_ROOT" <<< "$config"
+    if [[ "${1:-}" == down ]]; then
+        for arg in "${@:2}"; do
+            if [[ "$arg" == --volumes* || ( "$arg" == -[^-]* && "$arg" == *v* ) ]]; then
+                deleting=true
+                break
+            fi
+        done
     fi
-    args+=(-f "$COMPOSE_FILE" "$@")
-    "${args[@]}"
+    if [[ "$deleting" == true ]]; then
+        printf 'Worktree: %s\n' "$PROJECT_ROOT" >&2
+        printf '%s\n' 'This deletes named volumes, including accounts, secrets, Agent state, pairing and Agent workspace.' >&2
+        if [[ "${RESET_CONFIRMED:-false}" != true ]]; then
+            project="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])' <<< "$config")"
+            [[ -t 0 ]] || { echo 'Use reset-storage --yes for explicit non-interactive deletion.' >&2; return 1; }
+            read -r -p "Type $project to delete its volumes: " answer
+            [[ "$answer" == "$project" ]] || return 1
+        fi
+    fi
+    "${command[@]}" "$@"
+    if [[ "${1:-}" == up || "${1:-}" == ps ]]; then
+        printf 'Worktree: %s\n' "$PROJECT_ROOT" >&2
+        local service binding port
+        for service in frontend backend; do
+            port="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["services"][sys.argv[1]]["ports"][0]["target"])' "$service" <<< "$config")"
+            binding="$("${command[@]}" port "$service" "$port" 2>/dev/null)" || continue
+            printf '%s: http://localhost:%s\n' "$service" "${binding##*:}" >&2
+        done
+    fi
 }
 
 usage() {
@@ -18,15 +52,15 @@ usage() {
         "Usage: ./scripts/dev.sh <command> [args]" \
         "" \
         "Commands:" \
-        "  up [--pwa] [--build] [-d] Start the development stack" \
+        "  up [--pwa] [--build] [-d] Start detached and wait for readiness" \
         "  stop [service]      Stop services" \
         "  down                Remove containers" \
-        "  reset-storage       Remove containers and volumes" \
+        "  reset-storage [--yes] Delete named volumes, including Agent state, after confirmation" \
         "  logs [service]      Show logs" \
-        "  status              Show service status" \
+        "  status              Show worktree, URLs, and service status" \
         "  config              Show the resolved Compose configuration" \
         "  compose [args]      Run Docker Compose with development configuration" \
-        "  doctor              Check pgvector and the embedding index" \
+        "  doctor              Check instance ownership, readiness, pgvector and embeddings" \
         "  db [args]           Run Alembic" \
         "  lock <target>       Update the backend, frontend, or MatoLoop Agent lockfile" \
         "  format <target>     Format backend or MatoLoop Agent code" \
@@ -121,16 +155,24 @@ case "${1:-}" in
         if [[ "$pwa" == true ]]; then
             export MATO_LOOP_FRONTEND_MODE=pwa
         fi
-        compose up "${up_args[@]}"
+        compose up --wait --wait-timeout 900 "${up_args[@]}"
         ;;
     stop) shift; compose stop "$@" ;;
     down) shift; compose down "$@" ;;
-    reset-storage) compose down -v ;;
+    reset-storage)
+        [[ $# == 1 || ( $# == 2 && "$2" == --yes ) ]] || { usage >&2; exit 1; }
+        RESET_CONFIRMED=false
+        if [[ "${2:-}" == --yes ]]; then RESET_CONFIRMED=true; fi
+        compose down --volumes
+        ;;
     logs) shift; compose logs -f "$@" ;;
     status) compose ps ;;
-    config) compose config ;;
+    config) shift; compose config "$@" ;;
     compose) shift; compose "$@" ;;
     doctor)
+        compose ps --all
+        compose exec -T backend sh -lc 'curl -fsS "http://localhost:$MATO_LOOP_BIND_BACKEND_PORT/api/health"'
+        compose exec -T frontend node -e 'fetch("http://localhost:" + process.env.MATO_LOOP_BIND_FRONTEND_PORT).then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))'
         compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT extversion AS vector_version FROM pg_extension WHERE extname = '\''vector'\'';"'
         compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT format_type(a.atttypid, a.atttypmod) AS embedding_type FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname = '\''memory_embeddings'\'' AND a.attname = '\''embedding'\'';"'
         compose exec -T db sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT format_type(a.atttypid, a.atttypmod) AS episode_embedding_type FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname = '\''message_search_chunks'\'' AND a.attname = '\''embedding'\'';"'
