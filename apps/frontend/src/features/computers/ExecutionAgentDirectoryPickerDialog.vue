@@ -26,16 +26,24 @@
           :disable="currentPath === '/' || loading"
           @click="load(parentPath(currentPath))"
         />
-        <q-breadcrumbs class="col q-px-sm" gutter="xs" active-color="primary">
-          <template #separator><q-icon name="chevron_right" size="18px" /></template>
-          <q-breadcrumbs-el
-            v-for="crumb in breadcrumbs"
-            :key="crumb.path"
-            :label="crumb.label"
-            :class="{ 'cursor-pointer': crumb.path !== currentPath && !loading }"
-            @click="crumb.path !== currentPath && !loading && load(crumb.path)"
-          />
-        </q-breadcrumbs>
+        <InlineToolbarSearch
+          v-if="modelValue"
+          v-model="search"
+          placeholder="Geladene Ordner filtern"
+          search-label="Ordner durchsuchen"
+          :disable="loading || loadFailed || !executionAgentId"
+        >
+          <q-breadcrumbs class="col q-px-sm" gutter="xs" active-color="primary">
+            <template #separator><q-icon name="chevron_right" size="18px" /></template>
+            <q-breadcrumbs-el
+              v-for="crumb in breadcrumbs"
+              :key="crumb.path"
+              :label="crumb.label"
+              :class="{ 'cursor-pointer': crumb.path !== currentPath && !loading }"
+              @click="crumb.path !== currentPath && !loading && load(crumb.path)"
+            />
+          </q-breadcrumbs>
+        </InlineToolbarSearch>
         <q-btn
           flat
           round
@@ -66,7 +74,7 @@
         </div>
         <q-list v-else separator>
           <q-item
-            v-for="entry in directories"
+            v-for="entry in filteredDirectories"
             :key="entry.path"
             clickable
             :disable="loading"
@@ -80,8 +88,10 @@
             </q-item-section>
             <q-item-section side><q-icon name="chevron_right" /></q-item-section>
           </q-item>
-          <q-item v-if="!loading && !directories.length">
-            <q-item-section class="app-muted text-center">Keine Unterordner vorhanden.</q-item-section>
+          <q-item v-if="!loading && !filteredDirectories.length">
+            <q-item-section class="app-muted text-center">
+              {{ search ? 'Keine passenden geladenen Ordner.' : 'Keine Unterordner vorhanden.' }}
+            </q-item-section>
           </q-item>
           <q-item v-if="nextOffset !== null" clickable :disable="loading" @click="load(currentPath, true)">
             <q-item-section class="text-primary text-center">Weitere Ordner laden</q-item-section>
@@ -110,6 +120,7 @@ import { computed, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { api } from 'src/boot/axios'
 import { absoluteComputerPath, parentPath } from 'src/features/files/state'
+import InlineToolbarSearch from 'src/shared/ui/InlineToolbarSearch.vue'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -121,6 +132,10 @@ const $q = useQuasar()
 
 const currentPath = ref('/')
 const directories = ref([])
+const search = ref('')
+const filteredDirectories = computed(() => directories.value.filter((entry) =>
+  entry.name.toLocaleLowerCase().includes(search.value.toLocaleLowerCase())
+))
 const nextOffset = ref(null)
 const loading = ref(false)
 const loadFailed = ref(false)
@@ -168,6 +183,7 @@ async function load(path, append = false) {
       suppressErrorToast: true
     })
     if (version !== requestVersion) return
+    if (data.path !== currentPath.value) search.value = ''
     currentPath.value = data.path
     const items = data.entries.filter((entry) => entry.kind === 'directory')
     directories.value = append ? [...directories.value, ...items] : items
@@ -225,6 +241,7 @@ watch(
   () => [props.modelValue, props.executionAgentId],
   ([open]) => {
     if (!open) return
+    search.value = ''
     currentPath.value = startPath()
     directories.value = []
     nextOffset.value = null

@@ -16,6 +16,8 @@ Dateien werden zwischen Ablage und Computer nur ausdrücklich kopiert, nicht aut
 2. Öffne über das Ordnersymbol die Ordnerauswahl.
 3. Wähle **Diesen Ordner auswählen**. Alternativ übernimm einen Ordner aus **Computer-Dateien**.
 
+Das Suchsymbol rechts in der Ordnerauswahl öffnet ein Suchfeld in der Pfadleiste. Es filtert nur bereits geladene Ordner nach Namen, unabhängig von Groß- und Kleinschreibung; Unterordner werden nicht durchsucht. Über **Weitere Ordner laden** ergänzt du die Liste. Mit dem X oder `Esc` entfernst du den Filter und kehrst zur Pfadnavigation zurück.
+
 Neue Sessions haben ohne ausdrückliche Auswahl oder Projektvorgabe keinen Arbeitsordner. Beim Computerwechsel wird dessen Home übernommen. Plan und Build benötigen einen zugänglichen Arbeitsordner. Unter Linux verwendest du absolute POSIX-Pfade, unter Windows etwa `C:/Users/Ada/workspace`.
 
 Eine Ordnerauswahl erlaubt Navigation im gewählten Baum, keine Datei- oder Shell-Aktionen. Diese unterliegen ihren eigenen [Rechten und Freigaben](freigaben-und-datenfreigabe.md). Computerwechsel des Modells benötigen ebenfalls passende Rechte. Bei Verbindungsverlust erfolgt kein automatischer Wechsel oder erneuter Versuch.
