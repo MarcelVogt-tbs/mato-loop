@@ -428,13 +428,13 @@ async def test_git_commands_are_prepared_without_git_prerequisites(monkeypatch, 
         "Reuse reviews and successful checks only when their evidence still covers the current code",
         "A commit alone does not invalidate a review of unchanged content",
         "When this action requires review or checks",
-        "If required evidence is missing, incomplete or stale, perform the necessary review and checks",
+        "cover missing, incomplete or stale evidence and rerun affected checks",
         "Reuse never bypasses current permission and target checks",
     ))
-    assert (
+    assert ((
         "Finish, Merge and PR require a separate worktree; if attached, its source branch must differ from the target. "
         "Otherwise stop and ask the user to select a suitable worktree in the Git app."
-    ) in task["instructions"]
+    ) in task["instructions"]) == (name in {"git-finish", "git-merge", "git-pr"})
 
 
 def test_existing_session_cannot_change_workspace_mode():
