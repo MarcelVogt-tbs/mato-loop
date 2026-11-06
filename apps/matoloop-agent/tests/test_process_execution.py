@@ -100,16 +100,18 @@ class ProcessExecutionTests(unittest.IsolatedAsyncioTestCase):
         os.set_inheritable(descriptor, True)
         self.addCleanup(os.close, descriptor)
         probe = (
-            "import os, subprocess, sys\n"
-            f"expected = {str(self.current)!r}\n"
-            "assert os.getcwd() == os.environ['PWD'] == os.environ['HOME'] == expected\n"
+            "import os, pwd, subprocess, sys\n"
+            f"expected = sys.argv[1] if len(sys.argv) > 1 else {str(self.current)!r}\n"
+            "assert os.getcwd() == expected\n"
+            f"assert os.environ['PWD'] == {str(self.current)!r}\n"
+            "assert os.environ['HOME'] == pwd.getpwuid(os.geteuid()).pw_dir\n"
             "assert not {'API_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'BASH_ENV', 'ENV', "
             "'PYTHONPATH', 'LD_PRELOAD', 'VIRTUAL_ENV'} & os.environ.keys()\n"
             "assert not any(os.path.realpath('/proc/self/fd/' + fd) == "
             f"{str(credential)!r} for fd in os.listdir('/proc/self/fd'))\n"
             "if len(sys.argv) == 1:\n"
             "    for key in ('PWD', 'HOME'):\n"
-            "        subprocess.run([sys.executable, 'probe.py', 'child'], "
+            "        subprocess.run([sys.executable, os.path.abspath(__file__), os.environ[key]], "
             "cwd=os.environ[key], close_fds=True, check=True)\n"
             "print('nested-ok')\n"
         )

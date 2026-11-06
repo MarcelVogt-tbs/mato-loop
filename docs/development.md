@@ -38,6 +38,8 @@ Existing stacks are not adopted automatically. Keep an older stack on its origin
 
 `dev.sh check` and `test` mask installed dependency environments with temporary anonymous volumes, while named download caches follow the selected Compose project. A documentation-only `compose run --no-deps backend` needs neither the Agent nor exposed service ports.
 
+Agent tests use a disposable source copy inside the container, including current uncommitted code and a host-resolved version stamp. Only that copy is made readable to the isolated browser user; private checkout permissions remain unchanged and external worktree Git metadata need not be mounted.
+
 ## Data
 
 The selected Compose project owns `app_data` (backend files and secrets), `db_data`, `embedding_cache`, `backend_uv_data`, `frontend_node_modules`, `frontend_yarn_cache`, `matoloop_agent_dependency_data`, `matoloop_agent_data` (Agent state and pairing), and `matoloop_agent_workspace` (Agent home at `/workspace`). The development stack does not use `MATOLOOP_AGENT_DATA` or `MATOLOOP_AGENT_HOME`. Infinity's pinned model download can take minutes on first start. Its model cache is reproducible; lexical search remains available during embedding degradation.

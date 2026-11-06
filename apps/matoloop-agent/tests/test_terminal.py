@@ -13,6 +13,9 @@ from matoloop_agent.process import ProcessRunner
 from matoloop_agent.protocol import Request
 from matoloop_agent.terminal import PTY_AVAILABLE, TerminalManager
 
+if PTY_AVAILABLE:
+    import pwd
+
 AGENT_ID = "2ea504cc-e3c6-4e0d-aa05-080328100fe8"
 TERMINAL_ID = "bbc46aa8-698d-4554-92c2-1cd5c6cc33a6"
 TERMINAL_OPERATIONS = {
@@ -148,7 +151,7 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["stderrBytes"], 0)
             self.assertFalse(result["stderrTruncated"])
             self.assertIn(
-                f"__ENV__{current}|{current}|31 99",
+                f"__ENV__{pwd.getpwuid(os.geteuid()).pw_dir}|{current}|31 99",
                 "".join(data for _channel, data in output),
             )
             with self.assertRaises(AgentError):
@@ -176,7 +179,7 @@ class TerminalTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(restricted["exitCode"], 0)
             self.assertIn(os.fspath(current), "".join(data for _channel, data in output))
             environment = environment_builder(*build_environment.call_args.args)
-            self.assertEqual(environment["HOME"], os.fspath(current))
+            self.assertEqual(environment["HOME"], pwd.getpwuid(os.geteuid()).pw_dir)
             self.assertEqual(
                 environment["PATH"],
                 "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",

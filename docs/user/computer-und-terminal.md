@@ -85,6 +85,8 @@ Neuladen, Zuklappen und Sessionwechsel erhalten die persönliche Shell. Der neue
 
 Jeder Agentenbefehl startet einen frischen Prozess im gewählten Sessionordner. Variablen, Aliase, Funktionen und `cd` werden weder zwischen Aufrufen noch aus deinem persönlichen Terminal übernommen. Wechsle den Session-Arbeitsordner ausdrücklich; zusammengehörige Shellschritte gehören in denselben Aufruf.
 
+Unter Linux bleibt `HOME` das Benutzerverzeichnis des ausführenden Betriebssystemkontos, auch im Worktree und im persönlichen Terminal. `PWD` bezeichnet den Arbeitsordner. Programme können dadurch deine Benutzerkonfiguration verwenden, etwa die globale Git-Identität; im Container gilt das Benutzerverzeichnis des Containerkontos. Andere Host-Umgebungsvariablen werden nicht pauschal übernommen. Temporärdateien gehören weiterhin in den Session-Tempordner.
+
 ## Aktualisieren oder Probleme beheben
 
 Updates und ältere Installationsstände behandelt [Aktualisierung und Upgrade-Hinweise](aktualisierung.md#computer-agents-aktualisieren). Bei fehlenden Funktionen prüfe Computerstatus, gewählten Sessioncomputer, Profilrechte und die gemeldeten Operationen. Ein Verbindungsverlust löst keinen automatischen Computerwechsel oder erneute Ausführung aus.

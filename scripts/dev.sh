@@ -105,7 +105,36 @@ test_frontend() {
 }
 
 test_matoloop_agent() {
-    run_matoloop_agent "uv sync --frozen && uv run --no-sync python -m unittest discover -s tests -v"
+    local version command
+    version="$(python3 libs/python/version/src/matoloop_version/__init__.py)"
+    command="$(cat <<'SH'
+set -eu
+snapshot=$(mktemp -d /tmp/matoloop-agent-tests.XXXXXXXX)
+trap 'rm -rf "$snapshot"' EXIT
+python3 - "$snapshot" "$1" <<'PY'
+import importlib.util
+import shutil
+import sys
+from pathlib import Path
+
+source = Path('/source')
+snapshot = Path(sys.argv[1]) / 'source'
+spec = importlib.util.spec_from_file_location('installer', source / 'scripts/matoloop-agent-installer.py')
+installer = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(installer)
+installer.copy_source(source, snapshot)
+shutil.copytree(source / 'apps/matoloop-agent/tests', snapshot / 'apps/matoloop-agent/tests',
+                ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+(snapshot / 'libs/python/version/src/matoloop_version/build-version.txt').write_text(sys.argv[2] + '\n')
+PY
+# Only the disposable code copy is made readable; the checkout remains untouched.
+chmod -R a+rX "$snapshot"
+cd "$snapshot/source/apps/matoloop-agent"
+uv sync --frozen
+uv run --no-sync python -m unittest discover -s tests -v
+SH
+)"
+    run_matoloop_agent "set -- '$version'; $command"
 }
 
 test_rag() {

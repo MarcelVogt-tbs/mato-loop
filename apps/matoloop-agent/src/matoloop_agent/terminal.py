@@ -76,7 +76,7 @@ class TerminalManager:
     def _personal_environment(self) -> dict[str, str]:
         username = pwd.getpwuid(os.getuid()).pw_name
         return {
-            "HOME": self.home,
+            "HOME": pwd.getpwuid(os.geteuid()).pw_dir,
             "SHELL": os.fspath(self.shell),
             "TERM": os.environ.get("TERM", "xterm-256color"),
             "COLORTERM": os.environ.get("COLORTERM", "truecolor"),

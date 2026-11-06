@@ -1964,11 +1964,13 @@ class ProcessRunner:
 
     @staticmethod
     def execution_environment(
-        home: str, inspection: dict | None, environment: dict[str, str] | None = None
+        directory: str, inspection: dict | None, environment: dict[str, str] | None = None
     ) -> dict[str, str]:
+        import pwd
+
         return {
-            "HOME": home,
-            "PWD": home,
+            "HOME": pwd.getpwuid(os.geteuid()).pw_dir,
+            "PWD": directory,
             "LANG": os.environ.get("LANG", "C.UTF-8"),
             "PATH": EXECUTION_PATH,
             **(environment or {}),
