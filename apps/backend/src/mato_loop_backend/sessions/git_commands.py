@@ -45,15 +45,22 @@ PUBLICATION_INSTRUCTIONS = (
     "Do not automatically publish technical worktree branch names; explicit user authorization to use that name is sufficient. "
     "Unmerged worktree commits may be published; prior Finish or local integration is not required. "
 )
+REBASE_INSTRUCTIONS = (
+    "If the target is already an ancestor of HEAD, skip rebasing. Otherwise record HEAD and rebase only this task's "
+    "own unpublished commits onto the target, preserving the current branch or detached HEAD. Verify the commit range "
+    "and publication status against current evidence for relevant remotes; stale tracking refs or author identity alone "
+    "are insufficient. Stop and ask if commits are published, shared, unrelated, include merges, or publication is uncertain. "
+    "Never substitute a merge, drop intended changes or force-push. "
+)
 MERGE_INSTRUCTIONS = (
-    "Local merge only: require a clean workspace and an existing local target branch. "
+    "Local integration only: require a clean workspace and an existing local target branch. "
     "The original checkout may remain dirty or on another branch during workspace preparation and review; leave it unchanged. "
     "Never commit, stash, reset or discard unrelated changes to make it ready. "
-    + COMMIT_RULES + "Merge the current local target into the workspace HEAD without rebasing; necessary merge commits are authorized. "
+    + COMMIT_RULES + "Use the current local target as the rebase target. " + REBASE_INSTRUCTIONS +
     "Resolve clear workspace conflicts preserving both tasks' intended behavior. For ambiguous intent, inspect relevant project "
     "sessions within profile limits, then ask with options and a recommendation; leave the original checkout unchanged. "
-    "After waiting or an answer, finish pending workspace merges and incorporate newer target commits. "
-    "Review the combined result, including semantic merge errors. Fix required integration findings in the workspace, "
+    "After waiting or an answer, inspect and resume only this action's pending rebase; incorporate newer target commits safely. "
+    "Review the combined result, including semantic integration errors. Fix required integration findings in the workspace, "
     "review repairs, rerun affected checks and commit only those repairs. Ask if findings or failed checks cannot be resolved safely in scope. "
     "Before asking about a blocked original checkout, check tool evidence for ongoing work or temporary Git locks. "
     "If confirmed, wait between checks and continue; dirty files alone do not prove ongoing work. Do independent permitted work while blocked; "
@@ -171,8 +178,8 @@ COMMANDS = (
         "Require a clean working tree; otherwise report the blocker and stop. "
         "Keep the current branch or detached HEAD; do not create or switch local branches. "
         + COMMIT_RULES +
-        "Fetch the configured remote target and merge that target into the workspace HEAD, without rebasing. "
-        "A necessary merge commit is authorized. Do not resolve conflicts or repair findings. "
+        "Fetch the configured remote target and use it as the rebase target. " + REBASE_INSTRUCTIONS +
+        "Do not resolve conflicts or repair findings. "
         "Ensure the complete proposed changes have a valid review and successful required checks. " + REVIEW_INSTRUCTIONS +
         "Stop on required findings, conflicts, or failed checks. "
         "Verify the reviewed commit before pushing it to the selected publication branch with a normal non-force push. "

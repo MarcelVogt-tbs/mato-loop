@@ -34,8 +34,8 @@ folgende Befehle zur Verfügung:
 - `/git_init`: Git im gewählten Workspace anlegen, ohne Commit oder Veröffentlichung.
 - `/git_review`: Änderungen einschließlich noch nicht übernommener Commits prüfen.
 - `/git_commit`: Ausgewählte Arbeitsänderungen ausdrücklich committen, ohne Push.
-- `/git_merge`: Aufgabenänderungen bei Bedarf committen und mit dem lokalen Zielbranch
-  zusammenführen, reviewen, prüfen und das ursprüngliche Checkout per Fast-forward
+- `/git_merge`: Aufgabenänderungen bei Bedarf committen, eigene unveröffentlichte Commits auf den lokalen Zielbranch
+  rebasen, reviewen, prüfen und das ursprüngliche Checkout per Fast-forward
   aktualisieren. Kein Fetch oder Push; ein Remote ist nicht erforderlich.
 - `/git_push`: Vorhandene Commits veröffentlichen, ohne Commit oder Merge; bei bereits integriertem Worktree den aktuellen Zielbranch.
 - `/git_pr`: Aufgabenänderungen bei Bedarf committen, den Remote-Zielstand integrieren, prüfen und ohne lokalen Branchwechsel

@@ -61,7 +61,7 @@ def test_pr_preserves_the_branch_binding_for_retries_and_publishes_detached_work
         "ask if its target or name is unclear", "Do not automatically publish technical worktree branch names",
         "prior Finish or local integration is not required", "normal non-force push",
         "Keep the current branch or detached HEAD; do not create or switch local branches",
-        "merge that target into the workspace HEAD", "<reviewed-commit>:refs/heads/<publication-branch>",
+        "use it as the rebase target", "<reviewed-commit>:refs/heads/<publication-branch>",
         "pass the publication branch explicitly as the PR source",
     ))
 
@@ -89,9 +89,16 @@ def test_git_reviews_share_risk_and_simplicity_criteria_without_optional_blocker
 @pytest.mark.parametrize("name", ["git-merge", "git-finish"])
 def test_git_merge_prepares_the_workspace_before_requiring_a_clean_original(name):
     instructions = parse_command(f"/{name}").instructions
-    assert instructions.index("original checkout may remain dirty") < instructions.index("Merge the current local target")
+    assert instructions.index("original checkout may remain dirty") < instructions.index("Use the current local target")
     assert instructions.index("Only before updating the original checkout") < instructions.index("both clean working trees")
     assert "fast-forward-only merge" in instructions
+
+
+@pytest.mark.parametrize("name", ["git-finish", "git-merge", "git-pr"])
+def test_git_integration_rebases_only_own_unpublished_commits(name):
+    from mato_loop_backend.sessions.git_commands import REBASE_INSTRUCTIONS
+
+    assert REBASE_INSTRUCTIONS in parse_command(f"/{name}").instructions
 
 
 def test_git_results_include_full_stored_commit_messages_even_when_integration_is_blocked():

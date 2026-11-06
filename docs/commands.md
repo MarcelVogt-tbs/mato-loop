@@ -188,7 +188,7 @@ selection and ingress semantics.
 | `/git-review` | Review working changes and unpublished commits without editing or publishing. |
 | `/git-commit` | Inspect and explicitly commit selected task changes without fetching or pushing. |
 | `/git-finish` | Complete missing review, repairs, checks, task commits and local integration without publishing. |
-| `/git-merge` | Commit task changes if needed, merge the local target into the worktree, review, check, and fast-forward the clean original checkout. No fetch or push. |
+| `/git-merge` | Commit task changes if needed, rebase own unpublished commits onto the local target, review, check, and fast-forward the clean original checkout. No fetch or push. |
 | `/git-push` | Publish existing commits to a project-appropriate remote branch without committing, fetching or merging. |
 | `/git-pr` | Commit task changes if needed, fetch and integrate the remote target, review, check, publish and create or update the PR. |
 | `/git-sync` | Fetch and fast-forward the clean original project checkout without switching branches or discarding work. |
@@ -202,8 +202,8 @@ The Git catalog is fixed and does not probe repositories or disable commands for
 Git prerequisites. The agent checks those prerequisites when processing the command and
 explains blockers or asks for a decision. Finish, Merge and PR require a separate worktree;
 an attached source branch must differ from the target. Detached HEAD is valid for review,
-commit, Finish, Merge and PR. PR preserves the current branch or detached HEAD, merges into
-that HEAD and publishes the reviewed commit with an explicit remote-branch refspec. The selected
+commit, Finish, Merge and PR. PR preserves the current branch or detached HEAD, rebases own
+unpublished commits onto the fetched target and publishes the reviewed commit with an explicit remote-branch refspec. The selected
 remote publication branch is passed explicitly as the PR source; no local branch is created or switched,
 so the saved branch binding remains valid on retry. If a suitable worktree
 is missing, the agent asks the user to select a
@@ -257,7 +257,11 @@ in the session checkout. Explicit user restrictions on creating commits take pre
 pending changes remain untouched if committing is restricted. Unclear selections require a
 question; unrelated work, staged changes and secrets are excluded. Already committed work needs
 no new task commit. A remaining dirty tree or unresolved failed checks still block integration.
-Necessary merge commits remain authorized unless the user restricts creating commits.
+If the target is already an ancestor of HEAD, no rebase is needed. Otherwise only the task's own
+unpublished commits may be rebased. The agent records HEAD and verifies the range and publication
+status with current remote evidence; stale tracking refs or author identity alone are insufficient.
+Published, shared, unrelated or merge commits, or uncertain publication status, require a question
+before rewriting. No merge or force-push is substituted. Existing target history stays unchanged.
 Review stays report-only; Push, fast-forward Pull, Init and Remote do not create commits.
 Telegram users select an existing coding session with `/sessions` and `/use <ID>`;
 messaging commands never create an unrelated empty session. Web submission can
