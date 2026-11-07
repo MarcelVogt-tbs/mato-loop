@@ -5,15 +5,17 @@ import math
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from io import BytesIO
 from typing import Any
 from uuid import UUID, uuid4
 
+from PIL import Image, ImageOps
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.media.attachments import AttachmentError, image_mime_type, validate_image
 from mato_loop_backend.models import Credential
 from mato_loop_backend.privacy import PseudonymizationError, RequestPseudonymizer
-from mato_loop_backend.providers import azure_speech, codex_images, lemonade
+from mato_loop_backend.providers import azure_speech, codex_images, lemonade, openai_images
 from mato_loop_backend.providers.base import MAX_PROVIDER_IMAGE_BYTES, ProviderError
 from mato_loop_backend.providers.codex_auth import refresh_codex_credential
 from mato_loop_backend.providers.codex_oauth import CODEX_IMAGE_MODEL_ID
@@ -79,13 +81,16 @@ class ImageEditRequest:
 
 _DEFAULT_FIELDS = {
     ModelCapability.IMAGE_GENERATION: "image_generation_model_id",
-    ModelCapability.IMAGE_EDITING: "image_generation_model_id",
+    ModelCapability.IMAGE_EDITING: "image_editing_model_id",
     ModelCapability.SPEECH_GENERATION: "speech_generation_model_id",
     ModelCapability.AUDIO_GENERATION: "audio_generation_model_id",
     ModelCapability.AUDIO_TRANSCRIPTION: "audio_transcription_model_id",
 }
 
 _ADAPTER_CAPABILITIES = {
+    "openai-compatible": frozenset(
+        {ModelCapability.IMAGE_GENERATION, ModelCapability.IMAGE_EDITING}
+    ),
     "azure-speech": frozenset({ModelCapability.AUDIO_TRANSCRIPTION}),
     "lemonade": frozenset(
         {
@@ -139,6 +144,14 @@ def _media_target(
     return provider, model
 
 
+def _default_model_id(settings: AiSettings, capability: ModelCapability) -> UUID | None:
+    field_name = _DEFAULT_FIELDS.get(capability)
+    model_id = getattr(settings, field_name) if field_name is not None else None
+    if capability == ModelCapability.IMAGE_EDITING and model_id is None:
+        return settings.image_generation_model_id
+    return model_id
+
+
 def resolve_media_target(
     settings: AiSettings,
     capability: ModelCapability,
@@ -164,12 +177,7 @@ def resolve_media_target(
         )
         if native is not None:
             return _media_target(settings, capability, native.id)
-    field_name = _DEFAULT_FIELDS.get(capability)
-    return (
-        _media_target(settings, capability, getattr(settings, field_name))
-        if field_name is not None
-        else None
-    )
+    return _media_target(settings, capability, _default_model_id(settings, capability))
 
 
 def media_model_available(
@@ -177,9 +185,8 @@ def media_model_available(
     capability: ModelCapability,
     model_id: UUID | None = None,
 ) -> bool:
-    field_name = _DEFAULT_FIELDS.get(capability)
     candidate_id = model_id if model_id is not None else (
-        getattr(settings, field_name) if field_name is not None else None
+        _default_model_id(settings, capability)
     )
     return _media_target(settings, capability, candidate_id) is not None
 
@@ -237,12 +244,12 @@ async def _protected_text(
         ) from exc
 
 
-async def _generate_image_with_lemonade(
+async def _generate_image_with_openai(
     _db: AsyncSession,
     resolved: ResolvedMediaModel,
     request: ImageGenerationRequest,
 ) -> tuple[bytes, dict[str, Any]]:
-    return await lemonade.generate_image(
+    return await openai_images.generate_image(
         base_url=resolved.base_url,
         api_key=resolved.api_key,
         model=resolved.model.model_id,
@@ -308,7 +315,8 @@ _ImageGenerator = Callable[
     Awaitable[tuple[bytes, dict[str, Any]]],
 ]
 _IMAGE_GENERATORS: dict[str, _ImageGenerator] = {
-    "lemonade": _generate_image_with_lemonade,
+    "lemonade": _generate_image_with_openai,
+    "openai-compatible": _generate_image_with_openai,
     "openai-codex": _generate_image_with_codex,
 }
 
@@ -506,16 +514,23 @@ class MediaService:
         total_bytes = normalized_bytes = 0
         normalized_images = []
         for data, mime_type in images:
+            original_size = len(data)
             try:
                 validated = validate_image(data, mime_type)
+                if validated.mime_type not in {"image/png", "image/jpeg"}:
+                    with Image.open(BytesIO(data)) as source:
+                        buffer = BytesIO()
+                        ImageOps.exif_transpose(source).convert("RGBA").save(buffer, format="PNG")
+                    data = buffer.getvalue()
+                    validated = validate_image(data, "image/png")
                 normalized_data, normalized_mime_type = normalize_provider_image(
                     data, validated
                 )
-            except AttachmentError as exc:
+            except (AttachmentError, OSError, SyntaxError, ValueError) as exc:
                 raise ProviderError(
                     "Invalid image edit input", code="provider.invalidResponse"
                 ) from exc
-            total_bytes += validated.size_bytes
+            total_bytes += original_size
             normalized_bytes += len(normalized_data)
             normalized_images.append((normalized_data, normalized_mime_type))
         if max(total_bytes, normalized_bytes) > MAX_PROVIDER_IMAGE_BYTES:
@@ -540,16 +555,23 @@ class MediaService:
                 code="provider.modelCapabilityUnavailable",
             )
         protected = await _protected_text(resolved.provider, resolved.model, prompt)
-        if resolved.provider.adapter_type != "openai-codex":
+        request = ImageEditRequest(protected, tuple(normalized_images), timeout)
+        if resolved.provider.adapter_type == "openai-codex":
+            data, metadata = await _edit_image_with_codex(db, resolved, request)
+        elif resolved.provider.adapter_type == "openai-compatible":
+            data, metadata = await openai_images.edit_image(
+                base_url=resolved.base_url,
+                api_key=resolved.api_key,
+                model=resolved.model.model_id,
+                prompt=request.prompt,
+                images=request.images,
+                timeout=request.timeout,
+            )
+        else:
             raise ProviderError(
                 "Image editing adapter is unavailable",
                 code="provider.modelCapabilityUnavailable",
             )
-        data, metadata = await _edit_image_with_codex(
-            db,
-            resolved,
-            ImageEditRequest(protected, tuple(normalized_images), timeout),
-        )
         result = _image_result(data, metadata, resolved, trust_level)
         result.metadata["sourceAttachmentIds"] = [
             str(attachment_id) for attachment_id in source_attachment_ids

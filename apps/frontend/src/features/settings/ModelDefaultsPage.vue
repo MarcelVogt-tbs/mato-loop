@@ -65,11 +65,17 @@ const fields = [
   { key: 'dreamingModelId', label: 'Memory / Dreaming', tools: true },
   { key: 'visionModelId', label: 'Bildanalyse', options: 'visionModelOptions' }, { key: 'videoModelId', label: 'Videoanalyse', options: 'videoModelOptions' },
   { key: 'audioAnalysisModelId', label: 'Audioanalyse', options: 'audioAnalysisModelOptions' },
-  { key: 'imageGenerationModelId', label: 'Bilderzeugung', capability: 'image_generation' }, { key: 'speechGenerationModelId', label: 'Spracherzeugung', capability: 'speech_generation' },
+  { key: 'imageGenerationModelId', label: 'Bilder', capability: 'image_generation' },
+  { key: 'imageEditingModelId', label: 'Abweichendes Modell für Bildbearbeitung', capability: 'image_editing' },
+  { key: 'speechGenerationModelId', label: 'Spracherzeugung', capability: 'speech_generation' },
   { key: 'audioGenerationModelId', label: 'Audioerzeugung', capability: 'audio_generation' }, { key: 'audioTranscriptionModelId', label: 'Transkription', capability: 'audio_transcription' }
 ]
 const options = (field) => [{ label: 'Automatische Auswahl', value: null }, ...(field.options ? providers[field.options] : providers.selectionOptions(form.value[field.key], field.tools, field.capability || 'chat'))]
-const effectiveLabel = (field) => `Effektiv: ${options(field).find((item) => item.value && item.value === (form.value[field.key] || store.inherited[field.key]))?.label || 'Auswahl zur Laufzeit'}`
+const effectiveLabel = (field) => {
+  const modelId = form.value[field.key] || store.inherited[field.key]
+    || (field.key === 'imageEditingModelId' ? form.value.imageGenerationModelId || store.inherited.imageGenerationModelId : null)
+  return `Effektiv: ${options(field).find((item) => item.value && item.value === modelId)?.label || 'Auswahl zur Laufzeit'}`
+}
 function setChoice(choice) {
   if (!profileId.value) { form.value.defaultModelId = choice.modelId; form.value.reasoningEffort = choice.reasoningEffort; return }
   const overrides = form.value.profileModels ||= {}

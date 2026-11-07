@@ -22,6 +22,14 @@ Synchronisiere und aktiviere die verfügbaren Modelle. Falls die Erkennung nicht
 
 Das Abo ist laut [Kimi-Nutzungsrichtlinien](https://www.kimi.com/code/docs/en/kimi-code/community-guidelines.html) für persönliche interaktive Nutzung vorgesehen, nicht für unbeaufsichtigte Automatisierung, Batch-Jobs oder geteilten API-Zugang. Verwende es daher nicht für Hintergrundfunktionen wie Dreaming oder geplante Aufgaben. Kontingente und Ratenlimits gelten auch in MatoLoop; eine Freigabe für deinen Client und Tarif muss bei Kimi bestehen. MatoLoop verwendet seine echte Clientkennung, keine nachgeahmte Kimi-CLI-Identität.
 
+### OpenAI-kompatible Bildserver
+
+Verwende die `/v1`-Basis-URL des Bildservers beim allgemeinen OpenAI-kompatiblen Provider. Aktiviere am Modell nur die tatsächlich unterstützten Fähigkeiten **Bildgenerierung** und **Bildbearbeitung** und wähle es unter **Standardmodelle > Bilder**. Die Fähigkeiten werden nicht zwingend automatisch erkannt und können manuell gesetzt werden.
+
+MatoLoop verwendet `/images/generations` (JSON) und `/images/edits` (Multipart mit geordneten `image[]`-Dateien) und erwartet Base64-Bilddaten in `data[].b64_json`. Reine URL-Antworten werden nicht unterstützt. Eine Chat-Anbindung allein genügt nicht.
+
+Bei Qwen-Image-Turbo über Gufo lässt du die Schrittzahl weg oder verwendest acht Schritte. Sende keine vom Server nicht unterstützten Zusatzparameter. Modellladen und gegenseitiges Entladen verwaltet der Modellserver beziehungsweise ein vorgeschalteter Dienst wie llama-swap, nicht MatoLoop. Die Standardwartezeit beträgt 300 Sekunden und muss auch einen möglichen Modellwechsel abdecken. Prüfe Modelllizenz und Vertrauenslevel; Quellbilder werden nicht textlich pseudonymisiert.
+
 ### Lemonade
 
 MatoLoop erkennt installierte Chat- und Medienmodelle eines Lemonade-Servers. Laden, Entladen und Speicherbelegung verwaltest du in Lemonade; MatoLoop übernimmt dessen Modellresidenz nicht. Nicht jede Modellart ist ein Chatmodell.
@@ -60,6 +68,8 @@ Gemeinsame Zuordnungen stehen unter **Administration > Standardmodelle > Verwalt
 Das Dropdown **Agentenprofil** zeigt unter **Standard** alle bisherigen Modellvorgaben. Wähle ein Profil, um nur dessen **Agentmodell** und **Reasoning-Stufe** anzupassen. Alle Modell- und Reasoning-Dropdowns bieten **Automatische Auswahl** als erste Option. Sie übernimmt die geerbte Vorgabe und ist ohne eigenen Wert vorausgewählt. Wähle diese Option erneut, um einen eigenen Wert zurückzusetzen. Der Hinweis **Effektiv** zeigt die bekannte Vorgabe; **Auswahl zur Laufzeit** bedeutet, dass der bestehende Fallback erst bei der Verwendung entscheidet. Änderungen werden mit **Speichern** übernommen. Hilfs- und Medienmodelle bleiben von Profilvorgaben unberührt. Die weiteren Einstellungen eines Agentenprofils verlinken direkt auf dessen Modellauswahl.
 
 Die **Reasoning-Stufe** neben **Memory / Dreaming** gilt für Memory-Extraktion, den Abgleich mit vorhandenen Erinnerungen und Session-Zusammenfassungen. Du kannst nur unterstützte Stufen auswählen; ein Modellwechsel setzt eine unpassende eigene Stufe zurück. Ohne unterstützte geerbte Vorgabe verwendet **Automatische Auswahl** wie beim Agentmodell den Modell-/Providerstandard, nicht eine fest vorgegebene Stufe. Höhere Stufen können Laufzeit und Tokenverbrauch erhöhen; bessere Ergebnisse sind nicht garantiert.
+
+**Bilder** legt das gemeinsame Standardmodell für Bilderzeugung und Bildbearbeitung fest. Unter **Abweichendes Modell für Bildbearbeitung** kannst du ein ausführbares, bildbearbeitungsfähiges Modell wählen. **Automatische Auswahl** übernimmt zunächst eine globale Bearbeitungsvorgabe; ohne diese verwendet die Bildbearbeitung das gemeinsame Bildmodell, sofern es Bildbearbeitung unterstützt. Eine persönliche Vorgabe für **Bilder** ersetzt keine geerbte globale Bearbeitungsvorgabe. Die bestehenden aktiven Modell-Fallbacks bleiben erhalten.
 
 **Sessionvorlagen** wählen verfügbare Agenten, Startagent, Memory, Nachrichtengröße und optionale Chatmodell-/Reasoning-Werte für die Session oder einzelne Agenten. **Allgemein** bietet Allgemein/Sysadmin; **Coding** bietet Plan/Build und kleine Nachrichten. Beide beginnen mit vollem Memory. Eine Session kopiert die Vorlage einmal; spätere Vorlagenänderungen wirken nicht auf sie zurück.
 

@@ -55,6 +55,10 @@ DEFAULT_MODEL_FIELDS: dict[str, tuple[str, ModelCapability]] = {
         "imageGenerationModelId",
         ModelCapability.IMAGE_GENERATION,
     ),
+    "image_editing_model_id": (
+        "imageEditingModelId",
+        ModelCapability.IMAGE_EDITING,
+    ),
     "speech_generation_model_id": (
         "speechGenerationModelId",
         ModelCapability.SPEECH_GENERATION,

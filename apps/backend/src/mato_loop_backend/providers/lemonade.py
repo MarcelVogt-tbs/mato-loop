@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import binascii
 import logging
 import math
 from typing import Annotated, Any
@@ -23,7 +21,6 @@ from mato_loop_backend.settings.models import ModelCapability, ModelInputModalit
 
 logger = logging.getLogger(__name__)
 
-MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_AUDIO_BYTES = 64 * 1024 * 1024
 _MAX_JSON_BYTES = 15 * 1024 * 1024
 _MAX_TRANSCRIPTION_BYTES = 1024 * 1024
@@ -62,19 +59,6 @@ class _ModelListResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     data: list[_LemonadeModel] = Field(max_length=10_000)
-
-
-class _ImageData(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    b64_json: str
-
-
-class _ImageResponse(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    data: list[_ImageData] = Field(min_length=1, max_length=1)
-    created: int | None = None
 
 
 class _TranscriptionResponse(BaseModel):
@@ -291,48 +275,6 @@ async def _post_json(
     except httpx.RequestError as exc:
         raise _request_error(exc, operation=operation, timeout=timeout) from exc
     return result
-
-
-async def generate_image(
-    *,
-    base_url: str,
-    api_key: str | None,
-    model: str,
-    prompt: str,
-    size: str | None = None,
-    steps: int | None = None,
-    cfg_scale: float | None = None,
-    seed: int | None = None,
-    timeout: float = 300,
-) -> tuple[bytes, dict[str, Any]]:
-    payload: dict[str, Any] = {
-        "model": model,
-        "prompt": prompt,
-        "n": 1,
-        "response_format": "b64_json",
-    }
-    if size is not None:
-        payload["size"] = size
-    for key, value in (("steps", steps), ("cfg_scale", cfg_scale), ("seed", seed)):
-        if value is not None:
-            payload[key] = value
-    response = await _post_json(
-        url=f"{base_url.rstrip('/')}/images/generations",
-        api_key=api_key,
-        payload=payload,
-        timeout=timeout,
-        max_bytes=_MAX_JSON_BYTES,
-        operation="image_generation",
-    )
-    try:
-        parsed = _ImageResponse.model_validate(response.json())
-        data = base64.b64decode(parsed.data[0].b64_json, validate=True)
-    except (ValueError, ValidationError, binascii.Error) as exc:
-        raise ProviderError("Lemonade returned an invalid image", code="provider.invalidResponse") from exc
-    if len(data) > MAX_IMAGE_BYTES:
-        raise ProviderError("Lemonade image is too large", code="provider.responseTooLarge")
-    metadata = {"created": parsed.created} if parsed.created is not None else {}
-    return data, metadata
 
 
 async def generate_speech(

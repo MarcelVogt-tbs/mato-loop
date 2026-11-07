@@ -10,6 +10,7 @@ from mato_loop_backend.api.routes.model_defaults import get_defaults, save_defau
 from mato_loop_backend.api.routes.session_templates import delete_template, save_template
 from mato_loop_backend.api.routes.sessions import SessionOptionsRequest, session_defaults
 from mato_loop_backend.models import ChatSession, Project, UserAccount
+from mato_loop_backend.providers.codex_oauth import CODEX_IMAGE_MODEL_ID
 from mato_loop_backend.sessions.service import SessionServiceError
 from mato_loop_backend.sessions.templates import available_templates, load_template
 from mato_loop_backend.settings import SettingsStore, load_effective_ai
@@ -22,6 +23,7 @@ from mato_loop_backend.settings.models import (
     AiProviderSettings,
     AiSettings,
     LlmProviderConfig,
+    ModelCapability,
     ModelConfig,
     ModelDefaults,
     ModelDefaultsSettings,
@@ -88,6 +90,24 @@ async def test_profile_defaults_inherit_independently_below_session_choices(docu
     selected = apply_session_ai(ai, session)
     other = apply_session_ai(ai, session, BUILD_PROFILE_ID)
     assert (selected.default_model_id, selected.reasoning_effort, other.default_model_id, selected.title_generation_model_id) == (models[3 if session_model else 1].id, "high", models[3 if session_model else 2].id, models[0].id)
+
+
+async def test_image_editing_default_inherits_instance_override_and_validates_capability(documents):
+    user = UserAccount(id=uuid4(), is_admin=True)
+    db = AsyncMock(spec=AsyncSession)
+    images = LlmProviderConfig(name="Images", adapter_type="lemonade")
+    edits = LlmProviderConfig(name="Edits", adapter_type="openai-codex", credential_id=uuid4())
+    shared = ModelConfig(provider_id=images.id, model_id="images", capabilities={ModelCapability.IMAGE_GENERATION})
+    editing = ModelConfig(provider_id=edits.id, model_id=CODEX_IMAGE_MODEL_ID, capabilities={ModelCapability.IMAGE_EDITING})
+    documents[AiProviderSettings, None] = AiProviderSettings(providers=[images, edits], models=[shared, editing])
+    await save_defaults(ModelDefaults(image_editing_model_id=editing.id), user, db, "instance")
+    await save_defaults(ModelDefaults(image_generation_model_id=shared.id), user, db, "personal")
+
+    effective = await load_effective_ai(db, user.id)
+
+    assert (effective.image_generation_model_id, effective.image_editing_model_id) == (shared.id, editing.id)
+    with pytest.raises(ApiError, match="provider.modelCapabilityUnavailable"):
+        await save_defaults(ModelDefaults(image_editing_model_id=shared.id), user, db, "personal")
 
 
 async def test_profile_model_uses_its_default_when_inherited_reasoning_is_unsupported(documents):

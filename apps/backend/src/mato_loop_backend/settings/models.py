@@ -1270,6 +1270,7 @@ class ModelDefaults(BaseModel):
     video_model_id: UUID | None = None
     audio_analysis_model_id: UUID | None = None
     image_generation_model_id: UUID | None = None
+    image_editing_model_id: UUID | None = None
     speech_generation_model_id: UUID | None = None
     audio_generation_model_id: UUID | None = None
     audio_transcription_model_id: UUID | None = None

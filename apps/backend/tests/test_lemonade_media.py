@@ -9,7 +9,7 @@ import pytest
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.providers import lemonade
+from mato_loop_backend.providers import lemonade, openai_images
 from mato_loop_backend.providers import media as media_module
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.media import MediaService
@@ -38,7 +38,8 @@ def _png() -> bytes:
     return buffer.getvalue()
 
 
-async def test_generate_image_sends_strict_payload_and_decodes_result(monkeypatch) -> None:
+@pytest.mark.parametrize("options", [{}, {"size": "512x512", "steps": 4, "cfg_scale": 1.5, "seed": 0}])
+async def test_generate_image_sends_strict_payload_and_decodes_result(monkeypatch, options) -> None:
     image = b"\x89PNG\r\n\x1a\nimage"
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -49,8 +50,7 @@ async def test_generate_image_sends_strict_payload_and_decodes_result(monkeypatc
             "prompt": "Bergsee",
             "n": 1,
             "response_format": "b64_json",
-            "steps": 4,
-            "seed": 7,
+            **options,
         }
         return httpx.Response(
             200,
@@ -62,13 +62,12 @@ async def test_generate_image_sends_strict_payload_and_decodes_result(monkeypatc
 
     _mock_client(monkeypatch, handler)
 
-    data, metadata = await lemonade.generate_image(
+    data, metadata = await openai_images.generate_image(
         base_url="https://lemonade.test/v1",
         api_key="secret",
         model="SD-Turbo",
         prompt="Bergsee",
-        steps=4,
-        seed=7,
+        **options,
     )
 
     assert data == image
@@ -102,7 +101,7 @@ async def test_media_timeout_is_distinct_and_reports_safe_context(
     _mock_client(monkeypatch, handler)
 
     with pytest.raises(ProviderError) as exc_info:
-        await lemonade.generate_image(
+        await openai_images.generate_image(
             base_url="https://lemonade.test/v1",
             api_key="secret",
             model="SD-Turbo",
@@ -168,14 +167,19 @@ async def test_transcription_sends_wav_multipart_and_reads_text(monkeypatch) -> 
     assert text == "Guten Morgen"
 
 
-async def test_image_rejects_invalid_base64(monkeypatch) -> None:
+@pytest.mark.parametrize("payload", [
+    {"data": [{"b64_json": "%%%"}]},
+    {"data": [{"b64_json": ""}]},
+    {"data": []},
+])
+async def test_image_rejects_invalid_response(monkeypatch, payload) -> None:
     _mock_client(
         monkeypatch,
-        lambda _request: httpx.Response(200, json={"data": [{"b64_json": "%%%"}]}),
+        lambda _request: httpx.Response(200, json=payload),
     )
 
     with pytest.raises(ProviderError) as exc_info:
-        await lemonade.generate_image(
+        await openai_images.generate_image(
             base_url="https://lemonade.test/v1",
             api_key=None,
             model="SD-Turbo",
@@ -185,10 +189,11 @@ async def test_image_rejects_invalid_base64(monkeypatch) -> None:
     assert exc_info.value.public_code == "provider.invalidResponse"
 
 
-async def test_media_service_resolves_host_default_without_model_argument(monkeypatch) -> None:
+@pytest.mark.parametrize("adapter", ["lemonade", "openai-compatible"])
+async def test_media_service_resolves_host_default_without_model_argument(monkeypatch, adapter) -> None:
     provider = LlmProviderConfig(
         name="Lemonade",
-        adapter_type="lemonade",
+        adapter_type=adapter,
         trust_level="private",
         config={"base_url": "https://lemonade.test/v1"},
     )
@@ -201,7 +206,7 @@ async def test_media_service_resolves_host_default_without_model_argument(monkey
     monkeypatch.setattr(media_module, "load_effective_ai", AsyncMock(return_value=settings))
     image = _png()
     transport = AsyncMock(return_value=(image, {"created": 123}))
-    monkeypatch.setattr(lemonade, "generate_image", transport)
+    monkeypatch.setattr(openai_images, "generate_image", transport)
 
     result = await MediaService.generate_image(
         AsyncMock(spec=AsyncSession), prompt="Ein Bergsee", user_id=uuid4()
@@ -212,7 +217,7 @@ async def test_media_service_resolves_host_default_without_model_argument(monkey
     assert result.filename == "generated.png"
     assert result.metadata == {
         "created": 123,
-        "providerAdapter": "lemonade",
+        "providerAdapter": adapter,
         "providerName": "Lemonade",
         "modelId": "SD-Turbo",
         "modelName": "SD-Turbo",
@@ -221,6 +226,42 @@ async def test_media_service_resolves_host_default_without_model_argument(monkey
     assert result.trust_level == TrustLevel.PRIVATE
     assert transport.await_args.kwargs["model"] == "SD-Turbo"
     assert transport.await_args.kwargs["size"] is None
+
+
+@pytest.mark.parametrize("override", [False, True])
+@pytest.mark.parametrize("source_format", ["PNG", "WEBP", "GIF"])
+async def test_openai_edit_uses_shared_default_or_edit_override(monkeypatch, override, source_format) -> None:
+    provider = LlmProviderConfig(
+        name="Images", adapter_type="openai-compatible",
+        config={"base_url": "https://images.test/v1"}, trust_level="private",
+    )
+    shared, editing = [
+        ModelConfig(provider_id=provider.id, model_id=name, capabilities={
+            ModelCapability.IMAGE_GENERATION, ModelCapability.IMAGE_EDITING,
+        }) for name in ("shared", "editing")
+    ]
+    settings = AiSettings(
+        providers=[provider], models=[shared, editing], image_generation_model_id=shared.id,
+        image_editing_model_id=editing.id if override else None,
+    )
+    monkeypatch.setattr(media_module, "load_effective_ai", AsyncMock(return_value=settings))
+    image = _png()
+    transport = AsyncMock(return_value=(image, {}))
+    monkeypatch.setattr(openai_images, "edit_image", transport)
+    source_id = uuid4()
+    source = BytesIO()
+    Image.new("RGB", (2, 2), "red").save(source, format=source_format)
+
+    result = await MediaService.edit_image(
+        AsyncMock(spec=AsyncSession), prompt="Make it blue",
+        images=((source.getvalue(), f"image/{source_format.lower()}"),),
+        source_attachment_ids=(source_id,), user_id=uuid4(),
+    )
+
+    assert (transport.await_args.kwargs["model"], result.metadata["sourceAttachmentIds"],
+            transport.await_args.kwargs["images"][0][1]) == (
+        "editing" if override else "shared", [str(source_id)], "image/png",
+    )
 
 
 async def test_media_service_rejects_changed_target_trust_before_transport(
@@ -240,7 +281,7 @@ async def test_media_service_rejects_changed_target_trust_before_transport(
     settings = AiSettings(providers=[provider], models=[model], image_generation_model_id=model.id)
     monkeypatch.setattr(media_module, "load_effective_ai", AsyncMock(return_value=settings))
     transport = AsyncMock()
-    monkeypatch.setattr(lemonade, "generate_image", transport)
+    monkeypatch.setattr(openai_images, "generate_image", transport)
 
     with pytest.raises(ProviderError) as exc_info:
         await MediaService.generate_image(
