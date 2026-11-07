@@ -3577,12 +3577,13 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     assert "Configured response language (data):" not in child
     assert "User-facing text, including template labels" in general
     assert "explicit language request, else configured response language, else profile primaryLanguage" in general
-    assert "exact question, scope, stopping condition" in work
-    assert "result format and length" in work
+    assert "clearly outweighs coordination costs" in work
+    assert "question, scope, stop condition" in work
+    assert "format/length" in work
     assert "Do not expand research into a full plan unless assigned one" in child
     assert "acceptance criteria" in work
-    assert "In English, give" in work
-    assert "overlapping writes" in work
+    assert "English handoff" in work
+    assert "write conflicts" in work
     assert work.count(build.instructions) == 1
     assert "do not lift those constraints or switch profiles" in work
     assert "plan discussed earlier in the conversation" in work
