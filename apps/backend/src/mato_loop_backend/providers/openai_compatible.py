@@ -65,9 +65,13 @@ class DiscoveredModel(BaseModel):
     @classmethod
     def normalize_capabilities(cls, value: Any) -> Any:
         if isinstance(value, dict):
+            value = [key for key, enabled in value.items() if enabled is True]
+        if isinstance(value, (list, set, tuple)):
+            aliases = {"image_to_image": ModelCapability.IMAGE_EDITING}
+            known = {item.value for item in ModelCapability}
             return {
-                capability for capability in ModelCapability
-                if value.get(capability) is True
+                aliases.get(item, item) for item in value
+                if isinstance(item, str) and (item in known or item in aliases)
             }
         return value
 

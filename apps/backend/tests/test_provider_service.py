@@ -1588,14 +1588,22 @@ async def test_transient_error_is_not_retried_after_stream_output() -> None:
     operation.assert_awaited_once()
 
 
-@pytest.mark.parametrize("model_fields", [
-    {},
-    {"capabilities": {
+@pytest.mark.parametrize(("model_fields", "capabilities"), [
+    ({}, {ModelCapability.CHAT}),
+    ({"capabilities": {
         "chat": True, "tools": True, "reasoning": True,
         "image_generation": False, "reasoning_efforts": None,
-    }},
+    }}, {ModelCapability.CHAT}),
+    ({"capabilities": {
+        "image_generation": True, "image_to_image": True, "vision": True,
+    }}, {ModelCapability.IMAGE_GENERATION, ModelCapability.IMAGE_EDITING}),
+    ({"capabilities": ["image_generation", "image_to_image", "vision", "unknown"]},
+     {ModelCapability.IMAGE_GENERATION, ModelCapability.IMAGE_EDITING}),
+    ({"capabilities": {"vision": True, "image_to_image": False}}, set()),
 ])
-async def test_discovery_gets_models_with_auth_and_preserves_opaque_ids(monkeypatch, model_fields) -> None:
+async def test_discovery_gets_models_with_auth_and_preserves_opaque_ids(
+    monkeypatch, model_fields, capabilities,
+) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert str(request.url) == "https://provider.test/v1/models"
@@ -1629,7 +1637,7 @@ async def test_discovery_gets_models_with_auth_and_preserves_opaque_ids(monkeypa
     )
 
     assert result[0].id == "vendor/model:version@2026-07"
-    assert result[0].capabilities == {ModelCapability.CHAT}
+    assert result[0].capabilities == capabilities
     assert result[0].metadata == {"object": "model", "owned_by": "vendor"}
 
 

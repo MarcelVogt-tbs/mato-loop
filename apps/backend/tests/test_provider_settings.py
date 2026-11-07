@@ -405,6 +405,38 @@ async def test_sync_adds_updates_and_marks_discovered_models_missing(monkeypatch
     assert result["models"][-1]["modelId"] == "opaque/vendor:model@1"
 
 
+@pytest.mark.parametrize("mode", ["new", "following", "overridden", "legacy", "manual"])
+def test_sync_refreshes_explicit_capabilities_without_overwriting_manual_values(mode) -> None:
+    from mato_loop_backend.providers.settings_service import ProviderSettingsService
+
+    provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
+    model = ModelConfig(
+        provider_id=provider.id, model_id="image-model",
+        origin=ModelOrigin.MANUAL if mode == "manual" else ModelOrigin.DISCOVERED,
+        capabilities={ModelCapability.IMAGE_GENERATION},
+        discovery_metadata=(
+            {"discovered_capabilities": ["chat" if mode == "overridden" else "image_generation"]}
+            if mode != "legacy" else {}
+        ),
+    )
+    settings = AiSettings(providers=[provider], models=[] if mode == "new" else [model])
+    ProviderSettingsService._reconcile_discovered_models(settings, provider, [
+        DiscoveredModel(id="image-model", capabilities={"image_generation": True}),
+    ])
+    ProviderSettingsService._reconcile_discovered_models(settings, provider, [
+        DiscoveredModel(id="image-model"),
+    ])
+    discovered = DiscoveredModel(id="image-model", capabilities={
+        "image_generation": True, "image_to_image": True, "vision": True,
+    })
+    for _ in range(2):
+        ProviderSettingsService._reconcile_discovered_models(settings, provider, [discovered])
+    assert settings.models[0].capabilities == (
+        {ModelCapability.IMAGE_GENERATION, ModelCapability.IMAGE_EDITING}
+        if mode in {"new", "following"} else {ModelCapability.IMAGE_GENERATION}
+    )
+
+
 async def test_sync_retains_discovered_input_modalities_without_name_inference(
     monkeypatch,
 ) -> None:

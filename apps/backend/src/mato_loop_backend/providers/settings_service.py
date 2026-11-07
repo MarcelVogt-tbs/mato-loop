@@ -505,6 +505,12 @@ class ProviderSettingsService:
             if item.provider_id == provider_config.id
         }
         for external_id, discovered_model in discovered_by_id.items():
+            discovery_metadata = discovered_model.metadata
+            if (
+                provider_config.adapter_type == "openai-compatible"
+                and "capabilities" in discovered_model.model_fields_set
+            ):
+                discovery_metadata["discovered_capabilities"] = sorted(discovered_model.capabilities)
             value = existing_by_id.get(external_id)
             if value is not None:
                 value.discovered_max_output_tokens = (
@@ -540,7 +546,7 @@ class ProviderSettingsService:
                         ),
                         origin=ModelOrigin.DISCOVERED,
                         last_seen_at=synced_at,
-                        discovery_metadata=discovered_model.metadata,
+                        discovery_metadata=discovery_metadata,
                         capabilities=discovered_model.capabilities,
                         context_window_tokens=context_window,
                         discovered_context_window_tokens=discovered_context,
@@ -575,7 +581,36 @@ class ProviderSettingsService:
             elif value.origin == ModelOrigin.DISCOVERED:
                 value.availability = ModelAvailability.AVAILABLE
                 value.last_seen_at = synced_at
-                value.discovery_metadata = discovered_model.metadata
+                previous_capabilities = value.discovery_metadata.get("discovered_capabilities")
+                current_capabilities = discovery_metadata.get("discovered_capabilities")
+                if (
+                    provider_config.adapter_type == "openai-compatible"
+                    and current_capabilities is None
+                    and isinstance(previous_capabilities, list)
+                ):
+                    discovery_metadata["discovered_capabilities"] = previous_capabilities
+                capabilities_overridden = (
+                    value.discovery_metadata.get("capabilities_overridden") is True
+                    or not isinstance(previous_capabilities, list)
+                    or set(previous_capabilities) != value.capabilities
+                )
+                if (
+                    provider_config.adapter_type == "openai-compatible"
+                    and capabilities_overridden
+                    and (
+                        current_capabilities is not None
+                        or isinstance(previous_capabilities, list)
+                        or value.discovery_metadata.get("capabilities_overridden") is True
+                    )
+                ):
+                    discovery_metadata["capabilities_overridden"] = True
+                if (
+                    provider_config.adapter_type == "openai-compatible"
+                    and not capabilities_overridden
+                    and current_capabilities is not None
+                ):
+                    value.capabilities = discovered_model.capabilities
+                value.discovery_metadata = discovery_metadata
                 _apply_discovered_context_window(
                     value, _discovered_context_window(discovered_model.metadata)
                 )
@@ -673,7 +708,13 @@ class ProviderSettingsService:
             validated = ModelConfig.model_validate(candidate)
         except ValidationError as exc:
             raise ProviderSettingsError("provider.configurationInvalid") from exc
-        provider(settings, validated.provider_id)
+        model_provider = provider(settings, validated.provider_id)
+        if (
+            model_provider.adapter_type == "openai-compatible"
+            and current.origin == ModelOrigin.DISCOVERED
+            and validated.capabilities != current.capabilities
+        ):
+            validated.discovery_metadata["capabilities_overridden"] = True
         _ensure_unique_model_id(
             settings,
             provider_id=validated.provider_id,

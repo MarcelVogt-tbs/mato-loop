@@ -42,6 +42,8 @@ Verwende einen HTTPS-Ressourcen- oder regionalen Endpunkt und den API-Schlüssel
 
 Neu erkannte Modelle beginnen normalerweise deaktiviert; bestimmte hostseitig ergänzte native Medienmodelle können aktiv sein. Aktiviere und teste benötigte Modelle. Synchronisierung erhält interne IDs und eigene Laufzeiteinstellungen, kennzeichnet verschwundene Modelle als **Nicht verfügbar** und löscht sie nicht automatisch.
 
+Bei OpenAI-kompatiblen Providern erkennt MatoLoop explizite Fähigkeitslisten und Fähigkeitsobjekte. `image_to_image` wird als Bildbearbeitung übernommen; `vision` allein bedeutet nicht Bildbearbeitung. Unbekannte Fähigkeiten werden ignoriert. Automatisch übernommene Fähigkeiten folgen späteren Providerangaben, solange du sie nicht geändert hast. Ältere Modelle ohne gespeicherten Vergleichswert behalten ihre vorhandenen Fähigkeiten; aktiviere dort **Bildbearbeitung** bei Bedarf einmal selbst. Erkannte Fähigkeiten ersetzen keine Tool-Berechtigungen und erteilen keine Aktionsrechte.
+
 Löschen entfernt passende Standardmodellzuordnungen und explizite sessionweite Verweise. Nicht verfügbare agentenspezifische Sessionwerte werden bei der Auflösung übersprungen. Eine spätere Synchronisierung kann das externe Modell mit einer neuen internen ID wieder anlegen. Ein Fehler bei der Synchronisierung ersetzt nicht den zuletzt gültigen Katalog.
 
 ## Laufzeiteinstellungen
