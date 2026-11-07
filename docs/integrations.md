@@ -112,6 +112,10 @@ Mealie uses a configured base URL without `/api` and an encrypted bearer token. 
 
 Recipe search is paginated with bounded exact filters. Creates may perform name creation followed by content update; failure can leave a partial recipe. Updates preserve omitted fields but replace supplied ingredient/instruction lists completely. Authorized ingredient replacement may create missing food/unit records; later failure is an uncertain outcome, never an automatic retry. Meal plans accept same-binding recipes or bounded free text.
 
+When developing new recipes, the agent reuses supplied or known context and asks for missing servings and relevant preferences together through `question`. Adopting a recipe from a URL, text, PDF or photo needs no extra questions when the source and task suffice. Missing source facts must not be invented; only blocking gaps require clarification.
+
+`recipe_set_image(integration_id, recipe_token, image)` replaces a recipe's main image. The image is a `FileReference` from session storage or the selected computer (`files`/`computer` in model-facing tools, internally `session`/`workspace`). Shared image validation applies. Source-file read permission is independent of the existing `recipes.write` permission. After source authorization, the action revalidates the integration binding and recipe-write authorization without another approval prompt, checks the current recipe snapshot before upload and returns a fresh recipe token on success. An uncertain upload outcome requires inspection, not a blind retry.
+
 Recipe/plan actions have separate read/write/delete permissions. Native shopping lists and organizer administration are not exposed. Shopping requests compose normal Mealie reads with additive CalDAV task creation; compatible quantities may be combined, without a durable synchronization table or destructive list reset.
 
 ## Arcane

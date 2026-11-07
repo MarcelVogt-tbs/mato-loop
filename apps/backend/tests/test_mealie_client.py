@@ -1,6 +1,8 @@
 import json
 from dataclasses import replace
 from datetime import date
+from email.parser import BytesParser
+from email.policy import default
 from uuid import UUID, uuid4
 
 import httpx
@@ -443,3 +445,47 @@ async def test_recipe_snapshot_includes_unprojected_data() -> None:
         first = await client.get_recipe(RECIPE_ID)
         second = await client.get_recipe(RECIPE_ID)
     assert first.snapshot_hash != second.snapshot_hash
+
+
+async def test_recipe_image_upload_uses_multipart_and_reads_saved_recipe() -> None:
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"image": "new-image"} if request.method == "PUT" else {**_summary(), "image": "new-image"})
+
+    async with _client(handler, "https://mealie.example.test/kitchen") as client:
+        recipe = await client.set_recipe_image(RECIPE_ID, b"image bytes", "image/png")
+
+    upload = requests[0]
+    multipart = BytesParser(policy=default).parsebytes(
+        f"Content-Type: {upload.headers['content-type']}\r\n\r\n".encode() + upload.content
+    )
+    parts = {part.get_param("name", header="content-disposition"): part for part in multipart.iter_parts()}
+    assert (upload.method, upload.url.path, upload.headers["authorization"]) == ("PUT", f"/kitchen/api/recipes/{RECIPE_ID}/image", "Bearer api-token")
+    assert parts["image"].get_payload(decode=True) == b"image bytes"
+    assert parts["image"].get_content_type() == "image/png"
+    assert parts["extension"].get_payload(decode=True) == b"png"
+    assert recipe.id == RECIPE_ID
+    assert requests[1].method == "GET"
+
+
+@pytest.mark.parametrize("failure", ["transport", "redirect", "malformed", "followup"])
+async def test_recipe_image_uncertain_outcomes_are_not_retried(failure) -> None:
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if failure == "transport":
+            raise httpx.ReadError("unavailable", request=request)
+        if failure == "redirect":
+            return httpx.Response(307, headers={"location": "https://other.example/upload"})
+        if failure == "malformed":
+            return httpx.Response(200, json={})
+        return httpx.Response(200, json={"image": "new"}) if request.method == "PUT" else httpx.Response(403)
+
+    async with _client(handler) as client:
+        with pytest.raises(MealieError) as error:
+            await client.set_recipe_image(RECIPE_ID, b"image bytes", "image/png")
+    assert error.value.code == "mealie.outcomeUnknown"
+    assert sum(request.method == "PUT" for request in requests) == 1

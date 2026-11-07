@@ -42,11 +42,16 @@ from mato_loop_backend.integrations.mealie.client import (
     MealieRecipeInstruction,
     MealieRecipeSummary,
 )
+from mato_loop_backend.media.attachments import MAX_IMAGE_ATTACHMENT_BYTES
+from mato_loop_backend.media.files import read_media_file
 from mato_loop_backend.models import Credential
+from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.security import CredentialCipher, load_credential, read_credential
 from mato_loop_backend.settings import IntegrationInstance
 from mato_loop_backend.tools.actions import ToolAction
 from mato_loop_backend.tools.argument_errors import invalid_argument
+from mato_loop_backend.tools.arguments import FileReference
+from mato_loop_backend.tools.contracts import ToolResult
 from mato_loop_backend.tools.snapshots import ToolSnapshotPolicy
 
 MEALIE_CREDENTIAL_KIND = "mealie.api_token"
@@ -218,6 +223,10 @@ class RecipeUpdateArguments(RecipeFields, RecipeGetArguments):
 
 class RecipeDeleteArguments(RecipeGetArguments):
     pass
+
+
+class RecipeSetImageArguments(RecipeGetArguments):
+    image: FileReference
 
 
 class RecipeImportArguments(MealieIntegrationArguments):
@@ -526,6 +535,7 @@ def _recipe_payload(
         raise MealieError("mealie.responseTooLarge")
     return {
         **_recipe_summary(recipe, integration_id, revision),
+        "image": recipe.image,
         "ingredients": [
             _ingredient_payload(item) for item in recipe.ingredients[:200]
         ],
@@ -723,6 +733,36 @@ async def recipe_update(arguments: RecipeUpdateArguments, context: Any) -> Any:
             recipe = await client.update_recipe(str(token.recipe_id), _recipe_changes(arguments))
         if recipe.id != str(token.recipe_id):
             return _error(MealieError("mealie.outcomeUnknown"))
+        return _recipe_write_result(recipe, arguments.integration_id, revision)
+    except ValueError:
+        return _invalid("recipe_token")
+    except MealieError as exc:
+        return _error(exc)
+
+
+async def recipe_set_image(arguments: RecipeSetImageArguments, context: Any) -> Any:
+    try:
+        _instance, revision = _binding(context, arguments.integration_id)
+        token = _decode_token(_RecipeToken, arguments.recipe_token, arguments.integration_id, revision)
+        if token.snapshot_hash is None:
+            return _invalid("recipe_token")
+    except ValueError:
+        return _invalid("recipe_token")
+    source = await read_media_file(
+        arguments.image, context, kind="image", limit=MAX_IMAGE_ATTACHMENT_BYTES,
+    )
+    if isinstance(source, ToolResult):
+        return source
+    try:
+        context.integration_settings = await context.current_integrations()
+        for request in _recipe_mutation_permission(arguments, context):
+            if await context.ask_handler(request, check_only=True) != PermissionDecision.ALLOW:
+                return ToolResult.error("permission.denied")
+        async with _selected_client(arguments.integration_id, context) as (client, _revision):
+            current = await client.get_recipe(str(token.recipe_id))
+            if current.id != str(token.recipe_id) or current.snapshot_hash != token.snapshot_hash:
+                return _remote_changed("recipe_token")
+            recipe = await client.set_recipe_image(str(token.recipe_id), source.data, source.mime_type)
         return _recipe_write_result(recipe, arguments.integration_id, revision)
     except ValueError:
         return _invalid("recipe_token")
@@ -1018,7 +1058,7 @@ def _recipe_get_permission(
 
 
 def _recipe_mutation_permission(
-    arguments: RecipeCreateArguments | RecipeImportArguments | RecipeUpdateArguments | RecipeDeleteArguments,
+    arguments: RecipeCreateArguments | RecipeImportArguments | RecipeUpdateArguments | RecipeDeleteArguments | RecipeSetImageArguments,
     context: Any,
 ) -> tuple[Any, ...]:
     from mato_loop_backend.permissions.policy import PermissionDisplayItem
@@ -1032,8 +1072,17 @@ def _recipe_mutation_permission(
         _instance, revision = _binding(context, arguments.integration_id)
         token = _decode_token(_RecipeToken, arguments.recipe_token, arguments.integration_id, revision)
         name = token.name
-        operation, verb = ("recipe-delete", "löschen") if isinstance(arguments, RecipeDeleteArguments) else ("recipe-update", "ändern")
+        if isinstance(arguments, RecipeSetImageArguments):
+            operation, verb = "recipe-set-image", "bebildern"
+        else:
+            operation, verb = ("recipe-delete", "löschen") if isinstance(arguments, RecipeDeleteArguments) else ("recipe-update", "ändern")
     items = [PermissionDisplayItem("Rezept", _display_text(name))]
+    if isinstance(arguments, RecipeSetImageArguments):
+        items.extend((
+            PermissionDisplayItem("Bildquelle", "Computer" if arguments.image.root == "workspace" else "Session-Ablage"),
+            PermissionDisplayItem("Bilddatei", arguments.image.path, format="code"),
+            PermissionDisplayItem("Änderung", "Das bisherige Hauptbild ersetzen."),
+        ))
     if isinstance(arguments, RecipeImportArguments):
         items.append(PermissionDisplayItem("Quell-URL", str(arguments.url)))
     if isinstance(arguments, RecipeFields):
@@ -1270,6 +1319,18 @@ MEALIE_SHARED_TOOLS = (
         label="Rezept löschen",
         icon="delete",
         actions=(_RECIPES_DELETE,),
+        instance_argument="integration_id",
+        authorization_factory=_recipe_mutation_permission,
+        releases_private_data=True,
+    ),
+    ToolContribution(
+        name="recipe_set_image",
+        description="Replace a recipe's main image using a fresh recipeToken from recipe_get or a recipe write and an image file reference. Use the stored path for generated images, attachments, or downloads, or a selected-computer file. Requires source-file read and recipe-write permission. Return the saved recipe and a fresh recipeToken. If the outcome is unknown, inspect the recipe in Mealie before retrying.",
+        arguments_model=RecipeSetImageArguments,
+        handler=recipe_set_image,
+        label="Rezeptbild setzen",
+        icon="image",
+        actions=(_RECIPES_WRITE,),
         instance_argument="integration_id",
         authorization_factory=_recipe_mutation_permission,
         releases_private_data=True,

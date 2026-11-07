@@ -76,6 +76,10 @@ Hinterlege bei Bedarf in den Kontoeinstellungen eine **Signatur (optional)**. Si
 
 Der Agent kann Rezepte suchen, lesen, erstellen, bearbeiten, per URL importieren und löschen sowie den Essensplan verwalten. Nenne bei Suchfiltern die exakten Tags, Kategorien oder Lebensmittel.
 
+Wenn du ein neues Rezept entwickeln lässt, nutzt der Agent deine vorhandenen Angaben und fragt fehlende Portionenzahl und relevante Vorlieben zusammen ab. Bei der Übernahme aus einer URL, einem Text, PDF oder Foto fragt er nicht unnötig nach, wenn Quelle und Auftrag ausreichen. Unklare Quellenangaben erfindet er nicht; nur wenn sie den Auftrag blockieren, fragt er nach.
+
+Bitte den Agenten, eine Bilddatei aus der Session-Ablage oder vom ausgewählten Computer als Rezeptbild zu setzen. Das ersetzt das bisherige Hauptbild. Dafür braucht er sowohl Leserechte auf die Bilddatei als auch Schreibrechte für Rezepte. Nach einem unklaren Upload-Ergebnis prüfe zuerst das Rezept in Mealie, bevor du den Upload wiederholst.
+
 Nicht angegebene Rezeptfelder bleiben erhalten; übergebene Zutaten- oder Zubereitungslisten ersetzen die jeweilige Liste vollständig. Nach einem unklaren Schreibergebnis prüfe Mealie vor einer Wiederholung: Bei einer Erstellung kann bereits ein teilweise befülltes Rezept vorhanden sein.
 
 Für eine Einkaufsliste richte eine CalDAV-Aufgabenliste ein und wähle sie als Standard. Bitte den Agenten, den Wochenplan und die Rezepte zu lesen und fehlende Einkaufsaufgaben anzulegen. Er fasst kompatible Mengen zusammen; unklare Einheiten bleiben getrennt. Bestehende offene Aufgaben bleiben erhalten. Es gibt weder automatische Synchronisierung noch native Mealie-Einkaufslisten.

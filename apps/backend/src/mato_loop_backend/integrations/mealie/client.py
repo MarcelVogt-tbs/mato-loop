@@ -72,6 +72,7 @@ class MealieRecipe(MealieRecipeSummary):
     ingredients: tuple[MealieRecipeIngredient, ...]
     instructions: tuple[MealieRecipeInstruction, ...]
     snapshot_hash: str
+    image: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,6 +252,7 @@ def _recipe(payload: Any) -> MealieRecipe:
         **{field.name: getattr(summary, field.name) for field in fields(summary)},
         ingredients=tuple(_ingredient(item) for item in ingredients),
         instructions=tuple(_instruction(item) for item in instructions),
+        image=_string(payload.get("image"), optional=True),
         snapshot_hash=hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest(),
@@ -350,6 +352,7 @@ class MealieClient:
         *,
         params: dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
+        image: tuple[bytes, str, str] | None = None,
         expected: set[int] = frozenset({200}),
         discard_response: bool = False,
     ) -> Any:
@@ -358,8 +361,15 @@ class MealieClient:
         if payload is not None:
             headers["Content-Type"] = "application/json"
             content = json.dumps(payload, ensure_ascii=False).encode()
+        multipart = {}
+        if image is not None:
+            data, mime_type, extension = image
+            multipart = {
+                "files": {"image": (f"image.{extension}", data, mime_type)},
+                "data": {"extension": extension},
+            }
         request = self._client.build_request(
-            method, self._url(path, params), headers=headers, content=content
+            method, self._url(path, params), headers=headers, content=content, **multipart,
         )
         mutation = method in _MUTATION_METHODS
 
@@ -565,6 +575,32 @@ class MealieClient:
         except MealieError as exc:
             if self._mutation_count != before:
                 # Food/unit creation may have succeeded before a later step failed.
+                raise _error("outcomeUnknown") from exc
+            raise
+
+    async def set_recipe_image(
+        self, recipe_id: str, data: bytes, mime_type: str,
+    ) -> MealieRecipe:
+        recipe_id = _request_uuid(recipe_id)
+        extension = {
+            "image/jpeg": "jpg", "image/png": "png",
+            "image/webp": "webp", "image/gif": "gif",
+        }.get(mime_type)
+        if extension is None or not data:
+            raise _error("invalidRequest")
+        before = self._mutation_count
+        try:
+            payload = await self._request(
+                "PUT", f"/recipes/{recipe_id}/image", image=(data, mime_type, extension),
+            )
+            if not isinstance(payload, dict) or not _string(payload.get("image")):
+                raise _error("malformedResponse")
+            recipe = await self.get_recipe(recipe_id)
+            if recipe.id != recipe_id or recipe.image != payload["image"]:
+                raise _error("malformedResponse")
+            return recipe
+        except MealieError as exc:
+            if self._mutation_count != before:
                 raise _error("outcomeUnknown") from exc
             raise
 

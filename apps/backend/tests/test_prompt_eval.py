@@ -546,6 +546,13 @@ def test_eval_cases_reuse_runtime_prompts_and_schemas() -> None:
     assert "Timed events require start and end" in calendar_tools[1]["description"]
     assert "Configured default calendar" in calendar_messages[0]["content"]
     assert "Missing-information contract" in calendar_messages[0]["content"]
+    assert (
+        "Recipe clarification: When developing a new recipe, reuse supplied or known context, then ask "
+        "for missing servings and relevant preferences together in one question call. Do not ask again "
+        "for known details. When adopting a recipe from a URL, text, PDF or photo, proceed without "
+        "unnecessary questions if the source and task suffice. Do not invent source facts; ask only "
+        "when a missing or unclear detail blocks the task."
+    ) in calendar_messages[0]["content"]
     create_required = calendar_tools[1]["parameters"]["required"]
     assert "integration_id" in create_required
     assert "calendar_key" in create_required

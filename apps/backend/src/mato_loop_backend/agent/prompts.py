@@ -344,6 +344,13 @@ def general_system_prompt(
             "to disambiguate. Do not call question for informational or complete requests. "
             "For design advice, answer directly instead of asking the user to choose an implementation."
         )
+        parts.append(
+            "Recipe clarification: When developing a new recipe, reuse supplied or known context, then ask "
+            "for missing servings and relevant preferences together in one question call. Do not ask again "
+            "for known details. When adopting a recipe from a URL, text, PDF or photo, proceed without "
+            "unnecessary questions if the source and task suffice. Do not invent source facts; ask only "
+            "when a missing or unclear detail blocks the task."
+        )
     if offered_tool_names:
         parts.append(
             "For each tool with a _reason argument, include one concise sentence in the user's language "

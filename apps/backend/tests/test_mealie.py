@@ -3,16 +3,21 @@ import json
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import date
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from PIL import Image
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.integrations.mealie.adapter as integrations_mealie_adapter
 import mato_loop_backend.integrations.mealie.service as mealie_service_module
 import mato_loop_backend.integrations.service as service_module
+from mato_loop_backend.files.service import RootFileService
+from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.integrations.mealie.adapter import (
     MEALIE_ADAPTER,
     MEALIE_CREDENTIAL_KIND,
@@ -26,6 +31,7 @@ from mato_loop_backend.integrations.mealie.adapter import (
     RecipeDeleteArguments,
     RecipeGetArguments,
     RecipeImportArguments,
+    RecipeSetImageArguments,
     RecipesSearchArguments,
     RecipeUpdateArguments,
     meal_plan_add,
@@ -50,10 +56,19 @@ from mato_loop_backend.integrations.mealie.client import (
     MealieRecipeSummary,
 )
 from mato_loop_backend.integrations.mealie.service import MealieIntegrationService
+from mato_loop_backend.media.attachments import AttachmentService
+from mato_loop_backend.models import ChatSession, Message
+from mato_loop_backend.permissions.policy import PermissionDecision
+from mato_loop_backend.permissions.resolution import tool_execution_policy
+from mato_loop_backend.providers.base import ToolCall
 from mato_loop_backend.settings import (
     IntegrationInstance,
     IntegrationSettings,
+    ToolExecutionPolicy,
+    ToolSettings,
 )
+from mato_loop_backend.tools.catalog import ToolRegistry
+from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.validation import argument_error
 
 RECIPE_ID = "12345678-1234-5678-9234-567812345678"
@@ -193,6 +208,7 @@ def test_adapter_is_a_standalone_shared_tool_definition() -> None:
         "recipe_update",
         "recipe_delete",
         "recipe_import_url",
+        "recipe_set_image",
         "meal_plan_get",
         "meal_plan_add",
         "meal_plan_update",
@@ -716,6 +732,7 @@ def test_permissions_name_the_account_and_offer_scoped_writes() -> None:
     for name, arguments, capability in (
         ("recipe_create", RecipeCreateArguments(integration_id=account.id, name="Suppe"), "recipes.write"),
         ("recipe_import_url", RecipeImportArguments(integration_id=account.id, url="https://recipes.example/soup"), "recipes.write"),
+        ("recipe_set_image", RecipeSetImageArguments(integration_id=account.id, recipe_token=integrations_mealie_adapter._recipe_token(_recipe(), account.id, revision), image={"root": "session", "path": "image.png"}), "recipes.write"),
         ("recipe_delete", RecipeDeleteArguments(integration_id=account.id, recipe_token=integrations_mealie_adapter._recipe_token(_recipe(), account.id, revision)), "recipes.delete"),
     ):
         permission = tools[name].authorization_factory(arguments, context)[0]
@@ -759,7 +776,7 @@ async def test_recipe_writes_chain_tokens_and_patch_only_supplied_fields(monkeyp
     assert RECIPE_ID not in created.content
 
 
-@pytest.mark.parametrize("operation", ["update", "delete"])
+@pytest.mark.parametrize("operation", ["update", "delete", "image"])
 @pytest.mark.parametrize("reference", ["summary", "changed", "other_account"])
 async def test_recipe_mutations_require_current_owner_bound_detail(monkeypatch, operation, reference) -> None:
     account = _account()
@@ -771,11 +788,18 @@ async def test_recipe_mutations_require_current_owner_bound_detail(monkeypatch, 
     _mock_client(monkeypatch, client, revision)
     if operation == "update":
         result = await recipe_update(RecipeUpdateArguments(integration_id=account.id, recipe_token=token, name="Neu"), _context(account, revision))
+    elif operation == "image":
+        monkeypatch.setattr(integrations_mealie_adapter, "read_media_file", AsyncMock(return_value=SimpleNamespace(data=b"image", mime_type="image/png")))
+        context = _context(account, revision)
+        context.current_integrations = AsyncMock(return_value=context.integration_settings)
+        context.ask_handler = AsyncMock(return_value=PermissionDecision.ALLOW)
+        result = await integrations_mealie_adapter.recipe_set_image(RecipeSetImageArguments(integration_id=account.id, recipe_token=token, image={"root": "session", "path": "image.png"}), context)
     else:
         result = await recipe_delete(RecipeDeleteArguments(integration_id=account.id, recipe_token=token), _context(account, revision))
     assert result.metadata["errorCode"] == ("integration.remoteChanged" if reference == "changed" else "integration.staleReference")
     client.update_recipe.assert_not_awaited()
     client.delete_recipe.assert_not_awaited()
+    client.set_recipe_image.assert_not_awaited()
 
 
 async def test_recipe_write_projection_failure_reports_unknown_outcome(monkeypatch) -> None:
@@ -785,3 +809,89 @@ async def test_recipe_write_projection_failure_reports_unknown_outcome(monkeypat
     _mock_client(monkeypatch, client, _revision(account))
     result = await recipe_create(RecipeCreateArguments(integration_id=account.id, name="Suppe"), _context(account, _revision(account)))
     assert result.metadata == {"errorCode": "integration.outcomeUnknown"}
+
+
+async def _image_tool_case(tmp_path, monkeypatch):
+    account = _account()
+    session = ChatSession(id=uuid4(), user_id=account.owner_id)
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(session.id)
+    integrations = IntegrationSettings(instances=[account])
+    call = ToolCall("image", "recipe_set_image", {
+        "integration_id": str(account.id),
+        "recipe_token": integrations_mealie_adapter._recipe_token(_recipe(), account.id, _revision(account)),
+        "image": {"root": "files", "path": "image.png"},
+    })
+    context = ToolContext(
+        db=AsyncMock(spec=AsyncSession), run_id=uuid4(), session=session, tool_call=call,
+        root_files=RootFileService(session.id, session_storage=storage),
+        integration_settings=integrations,
+        tool_settings=ToolSettings(private_permission_preset="ask_all", public_permission_preset="ask_all"),
+        ask_handler=AsyncMock(return_value=PermissionDecision.ALLOW),
+    )
+    context.db.scalar.return_value = None
+    monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=integrations))
+    monkeypatch.setattr("mato_loop_backend.tools.access.profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    client = AsyncMock()
+    client.get_recipe.return_value = _recipe()
+    client.set_recipe_image.return_value = _recipe(snapshot_hash="b" * 64, image="new-image")
+    _mock_client(monkeypatch, client, _revision(account))
+    output = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(output, format="PNG")
+    return call, context, client, storage, output.getvalue()
+
+
+@pytest.mark.parametrize("source", ["generated", "attachment", "download", "computer"])
+async def test_recipe_image_reads_all_file_sources(tmp_path, monkeypatch, source):
+    call, context, client, storage, data = await _image_tool_case(tmp_path, monkeypatch)
+    if source == "computer":
+        call.arguments["image"] = {"root": "computer", "path": "/work/image.png"}
+        context.execution_client = SimpleNamespace(agent_id=uuid4(), current_directory="/work", read_bytes=AsyncMock(return_value=data))
+    else:
+        message = Message(id=uuid4(), session_id=context.session.id, role="user" if source == "attachment" else "tool", content="", attachments=[], trust_level="public", provider_data={"_matoloop": {"runId": str(context.run_id), "fileOutputsPending": True}})
+        service = AttachmentService(storage, run_id=context.run_id if source != "attachment" else None)
+        context.db.scalar.return_value = context.session
+        attachment = await service.create_image(
+            context.db, message, data, "image/png", filename="image.png", position=0,
+            category={"generated": "generated", "attachment": "user_upload", "download": "downloaded"}[source], purpose="attachment" if source == "attachment" else "artifact",
+        )
+        call.arguments["image"]["path"] = attachment.file_path
+        if source == "attachment":
+            attachment.message = message
+            context.db.scalar.return_value = attachment
+        else:
+            context.db.scalar.return_value = None
+            context.root_files = RootFileService(context.session.id, session_storage=storage, run_id=context.run_id)
+            context.db.scalars.return_value = Mock(all=Mock(return_value=[message]))
+        monkeypatch.setattr("mato_loop_backend.media.files.AttachmentService", lambda **_kwargs: service)
+
+    result = await ToolRegistry([]).effective(context.integration_settings).execute(call, context)
+
+    assert not result.is_error, result.content
+    client.set_recipe_image.assert_awaited_once_with(RECIPE_ID, data, "image/png")
+    saved = json.loads(result.content)["recipe"]["recipeToken"]
+    assert saved != call.arguments["recipe_token"]
+
+
+@pytest.mark.parametrize("failure,code", [("write", "permission.denied"), ("read", "permission.denied"), ("revoked_write", "permission.denied"), ("invalid", "attachment.unsupportedType"), ("oversized", "file.tooLarge")])
+async def test_recipe_image_blocks_upload_without_permissions_or_valid_image(tmp_path, monkeypatch, failure, code):
+    call, context, client, _storage, data = await _image_tool_case(tmp_path, monkeypatch)
+    call.arguments["image"] = {"root": "computer", "path": "/work/image.png"}
+    context.execution_client = SimpleNamespace(agent_id=uuid4(), current_directory="/work", read_bytes=AsyncMock(return_value=b"invalid" if failure == "invalid" else data))
+    async def authorize(request, *, check_only=False):
+        if failure == "revoked_write" and request.capability == "filesystem.read":
+            context.tool_settings.permissions.integration_policies[call.arguments["integration_id"]] = {"recipes.write": ToolExecutionPolicy.DISABLED}
+        if check_only and tool_execution_policy(
+            context.tool_settings, request.capability,
+            integration_id=request.policy_integration_id,
+            resource_key=request.policy_resource_key,
+        ) == ToolExecutionPolicy.DISABLED:
+            return PermissionDecision.DENY
+        return PermissionDecision.DENY if request.capability == {"write": "recipes.write", "read": "filesystem.read"}.get(failure) else PermissionDecision.ALLOW
+
+    context.ask_handler.side_effect = authorize
+    if failure == "oversized":
+        monkeypatch.setattr(integrations_mealie_adapter, "MAX_IMAGE_ATTACHMENT_BYTES", 1)
+    result = await ToolRegistry([]).effective(context.integration_settings).execute(call, context)
+    assert result.metadata["errorCode"] == code
+    client.set_recipe_image.assert_not_awaited()

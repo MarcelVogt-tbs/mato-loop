@@ -182,7 +182,9 @@ Regression tests in normal backend CI protect [serialized prefixes across tool r
 Run affected tests when changing these boundaries. Under unchanged authorization and context constraints, compare the retained serialized prefix and schemas without normalizing away differences; intentional invalidation needs an explicit reason. Prefer deterministic prefix and scan/request-count assertions to provider latency or cache-hit thresholds. The [dated session-cache evaluation](session-cache-evaluation-2026-10.md) records the live serialization regression and measured fix, not current performance guarantees or a new validation run.
 
 Host/profile prompt changes, including the global response-language contract, intentionally
-invalidate older prefixes. The configured language remains stable across tool rounds;
+invalidate older prefixes. The recipe clarification rule intentionally changes the stable
+host prefix when `question` is offered; unchanged offers retain the same rule across tool rounds.
+The configured language remains stable across tool rounds;
 changing it for a later run changes system context. Git review/merge instructions and output
 formats are saved with their command turn rather than retroactively replacing historical
 command instructions. Updating these contracts changes newly prepared command turns, not

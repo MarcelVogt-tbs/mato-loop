@@ -1,12 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
-import mimetypes
-from dataclasses import dataclass
 from io import BytesIO
-from types import SimpleNamespace
 from uuid import UUID
 
 import zxingcpp
@@ -22,27 +18,23 @@ from mato_loop_backend.agent.video_analysis import VideoAnalysisError
 from mato_loop_backend.media.attachments import (
     ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES,
     MAX_IMAGE_ATTACHMENT_BYTES,
-    AttachmentService,
-    image_mime_type,
-    validate_image,
 )
+from mato_loop_backend.media.files import read_media_file
 from mato_loop_backend.media.processing import (
     AttachmentProcessingError,
     AttachmentProcessingLimits,
     process_attachment,
 )
 from mato_loop_backend.media.video_processing import MAX_VIDEO_BYTES
-from mato_loop_backend.models import MessageAttachment
 from mato_loop_backend.permissions.policy import media_permission
 from mato_loop_backend.providers.base import MAX_PROVIDER_IMAGE_BYTES
 from mato_loop_backend.providers.media import MediaService, ResolvedMediaModel
-from mato_loop_backend.settings import ModelCapability, ToolExecutionPolicy, TrustLevel
+from mato_loop_backend.settings import ModelCapability, ToolExecutionPolicy
 from mato_loop_backend.tools.actions import ToolAction
 from mato_loop_backend.tools.arguments import (
     AnalyzeAudioArguments,
     AnalyzeVideoArguments,
     EditImageArguments,
-    FileReference,
     GenerateAudioArguments,
     GenerateImageArguments,
     GenerateQrCodeArguments,
@@ -61,55 +53,6 @@ QR_CODE_MAX_RESULTS = 16
 
 
 IMAGE_AUTHORIZATION_LINEAGE_LIMIT = 100
-
-
-@dataclass(frozen=True)
-class MediaFile:
-    path: str
-    data: bytes
-    mime_type: str
-    sha256: str
-    trust_level: TrustLevel
-    attachment: MessageAttachment | SimpleNamespace | None
-
-
-async def _read_media_file(
-    reference: FileReference, context: ToolContext, *, kind: str, limit: int,
-) -> MediaFile | ToolResult:
-    if files_access.delegated_session_files(context, reference.root):
-        return ToolResult.error("tool.unavailable")
-    path = files_access.file_path(context, reference.root, reference.path)
-    request = files_access.filesystem_permission(
-        context, root=reference.root, path=path, capability="filesystem.read",
-        action_kind=context.tool_call.name, action_label="Mediendatei lesen",
-    )
-    if not await tools_access.allow(context, request):
-        return ToolResult.error("permission.denied")
-    attachment = (
-        await AttachmentService(run_id=context.run_id).resolve_path(context.db, context.root_files, path)
-        if reference.root == "session" else None
-    )
-    if attachment is not None:
-        if (attachment.metadata_json or {}).get("protectedInput") is True:
-            return ToolResult.error("permission.denied")
-        if attachment.processing_status != "ready" or attachment.kind not in {kind, "file"}:
-            return ToolResult.error("attachment.unsupportedType")
-    data = await files_access.read_bytes(context, reference.root, path, limit=limit)
-    digest = hashlib.sha256(data).hexdigest()
-    if attachment is not None and (attachment.sha256 != digest or attachment.size_bytes != len(data)):
-        return ToolResult.error("attachment.storageInvalid")
-    mime_type = (
-        attachment.mime_type if attachment is not None
-        else mimetypes.guess_type(path)[0] or "application/octet-stream"
-    )
-    if kind == "image":
-        validated = await asyncio.to_thread(validate_image, data, image_mime_type(data) or "", max_bytes=limit)
-        mime_type = validated.mime_type
-    return MediaFile(
-        path, data, mime_type, digest,
-        TrustLevel(attachment.message.trust_level) if attachment is not None else context.model_trust_level,
-        attachment,
-    )
 
 
 async def _authorize_media(
@@ -312,7 +255,7 @@ def _read_qr_codes(data: bytes) -> list[str]:
 async def _read_qr_code(
     arguments: ReadQrCodeArguments, context: ToolContext
 ) -> ToolResult:
-    source = await _read_media_file(arguments, context, kind="image", limit=MAX_IMAGE_ATTACHMENT_BYTES)
+    source = await read_media_file(arguments, context, kind="image", limit=MAX_IMAGE_ATTACHMENT_BYTES)
     if isinstance(source, ToolResult):
         return source
     try:
@@ -341,7 +284,7 @@ async def _edit_image(
     sources = []
     source_files = []
     for reference in arguments.images:
-        source = await _read_media_file(reference, context, kind="image", limit=MAX_IMAGE_ATTACHMENT_BYTES)
+        source = await read_media_file(reference, context, kind="image", limit=MAX_IMAGE_ATTACHMENT_BYTES)
         if isinstance(source, ToolResult):
             return source
         sources.append(source)
@@ -488,7 +431,7 @@ async def _transcribe_audio(
 ) -> ToolResult:
     if error := await _authorize_media(context, "media.transcribe.audio"):
         return error
-    source = await _read_media_file(
+    source = await read_media_file(
         arguments, context, kind="audio", limit=ABSOLUTE_MAX_FILE_ATTACHMENT_BYTES,
     )
     if isinstance(source, ToolResult):
@@ -521,7 +464,7 @@ async def _analyze_video(
 ) -> ToolResult:
     if context.video_analysis_handler is None or context.video_analysis_target is None:
         return ToolResult.error("tool.unavailable")
-    source = await _read_media_file(arguments, context, kind="video", limit=MAX_VIDEO_BYTES)
+    source = await read_media_file(arguments, context, kind="video", limit=MAX_VIDEO_BYTES)
     if isinstance(source, ToolResult):
         return source
     data, normalized_path, digest = source.data, source.path, source.sha256
@@ -580,7 +523,7 @@ async def _analyze_audio(
             "audio.transcriptionUnavailable" if arguments.analysis_mode == "speech"
             else "audio.analysisUnavailable"
         )
-    source = await _read_media_file(arguments, context, kind="audio", limit=MAX_AUDIO_ANALYSIS_BYTES)
+    source = await read_media_file(arguments, context, kind="audio", limit=MAX_AUDIO_ANALYSIS_BYTES)
     if isinstance(source, ToolResult):
         return source
     if error := await _authorize_media(

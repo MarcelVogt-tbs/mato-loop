@@ -23,6 +23,7 @@ import mato_loop_backend.agent.summarization as mock_agent_summarization
 import mato_loop_backend.agent.titles as mock_agent_titles
 import mato_loop_backend.agent.tool_round as mock_tool_round
 import mato_loop_backend.files.access as mock_files_access
+import mato_loop_backend.media.files as mock_media_files
 import mato_loop_backend.tools.access as mock_tools_access
 import mato_loop_backend.tools.catalog as mock_tools_catalog
 import mato_loop_backend.tools.files as mock_tools_files
@@ -1283,7 +1284,7 @@ async def test_pending_audio_and_image_tools_use_owned_live_sources(tmp_path, mo
     db.scalars.return_value = Mock(all=Mock(return_value=[message]))
     def _mock_value(**_kwargs):
         return service
-    for _mock_target in (mock_tools_files, mock_tools_media,):
+    for _mock_target in (mock_tools_files, mock_media_files,):
         monkeypatch.setattr(_mock_target, 'AttachmentService', _mock_value)
     target = SimpleNamespace(
         model=SimpleNamespace(id=uuid4(), trust_level=TrustLevel.PUBLIC),
@@ -1319,7 +1320,7 @@ async def test_pending_audio_and_image_tools_use_owned_live_sources(tmp_path, mo
     )
     assert transcribe.await_args.kwargs["audio"] == audio_output.getvalue()
     context.run_id = uuid4()
-    monkeypatch.setattr(mock_tools_media, "AttachmentService", AttachmentService)
+    monkeypatch.setattr(mock_media_files, "AttachmentService", AttachmentService)
     with pytest.raises(AttachmentError):
         await mock_tools_media._transcribe_audio(
             SimpleNamespace(root="session", path=attachment.file_path, language=None), context,
