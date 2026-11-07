@@ -22,6 +22,7 @@ from mato_loop_backend.skill_packages import (
     SkillError,
     SkillFile,
     SkillPackage,
+    bundled_file_hashes,
     parse_skill_md,
     skill_md,
 )
@@ -134,7 +135,11 @@ class SkillService:
         if create and sum(item.id not in DEFAULT_SKILLS for item in settings.skills) >= 20:
             raise SkillError("skill.limitReached")
         revision = await asyncio.to_thread(SkillStorage().publish, owner_id, skill_id, package)
-        replacement = SkillReference(id=skill_id, name=package.name, revision=revision, enabled=current.enabled if current else True)
+        replacement = SkillReference(
+            id=skill_id, name=package.name, revision=revision, enabled=current.enabled if current else True,
+            bundled_files=(bundled_file_hashes(package) if skill_id in DEFAULT_SKILLS and package == default_package(skill_id)
+                           else current.bundled_files if current else {}),
+        )
         settings.skills = [replacement if item.id == skill_id else item for item in settings.skills]
         if not any(item.id == skill_id for item in settings.skills):
             settings.skills.append(replacement)

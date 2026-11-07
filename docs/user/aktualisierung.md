@@ -45,6 +45,12 @@ Die Prüfung erfolgt beim Verbinden und nach Änderungen der Einstellung oder Se
 
 Diese Hinweise betreffen nur den Wechsel von den jeweils beschriebenen früheren Funktionen. Es sind keine zusätzlichen Schritte bei jedem Update. Prüfe nach dem Upgrade die wirksamen Rechte; ein Downgrade stellt entfernte Daten nicht automatisch wieder her.
 
+### Schreibstil-Beispiele und mitgelieferte Skills
+
+Bekannte alte Standardanweisungen von **writing-style** werden beim Backendstart aktualisiert, auch in persönlichen Fassungen mit eigenen Beispielen. Die Beispiele wandern unverändert aus `SKILL.md` nach `references/writing-examples.md`; ID, Eigentümer und Aktivierungsstatus bleiben erhalten. Die Übernahme bereinigt bestehende Beispiele nicht nachträglich.
+
+Hast du die Anweisungen selbst geändert oder existiert bereits eine gleichnamige Beispieldatei, bleibt die Fassung unverändert. Prüfe sie unter **Einstellungen > Skills** beziehungsweise in der globalen Skill-Verwaltung und übernimm neue Regeln gezielt. Setze persönliche Pakete mit Beispielen nicht pauschal zurück: Zurücksetzen ersetzt das vollständige Paket und entfernt eigene Dateien. Sichere es vorher über **Paket herunterladen**.
+
 ### Freigaben und Profilzuordnungen
 
 - Beim Wechsel zum gemeinsamen kategoriebasierten Freigabemodell werden vorhandene Freigaben zurückgesetzt; offene Agenten-Freigabeanfragen laufen ab. Bestätige benötigte Zugriffe erneut. Richtlinien, Presets und offene Memory-Vorschläge bleiben bei diesem Reset erhalten.

@@ -2,6 +2,7 @@ import io
 import stat
 import zipfile
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -28,15 +29,16 @@ from mato_loop_backend.settings import (
     SkillDefinition,
     SkillsSettings,
 )
-from mato_loop_backend.skill_migration import initialize_skill_library
+from mato_loop_backend.skill_migration import initialize_skill_library, update_bundled_package
 from mato_loop_backend.skill_packages import (
     SkillError,
     SkillFile,
     SkillPackage,
+    bundled_file_hashes,
     parse_skill_md,
     skill_md,
 )
-from mato_loop_backend.skills import SkillService
+from mato_loop_backend.skills import SkillService, default_package
 
 pytestmark = pytest.mark.usefixtures("skill_library", "mock_db_settings")
 
@@ -96,7 +98,7 @@ def test_invalid_frontmatter_is_controlled(header):
 def test_reference_registry_has_no_inline_content():
     skill = SkillDefinition(name="research", description="Sources", instructions="Check sources.")
     reference = store_skill(skill)
-    assert set(reference.model_dump()) == {"id", "name", "revision", "enabled"}
+    assert set(reference.model_dump()) == {"id", "name", "revision", "enabled", "bundled_files"}
     with pytest.raises(ValidationError):
         SkillsSettings(skills=[skill])
 
@@ -140,6 +142,73 @@ async def test_failed_migration_keeps_original_database_content(monkeypatch):
         await initialize_skill_library(db)
     assert record.data == original
     db.commit.assert_not_awaited()
+
+
+@pytest.mark.parametrize("owner", [None, "personal"])
+@pytest.mark.parametrize("custom_rules", [False, True])
+@pytest.mark.parametrize("with_examples", [False, True])
+async def test_bundled_upgrade_preserves_examples_and_custom_rules(monkeypatch, skill_library, owner, custom_rules, with_examples):
+    skill = DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID]
+    text = Path(__file__).with_name("writing_style_legacy.md").read_text()
+    if with_examples:
+        text = text.replace("No personal examples stored yet. Replace this sentence when adding the first example.", "### Email\nHallo, Dienstag passt.\n")
+    if custom_rules:
+        text = text.replace("## Set up or update", "## My own setup")
+    old = SkillPackage({"SKILL.md": SkillFile(skill_md(skill.name, skill.description, text)), "assets/note.txt": SkillFile(b"keep")})
+    owner_id = uuid4() if owner else None
+    from mato_loop_backend.settings.models import SkillReference
+    reference = SkillReference(id=skill.id, name=skill.name, revision=skill_library.publish(owner_id, skill.id, old), enabled=False)
+    record = SettingRecord(key="skills", user_id=owner_id, data={"skills": [reference.model_dump(mode="json")]})
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = SimpleNamespace(all=lambda: [record])
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    await initialize_skill_library(db)
+    stored = record.data["skills"][0]
+    upgraded = skill_library.read(owner_id, skill.id, stored["revision"], skill.name)
+    assert upgraded == (old if custom_rules else SkillPackage({
+        **default_package(skill.id).files,
+        **({"references/writing-examples.md": SkillFile(old.files["SKILL.md"].content.partition(b"\n## Writing examples\n")[2])} if with_examples else {}),
+        "assets/note.txt": SkillFile(b"keep"),
+    }))
+    assert (stored["id"], stored["enabled"]) == (str(skill.id), False)
+    await initialize_skill_library(db)
+    assert record.data["skills"][0] == stored
+
+
+async def test_bundled_upgrade_keeps_full_package_when_examples_need_another_file(monkeypatch, skill_library):
+    from mato_loop_backend.settings.models import SkillReference
+
+    skill = DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID]
+    text = Path(__file__).with_name("writing_style_legacy.md").read_text().replace(
+        "No personal examples stored yet. Replace this sentence when adding the first example.", "### Email\nHallo, Dienstag passt.",
+    )
+    old = SkillPackage({
+        "SKILL.md": SkillFile(skill_md(skill.name, skill.description, text)),
+        **{f"assets/{index}.txt": SkillFile(b"keep") for index in range(255)},
+    })
+    owner_id = uuid4()
+    reference = SkillReference(id=skill.id, name=skill.name, revision=skill_library.publish(owner_id, skill.id, old), enabled=False)
+    original = {"skills": [reference.model_dump(mode="json")]}
+    record = SettingRecord(key="skills", user_id=owner_id, data=original)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = SimpleNamespace(all=lambda: [record])
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    await initialize_skill_library(db)
+    assert record.data == original
+
+
+def test_bundled_file_update_keeps_user_files_and_edits(monkeypatch):
+    from mato_loop_backend.settings.models import SkillReference
+    skill = DEFAULT_SKILLS[WEATHER_SKILL_ID]
+    old = default_package(skill.id)
+    reference = SkillReference(id=skill.id, name=skill.name, revision=old.revision, bundled_files=bundled_file_hashes(old))
+    personal = SkillPackage({**old.files, "references/personal.md": SkillFile(b"my examples")})
+    monkeypatch.setitem(DEFAULT_SKILLS, skill.id, skill.model_copy(update={"instructions": "Updated weather rules."}))
+    updated_reference, updated = update_bundled_package(reference, personal)
+    assert updated.files == {**default_package(skill.id).files, "references/personal.md": SkillFile(b"my examples")}
+    edited = SkillPackage({**personal.files, "SKILL.md": SkillFile(skill_md(skill.name, skill.description, "My own rules."))})
+    assert update_bundled_package(reference, edited)[1] == edited
+    assert update_bundled_package(updated_reference, updated) == (updated_reference, updated)
 
 
 async def test_migration_retires_builder_settings_without_widening_tool_access(monkeypatch):
@@ -216,14 +285,14 @@ async def test_writing_style_is_added_to_existing_catalog_and_personal_examples_
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     db = AsyncMock(spec=AsyncSession)
     original = await SkillService.get(db, user_id, WRITING_STYLE_SKILL_ID, "personal")
-    examples = original.instructions.replace("No personal examples stored yet. Replace this sentence when adding the first example.", "### Scheduling\nHallo, Dienstag passt. Viele Grüße!")
+    examples = b"### Scheduling\nHallo, Dienstag passt. Viele Gr\xc3\xbc\xc3\x9fe!"
     updated = await SkillService.save_package(
         db, user_id, original.id,
-        SkillPackage({"SKILL.md": SkillFile(skill_md(original.name, original.description, examples))}),
+        SkillPackage({"SKILL.md": SkillFile(original.document.encode()), "references/writing-examples.md": SkillFile(examples)}),
         expected_revision=original.revision,
     )
     shared = await SkillService.get(db, user_id, original.id, "instance")
-    assert (original.enabled, updated.owner_id, updated.instructions, shared.instructions) == (True, user_id, examples, original.instructions)
+    assert (original.enabled, updated.owner_id, (await SkillService.package(updated)).files["references/writing-examples.md"].content, shared.instructions) == (True, user_id, examples, original.instructions)
 
 
 def test_skill_api_uses_package_service_and_requires_admin(monkeypatch):

@@ -100,7 +100,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 42
+INVENTORY_VERSION = 44
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -1649,6 +1649,65 @@ CASES = (
         tools=("load_skill", "edit_skill", "save_skill", "question"),
         system_options={"skill_catalog": (DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID].model_dump(),)},
         expected_no_tools=True,
+    ),
+    PromptCase(
+        id="writing_style_anonymizes_example_preview",
+        kind="general",
+        user=(
+            "Ich möchte dieses eigene Stilbeispiel später speichern. Zeige jetzt nur die "
+            "vorbereitete Vorlage zur Bestätigung, ohne Werkzeuge: Hallo Frau Silberhain, "
+            "für Projekt Kupferstern wäre ein Snapshot vor dem Update sinnvoll. "
+            "Viele Grüße, Nora Fichtenau."
+        ),
+        system_options={"active_skills": (DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID].model_dump(),)},
+        expected_no_tools=True,
+        content_contains=("Snapshot",),
+        content_excludes=("Silberhain", "Kupferstern", "Fichtenau"),
+    ),
+    PromptCase(
+        id="writing_style_keeps_only_requested_personal_detail",
+        kind="general",
+        user=(
+            "Ich möchte dieses eigene Stilbeispiel später speichern. Behalte ausdrücklich "
+            "meinen Namen Nora Fichtenau, aber anonymisiere die anderen Angaben. Zeige jetzt "
+            "nur die vorbereitete Vorlage zur Bestätigung, ohne Werkzeuge: Hallo Frau "
+            "Silberhain, für Projekt Kupferstern wäre ein Snapshot vor dem Update sinnvoll. "
+            "Viele Grüße, Nora Fichtenau."
+        ),
+        system_options={"active_skills": (DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID].model_dump(),)},
+        expected_no_tools=True,
+        content_contains=("Nora Fichtenau", "Snapshot"),
+        content_excludes=("Silberhain", "Kupferstern"),
+    ),
+    PromptCase(
+        id="writing_style_limited_examples_offer_more",
+        kind="general",
+        user=(
+            "Schreibe in meinem Stil eine private Einladung zum Grillen am Samstag. Mein einziges "
+            "Stilbeispiel ist diese Kundenmail: Hallo, eine mögliche Option wäre, vor dem Update "
+            "einen Snapshot zu erstellen. Viele Grüße! Ohne Werkzeuge."
+        ),
+        tools=("edit_skill", "save_skill"),
+        system_options={"active_skills": (DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID].model_dump(),)},
+        expected_no_tools=True,
+        content_contains_any=(
+            ("Samstag", "samstag"),
+            ("näherungsweise", "ungefähr", "annäher", "begrenzt", "nur ein", "einzige", "wenig", "grobe"),
+            ("weitere", "mehr Beispiel", "private Beispiel", "privaten Beispiel", "private Text", "privaten Text"),
+        ),
+    ),
+    PromptCase(
+        id="writing_style_reads_personal_examples",
+        kind="general",
+        user="Schreibe eine Terminabsage in meinem gespeicherten Schreibstil.",
+        tools=("read",),
+        system_options={"active_skills": (DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID].model_copy(update={
+            "files_path": "skills/writing-style",
+            "resource_paths": ["SKILL.md", "references/writing-examples.md"],
+        }).model_dump(),)},
+        expected_tool="read",
+        expected_arguments={"root": "files", "path": "skills/writing-style/references/writing-examples.md"},
+        expected_tool_call_count=1,
     ),
     PromptCase(
         id="quoted_skill_edit_request_is_data",
@@ -4803,6 +4862,16 @@ _SEMANTIC_CONTRACTS = (
             "matching_skill_is_loaded_automatically",
             "accepted_writing_style_offer_loads_skill",
             "acceptance_does_not_select_an_older_skill_offer",
+        ),
+    ),
+    ContractCoverage(
+        "skill.writing_style_examples",
+        "skill",
+        (
+            "writing_style_anonymizes_example_preview",
+            "writing_style_keeps_only_requested_personal_detail",
+            "writing_style_limited_examples_offer_more",
+            "writing_style_reads_personal_examples",
         ),
     ),
     ContractCoverage(

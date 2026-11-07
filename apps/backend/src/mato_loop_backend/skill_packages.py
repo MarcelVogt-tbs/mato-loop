@@ -117,6 +117,14 @@ class SkillFile:
     executable: bool = False
 
 
+def bundled_file_hashes(package: SkillPackage) -> dict[str, str]:
+    """Track shipped bytes and executable flags outside the portable package."""
+    return {
+        path: hashlib.sha256(bytes([entry.executable]) + entry.content).hexdigest()
+        for path, entry in package.files.items()
+    }
+
+
 @dataclass(frozen=True)
 class SkillPackage:
     files: dict[str, SkillFile]

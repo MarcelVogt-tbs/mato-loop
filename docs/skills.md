@@ -38,6 +38,26 @@ conversion is restart-safe and fails startup on error. Normal runtime has only
 the package-backed path. No relational schema changes are needed.
 
 Personal overrides of shipped defaults keep their existing scoped identities.
+At startup, bundled packages update in global and personal scopes. The registry's
+`bundled_files` map tracks the last shipped hash of each managed file, including its
+executable flag. Only files still matching that hash are replaced or removed;
+user-edited or deleted files and untracked resources are preserved. New shipped
+files are added only at unused paths. Packages are published before registry changes
+commit; repeated startup is idempotent. If a generated update fails package validation,
+startup keeps the valid original and logs a warning; failures reading the original
+still abort startup. No background worker or runtime inheritance
+is involved, and exports contain complete standard Agent Skills packages without
+the registry's update metadata.
+
+Writing-style instructions remain in `SKILL.md`; personal examples belong in
+`references/writing-examples.md`, which is not a bundled file. The skill reads that
+reference through ordinary file permissions before using stored examples. Legacy
+packages are split only when their instruction prefix exactly matches the known
+shipped version. Example text and unrelated resources are preserved; custom
+instructions or a conflicting examples path leave the package untouched.
+Changing the bundled instructions intentionally changes the active skill prefix
+for subsequent runs; running catalogs and historical requests remain fixed.
+
 Shipped defaults define their initial enabled state individually: `writing-style`
 starts enabled, while `weather` starts disabled. They support reset and cannot be
 deleted. Personal skills may be disabled instance-wide, with the existing administrator exception.
