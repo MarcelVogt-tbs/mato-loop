@@ -8,6 +8,7 @@ import json
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import pytest
 from runtime_helpers import (
     _assistant_messages,
     _runtime_setup,
@@ -26,7 +27,8 @@ from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.tools.catalog import tool_registry
 
 
-async def test_native_coding_replays_patch_repairs_checks_and_diff(tmp_path, monkeypatch, skill_library):
+@pytest.mark.parametrize("patch_error", ["file.patchContextMismatch", "tool.invalidArguments"])
+async def test_native_coding_replays_patch_repairs_checks_and_diff(tmp_path, monkeypatch, skill_library, patch_error):
     agent_id = uuid4()
     directory = "/home/test/project"
     revision = "a" * 64
@@ -114,7 +116,11 @@ async def test_native_coding_replays_patch_repairs_checks_and_diff(tmp_path, mon
             assert arguments == {"patch": calls[step - 1].arguments["patchText"].replace("check.sh", directory + "/check.sh")}
             if step == 3:
                 return ResponseMessage(
-                    type="response", id=request_id, ok=False, error={"code": "file.patchContextMismatch"},
+                    type="response", id=request_id, ok=False, error={
+                        "code": "request.invalid" if patch_error == "tool.invalidArguments" else patch_error,
+                        **({"params": {"field": "patchText", "reason": "invalid_value"}}
+                           if patch_error == "tool.invalidArguments" else {}),
+                    },
                 )
             result = {"files": [{
                 "operation": "update", "path": directory + "/check.sh", "sha256": "b" * 64, "size": 72,
@@ -167,7 +173,7 @@ async def test_native_coding_replays_patch_repairs_checks_and_diff(tmp_path, mon
                     "process.commandFailed" if step == 2 else None
                 )
             elif step == 3:
-                assert previous["error"]["code"] == "file.patchContextMismatch"
+                assert previous["error"]["code"] == patch_error
             elif step == 4:
                 assert "error" not in previous
             if step == 6:

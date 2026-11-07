@@ -429,6 +429,8 @@ async def execute_definition(
         TbsDeskError,
         WebFetchError,
     ) as exc:
+        if isinstance(exc, ExecutionClientError) and exc.code == "tool.invalidArguments":
+            return _rejected_arguments(field=exc.field, params=exc.params)
         return ToolResult.error(
             exc.code,
             field=exc.field if isinstance(exc, (ExecutionClientError, RootFileError, MailError)) else None,
