@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.agent.media_prompt_profiles import (
     GPT_IMAGE_2_EDIT_INSTRUCTIONS,
     GPT_IMAGE_2_GENERATE_INSTRUCTIONS,
+    QWEN_IMAGE_TURBO_EDIT_INSTRUCTIONS,
+    QWEN_IMAGE_TURBO_GENERATE_INSTRUCTIONS,
     Z_IMAGE_TURBO_GENERATE_INSTRUCTIONS,
     with_media_prompt_profiles,
 )
@@ -434,6 +436,25 @@ def test_media_prompt_profiles_follow_offered_resolved_target() -> None:
         "media_adapter_type": "lemonade",
         "media_provider_model_id": "Z-Image-Turbo",
     }
+
+
+@pytest.mark.parametrize(("tool", "profile"), [
+    ("generate_image", QWEN_IMAGE_TURBO_GENERATE_INSTRUCTIONS),
+    ("edit_image", QWEN_IMAGE_TURBO_EDIT_INSTRUCTIONS),
+])
+def test_qwen_image_profile_follows_image_target_not_chat_model(tool, profile) -> None:
+    provider = LlmProviderConfig(name="Images", adapter_type="openai-compatible")
+    chat = ModelConfig(provider_id=provider.id, model_id="different-chat-model")
+    image = ModelConfig(provider_id=provider.id, model_id="Qwen-Image-2.1-Turbo", capabilities={
+        ModelCapability.IMAGE_GENERATION, ModelCapability.IMAGE_EDITING,
+    })
+    settings = AiSettings(providers=[provider], models=[chat, image],
+                          image_generation_model_id=image.id)
+    offered = tool_registry.effective(IntegrationSettings(), tool_capabilities={
+        "media.generate.image", "media.edit.image",
+    }).only(tool)
+    profiled = with_media_prompt_profiles(offered, settings, active_model_id=chat.id)
+    assert profiled.prompt_fragments == (profile,)
 
 
 def test_lemonade_does_not_advertise_unimplemented_image_editing() -> None:

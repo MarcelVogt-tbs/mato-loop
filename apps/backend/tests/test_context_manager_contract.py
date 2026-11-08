@@ -3645,16 +3645,44 @@ async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(
         search_policy=WebSearchPolicy.AVAILABLE,
     )
     from mato_loop_backend.settings import SettingsStore
-    from mato_loop_backend.settings.models import UserPreferences
+    from mato_loop_backend.settings.models import AiProviderSettings, UserPreferences
 
     load_settings = SettingsStore.load
+    load_optional = SettingsStore.load_optional
 
     async def load_with_language(db, settings_type, **kwargs):
         if settings_type is UserPreferences:
             return UserPreferences(preferred_language="fr")
-        return await load_settings(db, settings_type, **kwargs)
+        value = await load_settings(db, settings_type, **kwargs)
+        if settings_type is AiProviderSettings:
+            from mato_loop_backend.settings.models import ModelCapability
+
+            if len(value.models) == 1:
+                value.models.append(ModelConfig(
+                    provider_id=value.providers[0].id, model_id="Qwen-Image-2.1-Turbo",
+                    capabilities={ModelCapability.IMAGE_GENERATION, ModelCapability.IMAGE_EDITING},
+                ))
+        return value
+
+    async def load_with_image_default(db, settings_type, **kwargs):
+        from mato_loop_backend.settings.models import (
+            AgentProfileAccessOverrides,
+            AgentProfilesSettings,
+            ModelDefaultsSettings,
+        )
+
+        value = await load_optional(db, settings_type, **kwargs)
+        if settings_type is AgentProfilesSettings:
+            value.builtin_access_overrides[BUILD_PROFILE_ID] = AgentProfileAccessOverrides(
+                tool_availability={"generate_image": True, "edit_image": True},
+            )
+        if settings_type is ModelDefaultsSettings:
+            ai = await load_with_language(db, AiProviderSettings)
+            value.image_generation_model_id = ai.models[-1].id
+        return value
 
     monkeypatch.setattr(SettingsStore, "load", load_with_language)
+    monkeypatch.setattr(SettingsStore, "load_optional", load_with_image_default)
     run.agent_profile_id = BUILD_PROFILE_ID
     run.current_directory_snapshot = "/current"
     records = await AgentRuntime._records(db, run.session_id)
@@ -3695,6 +3723,8 @@ async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(
     records.extend([secret_call, secret_result])
     system = projections[0]["system_prompt"]
     assert 'Configured response language (data): "fr"' in system
+    assert "Qwen-Image-2.1-Turbo generation:" in system
+    assert "Qwen-Image-2.1-Turbo editing:" in system
     user_id = next(item.id for item in reversed(records) if item.role == "user")
     first = _projection_messages(system, None, records, TrustLevel.PRIVATE,
                                  memory_context="Earlier memory", memory_contexts={user_id: "Earlier memory"},

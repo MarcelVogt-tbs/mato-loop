@@ -34,6 +34,12 @@ Verhindert eine Anhangsgrenze das Hinzufügen, bleibt die Aufnahme für einen we
 
 ## Mediengenerierung
 
+Für das OpenAI-kompatible Bildmodell mit der Modell-ID `Qwen-Image-2.1-Turbo`
+erhält der Agent getrennte Formulierungshinweise zum Erzeugen und Bearbeiten.
+Bei mehreren Referenzen benennt er deren Rollen in Upload-Reihenfolge als
+`<image1>`, `<image2>` usw. Wortgetreu vorgegebene Prompts bleiben unverändert.
+Andere Modell-Aliase erhalten diese Hinweise nicht automatisch.
+
 Je nach Provider, Modellfähigkeiten und Rechten des gewählten Agentenprofils kann der Agent Bilder, Sprache oder Audio erzeugen und Bilder bearbeiten. Dauerhafte erzeugte oder bearbeitete Bilder, QR-Codes, Sprach- und Audioausgaben, abgerufene Bilder, gerenderte PDF-Seiten sowie OpenSCAD-Exporte werden als verwaltete Dateien mit gespeicherten Vollversionen abgelegt. Die jeweilige Nachricht verweist auf genau diese Version. Normales Bearbeiten, Verschieben und das Aktivieren einer anderen Version erhalten diesen Verweis; das Löschen der vollständigen verwalteten Datei macht ihn unbrauchbar.
 
 Die Bearbeitung eines einzelnen, bereits erzeugten Bildes ergänzt dessen Versionsverlauf. Ein hochgeladenes oder heruntergeladenes Original sowie mehrere gemeinsam bearbeitete Quellen bleiben unverändert; das Ergebnis wird als neue Datei gespeichert.

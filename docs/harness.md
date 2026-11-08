@@ -160,6 +160,13 @@ The implementation owners are `agent/prompts.py` (system parts/reminders), `agen
 
 ### Stability and isolation rules
 
+Image-tool prompt profiles follow the resolved image target, not the active chat model.
+For the OpenAI-compatible model ID `Qwen-Image-2.1-Turbo`, generation and editing
+receive separate Qwen-specific guidance. Arbitrary model aliases are not inferred.
+These profiles intentionally change system prefixes when the matching image tools
+are offered; unchanged target/tool selection retains deterministic guidance across
+rounds. HTTP image transport and sampling defaults are unchanged.
+
 - **Do not rewrite earlier turns from current state.** Profile instructions use persisted `agentProfileInstructions`; workspace-change reminders use the originating turn's `workspaceContext` snapshot, refreshed for the latest turn on retry, never for earlier turns. Memory envelopes use their own turn snapshots and live source revalidation, as defined in [memory.md](memory.md#automatic-context). Invalidated context is omitted, never retained merely for caching. Compacted image sources may fall back to the request tail; reasoning replay requires its exact provider/model/credential/endpoint/trust/privacy scope.
   Moving Memory envelopes from synthetic assistant answers into their user messages intentionally invalidates older prefixes from the changed contract onward. It preserves turn snapshots, consecutive-envelope deduplication and subsequent serialized-prefix reuse without migrating stored messages.
 - **Freeze retrieved session summaries with their turn.** Dreaming may update the current snapshot, but that does not replace cached tool-round context or historical Memory envelopes. History invalidation changes the source revision; summary regeneration alone does not. Summary reading hints stay in the turn-local envelope, and disabled-summary requests keep the existing prompt contract unchanged. [Session-summary tests](../apps/backend/tests/test_session_summaries.py) compare Chat Completions and Responses prefixes across tool rounds and database-loaded follow-ups.

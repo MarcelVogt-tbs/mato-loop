@@ -45,7 +45,33 @@ Z_IMAGE_TURBO_GENERATE_INSTRUCTIONS = (
     "parameters."
 )
 
+QWEN_IMAGE_TURBO_GENERATE_INSTRUCTIONS = (
+    "Qwen-Image-2.1-Turbo generation: Copy a user-specified exact prompt verbatim. Otherwise write "
+    "a coherent English description of the finished image, not instructions to a renderer or a tag list. "
+    "Specify the medium, subject, spatial arrangement, relevant materials, lighting and style. "
+    "Match detail to the request; do not invent subjects, branding, captions or unrelated elements, "
+    "and do not pad to a fixed length. Preserve requested visible text character for character in "
+    "its original language, enclosed in double quotes. Avoid quality slogans such as masterpiece "
+    "or 8K. Keep dimensions and sampling settings out of prompt prose; use supported tool fields "
+    "for explicit size requests and otherwise leave sampling settings unset."
+)
+QWEN_IMAGE_TURBO_EDIT_INSTRUCTIONS = (
+    "Qwen-Image-2.1-Turbo editing: Copy a user-specified exact prompt verbatim. Otherwise inspect "
+    "the referenced images before describing visible details, and write a precise English editing "
+    "instruction beginning with the requested operation. For an in-place edit, put the base canvas "
+    "first in images. For multiple inputs use <image1>, <image2>, etc. in upload order, explicitly "
+    "naming each input's role and what to transfer; for a single input say the image without tags. "
+    "Describe the requested change concretely and affirmatively. Preserve unrelated content, "
+    "identity, framing and lighting with one concise clause rather than redescribing their appearance. "
+    "For identity references point to the supplied image instead of inventing facial features. "
+    "Distinguish changing this picture from creating a new composition from references; do not "
+    "lock the original composition when the user requests a new one. Preserve exact visible text "
+    "and its language unless changing it is requested. Add no unrequested cleanup or enhancements. "
+    "Keep sampling settings and pixel dimensions out of prompt prose."
+)
+
 _TOOL_CAPABILITIES = {
+    # Profiles describe downstream image models, not the active chat model.
     "generate_image": ModelCapability.IMAGE_GENERATION,
     "edit_image": ModelCapability.IMAGE_EDITING,
 }
@@ -58,6 +84,12 @@ _PROFILES = {
     ),
     ("lemonade", "Z-Image-Turbo", "generate_image"): (
         Z_IMAGE_TURBO_GENERATE_INSTRUCTIONS
+    ),
+    ("openai-compatible", "Qwen-Image-2.1-Turbo", "generate_image"): (
+        QWEN_IMAGE_TURBO_GENERATE_INSTRUCTIONS
+    ),
+    ("openai-compatible", "Qwen-Image-2.1-Turbo", "edit_image"): (
+        QWEN_IMAGE_TURBO_EDIT_INSTRUCTIONS
     ),
 }
 
