@@ -5177,6 +5177,7 @@ async def test_provide_file_supports_session_files(tmp_path) -> None:
     )
     context = _context(tmp_path, call)
     context.root_files.write_file("session", "report.pdf", "report")
+    context.db.scalars.return_value = Mock(all=Mock(return_value=[]))
 
     result = await tool_registry.execute(call, context)
 

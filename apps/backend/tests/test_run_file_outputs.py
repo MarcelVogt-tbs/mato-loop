@@ -467,6 +467,38 @@ async def test_pending_images_edit_in_place_project_and_finalize_once(tmp_path, 
     assert len(public_files.list_revisions(second.file_path)) == 1
 
 
+@pytest.mark.parametrize("variant", ["result", "internal", "changed", "later_run", "other_root"])
+async def test_provide_skips_only_current_visible_result(tmp_path, monkeypatch, variant):
+    session = ChatSession(id=uuid4(), user_id=uuid4())
+    run_id = uuid4()
+    storage = SessionStorage(tmp_path / "sessions")
+    storage.provision(session.id)
+    files = RootFileService(session.id, session_storage=storage, run_id=run_id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = session
+    message = tool_message(session, run_id)
+    attachment = await AttachmentService(storage, run_id=run_id).create_image(
+        db, message, png("red"), "image/png", filename="result.png", position=0,
+        category="generated", purpose="artifact",
+        metadata={"toolOutputPresentation": "internal" if variant == "internal" else "result"},
+    )
+    if variant == "changed":
+        files.append_output_revision(attachment.file_id, png("blue"))
+    if variant == "other_root":
+        message.provider_data["_matoloop"]["pendingAttachments"][0]["file_root_id"] = str(uuid4())
+    db.scalars.return_value = Mock(all=Mock(return_value=[message]))
+    monkeypatch.setattr(mock_files_access, "project_read_files", AsyncMock(return_value=(files, session.id)))
+    monkeypatch.setattr(mock_files_access, "filesystem_permission", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(mock_tools_access, "allow", AsyncMock(return_value=True))
+    result = await mock_tools_files._provide_file(
+        ProvideFileArguments(root="session", path=attachment.file_path),
+        SimpleNamespace(db=db, run_id=uuid4() if variant == "later_run" else run_id, session=session),
+    )
+    assert (json.loads(result.content).get("alreadyAvailable", False), bool(result.file_actions)) == (
+        variant == "result", variant != "result",
+    )
+
+
 async def test_provided_working_file_and_actions_publish_only_final_output(tmp_path, monkeypatch):
     session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
     run_id = uuid4()
@@ -475,19 +507,20 @@ async def test_provided_working_file_and_actions_publish_only_final_output(tmp_p
     files = RootFileService(session.id, session_storage=storage, run_id=run_id)
     files.write_file("session", "model.scad", "cube(1);")
     working = files.working_revision("model.scad")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = session
+    db.scalars.return_value = Mock(all=Mock(return_value=[]))
     monkeypatch.setattr(mock_files_access, 'project_read_files', AsyncMock(return_value=(files, session.id)))
     monkeypatch.setattr(mock_files_access, 'filesystem_permission', lambda *_args, **_kwargs: None)
     monkeypatch.setattr(mock_tools_access, 'allow', AsyncMock(return_value=True))
     provided = await mock_tools_files._provide_file(
         ProvideFileArguments(root="session", path="model.scad"),
-        SimpleNamespace(run_id=run_id, root_files=files, session=session),
+        SimpleNamespace(db=db, run_id=run_id, root_files=files, session=session),
     )
     assert provided.file_actions[0].file_revision is None
     assert provided.file_actions[0].file_id == str(working.file_id)
     assert "downloadUrl" not in json.loads(provided.content)
     service = AttachmentService(storage, run_id=run_id)
-    db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = session
     messages = [tool_message(session, run_id) for _ in range(2)]
     for message in messages:
         message.provider_data["_matoloop"]["fileActions"] = [
@@ -537,16 +570,17 @@ async def test_provided_reference_retains_final_revision_without_creating_attach
     files.create_directory("session", "reports")
     files.write_file("session", "reports/notes.txt", "original")
     source = files.working_revision("reports/notes.txt")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = session
+    db.scalars.return_value = Mock(all=Mock(return_value=[]))
     monkeypatch.setattr(mock_files_access, 'project_read_files', AsyncMock(return_value=(files, session.id)))
     monkeypatch.setattr(mock_files_access, 'filesystem_permission', lambda *_args, **_kwargs: None)
     monkeypatch.setattr(mock_tools_access, 'allow', AsyncMock(return_value=True))
     provided = await mock_tools_files._provide_file(
         ProvideFileArguments(root="session", path="reports/notes.txt"),
-        SimpleNamespace(run_id=run_id, root_files=files, session=session),
+        SimpleNamespace(db=db, run_id=run_id, root_files=files, session=session),
     )
     assert not provided.is_error
-    db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = session
     service = AttachmentService(storage, run_id=run_id)
     message, _, _ = await mock_tool_round.persist_tool_result(
         db, SimpleNamespace(id=run_id), session, ToolCall("provide", "provide_file", {}),

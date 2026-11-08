@@ -15,6 +15,7 @@ from mato_loop_backend.files.roots import model_file_roots
 from mato_loop_backend.media.attachments import (
     AttachmentError,
     AttachmentService,
+    attachment_presentation,
     latest_image_references,
     model_attachments,
 )
@@ -562,6 +563,14 @@ def message_dict(
             f"{attachment.filename or 'attachment'}, kind {attachment.kind}, "
             f"MIME {attachment.mime_type}, path {attachment.file_path}{companion}{duration}{voice}]"
         )
+        if (
+            message.role == "tool" and attachment.processing_status == "ready"
+            and attachment_presentation(message, attachment) == "result"
+        ):
+            attachment_markers[-1] += (
+                " [This result attachment is automatically displayed with download controls. "
+                "Do not call provide_file for it again in this response.]"
+            )
     if include_attachment_markers and attachment_markers:
         if message.role == "user" and not content.strip():
             content = (

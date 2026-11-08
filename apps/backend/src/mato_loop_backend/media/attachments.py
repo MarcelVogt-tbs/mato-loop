@@ -429,6 +429,29 @@ def pending_attachments(message: Message) -> list[SimpleNamespace]:
     return result
 
 
+def attachment_presentation(
+    message: Message, attachment: MessageAttachment | SimpleNamespace,
+) -> Literal["result", "internal"] | None:
+    value = (attachment.metadata_json or {}).get("toolOutputPresentation")
+    if value in {"result", "internal"}:
+        return value
+    if message.role != "tool":
+        return "result"
+    state = (message.provider_data or {}).get("_matoloop", {})
+    tool_name = state.get("toolName") if isinstance(state, dict) else None
+    if not tool_name:
+        return None
+    if tool_name in {"browser", "browser_take_screenshot", "webfetch"} and attachment.kind == "image":
+        return "internal"
+    if tool_name == "render_openscad" and (
+        attachment.kind == "image"
+        or attachment.mime_type == "model/vnd.off"
+        or str(attachment.filename or "").lower().endswith(".off")
+    ):
+        return "internal"
+    return "result"
+
+
 def model_attachments(message: Message, *, include_pending: bool = True) -> list:
     if message.role == "tool" and (message.provider_data or {}).get("_matoloop", {}).get("fileOutputsHidden"):
         return []
@@ -1019,6 +1042,34 @@ class AttachmentService:
             for item in pending_attachments(message)
             if item.run_id == self.run_id and item.session_id == session_id
         ]
+
+    async def result_available(
+        self, db: AsyncSession, session_id: UUID, file_root_id: UUID,
+        revision: FileRevision | WorkingFileRevision,
+    ) -> bool:
+        if self.run_id is None:
+            return False
+        messages = (await db.scalars(
+            select(Message)
+            .options(selectinload(Message.attachments))
+            .where(
+                Message.session_id == session_id,
+                Message.role == "tool",
+                Message.provider_data["_matoloop"]["runId"].astext == str(self.run_id),
+            )
+        )).all()
+        return any(
+            attachment.file_root_id == file_root_id
+            and attachment.file_id == revision.file_id
+            and attachment.file_revision == revision.revision
+            and attachment.sha256 == revision.sha256
+            and attachment.processing_status == "ready"
+            and attachment_presentation(message, attachment) == "result"
+            for message in messages
+            if message.session_id == session_id and message.role == "tool"
+            and (message.provider_data or {}).get("_matoloop", {}).get("runId") == str(self.run_id)
+            for attachment in model_attachments(message)
+        )
 
     async def resolve_path(
         self, db: AsyncSession, root_files: RootFileService, path: str,

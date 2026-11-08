@@ -17,6 +17,7 @@ from mato_loop_backend.agent.run_timing import run_timing_payload
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.execution.paths import is_absolute_path
 from mato_loop_backend.files.service import RootFileError, RootFileService
+from mato_loop_backend.media.attachments import attachment_presentation
 from mato_loop_backend.media.processing import claimed_audio_format
 from mato_loop_backend.message_content import canonical_assistant_content
 from mato_loop_backend.models import (
@@ -25,7 +26,6 @@ from mato_loop_backend.models import (
     ContextSummary,
     MemoryMode,
     Message,
-    MessageAttachment,
     WebSearchPolicy,
 )
 from mato_loop_backend.settings.session_profiles import SessionProfileSnapshot
@@ -251,32 +251,6 @@ def _public_prepared_reply(item: Message) -> dict[str, Any] | None:
     if len({option.id for option in reply.options}) != len(reply.options):
         return None
     return reply.model_dump(mode="json")
-
-
-def _attachment_presentation(
-    item: Message, attachment: MessageAttachment
-) -> Literal["result", "internal"] | None:
-    value = (attachment.metadata_json or {}).get("toolOutputPresentation")
-    if value in {"result", "internal"}:
-        return value
-    if item.role != "tool":
-        return "result"
-    runtime_data = (item.provider_data or {}).get("_matoloop", {})
-    tool_name = runtime_data.get("toolName") if isinstance(runtime_data, dict) else None
-    if not tool_name:
-        return None
-    if (
-        tool_name in {"browser", "browser_take_screenshot", "webfetch"}
-        and attachment.kind == "image"
-    ):
-        return "internal"
-    if tool_name == "render_openscad" and (
-        attachment.kind == "image"
-        or attachment.mime_type == "model/vnd.off"
-        or str(attachment.filename or "").lower().endswith(".off")
-    ):
-        return "internal"
-    return "result"
 
 
 def session_payload(
@@ -542,7 +516,7 @@ def message_payload(
                 "kind": attachment.kind,
                 "category": attachment.category,
                 "purpose": attachment.purpose,
-                "presentation": _attachment_presentation(item, attachment),
+                "presentation": attachment_presentation(item, attachment),
                 "processingStatus": attachment.processing_status,
                 "mimeType": attachment.mime_type,
                 "sizeBytes": attachment.size_bytes,

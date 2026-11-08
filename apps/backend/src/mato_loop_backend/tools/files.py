@@ -502,6 +502,17 @@ async def _provide_file(
     filename = "files.zip" if kind == "collection" else path.rsplit("/", 1)[-1] or "files"
     if path == ".":
         filename = "files"
+    if revision is not None and target_session_id == context.session.id:
+        service = AttachmentService(root_files.session_storage, run_id=context.run_id)
+        if await service.result_available(
+            context.db, context.session.id, UUID(root_files.root_identity("session")), revision,
+        ):
+            return ToolResult.json({
+                "root": arguments.root, "path": path, "filename": filename,
+                "provided": False, "alreadyAvailable": True,
+                "message": "This result is already displayed with download controls. No additional provision is needed.",
+                "sessionId": str(target_session_id),
+            })
     action = ToolFileAction(
         operation="provide", root=arguments.root,
         root_identity=root_files.root_identity("session") if arguments.root == "session" else None,

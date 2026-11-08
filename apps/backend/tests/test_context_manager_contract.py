@@ -964,7 +964,7 @@ async def test_selected_computer_metadata_does_not_relocate_session_files(bound)
 @pytest.mark.parametrize("serialize, history_key", [
     (service_module._chat_body, "messages"), (service_module._responses_body, "input"),
 ])
-@pytest.mark.parametrize("large_result", [None, "shell", "mcp", "text", "browser"])
+@pytest.mark.parametrize("large_result", [None, "shell", "mcp", "text", "browser", "attachment"])
 async def test_recorded_computers_preserve_provider_request_prefix(serialize, history_key, large_result) -> None:
     session = _session()
     agent_id = uuid4()
@@ -979,7 +979,13 @@ async def test_recorded_computers_preserve_provider_request_prefix(serialize, hi
         call.tool_calls = [{"id": str(index), "name": "browser" if large_result == "browser" else "shell_run",
                             "arguments": {"command": "pwd"}}]
         result = _message(session.id, "tool", "/work")
-        if large_result:
+        if large_result == "attachment":
+            attachment = _attach_image(result)
+            attachment.kind = "file"
+            attachment.mime_type = "application/octet-stream"
+            attachment.processing_status = "ready"
+            attachment.metadata_json = {"toolOutputPresentation": "result"}
+        elif large_result:
             content = "first\n" + "large output\n" * 5_000 + "last"
             result.content = (
                 json.dumps({"exitCode": 0, "timedOut": False, "output": {"stdout": content, "stderr": ""}})
@@ -992,7 +998,9 @@ async def test_recorded_computers_preserve_provider_request_prefix(serialize, hi
         result.tool_call_id = str(index)
         result.provider_data = {"_matoloop": {"executionAgentId": str(agent_id), "executionAgentAlias": "Server"}}
         records.extend([call, result])
-        if large_result:
+        if large_result == "attachment":
+            assert "Do not call provide_file" in message_dict(result)["content"]
+        elif large_result:
             preview = json.loads(_projection_messages(system, None, records, TrustLevel.PRIVATE)[-1]["content"])
             assert preview["toolOutputShortened"] and preview["toolResultReference"]["arguments"]["message_id"] == str(result.id)
             assert len(json.dumps(preview)) < 20_000
