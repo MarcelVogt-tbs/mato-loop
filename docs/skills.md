@@ -55,8 +55,9 @@ reference through ordinary file permissions before using stored examples. Legacy
 packages are split only when their instruction prefix exactly matches the known
 shipped version. Example text and unrelated resources are preserved; custom
 instructions or a conflicting examples path leave the package untouched.
-Changing the bundled instructions intentionally changes the active skill prefix
-for subsequent runs; running catalogs and historical requests remain fixed.
+Changing a bundled description intentionally changes the catalog prefix; changing
+bundled instructions changes the active skill prefix for subsequent runs. Running
+catalogs and historical requests remain fixed.
 
 Shipped defaults define their initial enabled state individually: `writing-style`
 starts enabled, while `weather` starts disabled. They support reset and cannot be

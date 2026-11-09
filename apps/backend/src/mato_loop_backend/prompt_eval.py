@@ -1616,6 +1616,19 @@ CASES = (
         forbidden_tools=("load_skill",),
     ),
     PromptCase(
+        id="ordinary_letter_draft_loads_writing_style",
+        kind="general",
+        user=(
+            "Hilf mir, einen Brief an die Krankenkasse zu verfassen. Schreibe einfach, dass meine "
+            "Frau im angefragten Zeitraum keine Bezüge hatte, wie schon im Fragebogen angegeben."
+        ),
+        tools=("load_skill", "edit_skill", "save_skill", "question"),
+        system_options={"skill_catalog": (DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID].model_dump(),)},
+        expected_tool="load_skill",
+        expected_arguments={"skill_id": str(WRITING_STYLE_SKILL_ID)},
+        expected_tool_call_count=1,
+    ),
+    PromptCase(
         id="accepted_writing_style_offer_loads_skill",
         kind="general",
         history=(
@@ -4860,6 +4873,7 @@ _SEMANTIC_CONTRACTS = (
         (
             "explicit_skill_selection_loads_skill",
             "matching_skill_is_loaded_automatically",
+            "ordinary_letter_draft_loads_writing_style",
             "accepted_writing_style_offer_loads_skill",
             "acceptance_does_not_select_an_older_skill_offer",
         ),

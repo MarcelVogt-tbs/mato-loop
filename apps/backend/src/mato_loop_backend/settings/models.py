@@ -1602,9 +1602,10 @@ Do not describe the data timestamp as the retrieval time.
         id=WRITING_STYLE_SKILL_ID,
         name="writing-style",
         description=(
-            "Set up or update the user's personal writing style from examples, including examples "
-            "selected from sent mail on request. Use when drafting or revising emails and other "
-            "texts in the user's name, or when feedback says a draft does not sound like them. "
+            "Use whenever drafting or revising emails, letters, or other texts in the user's name, "
+            "even without an explicit request to match their writing style. Also use when feedback "
+            "says a draft does not sound like them, or to set up or update their personal writing "
+            "style from examples, including examples selected from sent mail on request. "
             "Do not use for ordinary assistant replies, translation, or general writing advice."
         ),
         instructions="""
