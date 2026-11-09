@@ -234,7 +234,9 @@ def test_send_message_http_response_accepts_nested_message(monkeypatch) -> None:
     from mato_loop_backend.api.routes import sessions as sessions_route
 
     user = _user()
-    session = ChatSession(id=uuid4(), user_id=user.id, title="Test")
+    session = ChatSession(
+        id=uuid4(), user_id=user.id, title="Test", preferred_execution_agent_id=uuid4()
+    )
     run = AgentRun(
         id=uuid4(),
         session_id=session.id,
@@ -248,7 +250,7 @@ def test_send_message_http_response_accepts_nested_message(monkeypatch) -> None:
         content="Nachricht",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, None, message]
+    db.scalar.side_effect = [session, None, message.id, message]
     monkeypatch.setattr(AgentRuntime, "start", AsyncMock(return_value=run))
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="agent")
@@ -274,7 +276,16 @@ def test_send_message_http_response_accepts_nested_message(monkeypatch) -> None:
     with TestClient(app) as client:
         response = client.post(
             f"/api/sessions/{session.id}/messages",
-            json={"content": "Nachricht"},
+            json={
+                "content": "Nachricht",
+                "active_file": {
+                    "root": "workspace",
+                    "execution_agent_id": str(session.preferred_execution_agent_id),
+                    "path": "/workspace/finish_diagram.py",
+                    "sha256": "a" * 64,
+                    "dirty": False,
+                },
+            },
         )
 
     assert response.status_code == 202

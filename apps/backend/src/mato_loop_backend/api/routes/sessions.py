@@ -334,6 +334,7 @@ class ActiveFileRequest(BaseModel):
     )
     execution_agent_id: UUID | None = Field(
         default=None,
+        strict=False,
         validation_alias=AliasChoices("execution_agent_id", "executionAgentId"),
     )
     path: str = Field(min_length=1, max_length=4_096)
