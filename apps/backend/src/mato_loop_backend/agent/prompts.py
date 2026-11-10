@@ -414,8 +414,9 @@ def general_system_prompt(
         )
     elif "task" in offered_tool_names:
         parts.append(
-            "Default to direct work. Delegate independent work only if parallelism or context isolation "
-            "clearly outweighs coordination costs. Keep small/coupled/sequential work. "
+            "Default to direct work. Delegate independent work only if parallelism or isolating substantial "
+            "context clearly outweighs coordination costs. Do small, coupled or sequential work yourself; "
+            "do not merely pass your next steps to children. "
             "English handoff: question, scope, stop condition, format/length, acceptance criteria, paths/IDs, skills; "
             "no parent transcript. Preserve quotes/IDs; avoid write conflicts/duplicate work; verify results. "
             "Answer users while children work."

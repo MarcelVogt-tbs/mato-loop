@@ -3586,6 +3586,8 @@ def test_task_general_profiles_keep_plan_in_conversation_and_child_permissions()
     assert "User-facing text, including template labels" in general
     assert "explicit language request, else configured response language, else profile primaryLanguage" in general
     assert "clearly outweighs coordination costs" in work
+    assert "Do small, coupled or sequential work yourself" in work
+    assert "do not merely pass your next steps to children" in work
     assert "question, scope, stop condition" in work
     assert "format/length" in work
     assert "Do not expand research into a full plan unless assigned one" in child

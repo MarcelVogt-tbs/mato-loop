@@ -69,6 +69,7 @@ from mato_loop_backend.settings.models import (
     PersonaProfile,
     ReasoningEffort,
     SkillDefinition,
+    build_profile,
     plan_profile,
     sysadmin_profile,
 )
@@ -968,6 +969,27 @@ CASES = (
         system_options={"agent_profile": plan_profile(), "delegated": True},
         tools=("read", "glob", "grep"), expected_no_tools=True,
         content_contains=("manifest.json:8", "ChatPage.vue:830"), max_content_words=80,
+    ),
+    PromptCase(
+        id="build_routine_change_stays_with_parent",
+        kind="general", scope="quality",
+        working_directory="/data/home/project",
+        user=(
+            "Entferne die Überschrift „Neuer Eintrag“ in "
+            "apps/frontend/src/pages/ticket/TicketViewPage.vue. Diese Datei wurde in dieser Session "
+            "noch nicht gelesen."
+        ),
+        system_options={
+            "agent_profile": build_profile(), "execution_agent_name": "Evaluator",
+            "execution_agent_connected": True, "current_directory": "/data/home/project",
+        },
+        tools=("read", "grep", "edit_file", "task", "todo_write"),
+        expected_tool="read",
+        argument_options={"path": (
+            "apps/frontend/src/pages/ticket/TicketViewPage.vue",
+            "/data/home/project/apps/frontend/src/pages/ticket/TicketViewPage.vue",
+        )},
+        forbidden_tools=("task",),
     ),
     PromptCase(
         id="console_diagnostics_use_assistant_text",
@@ -4686,7 +4708,8 @@ _SEMANTIC_CONTRACTS = (
         "agent.delegated_task",
         "tools",
         ("codebase_investigation_uses_delegated_task", "plan_assessment_matches_requested_feature",
-         "plan_explicit_implementation_remains_actionable", "delegated_findings_stay_bounded"),
+         "plan_explicit_implementation_remains_actionable", "delegated_findings_stay_bounded",
+         "build_routine_change_stays_with_parent"),
     ),
     ContractCoverage("file.provide", "file", ("provide_file_creates_download",)),
     ContractCoverage(

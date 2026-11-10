@@ -70,7 +70,7 @@ Unchanged failed calls are keyed by tool, canonical arguments and relevant compu
 
 ## Native Subagents
 
-The host prompt defaults to direct work. Delegation is reserved for clearly scoped, independent tasks where parallel execution or isolating substantial research context clearly outweighs handoff, context setup and result integration. Small, coupled or sequential work stays with the parent; multiple steps or available agents alone do not justify delegation. This is model guidance, not a runtime restriction.
+The host prompt defaults to direct work. Delegation is reserved for clearly scoped, independent tasks where parallel execution or isolating substantial context clearly outweighs handoff, context setup and result integration. Small, coupled or sequential work stays with the parent; merely passing its next steps to children does not justify delegation. This is model guidance, not a runtime restriction.
 
 Plan and Build expose `task` with one to four scoped assignments per call. At most four children may be active per main session, including queued work and approval/input waits. Completed, failed and cancelled runs free their slots; there is no lifetime spawn limit. A batch needing more free slots is rejected before any task starts or receives a correction, with the available slot count. A child cannot delegate. Failure of one child does not discard successful siblings.
 
