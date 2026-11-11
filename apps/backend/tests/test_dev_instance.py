@@ -1,65 +1,80 @@
-"""Protect foreign development data and deletion confirmation."""
+"""Protect development resource ownership and explicit deletion in dev.sh."""
 
-import runpy
 import subprocess
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
 
-
-@pytest.fixture
-def instance():
-    return SimpleNamespace(
-        **runpy.run_path(str(Path(__file__).resolve().parents[3] / "scripts/dev-instance.py"))
-    )
+SCRIPT = Path(__file__).resolve().parents[3] / "scripts/dev.sh"
+FUNCTIONS = SCRIPT.read_text().split("resource_ids()", 1)[1].split('\ncd "$PROJECT_ROOT"', 1)[0]
 
 
-def test_foreign_checkout_is_rejected(instance, tmp_path, monkeypatch):
-    runner = Mock(
-        side_effect=[
-            "container-id",
-            '[{"Config":{"Labels":{"com.docker.compose.project.working_dir":"/another-checkout"}}}]',
-        ]
-    )
-    monkeypatch.setitem(instance.inspect_instance.__globals__, "run", runner)
-    with pytest.raises(SystemExit, match="belongs to another checkout"):
-        instance.inspect_instance({"name": "shared"}, tmp_path)
-
-
-def test_noninteractive_volume_deletion_is_rejected():
-    script = Path(__file__).resolve().parents[3] / "scripts/dev.sh"
-    functions = "compose()" + script.read_text().split("compose()", 1)[1].split("usage()", 1)[0]
+@pytest.mark.parametrize(
+    "operation,fault,expected",
+    [
+        ("verify_resources test", "", ""),
+        ("verify_resources test", "foreign", "Foreign or unverified"),
+        ("verify_resources test", "unknown", "Foreign or unverified"),
+        ("cleanup --project test --all --yes", "legacy-network", "Retaining unverified network"),
+        ("prepare_caches ' cache-uv-v1 ' check", "cache", "Foreign or unverified cache"),
+        ("cleanup --project test --all", "", "requires --yes"),
+        ("cleanup --project test --all --yes", "running", "Stop the stack"),
+        ("cleanup --project test --all --yes", "foreign", "Foreign or unverified"),
+        ("cleanup --project test --all --yes", "changed", "Stack changed"),
+        ("cleanup --project test --dependencies --yes", "", "REMOVE volume deps"),
+        ("cleanup --project test --all --yes", "", "REMOVE volume data"),
+        ("compose down --volumes", "", "explicit non-interactive deletion"),
+    ],
+)
+def test_dev_shell_guards(operation, fault, expected):
     result = subprocess.run(
         [
             "bash",
             "-c",
-            functions
-            + """
-PROJECT_ROOT=/unused
-python3() { if [[ "$1" == -c ]]; then echo test-stack; fi; }
-docker() { if [[ " $* " == *" config "* ]]; then echo '{}'; else exit 77; fi; }
-compose down --volumes
+            "set -euo pipefail\nresource_ids()"
+            + FUNCTIONS
+            + r"""
+PROJECT_ROOT=/worktree
+MATO_LOOP_DEV_REPOSITORY=/repo/.git
+MATO_LOOP_DEV_CACHE_PREFIX=cache
+fault=$1
+
+docker() {
+    case "$*" in
+        'compose '*'config --format json') echo '{"name":"test"}' ;;
+        'container ls -q --filter label=com.docker.compose.project=test -a') echo container ;;
+        'container ls '*'status=running') [[ "$fault" != running ]] || echo container ;;
+        'volume ls -q --filter label=com.docker.compose.project=test') printf 'deps\ndata\n' ;;
+        'network ls '*) [[ "$fault" != legacy-network ]] || echo network ;;
+        'network inspect '*) echo '<no value>' ;;
+        'volume inspect cache-uv-v1') : ;;
+        *inspect*matoloop.dev.worktree*)
+            case "$fault" in foreign) echo /foreign ;; unknown) echo '<no value>' ;; *) echo /worktree ;; esac ;;
+        *inspect*matoloop.dev.repository*matoloop.dev.cache*) echo '/foreign|uv|' ;;
+        *inspect*com.docker.compose.project.working_dir*) echo '<no value>' ;;
+        *inspect*matoloop.dev.repository*) if [[ "$fault" == foreign ]]; then echo /foreign/.git; else echo /repo/.git; fi ;;
+        *inspect*matoloop.dev.cache*) echo '<no value>' ;;
+        *inspect*com.docker.compose.volume*deps) echo backend_uv_data ;;
+        *inspect*com.docker.compose.volume*data) echo db_data ;;
+        'inspect '*) if [[ "$fault" == changed ]]; then echo "$BASHPID"; else echo snapshot; fi ;;
+        'container rm '*|'volume rm '*) echo "REMOVE $1 $3" ;;
+        *) echo "Unexpected Docker call: $*" >&2; return 77 ;;
+    esac
+}
+eval "$2"
 """,
+            "test",
+            fault,
+            operation,
         ],
         input="",
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 1 and "explicit non-interactive deletion" in result.stderr
-
-
-@pytest.mark.parametrize("selection", ["referenced", "project"])
-def test_foreign_volumes_are_rejected(instance, tmp_path, monkeypatch, selection):
-    runner = Mock(
-        side_effect=[
-            "",
-            f"volume-id\t{'shared' if selection == 'project' else 'other-stack'}\n",
-            '[{"Labels":{"matoloop.dev.worktree":"/another-checkout"}}]',
-        ]
-    )
-    monkeypatch.setitem(instance.inspect_instance.__globals__, "run", runner)
-    volumes = {"db_data": {"name": "volume-id"}} if selection == "referenced" else {}
-    with pytest.raises(SystemExit, match="volumes owned by another"):
-        instance.inspect_instance({"name": "shared", "volumes": volumes}, tmp_path)
+    deleting = "--yes" in operation and fault in ("", "legacy-network")
+    assert result.returncode == (0 if not expected or deleting else 1), result.stderr
+    assert expected in result.stdout + result.stderr
+    if not deleting:
+        assert "REMOVE" not in result.stdout
+    elif "--dependencies" in operation:
+        assert "REMOVE volume data" not in result.stdout

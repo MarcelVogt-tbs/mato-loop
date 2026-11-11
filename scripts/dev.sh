@@ -2,6 +2,121 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MATO_LOOP_DEV_REPOSITORY="$(git -C "$PROJECT_ROOT" rev-parse --path-format=absolute --git-common-dir)"
+export MATO_LOOP_DEV_REPOSITORY
+export MATO_LOOP_DEV_CACHE_PREFIX="mato-loop-cache-$(printf '%s' "$MATO_LOOP_DEV_REPOSITORY" | sha256sum | cut -c1-12)"
+
+resource_ids() {
+    docker "$1" ls -q --filter "label=com.docker.compose.project=$2" "${@:3}"
+}
+
+verify_resources() {
+    local kind id path repository cache labels ids worktree="${2:-$PROJECT_ROOT}"
+    for kind in container volume; do
+        if [[ "$kind" == container ]]; then ids="$(resource_ids "$kind" "$1" -a)"; else ids="$(resource_ids "$kind" "$1")"; fi
+        for id in $ids; do
+            labels='.Labels'
+            [[ "$kind" != container ]] || labels='.Config.Labels'
+            path="$(docker "$kind" inspect --format "{{index $labels \"matoloop.dev.worktree\"}}" "$id")"
+            if [[ "$kind" == container && ( -z "$path" || "$path" == '<no value>' ) ]]; then
+                path="$(docker container inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$id")"
+            fi
+            repository="$(docker "$kind" inspect --format "{{index $labels \"matoloop.dev.repository\"}}" "$id")"
+            cache="$(docker "$kind" inspect --format "{{index $labels \"matoloop.dev.cache\"}}" "$id")"
+            [[ "$path" == "$worktree" && ( "$repository" == "$MATO_LOOP_DEV_REPOSITORY" || ( "$worktree" == "$PROJECT_ROOT" && ( -z "$repository" || "$repository" == '<no value>' ) ) ) && ( -z "$cache" || "$cache" == '<no value>' ) ]] || {
+                echo "Foreign or unverified $kind: $id. No changes made." >&2; return 1;
+            }
+        done
+    done
+}
+
+prepare_caches() {
+    local kind name labels
+    for kind in uv yarn embedding; do
+        name="$MATO_LOOP_DEV_CACHE_PREFIX-$kind-v1"
+        if [[ " $1 " != *" $name "* ]]; then continue; fi
+        if ! docker volume inspect "$name" >/dev/null 2>&1; then
+            [[ "$2" == prepare ]] || continue
+            docker volume create --label "matoloop.dev.repository=$MATO_LOOP_DEV_REPOSITORY" --label "matoloop.dev.cache=$kind" "$name" >/dev/null
+        fi
+        labels="$(docker volume inspect --format '{{index .Labels "matoloop.dev.repository"}}|{{index .Labels "matoloop.dev.cache"}}|{{index .Labels "matoloop.dev.worktree"}}' "$name")"
+        [[ "$labels" == "$MATO_LOOP_DEV_REPOSITORY|$kind|" || "$labels" == "$MATO_LOOP_DEV_REPOSITORY|$kind|<no value>" ]] || {
+            echo "Foreign or unverified cache: $name. No changes made." >&2; return 1;
+        }
+    done
+}
+
+cleanup() {
+    local project='' mode='' yes=false id kind path before after
+    while (( $# )); do
+        case "$1" in
+            --project) project="${2:?Missing project name}"; shift ;;
+            --dependencies|--all) [[ -z "$mode" ]] || return 1; mode="$1" ;;
+            --yes) yes=true ;;
+            *) usage >&2; return 1 ;;
+        esac
+        shift
+    done
+    if [[ -z "$project" ]]; then
+        [[ -z "$mode" && "$yes" == false ]] || { echo 'Deletion requires --project and a mode.' >&2; return 1; }
+        docker compose ls --all
+        docker volume ls --filter label=matoloop.dev.worktree --format '{{.Name}}\t{{.Label "matoloop.dev.worktree"}}'
+        return
+    fi
+    local containers volumes networks
+    containers="$(resource_ids container "$project" -a)"
+    volumes="$(resource_ids volume "$project")"
+    networks="$(resource_ids network "$project")"
+    [[ -n "$containers$volumes$networks" ]] || { echo 'No stack resources found.' >&2; return 1; }
+    printf 'Stack: %s\nContainers: %s\nVolumes: %s\nNetworks: %s\n' "$project" "$containers" "$volumes" "$networks"
+    [[ -n "$mode" ]] || { [[ "$yes" == false ]]; return; }
+    local verified_networks=''
+    for id in $networks; do
+        kind="$(docker network inspect --format '{{index .Labels "matoloop.dev.repository"}}' "$id")"
+        path="$(docker network inspect --format '{{index .Labels "matoloop.dev.worktree"}}' "$id")"
+        if [[ "$kind" == "$MATO_LOOP_DEV_REPOSITORY" && "$path" == /* ]]; then verified_networks+="$id ";
+        else printf 'Retaining unverified network: %s\n' "$id"; fi
+    done
+    networks="$verified_networks"
+    path="$PROJECT_ROOT"
+    for id in $volumes; do
+        path="$(docker volume inspect --format '{{index .Labels "matoloop.dev.worktree"}}' "$id")"; break
+    done
+    if [[ -z "$volumes" ]]; then
+        for id in $networks; do path="$(docker network inspect --format '{{index .Labels "matoloop.dev.worktree"}}' "$id")"; break; done
+        for id in $containers; do path="$(docker container inspect --format '{{index .Config.Labels "matoloop.dev.worktree"}}' "$id")"; break; done
+    fi
+    [[ "$path" == /* ]] || { echo 'Missing worktree ownership.' >&2; return 1; }
+    verify_resources "$project" "$path"
+    for id in $networks; do
+        [[ "$(docker network inspect --format '{{index .Labels "matoloop.dev.worktree"}}' "$id")" == "$path" ]] || { echo 'Foreign network worktree.' >&2; return 1; }
+    done
+    [[ -z "$(resource_ids container "$project" --filter status=running)" ]] || { echo 'Stop the stack explicitly before cleanup.' >&2; return 1; }
+    if [[ "$mode" == --dependencies ]]; then
+        local selected=''
+        for id in $volumes; do
+            kind="$(docker volume inspect --format '{{index .Labels "com.docker.compose.volume"}}' "$id")"
+            case "$kind" in backend_uv_data|frontend_node_modules|frontend_yarn_cache|embedding_cache|matoloop_agent_dependency_data|shell_decider_eval_cache) selected+="$id " ;; esac
+        done
+        volumes="$selected"; networks=''
+    fi
+    [[ -n "$containers$volumes$networks" ]] || { echo 'No selected resources to remove.'; return; }
+    printf 'Delete stopped containers and selected volumes: %s\n' "$volumes"
+    [[ "$mode" != --all ]] || echo 'WARNING: This deletes accounts, database, secrets, files, Agent state, pairing and workspace.'
+    before="$(docker inspect $containers $volumes $networks)"
+    if [[ "$yes" == false ]]; then
+        [[ -t 0 ]] || { echo 'Explicit non-interactive deletion requires --yes.' >&2; return 1; }
+        read -r -p "Type $project to confirm deletion: " id
+        [[ "$id" == "$project" ]] || return 1
+    fi
+    verify_resources "$project" "$path"
+    after="$(docker inspect $containers $volumes $networks)"
+    [[ "$before" == "$after" ]] || { echo 'Stack changed; inspect it again.' >&2; return 1; }
+    # Never force: Docker rejects running containers, attached networks and volumes still in use.
+    for id in $containers; do docker container rm "$id"; done
+    for id in $volumes; do docker volume rm "$id"; done
+    for id in $networks; do docker network rm "$id"; done
+}
 
 compose() {
     export MATO_LOOP_DEV_WORKTREE="$PROJECT_ROOT"
@@ -16,7 +131,21 @@ compose() {
     [[ "${1:-}" != -* ]] || { echo 'Use .env.dev.override for instance settings.' >&2; return 1; }
     local config arg project answer deleting=false
     config="$("${command[@]}" config --format json)"
-    python3 "$PROJECT_ROOT/scripts/dev-instance.py" "$PROJECT_ROOT" <<< "$config"
+    project="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])' <<< "$config")"
+    verify_resources "$project"
+    local key name kind external path names='' prepare=check
+    while IFS='|' read -r key name external; do
+        if [[ "$key" == shared_* ]]; then
+            kind="${key#shared_}"; kind="${kind%_cache}"
+            [[ "$external" == True && "$name" == "$MATO_LOOP_DEV_CACHE_PREFIX-$kind-v1" && "$kind" =~ ^(uv|yarn|embedding)$ ]] || return 1
+            names+=" $name "
+        elif docker volume inspect "$name" >/dev/null 2>&1; then
+            path="$(docker volume inspect --format '{{index .Labels "matoloop.dev.worktree"}}' "$name")"
+            [[ "$path" == "$PROJECT_ROOT" ]] || { echo "Foreign or unverified volume: $name" >&2; return 1; }
+        fi
+    done < <(python3 -c 'import json,sys; c=json.load(sys.stdin); [print(k,v["name"],v.get("external",False),sep="|") for k,v in c.get("volumes",{}).items()]' <<< "$config")
+    case "${1:-}" in up|run|create) prepare=prepare ;; esac
+    prepare_caches "$names" "$prepare"
     if [[ "${1:-}" == down ]]; then
         for arg in "${@:2}"; do
             if [[ "$arg" == --volumes* || ( "$arg" == -[^-]* && "$arg" == *v* ) ]]; then
@@ -27,7 +156,7 @@ compose() {
     fi
     if [[ "$deleting" == true ]]; then
         printf 'Worktree: %s\n' "$PROJECT_ROOT" >&2
-        printf '%s\n' 'This deletes named volumes, including accounts, secrets, Agent state, pairing and Agent workspace.' >&2
+        printf '%s\n' 'This deletes instance volumes, including accounts, secrets, Agent state, pairing and Agent workspace. Shared download caches remain.' >&2
         if [[ "${RESET_CONFIRMED:-false}" != true ]]; then
             project="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])' <<< "$config")"
             [[ -t 0 ]] || { echo 'Use reset-storage --yes for explicit non-interactive deletion.' >&2; return 1; }
@@ -56,6 +185,8 @@ usage() {
         "  stop [service]      Stop services" \
         "  down                Remove containers" \
         "  reset-storage [--yes] Delete named volumes, including Agent state, after confirmation" \
+        "  cleanup             List Compose stacks and labeled worktree volumes (read-only)" \
+        "  cleanup --project NAME [--dependencies|--all] [--yes] Preview or delete stopped stack resources" \
         "  logs [service]      Show logs" \
         "  status              Show worktree, URLs, and service status" \
         "  config              Show the resolved Compose configuration" \
@@ -188,6 +319,7 @@ case "${1:-}" in
         ;;
     stop) shift; compose stop "$@" ;;
     down) shift; compose down "$@" ;;
+    cleanup) shift; cleanup "$@" ;;
     reset-storage)
         [[ $# == 1 || ( $# == 2 && "$2" == --yes ) ]] || { usage >&2; exit 1; }
         RESET_CONFIRMED=false

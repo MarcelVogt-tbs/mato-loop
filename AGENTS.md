@@ -58,15 +58,16 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Use only `docker-compose.dev.yaml` through `./scripts/dev.sh` for development work.
 - Run commands from the intended worktree using its own scripts. Stack names are worktree-local and Docker assigns host ports; use the URLs printed by `up` or `status`, not fixed ports. See [the development guide](docs/development.md#parallel-worktrees) for configuration and existing-stack migration.
 - Start services only when the selected check needs them. Ordinary checks and unit tests do not require a full running stack.
+- Before handing off or removing a worktree, report any development stack resources left behind; use `./scripts/dev.sh cleanup` for a read-only inventory. Do not stop or delete an existing stack without an explicit request.
 - Before browser validation, verify that the target instance mounts the intended worktree. A running Agent container does not prove that it is paired with this instance.
 - Do not share another instance's database, Agent state, credentials or pairing state, or bypass checkout ownership checks. Keep existing instances untouched unless explicitly asked to operate on them.
 - Run evaluations through `./scripts/eval.sh`; it delegates to `./scripts/dev.sh compose` and adds `docker-compose.eval.yaml` only for evaluation-specific services.
 - Start the prepared production stack only when explicitly requested.
 - The development stack consists of `db`, `embedding`, `backend`, `frontend`, and `matoloop-agent`.
 - Backend development data lives in the `db_data` and `app_data` named volumes. MatoLoop Agent state uses `matoloop_agent_data`; its `/workspace` home uses `matoloop_agent_workspace`.
-- Python and frontend dependencies also live in named volumes.
+- Installed Python and frontend dependencies use worktree-local volumes. Only reproducible downloads use repository-scoped shared caches; never put credentials or instance data there. See `docs/development.md#data`.
 - The repository bind mounts at `/workspace` (backend/frontend) and `/source` (Agent) exist only for HMR and live code changes.
-- `down` retains data. Run `reset-storage` or `down --volumes` only on explicit user request to delete the affected instance's data; confirmation flags are not authorization. These operations also delete Agent state and pairing stored in named volumes.
+- `down` retains data. Run `cleanup --dependencies` only on explicit request to remove rebuildable dependencies; `cleanup --all`, `reset-storage`, and `down --volumes` require an explicit request to delete the affected instance's data, including Agent state and pairing. Confirmation flags are not authorization. Never prune unrelated Docker resources or delete stacks merely because their worktree is missing or merged.
 
 ## Backend
 

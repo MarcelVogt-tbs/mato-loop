@@ -1,5 +1,8 @@
 services:
   shell-decider-eval:
+    labels:
+      matoloop.dev.worktree: ${MATO_LOOP_DEV_WORKTREE:?Use ./scripts/eval.sh}
+      matoloop.dev.repository: ${MATO_LOOP_DEV_REPOSITORY:?Use ./scripts/eval.sh}
     profiles: [evaluation]
     build:
       context: ./scripts/shell-decider-eval
@@ -27,3 +30,4 @@ volumes:
   shell_decider_eval_cache:
     labels:
       matoloop.dev.worktree: ${MATO_LOOP_DEV_WORKTREE:?Use ./scripts/eval.sh}
+      matoloop.dev.repository: ${MATO_LOOP_DEV_REPOSITORY:?Use ./scripts/eval.sh}
