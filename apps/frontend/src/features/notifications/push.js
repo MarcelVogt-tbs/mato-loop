@@ -44,7 +44,8 @@ export function parsePushPayload(payload) {
     title: notification.title,
     options: {
       ...(typeof notification.body === 'string' ? { body: notification.body } : {}),
-      ...(typeof notification.tag === 'string' ? { tag: notification.tag } : {}),
+      ...(typeof notification.tag === 'string' ? { tag: notification.tag, renotify: false } : {}),
+      ...(notification.silent === true ? { silent: true } : {}),
       icon: '/icons/icon-192.png',
       data: {
         version: 1, target,

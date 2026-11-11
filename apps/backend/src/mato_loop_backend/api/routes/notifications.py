@@ -17,7 +17,11 @@ from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.memory.service import MemoryService
 from mato_loop_backend.models import ChatSession, Notification, UserAccount
-from mato_loop_backend.notification_content import notification_body_preview
+from mato_loop_backend.notification_content import (
+    NotificationPriority,
+    notification_body_preview,
+    notification_title,
+)
 from mato_loop_backend.notifications import NotificationError, NotificationService
 from mato_loop_backend.security import require_admin, require_user
 from mato_loop_backend.sessions.presence import mark_user_present
@@ -63,6 +67,7 @@ class NotificationResponse(BaseModel):
 
     id: UUID
     kind: str
+    priority: NotificationPriority = "normal"
     title: str
     body: str | None
     target: SessionNotificationTargetResponse | AutomationNotificationTargetResponse | MemoryApprovalNotificationTargetResponse | None
@@ -113,7 +118,8 @@ def _notification_payload(item: Notification) -> NotificationResponse:
     return NotificationResponse(
         id=item.id,
         kind=item.kind,
-        title=item.title,
+        priority=item.priority or "normal",
+        title=notification_title(item.title, item.priority),
         body=notification_body_preview(item.body, limit=500 if item.kind == "session.response" else 4_000),
         target=(
             MemoryApprovalNotificationTargetResponse(

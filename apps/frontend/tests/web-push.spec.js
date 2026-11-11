@@ -53,4 +53,13 @@ describe('web push contract', () => {
     })
     expect(pushTargetPath({ type: 'url', url: 'https://example.com' })).toBe('/')
   })
+
+  it('replaces a corrected notification silently with the same tag', () => {
+    expect(parsePushPayload({ version: 1, notification: {
+      title: '⚠️ Backup fehlgeschlagen', tag: `notification:${RUN_ID}`, silent: true
+    } })).toMatchObject({
+      title: '⚠️ Backup fehlgeschlagen',
+      options: { tag: `notification:${RUN_ID}`, renotify: false, silent: true }
+    })
+  })
 })

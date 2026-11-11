@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
 from mato_loop_backend.message_content import canonical_assistant_content
 
 _MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"])
+
+NotificationPriority = Literal["normal", "warning", "urgent"]
+
+
+def notification_title(title: str, priority: str | None) -> str:
+    prefix = {"warning": "⚠️ ", "urgent": "🚨 "}.get(priority, "")
+    return f"{prefix}{title}"[:240]
 
 
 def _token_text(token: Token) -> str:

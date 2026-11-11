@@ -46,6 +46,8 @@ Hinweise auf Freigaben und Rückfragen öffnen den zugehörigen Chat. Neue [Memo
 
 Wenn du eine Session löschst, werden auch alle mit ihr verknüpften Benachrichtigungen gelöscht. Hinweise ohne Sessionbezug bleiben erhalten.
 
+Mit `notify` erstellt der Agent höchstens einen gezielten Hinweis pro Lauf. Weitere Aufrufe korrigieren dessen Titel, Inhalt und Priorität; einen von dir gelöschten Hinweis erzeugen sie nicht erneut. Normale Hinweise bleiben unverändert; Warnungen tragen ⚠️, dringende Hinweise 🚨 vor dem Titel. Die Priorität ändert keine Ruhezeiten oder Zustellregeln. Korrekturen behalten den Gelesen-Status und aktualisieren vorhandene Push-Hinweise still, soweit Browser und Betriebssystem das unterstützen. Bereits gesehene Inhalte lassen sich nicht zurücknehmen.
+
 Session-Freigaben verwaltest du unter **Session > Session-Freigaben**. Computer und Arbeitsverzeichnis haben eigene Auswahlfelder im Sessionbereich.
 
 ## App und Push verwenden

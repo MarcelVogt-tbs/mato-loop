@@ -83,6 +83,7 @@ class TaskArguments(ToolArguments):
 class NotifyArguments(ToolArguments):
     title: str = Field(min_length=1, max_length=240)
     body: str = Field(min_length=1, max_length=500)
+    priority: Literal["normal", "warning", "urgent"] = "normal"
 
     @field_validator("title", "body")
     @classmethod

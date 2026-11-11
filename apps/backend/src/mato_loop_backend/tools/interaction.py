@@ -274,16 +274,18 @@ async def _todo_write(arguments: TodoWriteArguments, _context: ToolContext) -> T
 
 async def _notify(arguments: NotifyArguments, context: ToolContext) -> ToolResult:
     session = await permission_origin(context.db, context.session)
-    notification_id = await NotificationService.create(context.db, NotificationDraft(
+    notification_id, created = await NotificationService.upsert_agent_notice(context.db, NotificationDraft(
         user_id=session.user_id, session_id=session.id, kind="agent.notice",
-        title=arguments.title, body=arguments.body,
-        deduplication_key=f"tool:{context.run_id}:{context.tool_call.id}",
-    ))
+        title=arguments.title, body=arguments.body, priority=arguments.priority,
+        deduplication_key=f"tool:{context.run_id}",
+    ), run_id=context.run_id)
     await context.db.commit()
     if notification_id is not None:
-        await NotificationService.deliver_after_commit(notification_id)
+        await NotificationService.deliver_after_commit(notification_id, silent=not created)
     return ToolResult.json(
-        {"created": notification_id is not None}, metadata={"suppressResponseNotification": True},
+        {"notificationId": str(notification_id), "created": created, "updated": not created}
+        if notification_id is not None else {"created": False, "updated": False, "dismissed": True},
+        metadata={"suppressResponseNotification": True},
     )
 
 
@@ -295,11 +297,14 @@ async def _silence(_arguments: ToolArguments, _context: ToolContext) -> ToolResu
 
 NOTIFY = ToolDefinition(
     "notify",
-    "Create a persistent notification for the current user, linked to this session. "
+    "Create or correct one persistent notification per run for the current user, linked to this session. "
+    "Further calls replace its title, body, and priority without a new alert. "
     "Use for requested alerts or important findings, including during automations. "
     "A successful call replaces this run's automatic completion notification. "
-    "Use a short plain-text title and body in the user's language.",
-    NotifyArguments, _notify, group="agent", label="Benachrichtigung erstellen", icon="notifications",
+    "Use a short plain-text title and body in the user's language, without priority symbols or labels. "
+    "Priority: normal by default, warning for attention, urgent only for time-critical consequences. "
+    "The host adds priority symbols; delivery and quiet-time rules stay unchanged.",
+    NotifyArguments, _notify, group="agent", label="Benachrichtigung erstellen oder korrigieren", icon="notifications",
 )
 
 

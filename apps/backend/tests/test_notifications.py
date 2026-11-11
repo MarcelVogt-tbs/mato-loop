@@ -524,7 +524,8 @@ async def test_delete_notification_is_owner_scoped_and_committed() -> None:
     db.commit.assert_awaited_once()
 
 
-async def test_agent_notification_uses_current_owner_and_session(monkeypatch) -> None:
+@pytest.mark.parametrize("created", [True, False])
+async def test_agent_notification_uses_current_owner_and_session(monkeypatch, created) -> None:
     from types import SimpleNamespace
 
     from mato_loop_backend.tools.arguments import NotifyArguments
@@ -532,16 +533,19 @@ async def test_agent_notification_uses_current_owner_and_session(monkeypatch) ->
 
     session = ChatSession(id=uuid4(), user_id=uuid4())
     db = AsyncMock(spec=AsyncSession)
-    create, deliver = AsyncMock(return_value=uuid4()), AsyncMock()
-    monkeypatch.setattr(NotificationService, "create", create)
+    notification_id, run_id = uuid4(), uuid4()
+    create, deliver = AsyncMock(return_value=(notification_id, created)), AsyncMock()
+    monkeypatch.setattr(NotificationService, "upsert_agent_notice", create)
     monkeypatch.setattr(NotificationService, "deliver_after_commit", deliver)
-    await _notify(NotifyArguments(title="Preis gefallen", body="Unter 10 Euro."), SimpleNamespace(
-        db=db, session=session, run_id=uuid4(), tool_call=SimpleNamespace(id="call-1"),
+    result = await _notify(NotifyArguments(title="Preis gefallen", body="Unter 10 Euro."), SimpleNamespace(
+        db=db, session=session, run_id=run_id, tool_call=SimpleNamespace(id="call-1"),
     ))
     draft = create.await_args.args[1]
     assert (draft.user_id, draft.session_id, draft.kind) == (session.user_id, session.id, "agent.notice")
+    assert draft.deduplication_key == f"tool:{run_id}"
+    assert json.loads(result.content) == {"notificationId": str(notification_id), "created": created, "updated": not created}
     db.commit.assert_awaited_once()
-    deliver.assert_awaited_once_with(create.return_value)
+    deliver.assert_awaited_once_with(notification_id, silent=not created)
 
 
 @pytest.mark.parametrize("outcome", ["notify", "silence", "normal", "other_run", "tool_error", "runtime_error", "earlier_unread"])
@@ -587,8 +591,17 @@ async def test_response_notification_uses_persisted_current_run_tool_outcome(req
                 context = SimpleNamespace(db=db, session=session, run_id=run.id, tool_call=call)
                 result = await _notify(NotifyArguments(title="Done", body="Finished"), context) if outcome == "notify" else await _silence(ToolArguments(), context)
                 if outcome == "notify":
+                    for priority in ("warning", "urgent"):
+                        context.tool_call = ToolCall(f"correct-{priority}", "notify", {})
+                        await _notify(NotifyArguments(title="Corrected", body="Complete", priority=priority), context)
+                    notices = list(await db.scalars(select(Notification).where(Notification.user_id == user.id)))
+                    assert [(_notification_payload(item).title, item.body, item.priority, str(item.id)) for item in notices] == [
+                        ("🚨 Corrected", "Complete", "urgent", json.loads(result.content)["notificationId"]),
+                    ]
                     # Removing a notice must not restore the duplicate completion notification.
                     await db.execute(delete(Notification).where(Notification.user_id == user.id))
+                    await _notify(NotifyArguments(title="Another correction", body="Still complete"), context)
+                    assert list(await db.scalars(select(Notification.id).where(Notification.user_id == user.id))) == []
                 if outcome == "tool_error":
                     result = ToolResult.error("tool.unavailable")
                 if outcome != "normal":

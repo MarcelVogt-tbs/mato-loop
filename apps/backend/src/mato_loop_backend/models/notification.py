@@ -53,6 +53,7 @@ class Notification(Base):
         ForeignKey("approval_requests.id", ondelete="SET NULL"), nullable=True
     )
     kind: Mapped[str] = mapped_column(String(80), nullable=False)
+    priority: Mapped[str] = mapped_column(String(16), nullable=False, default="normal", server_default="normal")
     title: Mapped[str] = mapped_column(String(240), nullable=False)
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
     deduplication_key: Mapped[str] = mapped_column(String(255), nullable=False)

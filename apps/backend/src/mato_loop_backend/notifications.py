@@ -14,6 +14,7 @@ from mato_loop_backend.db.changes import record_change
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.message_content import canonical_assistant_content
 from mato_loop_backend.models import (
+    AgentRun,
     ApprovalRequest,
     Automation,
     AutomationRun,
@@ -23,6 +24,7 @@ from mato_loop_backend.models import (
     QuestionRequest,
     UserAccount,
 )
+from mato_loop_backend.notification_content import NotificationPriority, notification_title
 from mato_loop_backend.sessions.presence import session_is_present
 from mato_loop_backend.web_push import (
     WebPushMemoryApprovalTarget,
@@ -46,6 +48,7 @@ class NotificationDraft(BaseModel):
     session_id: UUID | None = None
     automation_run_id: UUID | None = None
     approval_id: UUID | None = None
+    priority: NotificationPriority = "normal"
 
     @field_validator("title", "deduplication_key")
     @classmethod
@@ -118,6 +121,33 @@ class NotificationService:
         return notification_id
 
     @staticmethod
+    async def upsert_agent_notice(
+        db: AsyncSession, draft: NotificationDraft, *, run_id: UUID,
+    ) -> tuple[UUID | None, bool]:
+        run = await db.scalar(select(AgentRun).join(ChatSession, ChatSession.id == AgentRun.session_id).where(
+            AgentRun.id == run_id, ChatSession.user_id == draft.user_id,
+        ).execution_options(populate_existing=True).with_for_update(of=AgentRun))
+        if run is None:
+            raise NotificationError("notification.targetNotFound")
+        if run.notice_id is None:
+            notification_id = await NotificationService.create(db, draft)
+            if notification_id is not None:
+                run.notice_id = notification_id
+                await db.flush()
+                return notification_id, True
+        notification_id = await db.scalar(update(Notification).where(
+            Notification.id == run.notice_id,
+            Notification.user_id == draft.user_id,
+            Notification.session_id == draft.session_id,
+            Notification.kind == "agent.notice",
+            Notification.deduplication_key == draft.deduplication_key,
+        ).values(title=draft.title, body=draft.body, priority=draft.priority).returning(Notification.id))
+        if notification_id is None:
+            return None, False
+        record_change(db, draft.user_id, "notifications")
+        return notification_id, False
+
+    @staticmethod
     async def create_for_approval(db: AsyncSession, approval: ApprovalRequest) -> UUID | None:
         return await NotificationService.create(db, NotificationDraft(
             user_id=approval.user_id,
@@ -182,15 +212,15 @@ class NotificationService:
         )
 
     @staticmethod
-    async def deliver_after_commit(notification_id: UUID) -> None:
+    async def deliver_after_commit(notification_id: UUID, *, silent: bool = False) -> None:
         async with AsyncSessionFactory() as db:
             item = await db.get(Notification, notification_id)
             if item is None or item.read_at is not None:
                 return
             user_id = item.user_id
             payload = web_push_payload(
-                title=item.title, body=item.body, tag=f"notification:{item.id}",
-                notification_id=item.id,
+                title=notification_title(item.title, item.priority), body=item.body, tag=f"notification:{item.id}",
+                notification_id=item.id, silent=silent,
                 target=WebPushMemoryApprovalTarget(
                     type="memoryApproval", approvalId=item.approval_id, sessionId=item.session_id,
                 )

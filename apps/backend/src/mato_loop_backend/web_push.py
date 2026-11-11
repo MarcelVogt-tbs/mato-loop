@@ -200,6 +200,7 @@ class WebPushNotificationPayload(BaseModel):
     tag: Annotated[str | None, Field(default=None, min_length=1, max_length=120)]
     target: WebPushSessionTarget | WebPushAutomationRunTarget | WebPushMemoryApprovalTarget | None = None
     notification_id: UUID | None = Field(default=None, alias="notificationId")
+    silent: bool = False
 
 
 class WebPushPayload(BaseModel):
@@ -216,6 +217,7 @@ def web_push_payload(
     tag: str,
     target: WebPushSessionTarget | WebPushAutomationRunTarget | WebPushMemoryApprovalTarget | None,
     notification_id: UUID | None = None,
+    silent: bool = False,
 ) -> WebPushPayload:
     return WebPushPayload(
         notification=WebPushNotificationPayload(
@@ -224,6 +226,7 @@ def web_push_payload(
             tag=tag,
             target=target,
             notificationId=notification_id,
+            silent=silent,
         )
     )
 

@@ -56,6 +56,8 @@ class AgentRun(Base):
     result_message_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("messages.id", ondelete="SET NULL", use_alter=True), nullable=True, unique=True
     )
+    # Keep the identity after the user deletes the notice to prevent renewed alerts.
+    notice_id: Mapped[UUID | None] = mapped_column(nullable=True)
     model_config_id: Mapped[UUID | None] = mapped_column(nullable=True)
     model_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
     trust_level: Mapped[str] = mapped_column(
