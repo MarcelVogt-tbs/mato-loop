@@ -67,7 +67,10 @@ class DiscoveredModel(BaseModel):
         if isinstance(value, dict):
             value = [key for key, enabled in value.items() if enabled is True]
         if isinstance(value, (list, set, tuple)):
-            aliases = {"image_to_image": ModelCapability.IMAGE_EDITING}
+            aliases = {
+                "chat_completion": ModelCapability.CHAT,
+                "image_to_image": ModelCapability.IMAGE_EDITING,
+            }
             known = {item.value for item in ModelCapability}
             return {
                 aliases.get(item, item) for item in value
