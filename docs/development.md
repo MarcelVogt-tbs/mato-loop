@@ -52,6 +52,8 @@ The selected Compose project owns `app_data` (backend files and secrets), `db_da
 
 ### Reclaim worktree storage
 
+For agent-driven task completion through `git-finish` ("Abschließen"), follow the [repository completion rules](../AGENTS.md#development-environment): after successful checks and local integration, stop and fully clean the verified current separate task worktree's stack unless the user requests retention. **This deletes its instance data, including database, accounts, secrets, Agent pairing and workspace.** The main/project checkout, checkouts on `develop`, other worktrees, shared caches and the Git worktree itself remain untouched. Tool approvals still apply; uncertain ownership or blocked cleanup must be reported without deleting unverified resources. This is an agent workflow, not an automatic UI cleanup hook.
+
 1. Run `./scripts/dev.sh cleanup` to list Compose stacks and labeled worktree volumes without changing anything. Use `cleanup --project <stack-name>` to list one stack's resource IDs. For Docker's host-wide size summary, use `docker system df`.
 2. Explicitly stop the intended stack with its own `./scripts/dev.sh stop`. Cleanup refuses running containers; it never stops a stack automatically.
 3. Run `cleanup --project <stack-name> --dependencies` to remove its stopped containers and rebuildable dependency/cache volumes, retaining application data. **Use `--all` only to permanently delete the stopped stack, its volumes and networks, including accounts, database, secrets, Agent state, pairing, and workspace.** Back up needed data first. Type the stack name to confirm; `--yes` is only for explicitly authorized non-interactive deletion.
