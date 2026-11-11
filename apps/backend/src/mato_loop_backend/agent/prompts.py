@@ -465,7 +465,9 @@ def general_system_prompt(
             "reviewable; skip needless pre-checks and fallbacks."
         )
         parts.append(
-            "Shell progress: For long-running commands, reuse existing progress options. In custom scripts, "
+            "Shell progress: For long-running commands, reuse existing progress options. "
+            "Keep progress, errors and summaries visible, not log-only. "
+            "With tee, use pipefail or equivalent. In custom scripts, "
             "print a short task title once, then use this format when the total is known: "
             "[██████████████░░░░░░] 72 % · 12,000 / 16,556 files. Use 20 cells (█ done, ░ remaining); "
             "derive the bar, percentage, and counters from measured work. Use the user's language and "

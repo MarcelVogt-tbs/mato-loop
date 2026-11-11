@@ -371,6 +371,10 @@ def test_agent_web_routing_production_prompt_is_conditional() -> None:
     assert messages[0]["content"].index(command_rule) < messages[0]["content"].index("Selected computer context:")
     assert command_rule not in offline_messages[0]["content"]
     assert "[██████████████░░░░░░] 72 % · 12,000 / 16,556 files" in messages[0]["content"]
+    assert (
+        "Keep progress, errors and summaries visible, not log-only. "
+        "With tee, use pipefail or equivalent."
+    ) in messages[0]["content"]
     growth = prompt_eval.estimate_tokens(messages[0]["content"], 4.0) - prompt_eval.estimate_tokens(
         offline_messages[0]["content"], 4.0
     )
