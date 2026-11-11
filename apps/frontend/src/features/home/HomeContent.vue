@@ -34,7 +34,7 @@
               <q-item-label lines="1" :class="{ 'text-weight-medium': session.status?.kind === 'unread' }">
                 {{ session.title }}
               </q-item-label>
-              <q-item-label caption>{{ projectName(session.projectId) }} · {{ formatRelativeDateTime(session.lastMessageAt || session.createdAt) }}</q-item-label>
+              <q-item-label caption>{{ projectName(session.projectId) }} · {{ formatRelativeDateTime(session.activityAt || session.lastUserMessageAt || session.createdAt) }}</q-item-label>
             </q-item-section>
             <q-item-section side class="q-pl-sm" @click.stop @keydown.stop @keyup.stop>
               <SidebarActionMenu class="home-activity-row__menu" :model-value="openSessionMenuId === session.id" @update:model-value="openSessionMenuId = $event ? session.id : null" :aria-label="`Aktionen für ${session.title}`" list-class="session-actions-menu">

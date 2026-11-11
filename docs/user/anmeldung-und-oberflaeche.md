@@ -14,7 +14,9 @@ Die Seitenleiste enthält Home, Suche, Projekte und Unterhaltungen, Automationen
 
 Home zeigt zuletzt aktive Unterhaltungen, offene Anfragen, kommende Automationen und Computerstatus. Manche Übersichtselemente sind auf kleinen Bildschirmen ausgeblendet; der Chat bleibt nutzbar. Eine ausdrückliche neue Unterhaltung öffnet einen leeren Entwurf.
 
-Unter **Zuletzt aktiv** stehen Sessions mit ungelesenen Agent-Antworten oben, neueste Antwort zuerst. Darunter folgen die übrigen Sessions nach deiner letzten Nachricht, neueste zuerst. Sobald du eine Antwort liest, richtet sich der Platz der Session wieder nach deiner letzten Nachricht. Bei leeren Sessions zählt der Erstellungszeitpunkt.
+Unter **Zuletzt aktiv** auf Home rücken Sessions bei einer neuen Nutzernachricht, Rückfrage, Freigabeanfrage oder fertigen Agent-Antwort nach oben. Es zählt das neueste dieser Ereignisse; Rückfragen erhalten keinen dauerhaften Vorrang. Streaming, Tools und Zwischenmeldungen ändern die Position nicht. Auch das Lesen einer Antwort oder Erledigen einer Anfrage verschiebt die Session nicht zurück. Stumme Antworten mit `silence` rücken die Session nicht nach oben; Fehler bleiben sichtbar.
+
+Die Seitenleiste bleibt nach deiner letzten Nachricht sortiert, neueste zuerst; angepinnte Sessions stehen oben. Bei leeren Sessions zählt der Erstellungszeitpunkt. Status und Ungelesen-Markierungen bleiben überall aktuell.
 
 ### Suche
 

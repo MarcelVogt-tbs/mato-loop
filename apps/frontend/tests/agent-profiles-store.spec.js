@@ -82,7 +82,7 @@ describe('agent profiles store', () => {
     store.defaultAgentProfileId = 'default-1'
     chat.current = { id: 'session-1', agentProfileId: 'global-1' }
     chat.sessionLists.standalone.items = [
-      { id: 'session-1', agentProfileId: 'global-1' },
+      { id: 'session-1', agentProfileId: 'global-1', createdAt: '2026-07-24T15:00:00Z' },
       { id: 'session-2', agentProfileId: 'other-1' }
     ]
     await store.deleteAgent('global-1')
@@ -93,7 +93,7 @@ describe('agent profiles store', () => {
     expect(store.agents).toEqual([])
     expect(chat.current.agentProfileId).toBe('default-1')
     expect(chat.sessionLists.standalone.items).toEqual([
-      { id: 'session-1', agentProfileId: 'default-1' },
+      { id: 'session-1', agentProfileId: 'default-1', createdAt: '2026-07-24T15:00:00Z' },
       { id: 'session-2', agentProfileId: 'other-1' }
     ])
 

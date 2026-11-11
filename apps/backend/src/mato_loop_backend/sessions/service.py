@@ -11,8 +11,8 @@ from typing import Any, Literal
 from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import (
+    JSON,
     and_,
-    case,
     delete,
     func,
     or_,
@@ -45,6 +45,7 @@ from mato_loop_backend.media.attachments import AttachmentInput, AttachmentServi
 from mato_loop_backend.memory.episode_indexing import EpisodeIndexService
 from mato_loop_backend.models import (
     AgentRun,
+    ApprovalRequest,
     Automation,
     AutomationRun,
     ChatSession,
@@ -55,6 +56,7 @@ from mato_loop_backend.models import (
     MessageAttachment,
     PermissionGrant,
     Project,
+    QuestionRequest,
     TitleGenerationStatus,
     UserAccount,
 )
@@ -438,6 +440,7 @@ async def session_detail_payload(
         last_assistant_message_at,
         user_request_count,
         latest_performance_data,
+        last_user_message_at,
     ) = (
         await db.execute(
             select(
@@ -447,6 +450,7 @@ async def session_detail_payload(
                 func.max(Message.created_at).filter(unread_response_clause()),
                 func.count(Message.id).filter(Message.role == "user"),
                 latest_performance_provider_data,
+                func.max(Message.created_at).filter(Message.role == "user"),
             ).where(Message.session_id == item.id)
         )
     ).one()
@@ -476,6 +480,7 @@ async def session_detail_payload(
                 has_unread_messages=has_unread_messages(item, last_assistant_message_at),
             )
         ),
+        "lastUserMessageAt": last_user_message_at.isoformat() if last_user_message_at else None,
         "messages": [
             message_serializer(
                 message,
@@ -883,8 +888,7 @@ async def list_sessions(
     scope = str(project_id) if project_id is not None else "standalone" if standalone else "all"
     if archived or include_archived:
         scope += ":archived" if archived else ":including-archived"
-    if sort == "recent":
-        scope += ":recent:user-activity"
+    scope += f":{sort}:" + ("relevant-activity" if sort == "recent" else "user-message")
     active_run_status = (
         select(AgentRun.status)
         .where(
@@ -916,20 +920,55 @@ async def list_sessions(
         .group_by(Message.session_id)
         .subquery()
     )
-    activity_at = func.coalesce(latest_messages.c.last_message_at, ChatSession.created_at)
-    priority = ChatSession.is_pinned
+    activity_at = func.coalesce(latest_messages.c.last_user_message_at, ChatSession.created_at)
     if sort == "recent":
-        priority = and_(
-            latest_messages.c.last_assistant_message_at.is_not(None),
-            or_(
-                ChatSession.last_read_at.is_(None),
-                latest_messages.c.last_assistant_message_at > ChatSession.last_read_at,
-            ),
+        legacy_response = aliased(Message)
+        legacy_response_id = (
+            select(legacy_response.id)
+            .where(
+                legacy_response.session_id == AgentRun.session_id,
+                legacy_response.role == "assistant",
+                legacy_response.created_at >= AgentRun.created_at,
+                legacy_response.created_at <= AgentRun.completed_at,
+                legacy_response.generation_status == "completed",
+                or_(legacy_response.tool_calls.is_(None), legacy_response.tool_calls == JSON.NULL, legacy_response.tool_calls == []),
+                legacy_response.provider_data["_matoloop"]["runId"].as_string().is_(None),
+                legacy_response.provider_data["_matoloop"]["continuationSegment"].as_boolean().is_not(True),
+            )
+            .order_by(legacy_response.created_at.desc(), legacy_response.id.desc())
+            .limit(1)
+            .correlate(AgentRun)
+            .scalar_subquery()
         )
-        activity_at = case(
-            (priority, latest_messages.c.last_assistant_message_at),
-            else_=func.coalesce(latest_messages.c.last_user_message_at, ChatSession.created_at),
+        last_response_at = (
+            select(func.max(AgentRun.completed_at))
+            .join(Message, or_(
+                Message.id == AgentRun.result_message_id,
+                and_(AgentRun.result_message_id.is_(None), Message.id == legacy_response_id),
+            ))
+            .where(
+                AgentRun.session_id == ChatSession.id,
+                AgentRun.parent_run_id.is_(None),
+                AgentRun.status.in_(("completed", "failed", "cancelled")),
+                unread_response_clause(),
+            )
+            .correlate(ChatSession)
+            .scalar_subquery()
         )
+        last_question_at = (
+            select(func.max(QuestionRequest.created_at))
+            .where(QuestionRequest.session_id == ChatSession.id)
+            .correlate(ChatSession)
+            .scalar_subquery()
+        )
+        last_approval_at = (
+            select(func.max(ApprovalRequest.created_at))
+            .where(ApprovalRequest.session_id == ChatSession.id, ApprovalRequest.user_id == user_id)
+            .correlate(ChatSession)
+            .scalar_subquery()
+        )
+        activity_at = func.greatest(activity_at, last_response_at, last_question_at, last_approval_at)
+    priority = ChatSession.is_pinned
     statement = (
         select(
             ChatSession,
@@ -937,6 +976,7 @@ async def list_sessions(
             latest_messages.c.last_assistant_message_at,
             active_run_status.label("active_run_status"),
             activity_at.label("activity_at"),
+            latest_messages.c.last_user_message_at,
         )
         .outerjoin(latest_messages, latest_messages.c.session_id == ChatSession.id)
         .where(
@@ -963,13 +1003,15 @@ async def list_sessions(
             activity_at < cursor_activity_at,
             and_(activity_at == cursor_activity_at, ChatSession.id < cursor_id),
         )
-        activity_tail = (
-            or_(priority.is_(False), and_(priority.is_(True), activity_tail))
-            if cursor_priority
-            else and_(priority.is_(False), activity_tail)
-        )
+        if sort == "pinned":
+            activity_tail = (
+                or_(priority.is_(False), and_(priority.is_(True), activity_tail))
+                if cursor_priority
+                else and_(priority.is_(False), activity_tail)
+            )
         statement = statement.where(activity_tail)
-    statement = statement.order_by(priority.desc())
+    if sort == "pinned":
+        statement = statement.order_by(priority.desc())
     rows = (
         await db.execute(
             statement.order_by(
@@ -992,15 +1034,17 @@ async def list_sessions(
                 )
             ),
             "activeRunStatus": active_status,
+            **({"activityAt": _activity_at.isoformat()} if sort == "recent" else {}),
+            "lastUserMessageAt": last_user_message_at.isoformat() if last_user_message_at else None,
         }
-        for item, last_message_at, last_assistant_message_at, active_status, _activity_at in page
+        for item, last_message_at, last_assistant_message_at, active_status, _activity_at, last_user_message_at in page
     ]
     next_cursor = None
     if len(rows) > page_size:
-        item, _last_message_at, last_assistant_message_at, _active_status, item_activity_at = page[-1]
+        item, _last_message_at, _last_assistant_message_at, _active_status, item_activity_at, _last_user_message_at = page[-1]
         next_cursor = _encode_session_cursor(
             user_id, scope,
-            bool(item.is_pinned) if sort == "pinned" else has_unread_messages(item, last_assistant_message_at),
+            bool(item.is_pinned) if sort == "pinned" else False,
             item_activity_at, item.id,
         )
     return {"items": items, "nextCursor": next_cursor}

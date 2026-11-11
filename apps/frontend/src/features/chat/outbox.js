@@ -316,7 +316,9 @@ export const outboxActions = {
             : api.post(url, payload, { suppressErrorToast: true }))
           entry.sentMessageId = data.message.id
           data.message.renderId = entry.id
+          this.updateCachedSession(entry.sessionId, (session) => ({ ...session, lastUserMessageAt: data.message.createdAt }))
           if (this.current?.id === entry.sessionId && this.selectedSessionId === entry.sessionId) {
+            this.current.lastUserMessageAt = data.message.createdAt
             if (!this.current.messages.some((message) => message.id === data.message.id)) {
               const later = this.current.messages.findIndex((message) => (
                 message.role === 'assistant' && message.runId === entry.continuationRunId
@@ -515,7 +517,7 @@ export const outboxActions = {
         }
         list.version += 1
         list.items = sortSessions([
-          data.session,
+          { ...data.session, lastUserMessageAt: data.session.lastUserMessageAt || userMessage.createdAt },
           ...list.items.filter((item) => item.id !== session.id)
         ])
         const recordings = this.getAudioDictation(null, projectId)

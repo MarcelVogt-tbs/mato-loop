@@ -156,9 +156,9 @@ export function emptyActivity(revision = 0) {
 export function sortSessions(sessions) {
   return [...sessions].sort((left, right) => {
     if (Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1
-    const leftLastMessageAt = Date.parse(left.lastMessageAt || left.createdAt || '') || 0
-    const rightLastMessageAt = Date.parse(right.lastMessageAt || right.createdAt || '') || 0
-    return rightLastMessageAt - leftLastMessageAt
+    const leftActivityAt = Date.parse(left.lastUserMessageAt || left.createdAt || '') || 0
+    const rightActivityAt = Date.parse(right.lastUserMessageAt || right.createdAt || '') || 0
+    return rightActivityAt - leftActivityAt || (left.id < right.id ? 1 : left.id > right.id ? -1 : 0)
   })
 }
 
@@ -190,7 +190,8 @@ export function sessionBeforeUserMessage(session, messageId) {
     messages,
     contextSummaries,
     activeRun: null,
-    lastMessageAt: lastVisibleMessageAt(messages)
+    lastMessageAt: lastVisibleMessageAt(messages),
+    lastUserMessageAt: [...messages].reverse().find((message) => message.role === 'user')?.createdAt || null
   }
 }
 

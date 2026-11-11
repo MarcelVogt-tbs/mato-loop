@@ -1572,20 +1572,20 @@ describe('chat drafts', () => {
     const list = chat.ensureSessionList(projectId)
     list.loaded = true
     list.items = [
-      { id: 'session-2', projectId, lastMessageAt: '2026-07-24T14:00:00Z' },
-      ...(listed ? [{ id: 'session-1', projectId, lastMessageAt: '2026-07-20T12:00:00Z' }] : [])
+      { id: 'session-2', projectId, lastUserMessageAt: '2026-07-24T14:00:00Z', lastMessageAt: '2026-07-24T14:00:00Z' },
+      ...(listed ? [{ id: 'session-1', projectId, lastUserMessageAt: '2026-07-20T12:00:00Z', lastMessageAt: '2026-07-20T12:00:00Z' }] : [])
     ]
     chat.current = {
       id: 'session-1',
       projectId,
-      lastMessageAt: '2026-07-20T12:00:00Z',
+      lastUserMessageAt: '2026-07-20T12:00:00Z', lastMessageAt: '2026-07-20T12:00:00Z',
       userRequestCount: 3,
       messages: []
     }
     chat.selectedSessionId = 'session-1'
 
     api.get.mockImplementation(async (url) => ({ data: url === '/sessions/message-queue' ? { items: [] } : {
-      ...chat.current, lastMessageAt: '2026-07-24T15:00:00Z', userRequestCount: 4,
+      ...chat.current, lastUserMessageAt: '2026-07-24T15:00:00Z', lastMessageAt: '2026-07-24T15:00:00Z', userRequestCount: 4,
       messages: [{ id: 'message-1', role: 'user', content: 'Neue Nachricht', createdAt: '2026-07-24T15:00:00Z' }]
     } }))
     await chat.send('Neue Nachricht')
@@ -1601,10 +1601,10 @@ describe('chat drafts', () => {
     const chat = useChatStore()
     const list = chat.ensureSessionList(projectId)
     list.loaded = true
-    const oldSession = { id: 'session-1', projectId, lastMessageAt: '2026-07-20T12:00:00Z' }
+    const oldSession = { id: 'session-1', projectId, lastUserMessageAt: '2026-07-20T12:00:00Z', lastMessageAt: '2026-07-20T12:00:00Z' }
     list.items = [
       { id: 'pinned', projectId, pinned: true, lastMessageAt: '2026-07-01T12:00:00Z' },
-      { id: 'session-2', projectId, lastMessageAt: '2026-07-24T14:00:00Z' },
+      { id: 'session-2', projectId, lastUserMessageAt: '2026-07-24T14:00:00Z', lastMessageAt: '2026-07-24T14:00:00Z' },
       oldSession
     ]
     chat.sessionCatalog = [...list.items]
@@ -1624,17 +1624,17 @@ describe('chat drafts', () => {
 
     await chat.refreshSession('session-1')
 
-    expect(list.items.map((session) => session.id)).toEqual(['pinned', 'session-1', 'session-2'])
-    expect(chat.sessionCatalog.map((session) => session.id)).toEqual(['pinned', 'session-1', 'session-2'])
-    expect(list.items[1].lastMessageAt).toBe(recentSession.lastMessageAt)
-    expect(chat.sessionCatalog[1].lastMessageAt).toBe(recentSession.lastMessageAt)
-    expect(list.items[1]).not.toHaveProperty('messages')
-    expect(list.items[1]).not.toHaveProperty('contextSummaries')
-    expect(list.items[1]).not.toHaveProperty('activeRun')
+    expect(list.items.map((session) => session.id)).toEqual(['pinned', 'session-2', 'session-1'])
+    expect(chat.sessionCatalog.map((session) => session.id)).toEqual(['pinned', 'session-2', 'session-1'])
+    expect(list.items[2].lastMessageAt).toBe(recentSession.lastMessageAt)
+    expect(chat.sessionCatalog[2].lastMessageAt).toBe(recentSession.lastMessageAt)
+    expect(list.items[2]).not.toHaveProperty('messages')
+    expect(list.items[2]).not.toHaveProperty('contextSummaries')
+    expect(list.items[2]).not.toHaveProperty('activeRun')
 
-    list.items[1] = oldSession
+    list.items[2] = oldSession
     await chat.loadSession('session-1')
-    expect(list.items[1].lastMessageAt).toBe(recentSession.lastMessageAt)
+    expect(list.items[2].lastMessageAt).toBe(recentSession.lastMessageAt)
   })
 
   it('does not navigate back to a late new-session response', async () => {
@@ -2289,12 +2289,12 @@ describe('chat drafts', () => {
   it('appends paginated sessions without duplicates and stops at the end', async () => {
     api.get
       .mockResolvedValueOnce(sessionPage([
-        { id: 'session-1', title: 'Neu', lastMessageAt: '2026-07-20T12:00:00Z' },
-        { id: 'session-2', title: 'Alt', lastMessageAt: '2026-07-19T12:00:00Z' }
+        { id: 'session-1', title: 'Neu', lastUserMessageAt: '2026-07-20T12:00:00Z', lastMessageAt: '2026-07-20T12:00:00Z' },
+        { id: 'session-2', title: 'Alt', lastUserMessageAt: '2026-07-19T12:00:00Z', lastMessageAt: '2026-07-19T12:00:00Z' }
       ], 'cursor-1'))
       .mockResolvedValueOnce(sessionPage([
-        { id: 'session-2', title: 'Aktualisiert', lastMessageAt: '2026-07-19T12:00:00Z' },
-        { id: 'session-3', title: 'Älter', lastMessageAt: '2026-07-18T12:00:00Z' }
+        { id: 'session-2', title: 'Aktualisiert', lastUserMessageAt: '2026-07-19T12:00:00Z', lastMessageAt: '2026-07-19T12:00:00Z' },
+        { id: 'session-3', title: 'Älter', lastUserMessageAt: '2026-07-18T12:00:00Z', lastMessageAt: '2026-07-18T12:00:00Z' }
       ]))
     const chat = useChatStore()
 
@@ -2316,7 +2316,7 @@ describe('chat drafts', () => {
     api.get.mockReturnValue(new Promise((resolve) => { resolveList = resolve }))
     api.post.mockResolvedValue({
       data: {
-        session: { id: 'new-session', projectId: null, title: 'Neu', messages: [] },
+        session: { id: 'new-session', projectId: null, title: 'Neu', createdAt: '2026-07-24T15:00:00Z', messages: [] },
         runId: 'run-1'
       }
     })
@@ -2591,8 +2591,8 @@ describe('chat drafts', () => {
     })
     const chat = useChatStore()
     setSessions(chat, [
-      { id: 'session-2', title: 'Andere Session', lastMessageAt: '2026-07-20T13:00:00Z' },
-      { id: 'session-1', title: 'Alter Titel', lastMessageAt: '2026-07-19T13:00:00Z' }
+      { id: 'session-2', title: 'Andere Session', lastUserMessageAt: '2026-07-20T13:00:00Z', lastMessageAt: '2026-07-20T13:00:00Z' },
+      { id: 'session-1', title: 'Alter Titel', lastUserMessageAt: '2026-07-19T13:00:00Z', lastMessageAt: '2026-07-19T13:00:00Z' }
     ])
     chat.current = { id: 'session-1', title: 'Alter Titel', messages: [] }
 
@@ -2626,7 +2626,7 @@ describe('chat drafts', () => {
     const chat = useChatStore()
     const session = {
       id: 'session-1', projectId: sourceId,
-      createdAt: '2026-07-01T12:00:00Z', lastMessageAt: '2026-07-24T15:00:00Z'
+      createdAt: '2026-07-01T12:00:00Z', lastUserMessageAt: '2026-07-24T15:00:00Z', lastMessageAt: '2026-07-24T15:00:00Z'
     }
     const source = chat.ensureSessionList(sourceId)
     source.loaded = true
@@ -2634,8 +2634,8 @@ describe('chat drafts', () => {
     const target = chat.ensureSessionList(targetId)
     target.loaded = true
     target.items = [
-      { id: 'session-2', projectId: targetId, lastMessageAt: '2026-07-24T16:00:00Z' },
-      { id: 'session-3', projectId: targetId, lastMessageAt: '2026-07-24T14:00:00Z' }
+      { id: 'session-2', projectId: targetId, lastUserMessageAt: '2026-07-24T16:00:00Z', lastMessageAt: '2026-07-24T16:00:00Z' },
+      { id: 'session-3', projectId: targetId, lastUserMessageAt: '2026-07-24T14:00:00Z', lastMessageAt: '2026-07-24T14:00:00Z' }
     ]
     chat.sessionCatalog = [...target.items, session]
     const { lastMessageAt, ...patchResult } = session
@@ -2690,11 +2690,11 @@ describe('chat drafts', () => {
     let resolveRefresh
     api.get.mockReturnValueOnce(new Promise((resolve) => { resolveRefresh = resolve }))
       .mockResolvedValue(sessionPage([
-        { id: 'session-1', title: 'Verschoben', projectId: 'project-2' },
+        { id: 'session-1', title: 'Verschoben', projectId: 'project-2', createdAt: '2026-07-24T15:00:00Z' },
         { id: 'session-2', title: 'Vorhanden', projectId: 'project-2' }
       ]))
     api.patch.mockResolvedValue({
-      data: { id: 'session-1', title: 'Verschoben', projectId: 'project-2' }
+      data: { id: 'session-1', title: 'Verschoben', projectId: 'project-2', createdAt: '2026-07-24T15:00:00Z' }
     })
     const chat = useChatStore()
     const source = chat.ensureSessionList('project-1')
@@ -2723,8 +2723,8 @@ describe('chat drafts', () => {
     })
     const chat = useChatStore()
     setSessions(chat, [
-      { id: 'session-2', pinned: false, lastMessageAt: '2026-07-20T14:00:00Z' },
-      { id: 'session-1', pinned: false, lastMessageAt: '2026-07-20T12:00:00Z' }
+      { id: 'session-2', pinned: false, lastUserMessageAt: '2026-07-20T14:00:00Z', lastMessageAt: '2026-07-20T14:00:00Z' },
+      { id: 'session-1', pinned: false, lastUserMessageAt: '2026-07-20T12:00:00Z', lastMessageAt: '2026-07-20T12:00:00Z' }
     ])
     chat.current = { id: 'session-1', pinned: false, messages: [] }
 
@@ -3078,13 +3078,14 @@ describe('chat drafts', () => {
   it('keeps an undone message as a draft after navigating away', async () => {
     let resolveUndo
     api.post.mockReturnValue(new Promise((resolve) => { resolveUndo = resolve }))
-    api.get.mockResolvedValue(sessionPage())
+    api.get.mockResolvedValue({ data: { id: 'session-1', messages: [], lastUserMessageAt: '2026-11-10T10:00:00Z' } })
     const chat = useChatStore()
     const message = { id: 'user-2', role: 'user', content: 'Später bearbeiten', attachments: [] }
     setSessions(chat, [{ id: 'session-1' }, { id: 'session-2' }])
     chat.current = {
       id: 'session-1',
-      messages: [{ id: 'user-1', role: 'user', content: 'Bleibt' }, message]
+      nextMessageCursor: 'older-page',
+      messages: [message]
     }
     chat.selectedSessionId = 'session-1'
 
@@ -3096,6 +3097,7 @@ describe('chat drafts', () => {
 
     expect(chat.current.id).toBe('session-2')
     expect(chat.drafts.sessionMessages['session-1']).toBe('Später bearbeiten')
+    await vi.waitFor(() => expect(chat.findCachedSession('session-1').lastUserMessageAt).toBe('2026-11-10T10:00:00Z'))
   })
 
   it('recovers an undo whose response was lost after the server commit', async () => {

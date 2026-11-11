@@ -714,6 +714,8 @@ export const sessionsActions = {
     updateSessionSummary(session) {
       if (session.archived) { this.removeCachedSession(session.id); return }
       const summary = { ...session }
+      const lastUserMessage = [...(session.messages || [])].reverse().find((message) => message.role === 'user')
+      if (lastUserMessage && !Object.hasOwn(session, 'lastUserMessageAt')) summary.lastUserMessageAt = lastUserMessage.createdAt
       delete summary.messages
       delete summary.contextSummaries
       delete summary.activeRun
@@ -825,8 +827,19 @@ export const sessionsActions = {
         else this.updateSessionSummary(updatedSession)
         this.drafts.sessionMessages[session.id] = data.draft.content
         this.replaceAttachmentFiles(files, session.id, message.attachments)
-        if (stillSelected && !recoveredSession) {
-          void this.refreshSession(session.id).catch(() => {})
+        if (!recoveredSession) {
+          const loadVersion = this.sessionLoadVersion
+          await this.fetchSession(session.id).then((canonical) => {
+            if (this.selectedSessionId === session.id && this.current?.id === session.id
+              && this.sessionLoadVersion === loadVersion) {
+              this.applySessionResult({
+                ...canonical,
+                messages: mergeMessages(this.current.messages, canonical.messages),
+                contextSummaries: mergeMessages(this.current.contextSummaries, canonical.contextSummaries),
+                nextMessageCursor: this.current.nextMessageCursor
+              })
+            } else this.updateSessionSummary(canonical)
+          }).catch(() => {})
         }
         this.persistDrafts()
         void useApprovalStore().fetchPending()

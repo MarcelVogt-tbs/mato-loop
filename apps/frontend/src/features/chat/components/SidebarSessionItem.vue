@@ -95,7 +95,7 @@ const props = defineProps({
 })
 const menuOpen = defineModel('menuOpen', { type: Boolean, default: false })
 const emit = defineEmits(['open', 'rename', 'move', 'archive', 'delete', 'toggle-pin', 'drag-start', 'drag-end'])
-const timestamp = computed(() => props.session.lastMessageAt || props.session.createdAt)
+const timestamp = computed(() => props.session.lastUserMessageAt || props.session.createdAt)
 const indicator = computed(() => props.status || sessionSidebarStatus(props.session)
   || (props.session.hasUnreadMessages ? { kind: 'unread', label: 'Ungelesene Antwort' } : null))
 

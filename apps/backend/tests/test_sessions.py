@@ -322,8 +322,8 @@ async def test_session_list_first_page_has_cursor_and_payload_metadata() -> None
     last_message_at = datetime(2026, 7, 24, 12, 0, tzinfo=UTC)
     execution_result = MagicMock()
     execution_result.all.return_value = [
-        (session, last_message_at, last_message_at, "running", last_message_at),
-        (next_session, None, None, None, next_session.created_at),
+        (session, last_message_at, last_message_at, "running", session.created_at, session.created_at),
+        (next_session, None, None, None, next_session.created_at, None),
     ]
     db = AsyncMock(spec=AsyncSession)
     db.execute.return_value = execution_result
@@ -336,6 +336,7 @@ async def test_session_list_first_page_has_cursor_and_payload_metadata() -> None
     assert result["items"][0]["createdAt"] == session.created_at.isoformat()
     assert result["items"][0]["updatedAt"] == session.updated_at.isoformat()
     assert result["items"][0]["lastMessageAt"] == last_message_at.isoformat()
+    assert result["items"][0]["lastUserMessageAt"] == session.created_at.isoformat()
     assert result["items"][0]["hasUnreadMessages"] is True
     assert result["items"][0]["activeRunStatus"] == "running"
     statement = db.execute.await_args.args[0]
@@ -346,7 +347,7 @@ async def test_session_list_first_page_has_cursor_and_payload_metadata() -> None
     assert "agent_runs.status IN" in sql
     assert "agent_runs.created_at DESC, agent_runs.id DESC" in sql
     assert "LIMIT" in sql
-    assert "coalesce(anon_1.last_message_at, chat_sessions.created_at) DESC" in sql
+    assert "coalesce(anon_1.last_user_message_at, chat_sessions.created_at) DESC" in sql
     assert "chat_sessions.updated_at DESC" not in sql
     assert 2 in statement.compile().params.values()
 
@@ -371,8 +372,8 @@ async def test_session_list_next_page_uses_full_keyset_and_preserves_order(sort)
     )
     first_result = MagicMock()
     first_result.all.return_value = [
-        (pinned, None, pinned.created_at if sort == "recent" else None, None, pinned.created_at),
-        (overflow, None, None, None, overflow.created_at),
+        (pinned, None, pinned.created_at if sort == "recent" else None, None, pinned.created_at, None),
+        (overflow, None, None, None, overflow.created_at, None),
     ]
     first_db = AsyncMock(spec=AsyncSession)
     first_db.execute.return_value = first_result
@@ -380,7 +381,7 @@ async def test_session_list_next_page_uses_full_keyset_and_preserves_order(sort)
 
     second_result = MagicMock()
     second_result.all.return_value = [
-        (overflow, None, None, "waiting_approval", overflow.created_at)
+        (overflow, None, None, "waiting_approval", overflow.created_at, None)
     ]
     second_db = AsyncMock(spec=AsyncSession)
     second_db.execute.return_value = second_result
@@ -395,16 +396,27 @@ async def test_session_list_next_page_uses_full_keyset_and_preserves_order(sort)
     if sort == "pinned":
         assert "chat_sessions.is_pinned IS false OR chat_sessions.is_pinned IS true" in sql
         assert sql.index("chat_sessions.is_pinned DESC") < sql.index(
-            "coalesce(anon_1.last_message_at, chat_sessions.created_at) DESC"
+            "coalesce(anon_1.last_user_message_at, chat_sessions.created_at) DESC"
         )
     else:
         assert "chat_sessions.is_pinned IS" not in sql
         assert "chat_sessions.is_pinned DESC" not in str(first_db.execute.await_args.args[0]) + sql
-        assert "chat_sessions.last_read_at IS NULL" in sql
-        assert "anon_1.last_assistant_message_at > chat_sessions.last_read_at" in sql
-        assert "THEN anon_1.last_assistant_message_at ELSE coalesce(anon_1.last_user_message_at, chat_sessions.created_at) END" in sql
-        assert "IS false OR" in sql and "IS true AND" in sql
-    activity_sql = str(statement.selected_columns["activity_at"].element)
+        assert "chat_sessions.last_read_at" not in str(statement._order_by_clauses)
+        assert "CASE WHEN" not in sql
+        assert "greatest(coalesce(anon_1.last_user_message_at" in sql
+        assert "max(agent_runs.completed_at)" in sql
+        assert "messages.id = agent_runs.result_message_id" in sql
+        assert "agent_runs.result_message_id IS NULL AND messages.id = (SELECT messages_1.id" in sql
+        assert "max(question_requests.created_at)" in sql
+        assert "max(approval_requests.created_at)" in sql
+        assert "question_requests.status" not in sql
+        assert "approval_requests.status" not in sql
+        assert second_page["items"][0]["activityAt"] == overflow.created_at.isoformat()
+    activity_sql = (
+        sql[sql.index("greatest("):sql.index(" AS activity_at")]
+        if sort == "recent"
+        else str(statement.selected_columns["activity_at"].element)
+    )
     assert f"{activity_sql} <" in sql
     assert f"{activity_sql} =" in sql
     assert "chat_sessions.id <" in sql
@@ -1083,6 +1095,7 @@ async def test_session_detail_contains_active_run_and_aggregate_metrics(todo_sta
                 }
             },
         },
+        created_at,
     )
     db.execute.side_effect = [anchors, aggregate]
     db.scalar.return_value = run
@@ -1230,7 +1243,7 @@ async def test_session_payload_marks_latest_restart_error_retryable() -> None:
     anchors = MagicMock()
     anchors.all.return_value = [SimpleNamespace(created_at=created_at, id=user_message.id)]
     aggregate = MagicMock()
-    aggregate.one.return_value = (created_at, created_at, 1, None)
+    aggregate.one.return_value = (created_at, created_at, 1, None, created_at)
     direct_links = MagicMock()
     direct_links.all.return_value = [
         SimpleNamespace(

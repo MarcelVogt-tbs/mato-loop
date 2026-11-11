@@ -404,7 +404,7 @@ it.each([false, true])('opens the automation and respects blocked navigation whe
 
 it('shows compact activity times and prioritizes approval over the unread dot', async () => {
   const session = useChatStore().cachedSessions.find((item) => item.id === 'standalone')
-  Object.assign(session, { hasUnreadMessages: true, lastMessageAt: new Date(Date.now() - 120_000).toISOString() })
+  Object.assign(session, { hasUnreadMessages: true, lastUserMessageAt: new Date(Date.now() - 120_000).toISOString(), lastMessageAt: new Date().toISOString() })
   await nextTick()
   const row = source('standalone').closest('.session-list-item')
   expect([row.querySelector('time').textContent, row.querySelector('[role="status"]').getAttribute('aria-label')]).toEqual(['2m', 'Ungelesene Antwort'])
@@ -417,7 +417,7 @@ it('shows compact activity times and prioritizes approval over the unread dot', 
   root.querySelector('button[aria-label="Standalone nicht mehr anheften"]').click()
   await nextTick()
   expect(chat.setSessionPinned).toHaveBeenCalledWith('standalone', false)
-  Object.assign(session, { pinned: false, hasUnreadMessages: false, lastMessageAt: null, activeRunStatus: null })
+  Object.assign(session, { pinned: false, hasUnreadMessages: false, lastUserMessageAt: null, lastMessageAt: null, activeRunStatus: null })
 })
 
 it('scrolls an overflowing session title clear of the fade and button overlap', () => {
