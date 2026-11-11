@@ -252,7 +252,16 @@ async def generate_speech(
                 "xml:lang": selected.locale,
             })
             speaker = ElementTree.SubElement(speak, "voice", {"name": selected.short_name})
-            ElementTree.SubElement(speaker, "prosody", {"rate": str(speed)}).text = text
+            if "dragonhd" in selected.short_name.casefold():
+                if speed != 1.0:
+                    raise ProviderError(
+                        "Azure Speech HD voices do not support speed control",
+                        code="provider.configurationInvalid",
+                        params={"field": "speed"},
+                    )
+                speaker.text = text
+            else:
+                ElementTree.SubElement(speaker, "prosody", {"rate": str(speed)}).text = text
             ssml = ElementTree.tostring(speak, encoding="utf-8")
             if len(ssml) > MAX_SSML_BYTES:
                 raise ProviderError(

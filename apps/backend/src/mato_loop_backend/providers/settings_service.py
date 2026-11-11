@@ -247,8 +247,15 @@ async def clear_invalid_model_defaults(
             if choice.model_id in candidate_ids and not model_reference_available(settings, "default_model_id", choice.model_id):
                 del document.profile_models[profile_id]
                 changed = True
-        for model_id in list(document.speech_generation_voices):
-            if model_id in candidate_ids and not model_reference_available(settings, "speech_generation_model_id", model_id):
+        for model_id, voice in list(document.speech_generation_voices.items()):
+            if model_id not in candidate_ids:
+                continue
+            speech_model = next((item for item in settings.models if item.id == model_id), None)
+            if (
+                not model_reference_available(settings, "speech_generation_model_id", model_id)
+                or speech_model is None
+                or voice not in speech_model.discovery_metadata.get("speech_voices", [])
+            ):
                 del document.speech_generation_voices[model_id]
                 changed = True
         if changed:
