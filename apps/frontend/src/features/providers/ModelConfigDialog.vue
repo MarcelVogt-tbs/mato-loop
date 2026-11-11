@@ -59,7 +59,7 @@
               map-options
               label="Modellfähigkeiten"
               :options="MODEL_CAPABILITY_OPTIONS"
-              :readonly="isDiscovered"
+              :readonly="capabilitiesAreAuthoritative"
               :hint="capabilityHint"
               lazy-rules
               :rules="[capabilityRule]"
@@ -131,7 +131,7 @@ const capabilitiesAreAuthoritative = computed(() => (
 const supportsChat = computed(() => modelSupportsCapability({ capabilities: form.capabilities }, 'chat'))
 const capabilityHint = computed(() => {
   if (capabilitiesAreAuthoritative.value) return 'Der Provider gibt diese Fähigkeiten bei der Modellerkennung verbindlich vor.'
-  if (isDiscovered.value) return 'Die Fähigkeiten wurden bei der Modellerkennung ermittelt.'
+  if (isDiscovered.value) return 'Erkannte Fähigkeiten können korrigiert oder ergänzt werden. Eigene Änderungen bleiben bei der Synchronisierung erhalten.'
   return 'Bestimmt, für welche Aufgaben das Modell auswählbar ist.'
 })
 const title = computed(() => props.model ? `${props.model.name || props.model.modelId} bearbeiten` : 'Modell hinzufügen')
