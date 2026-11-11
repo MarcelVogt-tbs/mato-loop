@@ -144,6 +144,13 @@ export const useChatStore = defineStore('chat', {
     }
   },
   actions: {
+    async fetchPersonalChatBinding() {
+      const owner = this.draftOwnerUserId
+      const { data } = await api.get('/assistant')
+      if (this.draftOwnerUserId === owner && !this.personalChatSessionId) {
+        this.personalChatSessionId = data.sessionId || null
+      }
+    },
     async ensurePersonalChat() {
       if (this.personalChatSessionId) return this.personalChatSessionId
       const owner = this.draftOwnerUserId

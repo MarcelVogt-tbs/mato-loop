@@ -1039,7 +1039,7 @@ async function loadRouteSession() {
   const sessionId = routeSessionId.value
   await composer.value?.prepareAudioNavigation?.()
   if (!isCurrent()) return
-  if (!sessionId && !Object.hasOwn(route.query, 'session')
+  if (Object.hasOwn(route.query, 'personal') && !sessionId && !Object.hasOwn(route.query, 'session')
     && !newSessionRequested.value && !Object.hasOwn(route.query, 'project')) {
     await chat.loadSession(null)
     if (!isCurrent()) return
@@ -1047,7 +1047,9 @@ async function loadRouteSession() {
     try {
       const personalSessionId = await chat.ensurePersonalChat()
       if (!isCurrent() || !personalSessionId) return
-      await router.replace({ name: 'chat', query: { ...route.query, session: personalSessionId } })
+      const query = { ...route.query, session: personalSessionId }
+      delete query.personal
+      await router.replace({ name: 'chat', query })
     } catch (error) {
       if (isCurrent()) chat.loadError = error
     } finally {

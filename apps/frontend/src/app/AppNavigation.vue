@@ -25,7 +25,7 @@
       <q-separator class="lt-md" />
 
       <div class="col column no-wrap drawer-navigation q-py-xs">
-        <SidebarNavItem icon="chat" icon-color="primary" label="Chat" :to="{ name: 'chat' }" :active="route.name === 'chat' && !Object.hasOwn(route.query, 'new') && ((!routeSessionId && !Object.hasOwn(route.query, 'project')) || Boolean(routeSessionId && routeSessionId === chat.personalChatSessionId))" class="q-mx-xs q-mb-xs" @click="closeDrawerOnMobile" />
+        <SidebarNavItem icon="home" icon-color="primary" label="Home" :to="{ name: 'chat' }" :active="route.name === 'chat' && !routeSessionId && !Object.hasOwn(route.query, 'new') && !Object.hasOwn(route.query, 'personal')" class="q-mx-xs q-mb-xs" @click="closeDrawerOnMobile" />
         <q-scroll-area
           ref="sidebarScrollArea"
           class="col session-scroll-area"
@@ -34,6 +34,7 @@
           tabindex="0"
           aria-label="Projekte und Sessions"
         >
+          <SidebarNavItem icon="chat" icon-color="primary" label="Chat" :to="{ name: 'chat', query: { personal: null } }" :active="route.name === 'chat' && (Object.hasOwn(route.query, 'personal') || Boolean(routeSessionId && routeSessionId === chat.personalChatSessionId))" class="q-mx-xs q-mb-xs" @click="closeDrawerOnMobile" />
           <section aria-labelledby="automations-heading" class="q-mx-xs q-mb-xs">
             <SidebarNavItem
               icon="auto_awesome" icon-color="primary" label="Automationen" label-id="automations-heading" :expanded="automationsSectionOpen"
@@ -484,7 +485,7 @@ onMounted(async () => {
   clockTimer = window.setInterval(() => {
     if (document.visibilityState === 'visible') sidebarNow.value = Date.now()
   }, 60_000)
-  await Promise.allSettled([loadProjects(), loadStandaloneSessions()])
+  await Promise.allSettled([chat.fetchPersonalChatBinding(), loadProjects(), loadStandaloneSessions()])
 })
 onBeforeUnmount(() => window.clearInterval(clockTimer))
 </script>

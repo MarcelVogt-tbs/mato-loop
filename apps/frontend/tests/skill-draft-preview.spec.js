@@ -126,17 +126,17 @@ it('adds Git when repository detection finishes after a new session has attached
 })
 
 describe('personal chat entry', () => {
-  it('opens the personal session from the bare chat route and reuses its known ID', async () => {
-    const { router } = await mountPage({ location: '/' })
+  it('opens the personal session from its dedicated entry and reuses its known ID', async () => {
+    const { router } = await mountPage({ location: '/?personal' })
     await vi.waitFor(() => expect(chat.current?.id).toBe('personal'))
     expect(router.currentRoute.value.query).toEqual({ session: 'personal' })
     expect(chat.personalChatSessionId).toBe('personal')
-    await router.push('/')
+    await router.push('/?personal')
     await vi.waitFor(() => expect(router.currentRoute.value.query.session).toBe('personal'))
     expect(api.post.mock.calls.filter(([url]) => url === '/assistant/chat')).toHaveLength(1)
   })
 
-  it.each(['/?new', '/?project=project-draft', '/?session=parent&project=parent-project'])(
+  it.each(['/', '/?new', '/?project=project-draft', '/?session=parent&project=parent-project'])(
     'preserves the explicit route %s', async (location) => {
       const { router } = await mountPage({ location })
       await nextTick()
@@ -145,10 +145,10 @@ describe('personal chat entry', () => {
     }
   )
 
-  it.each(['/?new', '/?project=project-draft', '/?session=parent&project=parent-project'])(
+  it.each(['/', '/?new', '/?project=project-draft', '/?session=parent&project=parent-project'])(
     'does not let a late personal-chat response replace %s', async (location) => {
       let finish
-      const { router } = await mountPage({ location: '/', chatReply: () => new Promise(resolve => { finish = resolve }) })
+      const { router } = await mountPage({ location: '/?personal', chatReply: () => new Promise(resolve => { finish = resolve }) })
       await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
       await router.push(location)
       finish({ data: { sessionId: 'personal' } })

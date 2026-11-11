@@ -10,9 +10,9 @@ Administratorrechte erlauben gemeinsame Konfiguration und Kontoverwaltung, keine
 
 ## Navigation
 
-Die Seitenleiste enthält Home, Suche, Projekte und Unterhaltungen, Automationen, **Variablen & Secrets**, **Archiv** und das Benutzermenü. Statussymbole zeigen aktive Arbeit, offene Anfragen und ungelesene Antworten. Projekt-Sessions werden beim Aufklappen geladen; **Mehr anzeigen** lädt weitere Einträge. Listenfehler können direkt erneut versucht werden.
+Die Seitenleiste enthält **Home**, **Chat**, **Automationen**, **Projekte** und **Sessions** in dieser Reihenfolge sowie Suche, **Variablen & Secrets**, **Archiv** und das Benutzermenü. **Chat** öffnet deinen dauerhaften persönlichen Gesprächsfaden; **Home** und das Anwendungslogo führen zur Startübersicht. Statussymbole zeigen aktive Arbeit, offene Anfragen und ungelesene Antworten. Projekt-Sessions werden beim Aufklappen geladen; **Mehr anzeigen** lädt weitere Einträge. Listenfehler können direkt erneut versucht werden.
 
-Home zeigt zuletzt aktive Unterhaltungen, offene Anfragen, kommende Automationen und Computerstatus. Manche Übersichtselemente sind auf kleinen Bildschirmen ausgeblendet; der Chat bleibt nutzbar. Eine ausdrückliche neue Unterhaltung öffnet einen leeren Entwurf.
+Der persönliche Chat erscheint nicht zusätzlich unter **Sessions**. Home zeigt zuletzt aktive Unterhaltungen, offene Anfragen, kommende Automationen und Computerstatus. Manche Übersichtselemente sind auf kleinen Bildschirmen ausgeblendet; der Chat bleibt nutzbar. Eine ausdrückliche neue Unterhaltung öffnet einen leeren Entwurf.
 
 Unter **Zuletzt aktiv** auf Home rücken Sessions bei einer neuen Nutzernachricht, Rückfrage, Freigabeanfrage oder fertigen Agent-Antwort nach oben. Es zählt das neueste dieser Ereignisse; Rückfragen erhalten keinen dauerhaften Vorrang. Streaming, Tools und Zwischenmeldungen ändern die Position nicht. Auch das Lesen einer Antwort oder Erledigen einer Anfrage verschiebt die Session nicht zurück. Stumme Antworten mit `silence` rücken die Session nicht nach oben; Fehler bleiben sichtbar.
 

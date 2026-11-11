@@ -33,13 +33,15 @@ import { useConfirm } from 'src/composables/confirm'
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.useRealTimers() })
 
-it('hides the personal chat from the ordinary sidebar list', () => {
-  const chat = {
-    personalChatSessionId: 'personal', cachedSessions: [],
-    sessionList: () => ({ items: [{ id: 'personal' }, { id: 'regular' }], nextCursor: 'next' })
-  }
+it('hides a directly opened personal chat after restoring its binding', async () => {
+  setActivePinia(createPinia())
+  const chat = useChatStore()
+  Object.assign(chat.ensureSessionList(), { items: [{ id: 'regular' }], loaded: true, nextCursor: 'next' })
+  chat.applySessionResult({ id: 'personal', projectId: null, messages: [] })
+  api.get.mockResolvedValueOnce({ data: { sessionId: 'personal' } })
+  await chat.fetchPersonalChatBinding()
   const sidebar = useSidebarSessions({ chat, projects: { items: [] } })
-  expect(sidebar.standaloneSessionList.value).toEqual({ items: [{ id: 'regular' }], nextCursor: 'next' })
+  expect(sidebar.standaloneSessionList.value.items.map(item => item.id)).toEqual(['regular'])
 })
 
 function mountPanel(props, session = {}, router) {
