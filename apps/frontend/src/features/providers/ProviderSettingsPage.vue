@@ -456,7 +456,7 @@ function providerDescription(provider) {
     return `${provider.config?.baseUrl || provider.config?.base_url || 'Keine URL'} · Lemonade`
   }
   if (provider.adapterType === 'azure-speech') {
-    return `${provider.config?.baseUrl || provider.config?.base_url || 'Keine URL'} · Azure Speech Fast Transcription`
+    return `${provider.config?.baseUrl || provider.config?.base_url || 'Keine URL'} · Azure Speech`
   }
   const apiType = provider.config?.apiType || provider.config?.api_type
   const protocol = apiType === 'responses' ? 'Responses API' : 'Chat Completions'

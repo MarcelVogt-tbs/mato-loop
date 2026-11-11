@@ -170,7 +170,11 @@ async def load_effective_ai(db: AsyncSession, user_id: UUID, *, include_personal
     personal_defaults = None
     if include_personal and await personal_settings_allowed(db, user_id, defaults.personal_settings_enabled):
         personal_defaults = await SettingsStore.load_optional(db, UserModelDefaultsSettings, user_id=user_id) or UserModelDefaultsSettings()
-        values.update(personal_defaults.model_dump(exclude={"profile_models"}, exclude_none=True))
+        values.update(personal_defaults.model_dump(exclude={"profile_models", "speech_generation_voices"}, exclude_none=True))
+        values["speech_generation_voices"] = {
+            **defaults.speech_generation_voices,
+            **personal_defaults.speech_generation_voices,
+        }
     instance = AiSettings.model_validate({**inventory.model_dump(include=set(AiProviderSettings.model_fields)), **values})
     personal = await SettingsStore.load_optional(db, UserAiSettings, user_id=user_id) if include_personal else None
     for provider in instance.providers:

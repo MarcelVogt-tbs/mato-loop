@@ -115,6 +115,7 @@ class DiscoveredModel(BaseModel):
             "api_model_id",
             "service_tier",
             "supports_reasoning_effort_updates",
+            "default_speech_voice",
         }
         metadata: dict[str, Any] = {}
         for key, value in self.model_dump(
@@ -144,6 +145,12 @@ class DiscoveredModel(BaseModel):
                 if isinstance(key, str)
                 and isinstance(value, (str, int, float, bool, type(None)))
             }
+        voices = (self.__pydantic_extra__ or {}).get("speech_voices")
+        if isinstance(voices, list):
+            metadata["speech_voices"] = sorted({
+                voice for voice in voices[:5000]
+                if isinstance(voice, str) and 0 < len(voice) <= 500
+            })
         if self.discovered_max_output_tokens is not None:
             metadata["top_provider"] = {
                 "max_completion_tokens": self.discovered_max_output_tokens

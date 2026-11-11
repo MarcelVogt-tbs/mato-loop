@@ -68,6 +68,13 @@ async def save_defaults(payload: ModelDefaults, user: Annotated[UserAccount, Dep
         value = getattr(payload, field)
         if value is not None and not model_reference_available(ai, field, value):
             raise ApiError(422, "provider.modelCapabilityUnavailable", field=alias)
+    voices = payload.speech_generation_voices if "speech_generation_voices" in payload.model_fields_set else configured.speech_generation_voices
+    for model_id, voice in voices.items():
+        speech_model = next((model for model in ai.models if model.id == model_id), None)
+        if speech_model is None or not model_reference_available(ai, "speech_generation_model_id", model_id):
+            raise ApiError(422, "provider.modelCapabilityUnavailable", field="speechGenerationVoices")
+        if voice not in speech_model.discovery_metadata.get("speech_voices", []):
+            raise ApiError(422, "validation.invalidChoice", field="speechGenerationVoices")
     try:
         inherited_model_id = (instance.default_model_id if scope == "personal" else None) or first_available_agent_model(ai)
         validate_chat_model(ai, ChatModelOverride(model_id=payload.default_model_id, reasoning_effort=payload.reasoning_effort), inherited_model_id)
@@ -93,7 +100,7 @@ async def save_defaults(payload: ModelDefaults, user: Annotated[UserAccount, Dep
     except SessionServiceError as exc:
         raise ApiError(exc.status_code, exc.code, field="dreamingReasoningEffort") from exc
     for field in ModelDefaults.model_fields:
-        if field == "profile_models" and field not in payload.model_fields_set:
+        if field in {"profile_models", "speech_generation_voices"} and field not in payload.model_fields_set:
             continue
         setattr(configured, field, getattr(payload, field))
     await SettingsStore.save(db, configured, user_id=user.id if scope == "personal" else None)

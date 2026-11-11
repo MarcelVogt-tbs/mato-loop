@@ -247,6 +247,10 @@ async def clear_invalid_model_defaults(
             if choice.model_id in candidate_ids and not model_reference_available(settings, "default_model_id", choice.model_id):
                 del document.profile_models[profile_id]
                 changed = True
+        for model_id in list(document.speech_generation_voices):
+            if model_id in candidate_ids and not model_reference_available(settings, "speech_generation_model_id", model_id):
+                del document.speech_generation_voices[model_id]
+                changed = True
         if changed:
             await SettingsStore.save(db, document, user_id=user_id)
 
