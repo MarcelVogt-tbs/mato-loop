@@ -118,7 +118,7 @@ def test_inventory_is_complete() -> None:
         "pdf",
         "provider",
     } <= categories
-    assert 80 <= len(CASES) <= 256
+    assert 80 <= len(CASES) <= 257
     assert {case.scope for case in CASES} == {
         "hard",
         "quality",
@@ -2397,10 +2397,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 141
-    assert payload["contractCount"] == 396
-    assert "Cases: 255" in report
+    assert payload["contractCount"] == 398
+    assert "Cases: 257" in report
     assert "Semantic contracts: 141" in report
-    assert "All inventory rows: 396" in report
+    assert "All inventory rows: 398" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

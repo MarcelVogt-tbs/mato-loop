@@ -845,6 +845,7 @@ describe('chat message queue', () => {
     expect(chat.activeAttachmentDraft).toHaveLength(1)
     expect(chat.activeAttachmentDraft[0].file.name).toBe('entwurf.txt')
     expect(chat.activeQueuedMessages.map((entry) => entry.content)).toEqual(['Danach'])
+    chat.cancelQueueDrain()
     setActivePinia(createPinia())
     const restored = useChatStore()
     restored.setDraftOwner('user-1')

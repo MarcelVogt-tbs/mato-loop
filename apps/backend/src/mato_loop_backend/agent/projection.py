@@ -1499,12 +1499,29 @@ def _tool_calls_by_message_id(records: list[Message]) -> dict[UUID, dict[str, An
     from mato_loop_backend.agent.interaction_context import tool_batches
 
     _, results = tool_batches(records)
-    return {
+    calls = {
         records[result].id: call
         for (batch, call_id), result in results.items()
         for call in records[batch].tool_calls or []
         if call.get("id") == call_id
+        and (records[result].provider_data or {}).get("_matoloop", {}).get("runId")
     }
+    # Legacy records have no run ownership: only the adjacent assistant/tool
+    # batch proves provenance. Never bridge a user turn or a known-run record.
+    legacy_calls: dict[str, dict[str, Any]] = {}
+    for record in records:
+        if (record.provider_data or {}).get("_matoloop", {}).get("runId"):
+            legacy_calls = {}
+        elif record.role == "assistant":
+            legacy_calls = {
+                str(call["id"]): call for call in record.tool_calls or [] if call.get("id")
+            }
+        elif record.role == "tool" and record.tool_call_id:
+            if call := legacy_calls.get(record.tool_call_id):
+                calls[record.id] = call
+        else:
+            legacy_calls = {}
+    return calls
 
 
 def _tool_names_by_message_id(records: list[Message]) -> dict[UUID, str]:
