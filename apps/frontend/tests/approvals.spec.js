@@ -39,13 +39,13 @@ describe('inline approvals', () => {
     expect(approvals.loadFailed).toBe(false)
   })
 
-  it('counts memory approvals globally but excludes them from session approvals', () => {
+  it('includes memory approvals in their session approvals', () => {
     const approvals = useApprovalStore()
     approvals.add({ id: 'agent', requestType: 'agent_action', sessionId: 'session-1' })
     approvals.add({ id: 'memory', requestType: 'memory_change', sessionId: 'session-1' })
 
     expect(approvals.pendingCount).toBe(2)
-    expect(approvals.forSession('session-1').map((item) => item.id)).toEqual(['agent'])
+    expect(approvals.forSession('session-1').map((item) => item.id)).toEqual(['agent', 'memory'])
   })
 
   it('does not reload previously viewed grants when loading pending approvals', async () => {

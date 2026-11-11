@@ -105,6 +105,14 @@ _TRANSCRIPT_ROUTING_INSTRUCTION = (
 
 _SESSION_READ = ToolAction("session.read", "Sessions lesen", category="read")
 
+_SESSION_STATE_WRITE = ToolAction(
+    "session.state.write", "Session-Zustand speichern", category="write", mutates=True
+)
+
+_SESSION_STATE_DELETE = ToolAction(
+    "session.state.delete", "Session-Kontext löschen", category="delete", mutates=True
+)
+
 _SESSION_READ_SENSITIVE = ToolAction(
     "session.read_sensitive", "Private Sessions lesen und durchsuchen", category="read_sensitive"
 )

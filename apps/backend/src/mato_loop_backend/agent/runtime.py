@@ -117,6 +117,7 @@ from mato_loop_backend.tools.catalog import (
 )
 from mato_loop_backend.tools.contracts import (
     ToolArgumentsEdited,
+    ToolCallSuperseded,
 )
 from mato_loop_backend.tools.display import tool_display
 from mato_loop_backend.tools.registry import _tool_available
@@ -205,11 +206,15 @@ class AgentRuntime:
 
         if await is_session_archived(db, chat_session):
             raise AgentRunError("session.archived")
+        from mato_loop_backend.agent.session_execution import parked_runs
+
+        bypass = parked_runs() if automation_run is not None else ()
         active_run = await db.scalar(
             select(AgentRun.id).where(
                 AgentRun.session_id == chat_session.id,
                 AgentRun.parent_run_id.is_(None),
                 AgentRun.status.in_(("queued", "running", "waiting_approval", "waiting_input")),
+                AgentRun.id.not_in(bypass),
             )
         )
         if active_run is not None:
@@ -226,7 +231,10 @@ class AgentRuntime:
         command_data = None
         if selected_command is not None:
             try:
-                command_data = await prepare_command(db, chat_session, selected_command, content)
+                command_data = await prepare_command(
+                    db, chat_session, selected_command, content,
+                    agent_profile_id=agent_profile_id_override or chat_session.agent_profile_id,
+                )
             except SessionServiceError as exc:
                 raise AgentRunError(exc.code, params=exc.params) from exc
             agent_profile_id_override = command_profile_id(
@@ -261,7 +269,7 @@ class AgentRuntime:
         model = agent_run_support._model_for_id(ai_settings, model_id)
         provider = agent_run_support._provider_for_model(ai_settings, model) if model is not None else None
         trust_level = effective_model_trust(provider, model) if provider and model else TrustLevel.PUBLIC
-        if chat_session.trust_level is None:
+        if chat_session.trust_level is None and not (automation_run is not None and model_id_override is not None):
             chat_session.trust_level = trust_level.value if provider and model else TrustLevel.PRIVATE.value
         pseudonymization_enabled = (
             provider is not None and model is not None
@@ -535,7 +543,10 @@ class AgentRuntime:
                     selected_command = parse_command("/" + saved_command["name"])
                     if selected_command is None:
                         raise SessionServiceError(409, "git.worktreeChanged")
-                    fresh_command = await prepare_command(db, chat_session, selected_command, input_message.content)
+                    fresh_command = await prepare_command(
+                        db, chat_session, selected_command, input_message.content,
+                        agent_profile_id=run.agent_profile_id,
+                    )
                     saved_context = command_context(saved_command)
                     if not saved_context or any(fresh_command["context"].get(key) != value
                                                 for key, value in saved_context.items()):
@@ -929,6 +940,8 @@ class AgentRuntime:
                 ):
                     return
                 session_id = run.session_id
+                from mato_loop_backend.agent import session_execution
+                await db.commit()
                 diagnostic_owner = await db.scalar(
                     select(ChatSession.user_id).where(ChatSession.id == session_id)
                 )
@@ -950,6 +963,7 @@ class AgentRuntime:
                         raise asyncio.CancelledError
                     if run_id in cls._interrupted_runs:
                         raise asyncio.CancelledError
+                    await session_execution.acquire(run_id, session_id)
                     transition_run_status(run, "running")
                     await db.commit()
                     if diagnostics_active:
@@ -1259,6 +1273,9 @@ class AgentRuntime:
                     if failure_committed and failed_run is not None:
                         await NotificationService.deliver_message_after_commit(failed_run.result_message_id)
         finally:
+            from mato_loop_backend.agent import session_execution
+
+            session_execution.release(run_id)
             cls._cancellable_runs.discard(run_id)
             cls._session_settings.pop(run_id, None)
             cls._user_cancelled_runs.discard(run_id)
@@ -1347,33 +1364,25 @@ class AgentRuntime:
     async def _terminalize_incomplete_tool_calls(
         db: AsyncSession, session_id: UUID, *, run_id: UUID
     ) -> None:
-        assistant = await db.scalar(
-            select(Message)
-            .where(
+        from mato_loop_backend.agent.interaction_context import tool_batches
+
+        records = list((await db.scalars(
+            select(Message).where(
                 Message.session_id == session_id,
-                Message.role == "assistant",
-                Message.tool_calls.is_not(None),
-            )
-            .order_by(Message.created_at.desc(), Message.id.desc())
-            .limit(1)
-        )
-        if assistant is None or not assistant.tool_calls:
+                Message.role.in_(("assistant", "tool")),
+                Message.provider_data["_matoloop"]["runId"].as_string() == str(run_id),
+            ).order_by(Message.created_at, Message.id)
+        )).all())
+        batch = next((index for index in range(len(records) - 1, -1, -1)
+                      if records[index].role == "assistant" and records[index].tool_calls is not None), None)
+        if batch is None or not records[batch].tool_calls:
             return
-        existing_ids = set(
-            (
-                await db.scalars(
-                    select(Message.tool_call_id).where(
-                        Message.session_id == session_id,
-                        Message.role == "tool",
-                        Message.tool_call_id.is_not(None),
-                    )
-                )
-            ).all()
-        )
+        assistant = records[batch]
+        _, results = tool_batches(records)
         missing = [
             str(call["id"])
             for call in assistant.tool_calls
-            if call.get("id") and str(call["id"]) not in existing_ids
+            if call.get("id") and (batch, call["id"]) not in results
         ]
         if not missing:
             return
@@ -1787,6 +1796,17 @@ class AgentRuntime:
             return PermissionDecision.ALLOW
         if check_only:
             return decision
+        from mato_loop_backend.agent.session_execution import has_other_runs
+
+        if (decision in {PermissionDecision.ALLOW, PermissionDecision.ASK}
+                and chat_session.parent_session_id is None and has_other_runs(run.id, chat_session.id)):
+            from mato_loop_backend.agent.interaction_context import existing_action
+            from mato_loop_backend.permissions.requests import prepare_file_grants
+
+            request = await prepare_file_grants(request, root_files)
+            if await existing_action(db, chat_session, run, call, request) is not None:
+                # Only the original waiter may continue this exact bound action.
+                raise ToolCallSuperseded
         if decision != PermissionDecision.ASK:
             draft_file = (request.approval_details or {}).get("draftFile")
             if (

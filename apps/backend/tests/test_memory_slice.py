@@ -2647,6 +2647,37 @@ async def test_dreaming_update_obeys_auto_ask_and_disabled(monkeypatch, policy, 
     assert run.status == "completed"
 
 
+async def test_dreaming_approval_uses_personal_chat_without_replacing_source_evidence(monkeypatch) -> None:
+    from mato_loop_backend.assistant import AssistantSettings
+
+    owner_id, source_id, run_id, evidence_id = (uuid4() for _ in range(4))
+    chat = ChatSession(id=uuid4(), user_id=owner_id, session_type="chat")
+    target = MemoryRecord(id=uuid4(), user_id=owner_id, audience="both")
+    snapshot = MemoryApprovalTarget(
+        id=target.id, revision=1, content="Original fact", category="fact", audience="both",
+        pinned=False, evidenceHash="0" * 64,
+    )
+    monkeypatch.setattr(MemoryService, "_approval_target", AsyncMock(return_value=snapshot))
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=AssistantSettings(session_id=chat.id)))
+    monkeypatch.setattr("mato_loop_backend.memory.service.NotificationService.create_for_approval", AsyncMock())
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [source_id, run_id, chat]
+    db.scalars.side_effect = [Mock(all=lambda: [evidence_id]), Mock(all=lambda: [])]
+
+    approval = await MemoryService.request_dreaming_approval(
+        db, action="update", owner_id=owner_id, source_session_id=source_id,
+        source_dream_run_id=run_id, targets=[target], after_content="Updated fact",
+        after_category=MemoryCategory.FACT, trust_level=TrustLevel.PUBLIC,
+        readable_by=TrustLevel.PUBLIC, evidence_message_ids=[evidence_id],
+        update_policy=ToolExecutionPolicy.ASK, remove_policy=ToolExecutionPolicy.ASK,
+    )
+
+    assert (approval.session_id, approval.payload["sourceSessionId"],
+            approval.payload["sourceDreamRunId"], approval.payload["evidenceMessageIds"]) == (
+        chat.id, str(source_id), str(run_id), [str(evidence_id)],
+    )
+
+
 def test_memory_approval_payload_rejects_obsolete_and_pin_bearing_schemas() -> None:
     base = {
         "schemaVersion": 3,

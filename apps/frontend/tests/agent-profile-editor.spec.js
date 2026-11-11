@@ -108,9 +108,14 @@ it('round-trips profile content without sending permissions through the profile 
   const enabled = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find(item => item.querySelector('.q-item__label')?.textContent === 'An'))
   enabled.click()
   await vi.waitUntil(() => !document.querySelector('[role="option"]'))
+  const assistantContext = [...root.querySelectorAll('.q-field')].find(field => field.querySelector('.q-field__label')?.textContent === 'Assistenzkontext')
+  assistantContext.querySelector('[role="combobox"]').click()
+  const automatic = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find(item => item.querySelector('.q-item__label')?.textContent === 'Automatisch'))
+  automatic.click()
+  await vi.waitUntil(() => !document.querySelector('[role="option"]'))
   await page.saveAgent()
   expect(api.put).toHaveBeenCalledWith('/agent-profiles/agent', expect.objectContaining({ overrides: {
-    maxToolCalls: null, todoEnabled: false, delegationEnabled: true, repositoryInstructionsEnabled: true, temporaryFilesEnabled: true, sessionWritePaths: []
+    maxToolCalls: null, todoEnabled: false, delegationEnabled: true, repositoryInstructionsEnabled: true, temporaryFilesEnabled: true, assistantContext: 'automatic', sessionWritePaths: []
   } }), { params: { scope: 'personal' } })
 })
 

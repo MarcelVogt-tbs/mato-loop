@@ -33,6 +33,15 @@ import { useConfirm } from 'src/composables/confirm'
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.useRealTimers() })
 
+it('hides the personal chat from the ordinary sidebar list', () => {
+  const chat = {
+    personalChatSessionId: 'personal', cachedSessions: [],
+    sessionList: () => ({ items: [{ id: 'personal' }, { id: 'regular' }], nextCursor: 'next' })
+  }
+  const sidebar = useSidebarSessions({ chat, projects: { items: [] } })
+  expect(sidebar.standaloneSessionList.value).toEqual({ items: [{ id: 'regular' }], nextCursor: 'next' })
+})
+
 function mountPanel(props, session = {}, router) {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   const pinia = createPinia()

@@ -220,7 +220,7 @@ async def test_parent_delete_cancels_descendants_before_trashing_all_storage(tmp
     paths = [storage.provision(item.id, user_id=user.id) for item in (parent, child)]
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = parent
-    db.scalar.side_effect = [parent, 0, parent, 0]
+    db.scalar.side_effect = [parent, 0, parent, 0, None]
     db.scalars.return_value = MagicMock(all=lambda: [])
     db.execute.return_value = MagicMock(all=lambda: [(child.id, None)])
 
@@ -236,6 +236,7 @@ async def test_parent_delete_cancels_descendants_before_trashing_all_storage(tmp
     cancel.assert_awaited_once_with(parent.id)
     assert all(not path.exists() for path in paths)
     assert storage._owners == {}
+    db.delete.assert_awaited_once_with(parent)
     db.commit.assert_awaited_once()
 
 

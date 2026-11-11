@@ -35,6 +35,7 @@ from mato_loop_backend.agent.run_support import (
     logger,
 )
 from mato_loop_backend.agent.run_timing import run_timing_payload, transition_run_status
+from mato_loop_backend.agent.session_context import prepare_session_contexts
 from mato_loop_backend.agent.session_secrets import session_secrets
 from mato_loop_backend.agent.session_settings import apply_run_session_settings
 from mato_loop_backend.agent.subagents import (
@@ -343,6 +344,12 @@ async def execute_loop_body(
         if delegated:
             memory_state = memory_policy.EffectiveMemory(False, False, False)
         records = await cls._records(db, chat_session.id)
+        review_context = ""
+        from mato_loop_backend.agent.interaction_context import interaction_context, run_records
+        from mato_loop_backend.agent.session_execution import has_other_runs
+
+        if chat_session.parent_session_id is None:
+            records = run_records(records, run)
         context_timings = {"settingsAndHistoryMs": round((time.monotonic() - context_started_at) * 1000)}
         current_user = next((item for item in reversed(records) if item.role == "user"), None)
         if current_user is not None and current_user.id != provider_turn_message_id:
@@ -393,6 +400,17 @@ async def execute_loop_body(
             user_quota_bytes=instance_limits.user_quota_bytes,
             max_editable_text_bytes=instance_limits.max_editable_text_bytes,
         )
+        session_context_authorize = partial(
+            cls._authorize, db, run, chat_session,
+            ToolCall(id=f"session-context:{run.id}", name="session_state", arguments={"operation": "read"}),
+            root_files=root_files, check_only=True,
+        )
+        session_contexts = await prepare_session_contexts(
+            db, chat_session, records, run_id=run.id, profile=_active_agent_profile,
+            trust_level=model_trust_level, authorize=session_context_authorize,
+        )
+        if chat_session.parent_session_id is None and has_other_runs(run.id, chat_session.id):
+            records, review_context = await interaction_context(db, chat_session, run, records)
         memory_started = time.monotonic()
         memory_turn = await prepare_memory_context(
             db, chat_session, records,
@@ -582,9 +600,10 @@ async def execute_loop_body(
                 system_prompt=system_prompt,
                 pdf_context=pdf_context,
                 runtime_instructions=profile_instructions,
-                runtime_context=tool_budget_prompt(
+                session_contexts=session_contexts,
+                runtime_context="\n\n".join(part for part in (review_context, tool_budget_prompt(
                     None if tool_call_limit is None else max(0, tool_call_limit - tool_calls_used),
-                ),
+                )) if part) or None,
                 schemas=schemas,
                 offered_tool_names=frozenset(effective_toolset.tools if effective_toolset else ()),
                 tool_snapshots=collect_tool_snapshots(

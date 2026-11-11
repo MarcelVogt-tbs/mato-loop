@@ -15,6 +15,7 @@ from mato_loop_backend.automations import (
     ACTIVE_STATUSES,
     AutomationError,
     AutomationService,
+    automation_next_run_at,
     runtime_snapshot,
 )
 from mato_loop_backend.db.session import get_db_session
@@ -79,6 +80,7 @@ class AutomationRequest(BaseModel):
     name: str = Field(min_length=1, max_length=240)
     task: str = Field(min_length=1, max_length=40_000)
     session_id: UUID | None = Field(default=None, alias="sessionId", strict=False)
+    model_id: UUID | None = Field(default=None, alias="modelId", strict=False)
     enabled: bool = True
     triggers: list[Literal["agent_response", "agent_error"]] = Field(default_factory=list, max_length=2)
     schedules: list[ScheduleRequest] = Field(max_length=50)
@@ -204,10 +206,7 @@ def _automation_status(
     item: Automation, active_run_status: str | None, *, archived: bool = False,
     last_run: AutomationLastRunResponse | None = None,
 ) -> AutomationStatusResponse:
-    next_at = min(
-        (schedule.next_run_at for schedule in item.schedules if schedule.enabled),
-        default=None,
-    ) if item.enabled and not archived else None
+    next_at = automation_next_run_at(item, archived=archived)
     return AutomationStatusResponse(
         id=item.id,
         revision=item.revision,
@@ -274,14 +273,15 @@ async def _automation_payload(
         .order_by(AutomationRun.created_at.desc(), AutomationRun.id.desc())
     )
     schedules = [_schedule_payload(schedule) for schedule in item.schedules]
-    effective_enabled = (
-        item.enabled and not await is_session_archived(db, execution_session)
-        and (bool(item.triggers) or any(schedule["enabled"] for schedule in schedules))
-    )
+    state = _automation_status(
+        item, active.status if active else None,
+        archived=await is_session_archived(db, execution_session),
+    ).effective_state
     payload = {
         "id": str(item.id),
         "name": item.name,
         "task": item.task,
+        "modelId": str(item.model_id) if item.model_id else None,
         "enabled": item.enabled,
         "triggers": item.triggers or [],
         "revision": item.revision,
@@ -292,20 +292,9 @@ async def _automation_payload(
         "lastRun": last_run.model_dump(mode="json", by_alias=True)
         if (last_run := (await _last_runs(db, [item.id])).get(item.id)) else None,
         "effectiveState": {
-            "enabled": effective_enabled,
-            "activeRunStatus": active.status if active else None,
-            "nextRunAt": (
-                min(
-                    (
-                        schedule["nextRunAt"]
-                        for schedule in schedules
-                        if schedule["enabled"]
-                    ),
-                    default=None,
-                )
-                if effective_enabled
-                else None
-            ),
+            "enabled": state.enabled,
+            "activeRunStatus": state.active_run_status,
+            "nextRunAt": state.next_run_at.isoformat() if state.next_run_at else None,
         },
         "createdAt": item.created_at.isoformat() if item.created_at else None,
         "updatedAt": item.updated_at.isoformat() if item.updated_at else None,
@@ -453,6 +442,7 @@ async def create_automation(
             enabled=payload.enabled,
             schedules=_schedule_drafts(payload),
             triggers=payload.triggers,
+            model_id=payload.model_id,
         )
     except AutomationError as exc:
         _raise(exc)
@@ -516,6 +506,7 @@ async def replace_automation(
             enabled=payload.enabled,
             schedules=_schedule_drafts(payload),
             triggers=payload.triggers,
+            model_id=payload.model_id,
         )
         await db.commit()
         return await _automation_payload(db, item)

@@ -32,6 +32,49 @@ IntegrationSettingsDocument = IntegrationSettings | UserIntegrationSettings
 ToolSettingsDocument = ToolSettings | UserToolSettings
 
 
+async def discover_integration_resources(db: AsyncSession, instance: IntegrationInstance) -> tuple:
+    """Discover and validate the same resource catalog for settings and consumers."""
+    import logging
+    import re
+
+    from mato_loop_backend.integrations.bookstack.adapter import BOOKSTACK_CREDENTIAL_KIND
+    from mato_loop_backend.integrations.caldav.service import discover_caldav_resources
+    from mato_loop_backend.integrations.contracts import IntegrationResource
+    from mato_loop_backend.integrations.mcp.adapter import MCP_CREDENTIAL_KIND
+    from mato_loop_backend.integrations.registry import integration_adapter
+    from mato_loop_backend.security import load_credential, read_credential
+
+    adapter = integration_adapter(instance.integration_type, instance.adapter_type)
+    if adapter is None or not adapter.resource_actions:
+        raise IntegrationSettingsError("integration.resourcePoliciesUnsupported")
+    if instance.integration_type == "calendar" and instance.adapter_type == "caldav":
+        return await discover_caldav_resources(db, instance)
+    try:
+        credential = None
+        if adapter.resource_loader is not None and instance.credential_id is not None:
+            record = await load_credential(db, instance.credential_id, owner_id=instance.owner_id, populate_existing=True)
+            expected_kind = {"bookstack": BOOKSTACK_CREDENTIAL_KIND, "sonobin": MCP_CREDENTIAL_KIND}.get(instance.adapter_type)
+            if record is None or expected_kind is not None and record.kind != expected_kind:
+                raise ValueError("missing or invalid integration credential")
+            credential = read_credential(record)
+        resources = await adapter.resources(instance, credential)
+        keys = set()
+        for resource in resources:
+            if (not isinstance(resource, IntegrationResource)
+                or not isinstance(resource.key, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,499}", resource.key) is None
+                or not isinstance(resource.label, str) or not 1 <= len(resource.label) <= 160
+                or resource.label != resource.label.strip()
+                or resource.group_key is not None and (not isinstance(resource.group_key, str)
+                    or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,499}", resource.group_key) is None)
+                or resource.key in keys):
+                raise ValueError("invalid integration resource")
+            keys.add(resource.key)
+        return resources
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Resource discovery for integration %s failed with %s", instance.id, type(exc).__name__)
+        raise IntegrationSettingsError("integration.resourceDiscoveryFailed") from exc
+
+
 def _clear_integration_policies(instance: IntegrationInstance) -> None:
     instance.permissions = IntegrationPermissions(tool_loading=instance.permissions.tool_loading)
     instance.profile_permissions = {

@@ -2396,11 +2396,11 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
     report = markdown_report(payload)
 
     assert payload["caseCount"] == len(CASES)
-    assert payload["semanticContractCount"] == 139
-    assert payload["contractCount"] == 394
+    assert payload["semanticContractCount"] == 141
+    assert payload["contractCount"] == 396
     assert "Cases: 255" in report
-    assert "Semantic contracts: 139" in report
-    assert "All inventory rows: 394" in report
+    assert "Semantic contracts: 141" in report
+    assert "All inventory rows: 396" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

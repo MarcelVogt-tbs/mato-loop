@@ -463,6 +463,7 @@ async def test_session_list_scopes_projects_and_standalone_sessions() -> None:
     assert "chat_sessions.project_id IS NULL" in str(
         standalone_db.execute.await_args.args[0]
     )
+    assert "NOT (EXISTS" in str(standalone_db.execute.await_args.args[0])
 
 
 async def test_failed_project_move_restores_the_session_tree(monkeypatch) -> None:
@@ -474,7 +475,7 @@ async def test_failed_project_move_restores_the_session_tree(monkeypatch) -> Non
         id=uuid4(), user_id=user.id, title="Move", project_id=source_project_id
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session.id, None, None, 0]
+    db.scalar.side_effect = [session.id, None, 0]
     db.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
     db.commit.side_effect = RuntimeError("commit failed")
     persisted_location = MagicMock()
@@ -516,8 +517,9 @@ async def test_standalone_project_move_preserves_managed_file_identity(monkeypat
     project_id = uuid4()
     session = ChatSession(id=uuid4(), user_id=user.id, title="Move")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session.id, None, project_id, 0]
+    db.scalar.side_effect = [session.id, project_id, 0]
     db.scalars.side_effect = [
+        MagicMock(all=MagicMock(return_value=[])),
         MagicMock(all=MagicMock(return_value=[])),
         MagicMock(all=MagicMock(return_value=[])),
     ]
@@ -553,7 +555,8 @@ async def test_project_move_rejects_files_referenced_by_another_session(monkeypa
     user = _user()
     session = ChatSession(id=uuid4(), user_id=user.id, title="Move", project_id=uuid4())
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session.id, None, None, 2]
+    db.scalar.side_effect = [session.id, None, 2]
+    db.scalars.return_value = MagicMock(all=lambda: [])
     storage = MagicMock()
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
     monkeypatch.setattr(
@@ -576,7 +579,8 @@ async def test_project_move_rejects_references_to_another_sessions_files(monkeyp
     user = _user()
     session = ChatSession(id=uuid4(), user_id=user.id, title="Move", project_id=uuid4())
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session.id, None, None, 1]
+    db.scalar.side_effect = [session.id, None, 1]
+    db.scalars.return_value = MagicMock(all=lambda: [])
     storage = MagicMock()
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: storage)
     monkeypatch.setattr(
@@ -1222,7 +1226,7 @@ async def test_session_payload_marks_latest_restart_error_retryable() -> None:
         role="user",
         content="Fortsetzen",
     )
-    failed_run = AgentRun(id=uuid4(), session_id=session.id, status="failed")
+    failed_run = AgentRun(id=uuid4(), session_id=session.id, status="failed", input_message_id=user_message.id)
     error_message = Message(
         id=uuid4(),
         session_id=session.id,
@@ -2882,6 +2886,7 @@ async def test_session_can_switch_to_public_model(monkeypatch) -> None:
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
     db.scalar.return_value = None
+    db.scalars.return_value = MagicMock(all=lambda: [])
 
     await update_session(
         session.id,
@@ -2904,6 +2909,7 @@ async def test_session_can_override_reasoning_effort() -> None:
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
     db.scalar.return_value = None
+    db.scalars.return_value = MagicMock(all=lambda: [])
 
     result = await update_session(
         session.id,
@@ -2931,6 +2937,7 @@ async def test_template_switch_replaces_session_overrides(monkeypatch) -> None:
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
     db.scalar.return_value = None
+    db.scalars.return_value = MagicMock(all=lambda: [])
 
     result = await update_session(session.id, SessionUpdateRequest(session_template_id=DEFAULT_TEMPLATE_ID), user, db)
 
@@ -2942,7 +2949,7 @@ async def test_template_switch_replaces_session_overrides(monkeypatch) -> None:
     }
 
 
-@pytest.mark.parametrize("field,revokes", [("message_size", False), ("agent_ids", True), ("agent_models", False), ("model_id", False)])
+@pytest.mark.parametrize("field,revokes", [("message_size", False), ("agent_ids", True), ("agent_models", False), ("model_id", False), ("assistant_context", False)])
 async def test_session_changes_preserve_grants_for_model_and_message_size(monkeypatch, field, revokes) -> None:
     from mato_loop_backend.settings.session_profiles import (
         ChatModelOverride,
@@ -2957,6 +2964,7 @@ async def test_session_changes_preserve_grants_for_model_and_message_size(monkey
     template = SessionTemplatesSettings().templates[1]
     profile = template.snapshot()
     session = ChatSession(id=uuid4(), user_id=user.id, title="Test", agent_profile_id=template.start_agent_id, model_config_id=model.id, memory_mode="disabled", session_profile=profile.model_dump(mode="json"))
+    session.session_profile["context_state"] = {"revision": 3, "blocks": [{"key": "keep", "text": "durable"}], "trust_level": "private"}
     payload = SessionUpdateRequest(model_id=model.id)
     if field == "model_id":
         session.model_config_id = None
@@ -2965,15 +2973,18 @@ async def test_session_changes_preserve_grants_for_model_and_message_size(monkey
             "message_size": "standard",
             "agent_ids": [template.start_agent_id],
             "agent_models": {template.start_agent_id: ChatModelOverride(model_id=model.id)},
+            "assistant_context": "disabled",
         }[field]})
         payload = SessionUpdateRequest(session_profile=profile)
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
     db.scalar.return_value = None
+    db.scalars.return_value = MagicMock(all=lambda: [])
 
     await update_session(session.id, payload, user, db)
 
     assert db.execute.await_count == int(revokes)
+    assert session.session_profile["context_state"]["revision"] == 3
 
 
 async def test_session_model_switch_ignores_stale_model_references(monkeypatch) -> None:
@@ -2998,6 +3009,7 @@ async def test_session_model_switch_ignores_stale_model_references(monkeypatch) 
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
     db.scalar.return_value = None
+    db.scalars.return_value = MagicMock(all=lambda: [])
 
     await update_session(session.id, SessionUpdateRequest(session_profile=profile), user, db)
 
@@ -3172,6 +3184,7 @@ async def test_changing_computer_preserves_terminal_preference(monkeypatch) -> N
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
     db.scalar.return_value = None
+    db.scalars.return_value = MagicMock(all=lambda: [])
     monkeypatch.setattr(service, "load_effective_ai", AsyncMock(return_value=AiSettings()))
     monkeypatch.setattr(service, "validate_execution_preferences", AsyncMock(return_value=(None, None)))
     monkeypatch.setattr(service, "add_directory_grant", AsyncMock())
@@ -3469,7 +3482,7 @@ async def test_project_cannot_change_during_active_run() -> None:
     )
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
-    db.scalar.return_value = uuid4()
+    db.scalars.return_value = MagicMock(all=lambda: [uuid4()])
 
     with pytest.raises(ApiError) as exc_info:
         await update_session(
@@ -3499,17 +3512,20 @@ async def test_model_change_preserves_active_run_settings(monkeypatch) -> None:
         session_profile={},
     )
     run = AgentRun(id=uuid4(), session_id=session_id, status="running")
+    waiting = AgentRun(id=uuid4(), session_id=session_id, status="waiting_approval")
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
-    db.scalar.return_value = run.id
+    db.scalars.return_value = MagicMock(all=lambda: [run.id, waiting.id])
     monkeypatch.setattr(AgentRuntime, "_session_settings", {})
-    monkeypatch.setattr(AgentRuntime, "_tasks", {run.id: SimpleNamespace(done=lambda: False)})
+    monkeypatch.setattr(AgentRuntime, "_tasks", {key: SimpleNamespace(done=lambda: False) for key in (run.id, waiting.id)})
     monkeypatch.setattr(service, "load_effective_ai", AsyncMock(return_value=AiSettings(providers=[provider], models=[model])))
     monkeypatch.setattr(routes, "_session_payload", AsyncMock(return_value={}))
 
     await update_session(session_id, SessionUpdateRequest(model_id=model.id), user, db)
     await update_session(session_id, SessionUpdateRequest(reasoning_effort="high"), user, db)
     saved_model = session.model_config_id
+    apply_run_session_settings(session, waiting)
+    assert session.model_config_id is None
     apply_run_session_settings(session, run)
 
     assert (saved_model, session.model_config_id, session.reasoning_effort, inspect(session).attrs.model_config_id.history.has_changes()) == (model.id, None, None, False)

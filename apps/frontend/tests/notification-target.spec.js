@@ -18,7 +18,10 @@ describe('notification target navigation', () => {
     })
   })
 
-  it('opens the exact Dreaming proposal', () => {
+  it('opens the approval chat and retains the legacy resolver route', () => {
+    expect(notificationTargetRoute({ type: 'memoryApproval', approvalId: 'approval-1', sessionId: 'chat-1' })).toEqual({
+      name: 'chat', query: { session: 'chat-1' }
+    })
     expect(notificationTargetRoute({ type: 'memoryApproval', approvalId: 'approval-1' })).toEqual({
       name: 'settings-memory', query: { tab: 'dreaming', approval: 'approval-1' }
     })

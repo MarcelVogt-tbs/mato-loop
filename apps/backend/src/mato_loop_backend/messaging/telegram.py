@@ -26,6 +26,8 @@ from mato_loop_backend.agent.activity import reasoning_activity_label, run_activ
 from mato_loop_backend.agent.question_decisions import QuestionDecisionError
 from mato_loop_backend.agent.run_contracts import AgentRunError
 from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.assistant import ensure_personal_chat
+from mato_loop_backend.automations import AutomationError
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.events import run_events
 from mato_loop_backend.files.storage import SessionStorage, SessionStorageError
@@ -618,10 +620,7 @@ async def _download_media(
 async def _new_session(
     db: AsyncSession,
     endpoint: MessagingEndpoint,
-    content: str,
-    attachments: list[AttachmentInput],
-    run_id: UUID,
-) -> AgentRun:
+) -> ChatSession:
     item = ChatSession(
         user_id=endpoint.user_id,
         title="Neue Session",
@@ -634,16 +633,7 @@ async def _new_session(
     storage = SessionStorage()
     try:
         await asyncio.to_thread(storage.provision, item.id, user_id=item.user_id)
-        return await AgentRuntime.start(
-            db,
-            item,
-            content,
-            run_id=run_id,
-            attachments=attachments,
-            source_type="endpoint",
-            source_provider="telegram",
-            source_endpoint_id=endpoint.id,
-        )
+        return item
     except BaseException:
         await db.rollback()
         try:
@@ -673,7 +663,8 @@ async def _command(
             + "\n".join(f"/{item.name.replace('-', '_')} - {item.description}" for item in registered_commands())
         )
     elif command == "/new":
-        endpoint.current_session_id = None
+        session = await _new_session(db, endpoint)
+        endpoint.current_session_id = session.id
         response = "Die nächste Nachricht startet eine neue Session."
     elif command == "/sessions":
         cutoff = datetime.now(UTC) - SESSION_MAX_AGE
@@ -732,7 +723,7 @@ async def _command(
         response = (
             f"Aktuelle Session: {session.title} ({str(session.id)[:8]})"
             if session is not None and session.user_id == endpoint.user_id
-            else "Keine Session ausgewählt. Die nächste Nachricht startet eine neue."
+            else "Keine Session ausgewählt. Die nächste Nachricht öffnet deinen persönlichen Chat."
         )
     elif command == "/stop":
         run_id = (
@@ -1421,34 +1412,37 @@ async def process_inbox(inbox_id: UUID) -> UUID | None:
             from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
 
             try:
+                command = parse_command(content)
                 selected_session_id = (
                     inbox.session_id or endpoint.current_session_id
-                    if parse_command(content) is not None else endpoint.current_session_id
+                    if command is not None else endpoint.current_session_id
                 )
-                if parse_command(content) is not None and selected_session_id is None:
+                if command is not None and selected_session_id is None:
                     raise TelegramServiceError("git.sessionRequired")
                 session = await get_owned_session(
                     db, selected_session_id, endpoint.user_id
                 ) if selected_session_id else None
-            except SessionServiceError as exc:
+                if selected_session_id is not None and (
+                    session is None or session.user_id != endpoint.user_id
+                    or session.session_type != "chat"
+                ):
+                    raise TelegramServiceError("session.notFound")
+                if selected_session_id is None:
+                    session = await ensure_personal_chat(db, endpoint.user_id)
+            except (AutomationError, SessionServiceError) as exc:
                 raise TelegramServiceError(exc.code) from exc
-            if session is None or session.user_id != endpoint.user_id or session.session_type != "chat":
-                if parse_command(content) is not None:
-                    raise TelegramServiceError("git.sessionRequired")
-                run = await _new_session(db, endpoint, content, attachments, inbox.id)
-            else:
-                if parse_command(content) is not None:
-                    inbox.session_id = session.id
-                run = await AgentRuntime.start(
-                    db,
-                    session,
-                    content,
-                    run_id=inbox.id,
-                    attachments=attachments,
-                    source_type="endpoint",
-                    source_provider="telegram",
-                    source_endpoint_id=endpoint.id,
-                )
+            if command is not None:
+                inbox.session_id = session.id
+            run = await AgentRuntime.start(
+                db,
+                session,
+                content,
+                run_id=inbox.id,
+                attachments=attachments,
+                source_type="endpoint",
+                source_provider="telegram",
+                source_endpoint_id=endpoint.id,
+            )
             allowed = await channel_provider_allowed(db, "telegram", lock=True)
             user = await db.scalar(
                 select(UserAccount)

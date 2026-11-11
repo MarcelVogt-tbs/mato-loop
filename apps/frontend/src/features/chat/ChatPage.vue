@@ -1028,12 +1028,35 @@ async function changeDraftProject(projectId) {
   }
 }
 
+let routeLoadVersion = 0
+// Same-session deep links are consumed after loading; draft route changes still invalidate it.
+watch(() => routeSessionId.value || route.fullPath, () => { routeLoadVersion += 1 }, { flush: 'sync' })
+
 async function loadRouteSession() {
+  const version = ++routeLoadVersion
+  const owner = chat.draftOwnerUserId
+  const isCurrent = () => version === routeLoadVersion && owner === chat.draftOwnerUserId
   const sessionId = routeSessionId.value
   await composer.value?.prepareAudioNavigation?.()
-  if (routeSessionId.value !== sessionId) return
+  if (!isCurrent()) return
+  if (!sessionId && !Object.hasOwn(route.query, 'session')
+    && !newSessionRequested.value && !Object.hasOwn(route.query, 'project')) {
+    await chat.loadSession(null)
+    if (!isCurrent()) return
+    chat.loading = true
+    try {
+      const personalSessionId = await chat.ensurePersonalChat()
+      if (!isCurrent() || !personalSessionId) return
+      await router.replace({ name: 'chat', query: { ...route.query, session: personalSessionId } })
+    } catch (error) {
+      if (isCurrent()) chat.loadError = error
+    } finally {
+      if (isCurrent()) chat.loading = false
+    }
+    return
+  }
   const session = await chat.loadSession(sessionId).catch(() => null)
-  if (routeSessionId.value !== sessionId) return
+  if (!isCurrent()) return
   if (session?.readOnly && session.parentSessionId) {
     await router.replace({ name: 'chat', query: { session: session.parentSessionId, subagent: session.id } })
     return
@@ -1409,10 +1432,14 @@ watch(showHome, async (shown) => {
   await nextTick()
   if (scrollTarget) scrollTarget.scrollTop = 0
 })
-watch(routeSessionId, (id, previousId) => {
+let previousRouteSessionId
+watch(() => route.fullPath, () => {
+  const id = routeSessionId.value
+  const previousId = previousRouteSessionId
+  previousRouteSessionId = id
   approvalDraftPreview.value = null
   void subagents.loadChildren(id)
-  if (previousId === null && id && chat.current?.id === id) return
+  if (id && (id === previousId || previousId === null && chat.current?.id === id)) return
   void loadRouteSession()
 }, { immediate: true })
 watch(routeProjectId, () => void reconcileRouteProject())
@@ -1495,6 +1522,7 @@ onMounted(() => {
   executionAgents.startPolling()
 })
 onBeforeUnmount(() => {
+  routeLoadVersion += 1
   draftProjectCreationContext = null
   approvalDraftPreview.value = null
   void subagents.loadChildren(null)

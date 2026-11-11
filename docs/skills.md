@@ -60,9 +60,41 @@ bundled instructions changes the active skill prefix for subsequent runs. Runnin
 catalogs and historical requests remain fixed.
 
 Shipped defaults define their initial enabled state individually: `writing-style`
-starts enabled, while `weather` starts disabled. They support reset and cannot be
+starts enabled, while `weather` and `assistant` start disabled. They support reset and cannot be
 deleted. Personal skills may be disabled instance-wide, with the existing administrator exception.
 Back up the database and `/data` together; the database alone does not contain skills.
+
+The bundled `assistant` skill (ID `00000000-0000-4000-8000-000000000103`)
+guides setup and scheduled reviews. Setup enables it for the user and creates an
+ordinary visible session with a disabled automation. The automation owns enabled
+state, schedules, and model selection. Assistant settings retain only session and automation IDs.
+`GET /assistant` returns those IDs, `initialized`, `enabled`, and an optional `errorCode`;
+`POST /assistant/setup` ensures the stable binding and enables the personal skill. There
+is no assistant configuration or context mutation API and no `customize_matoloop` area.
+
+The setup command guides the user to the assigned session. The model publishes
+`references/preferences.json` in the personal skill through ordinary `edit_skill` or
+`save_skill`: a JSON object with integer `version: 1`, a nonempty `sources` list of objects,
+and optional string `instructions`. Source objects hold user-chosen normal tool/integration
+references and scope, not host-defined source types or filters. The host does not generate
+preferences. Initialization requires this valid published file in the owner's enabled
+personal skill. Activation, enqueueing, and execution of the assigned automation check
+initialization; pausing remains possible. Scheduling starts disabled with a 15-minute cron;
+enable it through normal automation controls after permission preparation.
+
+Reviews use ordinary discovered tools directly, including their pagination and permission
+checks.
+Working style is plain text in `instructions`, not a separate mode or permission.
+The assistant uses the shared [runtime interaction lifecycle](harness.md#runtime-and-coordinator),
+including nonblocking automation checks during open approvals/questions. It has no
+separate admission, action-ownership or permission path. Unanswered requests are not consent.
+
+Notes use `session_state` context; processed
+source IDs/versions use `message_metadata` namespace `assistant`, with successful
+tool-message references. These annotations are not proof of external effects or
+authorization. There is no assistant worker or separate source adapter.
+Cross-chat target-session permission preflight is not implemented; prepare permissions
+in the assigned assistant session. Setup does not copy grants or change tool policies.
 
 ## Import and editing
 

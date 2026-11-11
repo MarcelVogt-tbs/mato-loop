@@ -12,6 +12,7 @@ from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import (
     JSON,
+    String,
     and_,
     delete,
     func,
@@ -57,6 +58,7 @@ from mato_loop_backend.models import (
     PermissionGrant,
     Project,
     QuestionRequest,
+    SettingRecord,
     TitleGenerationStatus,
     UserAccount,
 )
@@ -413,6 +415,12 @@ async def session_detail_payload(
         .limit(1)
     )
     active_run = latest_run if latest_run and latest_run.status in ACTIVE_RUN_STATUSES else None
+    if active_run is None or active_run.status in {"waiting_approval", "waiting_input"}:
+        active_run = await db.scalar(select(AgentRun).where(
+            AgentRun.session_id == item.id, AgentRun.parent_run_id.is_(None),
+            AgentRun.status.in_(ACTIVE_RUN_STATUSES),
+        ).order_by(AgentRun.status.in_(("running", "queued")).desc(),
+                   AgentRun.created_at.desc(), AgentRun.id.desc()).limit(1))
     retry_message_id = None
     if item.parent_session_id is None and active_run is None and messages:
         retry_source = await ChatHistoryService.retry_source(
@@ -983,6 +991,11 @@ async def list_sessions(
             ChatSession.user_id == user_id,
             ChatSession.session_type == "chat",
             ChatSession.parent_session_id.is_(None),
+            ~select(SettingRecord.id).where(
+                SettingRecord.user_id == user_id,
+                SettingRecord.key == "assistant",
+                SettingRecord.data["session_id"].astext == ChatSession.id.cast(String),
+            ).exists(),
         )
     )
     if project_id is not None:
@@ -1060,6 +1073,7 @@ async def create_session(
     session_serializer: PayloadSerializer,
     message_serializer: MessageSerializer,
     duplicate_submission,
+    commit: bool = True,
 ) -> dict[str, Any]:
     duplicate = await duplicate_submission(db, payload.run_id, user.id)
     if duplicate is not None:
@@ -1095,6 +1109,8 @@ async def create_session(
 
     template = await load_template(db, user.id, payload.session_template_id or (project.default_session_template_id if project else None))
     configuration = payload.session_profile or template.snapshot()
+    # Initial client notes cannot self-declare public classification or a host revision.
+    configuration.context_state = configuration.context_state.model_copy(update={"trust_level": "private", "revision": 0})
     configuration.template_id = template.id
     configuration.worktrees_enabled = template.worktrees_enabled
     agent_profile_id = command_profile_id(command, payload.agent_profile_id or template.start_agent_id)
@@ -1207,7 +1223,10 @@ async def create_session(
     try:
         await asyncio.to_thread(session_storage.provision, item_id, item_project_id, user_id=user.id)
         if content is None:
-            await ChatHistoryService._commit(db)
+            if commit:
+                await ChatHistoryService._commit(db)
+            else:
+                await db.flush()
         else:
             run = await AgentRuntime.start(
                 db,
@@ -1555,24 +1574,23 @@ async def update_session(
         else item.agent_profile_id
     )
     original_settings = None
-    active_run_id = None
+    active_run_ids = []
     if fields & policy_fields:
         from mato_loop_backend.sessions.archive import is_session_archived
 
         if await is_session_archived(db, item):
             raise SessionServiceError(409, "session.archived")
-        active_run_id = await db.scalar(
+        active_run_ids = list((await db.scalars(
             select(AgentRun.id).where(
                 AgentRun.session_id == session_id,
                 AgentRun.parent_run_id.is_(None),
                 AgentRun.status.in_(ACTIVE_RUN_STATUSES),
             )
-        )
-        if active_run_id is not None:
+        )).all())
+        if active_run_ids:
             if "project_id" in fields:
                 raise SessionServiceError(409, "session.runAlreadyActive")
-            if active_run_id not in AgentRuntime._session_settings:
-                original_settings = RunSessionSettings.model_validate(item)
+            original_settings = RunSessionSettings.model_validate(item)
     source_project_id = item.project_id
     target_project_id = (
         payload.project_id if "project_id" in fields else source_project_id
@@ -1605,8 +1623,8 @@ async def update_session(
     ) or (
         "session_profile" in fields
         and payload.session_profile is not None
-        and payload.session_profile.model_dump(exclude={"message_size", "agent_models"})
-        != SessionProfileSnapshot.model_validate(item.session_profile or {}).model_dump(exclude={"message_size", "agent_models"})
+        and payload.session_profile.model_dump(exclude={"message_size", "agent_models", "context_state", "assistant_context"})
+        != SessionProfileSnapshot.model_validate(item.session_profile or {}).model_dump(exclude={"message_size", "agent_models", "context_state", "assistant_context"})
     ):
         await db.execute(
             delete(PermissionGrant).where(
@@ -1636,7 +1654,11 @@ async def update_session(
             model_id=payload.model_id if "model_id" in fields else item.model_config_id,
             previous=SessionProfileSnapshot.model_validate(item.session_profile or {}),
         )
-        item.session_profile = payload.session_profile.model_dump(mode="json")
+        # Context changes use revision-checked state, not profile metadata.
+        # update_session holds the owner-bound session row lock before profile effects.
+        await db.refresh(item, attribute_names=["session_profile"])
+        stored_context = SessionProfileSnapshot.model_validate(item.session_profile or {}).context_state
+        item.session_profile = {**payload.session_profile.model_dump(mode="json"), "context_state": stored_context.model_dump(mode="json")}
     if fields & {"session_profile", "agent_profile_id"}:
         from mato_loop_backend.settings.effective import session_agent_allowed
 
@@ -1795,9 +1817,10 @@ async def update_session(
             item.project_id = target_project_id
         await db.flush()
         await db.refresh(item)
-        active_task = AgentRuntime._tasks.get(active_run_id)
-        if original_settings is not None and active_task is not None and not active_task.done():
-            AgentRuntime._session_settings.setdefault(active_run_id, original_settings)
+        for settings_run_id in active_run_ids:
+            active_task = AgentRuntime._tasks.get(settings_run_id)
+            if original_settings is not None and active_task is not None and not active_task.done():
+                AgentRuntime._session_settings.setdefault(settings_run_id, original_settings)
         commit_task = asyncio.create_task(db.commit())
         await asyncio.shield(commit_task)
         await finalize_storage()
@@ -2179,6 +2202,9 @@ async def delete_session(
                 await db.delete(automation)
         if automation_mode == "deleteAutomations":
             await db.flush()
+        from mato_loop_backend.assistant import clear_assistant_binding
+
+        await clear_assistant_binding(db, user_id, session_ids=[session_id])
         await db.delete(item)
         commit_task = asyncio.create_task(db.commit())
         await asyncio.shield(commit_task)

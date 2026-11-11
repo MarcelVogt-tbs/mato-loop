@@ -1,4 +1,5 @@
 import asyncio
+import json
 import runpy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -39,7 +40,7 @@ from mato_loop_backend.notifications import (
     NotificationError,
     NotificationService,
 )
-from mato_loop_backend.web_push import web_push_payload
+from mato_loop_backend.web_push import WebPushMemoryApprovalTarget, web_push_payload
 
 
 def _user() -> UserAccount:
@@ -195,9 +196,13 @@ async def test_approval_notice_preserves_snapshot_and_links_to_its_decision_cont
     draft = create.await_args.args[1]
     item = Notification(id=uuid4(), **draft.model_dump(), created_at=approval.created_at)
     payload = _notification_payload(item).model_dump(mode="json", by_alias=True)
+    if request_type == "memory_change":
+        assert WebPushMemoryApprovalTarget.model_validate_json(
+            json.dumps(payload["target"])
+        ).model_dump(mode="json", by_alias=True) == payload["target"]
     assert (payload["title"], payload["body"], payload["target"]) == (
         approval.title, approval.summary,
-        {"type": "memoryApproval", "approvalId": str(approval.id)} if request_type == "memory_change"
+        {"type": "memoryApproval", "approvalId": str(approval.id), "sessionId": str(approval.session_id)} if request_type == "memory_change"
         else {"type": "session", "sessionId": str(approval.session_id)},
     )
 

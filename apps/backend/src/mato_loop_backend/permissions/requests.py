@@ -207,7 +207,10 @@ async def request_approval(
         )
         if notification_id is not None:
             await NotificationService.deliver_after_commit(notification_id)
-        decision = await asyncio.shield(waiter)
+        from mato_loop_backend.agent.session_execution import interaction_wait
+
+        async with interaction_wait(run_id):
+            decision = await asyncio.shield(waiter)
     except asyncio.CancelledError:
         await db.rollback()
         current = await db.get(ApprovalRequest, approval_id)

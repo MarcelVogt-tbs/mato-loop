@@ -28,6 +28,7 @@
               <AppSelect :model-value="form.agentIds" outlined dense multiple use-chips emit-value map-options label="Verfügbare Agenten" :options="agentOptions" :disable="store.saving" :rules="[(value) => value?.length > 0 || 'Mindestens einen Agenten auswählen.']" @update:model-value="setAgents" />
               <AppSelect v-model="form.startAgentId" outlined dense emit-value map-options label="Startagent" :options="agentOptions.filter((item) => form.agentIds?.includes(item.value))" :disable="store.saving" />
               <AppSelect v-model="form.memoryMode" outlined dense emit-value map-options label="Memory" :options="memoryOptions" :disable="store.saving" />
+              <AppSelect v-model="form.assistantContext" outlined dense emit-value map-options label="Assistenzkontext" :options="assistantContextOptions" :disable="store.saving" />
               <AppSelect v-model="form.messageSize" outlined dense emit-value map-options label="Nachrichtengröße" :options="[{ label: 'Standard', value: 'standard' }, { label: 'Klein', value: 'small' }]" hint="Klein reduziert die Schriftgröße und die Abstände der Nachrichten sowie die Schriftgröße im Eingabefeld am Desktop." persistent-hint :disable="store.saving" />
               <div>
                 <q-toggle v-model="form.worktreesEnabled" label="Worktrees verwenden" :disable="store.saving" />
@@ -77,6 +78,7 @@ const blocked = computed(() => !ready.value || failed.value || store.loading || 
 const agentOptions = computed(() => agents.agents.filter((agent) => !admin || agent.scope === 'instance').map((agent) => ({ label: agent.name, value: agent.id })))
 const defaults = computed(() => ({ modelId: models.effective.defaultModelId, reasoningEffort: models.effective.reasoningEffort }))
 const memoryOptions = [{ label: 'Vollständig', value: 'full' }, { label: 'Nur lesen', value: 'read_only' }, { label: 'Deaktiviert', value: 'disabled' }]
+const assistantContextOptions = [{ label: 'Vom Agenten übernehmen', value: null }, { label: 'Automatisch', value: 'automatic' }, { label: 'Bei Nachfrage', value: 'on_demand' }, { label: 'Deaktiviert', value: 'disabled' }]
 function setAgents(agentIds) {
   Object.assign(form.value, { agentIds, agentModels: Object.fromEntries(Object.entries(form.value.agentModels || {}).filter(([id]) => agentIds.includes(id))), ...(!agentIds.includes(form.value.startAgentId) ? { startAgentId: agentIds[0] || null } : {}) })
 }
@@ -95,6 +97,7 @@ async function load() {
 }
 function edit(item) {
   form.value = item ? JSON.parse(JSON.stringify(item)) : { id: randomUuid(), name: '', agentIds: [agents.defaultAgentProfileId], startAgentId: agents.defaultAgentProfileId, memoryMode: 'full', messageSize: 'standard', worktreesEnabled: false, modelId: null, reasoningEffort: null, agentModels: {} }
+  form.value.assistantContext ??= null
   delete form.value.scope
   saved.value = JSON.stringify(form.value); dialogOpen.value = true
 }

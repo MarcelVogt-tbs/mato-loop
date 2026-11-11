@@ -736,7 +736,8 @@ async def test_telegram_voice_download_preserves_original_and_marks_recording(
     assert attachments[0].metadata == {"voiceMessage": True}
 
 
-async def test_telegram_forwards_voice_attachment_and_unchanged_text(monkeypatch) -> None:
+@pytest.mark.parametrize("binding", ["selected", "personal", "missing", "archived"])
+async def test_telegram_forwards_voice_attachment_and_unchanged_text(monkeypatch, binding) -> None:
     session = ChatSession(
         id=uuid4(), user_id=uuid4(), title="Test", session_type="chat"
     )
@@ -772,10 +773,18 @@ async def test_telegram_forwards_voice_attachment_and_unchanged_text(monkeypatch
     )
     run = AgentRun(id=inbox.id, session_id=session.id, input_message_id=uuid4())
     db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = [inbox, endpoint, None, session]
-    db.scalar.side_effect = [user, endpoint, None, user, endpoint, inbox]
+    if binding == "personal":
+        endpoint.current_session_id = None
+        db.get.side_effect = [inbox, endpoint, None]
+        db.scalar.side_effect = [user, endpoint, user, endpoint, inbox]
+    else:
+        db.get.side_effect = [inbox, endpoint, None, None if binding == "missing" else session, inbox, endpoint]
+        db.scalar.side_effect = [user, endpoint, None, user, endpoint, inbox]
 
     start = AsyncMock(return_value=run)
+    if binding == "archived":
+        start.side_effect = telegram.AgentRunError("session.archived")
+    personal_chat = AsyncMock(return_value=session)
     attachments = [AttachmentInput(
         b"original", "audio/ogg", "voice.ogg", "audio", {"voiceMessage": True}
     )]
@@ -787,10 +796,33 @@ async def test_telegram_forwards_voice_attachment_and_unchanged_text(monkeypatch
         telegram, "_download_media", AsyncMock(return_value=attachments)
     )
     monkeypatch.setattr(telegram.AgentRuntime, "start", start)
+    monkeypatch.setattr(telegram, "ensure_personal_chat", personal_chat)
 
-    assert await telegram.process_inbox(inbox.id) == run.id
+    result = await telegram.process_inbox(inbox.id)
+    if binding in {"missing", "archived"}:
+        assert inbox.error_code == ("session.notFound" if binding == "missing" else "session.archived")
+        personal_chat.assert_not_awaited()
+        return
+    assert result == run.id
     assert start.await_args.args[2] == "Bitte"
     assert start.await_args.kwargs["attachments"] is attachments
+    assert start.await_args.kwargs["source_endpoint_id"] == endpoint.id
+    if binding == "personal":
+        personal_chat.assert_awaited_once_with(db, endpoint.user_id)
+    else:
+        personal_chat.assert_not_awaited()
+
+
+async def test_telegram_new_selects_a_separate_chat(monkeypatch) -> None:
+    db = AsyncMock(spec=AsyncSession)
+    session = ChatSession(id=uuid4())
+    endpoint = MessagingEndpoint(id=uuid4(), current_session_id=uuid4())
+    inbox = MessagingInbox(id=uuid4(), payload={"chatId": "789"})
+    monkeypatch.setattr(telegram, "_new_session", AsyncMock(return_value=session))
+
+    await telegram._command(db, inbox, endpoint, "/new")
+
+    assert endpoint.current_session_id == session.id
 
 
 async def test_telegram_progress_target_copies_state_before_rollback(monkeypatch) -> None:

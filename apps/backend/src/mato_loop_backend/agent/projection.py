@@ -527,6 +527,7 @@ def message_dict(
             for call in tool_calls
         ]
     provider_data.pop("_matoloop", None)
+    provider_data.pop("agent_metadata", None)
     provider_data = _model_provider_file_roots(provider_data, tool_results)
     # Generated protected artifacts are for the user, not a model image or readable reference.
     visible_attachments = [
@@ -711,6 +712,7 @@ def _projection_messages(
     *,
     memory_context: str | None = None,
     memory_contexts: dict[UUID, str] | None = None,
+    session_contexts: dict[UUID, str] | None = None,
     tool_snapshots: list[dict[str, Any]] | None = None,
     tool_snapshot_characters: int = 8_000,
     runtime_instructions: str = "",
@@ -772,6 +774,7 @@ def _projection_messages(
     tool_names = _tool_names_by_message_id(source_records)
     tool_results_by_message: dict[UUID, dict[str, Message]] = {}
     call_owners: dict[str, UUID] = {}
+    live_result_ids: set[UUID] = set()
     for record in available_records or records:
         if record.role == "assistant":
             for call in record.tool_calls or []:
@@ -780,6 +783,8 @@ def _projection_messages(
         elif record.role == "tool" and record.tool_call_id in call_owners:
             owner = call_owners.pop(record.tool_call_id)
             tool_results_by_message.setdefault(owner, {})[record.tool_call_id] = record
+            if any(call.get("id") == record.tool_call_id for call in (live_tool_calls or {}).get(owner, [])):
+                live_result_ids.add(record.id)
     reader_sources, original_references = _tool_result_read_metadata(source_records)
     latest_user_id = next(
         (item.id for item in reversed(records) if item.role == "user"),
@@ -849,6 +854,10 @@ def _projection_messages(
             projected["image_reference_offset"] = len(memory_prefix)
             projected["content"] = memory_prefix + projected["content"]
             previous_memory_context = turn_memory
+        if item.role == "user" and (saved_context := (session_contexts or {}).get(item.id)):
+            prefix = saved_context + "\n\n"
+            projected["content"] = prefix + projected["content"]
+            projected["image_reference_offset"] = projected.get("image_reference_offset", 0) + len(prefix)
         if live_tool_calls is not None and item.id in live_tool_calls:
             projected["tool_calls"] = _model_tool_calls(live_tool_calls[item.id])
         if item.role == "assistant":
@@ -887,6 +896,8 @@ def _projection_messages(
                     tool_name,
                     str(projected.get("content") or ""),
                     target_trust_level,
+                    source_trust_level=item.trust_level,
+                    authorized_live=item.id in live_result_ids,
                     available_secret_references=available_secret_references,
                 )
             projected["content"] = _model_file_tool_result(projected["content"])
@@ -1485,21 +1496,15 @@ def _limit_tool_output_tokens(
 
 
 def _tool_calls_by_message_id(records: list[Message]) -> dict[UUID, dict[str, Any]]:
-    calls: dict[UUID, dict[str, Any]] = {}
-    active_calls: dict[str, dict[str, Any]] = {}
-    for record in records:
-        if record.role == "assistant":
-            active_calls = {
-                str(call["id"]): call
-                for call in (record.tool_calls or [])
-                if call.get("id")
-            }
-        elif record.role == "tool" and record.tool_call_id:
-            if call := active_calls.get(record.tool_call_id):
-                calls[record.id] = call
-        else:
-            active_calls = {}
-    return calls
+    from mato_loop_backend.agent.interaction_context import tool_batches
+
+    _, results = tool_batches(records)
+    return {
+        records[result].id: call
+        for (batch, call_id), result in results.items()
+        for call in records[batch].tool_calls or []
+        if call.get("id") == call_id
+    }
 
 
 def _tool_names_by_message_id(records: list[Message]) -> dict[UUID, str]:
@@ -1553,6 +1558,7 @@ def _tool_result_page(
 ) -> dict[str, Any]:
     content = _target_tool_result(
         tool_name, message.content, readable_by,
+        source_trust_level=message.trust_level,
         available_secret_references=available_secret_references,
     )
     content = _sanitize_tool_result_reference_fields(_model_file_tool_result(content))
@@ -1611,12 +1617,29 @@ def _target_tool_result(
     readable_by: TrustLevel,
     *,
     depth: int = 0,
+    source_trust_level: str | None = None,
+    authorized_live: bool = False,
     available_secret_references: set[str] | None = None,
 ) -> str:
     if tool_name is None:
         tool_name = _inferred_tool_name(content)
     if tool_name == "secret_input" and available_secret_references is not None:
         return model_secret_references(content, available_secret_references)
+    if tool_name in {"session_state", "message_metadata"} and readable_by == TrustLevel.PUBLIC and not authorized_live:
+        # Trust comes from the persisted host record, never model-authored JSON.
+        # Legacy results may predate host trust stamping; labels can only restrict.
+        try:
+            payload = json.loads(content)
+            if tool_name == "session_state":
+                legacy_private = payload.get("trust_level") != "public"
+            else:
+                entries = [payload, *payload.get("messages", [])]
+                legacy_private = any(value.get("trustLevel") != "public"
+                                     for entry in entries for value in entry.get("namespaces", {}).values())
+        except (ValueError, TypeError, AttributeError):
+            legacy_private = True
+        if source_trust_level != TrustLevel.PUBLIC.value or legacy_private:
+            return json.dumps({"redactedPrivateContext": True})
     if tool_name in {"memory_retrieve", "memory_browse"}:
         return _target_memory_result(content, readable_by)
     if tool_name == "context_search":

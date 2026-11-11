@@ -107,10 +107,23 @@ class ChatHistoryService:
         ):
             return None
         user_index = next(
-            (index for index in range(len(messages) - 2, -1, -1) if messages[index].role == "user"),
+            (index for index, message in enumerate(messages)
+             if message.id == failed_run.input_message_id and message.role == "user"),
             None,
         )
-        return (failed_run, user_index) if user_index is not None else None
+        if user_index is None:
+            return None
+        # Retry deletes a suffix. Never erase another run's input or output.
+        for message in messages[user_index + 1:]:
+            metadata = (message.provider_data or {}).get("_matoloop", {})
+            if (
+                metadata.get("runId") not in (None, str(failed_run.id))
+                or message.error_run_id not in (None, failed_run.id)
+                or message.role == "user"
+                and metadata.get("continuationRunId") != str(failed_run.id)
+            ):
+                return None
+        return failed_run, user_index
 
     @classmethod
     async def _lock_after_cancelling_active_run(
@@ -118,14 +131,13 @@ class ChatHistoryService:
     ) -> ChatSession:
         for _attempt in range(3):
             await cls._owned_session(db, session_id, user_id, for_update=False)
-            active_run = await cls._active_run(db, session_id)
-            if active_run is not None:
-                run_id = active_run.id
-                await db.rollback()
-                await AgentRuntime.cancel_and_wait(run_id)
-                continue
-
+            run_ids = list((await db.scalars(select(AgentRun.id).where(
+                AgentRun.session_id == session_id,
+                AgentRun.parent_run_id.is_(None),
+                AgentRun.status.in_(_ACTIVE_RUN_STATUSES),
+            ))).all())
             await db.rollback()
+            await asyncio.gather(*(AgentRuntime.cancel_and_wait(run_id) for run_id in run_ids))
             await AgentRuntime.cancel_descendants(session_id)
             session = await cls._owned_session(db, session_id, user_id)
             if await cls._active_run(db, session_id) is None:

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { toRaw } from 'vue'
+import { api } from 'src/boot/axios'
 import { useApprovalStore } from 'src/stores/approvals'
 import { useQuestionStore } from 'src/stores/questions'
 import { releaseAttachmentDrafts } from 'src/features/chat/attachments'
@@ -18,6 +19,7 @@ export const useChatStore = defineStore('chat', {
     sessionCatalogVersion: 0,
     sessionsProjectId: null,
     current: null,
+    personalChatSessionId: null,
     sessionDetails: [],
     loading: false,
     running: false,
@@ -142,6 +144,14 @@ export const useChatStore = defineStore('chat', {
     }
   },
   actions: {
+    async ensurePersonalChat() {
+      if (this.personalChatSessionId) return this.personalChatSessionId
+      const owner = this.draftOwnerUserId
+      const { data } = await api.post('/assistant/chat')
+      if (this.draftOwnerUserId !== owner) return null
+      this.personalChatSessionId = data.sessionId
+      return data.sessionId
+    },
     ensureSessionList(projectId = null) {
       const scope = sessionScopeKey(projectId)
       if (!this.sessionLists[scope]) this.sessionLists[scope] = emptySessionList()
@@ -176,6 +186,7 @@ export const useChatStore = defineStore('chat', {
       }
     },
     removeCachedSession(id) {
+      if (this.personalChatSessionId === id) this.personalChatSessionId = null
       this.sessionDetails = this.sessionDetails.filter((session) => session.id !== id)
       for (const list of Object.values(this.sessionLists)) {
         if (!list.items.some((session) => session.id === id)) continue

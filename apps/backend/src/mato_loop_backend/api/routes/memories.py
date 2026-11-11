@@ -275,7 +275,8 @@ async def get_dream_run(
         "summary": item.summary if item.summary_status == "completed" else None,
         "changes": [{"id": str(change.id), "action": change.action, "before": change.before,
                      "after": change.after, "createdAt": change.created_at.isoformat()} for change in changes],
-        "proposals": [{"id": str(approval.id), "status": approval.status, "action": approval.action_kind}
+        "proposals": [{"id": str(approval.id), "status": approval.status, "action": approval.action_kind,
+                       "sessionId": str(approval.session_id) if approval.session_id else None}
                       for approval in approvals],
     }
 

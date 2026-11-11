@@ -16,14 +16,6 @@
       </div>
       <template v-if="chat.current">
         <q-separator />
-        <q-item class="q-px-md q-py-sm">
-          <q-item-section avatar><q-icon :name="defaultChannel.icon" color="primary" /></q-item-section>
-          <q-item-section>
-            <q-item-label>Standardkanal</q-item-label>
-            <q-item-label caption>{{ defaultChannel.label }}</q-item-label>
-          </q-item-section>
-        </q-item>
-        <q-separator />
         <section class="q-pa-md" aria-labelledby="session-permissions-title">
           <div class="row items-center no-wrap q-mb-md">
             <div id="session-permissions-title" class="text-subtitle2">Freigaben</div>
@@ -141,13 +133,6 @@ const grantContext = computed(() => JSON.stringify([
 const loadedGrantContext = ref(null)
 const visible = computed(() => controlCenter.open && controlCenter.activeContentId === 'session'
   && (!$q.screen.lt.md || !controlCenter.restoredOpen))
-const defaultChannel = computed(() => {
-  const channel = chat.current?.defaultChannel
-  if (channel?.type === 'endpoint' && channel.provider === 'telegram') {
-    return { icon: 'send', label: 'Telegram' }
-  }
-  return { icon: 'devices', label: 'MatoLoop-App' }
-})
 const grantDisplay = (grant) => permissionGrantDisplay(grant, chat.cachedSessions)
 
 async function loadGrants() {

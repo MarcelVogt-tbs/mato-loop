@@ -260,7 +260,8 @@ async def test_executor_preferences_can_change_without_moving_the_active_run(mon
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
     run = AgentRun(id=uuid4(), session_id=session.id, execution_agent_id=agent.id, current_directory_snapshot="/home/user")
-    db.scalar.side_effect = [session.id, run.id]
+    db.scalar.return_value = session.id
+    db.scalars.return_value = Mock(all=lambda: [run.id])
     monkeypatch.setattr(AgentRuntime, "_session_settings", {})
     monkeypatch.setattr(AgentRuntime, "_tasks", {run.id: SimpleNamespace(done=lambda: False)})
     monkeypatch.setattr(service, "load_effective_ai", AsyncMock(return_value=AiSettings()))

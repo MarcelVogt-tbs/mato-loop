@@ -60,6 +60,14 @@ async def builtin_permissions(arguments, context: ToolContext, name: str):
             context, root=arguments.root, path=arguments.path, capability=capability,
             action_kind=name, action_label="Session-Zugriff vorbereiten",
         ),)
+    if name == "message_metadata":
+        from mato_loop_backend.tools.message_metadata import message_metadata_permissions
+
+        return await message_metadata_permissions(arguments, context)
+    if name == "session_state":
+        from mato_loop_backend.tools.session_state import session_state_permissions
+
+        return await session_state_permissions(arguments, context)
     if name == "session_read":
         from mato_loop_backend.tools.sessions import session_read_permission
 

@@ -3,6 +3,7 @@
 import re
 from uuid import UUID
 
+from mato_loop_backend.sessions.assistant_commands import ASSISTANT_COMMAND_PROVIDER
 from mato_loop_backend.sessions.command_contracts import Command, CommandProvider, command_arguments
 from mato_loop_backend.sessions.git_commands import GIT_COMMAND_PROVIDER
 from mato_loop_backend.settings.models import BUILD_PROFILE_ID, PLAN_PROFILE_ID
@@ -53,7 +54,9 @@ async def command_catalog(db, session) -> list[dict]:
     return items
 
 
-async def prepare_command(db, session, command: Command, content: str | None = None) -> dict:
+async def prepare_command(
+    db, session, command: Command, content: str | None = None, *, agent_profile_id: UUID | None = None,
+) -> dict:
     from mato_loop_backend.sessions.service import SessionServiceError
 
     if session.parent_session_id is not None:
@@ -61,7 +64,12 @@ async def prepare_command(db, session, command: Command, content: str | None = N
     if command == FORK_COMMAND:
         raise SessionServiceError(422, "validation.invalid", field="content")
     provider = next(provider for provider in _providers.values() if command in provider.commands)
-    prepared = await provider.prepare(db, session, command, content)
+    if provider.prepare_with_profile is not None:
+        prepared = await provider.prepare_with_profile(
+            db, session, command, content, command_profile_id(command, agent_profile_id or session.agent_profile_id),
+        )
+    else:
+        prepared = await provider.prepare(db, session, command, content)
     arguments = command_arguments(content)
     return {**prepared, "name": command.name, "label": command.label,
             "prompt": prepared.get("prompt", command.instructions + (f"\n\n{arguments}" if arguments else "")),
@@ -70,3 +78,4 @@ async def prepare_command(db, session, command: Command, content: str | None = N
 
 
 register_command_provider(GIT_COMMAND_PROVIDER)
+register_command_provider(ASSISTANT_COMMAND_PROVIDER)

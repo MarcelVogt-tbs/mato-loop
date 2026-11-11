@@ -760,6 +760,7 @@ async def test_resource_discovery_cannot_invent_adapter_capabilities(
         )
 
     assert exc_info.value.code == "integration.resourceDiscoveryFailed"
+    assert exc_info.value.status_code == 502
 
 
 async def test_caldav_discovery_rejects_duplicate_resource_keys(monkeypatch) -> None:
@@ -783,6 +784,7 @@ async def test_caldav_discovery_rejects_duplicate_resource_keys(monkeypatch) -> 
             AsyncMock(spec=AsyncSession), instance,
         )
     assert exc_info.value.code == "integration.resourceDiscoveryFailed"
+    assert exc_info.value.status_code == 502
 
 
 async def test_caldav_access_manages_independent_defaults(monkeypatch) -> None:

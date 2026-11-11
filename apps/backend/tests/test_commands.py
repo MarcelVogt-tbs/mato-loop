@@ -39,10 +39,21 @@ from mato_loop_backend.settings import AiSettings, TrustLevel
 from mato_loop_backend.tools.sessions import _message_item
 
 
+def test_active_file_contract_accepts_json_computer_uuid():
+    from mato_loop_backend.sessions.contracts import ActiveFileRequest
+
+    agent_id = uuid4()
+    payload = ActiveFileRequest.model_validate({
+        "root": "workspace", "executionAgentId": str(agent_id), "path": "/file.txt",
+        "sha256": "a" * 64, "dirty": True,
+    })
+    assert payload.execution_agent_id == agent_id
+
+
 async def test_browser_and_telegram_share_portable_coding_commands(monkeypatch):
     assert set(OUTPUT_FORMATS) == {item.name for item in registered_commands() if item.name.startswith("git-")}
     assert {command.command for command in telegram_commands() if command.command.startswith("git_")} == {
-        item.name.replace("-", "_") for item in registered_commands()
+        item.name.replace("-", "_") for item in registered_commands() if item.name.startswith("git-")
     }
     assert (parse_command("/git-review").name, parse_command("/git_review@my_bot").name) == ("git-review", "git-review")
     assert parse_command("Explain /git-merge") is None

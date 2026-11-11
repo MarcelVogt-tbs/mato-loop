@@ -38,6 +38,17 @@ async def request_question(
     | None
 ):
     origin = await permission_origin(db, chat_session)
+    from mato_loop_backend.agent.session_execution import has_other_runs
+
+    if chat_session.parent_session_id is None and has_other_runs(run.id, chat_session.id):
+        from sqlalchemy import select
+
+        pending = (await db.scalars(select(QuestionRequest).where(
+            QuestionRequest.session_id == origin.id, QuestionRequest.run_id != run.id,
+            QuestionRequest.status == "pending",
+        ))).all()
+        if any(item.questions == questions.model_dump(mode="json")["questions"] for item in pending):
+            raise ToolCallSuperseded
     request = QuestionRequest(
         session_id=origin.id,
         run_id=run.id,
@@ -84,7 +95,10 @@ async def request_question(
         )
         if notification_id is not None:
             await NotificationService.deliver_after_commit(notification_id)
-        answers = await asyncio.shield(waiter)
+        from mato_loop_backend.agent.session_execution import interaction_wait
+
+        async with interaction_wait(run_id):
+            answers = await asyncio.shield(waiter)
     except asyncio.CancelledError:
         await db.rollback()
         current = await db.get(QuestionRequest, question_id)

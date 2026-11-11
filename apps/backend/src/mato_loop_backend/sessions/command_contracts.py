@@ -3,6 +3,7 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +27,7 @@ class CommandProvider:
     commands: tuple[Command, ...]
     availability: Callable[[AsyncSession, ChatSession], Awaitable[dict[str, str | None]]]
     prepare: Callable[[AsyncSession, ChatSession, Command, str | None], Awaitable[dict]]
+    prepare_with_profile: Callable[[AsyncSession, ChatSession, Command, str | None, UUID | None], Awaitable[dict]] | None = None
 
 
 def command_arguments(content: str | None) -> str:

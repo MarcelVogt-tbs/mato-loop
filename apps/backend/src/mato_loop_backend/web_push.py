@@ -189,6 +189,7 @@ class WebPushMemoryApprovalTarget(BaseModel):
 
     type: Literal["memoryApproval"]
     approval_id: UUID = Field(alias="approvalId")
+    session_id: UUID | None = Field(default=None, alias="sessionId")
 
 
 class WebPushNotificationPayload(BaseModel):

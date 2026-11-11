@@ -3,6 +3,7 @@ import json
 import traceback
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -660,7 +661,16 @@ async def test_smtp_success_reports_sent_copy_separately(monkeypatch, outcome) -
     smtp.send_message.assert_called_once()
 
 
-async def test_imap_search_pages_use_exclusive_uid_boundary(monkeypatch) -> None:
+@pytest.mark.parametrize("recent_since,include_unread,criteria", [
+    (None, False, ()),
+    (date(2026, 11, 8), False, ("SINCE", "08-Nov-2026")),
+    (date(2026, 11, 8), True, ("OR", "UNSEEN", "SINCE", "08-Nov-2026")),
+])
+async def test_imap_search_pages_use_exclusive_uid_boundary(
+    monkeypatch, recent_since, include_unread, criteria,
+) -> None:
+    searches = []
+
     class FakeImap:
         def select(self, _mailbox, readonly=False):
             return "OK", [b"3"]
@@ -670,6 +680,7 @@ async def test_imap_search_pages_use_exclusive_uid_boundary(monkeypatch) -> None
 
         def uid(self, command, *args):
             if command == "SEARCH":
+                searches.append(args)
                 return "OK", [b"1" if "1:1" in args else b"1 2 3"]
             return "OK", [(f"1 (UID {args[0]} FLAGS () RFC822.SIZE 0)".encode(), b"")]
 
@@ -680,12 +691,20 @@ async def test_imap_search_pages_use_exclusive_uid_boundary(monkeypatch) -> None
         yield FakeImap()
 
     monkeypatch.setattr(client, "_imap", imap)
-    first = await client.search("INBOX", limit=2)
-    second = await client.search("INBOX", limit=2, before_uid=first.next_uid, expected_uidvalidity=17)
-    assert ([item.locator.uid for item in first.messages], [item.locator.uid for item in second.messages], second.next_uid) == ([3, 2], [1], None)
+    filters = {"recent_since": recent_since, "include_unread": include_unread}
+    first = await client.search("INBOX", limit=2, query="workshop", **filters)
+    second = await client.search("INBOX", limit=2, query="workshop", before_uid=first.next_uid, expected_uidvalidity=17, **filters)
+    text = ("TEXT", b'"workshop"')
+    assert (
+        [item.locator.uid for item in first.messages],
+        [item.locator.uid for item in second.messages], second.next_uid, searches,
+    ) == ([3, 2], [1], None, [
+        ("CHARSET", "UTF-8", *criteria, *text),
+        ("CHARSET", "UTF-8", "UID", "1:1", *criteria, *text),
+    ])
 
 
-@pytest.mark.parametrize("changed", [None, "integration_id", "revision", "mailbox", "query", "invalid"])
+@pytest.mark.parametrize("changed", [None, "integration_id", "revision", "mailbox", "query", "invalid", "recent_since", "include_unread"])
 async def test_mail_search_cursor_scope(changed) -> None:
     arguments = MailSearchArguments(integration_id=uuid4(), mailbox="INBOX", query="workshop")
     client = SimpleNamespace(search=AsyncMock(return_value=MessagePage((), 17, 42)))
@@ -702,6 +721,10 @@ async def test_mail_search_cursor_scope(changed) -> None:
         revision = "changed"
     elif changed == "invalid":
         arguments.cursor = "invalid"
+    elif changed == "recent_since":
+        arguments.recent_since = date(2026, 11, 8)
+    elif changed == "include_unread":
+        arguments.include_unread = True
     else:
         setattr(arguments, changed, uuid4() if changed == "integration_id" else "changed")
     with pytest.raises(ValueError):

@@ -26,10 +26,8 @@ from pydantic import (
     StrictBool,
     StrictInt,
     ValidationError,
-    model_validator,
 )
 from sqlalchemy import and_, select, update
-from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -41,8 +39,7 @@ from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.events import run_events
-from mato_loop_backend.execution.paths import is_absolute_path
-from mato_loop_backend.files.service import RootFileError, RootFileService
+from mato_loop_backend.files.service import RootFileError
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.media.attachments import (
     AttachmentError,
@@ -71,6 +68,25 @@ from mato_loop_backend.models import (
 from mato_loop_backend.security import require_user
 from mato_loop_backend.sessions import service as session_service
 from mato_loop_backend.sessions.archive import ArchiveRequest, is_session_archived, set_archived
+from mato_loop_backend.sessions.contracts import (
+    ActiveFileRequest,
+    ControlCenterState,
+    SessionCreateRequest,
+    SessionOptionsRequest,
+    default_control_center_state,
+)
+from mato_loop_backend.sessions.contracts import (
+    ControlCenterFileTarget as ControlCenterFileTarget,
+)
+from mato_loop_backend.sessions.contracts import (
+    ControlCenterFileView as ControlCenterFileView,
+)
+from mato_loop_backend.sessions.contracts import (
+    ControlCenterFileViews as ControlCenterFileViews,
+)
+from mato_loop_backend.sessions.contracts import (
+    ControlCenterTabState as ControlCenterTabState,
+)
 from mato_loop_backend.sessions.serialization import (
     LAST_MESSAGE_AT_UNSET as _LAST_MESSAGE_AT_UNSET,
 )
@@ -123,255 +139,6 @@ async def _mutable_session(
         )
     except session_service.SessionServiceError as exc:
         _raise_api_error(exc)
-
-
-class ControlCenterFileTarget(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    scope: Literal["session", "filesystem"]
-    path: str = Field(min_length=1, max_length=4_096)
-    name: str = Field(min_length=1, max_length=255)
-    root_identity: str | None = Field(default=None, min_length=36, max_length=36)
-    execution_agent_id: str | None = Field(default=None, min_length=36, max_length=36)
-    current_directory: str | None = Field(default=None, min_length=1, max_length=4_096)
-    read_only: bool = False
-    file_id: str | None = Field(default=None, min_length=36, max_length=36)
-    revision: int | None = Field(default=None, ge=1)
-
-    @model_validator(mode="after")
-    def validate_target(self) -> ControlCenterFileTarget:
-        if self.revision is not None or self.file_id is not None:
-            if (
-                self.scope != "session" or not self.read_only
-                or self.revision is None or self.file_id is None
-                or str(UUID(self.file_id)) != self.file_id
-            ):
-                raise ValueError("historical targets require a read-only session file identity and revision")
-        if self.scope == "session":
-            service = RootFileService(UUID(int=0))
-            try:
-                valid_root = (
-                    self.root_identity is not None
-                    and str(UUID(self.root_identity)) == self.root_identity
-                )
-            except ValueError:
-                valid_root = False
-            if (
-                service.normalize_relative_path(self.path) != self.path
-                or self.path == "."
-                or not valid_root
-            ):
-                raise ValueError("session file targets require a normalized file path and root")
-            if self.execution_agent_id is not None or self.current_directory is not None:
-                raise ValueError("session file targets cannot contain computer fields")
-            return self
-        if (
-            self.root_identity is not None
-            or self.execution_agent_id is None
-            or self.current_directory is None
-            or not is_absolute_path(self.path)
-            or not is_absolute_path(self.current_directory)
-        ):
-            raise ValueError("computer file targets require canonical absolute context")
-        try:
-            if str(UUID(self.execution_agent_id)) != self.execution_agent_id:
-                raise ValueError("computer ID must be canonical")
-        except ValueError as exc:
-            raise ValueError("computer ID must be canonical") from exc
-        return self
-
-
-class ControlCenterTabState(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    tab_id: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=64,
-        pattern=r"^(?:[a-z][a-z0-9_-]*|file-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$",
-    )
-    kind: Literal["app", "file"] = "app"
-    app_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_-]*$")
-    pinned: bool
-    file_target: ControlCenterFileTarget | None = None
-
-    @model_validator(mode="after")
-    def validate_tab(self) -> ControlCenterTabState:
-        if self.tab_id is None:
-            self.tab_id = self.app_id
-        if self.kind == "app":
-            if self.tab_id != self.app_id or self.file_target is not None:
-                raise ValueError("app tabs must use their app ID and cannot contain a file")
-            return self
-        if (
-            self.app_id != "file-viewer"
-            or not self.tab_id.startswith("file-")
-            or self.file_target is None
-        ):
-            raise ValueError("file tabs require an opaque file tab ID and target")
-        try:
-            valid_id = f"file-{UUID(self.tab_id.removeprefix('file-'))}" == self.tab_id
-        except ValueError:
-            valid_id = False
-        if not valid_id:
-            raise ValueError("file tabs require a canonical UUID tab ID")
-        return self
-
-
-class ControlCenterFileView(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    scope: Literal["session", "filesystem"]
-    selected_path: str = Field(min_length=1, max_length=1_000)
-    selected_kind: Literal["file", "directory"]
-    viewed_file_path: str | None = Field(default=None, min_length=1, max_length=1_000)
-    root_identity: str | None = Field(default=None, min_length=1, max_length=1_000)
-    execution_agent_id: str | None = Field(default=None, min_length=36, max_length=36)
-    current_directory: str | None = Field(default=None, min_length=1, max_length=4_096)
-
-    @model_validator(mode="after")
-    def validate_view(self) -> ControlCenterFileView:
-        service = RootFileService(UUID(int=0))
-        if self.scope == "session":
-            if service.normalize_relative_path(self.selected_path) != self.selected_path:
-                raise ValueError("selected path must be normalized")
-            if self.selected_path == "." and self.selected_kind != "directory":
-                raise ValueError("the root path must be a directory")
-        elif not is_absolute_path(self.selected_path):
-            raise ValueError("filesystem paths must be absolute")
-        if self.viewed_file_path is not None:
-            if (
-                self.selected_kind != "file"
-                or self.viewed_file_path == "."
-                or self.viewed_file_path != self.selected_path
-            ):
-                raise ValueError("viewed file path must match the selected file")
-        if self.scope == "session":
-            if self.root_identity is None:
-                return self
-            if self.execution_agent_id is not None or self.current_directory is not None:
-                raise ValueError("session views cannot contain workspace snapshot fields")
-            return self
-        if self.root_identity is not None:
-            raise ValueError("filesystem views cannot contain root identity")
-        if self.execution_agent_id is None or self.current_directory is None:
-            raise ValueError("historical workspace views require snapshot fields")
-        assert self.execution_agent_id is not None
-        try:
-            valid_id = str(UUID(self.execution_agent_id)) == self.execution_agent_id
-        except ValueError:
-            valid_id = False
-        if not valid_id or not is_absolute_path(self.current_directory):
-            raise ValueError("workspace snapshot must use canonical absolute identifiers")
-        return self
-
-
-class ControlCenterFileViews(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    session: ControlCenterFileView | None = None
-    filesystem: ControlCenterFileView | None = None
-
-    @model_validator(mode="after")
-    def validate_scopes(self) -> ControlCenterFileViews:
-        if self.session is not None and self.session.scope != "session":
-            raise ValueError("session file view must use session scope")
-        if self.filesystem is not None and self.filesystem.scope != "filesystem":
-            raise ValueError("filesystem file view must use filesystem scope")
-        return self
-
-
-class ControlCenterState(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    tabs: list[ControlCenterTabState] = Field(max_length=21)
-    active_app_id: str | None = Field(max_length=64, pattern=r"^[a-z][a-z0-9_-]*$")
-    open: bool = False
-    file_view: ControlCenterFileView | None = None
-    file_views: ControlCenterFileViews = Field(default_factory=ControlCenterFileViews)
-
-    @model_validator(mode="after")
-    def validate_tabs(self) -> ControlCenterState:
-        session_tabs = [tab for tab in self.tabs if tab.app_id == "session"]
-        if session_tabs:
-            session_tab = session_tabs[0]
-            if session_tab.kind != "app":
-                raise ValueError("the Session tab must be an app")
-            self.tabs = [session_tab, *[tab for tab in self.tabs if tab is not session_tab]]
-        else:
-            self.tabs.insert(0, ControlCenterTabState(app_id="session", pinned=False))
-        if len(self.tabs) > 21:
-            raise ValueError("control center supports at most 21 tabs")
-        if self.active_app_id is None:
-            self.active_app_id = "session"
-        tab_ids = [tab.tab_id for tab in self.tabs]
-        if len(tab_ids) != len(set(tab_ids)):
-            raise ValueError("control center tab IDs must be unique")
-        if self.active_app_id not in tab_ids:
-            raise ValueError("active ID must identify a tab")
-        return self
-
-
-def default_control_center_state() -> ControlCenterState:
-    return ControlCenterState(
-        tabs=[
-            ControlCenterTabState(app_id="session", pinned=False),
-            ControlCenterTabState(app_id="files", pinned=False),
-        ],
-        active_app_id="session",
-    )
-
-
-class ActiveFileRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    root: Literal["session", "workspace"]
-    root_identity: str | None = Field(
-        default=None,
-        min_length=36,
-        max_length=36,
-        validation_alias=AliasChoices("root_identity", "rootIdentity"),
-    )
-    execution_agent_id: UUID | None = Field(
-        default=None,
-        strict=False,
-        validation_alias=AliasChoices("execution_agent_id", "executionAgentId"),
-    )
-    path: str = Field(min_length=1, max_length=4_096)
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    dirty: bool
-
-
-class SessionOptionsRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    project_id: UUID | None = None
-    session_template_id: UUID | None = None
-    session_profile: SessionProfileSnapshot | None = None
-    model_id: UUID | None = None
-    agent_profile_id: UUID | None = Field(
-        default=None,
-        validation_alias=AliasChoices("agentProfileId", "agent_profile_id"),
-    )
-    reasoning_effort: ReasoningEffort | None = None
-    memory_mode: MemoryMode | None = None
-
-
-class SessionCreateRequest(SessionOptionsRequest):
-    trust_level: TrustLevel | None = None
-    content: str | None = Field(max_length=200_000)
-    voice_attachment_indices: list[StrictInt] = Field(default_factory=list, alias="voiceAttachmentIndices")
-    run_id: UUID | None = None
-    memory_mode: MemoryMode = MemoryMode.FULL
-    web_search_policy: WebSearchPolicy = WebSearchPolicy.AVAILABLE
-    preferred_execution_agent_id: UUID | None = None
-    current_directory: str | None = Field(default=None, max_length=4_096)
-    workspace_mode: Literal["local", "worktree"] | None = None
-    workspace_path: str | None = Field(default=None, max_length=4096)
-    control_center: ControlCenterState = Field(default_factory=default_control_center_state)
-    active_file: ActiveFileRequest | None = Field(
-        default=None, validation_alias=AliasChoices("active_file", "activeFile")
-    )
 
 
 class SessionUpdateRequest(BaseModel):
@@ -554,7 +321,6 @@ def session_payload(
     workspace_context: dict[str, Any] | None = None,
     last_message_at: Any = _LAST_MESSAGE_AT_UNSET,
     has_unread_messages: bool | None = None,
-    default_channel: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
         control_center = ControlCenterState.model_validate(
@@ -573,7 +339,6 @@ def session_payload(
         workspace_context=workspace_context,
         last_message_at=last_message_at,
         has_unread_messages=has_unread_messages,
-        default_channel=default_channel,
     )
 
 
@@ -586,28 +351,6 @@ async def _session_payload(
 ) -> dict[str, Any]:
     archived = await is_session_archived(db, item)
     workspace_context = await session_service.workspace_context(db, item)
-    first_user_message = (
-        await db.scalar(
-            select(Message)
-            .where(Message.session_id == item.id, Message.role == "user")
-            .order_by(Message.created_at, Message.id)
-            .limit(1)
-        )
-        if sa_inspect(item).persistent
-        else None
-    )
-    default_channel = (
-        {
-            "type": "endpoint",
-            "provider": first_user_message.source_provider,
-            "endpointId": str(first_user_message.source_endpoint_id),
-        }
-        if first_user_message is not None
-        and first_user_message.source_type == "endpoint"
-        and first_user_message.source_provider
-        and first_user_message.source_endpoint_id
-        else {"type": "app"}
-    )
     if item.memory_mode == MemoryMode.DISABLED.value:
         return {**session_payload(
             item,
@@ -617,7 +360,6 @@ async def _session_payload(
             workspace_context=workspace_context,
             last_message_at=last_message_at,
             has_unread_messages=has_unread_messages,
-            default_channel=default_channel,
         ), "archived": archived}
     ai = apply_session_ai(await load_effective_ai(db, item.user_id), item)
     memory = await SettingsStore.load(db, MemorySettings, user_id=item.user_id)
@@ -632,7 +374,6 @@ async def _session_payload(
         workspace_context=workspace_context,
         last_message_at=last_message_at,
         has_unread_messages=has_unread_messages,
-        default_channel=default_channel,
     ), "archived": archived}
 
 

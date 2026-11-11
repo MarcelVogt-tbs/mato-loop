@@ -185,6 +185,7 @@ async def _list_automations(
                     "id": str(item.id),
                     "executionSessionId": str(item.execution_session_id),
                     "name": item.name,
+                    "modelId": str(item.model_id) if item.model_id else None,
                     "enabled": item.enabled,
                     "triggers": item.triggers or [],
                     "revision": item.revision,
@@ -251,6 +252,7 @@ async def _create_automation(
         preview = {
             "name": arguments.name,
             "task": arguments.task,
+            "modelId": str(arguments.model_id) if arguments.model_id else None,
             "enabled": arguments.enabled,
             "triggers": arguments.triggers,
             "schedules": _automation_schedule_json(schedules),
@@ -269,6 +271,7 @@ async def _create_automation(
                 PermissionDisplayItem("Name", arguments.name),
                 PermissionDisplayItem("Status", "Wird aktiviert." if arguments.enabled else "Wird deaktiviert gespeichert."),
                 PermissionDisplayItem("Aufgabe", arguments.task),
+                PermissionDisplayItem("Modell", str(arguments.model_id) if arguments.model_id else "Aktuelles Sessionmodell"),
                 PermissionDisplayItem(
                     "Zeitpläne", _automation_schedule_lines(schedules), "list"
                 ),
@@ -292,6 +295,7 @@ async def _create_automation(
             enabled=arguments.enabled,
             schedules=schedules,
             triggers=arguments.triggers,
+            model_id=arguments.model_id,
         )
         await context.db.commit()
         return ToolResult.json(
@@ -336,6 +340,8 @@ def _automation_edit_diff(
     comparisons = (
         ("Name", automation.name, arguments.name),
         ("Aufgabe", automation.task, arguments.task),
+        ("Modell", str(automation.model_id) if automation.model_id else "Aktuelles Sessionmodell",
+         str(arguments.model_id) if arguments.model_id else "Aktuelles Sessionmodell"),
         ("Aktiv", str(automation.enabled), str(arguments.enabled)),
         (
             "Auslöser",
@@ -407,6 +413,7 @@ async def _edit_automation(
             enabled=arguments.enabled,
             schedules=schedules,
             triggers=arguments.triggers,
+            model_id=arguments.model_id,
         )
         await context.db.commit()
         return ToolResult.json(

@@ -4,7 +4,9 @@ Eine Session ist eine gespeicherte Unterhaltung mit eigenen Einstellungen, Datei
 
 ## Eine Session starten und organisieren
 
-Öffne Home oder eine neue Unterhaltung, wähle die Startvorgaben und sende eine Nachricht. Erst das Senden oder Öffnen einer sessiongebundenen Control-Center-App speichert die Session. Die feste Sessionansicht, Git-Ansicht und globale Benachrichtigungen allein erzeugen keine Session.
+**Chat** öffnet deinen festen persönlichen Gesprächsfaden. Er ist eine normale Session mit denselben Modellvorgaben, Freigaben, Kontextlimits und derselben Kompaktierung wie andere Sessions. Das erste Öffnen legt ihn an, startet aber weder einen Modelllauf noch die proaktive Assistenz. Dreaming-Vorschläge erscheinen hier als Freigabekarten; ihre Belegquellen bleiben getrennt erhalten.
+
+Für ein eigenes Thema öffne eine **neue Session**, wähle die Startvorgaben und sende eine Nachricht. Erst das Senden oder Öffnen einer sessiongebundenen Control-Center-App speichert diese neue Session. Explizit ausgewählte Sessions und Projektentwürfe werden nicht durch den persönlichen Chat ersetzt.
 
 Deine Nachricht erscheint direkt nach dem Absenden im Chat. **Wird gesendet …** bleibt sichtbar, während der Browser sie lokal sichert, Anhänge hochlädt und auf die Serverbestätigung wartet. Der Platz für den Antwortstatus wird dabei bereits freigehalten; **Verarbeite Anfrage** erscheint erst nach der Serverbestätigung. Schlägt die lokale Sicherung fehl, bleiben Text und Anhänge im Entwurf erhalten.
 

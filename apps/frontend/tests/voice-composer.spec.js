@@ -56,6 +56,7 @@ import { useProviderStore } from '../src/stores/providers'
 import { useToolSettingsStore } from '../src/stores/tool-settings'
 import { useInstanceLimitsStore } from '../src/stores/instance-limits'
 import { useQuestionStore } from '../src/stores/questions'
+import { useControlCenterStore } from '../src/stores/control-center'
 
 let app, root, chat, session, stopResolve, showPage, router, sentMessages, stoppedCount, composer
 const file = (name = 'aufnahme.wav') => new File(['wav'], name, { type: 'audio/wav' })
@@ -220,7 +221,7 @@ describe('voice attachment composer', () => {
 
   it('copies only the complete assistant answer, including Markdown', async () => {
     mocks.api.get.mockResolvedValue({ data: { items: [] } })
-    await router.push('/')
+    await router.push('/?project=draft')
     showPage.value = true
     await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
     const content = '**Answer**\n\n```js\nconst value = 1\n```'
@@ -232,7 +233,7 @@ describe('voice attachment composer', () => {
 
   it('keeps the composer available while a question is pending', async () => {
     mocks.api.get.mockResolvedValue({ data: { items: [] } })
-    await router.push('/')
+    await router.push('/?project=draft')
     showPage.value = true
     await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
     chat.current = { id: 'session-1', messages: [] }
@@ -285,7 +286,7 @@ describe('voice attachment composer', () => {
 
   it('keeps the final touch-scroll position when a transcript update was deferred during the gesture', async () => {
     mocks.api.get.mockResolvedValue({ data: { items: [] } })
-    await router.push('/')
+    await router.push('/?project=draft')
     const target = document.createElement('div')
     Object.defineProperties(target, {
       clientHeight: { value: 400 },
@@ -334,7 +335,7 @@ describe('voice attachment composer', () => {
 
   it('shows the saved command prompt instead of its invocation in the user message', async () => {
     mocks.api.get.mockResolvedValue({ data: { items: [] } })
-    await router.push('/')
+    await router.push('/?project=draft')
     showPage.value = true
     await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
     const prompt = 'Review the working changes.\n\nOnly parser changes.'
@@ -363,7 +364,7 @@ describe('voice attachment composer', () => {
   })
   it('invalidates message heights and remounts the composer input when the session message size changes', async () => {
     mocks.api.get.mockResolvedValue({ data: { items: [] } })
-    await router.push('/')
+    await router.push('/?project=draft')
     showPage.value = true
     await nextTick()
     chat.current = { id: 'session-1', sessionProfile: { messageSize: 'standard' }, messages: [{ id: 'message', role: 'user', content: 'Text' }] }
@@ -380,7 +381,7 @@ describe('voice attachment composer', () => {
 
   it('shows the first outgoing message in the transcript with its delivery state', async () => {
     mocks.api.get.mockResolvedValue({ data: { items: [] } })
-    await router.push('/')
+    await router.push('/?project=draft')
     showPage.value = true
     await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
     const entry = { id: 'pending', content: 'Erste Nachricht', attachments: [], paused: false }
@@ -414,7 +415,7 @@ describe('voice attachment composer', () => {
 
   it('renders host failures as message content with a red metadata retry action', async () => {
     mocks.api.get.mockResolvedValue({ data: { items: [] } })
-    await router.push('/')
+    await router.push('/?project=draft')
     showPage.value = true
     await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
     const failure = { id: 'failure', role: 'assistant', origin: 'host', kind: 'runtime_error',
@@ -434,7 +435,7 @@ describe('voice attachment composer', () => {
 
   it('keeps the previous assistant reply unchanged while submitting the next message', async () => {
     mocks.api.get.mockResolvedValue({ data: { items: [] } })
-    await router.push('/')
+    await router.push('/?project=draft')
     showPage.value = true
     await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
     chat.current = { id: 'created', messages: [
@@ -458,7 +459,7 @@ describe('voice attachment composer', () => {
 
   it('keeps sent-message undo and queue recovery visible after local cleanup fails', async () => {
     mocks.api.get.mockResolvedValue({ data: { items: [] } })
-    await router.push('/')
+    await router.push('/?project=draft')
     showPage.value = true
     await vi.waitFor(() => expect(root.querySelector('.home-stub')).not.toBeNull())
     const message = { id: 'sent', role: 'user', content: 'Angenommen', createdAt: new Date().toISOString() }
@@ -471,12 +472,12 @@ describe('voice attachment composer', () => {
       .toEqual([true, 'sent'])
   })
 
-  it.each([false, true])('keeps the Home composer and draft through chat transitions (mobile=%s)', async (mobile) => {
+  it.each([false, true])('keeps the project draft composer through chat transitions (mobile=%s)', async (mobile) => {
     mocks.mobile = mobile
     chat.outboxLoaded = true
     mocks.api.get.mockImplementation(async (url) => ({ data: url.startsWith('/sessions/session-')
       ? { id: url.split('/').pop(), messages: [] } : { items: [] } }))
-    await router.push('/')
+    await router.push('/?project=draft')
     showPage.value = true
     await vi.waitFor(() => expect(root.querySelector('.chat-start-project')).not.toBeNull())
     expect(root.querySelector('.home-stub')).not.toBeNull()
@@ -492,16 +493,13 @@ describe('voice attachment composer', () => {
     expect(root.querySelector('.home-stub')).toBeNull()
     expect(root.querySelector('.chat-input-dock textarea')).toBe(input)
     expect(input.value).toBe('Entwurf für Home')
-    await router.push('/')
+    await router.push('/?project=draft')
     await vi.waitFor(() => expect(root.querySelector('.chat-start-project')).not.toBeNull())
 
-    chat.current = { id: 'created', messages: [] }
-    await nextTick()
-    expect(root.querySelector('.chat-input-dock textarea')).toBe(input)
-    expect(root.querySelector('.chat-start-project')).toBeNull()
     await router.push('/?session=session-2')
     await vi.waitFor(() => expect(chat.current?.id).toBe('session-2'))
-    await router.push('/')
+    expect(root.querySelector('.chat-start-project')).toBeNull()
+    await router.push('/?project=draft')
     await vi.waitFor(() => expect(root.querySelector('.chat-input-dock textarea')?.value).toBe('Entwurf für Home'))
     expect(chat.activeAttachmentDraft[0].file.name).toBe('entwurf.wav')
   })
@@ -761,6 +759,24 @@ describe('voice attachment composer', () => {
       { id: 'original', children: 'child', active: 'false' },
       { id: 'latest', children: 'child', active: 'true' }
     ]))
+  })
+
+  it('applies the latest same-session deep link when the session finishes loading', async () => {
+    chat.outboxLoaded = true
+    let releaseSession
+    const openApp = vi.spyOn(useControlCenterStore(), 'openApp').mockResolvedValue()
+    mocks.api.get.mockImplementation(async (url) => ({ data: url === '/sessions/session-1'
+      ? await new Promise((resolve) => { releaseSession = resolve })
+      : url.endsWith('/children') ? [] : { items: [] } }))
+    showPage.value = true
+    await vi.waitFor(() => expect(releaseSession).toBeTypeOf('function'))
+    await router.push('/?session=session-1&message=target&controlCenter=automation')
+    releaseSession({ id: 'session-1', messages: [{ id: 'target', role: 'assistant', content: 'Result' }] })
+
+    await vi.waitFor(() => expect([
+      root.querySelector('.chat-message--search-target')?.dataset.messageId,
+      openApp.mock.calls
+    ]).toEqual(['target', [['automation']]]))
   })
 
   it('keeps the mounted parent composer, draft and session when only the subagent URL changes', async () => {

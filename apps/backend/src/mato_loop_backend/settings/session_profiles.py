@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
+from mato_loop_backend.sessions.context_state import SessionContextState
 from mato_loop_backend.settings.models import (
     BUILD_PROFILE_ID,
     GENERAL_PROFILE_ID,
@@ -23,6 +24,7 @@ class SessionProfileConfig(BaseModel):
     agent_models: dict[UUID, ChatModelOverride] = Field(default_factory=dict)
     message_size: Literal["standard", "small"] = "standard"
     worktrees_enabled: bool = False
+    assistant_context: Literal["disabled", "on_demand", "automatic"] | None = None
 
     @model_validator(mode="after")
     def validate_agents(self):
@@ -33,6 +35,7 @@ class SessionProfileConfig(BaseModel):
 
 class SessionProfileSnapshot(SessionProfileConfig):
     template_id: UUID | None = None
+    context_state: SessionContextState = Field(default_factory=SessionContextState)
 
 
 class SessionTemplate(SessionProfileConfig, ChatModelOverride):
@@ -43,7 +46,7 @@ class SessionTemplate(SessionProfileConfig, ChatModelOverride):
     memory_mode: Literal["full", "read_only", "disabled"] = "full"
 
     def snapshot(self) -> SessionProfileSnapshot:
-        return SessionProfileSnapshot(template_id=self.id, agent_ids=self.agent_ids, agent_models=self.agent_models, message_size=self.message_size, worktrees_enabled=self.worktrees_enabled).model_copy(deep=True)
+        return SessionProfileSnapshot(template_id=self.id, agent_ids=self.agent_ids, agent_models=self.agent_models, message_size=self.message_size, worktrees_enabled=self.worktrees_enabled, assistant_context=self.assistant_context).model_copy(deep=True)
 
     @model_validator(mode="after")
     def validate_start(self):

@@ -3438,6 +3438,28 @@ async def test_compaction_preserves_history_and_records_stable_summary_boundary(
     assert projection.messages[0]["attachments"][0]["historical"] is True
 
 
+async def test_completed_crossed_review_compacts_and_reloads_at_canonical_boundary():
+    session = _session()
+    records = [_message(session.id, "user", "old " * 2000),
+               _message(session.id, "assistant", ""),
+               _message(session.id, "user", "intervening review"),
+               _message(session.id, "assistant", "review complete"),
+               _message(session.id, "tool", '{"success":true}'),
+               _message(session.id, "user", "current request")]
+    records[1].tool_calls = [{"id": "action", "name": "read", "arguments": {"path": "x"}}]
+    records[4].tool_call_id = "action"
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    summarize = AsyncMock(return_value=SummaryResult("Completed reviews", None))
+    kwargs = dict(chat_session=session, records=records, system_prompt="System", tool_schemas=[],
+                  model=_model(context_window_tokens=4000), settings=_settings(), summarize=summarize)
+    projection = await _build_context(db, **kwargs)
+    assert projection.compacted and db.add.call_args.args[0].covered_through_message_id == records[4].id
+    db.scalar.return_value = db.add.call_args.args[0]
+    reload = await _build_context(db, **kwargs)
+    assert "tool.executionInterrupted" not in str(reload.messages) and "current request" in str(reload.messages)
+
+
 async def test_large_old_tool_output_is_pruned_without_mutating_message_history() -> None:
     session = _session()
     original_content = "x" * 3_000
@@ -3736,8 +3758,10 @@ async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(
     assert "Qwen-Image-2.1-Turbo generation:" in system
     assert "Qwen-Image-2.1-Turbo editing:" in system
     user_id = next(item.id for item in reversed(records) if item.role == "user")
+    saved_session_context = {user_id: "[Untrusted saved session context] Original durable note"}
     first = _projection_messages(system, None, records, TrustLevel.PRIVATE,
                                  memory_context="Earlier memory", memory_contexts={user_id: "Earlier memory"},
+                                 session_contexts=saved_session_context,
                                  runtime_instructions=projections[0]["runtime_instructions"],
                                  live_tool_calls={tool_message.id: live_calls},
                                  available_secret_references={saved_reference})
@@ -3756,6 +3780,7 @@ async def test_turn_snapshots_preserve_tool_history_prefix_on_followup(
         system, None, [*records, _message(run.session_id, "assistant", "Done"), followup],
         TrustLevel.PRIVATE, runtime_instructions=agent_profile_runtime_instructions(plan_profile()),
         memory_context=current_memory, memory_contexts={user_id: "Earlier memory"},
+        session_contexts={**saved_session_context, followup.id: "[Untrusted saved session context] Updated durable note"},
         available_secret_references={saved_reference},
     )
     provider = requests[0]["provider"]
@@ -4043,6 +4068,8 @@ async def test_direct_messages_during_tool_batch_keep_same_run_results_available
     result_two = _message(session.id, "tool", '{"exitCode":0,"stdout":"checksum verified"}')
     result_one.tool_call_id = "check-1"
     result_two.tool_call_id = "check-2"
+    for message in (result_one, result_two):
+        message.provider_data = {"_matoloop": {"runId": str(run_id)}}
     records = [request, assistant, first, result_one, second, result_two]
     original_ids = [item.id for item in records]
     db = AsyncMock(spec=AsyncSession)

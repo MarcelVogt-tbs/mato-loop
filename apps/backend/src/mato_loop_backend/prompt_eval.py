@@ -101,7 +101,7 @@ TASK_LIST_KEY = f"tasklist:{'b' * 32}"
 SKILL_ID = UUID("60000000-0000-4000-8000-000000000001")
 AUTOMATION_ID = UUID("a0000000-0000-4000-8000-000000000001")
 
-INVENTORY_VERSION = 44
+INVENTORY_VERSION = 45
 NORMAL_OUTPUT_TOKENS = 16_384
 TITLE_REPAIR_OUTPUT_TOKENS = repair_title_output_budget(
     initial_title_output_budget(4_096),
@@ -289,6 +289,9 @@ SOURCE_FILES = (
     "src/mato_loop_backend/tools/media.py",
     "src/mato_loop_backend/tools/memory.py",
     "src/mato_loop_backend/tools/sessions.py",
+    "src/mato_loop_backend/tools/session_state.py",
+    "src/mato_loop_backend/tools/message_metadata.py",
+    "src/mato_loop_backend/sessions/context_state.py",
     "src/mato_loop_backend/tools/skills.py",
     "src/mato_loop_backend/tools/identity.py",
     "src/mato_loop_backend/tools/interaction.py",
@@ -2771,6 +2774,27 @@ CASES = (
         content_excludes=("Produktvorstellung", "Sprechertext", "Schritt-für-Schritt"),
     ),
     PromptCase(
+        id="session_state_reads_before_context_replacement",
+        kind="general",
+        user="Ersetze den dauerhaften Kontext dieser Session durch eine Notiz: Projekt Aurora ist pausiert.",
+        tools=("session_state", "message_metadata"),
+        expected_tool="session_state",
+        expected_arguments={"operation": "read"},
+        forbidden_tools=("message_metadata",),
+    ),
+    PromptCase(
+        id="message_metadata_writes_processed_item_ids",
+        kind="general",
+        user=(
+            'Speichere an deiner aktuellen Antwort im Metadaten-Namensraum "processed_items" '
+            'exakt dieses JSON: {"ids":["item-42"]}. Das ist nur eine Notiz, kein Nachweis einer Ausführung.'
+        ),
+        tools=("message_metadata", "session_state"),
+        expected_tool="message_metadata",
+        expected_arguments={"operation": "write", "namespace": "processed_items", "data": {"ids": ["item-42"]}},
+        forbidden_tools=("session_state",),
+    ),
+    PromptCase(
         id="session_read_uses_session_uuid",
         kind="general",
         user=f"Lies die Nachrichten der Session {SESSION_ID}.",
@@ -4794,6 +4818,16 @@ _SEMANTIC_CONTRACTS = (
         ),
     ),
     ContractCoverage("session.uuid_fields", "session", ("session_read_uses_session_uuid",)),
+    ContractCoverage(
+        "session.context_read_before_replace",
+        "session",
+        ("session_state_reads_before_context_replacement",),
+    ),
+    ContractCoverage(
+        "session.message_metadata_annotations",
+        "session",
+        ("message_metadata_writes_processed_item_ids",),
+    ),
     ContractCoverage(
         "memory.explicit_write_only",
         "memory",

@@ -51,38 +51,27 @@ async def test_undo_removes_user_message_suffix_and_returns_draft(monkeypatch) -
     commit.assert_awaited_once_with(db)
 
 
-async def test_undo_cancels_active_run_before_locking_session(monkeypatch) -> None:
-    user = UserAccount(id=uuid4(), username="test", password_hash="hash")
-    session = ChatSession(id=uuid4(), user_id=user.id, title="Test")
-    run_id = uuid4()
+@pytest.mark.parametrize("run_count", [1, 4])
+async def test_undo_cancels_active_run_before_locking_session(monkeypatch, run_count) -> None:
+    session = ChatSession(id=uuid4(), user_id=uuid4(), title="Test")
+    run_ids = [uuid4() for _ in range(run_count)]
     events = []
-
-    class ActiveRun:
-        @property
-        def id(self):
-            events.append("run_id")
-            return run_id
-
-    run = ActiveRun()
     db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = MagicMock(all=lambda: run_ids)
     db.rollback.side_effect = lambda: events.append("rollback")
-    monkeypatch.setattr(ChatHistoryService, "_owned_session", AsyncMock(return_value=session))
-    monkeypatch.setattr(
-        ChatHistoryService,
-        "_active_run",
-        AsyncMock(side_effect=[run, None, None]),
-    )
-    cancel = AsyncMock(side_effect=lambda _run_id: events.append("cancel"))
-    monkeypatch.setattr(AgentRuntime, "cancel_and_wait", cancel)
 
-    result = await ChatHistoryService._lock_after_cancelling_active_run(
-        db, session.id, user.id
-    )
+    async def owned_session(*args, for_update=True):
+        if for_update:
+            events.append("lock")
+        return session
 
-    assert result is session
-    cancel.assert_awaited_once_with(run_id)
-    assert events[:3] == ["run_id", "rollback", "cancel"]
-    assert db.rollback.await_count == 2
+    monkeypatch.setattr(ChatHistoryService, "_owned_session", owned_session)
+    monkeypatch.setattr(ChatHistoryService, "_active_run", AsyncMock(return_value=None))
+    monkeypatch.setattr(AgentRuntime, "cancel_and_wait", AsyncMock(side_effect=lambda run_id: events.append(run_id)))
+
+    await ChatHistoryService._lock_after_cancelling_active_run(db, session.id, session.user_id)
+
+    assert events == ["rollback", *run_ids, "lock"]
 
 
 async def test_undo_of_first_user_message_keeps_session_and_resets_generated_title(monkeypatch) -> None:
@@ -134,8 +123,10 @@ async def test_undo_of_first_user_message_preserves_manual_title(monkeypatch) ->
 async def test_retry_keeps_user_message_and_restarts_original_failed_run(monkeypatch, before_execution) -> None:
     user = UserAccount(id=uuid4(), username="test", password_hash="hash")
     session = ChatSession(id=uuid4(), user_id=user.id, title="Test")
-    failed_run = AgentRun(id=uuid4(), session_id=session.id, status="failed")
     messages = _records(session.id)[:3]
+    failed_run = AgentRun(id=uuid4(), session_id=session.id, status="failed", input_message_id=messages[2].id)
+    messages.append(Message(id=uuid4(), session_id=session.id, role="user", content="Continue",
+                            provider_data={"_matoloop": {"continuationRunId": str(failed_run.id)}}))
     error = Message(
         id=uuid4(),
         session_id=session.id,
@@ -166,6 +157,24 @@ async def test_retry_keeps_user_message_and_restarts_original_failed_run(monkeyp
     assert result.run is replacement_run
     remove_suffix.assert_awaited_once_with(db, messages, 2, include_boundary=False)
     retry.assert_awaited_once_with(db, session, failed_run, before_execution=before_execution)
+
+
+@pytest.mark.parametrize("foreign_role", ["user", "assistant"])
+async def test_retry_rejects_foreign_run_in_deleted_suffix(foreign_role) -> None:
+    session_id, run_id = uuid4(), uuid4()
+    original = Message(id=uuid4(), role="user", content="Original")
+    failed_run = AgentRun(id=run_id, session_id=session_id, status="failed", input_message_id=original.id)
+    foreign = Message(id=uuid4(), role=foreign_role, content="Successful review",
+                      provider_data={"_matoloop": {
+                          "requestId" if foreign_role == "user" else "runId": str(uuid4())
+                      }})
+    error = Message(id=uuid4(), role="assistant", error_code="provider.requestFailed", error_run_id=run_id)
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = failed_run
+
+    assert await ChatHistoryService.retry_source(
+        db, session_id=session_id, messages=[original, foreign, error], message_id=error.id
+    ) is None
 
 
 async def test_retry_rejects_a_non_latest_error(monkeypatch) -> None:

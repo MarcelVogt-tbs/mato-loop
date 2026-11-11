@@ -27,6 +27,9 @@ def apply_run_session_settings(session: ChatSession, run: AgentRun) -> bool:
         return False
     values = settings.model_dump()
     values["session_profile"] = settings.session_profile.model_dump(mode="json")
+    # Durable context is live state, not a frozen run configuration.
+    if "context_state" in (session.session_profile or {}):
+        values["session_profile"]["context_state"] = session.session_profile["context_state"]
     values.update(
         agent_profile_id=run.agent_profile_id or session.agent_profile_id,
         preferred_execution_agent_id=run.execution_agent_id,

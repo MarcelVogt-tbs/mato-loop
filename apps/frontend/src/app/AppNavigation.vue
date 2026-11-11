@@ -25,7 +25,7 @@
       <q-separator class="lt-md" />
 
       <div class="col column no-wrap drawer-navigation q-py-xs">
-        <SidebarNavItem icon="home" icon-color="primary" label="Home" :to="{ name: 'chat' }" :active="route.name === 'chat' && !routeSessionId && !Object.hasOwn(route.query, 'new')" class="q-mx-xs q-mb-xs" @click="closeDrawerOnMobile" />
+        <SidebarNavItem icon="chat" icon-color="primary" label="Chat" :to="{ name: 'chat' }" :active="route.name === 'chat' && !Object.hasOwn(route.query, 'new') && ((!routeSessionId && !Object.hasOwn(route.query, 'project')) || Boolean(routeSessionId && routeSessionId === chat.personalChatSessionId))" class="q-mx-xs q-mb-xs" @click="closeDrawerOnMobile" />
         <q-scroll-area
           ref="sidebarScrollArea"
           class="col session-scroll-area"

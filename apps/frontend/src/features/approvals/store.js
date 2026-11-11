@@ -37,7 +37,7 @@ export const useApprovalStore = defineStore('approvals', {
       item.sessionId === sessionId && !item.runId
     )),
     forSession: (state) => (sessionId) => state.pending.filter((item) => (
-      item.sessionId === sessionId && (item.requestType !== 'memory_change' || item.payload?.subagentSessionId)
+      item.sessionId === sessionId
     ))
   },
   actions: {

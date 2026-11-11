@@ -39,6 +39,7 @@ from mato_loop_backend.media.attachments import AttachmentInput
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
+    AutomationRun,
     ChatSession,
     Message,
     QuestionRequest,
@@ -74,6 +75,32 @@ from mato_loop_backend.tools.arguments import QuestionArguments, TaskArguments
 def prepared_execution(monkeypatch):
     # These tests isolate event delivery; execution prerequisites have their own coverage.
     monkeypatch.setattr(AgentRuntime, "_prepare_run", AsyncMock())
+
+
+@pytest.mark.parametrize("foreign_run", [False, True])
+async def test_terminalization_pairs_reused_ids_with_latest_own_batch(foreign_run) -> None:
+    session_id, run_id = uuid4(), uuid4()
+    earlier_run_id = uuid4() if foreign_run else run_id
+    records = [
+        Message(id=uuid4(), session_id=session_id, role="assistant", tool_calls=[{"id": "reused"}],
+                provider_data={"_matoloop": {"runId": str(earlier_run_id)}}),
+        Message(id=uuid4(), session_id=session_id, role="tool", tool_call_id="reused",
+                provider_data={"_matoloop": {"runId": str(earlier_run_id)}}),
+        Message(id=uuid4(), session_id=session_id, role="assistant", trust_level="private",
+                tool_calls=[{"id": "reused"}, {"id": "done"}],
+                provider_data={"_matoloop": {"runId": str(run_id)}}),
+        Message(id=uuid4(), session_id=session_id, role="tool", tool_call_id="done",
+                provider_data={"_matoloop": {"runId": str(run_id)}}),
+    ]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalars.return_value = Mock(all=lambda: [
+        item for item in records if item.provider_data["_matoloop"]["runId"] == str(run_id)
+    ])
+
+    await AgentRuntime._terminalize_incomplete_tool_calls(db, session_id, run_id=run_id)
+
+    assert [(item.tool_call_id, json.loads(item.content)["error"]["code"])
+            for item in db.add_all.call_args.args[0]] == [("reused", "tool.executionInterrupted")]
 
 
 def test_run_timing_sums_active_segments_and_excludes_user_waits() -> None:
@@ -762,6 +789,7 @@ async def test_child_authorization_uses_main_grants_child_roots_and_snapshot(mon
 )
 @pytest.mark.parametrize("tool_limit", [25, None])
 @pytest.mark.parametrize("session_trust", [None, "public", "private"])
+@pytest.mark.parametrize("automation", [False, True])
 @pytest.mark.usefixtures("mock_db_settings")
 async def test_start_persists_effective_run_policy_snapshot(
     monkeypatch,
@@ -771,6 +799,7 @@ async def test_start_persists_effective_run_policy_snapshot(
     expected_pseudonymization: bool,
     tool_limit: int | None,
     session_trust: str | None,
+    automation: bool,
 ) -> None:
     from mato_loop_backend.settings.models import AgentProfile
 
@@ -790,8 +819,9 @@ async def test_start_persists_effective_run_policy_snapshot(
         name="Anzeigename",
         trust_level=model_trust,
     )
+    session_model = ModelConfig(provider_id=provider.id, model_id="session", trust_level=TrustLevel.PRIVATE)
     settings = AiSettings(
-        providers=[provider], models=[model], default_model_id=model.id
+        providers=[provider], models=[model, session_model], default_model_id=session_model.id
     )
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
     task = Mock()
@@ -805,7 +835,7 @@ async def test_start_persists_effective_run_policy_snapshot(
         id=uuid4(),
         user_id=uuid4(),
         title="Test",
-        model_config_id=model.id,
+        model_config_id=session_model.id,
         agent_profile_id=profile.id,
         trust_level=session_trust,
     )
@@ -813,7 +843,10 @@ async def test_start_persists_effective_run_policy_snapshot(
     db.scalar.side_effect = [session, None, True, True]
 
     requested_run_id = uuid4()
-    run = await AgentRuntime.start(db, session, "Nachricht", run_id=requested_run_id)
+    run = await AgentRuntime.start(
+        db, session, "Nachricht", run_id=requested_run_id, model_id_override=model.id,
+        automation_run=AutomationRun(id=uuid4(), automation_id=uuid4(), definition_snapshot={}) if automation else None,
+    )
 
     message, persisted_run = db.add_all.call_args.args[0]
     assert message.provider_data["_matoloop"]["maxToolCallsByRun"] == {str(run.id): tool_limit}
@@ -821,9 +854,10 @@ async def test_start_persists_effective_run_policy_snapshot(
     assert persisted_run is run
     assert run.id == requested_run_id
     assert run.model_config_id == model.id
+    assert session.model_config_id == session_model.id
     assert run.model_name == "Anzeigename"
     assert run.trust_level == expected_trust.value
-    assert session.trust_level == (session_trust or expected_trust.value)
+    assert session.trust_level == (session_trust if automation else session_trust or expected_trust.value)
     assert run.pseudonymization_enabled is expected_pseudonymization
     db.commit.assert_awaited_once()
     task.add_done_callback.assert_called_once()

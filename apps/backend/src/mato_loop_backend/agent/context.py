@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.agent.projection as agent_projection
+from mato_loop_backend.agent.interaction_context import tool_batches
 from mato_loop_backend.agent.projection import (
     _SHORTENED_TOOL_OUTPUT,
     _SUMMARY_EVIDENCE_MARKER,
@@ -30,32 +31,17 @@ EstimateCallback = Callable[[list[dict[str, Any]]], Awaitable[int]]
 
 def _model_order(records: list[Message]) -> list[Message]:
     """Keep completed tool batches together when direct messages arrive during execution."""
+    _, results = tool_batches(records)
+    batches: dict[int, list[int]] = {}
+    for (batch, _call_id), result in results.items():
+        batches.setdefault(batch, []).append(result)
+    moved = set(results.values())
     ordered = []
-    index = 0
-    while index < len(records):
-        assistant = records[index]
-        ordered.append(assistant)
-        index += 1
-        if assistant.role != "assistant" or not assistant.tool_calls:
+    for index, item in enumerate(records):
+        if index in moved:
             continue
-        run_id = (assistant.provider_data or {}).get("_matoloop", {}).get("runId")
-        call_ids = {str(call["id"]) for call in assistant.tool_calls if call.get("id")}
-        if not run_id or not call_ids:
-            continue
-        results = []
-        direct_messages = []
-        while index < len(records):
-            item = records[index]
-            if item.role == "tool" and item.tool_call_id in call_ids:
-                results.append(item)
-            elif (item.role == "user" and
-                  (item.provider_data or {}).get("_matoloop", {}).get("continuationRunId") == run_id):
-                direct_messages.append(item)
-            else:
-                break
-            index += 1
-        ordered.extend(results)
-        ordered.extend(direct_messages)
+        ordered.append(item)
+        ordered.extend(records[result] for result in sorted(batches.get(index, [])))
     return ordered
 
 
@@ -75,6 +61,7 @@ class ContextManager:
         target_trust_level: TrustLevel = TrustLevel.PUBLIC,
         memory_context: str | None = None,
         memory_contexts: dict[UUID, str] | None = None,
+        session_contexts: dict[UUID, str] | None = None,
         runtime_instructions: str = "",
         runtime_context: str | None = None,
         live_tool_calls: dict[UUID, list[dict[str, Any]]] | None = None,
@@ -85,7 +72,11 @@ class ContextManager:
     ) -> ContextProjection:
         """Budget original projections with raw request estimates, before slack and safety."""
         # Reorder only the model's view; persisted timestamps and message order stay intact.
-        records = _model_order([item for item in records if item.error_code is None])
+        records = [item for item in records if item.error_code is None]
+        canonical_positions = {item.id: index for index, item in enumerate(records)}
+        records = _model_order(records)
+        interleaved_start = next((i for i, item in enumerate(records)
+                                  if getattr(item, "_interleaved_review", False)), len(records))
         reserved_output_tokens = generation_reserve(model)
         input_budget = raw_input_budget(max(
             0,
@@ -120,8 +111,9 @@ class ContextManager:
                 ),
                 None,
             )
-            if boundary is not None:
-                active_records = records[boundary + 1 :]
+            if boundary is not None and boundary < interleaved_start:
+                covered = canonical_positions[latest.covered_through_message_id]
+                active_records = [item for item in records if canonical_positions[item.id] > covered]
             else:
                 latest = None
 
@@ -131,7 +123,7 @@ class ContextManager:
 
         async def persist_omissions() -> None:
             for item in active_records:
-                if item.id in omitted_tool_result_ids:
+                if item.id in omitted_tool_result_ids and not getattr(item, "_interleaved_review", False):
                     data = item.provider_data or {}
                     item.provider_data = {
                         **data,
@@ -158,6 +150,7 @@ class ContextManager:
                     target_trust_level,
                     memory_context=memory_context,
                     memory_contexts=memory_contexts,
+                    session_contexts=session_contexts,
                     tool_snapshots=tool_snapshots,
                     tool_snapshot_characters=int(input_budget * 0.05 * characters_per_token),
                     runtime_instructions=runtime_instructions,
@@ -215,6 +208,19 @@ class ContextManager:
             agent_projection._protected_start(active_records, settings.protected_recent_turns),
             within_turn=estimated > trigger_tokens,
         )
+        # Only canonical completed prefixes may become shared durable summaries.
+        protected_start = min(protected_start, next((i for i, item in enumerate(active_records)
+            if getattr(item, "_interleaved_review", False)), len(active_records)))
+        # A reordered batch may compact only when the prefix contains the entire
+        # crossed canonical group. Completed groups do not become permanent barriers.
+        canonical_active = sorted(canonical_positions[item.id] for item in active_records)
+        safe = [0]
+        selected_positions = set()
+        for index, item in enumerate(active_records[:protected_start], 1):
+            selected_positions.add(canonical_positions[item.id])
+            if selected_positions == set(canonical_active[:index]):
+                safe.append(index)
+        protected_start = max(safe)
         prefix = active_records[:protected_start]
         suffix = active_records[protected_start:]
         # Clear an old batch only under budget pressure, and never expand it on a later run.
@@ -263,15 +269,15 @@ class ContextManager:
             if not content:
                 raise ContextError("agent.compactionFailed")
             if prefix:
-                covered_through_message_id = prefix[-1].id
+                covered_through_message_id = max(prefix, key=lambda item: canonical_positions[item.id]).id
             else:
                 assert latest is not None
                 covered_through_message_id = latest.covered_through_message_id
-            covered_index = next(
-                index for index, item in enumerate(records) if item.id == covered_through_message_id
-            )
+            covered_position = canonical_positions[covered_through_message_id]
             content = content.split(_SUMMARY_EVIDENCE_MARKER, 1)[0].rstrip()
-            content += agent_projection._summary_evidence(records[:covered_index + 1])
+            content += agent_projection._summary_evidence([
+                item for item in records if canonical_positions[item.id] <= covered_position
+            ])
             pending_summary = ContextSummary(
                 session_id=chat_session.id,
                 covered_through_message_id=covered_through_message_id,

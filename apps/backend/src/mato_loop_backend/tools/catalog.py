@@ -12,8 +12,10 @@ import mato_loop_backend.tools.identity as tools_identity
 import mato_loop_backend.tools.interaction as tools_interaction
 import mato_loop_backend.tools.media as tools_media
 import mato_loop_backend.tools.memory as tools_memory
+import mato_loop_backend.tools.message_metadata as tools_message_metadata
 import mato_loop_backend.tools.permissions as tools_permissions
 import mato_loop_backend.tools.personal_settings as tools_personal_settings
+import mato_loop_backend.tools.session_state as tools_session_state
 import mato_loop_backend.tools.sessions as tools_sessions
 import mato_loop_backend.tools.skills as tools_skills
 import mato_loop_backend.tools.web as tools_web
@@ -169,6 +171,8 @@ tool_registry = ToolRegistry(
         tools_sessions.SESSION_TOOL_RESULT_READ,
         tools_sessions.SESSION_BROWSE,
         tools_sessions.SESSION_SEARCH,
+        tools_session_state.SESSION_STATE,
+        tools_message_metadata.MESSAGE_METADATA,
         tools_automations.LIST_AUTOMATIONS,
         tools_automations.GET_AUTOMATION,
         tools_automations.CREATE_AUTOMATION,

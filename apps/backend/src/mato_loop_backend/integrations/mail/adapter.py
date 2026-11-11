@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import date
 from typing import Any, Literal
 from uuid import UUID
 
@@ -116,6 +117,14 @@ class MailSearchArguments(MailIntegrationArguments):
     query: str | None = Field(default=None, min_length=1, max_length=500)
     limit: int = Field(default=50, ge=1, le=100)
     cursor: str | None = Field(default=None, min_length=1, max_length=50_000)
+    recent_since: date | None = Field(
+        default=None,
+        description="Include messages received on or after this date (IMAP INTERNALDATE).",
+    )
+    include_unread: bool = Field(
+        default=False,
+        description="With recent_since, match unread OR recent messages. Both remain subject to query and cursor. Ignored without recent_since.",
+    )
 
 
 class _MailSearchCursor(_Arguments):
@@ -125,6 +134,8 @@ class _MailSearchCursor(_Arguments):
     query: str | None
     uidvalidity: int = Field(gt=0)
     before_uid: int = Field(gt=1)
+    recent_since: date | None = None
+    include_unread: bool = False
 
 
 class MailTokenArguments(MailIntegrationArguments):
@@ -422,12 +433,19 @@ async def search_messages(
             or cursor.binding_revision != revision
             or cursor.mailbox != arguments.mailbox
             or cursor.query != arguments.query
+            or cursor.recent_since != arguments.recent_since
+            or cursor.include_unread != arguments.include_unread
         ):
             raise ValueError("mail search cursor binding mismatch")
+    filters = (
+        {"recent_since": arguments.recent_since, "include_unread": arguments.include_unread}
+        if arguments.recent_since is not None else {}
+    )
     page = await client.search(
         arguments.mailbox, query=arguments.query, limit=arguments.limit,
         before_uid=cursor.before_uid if cursor else None,
         expected_uidvalidity=cursor.uidvalidity if cursor else None,
+        **filters,
     )
     next_cursor = None
     if page.next_uid is not None:
@@ -439,6 +457,8 @@ async def search_messages(
                 query=arguments.query,
                 uidvalidity=page.uidvalidity,
                 before_uid=page.next_uid,
+                recent_since=arguments.recent_since,
+                include_unread=arguments.include_unread,
             ).model_dump(mode="json")
         ).decode("ascii")
     return {

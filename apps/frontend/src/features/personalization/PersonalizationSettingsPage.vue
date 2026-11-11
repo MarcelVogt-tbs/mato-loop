@@ -11,6 +11,7 @@
     >
       <q-tab name="profile" icon="person" label="Über mich" />
       <q-tab name="assistant" icon="face" label="Personas" />
+      <q-tab name="personal-assistant" icon="support_agent" label="Assistent" />
     </q-tabs>
 
     <q-tab-panels v-model="tab" class="bg-transparent">
@@ -159,6 +160,9 @@
       <q-tab-panel name="assistant" class="q-pa-none">
         <AgentIdentitySettingsPage />
       </q-tab-panel>
+      <q-tab-panel name="personal-assistant" class="q-pa-none">
+        <AssistantSettings />
+      </q-tab-panel>
     </q-tab-panels>
   </section>
 </template>
@@ -169,6 +173,7 @@ import { useQuasar } from 'quasar'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import UserProfileFieldEditor from 'src/features/personalization/UserProfileFieldEditor.vue'
 import AgentIdentitySettingsPage from 'src/features/personalization/AgentIdentitySettingsPage.vue'
+import AssistantSettings from 'src/features/personalization/AssistantSettings.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { useAuthStore } from 'stores/auth'
 import {
@@ -210,7 +215,7 @@ const audienceOptions = [
   { label: 'Öffentliche Modelle', value: 'public', icon: 'public' }
 ]
 const tab = computed({
-  get: () => route.query.tab === 'assistant' ? 'assistant' : 'profile',
+  get: () => ['assistant', 'personal-assistant'].includes(route.query.tab) ? route.query.tab : 'profile',
   set: (value) => router.replace({ query: { ...route.query, tab: value } })
 })
 const visibleFields = computed(() => fields.filter((field) => activeFieldNames.value.includes(field.name)))

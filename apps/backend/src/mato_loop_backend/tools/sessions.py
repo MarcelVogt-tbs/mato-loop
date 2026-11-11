@@ -79,6 +79,7 @@ def _message_item(
     if message.role == "tool":
         content = _target_tool_result(
             tool_names.get(message.id), message.content, target_trust_level,
+            source_trust_level=message.trust_level,
             available_secret_references=available_secret_references or set(),
         )
         content = _model_file_tool_result(content)

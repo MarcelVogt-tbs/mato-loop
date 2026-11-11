@@ -12,6 +12,23 @@ The backend runs **one worker** with one process-local run/approval coordinator.
 - Explicit cancellation interrupts providers, child work and dispatched operations best effort, persists visible partial text and terminal tool results, and expires pending run interactions. Repeated cancellation must not interrupt cleanup again.
 - Completed effects remain; late file/process effects may still finish. Neither restart nor uncertain dispatch permits automatic replay.
 
+Root execution is serialized per session. A committed approval/question wait releases
+the execution slot, allowing any automation in that session to run while the original
+request and waiter remain intact. Resolving the request reacquires the slot before
+continuing and retains normal post-approval authorization. Runnable/queued roots block
+new starts; ordinary chat admission and queued messages still wait for all active roots.
+Roots with live children retain their blocking lifecycle to avoid uncoordinated effects.
+Manual, scheduled and event-triggered automations use the same parked-run exclusion.
+
+Interleaved runs receive same-session open requests as untrusted status, never consent.
+Protected input and private-model request details are excluded from public-model context.
+One shared permission-time action-ownership check matches tool arguments,
+computer/directory and exact resource/content bindings. It prevents
+reissuing another live request's action, including approved actions awaiting continuation,
+but stops matching after that call has a persisted result. It never copies consent.
+Live reordered exchanges are not compacted into shared summaries; completed groups may
+compact only at complete canonical coverage boundaries.
+
 The [run-continuation contract](run-continuations.md) defines direct input, pending-interaction replacement and provider replay. Title generation is independent, tool-free and must not block the agent. Manual naming wins over a pending generated title.
 
 `BackgroundProcessing` shares lifecycle and error handling for the message queue,
@@ -168,6 +185,7 @@ are offered; unchanged target/tool selection retains deterministic guidance acro
 rounds. HTTP image transport and sampling defaults are unchanged.
 
 - **Do not rewrite earlier turns from current state.** Profile instructions use persisted `agentProfileInstructions`; workspace-change reminders use the originating turn's `workspaceContext` snapshot, refreshed for the latest turn on retry, never for earlier turns. Memory envelopes use their own turn snapshots and live source revalidation, as defined in [memory.md](memory.md#automatic-context). Invalidated context is omitted, never retained merely for caching. Compacted image sources may fall back to the request tail; reasoning replay requires its exact provider/model/credential/endpoint/trust/privacy scope.
+  Durable session context uses bounded `session_profile.context_state` data and host-authored `sessionContext` snapshots on originating user messages. Context changes affect the next turn, not retained turns or the system prefix. Snapshots are reauthorized for current owner, source visibility, model trust and assistant-context mode on every projection; private historical text never inherits a later public source classification. Automatic assistant-context reads use check-only session permissions and never create approvals. Notes and processing receipts remain untrusted data, not instructions, authorization or proof of effects. Enabling the new `session_state` schema intentionally changes the offered-tool prefix; unchanged eligible schemas and turn snapshots remain stable afterward.
   Moving Memory envelopes from synthetic assistant answers into their user messages intentionally invalidates older prefixes from the changed contract onward. It preserves turn snapshots, consecutive-envelope deduplication and subsequent serialized-prefix reuse without migrating stored messages.
 - **Freeze retrieved session summaries with their turn.** Dreaming may update the current snapshot, but that does not replace cached tool-round context or historical Memory envelopes. History invalidation changes the source revision; summary regeneration alone does not. Summary reading hints stay in the turn-local envelope, and disabled-summary requests keep the existing prompt contract unchanged. [Session-summary tests](../apps/backend/tests/test_session_summaries.py) compare Chat Completions and Responses prefixes across tool rounds and database-loaded follow-ups.
 - **Compare serialized input, not just object equality.** Chat Completions and Responses encode tool arguments with sorted JSON keys, including nested objects, so JSONB roundtrips do not change equivalent argument strings. Preserve semantic array/tool order and omit host-only projection fields from provider payloads.

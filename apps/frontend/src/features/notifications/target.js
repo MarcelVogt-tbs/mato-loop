@@ -1,5 +1,7 @@
 export function notificationTargetRoute(target) {
   if (target?.type === 'memoryApproval' && target.approvalId) {
+    if (target.sessionId) return { name: 'chat', query: { session: target.sessionId } }
+    // Older persisted notices need their owner-scoped approval resolved first.
     return { name: 'settings-memory', query: { tab: 'dreaming', approval: target.approvalId } }
   }
   if (target?.type === 'session' && target.sessionId) {

@@ -86,12 +86,14 @@ def test_schedule_request_accepts_exactly_one_schedule_kind() -> None:
 
 def test_automation_request_accepts_browser_uuid_and_datetime_values() -> None:
     session_id = uuid4()
+    model_id = uuid4()
 
     request = AutomationRequest.model_validate(
         {
             "name": "Bericht",
             "task": "Erstelle einen Bericht",
             "sessionId": str(session_id),
+            "modelId": str(model_id),
             "schedules": [
                 {"runAt": "2026-08-21T10:30:00+02:00", "enabled": True}
             ],
@@ -99,6 +101,7 @@ def test_automation_request_accepts_browser_uuid_and_datetime_values() -> None:
     )
 
     assert request.session_id == session_id
+    assert request.model_id == model_id
     assert request.schedules[0].run_at == datetime(2026, 8, 21, 8, 30, tzinfo=UTC)
 
 
@@ -230,15 +233,16 @@ def test_status_and_list_summary_are_compact_and_batch_active_statuses(automatio
 
 
 @pytest.mark.parametrize("enabled", [True, False])
-def test_status_next_run_requires_effective_schedule(enabled):
+@pytest.mark.parametrize("archived", [True, False])
+def test_status_next_run_requires_effective_schedule(enabled, archived):
     now = datetime(2026, 9, 1, tzinfo=UTC)
     item = Automation(
         id=uuid4(), revision=1, enabled=enabled,
         schedules=[AutomationSchedule(enabled=True, next_run_at=now)],
     )
-    state = routes._automation_status(item, None).effective_state
-    assert state.enabled == enabled
-    assert state.next_run_at == (now if enabled else None)
+    state = routes._automation_status(item, None, archived=archived).effective_state
+    assert state.enabled == (enabled and not archived)
+    assert state.next_run_at == (now if enabled and not archived else None)
 
 
 @pytest.mark.parametrize("suffix", ["/status", "?includeHistory=false", "/runs?summary=true"])
@@ -482,6 +486,7 @@ async def test_replace_deletes_existing_schedules_before_inserting_replacements(
         user_id=automation.user_id,
         session_type="automation",
     )
+    db.scalar.return_value = None
     schedule_snapshots = []
 
     async def flush() -> None:
@@ -565,7 +570,7 @@ async def test_due_schedules_are_bundled_into_one_skipped_run() -> None:
     rows.all.return_value = [automation]
     db = AsyncMock(spec=AsyncSession)
     db.scalars.return_value = rows
-    db.scalar.return_value = uuid4()
+    db.scalar.side_effect = [uuid4(), None]
     db.get.return_value = execution_session
 
     count = await AutomationService.enqueue_due(db, now=now)
@@ -779,7 +784,8 @@ def test_session_delete_impact_changes_with_linked_automation_revision() -> None
     assert automation_impact_token([automation]) != original
 
 
-async def test_start_failure_is_visible_in_the_session() -> None:
+@pytest.mark.parametrize("busy", [False, True])
+async def test_start_failure_is_visible_in_the_session(busy) -> None:
     run = AutomationRun(
         id=uuid4(),
         automation_id=uuid4(),
@@ -791,12 +797,17 @@ async def test_start_failure_is_visible_in_the_session() -> None:
     )
     db = AsyncMock(spec=AsyncSession)
     db.get.side_effect = [run, Automation(id=run.automation_id, execution_session_id=uuid4(), task="Task")]
-    db.scalar.return_value = None
+    db.scalar.return_value = uuid4() if busy else None
 
     await AutomationService._fail_start(db, run.id, "automation.snapshotInvalid")
 
     assert run.status == "failed"
-    assert db.add.call_args.args[0].error_code == "automation.snapshotInvalid"
+    if busy:
+        db.add.assert_not_called()
+    else:
+        assert db.add.call_args.args[0].error_code == "automation.snapshotInvalid"
+        source, failed = db.add_all.call_args.args[0]
+        assert source.provider_data["_matoloop"]["requestId"] == str(failed.id)
     db.commit.assert_awaited_once()
 
 
@@ -841,6 +852,7 @@ async def test_delete_automation_keeps_session_and_its_running_agent(monkeypatch
     automation = Automation(id=uuid4(), user_id=uuid4(), execution_session_id=uuid4(), revision=1)
     monkeypatch.setattr(AutomationService, "owned", AsyncMock(return_value=automation))
     db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
     await AutomationService.delete(db, automation.id, automation.user_id, expected_revision=1)
     db.delete.assert_awaited_once_with(automation)
 
@@ -859,10 +871,10 @@ async def test_busy_session_start_remains_queued(monkeypatch):
     from mato_loop_backend.agent.run_contracts import AgentRunError
     from mato_loop_backend.agent.runtime import AgentRuntime
 
-    automation = Automation(id=uuid4(), execution_session_id=uuid4())
+    automation = Automation(id=uuid4(), user_id=uuid4(), execution_session_id=uuid4())
     run = AutomationRun(id=uuid4(), automation_id=automation.id, status="queued", definition_snapshot={"task": "Task"})
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.return_value = run
+    db.scalar.side_effect = [run, None]
     db.get.side_effect = [automation, ChatSession(id=automation.execution_session_id)]
     monkeypatch.setattr(AgentRuntime, "start", AsyncMock(side_effect=AgentRunError("session.runAlreadyActive")))
     await AutomationService.process_next(db)
@@ -876,3 +888,108 @@ def test_create_cannot_bind_a_foreign_session(automation_api):
         'sessionId': str(uuid4()), 'name': 'Task', 'task': 'Work', 'schedules': [],
     })
     assert response.status_code == 404
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+async def test_automation_model_is_run_local_and_null_tracks_session(monkeypatch, explicit):
+    from mato_loop_backend.agent.runtime import AgentRuntime
+    from mato_loop_backend.settings import AiSettings
+    from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
+
+    provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="automation")
+    monkeypatch.setattr("mato_loop_backend.settings.load_effective_ai", AsyncMock(return_value=AiSettings(providers=[provider], models=[model])))
+    session = ChatSession(id=uuid4(), user_id=uuid4(), model_config_id=uuid4(), agent_profile_id=uuid4())
+    automation = Automation(id=uuid4(), user_id=session.user_id, execution_session_id=session.id, model_id=model.id if explicit else None, name="Task", task="Work")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    db.get.return_value = session
+    snapshot = await AutomationService._snapshot(db, automation)
+    session.model_config_id = uuid4()
+    current_model_id = session.model_config_id
+    run = AutomationRun(id=uuid4(), automation_id=automation.id, definition_snapshot=snapshot)
+    db.scalar.side_effect = [run, None]
+    db.get.side_effect = [automation, session]
+    start = AsyncMock()
+    monkeypatch.setattr(AgentRuntime, "start", start)
+
+    await AutomationService.process_next(db)
+
+    assert (start.await_args.kwargs["model_id_override"], session.model_config_id,
+            run.definition_snapshot["runtime"]["modelId"]) == (
+        model.id if explicit else None, current_model_id, str(model.id if explicit else current_model_id),
+    )
+
+
+@pytest.mark.parametrize("method", ["post", "put"])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_automation_api_passes_nullable_model_to_shared_service(automation_api, monkeypatch, method, explicit):
+    client, db, user = automation_api
+    model_id = uuid4() if explicit else None
+    automation = Automation(id=uuid4(), user_id=user.id, execution_session_id=uuid4(), revision=1)
+    monkeypatch.setattr(AutomationService, "owned", AsyncMock(return_value=automation))
+    service = AsyncMock(return_value=automation)
+    monkeypatch.setattr(AutomationService, "create" if method == "post" else "replace", service)
+    monkeypatch.setattr(routes, "_automation_payload", AsyncMock(return_value={"modelId": str(model_id) if model_id else None}))
+
+    response = client.request(method, "/automations" if method == "post" else f"/automations/{automation.id}", json={
+        "name": "Task", "task": "Work", "sessionId": str(automation.execution_session_id),
+        "expectedRevision": 1, "schedules": [], "modelId": str(model_id) if model_id else None,
+    })
+
+    assert (response.status_code, service.await_args.kwargs["model_id"]) == (201 if method == "post" else 200, model_id)
+
+
+@pytest.mark.parametrize("unavailable", ["deleted", "disabled", "provider", "tools", "capability"])
+async def test_automation_model_validation_rejects_unavailable_models(monkeypatch, unavailable):
+    from mato_loop_backend.settings import AiSettings
+    from mato_loop_backend.settings.models import LlmProviderConfig, ModelCapability, ModelConfig
+
+    provider = LlmProviderConfig(name="Provider", adapter_type="openai-compatible", enabled=unavailable != "provider")
+    model = ModelConfig(provider_id=provider.id, model_id="automation", enabled=unavailable != "disabled", supports_tools=unavailable != "tools")
+    if unavailable == "capability":
+        model.capabilities = [ModelCapability.IMAGE_GENERATION]
+    ai = AiSettings(providers=[provider], models=[] if unavailable == "deleted" else [model])
+    monkeypatch.setattr("mato_loop_backend.settings.load_effective_ai", AsyncMock(return_value=ai))
+
+    with pytest.raises(AutomationError) as error:
+        await AutomationService.validate_model(AsyncMock(spec=AsyncSession), uuid4(), model.id)
+
+    assert (error.value.code, error.value.field) == ("session.modelUnavailable", "modelId")
+
+
+async def test_can_disable_automation_with_unchanged_unavailable_model(monkeypatch):
+    from mato_loop_backend.settings import AiSettings
+
+    automation = Automation(
+        id=uuid4(), user_id=uuid4(), execution_session_id=uuid4(), model_id=uuid4(),
+        name="Task", task="Work", revision=1, enabled=True,
+    )
+    monkeypatch.setattr("mato_loop_backend.settings.load_effective_ai", AsyncMock(return_value=AiSettings()))
+
+    await AutomationService.replace(
+        AsyncMock(spec=AsyncSession), automation, expected_revision=1,
+        name=automation.name, task=automation.task, enabled=False,
+        schedules=[], model_id=automation.model_id,
+    )
+
+    assert automation.enabled is False
+
+
+async def test_unavailable_automation_override_fails_without_starting_runtime(monkeypatch):
+    from mato_loop_backend.agent.runtime import AgentRuntime
+    from mato_loop_backend.settings import AiSettings
+
+    automation = Automation(id=uuid4(), user_id=uuid4(), execution_session_id=uuid4())
+    run = AutomationRun(id=uuid4(), automation_id=automation.id, definition_snapshot={"task": "Work", "modelId": str(uuid4())})
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [run, None]
+    db.get.side_effect = [automation, ChatSession(id=automation.execution_session_id, user_id=uuid4())]
+    monkeypatch.setattr("mato_loop_backend.settings.load_effective_ai", AsyncMock(return_value=AiSettings()))
+    start, fail = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(AgentRuntime, "start", start)
+    monkeypatch.setattr(AutomationService, "_fail_start", fail)
+
+    await AutomationService.process_next(db)
+
+    assert (start.await_count, fail.await_args.args) == (0, (db, run.id, "session.modelUnavailable"))

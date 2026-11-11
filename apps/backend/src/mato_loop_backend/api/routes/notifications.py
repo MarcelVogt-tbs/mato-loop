@@ -55,6 +55,7 @@ class MemoryApprovalNotificationTargetResponse(BaseModel):
 
     type: Literal["memoryApproval"]
     approval_id: UUID = Field(alias="approvalId")
+    session_id: UUID | None = Field(default=None, alias="sessionId")
 
 
 class NotificationResponse(BaseModel):
@@ -115,7 +116,9 @@ def _notification_payload(item: Notification) -> NotificationResponse:
         title=item.title,
         body=notification_body_preview(item.body, limit=500 if item.kind == "session.response" else 4_000),
         target=(
-            MemoryApprovalNotificationTargetResponse(type="memoryApproval", approvalId=item.approval_id)
+            MemoryApprovalNotificationTargetResponse(
+                type="memoryApproval", approvalId=item.approval_id, sessionId=item.session_id,
+            )
             if item.kind == "memory.approval" and item.approval_id is not None
             else SessionNotificationTargetResponse(type="session", sessionId=item.session_id)
             if item.session_id is not None

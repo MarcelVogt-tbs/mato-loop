@@ -9,7 +9,7 @@ import smtplib
 import ssl
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import date, datetime
 from email import policy
 from email.message import EmailMessage, Message
 from email.parser import BytesParser
@@ -550,6 +550,7 @@ class MailClient:
     def _search_sync(
         self, mailbox: str, query: str | None, limit: int,
         before_uid: int | None = None, expected_uidvalidity: int | None = None,
+        recent_since: date | None = None, include_unread: bool = False,
     ) -> MessagePage:
         _modified_utf7_encode(mailbox)
         if query and any(ord(character) < 32 or ord(character) == 127 for character in query):
@@ -559,6 +560,17 @@ class MailClient:
             if expected_uidvalidity is not None and uidvalidity != expected_uidvalidity:
                 raise MailError("mail.staleReference")
             criteria = ("UID", f"1:{before_uid - 1}") if before_uid is not None else ()
+            if recent_since is not None:
+                # IMAP date month names must not depend on the process locale.
+                month = (
+                    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+                )[recent_since.month - 1]
+                since = f"{recent_since.day:02d}-{month}-{recent_since.year:04d}"
+                criteria += (
+                    ("OR", "UNSEEN", "SINCE", since)
+                    if include_unread else ("SINCE", since)
+                )
             if query:
                 escaped = query.replace("\\", "\\\\").replace('"', '\\"')
                 status, values = client.uid(
@@ -609,9 +621,11 @@ class MailClient:
     async def search(
         self, mailbox: str, *, query: str | None = None, limit: int = 50,
         before_uid: int | None = None, expected_uidvalidity: int | None = None,
+        recent_since: date | None = None, include_unread: bool = False,
     ) -> MessagePage:
         return await self._run(
-            self._search_sync, mailbox, query, limit, before_uid, expected_uidvalidity
+            self._search_sync, mailbox, query, limit, before_uid, expected_uidvalidity,
+            recent_since, include_unread,
         )
 
     def _get_raw_sync(self, locator: MessageLocator) -> tuple[bytes, frozenset[str]]:

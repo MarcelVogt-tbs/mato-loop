@@ -8,6 +8,9 @@ export function applicationServerKey(value) {
 
 export function pushTargetPath(target) {
   if (target?.type === 'memoryApproval' && UUID_PATTERN.test(target.approvalId || '')) {
+    if (UUID_PATTERN.test(target.sessionId || '')) {
+      return `/?session=${encodeURIComponent(target.sessionId)}`
+    }
     return `/settings/memory?tab=dreaming&approval=${encodeURIComponent(target.approvalId)}`
   }
   if (target?.type === 'session' && UUID_PATTERN.test(target.sessionId || '')) {

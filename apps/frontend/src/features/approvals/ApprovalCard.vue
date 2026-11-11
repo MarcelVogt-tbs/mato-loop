@@ -11,6 +11,10 @@
 
     <q-card-section class="q-px-md q-pt-none q-pb-md">
       <template v-if="isMemoryApproval">
+        <div v-if="memoryPayload.sourceSessionId" class="row q-gutter-xs q-mb-sm">
+          <q-btn flat dense no-caps icon="chat" label="Quell-Session" :to="{ name: 'chat', query: { session: memoryPayload.sourceSessionId } }" />
+          <q-btn v-if="memoryPayload.sourceDreamRunId" flat dense no-caps icon="history" label="Durchlauf" :to="{ name: 'settings-dream-run', params: { runId: memoryPayload.sourceDreamRunId } }" />
+        </div>
         <q-banner v-if="invalidMemoryApproval" rounded class="bg-negative text-white q-mb-md" role="alert">
           Dieser Memory-Vorschlag ist unvollständig und kann nicht genehmigt werden.
         </q-banner>

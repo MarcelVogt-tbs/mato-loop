@@ -1803,12 +1803,14 @@ def test_automation_schedule_arguments_accept_one_time_schedule() -> None:
 async def test_create_automation_approval_uses_current_session_boundaries(
     tmp_path, monkeypatch, manual
 ) -> None:
+    model_id = uuid4() if manual else None
     call = ToolCall(
         "create",
         "create_automation",
         {
             "name": "Bericht",
             "task": "Erstelle den Bericht",
+            "model_id": str(model_id) if model_id else None,
             "enabled": True,
             "schedules": [] if manual else [
                 {
@@ -1854,6 +1856,7 @@ async def test_create_automation_approval_uses_current_session_boundaries(
         )
     assert create.await_args.kwargs["session_id"] == context.session.id
     assert create.await_args.kwargs["triggers"] == []
+    assert create.await_args.kwargs["model_id"] == model_id
 
 
 async def test_edit_automation_approval_labels_removing_schedules_as_manual(tmp_path, monkeypatch):
@@ -1866,6 +1869,7 @@ async def test_edit_automation_approval_labels_removing_schedules_as_manual(tmp_
     automation = Automation(
         id=automation_id, user_id=context.session.user_id, revision=1, name="Manual",
         task="Do work", enabled=True,
+        model_id=uuid4(),
         schedules=[AutomationSchedule(
             cron_expression="0 8 * * *", timezone="UTC", enabled=True,
         )],
@@ -1878,9 +1882,11 @@ async def test_edit_automation_approval_labels_removing_schedules_as_manual(tmp_
     permission = context.ask_handler.await_args.args[0]
     assert permission.capability == "automation.update"
     changes = permission.approval_details["automationChange"]["changes"]
-    assert len(changes) == 1 and changes[0].endswith(" -> Keine Zeitpläne")
+    assert any(change.endswith(" -> Keine Zeitpläne") for change in changes)
+    assert any(change.endswith(" -> Aktuelles Sessionmodell") for change in changes)
     assert replace.await_args.kwargs["schedules"] == []
     assert replace.await_args.kwargs["expected_revision"] == 1
+    assert replace.await_args.kwargs["model_id"] is None
 
 
 async def test_run_automation_rechecks_revision_after_approval_and_queues_only(
@@ -3122,12 +3128,13 @@ async def test_personal_calendar_default_requires_discovered_owned_resource(monk
     assert save.await_args.kwargs["user_id"] == context.session.user_id
 
 
-async def test_personal_settings_permissions_bind_to_session_owner(tmp_path) -> None:
-    call = ToolCall("settings", "customize_matoloop", {"action": "get", "area": "memory"})
+@pytest.mark.parametrize("area", ["memory"])
+async def test_personal_settings_permissions_bind_to_session_owner(tmp_path, area) -> None:
+    call = ToolCall("settings", "customize_matoloop", {"action": "get", "area": area})
     context = _context(tmp_path, call)
     for request in (
-        personal_settings_permission(uuid4(), "memory", "get"),
-        personal_settings_permission(context.session.user_id, "memory", "get"),
+        personal_settings_permission(uuid4(), area, "get"),
+        personal_settings_permission(context.session.user_id, area, "get"),
     ):
         decision = await PermissionPolicy.evaluate(
             context.db, context.session, request, context.root_files, ToolExecutionPolicy.AUTO

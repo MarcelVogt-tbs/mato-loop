@@ -54,6 +54,7 @@ async def build_turn_context(
     repository_context_loader: Callable[..., Awaitable[str]] | None = None,
     pdf_context: dict[str, dict] | None = None,
     runtime_context: str | None = None,
+    session_contexts: dict[UUID, str] | None = None,
     available_secret_references: set[str] | None = None,
 ) -> tuple[ContextProjection, int, int]:
     async def summarize(source: str, output_tokens: int) -> SummaryResult:
@@ -159,6 +160,7 @@ async def build_turn_context(
                     runtime_context=runtime_context,
                     memory_context=memory_context,
                     memory_contexts=memory_turn.historical_contexts,
+                    session_contexts=session_contexts,
                     tool_snapshots=tool_snapshots,
                     tool_schemas=schemas,
                     model=model,

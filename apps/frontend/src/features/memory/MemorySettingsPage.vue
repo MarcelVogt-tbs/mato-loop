@@ -25,6 +25,8 @@
       />
     </header>
 
+    <LegacyMemoryApprovalLink v-if="route.query.approval" :approval-id="String(route.query.approval)" />
+
     <q-tabs
       :model-value="section"
       dense
@@ -276,21 +278,6 @@
       </q-tab-panel>
 
       <q-tab-panel name="dreaming" class="q-pa-none">
-        <section aria-labelledby="dreaming-proposals" class="q-mb-lg">
-          <h3 id="dreaming-proposals" class="text-subtitle1 text-weight-bold q-mt-none q-mb-sm">Offene Vorschläge</h3>
-          <q-skeleton v-if="approvals.loading && !approvals.loaded" type="text" />
-          <q-banner v-if="approvals.loadFailed" rounded class="app-surface-tonal">
-            Vorschläge konnten nicht geladen werden.
-            <template #action><q-btn flat no-caps label="Erneut laden" @click="refreshProposals" /></template>
-          </q-banner>
-          <p v-else-if="approvals.loaded && !memoryProposals.length" class="app-muted">Keine offenen Vorschläge.</p>
-          <q-banner v-if="route.query.approval && approvals.loaded && !approvals.loadFailed && !memoryProposals.some((item) => item.id === route.query.approval)" rounded class="app-surface-tonal q-mb-sm">
-            Dieser Vorschlag ist nicht mehr offen.
-          </q-banner>
-          <div v-for="proposal in memoryProposals" :id="`memory-proposal-${proposal.id}`" :key="proposal.id" tabindex="-1" class="q-mb-sm" :class="{ 'app-surface-tonal rounded-borders q-pa-sm': proposal.id === route.query.approval }">
-            <ApprovalCard :approval="proposal" :show-draft-action="false" />
-          </div>
-        </section>
         <section aria-label="Verarbeitungseinstellungen">
           <q-form ref="dreamingSettingsFormRef" class="dreaming-settings-form relative-position" @submit="saveSettings('dreaming')" @validation-error="advancedSettingsOpen = true">
             <q-card flat class="app-surface dreaming-settings-card">
@@ -571,11 +558,10 @@ import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
-import ApprovalCard from 'src/features/approvals/ApprovalCard.vue'
+import LegacyMemoryApprovalLink from './LegacyMemoryApprovalLink.vue'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { useChatStore } from 'src/features/chat/store'
-import { useApprovalStore } from 'stores/approvals'
 import { useMemoryStore } from 'stores/memories'
 import { useAuthStore } from 'stores/auth'
 import { apiErrorMessage } from 'src/utils/api-errors'
@@ -588,7 +574,6 @@ const { confirm } = useConfirm()
 const chat = useChatStore()
 const memories = useMemoryStore()
 const auth = useAuthStore()
-const approvals = useApprovalStore()
 const route = useRoute()
 const router = useRouter()
 const showRunPage = computed(() => ['settings-dream-runs', 'settings-dream-run'].includes(route.name))
@@ -598,7 +583,6 @@ const section = computed(() => showRunPage.value || route.query.tab === 'dreamin
 function selectSection(tab) {
   return router.replace({ name: 'settings-memory', query: { ...route.query, tab, approval: undefined } })
 }
-const memoryProposals = computed(() => approvals.pending.filter((item) => item.requestType === 'memory_change'))
 const page = ref(1)
 const pageSize = ref(20)
 const memoryDialogOpen = ref(false)
@@ -1002,19 +986,8 @@ watch([showRunPage, section], ([runPage, value], [previousRunPage, previous]) =>
   }
 })
 
-function refreshProposals() { return approvals.fetchPending().catch(() => {}) }
-
-watch([section, () => route.query.approval, () => memoryProposals.value.some((item) => item.id === route.query.approval)], async ([tab, id, present]) => {
-  if (tab !== 'dreaming' || !present) return
-  await nextTick()
-  const proposal = document.getElementById(`memory-proposal-${id}`)
-  proposal?.scrollIntoView({ block: 'start' })
-  proposal?.focus({ preventScroll: true })
-}, { immediate: true, flush: 'post' })
-
 function loadMainPage() {
   if (showRunPage.value) return
-  void refreshProposals()
   void loadMemories(0)
   void refreshDreamRuns()
   void chat.fetchSessionCatalog().catch(() => {})

@@ -13,6 +13,7 @@ from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from mato_loop_backend.agent.session_execution import parked_runs
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.models import (
     AgentRun,
@@ -89,12 +90,17 @@ def runtime_snapshot(session: ChatSession) -> dict[str, Any]:
     }
 
 
-def automation_definition(automation: Automation, *, archived: bool = False) -> dict[str, Any]:
-    next_at = min(
+def automation_next_run_at(automation: Automation, *, archived: bool = False) -> datetime | None:
+    return min(
         (item.next_run_at for item in automation.schedules if item.enabled), default=None,
     ) if automation.enabled and not archived else None
+
+
+def automation_definition(automation: Automation, *, archived: bool = False) -> dict[str, Any]:
+    next_at = automation_next_run_at(automation, archived=archived)
     return {
         "id": str(automation.id), "name": automation.name, "task": automation.task,
+        "modelId": str(automation.model_id) if automation.model_id else None,
         "enabled": automation.enabled, "triggers": automation.triggers or [],
         "revision": automation.revision, "executionSessionId": str(automation.execution_session_id),
         "schedules": [{
@@ -109,6 +115,22 @@ def automation_definition(automation: Automation, *, archived: bool = False) -> 
 
 
 class AutomationService:
+    @staticmethod
+    async def validate_model(db: AsyncSession, user_id: UUID, model_id: UUID | None) -> None:
+        if model_id is None:
+            return
+        from mato_loop_backend.sessions.service import SessionServiceError
+        from mato_loop_backend.sessions.templates import validate_chat_model
+        from mato_loop_backend.settings import load_effective_ai
+        from mato_loop_backend.settings.session_profiles import ChatModelOverride
+
+        try:
+            validate_chat_model(
+                await load_effective_ai(db, user_id), ChatModelOverride(model_id=model_id),
+            )
+        except SessionServiceError as exc:
+            raise AutomationError(exc.code, field=exc.field) from exc
+
     @staticmethod
     async def session_definitions(db: AsyncSession, session: ChatSession) -> list[dict[str, Any]]:
         rows = (await db.scalars(
@@ -211,11 +233,14 @@ class AutomationService:
         db: AsyncSession, *, user_id: UUID, session_id: UUID, name: str, task: str,
         enabled: bool, schedules: list[dict[str, Any]],
         triggers: list[str] | None = None, now: datetime | None = None,
+        model_id: UUID | None = None,
     ) -> Automation:
         session = await AutomationService.normal_session(db, session_id, user_id, field="sessionId")
+        await AutomationService.validate_model(db, user_id, model_id)
         automation = Automation(
             user_id=user_id, execution_session_id=session.id, name=name, task=task,
             enabled=enabled, triggers=list(dict.fromkeys(triggers or [])),
+            model_id=model_id,
         )
         AutomationService.set_schedules(automation, schedules, now=now or datetime.now(UTC))
         AutomationService.attach_app(session)
@@ -232,10 +257,18 @@ class AutomationService:
         name: str, task: str, enabled: bool,
         schedules: list[dict[str, Any]], triggers: list[str] | None = None,
         now: datetime | None = None,
+        model_id: UUID | None = None,
     ) -> Automation:
         if automation.revision != expected_revision:
             raise AutomationError("automation.changed", params={"currentRevision": automation.revision})
+        if enabled:
+            from mato_loop_backend.assistant import require_assistant_initialized
+
+            await require_assistant_initialized(db, automation)
+        if enabled or model_id != automation.model_id:
+            await AutomationService.validate_model(db, automation.user_id, model_id)
         automation.name = name
+        automation.model_id = model_id
         automation.task = task
         automation.enabled = enabled
         if not enabled:
@@ -254,12 +287,16 @@ class AutomationService:
 
     @staticmethod
     async def _snapshot(db: AsyncSession, automation: Automation) -> dict[str, Any]:
+        from mato_loop_backend.assistant import require_assistant_initialized
+
+        await require_assistant_initialized(db, automation)
         session = await db.get(ChatSession, automation.execution_session_id)
         if session is None:
             raise AutomationError("automation.executionSessionMissing")
         return {
             "name": automation.name,
             "task": automation.task,
+            "modelId": str(automation.model_id) if automation.model_id else None,
             "runtime": runtime_snapshot(session),
         }
 
@@ -275,6 +312,7 @@ class AutomationService:
             raise AutomationError("session.archived")
         active = await db.scalar(select(AutomationRun.id).where(
             AutomationRun.automation_id == automation.id, AutomationRun.status.in_(ACTIVE_STATUSES),
+            AutomationRun.agent_run_id.is_(None) | AutomationRun.agent_run_id.not_in(parked_runs()),
         ))
         if active is not None:
             raise AutomationError("automation.alreadyRunning")
@@ -295,6 +333,9 @@ class AutomationService:
         automation = await AutomationService.owned(db, automation_id, user_id, for_update=True)
         if automation.revision != expected_revision:
             raise AutomationError("automation.changed", params={"currentRevision": automation.revision})
+        from mato_loop_backend.assistant import clear_assistant_binding
+
+        await clear_assistant_binding(db, user_id, automation_ids=[automation.id])
         await db.delete(automation)
         await db.commit()
 
@@ -329,6 +370,7 @@ class AutomationService:
                 advance_schedule(item, now)
             active = await db.scalar(select(AutomationRun.id).where(
                 AutomationRun.automation_id == automation.id, AutomationRun.status.in_(ACTIVE_STATUSES),
+                AutomationRun.agent_run_id.is_(None) | AutomationRun.agent_run_id.not_in(parked_runs()),
             ))
             try:
                 definition_snapshot = await AutomationService._snapshot(db, automation)
@@ -353,17 +395,18 @@ class AutomationService:
         from mato_loop_backend.agent.runtime import AgentRuntime
         from mato_loop_backend.error_contract import describe_error
 
+        agent_run_id = uuid4()
         message = Message(
             session_id=automation.execution_session_id, role="user",
             content=run.definition_snapshot.get("task", automation.task),
-            source_type="app", provider_data={"_matoloop": {"source": {
+            source_type="app", provider_data={"_matoloop": {"requestId": str(agent_run_id), "source": {
                 "type": "automationRun", "automationId": str(automation.id),
                 "runId": str(run.id), "trigger": run.trigger,
                 "automationName": run.definition_snapshot.get("name", automation.name),
             }}},
         )
         agent_run = AgentRun(
-            id=uuid4(), session_id=automation.execution_session_id,
+            id=agent_run_id, session_id=automation.execution_session_id,
             automation_origin=True,
             status="failed", error=code, completed_at=datetime.now(UTC),
         )
@@ -391,8 +434,9 @@ class AutomationService:
             if await db.scalar(select(AgentRun.id).where(
                 AgentRun.session_id == automation.execution_session_id,
                 AgentRun.parent_run_id.is_(None), AgentRun.status.in_(ACTIVE_STATUSES),
+                AgentRun.id.not_in(parked_runs()),
             )) is not None:
-                await db.rollback()
+                await db.commit()
                 return
             message = await AutomationService._session_error(db, automation, run, code)
         await db.commit()
@@ -406,10 +450,11 @@ class AutomationService:
         from mato_loop_backend.agent.run_contracts import AgentRunError
         from mato_loop_backend.agent.runtime import AgentRuntime
 
-        # Use the same active-session rule as interactive messages; another job can start meanwhile.
+        # Only committed interaction waits release execution for another automation.
         busy_session = select(AgentRun.id).where(
             AgentRun.session_id == Automation.execution_session_id,
             AgentRun.parent_run_id.is_(None), AgentRun.status.in_(ACTIVE_STATUSES),
+            AgentRun.id.not_in(parked_runs()),
         ).exists()
         run = await db.scalar(
             select(AutomationRun).join(Automation, Automation.id == AutomationRun.automation_id)
@@ -434,9 +479,18 @@ class AutomationService:
             await AutomationService._fail_start(db, run_id, run.definition_snapshot["errorCode"])
             return True
         try:
-            # Runtime configuration belongs to the session, including for scheduled turns.
+            # Null follows the effective session model at start, not at enqueue time.
+            from mato_loop_backend.assistant import require_assistant_initialized
+
+            await require_assistant_initialized(db, automation)
+            model_id = run.definition_snapshot.get("modelId")
+            model_id = UUID(model_id) if model_id is not None else None
+            await AutomationService.validate_model(db, session.user_id, model_id)
             run.definition_snapshot = {
-                **run.definition_snapshot, "runtime": runtime_snapshot(session),
+                **run.definition_snapshot, "runtime": {
+                    **runtime_snapshot(session),
+                    **({"modelId": str(model_id)} if model_id else {}),
+                },
             }
             task = str(run.definition_snapshot["task"])
             if event := run.definition_snapshot.get("event"):
@@ -451,7 +505,10 @@ class AutomationService:
             await AgentRuntime.start(
                 db, session, task,
                 automation_run=run,
+                model_id_override=model_id,
             )
+        except AutomationError as exc:
+            await AutomationService._fail_start(db, run_id, exc.code)
         except AgentRunError as exc:
             if exc.code == "session.runAlreadyActive":
                 await db.rollback()
@@ -512,6 +569,7 @@ class AutomationService:
                 continue
             active = await db.scalar(select(AutomationRun.id).where(
                 AutomationRun.automation_id == item.id, AutomationRun.status.in_(ACTIVE_STATUSES),
+                AutomationRun.agent_run_id.is_(None) | AutomationRun.agent_run_id.not_in(parked_runs()),
             ))
             try:
                 snapshot = await AutomationService._snapshot(db, item)

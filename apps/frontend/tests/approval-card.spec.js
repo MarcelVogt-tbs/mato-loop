@@ -447,15 +447,19 @@ describe('inline memory approval edits', () => {
     return card
   }
 
-  it('opens the linked proposal in Dreaming and allows its decision there', async () => {
+  it('links a legacy Dreaming proposal to its chat instead of deciding it in settings', async () => {
     Element.prototype.scrollIntoView = vi.fn()
+    approval.sessionId = 'proposal-chat'
     responses['/memories'] = { items: [], total: 0, offset: 0, limit: 20 }
     responses['/memories/settings'] = {}
     responses['/memories/dream-runs'] = { items: [] }
     responses['/sessions'] = { items: [], nextCursor: null }
     const router = createRouter({
       history: createMemoryHistory(),
-      routes: [{ path: '/settings/memory', name: 'settings-memory', component: { render: () => null } }]
+      routes: [
+        { path: '/settings/memory', name: 'settings-memory', component: { render: () => null } },
+        { path: '/', name: 'chat', component: { render: () => null } }
+      ]
     })
     await router.push('/settings/memory?tab=dreaming&approval=memory')
     root = document.createElement('div')
@@ -463,21 +467,9 @@ describe('inline memory approval edits', () => {
     app = createApp(MemorySettingsPage)
     app.use(pinia).use(router).use(Quasar, quasarOptions)
     app.mount(root)
-    await vi.waitFor(() => expect(document.activeElement?.id).toBe('memory-proposal-memory'))
-    const card = root.querySelector('.approval-card')
-    card.querySelector('[aria-label="Vorschlag bearbeiten"]').click()
-    await nextTick()
-    const input = card.querySelector('textarea')
-    input.focus()
-    responses['/approvals/pending'] = [structuredClone(approval)]
-    await useApprovalStore().fetchPending()
-    await nextTick()
-    expect(document.activeElement).toBe(input)
-    button(card, 'Bearbeitung verwerfen').click()
-    await nextTick()
-    button(root.querySelector('.approval-card'), 'Genehmigen').click()
-    await vi.waitFor(() => expect(root.querySelector('.approval-card')).toBeNull())
-    expect(api.post).toHaveBeenCalledExactlyOnceWith('/approvals/memory/decisions', { decision: 'approve' })
+    await vi.waitFor(() => expect(root.querySelector('[role="status"] a')?.getAttribute('href')).toBe('/?session=proposal-chat'))
+    expect(root.querySelector('.approval-card')).toBeNull()
+    expect(api.post).not.toHaveBeenCalled()
   })
 
   it.each([

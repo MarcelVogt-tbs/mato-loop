@@ -39,6 +39,7 @@ describe('web push contract', () => {
     })).toBe(`/settings/automations/${AUTOMATION_ID}?run=${RUN_ID}`)
     expect(pushTargetPath({ type: 'actions' })).toBe('/?controlCenter=notifications')
     expect(pushTargetPath({ type: 'memoryApproval', approvalId: RUN_ID })).toBe(`/settings/memory?tab=dreaming&approval=${RUN_ID}`)
+    expect(pushTargetPath({ type: 'memoryApproval', approvalId: RUN_ID, sessionId: SESSION_ID })).toBe(`/?session=${SESSION_ID}`)
   })
 
   it('shows a safe fallback for unknown versions and ignores arbitrary click destinations', () => {

@@ -142,6 +142,10 @@ class CalendarQueryEventsArguments(CalendarResourceArguments):
     start: datetime
     end: datetime
     limit: int = Field(default=50, ge=1, le=50)
+    offset: int | None = Field(
+        default=None, ge=0, le=100_000,
+        description="Omit for server order. Set 0 for stable pagination by resource, UID and occurrence start; increase by limit while truncated. Restart if the collection changes.",
+    )
 
     @model_validator(mode="after")
     def validate_range(self) -> CalendarQueryEventsArguments:
@@ -282,6 +286,10 @@ class TaskResourceArguments(TaskIntegrationArguments):
 class TaskQueryArguments(TaskResourceArguments):
     include_completed: bool = False
     limit: int = Field(default=100, ge=1, le=100)
+    offset: int | None = Field(
+        default=None, ge=0, le=100_000,
+        description="Omit for server order. Set 0 for stable pagination by resource, UID and due date; increase by limit while truncated. Restart if the collection changes.",
+    )
 
 
 class TaskCreateArguments(TaskResourceArguments):
@@ -974,6 +982,11 @@ async def calendar_query_events(
         async with _selected_client(arguments.integration_id, context) as (client, revision):
             calendar = await _calendar(client, arguments.calendar_key, context)
             events = await client.query_events(calendar, arguments.start, arguments.end)
+        if arguments.offset is not None:
+            events = sorted(
+                events, key=lambda item: (item.href, item.uid, item.start.isoformat())
+            )
+        offset = arguments.offset or 0
         return _result(
             {
                 "calendar": {
@@ -988,8 +1001,9 @@ async def calendar_query_events(
                         revision,
                         arguments.calendar_key,
                     )
-                    for event in events[: arguments.limit]
-                ]
+                    for event in events[offset: offset + arguments.limit]
+                ],
+                "truncated": len(events) > offset + arguments.limit,
             }
         )
     except CalDavError as exc:
@@ -1112,6 +1126,12 @@ async def tasks_query(arguments: TaskQueryArguments, context: Any) -> Any:
             tasks = await client.query_tasks(
                 task_list, include_completed=arguments.include_completed
             )
+        if arguments.offset is not None:
+            tasks = sorted(
+                tasks,
+                key=lambda item: (item.href, item.uid, item.due.isoformat() if item.due else ""),
+            )
+        offset = arguments.offset or 0
         return _result(
             {
                 "tasks": [
@@ -1121,9 +1141,9 @@ async def tasks_query(arguments: TaskQueryArguments, context: Any) -> Any:
                         revision,
                         arguments.task_list_key,
                     )
-                    for task in tasks[: arguments.limit]
+                    for task in tasks[offset: offset + arguments.limit]
                 ],
-                "truncated": len(tasks) > arguments.limit,
+                "truncated": len(tasks) > offset + arguments.limit,
             }
         )
     except CalDavError as exc:

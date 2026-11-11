@@ -21,7 +21,7 @@ export function useSidebarSessions({
     { label: 'Ohne Projekt', value: null },
     ...projects.items.map((project) => ({ label: project.name, value: project.id }))
   ])
-  const standaloneSessionList = computed(() => chat.sessionList(null) || emptySidebarList)
+  const standaloneSessionList = computed(() => projectSessionList(null))
   const sessionStatuses = computed(() => new Map(chat.cachedSessions.map((session) => [
     session.id,
     sessionSidebarStatus(
@@ -58,7 +58,8 @@ export function useSidebarSessions({
   }
 
   function projectSessionList(projectId) {
-    return chat.sessionList(projectId) || emptySidebarList
+    const list = chat.sessionList(projectId) || emptySidebarList
+    return { ...list, items: list.items.filter(session => session.id !== chat.personalChatSessionId) }
   }
 
   async function loadProjectSessions(projectId, force = false) {

@@ -91,6 +91,7 @@
             </div>
             <q-expansion-item v-model="optionsOpen" :duration="0" dense label="Weitere Optionen" class="q-mt-md">
               <div class="q-pa-sm q-gutter-sm">
+                <AppSelect v-model="form.modelId" outlined dense emit-value map-options label="Ausführungsmodell" :options="modelOptions" :disable="archived" hint="Aktuelles Sessionmodell wird bei jedem Start neu bestimmt. Eine feste Auswahl gilt nur für diese Automation." />
                 <q-toggle v-model="form.enabled" :disable="archived" dense label="Automatische Starts aktiv" />
                 <q-btn v-if="definition" flat dense no-caps color="negative" icon="delete_outline" label="Automation entfernen" :disable="saving" @click="remove(definition)" />
               </div>
@@ -119,6 +120,7 @@
 
 <script setup>
 import AppMenu from 'src/shared/ui/AppMenu.vue'
+import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { isNavigationFailure, NavigationFailureType, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
@@ -130,6 +132,7 @@ import { isPwaUpdateReload } from 'src/app/pwa-update'
 import { useAutomationStore } from 'stores/automations'
 import { useChatStore } from 'src/features/chat/store'
 import { useControlCenterStore } from 'stores/control-center'
+import { useProviderStore } from 'stores/providers'
 
 const $q = useQuasar()
 const route = useRoute()
@@ -138,6 +141,7 @@ const { confirm } = useConfirm()
 const automations = useAutomationStore()
 const chat = useChatStore()
 const controlCenter = useControlCenterStore()
+const providers = useProviderStore()
 const sessionId = computed(() => controlCenter.sessionId)
 const selectedId = computed(() => typeof route.query.automation === 'string' ? route.query.automation : null)
 const visible = computed(() => controlCenter.open && controlCenter.activeContentId === 'automation')
@@ -154,7 +158,15 @@ const optionsOpen = ref(false)
 const editingTask = ref(false)
 const taskExpanded = ref(false)
 const expandedSchedule = ref(null)
-const form = reactive({ name: '', task: '', enabled: true, schedules: [], triggers: [] })
+const form = reactive({ name: '', task: '', modelId: null, enabled: true, schedules: [], triggers: [] })
+const modelOptions = computed(() => {
+  const options = providers.selectionOptions(form.modelId, true)
+  return [
+    { label: 'Aktuelles Sessionmodell', value: null },
+    ...(form.modelId && !options.some((item) => item.value === form.modelId) ? [{ label: 'Modell nicht verfügbar', value: form.modelId, disable: true }] : []),
+    ...options
+  ]
+})
 const triggerOptions = [{ value: 'agent_response', label: 'Agent hat geantwortet' }, { value: 'agent_error', label: 'Agent-Auftrag fehlgeschlagen' }]
 const summaries = computed(() => new Map(automations.items.map((item) => [item.id, item])))
 const entries = computed(() => automations.sessionItems
@@ -180,6 +192,7 @@ function assign(value) {
   definition.value = value
   Object.assign(form, {
     name: value?.name || '', task: value?.task || '', enabled: value?.enabled ?? true,
+    modelId: value?.modelId ?? null,
     schedules: value?.schedules?.map(scheduleDraft) || [],
     triggers: [...(value?.triggers || [])]
   })
@@ -200,7 +213,7 @@ async function load() {
   taskExpanded.value = false
   optionsOpen.value = false
   try {
-    const values = await automations.fetchForSession(sessionId.value)
+    const [values] = await Promise.all([automations.fetchForSession(sessionId.value), providers.fetchEffective()])
     if (current !== version) return
     const value = values.find((item) => item.id === selectedId.value)
     if (selectedId.value && selectedId.value !== 'new' && !value) { loadFailed.value = true; return }
@@ -235,6 +248,7 @@ async function openLastRun(item) {
 function payload() {
   return {
     name: form.name.trim(), task: form.task.trim(), sessionId: sessionId.value,
+    modelId: form.modelId,
     enabled: form.enabled, schedules: form.schedules.map(schedulePayload),
     triggers: form.triggers
   }
@@ -285,6 +299,7 @@ async function toggleEnabled(item = definition.value) {
     if (current !== version) return
     const value = await automations.updateAutomation(item.id, {
       name: saved.name, task: saved.task, enabled: !item.enabled,
+      modelId: saved.modelId ?? null,
       schedules: saved.schedules.map((schedule) => schedulePayload(scheduleDraft(schedule))),
       triggers: saved.triggers || [], expectedRevision: saved.revision
     })

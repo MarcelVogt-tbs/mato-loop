@@ -191,7 +191,9 @@ class NotificationService:
             payload = web_push_payload(
                 title=item.title, body=item.body, tag=f"notification:{item.id}",
                 notification_id=item.id,
-                target=WebPushMemoryApprovalTarget(type="memoryApproval", approvalId=item.approval_id)
+                target=WebPushMemoryApprovalTarget(
+                    type="memoryApproval", approvalId=item.approval_id, sessionId=item.session_id,
+                )
                 if item.kind == "memory.approval" and item.approval_id is not None
                 else WebPushSessionTarget(type="session", sessionId=item.session_id)
                 if item.session_id else None,

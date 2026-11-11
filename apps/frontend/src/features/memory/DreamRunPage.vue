@@ -43,10 +43,10 @@
           <div v-if="run.proposals.length">
             <div class="text-subtitle2">Änderungsvorschläge</div>
             <q-list>
-              <q-item v-for="proposal in run.proposals" :key="proposal.id" :clickable="proposal.status === 'pending'" :to="proposal.status === 'pending' ? { name: 'settings-memory', query: { tab: 'dreaming', approval: proposal.id } } : undefined">
+              <q-item v-for="proposal in run.proposals" :key="proposal.id" :clickable="proposal.status === 'pending'" :to="proposal.status === 'pending' ? notificationTargetRoute({ type: 'memoryApproval', approvalId: proposal.id, sessionId: proposal.sessionId }) : undefined">
                 <q-item-section>
                   <q-item-label>{{ actionLabel(proposal.action.replace('memory_', '')) }}</q-item-label>
-                  <q-item-label caption>{{ proposalStatusLabel(proposal.status) }}</q-item-label>
+                  <q-item-label caption>{{ proposalStatusLabel(proposal.status) }}{{ proposal.status === 'pending' ? ' · Im Chat prüfen' : '' }}</q-item-label>
                 </q-item-section>
               </q-item>
             </q-list>
@@ -88,6 +88,7 @@ import { useMemoryStore } from 'src/stores/memories'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
 import { dreamRunMeta, summaryStatusLabel } from './dreaming'
+import { notificationTargetRoute } from 'src/features/notifications/target'
 
 const route = useRoute()
 const memories = useMemoryStore()

@@ -10,6 +10,7 @@ vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: mocks.
 vi.mock('stores/automations', () => ({ useAutomationStore: () => mocks.stores.automations }))
 vi.mock('src/features/chat/store', () => ({ useChatStore: () => mocks.stores.chat }))
 vi.mock('stores/control-center', () => ({ useControlCenterStore: () => mocks.stores.controlCenter }))
+vi.mock('stores/providers', () => ({ useProviderStore: () => ({ selectionOptions: () => [{ label: 'Automation model', value: 'model' }], fetchEffective: vi.fn() }) }))
 import AutomationApp from '../src/features/automations/AutomationApp.vue'
 import { scheduleDraft } from '../src/features/automations/schedules'
 
@@ -82,7 +83,7 @@ it('creates an automation in the current session without runtime copies or outpu
   await page.save()
   expect(store.createAutomation).toHaveBeenCalledWith({
     name: 'Meine Session', task: 'Prüfe die Aufgabe.', sessionId: 'session',
-    enabled: true, schedules: [], triggers: []
+    enabled: true, schedules: [], triggers: [], modelId: null
   })
 })
 
@@ -101,6 +102,18 @@ it('validates schedules and preserves existing one-time timestamps', async () =>
       { runAt: '2027-02-03T11:12:43.123456+01:00', enabled: false }
     ]
   }))
+})
+
+it('saves and clears the run-only model override and preserves it when pausing', async () => {
+  const { page, store } = await mount({ ...definition(), modelId: 'model' })
+  await page.toggleEnabled()
+  expect(store.updateAutomation).toHaveBeenLastCalledWith('automation', expect.objectContaining({ modelId: 'model' }))
+  page.form.modelId = null
+  await page.save()
+  expect(store.updateAutomation).toHaveBeenLastCalledWith('automation', expect.objectContaining({ modelId: null }))
+  page.form.modelId = 'model'
+  await page.save()
+  expect(store.updateAutomation).toHaveBeenLastCalledWith('automation', expect.objectContaining({ modelId: 'model' }))
 })
 
 it('saves an event trigger through the normal automation form', async () => {

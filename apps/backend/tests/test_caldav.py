@@ -853,8 +853,46 @@ async def test_calendar_query_identifies_empty_selected_calendar(monkeypatch) ->
             "name": "Privat",
         },
         "events": [],
+        "truncated": False,
         "contentIsUntrusted": True,
     }
+
+
+@pytest.mark.parametrize("kind", ["events", "tasks"])
+async def test_query_offset_pages_are_stable_without_changing_server_order(monkeypatch, kind) -> None:
+    account = _account()
+    revision = _revision(account)
+    client = AsyncMock()
+    _mock_task_client(monkeypatch, client, revision)
+    if kind == "events":
+        event = CalDavEvent(
+            uid="recurring", href="https://calendar.example.com/event.ics",
+            etag=None, summary="First", start=date(2026, 11, 8),
+            end=date(2026, 11, 9), all_day=True, recurring=True,
+        )
+        items = (event, replace(event, summary="Second", start=date(2026, 11, 9), end=date(2026, 11, 10)))
+        monkeypatch.setattr(integrations_caldav_adapter, "_calendar", AsyncMock(return_value=SimpleNamespace(name="Test")))
+        arguments = integrations_caldav_adapter.CalendarQueryEventsArguments(
+            integration_id=account.id, calendar_key=f"calendar:{'a' * 32}", limit=1,
+            start=datetime(2026, 11, 8, tzinfo=UTC), end=datetime(2026, 11, 10, tzinfo=UTC),
+        )
+        query = integrations_caldav_adapter.calendar_query_events
+        title = "summary"
+    else:
+        items = (_task(title="First", uid="a"), _task(title="Second", uid="b"))
+        arguments = integrations_caldav_adapter.TaskQueryArguments(
+            integration_id=account.id, task_list_key=f"tasklist:{'a' * 32}", limit=1,
+        )
+        query = integrations_caldav_adapter.tasks_query
+        title = "title"
+    remote_query = getattr(client, f"query_{kind}")
+    remote_query.side_effect = [items[::-1], items[::-1], items]
+    pages = []
+    for offset in (None, 0, 1):
+        arguments.offset = offset
+        payload = json.loads((await query(arguments, _task_context(account, revision))).content)
+        pages.append(([item[title] for item in payload[kind]], payload["truncated"]))
+    assert pages == [(["Second"], True), (["First"], True), (["Second"], False)]
 
 
 async def test_create_uses_a_stable_host_generated_idempotency_key(monkeypatch) -> None:

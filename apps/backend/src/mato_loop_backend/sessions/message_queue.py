@@ -50,7 +50,10 @@ async def enqueue(db, session, request_id, payload, attachments=(), *, after_run
         payload = {**payload, "_source": "followup"}
     command = parse_command(payload["content"])
     if command is not None:
-        prepared = await prepare_command(db, session, command, payload["content"])
+        prepared = await prepare_command(
+            db, session, command, payload["content"],
+            agent_profile_id=UUID(payload["agent_profile_id"]) if payload.get("agent_profile_id") else session.agent_profile_id,
+        )
         payload = {**payload, "_command_context": prepared["context"]}
     entry = QueuedMessage(id=request_id, session_id=session.id, after_run_id=after_run_id,
                           payload={**payload, "_workspace": workspace_binding(session)}, attachments=[])

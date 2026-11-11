@@ -39,6 +39,7 @@ class Automation(Base):
     )
     name: Mapped[str] = mapped_column(String(240), nullable=False)
     task: Mapped[str] = mapped_column(Text, nullable=False)
+    model_id: Mapped[UUID | None] = mapped_column(nullable=True)
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )

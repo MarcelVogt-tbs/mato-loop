@@ -261,7 +261,6 @@ def session_payload(
     memory_tools_available: bool | None = None,
     memory_unavailable_reason: str | None = None,
     workspace_context: dict[str, Any] | None = None,
-    default_channel: dict[str, Any] | None = None,
     last_message_at: datetime | None | object = LAST_MESSAGE_AT_UNSET,
     has_unread_messages: bool | None = None,
 ) -> dict[str, Any]:
@@ -331,7 +330,6 @@ def session_payload(
             "connected": False,
             "operations": [],
         },
-        "defaultChannel": default_channel or {"type": "app"},
         "createdAt": item.created_at.isoformat() if item.created_at else None,
         "updatedAt": item.updated_at.isoformat() if item.updated_at else None,
     }

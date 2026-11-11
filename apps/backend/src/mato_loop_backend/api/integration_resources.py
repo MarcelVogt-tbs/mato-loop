@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 import logging
-import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
-from mato_loop_backend.integrations.bookstack.adapter import BOOKSTACK_CREDENTIAL_KIND
-from mato_loop_backend.integrations.caldav.service import discover_caldav_resources
 from mato_loop_backend.integrations.contracts import IntegrationResource
-from mato_loop_backend.integrations.mcp.adapter import MCP_CREDENTIAL_KIND
 from mato_loop_backend.integrations.registry import integration_adapter
-from mato_loop_backend.integrations.service import IntegrationSettingsError
+from mato_loop_backend.integrations.service import (
+    IntegrationSettingsError,
+    discover_integration_resources,
+)
 from mato_loop_backend.permissions.resolution import resolve_tool_execution_policy
-from mato_loop_backend.security import load_credential, read_credential
 from mato_loop_backend.settings import (
     IntegrationInstance,
     ToolExecutionPolicy,
@@ -23,9 +21,6 @@ from mato_loop_backend.settings import (
 from mato_loop_backend.tools.catalog import tool_registry
 
 logger = logging.getLogger("mato_loop_backend.api.routes.integrations")
-
-
-_RESOURCE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,499}$")
 
 
 ToolSettingsDocument = ToolSettings | UserToolSettings
@@ -39,63 +34,13 @@ async def _integration_resources(
         raise ApiError(409, "integration.resourcePoliciesUnsupported")
     if not tool_registry.integration_resource_actions(instance):
         raise ApiError(409, "integration.resourcePoliciesUnsupported")
-    if instance.integration_type == "calendar" and instance.adapter_type == "caldav":
-        try:
-            return await discover_caldav_resources(db, instance)
-        except IntegrationSettingsError as exc:
-            raise ApiError(
-                409 if exc.code == "integration.resourcePoliciesUnsupported" else 502,
-                exc.code,
-            ) from exc
-    credential = None
     try:
-        if adapter.resource_loader is not None and instance.credential_id is not None:
-            record = await load_credential(
-                db,
-                instance.credential_id,
-                owner_id=instance.owner_id,
-                populate_existing=True,
-            )
-            if record is None:
-                raise ValueError("missing integration credential")
-            if (
-                instance.integration_type == "knowledge"
-                and instance.adapter_type == "bookstack"
-                and record.kind != BOOKSTACK_CREDENTIAL_KIND
-            ):
-                raise ValueError("invalid integration credential kind")
-            if instance.adapter_type == "sonobin" and record.kind != MCP_CREDENTIAL_KIND:
-                raise ValueError("invalid integration credential kind")
-            credential = read_credential(record)
-        resources = await adapter.resources(instance, credential)
-    except Exception as exc:
-        logger.warning(
-            "Resource discovery for integration %s failed with %s",
-            instance.id,
-            type(exc).__name__,
-        )
-        raise ApiError(502, "integration.resourceDiscoveryFailed") from exc
-    keys = set()
-    for resource in resources:
-        if (
-            not isinstance(resource, IntegrationResource)
-            or not isinstance(resource.key, str)
-            or _RESOURCE_KEY.fullmatch(resource.key) is None
-            or not isinstance(resource.label, str)
-            or not 1 <= len(resource.label) <= 160
-            or resource.label != resource.label.strip()
-            or (
-                resource.group_key is not None
-                and (
-                    not isinstance(resource.group_key, str)
-                    or _RESOURCE_KEY.fullmatch(resource.group_key) is None
-                )
-            )
-            or resource.key in keys
-        ):
-            raise ApiError(502, "integration.resourceDiscoveryFailed")
-        keys.add(resource.key)
-    return resources
+        return await discover_integration_resources(db, instance)
+    except IntegrationSettingsError as exc:
+        raise ApiError(
+            409 if exc.code == "integration.resourcePoliciesUnsupported" else 502,
+            exc.code,
+        ) from exc
 
 
 def _access_payload(

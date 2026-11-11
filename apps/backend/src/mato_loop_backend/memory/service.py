@@ -995,10 +995,13 @@ class MemoryService:
             ),
         }
         title, summary = labels[action]
+        from mato_loop_backend.assistant import ensure_personal_chat
+
+        communication_session = await ensure_personal_chat(db, owner_id)
         approval = ApprovalRequest(
             request_type="memory_change",
             user_id=owner_id,
-            session_id=source_session_id,
+            session_id=communication_session.id,
             run_id=None,
             action_kind=action_kind,
             risk_level="high" if action in {"merge", "remove"} else "medium",

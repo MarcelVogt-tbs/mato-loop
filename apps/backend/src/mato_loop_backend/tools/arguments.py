@@ -1237,12 +1237,13 @@ class GetAutomationArguments(ToolArguments):
 
 
 class CreateAutomationArguments(AutomationDefinitionArguments):
-    pass
+    model_id: UUID | None = Field(default=None, description="Run-only chat model override. Null follows the current effective session model on every run.")
 
 
 class EditAutomationArguments(AutomationDefinitionArguments):
     automation_id: UUID
     expected_revision: int = Field(ge=1)
+    model_id: UUID | None = Field(default=None, description="Run-only chat model override. Null follows the current effective session model on every run.")
 
 
 class RunAutomationArguments(ToolArguments):

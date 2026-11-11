@@ -11,6 +11,8 @@ vi.mock('src/features/chat/components/ChatComposer.vue', () => ({ default: { met
 vi.mock('src/app/control-center/ControlCenterPanel.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/chat/components/MessageContent.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/chat/components/ChatFiles.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/home/HomeContent.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/chat/components/ComputerChoiceStrip.vue', () => ({ default: { render: () => null } }))
 
 import ChatPage from '../src/features/chat/ChatPage.vue'
 import { api } from 'src/boot/axios'
@@ -27,7 +29,7 @@ const initialRevision = 'a'.repeat(64)
 const parentRevision = 'b'.repeat(64)
 const source = '{"name":"Dateien prüfen","instructions":"Nur lesen"}'
 
-async function mountPage({ actionKind = 'build_skill', rootIdentity, reply } = {}) {
+async function mountPage({ actionKind = 'build_skill', rootIdentity, reply, location = '/?session=parent&project=parent-project', chatReply } = {}) {
   vi.stubGlobal('scrollTo', vi.fn())
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -46,17 +48,21 @@ async function mountPage({ actionKind = 'build_skill', rootIdentity, reply } = {
       draftFile: { root: 'session', path: 'skill-draft.json', filename: 'skill-draft.json', initialRevision, fileRevision: initialRevision, ...(rootIdentity ? { rootIdentity } : {}) }
     }
   }
-  api.post.mockResolvedValue({ data: {} })
+  api.post.mockImplementation(async (url) => url === '/assistant/chat'
+    ? chatReply ? await chatReply() : { data: { sessionId: 'personal' } }
+    : { data: {} })
   api.get.mockImplementation(async (url) => {
     if (url === '/workspace/files/preview') return reply ? await reply() : { data: { kind: 'text', content: source, revision: initialRevision } }
     if (url === '/sessions/parent') return { data: { id: 'parent', projectId: 'parent-project', messages: [] } }
+    if (url === '/sessions/personal') return { data: { id: 'personal', projectId: null, messages: [] } }
     if (url === '/approvals/pending') return { data: [approval] }
     if (url === '/mail/accounts') return { data: [{ id: 'mail-1' }] }
     if (url === '/questions/pending' || url.endsWith('/children')) return { data: [] }
-    return { data: {} }
+    if (url === '/execution-agents' || url === '/agent-profiles') return { data: [] }
+    return { data: { items: [] } }
   })
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', name: 'chat', component: ChatPage }] })
-  await router.push('/?session=parent&project=parent-project')
+  await router.push(location)
   root = document.createElement('div')
   document.body.append(root)
   app = createApp({ render: () => h(ChatPage) })
@@ -65,7 +71,9 @@ async function mountPage({ actionKind = 'build_skill', rootIdentity, reply } = {
   app.component('QSplitter', { render() { return h('div', this.$slots.before?.()) } })
   app.component('QVirtualScroll', { render() { return h('div', this.$slots.after?.()) } })
   app.mount(root)
-  await vi.waitFor(() => expect(root.querySelector('.approval-card')).not.toBeNull())
+  if (location.includes('session=parent')) {
+    await vi.waitFor(() => expect(root.querySelector('.approval-card')).not.toBeNull())
+  } else await nextTick()
   workspace.sessionId = 'parent'
   workspace.rootIdentity = 'parent'
   workspace.scope = 'session'
@@ -76,7 +84,7 @@ async function mountPage({ actionKind = 'build_skill', rootIdentity, reply } = {
   workspace.filePreviews = { 'skill-draft.json': { content: 'Parent file', revision: parentRevision } }
   await nextTick()
   return {
-    approval, approvals, workspace,
+    approval, approvals, workspace, router,
     preview: vi.spyOn(approvals, 'previewSkillDraft'),
     openFile: vi.spyOn(controlCenter, 'openFile'),
     startEdit: vi.spyOn(workspace, 'startFileTabEdit')
@@ -115,6 +123,40 @@ it('adds Git when repository detection finishes after a new session has attached
   chat.selectedSessionId = 'created'
   chat.current = { id: 'created', projectId: 'project', preferredExecutionAgentId: 'computer', currentDirectory: '/worktree', messages: [] }
   await vi.waitFor(() => expect(add).toHaveBeenCalledWith('git'))
+})
+
+describe('personal chat entry', () => {
+  it('opens the personal session from the bare chat route and reuses its known ID', async () => {
+    const { router } = await mountPage({ location: '/' })
+    await vi.waitFor(() => expect(chat.current?.id).toBe('personal'))
+    expect(router.currentRoute.value.query).toEqual({ session: 'personal' })
+    expect(chat.personalChatSessionId).toBe('personal')
+    await router.push('/')
+    await vi.waitFor(() => expect(router.currentRoute.value.query.session).toBe('personal'))
+    expect(api.post.mock.calls.filter(([url]) => url === '/assistant/chat')).toHaveLength(1)
+  })
+
+  it.each(['/?new', '/?project=project-draft', '/?session=parent&project=parent-project'])(
+    'preserves the explicit route %s', async (location) => {
+      const { router } = await mountPage({ location })
+      await nextTick()
+      expect(router.currentRoute.value.fullPath).toBe(location)
+      expect(api.post).not.toHaveBeenCalledWith('/assistant/chat')
+    }
+  )
+
+  it.each(['/?new', '/?project=project-draft', '/?session=parent&project=parent-project'])(
+    'does not let a late personal-chat response replace %s', async (location) => {
+      let finish
+      const { router } = await mountPage({ location: '/', chatReply: () => new Promise(resolve => { finish = resolve }) })
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+      await router.push(location)
+      finish({ data: { sessionId: 'personal' } })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      await nextTick()
+      expect(router.currentRoute.value.fullPath).toBe(location)
+    }
+  )
 })
 
 describe('child skill draft previews', () => {

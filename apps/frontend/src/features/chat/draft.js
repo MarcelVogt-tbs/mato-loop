@@ -40,6 +40,7 @@ export const draftActions = {
       this.cancelQueueDrain()
       this.clearAllAttachmentDrafts()
       this.draftOwnerUserId = ownerUserId
+      this.personalChatSessionId = null
       this.queuedMessages = {}
       this.pendingOutboxEntry = null
       this.queuedSendPausedSessions = {}
