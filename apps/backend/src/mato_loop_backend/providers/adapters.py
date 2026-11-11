@@ -158,7 +158,7 @@ async def _discover_azure_speech(
     )
 
 
-async def _transcription_only_operation(
+async def _media_only_operation(
     _runtime: AdapterRuntime,
     _db: AsyncSession,
     _provider: LlmProviderConfig,
@@ -170,7 +170,7 @@ async def _transcription_only_operation(
     _on_reasoning: ReasoningDeltaCallback | None,
 ) -> ProviderOperation:
     raise ProviderError(
-        "Provider supports transcription only", code="provider.modelCapabilityUnavailable"
+        "Provider supports media operations only", code="provider.modelCapabilityUnavailable"
     )
 
 
@@ -296,7 +296,7 @@ _LEMONADE = ProviderAdapter(
 _AZURE_SPEECH = ProviderAdapter(
     adapter_type="azure-speech",
     discover=_discover_azure_speech,
-    operation=_transcription_only_operation,
+    operation=_media_only_operation,
 )
 
 PROVIDER_ADAPTERS: Mapping[str, ProviderAdapter] = MappingProxyType(

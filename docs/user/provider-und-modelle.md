@@ -36,7 +36,14 @@ MatoLoop erkennt installierte Chat- und Medienmodelle eines Lemonade-Servers. La
 
 ### Azure Speech
 
-Verwende einen HTTPS-Ressourcen- oder regionalen Endpunkt und den API-Schlüssel. Synchronisierung prüft verfügbare Sprachen und bietet `azure-speech-fast-transcription` an. Aktiviere es und wähle es als **Transkription** unter Standardmodelle. Azure Speech verarbeitet aufgezeichnetes Audio, weder Chat noch Live-Transkription oder Sprachgenerierung. Das Originalaudio wird übertragen und kann nicht textlich pseudonymisiert werden. Dienstregion, Tarif, Quoten und Sprachen müssen bei Azure passend verfügbar sein.
+Verwende einen HTTPS-Ressourcenendpunkt wie `https://my-speech.cognitiveservices.azure.com` oder einen regionalen Endpunkt wie `https://westeurope.api.cognitive.microsoft.com` und den API-Schlüssel. Synchronisiere die Modelle; dabei prüft MatoLoop die verfügbaren Transkriptionssprachen und Stimmen. Dienstregion, Tarif, Quoten und Sprachen müssen bei Azure passend verfügbar sein.
+
+- Aktiviere `azure-speech-fast-transcription` und wähle es unter **Standardmodelle > Transkription**, um aufgezeichnetes Audio zu transkribieren. Das Originalaudio wird übertragen und kann nicht textlich pseudonymisiert werden.
+- Aktiviere `azure-speech-tts` und wähle es unter **Standardmodelle > Spracherzeugung**, um Text als WAV-Datei ausgeben zu lassen. Erlaube im Agentenprofil **Sprache erzeugen** und bitte den Agenten beispielsweise: „Erzeuge eine Sprachausgabe dieses Textes: …“. Der bestehende Schutz für Kennungen und Secrets wird vor der Textübertragung angewendet, sofern er für das Modell aktiviert ist.
+
+Unter **Standardmodelle** erscheint beim Azure-Modell direkt unter **Spracherzeugung** die **Standardstimme**. Durchsuche die verfügbaren Stimmen beispielsweise nach `de-DE`, wähle eine Stimme und klicke auf **Speichern**. Fehlen die Stimmen, synchronisiere den Azure-Speech-Provider erneut. Die Vorgabe gilt für dieses Modell; ein Wechsel des Modells übernimmt keine fremde Stimme. Persönliche Stimmenvorgaben überschreiben die globale Auswahl. **Automatische Auswahl** setzt deine Abweichung zurück und übernimmt die geerbte Stimme beziehungsweise den Providerstandard `en-US-AvaMultilingualNeural`.
+
+Eine ausdrücklich im Chat gewünschte Stimme hat Vorrang, beispielsweise `de-DE-KatjaNeural`. Du kannst dort auch die Geschwindigkeit zwischen `0.5` und `2.0` wählen; DragonHD- und Dragon HD Omni-Stimmen unterstützen nur die Standardgeschwindigkeit `1.0`. Verschwindet eine gespeicherte Stimme aus dem Katalog, entfernt die nächste Synchronisierung ihre Vorgabe und stellt die Vererbung wieder her. MatoLoop akzeptiert höchstens 64 KiB einschließlich des erzeugten SSML-Markups pro Aufruf. Azure gibt höchstens zehn Minuten Audio pro Anfrage zurück; teile längere Texte vorher auf. Es gibt keine automatische Aufteilung oder automatische Vorlesefunktion für Chatantworten. Azure Speech bietet hier weder Chat noch Live-Transkription.
 
 ## Modelle synchronisieren
 

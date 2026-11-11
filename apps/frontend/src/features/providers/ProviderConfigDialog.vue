@@ -97,10 +97,10 @@
           />
 
           <q-banner v-if="isAzureSpeech" rounded class="provider-form-section app-surface-tonal">
-            Azure Speech Fast Transcription transkribiert abgeschlossene Sprachnachrichten und Audiodateien.
+            Azure Speech transkribiert abgeschlossene Sprachnachrichten und Audiodateien und erzeugt Sprache aus Text.
             Keine Live-Transkription, kein Chat und keine Tool-Aufrufe.
             Das Originalaudio wird ohne Pseudonymisierung an Azure gesendet – auch wenn der Schutz für Kennungen und Secrets aktiviert ist.
-            Nach der Modellerkennung kannst du das Modell im Agentenprofil für die Transkription auswählen.
+            Nach der Modellerkennung kannst du die Modelle unter Standardmodelle für Transkription und Spracherzeugung auswählen.
           </q-banner>
           <q-banner v-if="providerType === 'kimi-code'" rounded class="provider-form-section app-surface-tonal">
             Verwende einen API-Key aus der Kimi-Code-Konsole, keinen Moonshot-API-Key.
@@ -250,9 +250,9 @@ const endpointPlaceholder = computed(() => {
   return providerType.value === 'lemonade' ? 'http://lemonade-host:13305/v1' : 'https://api.example.com/v1'
 })
 const apiKeyHint = computed(() => {
-  if (isAzureSpeech.value && form.remove_api_key) return 'Ohne API-Key ist keine Transkription möglich.'
+  if (isAzureSpeech.value && form.remove_api_key) return 'Ohne API-Key sind weder Transkription noch Spracherzeugung möglich.'
   if (props.provider?.hasCredential) return 'Leer lassen, um den gespeicherten API-Key beizubehalten.'
-  return isAzureSpeech.value ? 'Für die Transkription ist ein API-Key der Azure-Speech-Ressource erforderlich.' : ''
+  return isAzureSpeech.value ? 'Für Transkription und Spracherzeugung ist ein API-Key der Azure-Speech-Ressource erforderlich.' : ''
 })
 const providerOptions = computed(() => [
   {
@@ -284,7 +284,7 @@ const providerOptions = computed(() => [
     label: 'Azure Speech',
     value: 'azure-speech',
     icon: 'graphic_eq',
-    description: 'Fast Transcription für fertige Sprachnachrichten und Audiodateien'
+    description: 'Transkription von Audio und Spracherzeugung aus Text'
   }
 ])
 const dialogTitle = computed(() => isEditing.value ? `${props.provider.name} bearbeiten` : 'Provider hinzufügen')

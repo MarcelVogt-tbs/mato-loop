@@ -376,7 +376,7 @@ async def _generate_speech(
     result = await MediaService.generate_speech(
         context.db,
         text=arguments.text,
-        voice=arguments.voice or "shimmer",
+        voice=arguments.voice,
         speed=arguments.speed,
         timeout=context.tool_settings.generate_speech.timeout_seconds,
         user_id=context.session.user_id,

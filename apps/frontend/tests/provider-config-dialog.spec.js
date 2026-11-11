@@ -160,7 +160,7 @@ it.each([false, true])('retains or explicitly removes a saved Azure credential (
     await fill('Neuer API-Key (optional)', 'replacement-key')
     document.querySelector('.provider-dialog .q-checkbox').click()
     await nextTick()
-    expect(document.querySelector('.provider-dialog').textContent).toContain('Ohne API-Key ist keine Transkription möglich.')
+    expect(document.querySelector('.provider-dialog').textContent).toContain('Ohne API-Key sind weder Transkription noch Spracherzeugung möglich.')
   }
   save('Änderungen speichern')
   await vi.waitFor(() => expect(updateProvider).toHaveBeenCalledWith('azure', {

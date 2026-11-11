@@ -1272,6 +1272,7 @@ class ModelDefaults(BaseModel):
     image_generation_model_id: UUID | None = None
     image_editing_model_id: UUID | None = None
     speech_generation_model_id: UUID | None = None
+    speech_generation_voices: dict[UUID, Annotated[str, Field(strict=True, min_length=1, max_length=500)]] = Field(default_factory=dict, max_length=1000)
     audio_generation_model_id: UUID | None = None
     audio_transcription_model_id: UUID | None = None
 
