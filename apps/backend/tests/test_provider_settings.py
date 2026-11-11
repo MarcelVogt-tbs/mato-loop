@@ -902,6 +902,21 @@ async def test_model_capability_change_removes_incompatible_default_reference(
     assert instance.image_generation_model_id is None
 
 
+async def test_voice_catalog_refresh_removes_stale_default(monkeypatch) -> None:
+    from mato_loop_backend.providers.settings_service import clear_invalid_model_defaults
+
+    provider = LlmProviderConfig(name="Azure", adapter_type="azure-speech", credential_id=uuid4())
+    model = ModelConfig(
+        provider_id=provider.id, model_id=azure_speech.SPEECH_MODEL_ID,
+        capabilities={ModelCapability.SPEECH_GENERATION},
+        discovery_metadata={"speech_voices": [azure_speech.DEFAULT_VOICE]},
+    )
+    settings = AiSettings(providers=[provider], models=[model], speech_generation_voices={model.id: "removed"})
+    defaults = _mock_settings(monkeypatch, settings)
+    await clear_invalid_model_defaults(_db(), settings, None, {model.id})
+    assert defaults.speech_generation_voices == {}
+
+
 async def test_duplicate_model_id_is_rejected_per_provider(monkeypatch) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     settings = AiSettings(

@@ -60,6 +60,7 @@ class ResolvedMediaModel:
     base_url: str
     api_key: str | None
     credential: Credential | None = None
+    default_speech_voice: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +92,9 @@ _ADAPTER_CAPABILITIES = {
     "openai-compatible": frozenset(
         {ModelCapability.IMAGE_GENERATION, ModelCapability.IMAGE_EDITING}
     ),
-    "azure-speech": frozenset({ModelCapability.AUDIO_TRANSCRIPTION}),
+    "azure-speech": frozenset({
+        ModelCapability.AUDIO_TRANSCRIPTION, ModelCapability.SPEECH_GENERATION,
+    }),
     "lemonade": frozenset(
         {
             ModelCapability.IMAGE_GENERATION,
@@ -129,7 +132,10 @@ def _media_target(
             provider.adapter_type == "azure-speech"
             and (
                 provider.credential_id is None
-                or model.model_id != azure_speech.MODEL_ID
+                or model.model_id != {
+                    ModelCapability.AUDIO_TRANSCRIPTION: azure_speech.MODEL_ID,
+                    ModelCapability.SPEECH_GENERATION: azure_speech.SPEECH_MODEL_ID,
+                }.get(capability)
             )
         )
         or (
@@ -436,6 +442,7 @@ class MediaService:
             base_url,
             api_key,
             credential,
+            default_speech_voice=settings.speech_generation_voices.get(model.id),
         )
 
     @classmethod
@@ -584,13 +591,14 @@ class MediaService:
         db: AsyncSession,
         *,
         text: str,
-        voice: str = "shimmer",
+        voice: str | None = None,
         speed: float = 1.0,
         timeout: float = 300,
         user_id: UUID,
     ) -> MediaResult:
         text = _require_text(text, max_length=100_000)
-        voice = _require_text(voice, max_length=500)
+        if voice is not None:
+            voice = _require_text(voice, max_length=500)
         _optional_positive_number(speed, maximum=4)
         resolved = await cls.resolve_model(
             db,
@@ -598,12 +606,16 @@ class MediaService:
             user_id=user_id,
         )
         protected = await _protected_text(resolved.provider, resolved.model, text)
-        data = await lemonade.generate_speech(
+        is_azure = resolved.provider.adapter_type == "azure-speech"
+        generate = azure_speech.generate_speech if is_azure else lemonade.generate_speech
+        data = await generate(
             base_url=resolved.base_url,
             api_key=resolved.api_key,
             model=resolved.model.model_id,
             text=protected,
-            voice=voice,
+            voice=voice or resolved.default_speech_voice or (
+                azure_speech.DEFAULT_VOICE if is_azure else "shimmer"
+            ),
             speed=speed,
             timeout=timeout,
         )

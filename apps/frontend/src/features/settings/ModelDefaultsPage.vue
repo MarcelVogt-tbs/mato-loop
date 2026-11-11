@@ -17,6 +17,10 @@
           <template v-for="field in fields" :key="field.key">
             <ChatModelFields v-if="field.key === 'dreamingModelId'" :model-value="dreamingChoice" :inherited="inheritedDreamingChoice" model-label="Memory / Dreaming" :disabled="blocked" @update:model-value="setDreamingChoice" />
             <AppSelect v-else :model-value="form[field.key] ?? null" outlined dense emit-value map-options :label="field.label" :options="options(field)" :disable="blocked" :hint="form[field.key] ? undefined : effectiveLabel(field)" @update:model-value="form[field.key] = $event" />
+            <template v-if="field.key === 'speechGenerationModelId' && azureSpeechModel">
+              <AppSelect :model-value="form.speechGenerationVoices?.[azureSpeechModel.id] ?? null" outlined dense emit-value map-options use-input input-debounce="0" label="Standardstimme" :options="speechVoiceOptions" :disable="blocked" :hint="speechVoiceHint" @filter="filterSpeechVoices" @update:model-value="setSpeechVoice" />
+              <div v-if="!azureSpeechModel.discoveryMetadata?.speech_voices?.length" class="text-body2 app-muted">Synchronisiere den Azure-Speech-Provider erneut, um die verfügbaren Stimmen zu laden.</div>
+            </template>
           </template>
           <AppSelect :model-value="form.titleVisionFallbackEnabled ?? null" outlined dense emit-value map-options label="Titel bei Bildinhalten mit Visionmodell erzeugen" :options="[{ label: 'Automatische Auswahl', value: null }, { label: 'An', value: true }, { label: 'Aus', value: false }]" :hint="form.titleVisionFallbackEnabled == null ? `Effektiv: ${store.inherited.titleVisionFallbackEnabled === false ? 'Aus' : 'An'}` : undefined" :disable="blocked" @update:model-value="form.titleVisionFallbackEnabled = $event" />
         </template>
@@ -56,6 +60,36 @@ const inheritedChoice = computed(() => {
   return { modelId: profile?.modelId || form.value.defaultModelId || inherited.defaultModelId || store.automaticModelId, reasoningEffort: profile?.reasoningEffort || form.value.reasoningEffort || inherited.reasoningEffort }
 })
 const dreamingChoice = computed(() => ({ modelId: form.value.dreamingModelId, reasoningEffort: form.value.dreamingReasoningEffort }))
+const azureSpeechModel = computed(() => {
+  const models = providers.availableModels || providers.models
+  const inventory = providers.availableProviders || providers.providers
+  const availableIds = providers.capabilityOptions('speech_generation').map((option) => option.value)
+  const selectedId = form.value.speechGenerationModelId || store.inherited.speechGenerationModelId
+  const model = models.find((item) => item.id === (selectedId || availableIds[0]))
+  return availableIds.includes(model?.id)
+    && inventory.some((provider) => provider.id === model.providerId && provider.adapterType === 'azure-speech')
+    ? model : null
+})
+const speechVoiceFilter = ref('')
+const speechVoiceOptions = computed(() => [
+  { label: 'Automatische Auswahl', value: null },
+  ...(azureSpeechModel.value?.discoveryMetadata?.speech_voices || [])
+    .filter((voice) => voice.toLowerCase().includes(speechVoiceFilter.value.toLowerCase()))
+    .map((voice) => ({ label: voice, value: voice }))
+])
+const speechVoiceHint = computed(() => {
+  const model = azureSpeechModel.value
+  if (!model || form.value.speechGenerationVoices?.[model.id]) return undefined
+  return `Effektiv: ${store.inherited.speechGenerationVoices?.[model.id] || model.discoveryMetadata?.default_speech_voice || 'Providerstandard'}`
+})
+function filterSpeechVoices(value, update) {
+  update(() => { speechVoiceFilter.value = value })
+}
+function setSpeechVoice(voice) {
+  const voices = form.value.speechGenerationVoices ||= {}
+  if (voice) voices[azureSpeechModel.value.id] = voice
+  else delete voices[azureSpeechModel.value.id]
+}
 const inheritedDreamingChoice = computed(() => ({
   modelId: store.inherited.dreamingModelId || form.value.defaultModelId || store.inherited.defaultModelId || store.automaticModelId,
   reasoningEffort: store.inherited.dreamingReasoningEffort

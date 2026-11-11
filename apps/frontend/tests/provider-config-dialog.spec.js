@@ -4,7 +4,7 @@ import { createPinia } from 'pinia'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import {
   Quasar, Notify, QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection,
-  QCheckbox, QChip, QDialog, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection,
+  QCheckbox, QChip, QDialog, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection,
   QSelect, QSeparator, QSpace, QToggle
 } from 'quasar'
 
@@ -39,7 +39,7 @@ async function mountDialog(component = ProviderConfigDialog, extraProps = {}) {
   app = createApp({ render: () => h(component, state) })
   app.use(pinia).use(Quasar, { plugins: { Notify }, components: {
     QAvatar, QBanner, QBtn, QCard, QCardActions, QCardSection, QCheckbox, QChip,
-    QDialog, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection,
+    QDialog, QExpansionItem, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection,
     QSelect, QSeparator, QSpace, QToggle
   } })
   app.mount(root)
@@ -160,7 +160,7 @@ it.each([false, true])('retains or explicitly removes a saved Azure credential (
     await fill('Neuer API-Key (optional)', 'replacement-key')
     document.querySelector('.provider-dialog .q-checkbox').click()
     await nextTick()
-    expect(document.querySelector('.provider-dialog').textContent).toContain('Ohne API-Key ist keine Transkription möglich.')
+    expect(document.querySelector('.provider-dialog').textContent).toContain('Ohne API-Key sind weder Transkription noch Spracherzeugung möglich.')
   }
   save('Änderungen speichern')
   await vi.waitFor(() => expect(updateProvider).toHaveBeenCalledWith('azure', {
@@ -168,6 +168,26 @@ it.each([false, true])('retains or explicitly removes a saved Azure credential (
     api_key: null, remove_api_key: removeKey, trust_level: 'public',
     pseudonymization_enabled: true, memory_policy: 'inherit'
   }))
+})
+
+it('saves manually selected capabilities for a discovered OpenAI-compatible Azure model', async () => {
+  const { updateModel } = await mountDialog(ModelConfigDialog, {
+    provider: { id: 'azure', name: 'Azure OpenAI', adapterType: 'openai-compatible' },
+    model: {
+      id: 'chat', modelId: 'azure-chat', origin: 'discovered', enabled: true,
+      capabilities: []
+    }
+  })
+  field('Modellfähigkeiten').querySelector('.q-field__native').click()
+  const option = await vi.waitUntil(() => [...document.querySelectorAll('.q-item__label')]
+    .find((element) => element.textContent === 'Chat'))
+  option.closest('.q-item').click()
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }))
+  await nextTick()
+  save('Änderungen speichern')
+  await vi.waitFor(() => expect(updateModel).toHaveBeenCalledWith(
+    'chat', expect.objectContaining({ capabilities: ['chat'] })
+  ))
 })
 
 it('keeps the discovered Azure model transcription-only when editing its display name', async () => {

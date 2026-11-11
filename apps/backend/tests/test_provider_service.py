@@ -1591,6 +1591,10 @@ async def test_transient_error_is_not_retried_after_stream_output() -> None:
 @pytest.mark.parametrize(("model_fields", "capabilities"), [
     ({}, {ModelCapability.CHAT}),
     ({"capabilities": {
+        "chat_completion": True, "completion": False, "embeddings": False,
+        "fine_tune": False, "inference": True,
+    }}, {ModelCapability.CHAT}),
+    ({"capabilities": {
         "chat": True, "tools": True, "reasoning": True,
         "image_generation": False, "reasoning_efforts": None,
     }}, {ModelCapability.CHAT}),

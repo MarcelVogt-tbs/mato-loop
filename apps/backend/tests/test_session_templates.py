@@ -10,6 +10,7 @@ from mato_loop_backend.api.routes.model_defaults import get_defaults, save_defau
 from mato_loop_backend.api.routes.session_templates import delete_template, save_template
 from mato_loop_backend.api.routes.sessions import SessionOptionsRequest, session_defaults
 from mato_loop_backend.models import ChatSession, Project, UserAccount
+from mato_loop_backend.providers import azure_speech
 from mato_loop_backend.providers.codex_oauth import CODEX_IMAGE_MODEL_ID
 from mato_loop_backend.sessions.service import SessionServiceError
 from mato_loop_backend.sessions.templates import available_templates, load_template
@@ -108,6 +109,48 @@ async def test_image_editing_default_inherits_instance_override_and_validates_ca
     assert (effective.image_generation_model_id, effective.image_editing_model_id) == (shared.id, editing.id)
     with pytest.raises(ApiError, match="provider.modelCapabilityUnavailable"):
         await save_defaults(ModelDefaults(image_editing_model_id=shared.id), user, db, "personal")
+
+
+async def test_speech_voice_defaults_inherit_per_model_and_reset_to_global(documents):
+    user = UserAccount(id=uuid4(), is_admin=True)
+    db = AsyncMock(spec=AsyncSession)
+    providers = [LlmProviderConfig(name=name, adapter_type="azure-speech", credential_id=uuid4()) for name in ("First", "Second")]
+    models = [ModelConfig(
+        provider_id=provider.id, model_id=azure_speech.SPEECH_MODEL_ID,
+        capabilities={ModelCapability.SPEECH_GENERATION},
+        discovery_metadata={"speech_voices": ["de-DE-KatjaNeural", azure_speech.DEFAULT_VOICE]},
+    ) for provider in providers]
+    documents[AiProviderSettings, None] = AiProviderSettings(providers=providers, models=models)
+    global_voices = {model.id: azure_speech.DEFAULT_VOICE for model in models}
+    await save_defaults(ModelDefaults(speech_generation_voices=global_voices), user, db, "instance")
+    await save_defaults(ModelDefaults(speech_generation_voices={models[0].id: "de-DE-KatjaNeural"}), user, db, "personal")
+    selected = (await load_effective_ai(db, user.id)).speech_generation_voices
+    await save_defaults(ModelDefaults(speech_generation_voices={}), user, db, "personal")
+    reset = (await get_defaults(user, db, "personal"))["effective"]["speechGenerationVoices"]
+    assert (selected, reset) == (
+        {models[0].id: "de-DE-KatjaNeural", models[1].id: azure_speech.DEFAULT_VOICE},
+        {str(key): value for key, value in global_voices.items()},
+    )
+
+
+@pytest.mark.parametrize("invalid", ["voice", "foreign_model"])
+async def test_speech_voice_defaults_validate_discovered_model_and_voice(documents, invalid):
+    user = UserAccount(id=uuid4(), is_admin=True)
+    provider = LlmProviderConfig(name="Azure", adapter_type="azure-speech", credential_id=uuid4())
+    model = ModelConfig(
+        provider_id=provider.id, model_id=azure_speech.SPEECH_MODEL_ID,
+        capabilities={ModelCapability.SPEECH_GENERATION},
+        discovery_metadata={"speech_voices": [azure_speech.DEFAULT_VOICE]},
+    )
+    documents[AiProviderSettings, None] = AiProviderSettings(providers=[provider], models=[model])
+    with pytest.raises(ApiError) as error:
+        await save_defaults(ModelDefaults(speech_generation_voices={
+            uuid4() if invalid == "foreign_model" else model.id: "unknown" if invalid == "voice" else azure_speech.DEFAULT_VOICE,
+        }), user, AsyncMock(spec=AsyncSession), "personal")
+    assert (error.value.code, error.value.field) == (
+        "validation.invalidChoice" if invalid == "voice" else "provider.modelCapabilityUnavailable",
+        "speechGenerationVoices",
+    )
 
 
 async def test_profile_model_uses_its_default_when_inherited_reasoning_is_unsupported(documents):
