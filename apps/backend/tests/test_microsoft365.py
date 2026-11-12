@@ -375,6 +375,7 @@ def test_control_center_edits_drafts_without_losing_html_or_inline_images(transp
     regular = {"@odata.type": "#microsoft.graph.fileAttachment", "id": "old", "name": "old.txt", "size": 1}
     inline = {**regular, "id": "logo", "isInline": True}
     patches, attachments, deleted = [], [], []
+    data = b"x" * (2 * 1024 * 1024)
     html = '<table><tr><td>Edited</td><td><img src="cid:logo"></td></tr></table>'
 
     def remote(request):
@@ -383,7 +384,7 @@ def test_control_center_edits_drafts_without_losing_html_or_inline_images(transp
             return httpx.Response(200, json={"id": "draft"})
         if request.method == "POST":
             attachments.append(json.loads(request.content))
-            return httpx.Response(201, json={})
+            return httpx.Response(201, json={"id": "new", **attachments[-1]})
         if request.method == "DELETE":
             deleted.append(request.url.path)
             return httpx.Response(204)
@@ -401,7 +402,7 @@ def test_control_center_edits_drafts_without_losing_html_or_inline_images(transp
             "expectedVersion": "version", "subject": "Changed", "to": "to@example.com",
             "body": html, "bodyFormat": "html", "preserveBody": str(preserve_body).lower(), "replaceAttachments": "true",
         },
-        files={"attachments": ("new.txt", b"new", "text/plain")},
+        files={"attachments": ("new.txt", data, "text/plain")},
     )
     assert response.status_code == 200 and response.json()["message"]["editBody"] == html
     assert patches == [{
@@ -409,7 +410,7 @@ def test_control_center_edits_drafts_without_losing_html_or_inline_images(transp
         "subject": "Changed", **({} if preserve_body else {"body": {"contentType": "html", "content": html}}),
     }]
     assert deleted == ["/v1.0/me/messages/draft/attachments/old"]
-    assert len(attachments) == 1 and base64.b64decode(attachments[0]["contentBytes"]) == b"new"
+    assert len(attachments) == 1 and base64.b64decode(attachments[0]["contentBytes"]) == data
 
 
 @pytest.mark.parametrize("failure", ["stale", "not-draft", "foreign-attachment", "lossy-html", "size"])
@@ -1327,7 +1328,8 @@ async def test_organizer_tools_execute_through_authorized_registry(transport, or
         storage = SessionStorage(tmp_path / "sessions")
         storage.provision(context.session.id)
         context.root_files = RootFileService(context.session.id, session_storage=storage)
-        context.root_files.create_file("session", "file.txt", BytesIO(b"File"), max_bytes=1024)
+        file_data = b"F" * (2 * 1024 * 1024) if name == "m365_todo_attach" else b"File"
+        context.root_files.create_file("session", "file.txt", BytesIO(file_data), max_bytes=len(file_data))
     else:
         for policy in (context.tool_settings.private_permissions, context.tool_settings.public_permissions):
             policy.policies.update({"session.files.read": ToolExecutionPolicy.DISABLED, "session.files.write": ToolExecutionPolicy.DISABLED})
@@ -1438,6 +1440,26 @@ async def test_organizer_rechecks_approved_resource_before_mutation(transport, o
     version = "two"
     result = await (organizer.write_event if kind == "event" else organizer.write_todo)(args, context)
     assert result.is_error and "staleReference" in result.content
+
+
+async def test_sparse_todo_due_update_accepts_equal_graph_start_with_fractional_precision(transport, organizer_context):
+    instance, context = organizer_context
+    task = {
+        **organizer_resource("task"),
+        "startDateTime": {"dateTime": "2026-11-12T10:00:00.0000000", "timeZone": "UTC"},
+    }
+
+    def remote(request):
+        return httpx.Response(200, json={**task, **(json.loads(request.content) if request.method == "PATCH" else {})})
+
+    transport(remote)
+    args = organizer.TodoUpdate(
+        integration_id=instance.id, kind="task", resource_token=todo_token(instance),
+        fields={"due": "2026-11-12T11:00:00+01:00"},
+    )
+    await organizer.permission(args, context)
+    result = await organizer.write_todo(args, context)
+    assert not result.is_error, result.content
 
 
 @pytest.mark.parametrize(("remote", "fields", "hint"), [

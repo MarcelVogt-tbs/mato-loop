@@ -10,6 +10,7 @@ vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn(), put: vi.f
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: vi.fn(async () => true) }) }))
 
 import MailApp from '../src/features/mail/MailApp.vue'
+import { useMailStore } from '../src/features/mail/store'
 import { api } from 'src/boot/axios'
 
 let app, root, account
@@ -154,7 +155,7 @@ it.each([false, true])('saves an existing Microsoft draft before sending, preser
   api.get.mockImplementation(async (path) => path.endsWith('/messages/message')
     ? { data: { message: {
       messageToken: 'message', subject: 'Subject', body: 'Original', editBody: html, editBodyFormat: 'html',
-      isDraft: true, version: 'version', to: [{ address: 'to@example.com' }],
+      isDraft: true, version: 'version', to: [{ name: 'Alice Example', address: 'to@example.com' }],
       attachments: [{ attachmentToken: 'logo', name: 'Logo', isInline: true }]
     } } }
     : get(path))
@@ -171,11 +172,36 @@ it.each([false, true])('saves an existing Microsoft draft before sending, preser
   button('Senden').click()
   await vi.waitFor(() => expect(api.post).toHaveBeenCalledOnce())
   const data = api.put.mock.calls[0][1]
+  expect(data.getAll('to')).toEqual(['to@example.com'])
   expect(data.get('expectedVersion')).toBe('version')
   expect(data.get('preserveBody')).toBe(editBody ? null : 'true')
   expect(data.get('bodyFormat')).toBe('html')
   expect(data.getAll('retainedAttachmentToken')).toEqual(['logo'])
   expect([...api.post.mock.calls[0][1].entries()]).toEqual([['expectedVersion', 'saved-version']])
+})
+
+it.each(['integration.staleReference', 'integration.outcomeUnknown'])('retries unchanged drafts safely after %s', async (code) => {
+  account.capabilities.send = true
+  api.post.mockRejectedValueOnce({ response: { data: { error: { code } } } })
+  await mount()
+  root.querySelector('.q-item--clickable').click()
+  await vi.waitFor(() => expect(root.querySelector('[aria-label="Entwurf unverändert senden"]')).toBeTruthy())
+  const send = root.querySelector('[aria-label="Entwurf unverändert senden"]')
+  send.click()
+  await vi.waitFor(() => expect(api.post).toHaveBeenCalledOnce())
+  await vi.waitFor(() => expect(send.disabled).toBe(false))
+  const get = api.get.getMockImplementation()
+  api.get.mockImplementation(async (path) => {
+    const response = await get(path)
+    if (response.data.message) response.data.message.version = 'fresh-version'
+    return response
+  })
+  root.querySelector('.q-item--clickable').click()
+  await vi.waitFor(() => expect(useMailStore().detail?.version).toBe('fresh-version'))
+  root.querySelector('[aria-label="Entwurf unverändert senden"]').click()
+  await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(2))
+  expect(api.post.mock.calls[1][1].get('expectedVersion')).toBe(code === 'integration.staleReference' ? 'fresh-version' : 'version')
+  expect(api.post.mock.calls[1][2].headers['Idempotency-Key'] === api.post.mock.calls[0][2].headers['Idempotency-Key']).toBe(code !== 'integration.staleReference')
 })
 
 it('does not send or resubmit after an uncertain draft edit', async () => {

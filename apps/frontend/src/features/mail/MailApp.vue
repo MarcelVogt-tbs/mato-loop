@@ -329,11 +329,11 @@ function sender(message) {
   return value?.name ? `${value.name} <${value.address}>` : value?.address || 'Unbekannt'
 }
 
-function recipients(value) {
+function recipients(value, displayNames = true) {
   const values = Array.isArray(value) ? value : value ? [value] : []
   return values.map((recipient) => typeof recipient === 'string'
     ? recipient
-    : recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).filter(Boolean).join(', ')
+    : displayNames && recipient.name ? `${recipient.name} <${recipient.address}>` : recipient.address).filter(Boolean).join(', ')
 }
 
 function attachmentUrl(token) {
@@ -476,7 +476,7 @@ function openCompose(draft = null) {
     token: draft.token,
     version: draft.version,
     bodyFormat: draft.editBodyFormat || 'text',
-    to: recipients(draft.to), cc: recipients(draft.cc), bcc: recipients(draft.bcc),
+    to: recipients(draft.to, false), cc: recipients(draft.cc, false), bcc: recipients(draft.bcc, false),
     subject: draft.subject || '', body: draft.editBody ?? draft.text ?? draft.bodyText ?? draft.body ?? '',
     originalBody: draft.editBody ?? draft.text ?? draft.bodyText ?? draft.body ?? '',
     existingAttachments: draft.attachments || []
@@ -581,8 +581,9 @@ async function sendCurrentDraft() {
     selectedToken.value = null
     notifySent(result)
     await refresh()
-  } catch {
-    // Keep the original key and version; uncertain sends must never become new sends.
+  } catch (error) {
+    // A stale reference is rejected before sending; uncertain outcomes retain the original attempt.
+    if (error.response?.data?.error?.code === 'integration.staleReference') draftSendAttempts.delete(attemptKey)
   } finally {
     draftSending.value = false
   }

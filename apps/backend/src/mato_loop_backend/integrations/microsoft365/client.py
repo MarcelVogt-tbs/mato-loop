@@ -23,6 +23,8 @@ from mato_loop_backend.integrations.microsoft365.composition import (
 GRAPH_ORIGIN = "https://graph.microsoft.com"
 GRAPH_BASE = GRAPH_ORIGIN + "/v1.0"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+# Simple attachment creation echoes base64 content plus bounded Graph metadata.
+MAX_ATTACHMENT_RESPONSE_BYTES = 4 * ((SIMPLE_ATTACHMENT_BYTES + 2) // 3) + 64 * 1024
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 logger = logging.getLogger(__name__)
 
@@ -93,8 +95,11 @@ class Microsoft365Config(BaseModel):
 
 
 async def request_json(
-    method: Literal["GET", "POST", "PATCH", "DELETE", "PUT"], url: str, *, uncertain_effect: bool = False, **kwargs: Any
+    method: Literal["GET", "POST", "PATCH", "DELETE", "PUT"], url: str, *, uncertain_effect: bool = False,
+    max_response_bytes: int = MAX_RESPONSE_BYTES, **kwargs: Any,
 ) -> tuple[int, dict[str, Any]]:
+    if not 1 <= max_response_bytes <= MAX_ATTACHMENT_RESPONSE_BYTES:
+        raise ValueError("Invalid Microsoft 365 response size limit")
     try:
         async with (
             asyncio.timeout(30),
@@ -104,7 +109,7 @@ async def request_json(
                 body = bytearray()
                 async for chunk in response.aiter_bytes():
                     body.extend(chunk)
-                    if len(body) > MAX_RESPONSE_BYTES:
+                    if len(body) > max_response_bytes:
                         raise Microsoft365Error(
                             "integration.outcomeUnknown" if uncertain_effect else "integration.responseTooLarge"
                         )
@@ -419,7 +424,7 @@ class GraphClient:
         path = "/me/messages/" + quote(message_id, safe="") + "/attachments"
         data = base64.b64decode(attachment["contentBytes"], validate=True)
         if len(data) < SIMPLE_ATTACHMENT_BYTES:
-            await self._write("POST", path, 201, json=attachment)
+            await self._write("POST", path, 201, json=attachment, max_response_bytes=MAX_ATTACHMENT_RESPONSE_BYTES)
             return
         if len(data) > MAX_OUTGOING_BYTES or attachment.get("isInline"):
             raise Microsoft365Error("integration.attachmentTooLarge")
@@ -482,10 +487,10 @@ class GraphClient:
         )
         self.check_status(status, expected, mutation=True)
 
-    async def mutate(self, method: Literal["POST", "PATCH", "DELETE"], path: str, *, payload: dict | None = None, etag: str | None = None) -> dict:
+    async def mutate(self, method: Literal["POST", "PATCH", "DELETE"], path: str, *, payload: dict | None = None, etag: str | None = None, max_response_bytes: int = MAX_RESPONSE_BYTES) -> dict:
         status, result = await request_json(
             method, GRAPH_BASE + path, headers={**self.headers, **({"If-Match": etag} if etag else {})},
-            json=payload, uncertain_effect=True,
+            json=payload, uncertain_effect=True, max_response_bytes=max_response_bytes,
         )
         self.check_status(status, {"POST": 201, "PATCH": 200, "DELETE": 204}[method], mutation=True)
         return result

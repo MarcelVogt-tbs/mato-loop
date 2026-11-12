@@ -8,7 +8,7 @@ import json
 import mimetypes
 import re
 from dataclasses import replace
-from datetime import UTC, date
+from datetime import UTC, date, datetime
 from io import BytesIO
 from pathlib import PurePosixPath
 from typing import Annotated, Any, Literal
@@ -44,6 +44,7 @@ from mato_loop_backend.tools.contracts import ToolResult
 from . import adapter
 from .client import (
     GRAPH_BASE,
+    MAX_ATTACHMENT_RESPONSE_BYTES,
     Body,
     Event,
     EventTime,
@@ -676,8 +677,13 @@ async def write_todo(arguments, context):
         if isinstance(arguments, TodoUpdate) and kind == "task":
             due = payload.get("dueDateTime", remote.dueDateTime.model_dump() if remote.dueDateTime else None)
             start = payload.get("startDateTime", remote.startDateTime.model_dump() if remote.startDateTime else None)
-            if due and start and due.get("timeZone") == start.get("timeZone") and due["dateTime"] < start["dateTime"]:
-                raise Microsoft365Error("tool.invalidArguments")
+            if due and start and due.get("timeZone") == start.get("timeZone"):
+                try:
+                    before_start = datetime.fromisoformat(due["dateTime"]) < datetime.fromisoformat(start["dateTime"])
+                except (ValueError, TypeError) as exc:
+                    raise Microsoft365Error("integration.invalidResponse") from exc
+                if before_start:
+                    raise Microsoft365Error("tool.invalidArguments")
             if payload.get("isReminderOn") and not payload.get("reminderDateTime", remote.reminderDateTime):
                 raise Microsoft365Error("tool.invalidArguments")
         if isinstance(arguments, TodoCreate):
@@ -719,7 +725,10 @@ async def attach_todo(arguments: TodoAttach, context):
                 "contentBytes": base64.b64encode(data).decode("ascii"),
             }
             if inline_payload({"attachments": [attachment_payload]}):
-                result = await client.mutate("POST", path + "/attachments", payload=attachment_payload)
+                result = await client.mutate(
+                    "POST", path + "/attachments", payload=attachment_payload,
+                    max_response_bytes=MAX_ATTACHMENT_RESPONSE_BYTES,
+                )
                 attachment = _parse("attachment", result, mutation=True)
                 return adapter._result({"attachment": _resource("attachment", path + "/attachments/" + quote(attachment.id, safe=""), attachment, instance)})
         status, session = await request_json(
