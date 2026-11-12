@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -104,16 +105,28 @@ def test_question_contract_rejects_invalid_questions_and_oversized_answers() -> 
 
 
 def test_question_schema_explains_answer_mode_discriminators() -> None:
-    properties = QuestionArguments.model_json_schema()["$defs"]["QuestionItem"]["properties"]
+    schema = tool_registry._definitions["question"].schema()["parameters"]
+    definitions = schema["$defs"]
+    assert schema["properties"]["questions"]["items"] == {"anyOf": [
+        {"$ref": f"#/$defs/{name}"}
+        for name in ("FreeTextQuestion", "SingleChoiceQuestion", "MultipleChoiceQuestion")
+    ]}
+    free_text = definitions["FreeTextQuestion"]["properties"]
+    assert "options" not in free_text and "allow_custom" not in free_text
+    assert "placeholder" in free_text
+    for name, kind in (("SingleChoiceQuestion", "single_choice"), ("MultipleChoiceQuestion", "multiple_choice")):
+        branch = definitions[name]
+        assert branch["properties"]["type"]["const"] == kind
+        assert "options" in branch["required"]
+        assert branch["properties"]["options"]["minItems"] == 2
+        assert "placeholder" not in branch["properties"]
 
-    assert properties["type"]["enum"] == ["free_text", "single_choice", "multiple_choice"]
-    assert properties["type"]["description"] == (
-        "free_text: text; single_choice: exactly one option; multiple_choice: one or more options."
-    )
-    assert properties["options"]["description"] == "Empty for free_text; 2-12 items for choices."
-    assert properties["placeholder"]["description"] == (
-        "free_text only. Omit or use null for choices, even with allow_custom=true."
-    )
+
+def test_question_schema_rejects_selection_without_options() -> None:
+    payload = _arguments().model_dump(mode="json", exclude_defaults=True)
+    del payload["questions"][0]["options"]
+
+    assert not Draft202012Validator(QuestionArguments.model_json_schema()).is_valid(payload)
 
 
 @pytest.mark.parametrize("question_type", ["single_choice", "multiple_choice"])

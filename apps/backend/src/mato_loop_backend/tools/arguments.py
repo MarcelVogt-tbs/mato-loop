@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
@@ -191,6 +192,39 @@ class QuestionItem(QuestionBase):
 
 class QuestionArguments(ToolArguments):
     questions: list[QuestionItem] = Field(min_length=1, max_length=5)
+
+    @classmethod
+    def model_json_schema(cls, **kwargs: Any) -> dict[str, Any]:
+        """Expose type-specific inputs while retaining stored-question compatibility."""
+        schema = super().model_json_schema(**kwargs)
+        definitions = schema["$defs"]
+        question = definitions.pop("QuestionItem")
+        variants = []
+        for kind, name, description in (
+            ("free_text", "FreeTextQuestion", "The user enters text."),
+            ("single_choice", "SingleChoiceQuestion", "Provide 2-12 options. The user selects one."),
+            ("multiple_choice", "MultipleChoiceQuestion", "Provide 2-12 options. The user selects one or more."),
+        ):
+            branch = deepcopy(question)
+            properties = branch["properties"]
+            properties["type"] = {"const": kind, "type": "string", "description": description}
+            if kind == "free_text":
+                del properties["options"]
+                del properties["allow_custom"]
+                properties["placeholder"]["description"] = (
+                    "Optional input hint for free_text only; omit for selection questions."
+                )
+            else:
+                del properties["placeholder"]
+                properties["options"].update(
+                    minItems=2,
+                    description="Required for selection questions: provide 2-12 options. Omit for free_text.",
+                )
+                branch["required"].append("options")
+            definitions[name] = branch
+            variants.append({"$ref": f"#/$defs/{name}"})
+        schema["properties"]["questions"]["items"] = {"anyOf": variants}
+        return schema
 
     @model_validator(mode="after")
     def ids_and_defaults_are_valid(self) -> QuestionArguments:

@@ -133,6 +133,7 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     assert prompt_tokens <= 9_650, prompt_tokens
     # Session state and message metadata add 806 tokens; automation model overrides and
     # CalDAV pagination account for the remaining growth within a 1,200-token allowance.
-    assert schema_tokens <= 14_500, schema_tokens
+    # Type-specific question variants add 375 estimated schema tokens.
+    assert schema_tokens <= 14_875, schema_tokens
     # Includes child session IDs, live corrections, integration context and delete_path administrator options (+80 schema tokens).
-    assert prompt_tokens + schema_tokens <= 24_150, prompt_tokens + schema_tokens
+    assert prompt_tokens + schema_tokens <= 24_525, prompt_tokens + schema_tokens

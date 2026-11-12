@@ -6,6 +6,12 @@ One tool call contains one to five questions of type `single_choice`, `multiple_
 The tool must be the only tool call in that model response so later actions cannot run before the
 reply is known.
 
+The model-facing schema exposes separate `free_text`, `single_choice`, and
+`multiple_choice` variants. Selection questions require 2–12 `options` and may
+allow a custom answer; `placeholder` is offered only for free text. Free-text
+questions do not offer `options` or `allow_custom`. Runtime validation and stored
+question parsing retain their existing compatibility and answer checks.
+
 Pending requests and accepted answers are persisted in `question_requests`. The runtime uses the
 same single-process waiter semantics as approvals. Question answers, including protected
 administrator input, create no permission grants. Password entry and session retention provide
