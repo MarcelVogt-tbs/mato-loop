@@ -59,7 +59,7 @@ docker() {
         *inspect*matoloop.dev.cache*) echo '<no value>' ;;
         *inspect*com.docker.compose.volume*deps) echo dev_data ;;
         *inspect*com.docker.compose.volume*data) echo db_data ;;
-        'inspect '*) if [[ "$fault" == changed ]]; then echo "$BASHPID"; else echo snapshot; fi ;;
+        'inspect '*) if [[ "$fault" == changed ]]; then echo "[{\"revision\":$BASHPID}]"; else echo '[{}]'; fi ;;
         'container rm '*|'volume rm '*) echo "REMOVE $1 $3" ;;
         *) echo "Unexpected Docker call: $*" >&2; return 77 ;;
     esac
@@ -81,6 +81,18 @@ eval "$2"
         assert "REMOVE" not in result.stdout
     elif "--dependencies" in operation:
         assert "REMOVE volume data" not in result.stdout
+
+
+def test_cleanup_snapshot_ignores_mount_order():
+    result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\nresource_ids()" + FUNCTIONS + r'''
+docker() { echo '[{"Mounts":[{"Destination":"/b"},{"Destination":"/a"}]}]'; }
+before=$(resource_snapshot test)
+docker() { echo '[{"Mounts":[{"Destination":"/a"},{"Destination":"/b"}]}]'; }
+test "$before" = "$(resource_snapshot test)"
+'''], capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_frontend_generated_paths_use_initialized_private_subpaths():

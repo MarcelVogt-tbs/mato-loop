@@ -100,19 +100,29 @@ cleanup() {
     [[ -n "$containers$volumes$networks" ]] || { echo 'No selected resources to remove.'; return; }
     printf 'Delete stopped containers and selected volumes: %s\n' "$volumes"
     [[ "$mode" != --all ]] || echo 'WARNING: This deletes accounts, database, secrets, files, Agent state, pairing and workspace.'
-    before="$(docker inspect $containers $volumes $networks)"
+    before="$(resource_snapshot $containers $volumes $networks)"
     if [[ "$yes" == false ]]; then
         [[ -t 0 ]] || { echo 'Explicit non-interactive deletion requires --yes.' >&2; return 1; }
         read -r -p "Type $project to confirm deletion: " id
         [[ "$id" == "$project" ]] || return 1
     fi
     verify_resources "$project" "$path"
-    after="$(docker inspect $containers $volumes $networks)"
+    after="$(resource_snapshot $containers $volumes $networks)"
     [[ "$before" == "$after" ]] || { echo 'Stack changed; inspect it again.' >&2; return 1; }
     # Never force: Docker rejects running containers, attached networks and volumes still in use.
     for id in $containers; do docker container rm "$id"; done
     for id in $volumes; do docker volume rm "$id"; done
     for id in $networks; do docker network rm "$id"; done
+}
+
+resource_snapshot() {
+    docker inspect "$@" | python3 -c '
+import json, sys
+items = json.load(sys.stdin)
+for item in items:
+    if "Mounts" in item:
+        item["Mounts"].sort(key=lambda mount: mount["Destination"])
+print(json.dumps(items, sort_keys=True))'
 }
 
 compose() {
