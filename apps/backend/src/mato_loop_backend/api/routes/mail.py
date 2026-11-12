@@ -35,6 +35,14 @@ from mato_loop_backend.integrations.mail.client import (
     parse_message,
 )
 from mato_loop_backend.integrations.mail.send import MailSendResult, send_once, send_status
+from mato_loop_backend.integrations.microsoft365.client import (
+    GraphClient,
+    Microsoft365Config,
+    Microsoft365Error,
+)
+from mato_loop_backend.integrations.microsoft365.composition import MAX_OUTGOING_BYTES
+from mato_loop_backend.integrations.microsoft365.mail import Microsoft365Mailbox
+from mato_loop_backend.integrations.microsoft365.oauth import access_token
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.security import load_credential, read_credential, require_user
 from mato_loop_backend.settings import (
@@ -57,25 +65,29 @@ def _mailbox_role(name: str, flags: frozenset[str]) -> str | None:
     return None
 
 
-def _api_error(error: MailError) -> ApiError:
-    code = mail_error_code(error)
+def _api_error(error: MailError | Microsoft365Error) -> ApiError:
+    code = error.code if isinstance(error, Microsoft365Error) else mail_error_code(error)
     if code == "integration.remoteNotFound":
         return ApiError(404, code)
     if code in {
         "integration.operationUnsupported",
         "integration.permissionDenied",
         "integration.staleReference",
+        "microsoft365.featureDisabled",
+        "microsoft365.authorizationRequired",
     }:
         return ApiError(409, code)
-    if code == "integration.responseTooLarge":
+    if code in {"integration.responseTooLarge", "integration.attachmentTooLarge"}:
         return ApiError(413, code)
+    if code == "microsoft365.throttled":
+        return ApiError(429, code)
     if code == "tool.invalidArguments":
         return ApiError(422, code, field=error.field, params=error.params)
     return ApiError(502, code)
 
 
 async def _account(
-    db: AsyncSession, user: UserAccount, integration_id: UUID
+    db: AsyncSession, user: UserAccount, integration_id: UUID, *, allow_microsoft365: bool = False,
 ) -> tuple[IntegrationInstance, object, str]:
     settings = await load_effective_integrations(db, user.id)
     account = next(
@@ -84,13 +96,26 @@ async def _account(
             for item in settings.instances
             if item.id == integration_id
             and item.enabled
-            and item.integration_type == "mail"
-            and item.adapter_type == "imap_smtp"
+            and (
+                (item.integration_type == "mail" and item.adapter_type == "imap_smtp")
+                or (
+                    item.integration_type == "microsoft365"
+                    and item.adapter_type == "microsoft_graph"
+                    and item.owner_id == user.id
+                )
+            )
         ),
         None,
     )
     if account is None or account.credential_id is None:
         raise ApiError(404, "integration.notFound")
+    if account.integration_type == "microsoft365":
+        if not allow_microsoft365:
+            raise ApiError(409, "integration.operationUnsupported")
+        try:
+            return account, Microsoft365Mailbox(account, GraphClient(await access_token(account))), ""
+        except Microsoft365Error as exc:
+            raise _api_error(exc) from exc
     record = await load_credential(
         db, account.credential_id, owner_id=account.owner_id
     )
@@ -110,7 +135,7 @@ async def _account(
 
 
 async def _attachments(
-    uploads: list[UploadFile] | None, limits: InstanceLimits
+    uploads: list[UploadFile] | None, limits: InstanceLimits, *, max_file_bytes: int | None = None,
 ) -> tuple[tuple[str, str, bytes], ...]:
     uploads = uploads or []
     if len(uploads) > limits.max_attachments_per_message:
@@ -121,9 +146,10 @@ async def _attachments(
     total = 0
     try:
         for upload in uploads:
-            data = await upload.read(limits.max_upload_bytes + 1)
+            file_limit = min(limits.max_upload_bytes, max_file_bytes or limits.max_upload_bytes)
+            data = await upload.read(file_limit + 1)
             total += len(data)
-            if len(data) > limits.max_upload_bytes:
+            if len(data) > file_limit:
                 raise ApiError(413, "integration.attachmentTooLarge")
             if total > limits.max_message_upload_bytes:
                 raise ApiError(413, "attachment.tooLarge")
@@ -228,11 +254,23 @@ async def list_accounts(
                 "name": item.name,
                 "fromAddress": item.config.get("from_address"),
                 "signature": item.config.get("signature", ""),
+                "signatureHtml": item.config.get("signature_html", ""),
+                "integrationType": item.integration_type,
+                "capabilities": {
+                    "createDraft": item.integration_type == "mail" or Microsoft365Config.model_validate(item.config).allow_drafts,
+                    "editDraft": item.integration_type == "mail" or Microsoft365Config.model_validate(item.config).allow_drafts,
+                    "send": item.integration_type == "mail" or Microsoft365Config.model_validate(item.config).allow_send,
+                    "delete": item.integration_type == "mail" or Microsoft365Config.model_validate(item.config).allow_delete,
+                    "uploadAttachments": True,
+                    "ccBcc": True,
+                },
             }
             for item in settings.instances
             if item.enabled
-            and item.integration_type == "mail"
-            and item.adapter_type == "imap_smtp"
+            and (
+                (item.integration_type == "mail" and item.adapter_type == "imap_smtp")
+                or (item.integration_type == "microsoft365" and item.adapter_type == "microsoft_graph" and item.owner_id == user.id)
+            )
         ]
     }
 
@@ -242,11 +280,17 @@ async def list_mailboxes(
     integration_id: UUID,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    parent: Annotated[str | None, Query(alias="parentKey", min_length=1, max_length=4096)] = None,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=50_000)] = None,
 ) -> dict:
-    _instance, client, _revision = await _account(db, user, integration_id)
+    _instance, client, _revision = await _account(db, user, integration_id, allow_microsoft365=True)
     try:
+        if isinstance(client, Microsoft365Mailbox):
+            return await client.mailboxes(parent, cursor)
         mailboxes = await client.list_mailboxes()
-    except MailError as exc:
+    except ValidationError as exc:
+        raise ApiError(422, "validation.invalid") from exc
+    except (MailError, Microsoft365Error) as exc:
         raise _api_error(exc) from exc
     return {
         "mailboxes": [
@@ -268,14 +312,16 @@ async def list_messages(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
     mailbox: Annotated[
-        str, Query(alias="mailboxKey", min_length=1, max_length=1_000)
+        str, Query(alias="mailboxKey", min_length=1, max_length=4096)
     ],
     query: Annotated[str | None, Query(min_length=1, max_length=500)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: Annotated[str | None, Query(min_length=1, max_length=50_000)] = None,
 ) -> dict:
-    _instance, client, revision = await _account(db, user, integration_id)
+    _instance, client, revision = await _account(db, user, integration_id, allow_microsoft365=True)
     try:
+        if isinstance(client, Microsoft365Mailbox):
+            return await client.messages(mailbox, query, limit, cursor)
         return await search_messages(
             MailSearchArguments(
                 integration_id=integration_id, mailbox=mailbox, query=query,
@@ -283,9 +329,11 @@ async def list_messages(
             ),
             client, revision,
         )
+    except ValidationError as exc:
+        raise ApiError(422, "validation.invalid") from exc
     except ValueError as exc:
         raise ApiError(409, "integration.staleReference", field="cursor") from exc
-    except MailError as exc:
+    except (MailError, Microsoft365Error) as exc:
         raise _api_error(exc) from exc
 
 
@@ -296,13 +344,15 @@ async def get_message(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
-    _instance, client, revision = await _account(db, user, integration_id)
+    _instance, client, revision = await _account(db, user, integration_id, allow_microsoft365=True)
     try:
+        if isinstance(client, Microsoft365Mailbox):
+            return await client.message(message_token)
         locator, _part = locator_from_token(message_token, integration_id, revision)
         message = await client.get_message(locator)
     except ValueError as exc:
         raise ApiError(409, "integration.staleReference") from exc
-    except MailError as exc:
+    except (MailError, Microsoft365Error) as exc:
         raise _api_error(exc) from exc
     return {"message": message_payload(message, integration_id, revision)}
 
@@ -319,8 +369,27 @@ async def create_draft(
     bcc: Annotated[list[str] | None, Form()] = None,
     mailbox: Annotated[str | None, Form(max_length=1_000)] = None,
     attachments: Annotated[list[UploadFile] | None, File()] = None,
+    reply_to: Annotated[str | None, Form(alias="replyTo", min_length=1, max_length=50_000)] = None,
 ) -> dict:
-    account, client, revision = await _account(db, user, integration_id)
+    account, client, revision = await _account(db, user, integration_id, allow_microsoft365=True)
+    if isinstance(client, Microsoft365Mailbox):
+        if mailbox:
+            raise ApiError(409, "integration.operationUnsupported")
+        try:
+            client.require("allow_drafts")
+            limits = await SettingsStore.load(db, InstanceLimits)
+            uploads = await _attachments(
+                attachments, limits, max_file_bytes=MAX_OUTGOING_BYTES,
+            ) if attachments else ()
+            return await client.create_draft(
+                to or [], subject, body, reply_to, cc=cc or (), bcc=bcc or (), attachments=uploads, limits=limits,
+            )
+        except ValidationError as exc:
+            raise ApiError(422, "validation.invalid") from exc
+        except Microsoft365Error as exc:
+            raise _api_error(exc) from exc
+    if reply_to:
+        raise ApiError(409, "integration.operationUnsupported")
     limits = await SettingsStore.load(db, InstanceLimits)
     try:
         locator = await client.create_draft(
@@ -361,8 +430,29 @@ async def update_draft(
         list[str] | None, Form(alias="retainedAttachmentToken")
     ] = None,
     replace_attachments: Annotated[bool, Form(alias="replaceAttachments")] = False,
+    expected_version: Annotated[str | None, Form(alias="expectedVersion", min_length=1, max_length=4096)] = None,
+    body_format: Annotated[str, Form(alias="bodyFormat", pattern="^(text|html)$")] = "text",
+    preserve_body: Annotated[bool, Form(alias="preserveBody")] = False,
 ) -> dict:
-    account, client, revision = await _account(db, user, integration_id)
+    account, client, revision = await _account(db, user, integration_id, allow_microsoft365=True)
+    if isinstance(client, Microsoft365Mailbox):
+        try:
+            client.require("allow_drafts")
+            limits = await SettingsStore.load(db, InstanceLimits)
+            uploads = await _attachments(attachments, limits, max_file_bytes=MAX_OUTGOING_BYTES)
+            changes = {"to": to or (), "cc": cc or (), "bcc": bcc or (), "subject": subject}
+            if not preserve_body:
+                changes.update(body=body, body_format=body_format)
+            return await client.update_draft(
+                message_token, expected_version or "", changes=changes, attachments=uploads, limits=limits,
+                retained_tokens=(retained_attachment_tokens or []) if replace_attachments else None,
+            )
+        except ValidationError as exc:
+            raise ApiError(422, "validation.invalid") from exc
+        except Microsoft365Error as exc:
+            raise _api_error(exc) from exc
+    if body_format != "text":
+        raise ApiError(409, "integration.operationUnsupported")
     limits = await SettingsStore.load(db, InstanceLimits)
     try:
         locator, _part = locator_from_token(message_token, integration_id, revision)
@@ -421,9 +511,13 @@ async def delete_draft(
     message_token: str,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    expected_version: Annotated[str | None, Query(alias="expectedVersion", min_length=1, max_length=4096)] = None,
 ) -> None:
-    _instance, client, revision = await _account(db, user, integration_id)
+    _instance, client, revision = await _account(db, user, integration_id, allow_microsoft365=True)
     try:
+        if isinstance(client, Microsoft365Mailbox):
+            await client.delete(message_token, expected_version or "", draft_only=True)
+            return
         locator, _part = locator_from_token(message_token, integration_id, revision)
         await client.delete_draft(locator)
     except ValueError as exc:
@@ -450,9 +544,15 @@ async def send_draft(
     retained_attachment_tokens: Annotated[
         list[str] | None, Form(alias="retainedAttachmentToken")
     ] = None,
+    expected_version: Annotated[str | None, Form(alias="expectedVersion", min_length=1, max_length=4096)] = None,
 ) -> MailSendResult:
-    account, client, revision = await _account(db, user, integration_id)
+    account, client, revision = await _account(db, user, integration_id, allow_microsoft365=True)
     try:
+        if isinstance(client, Microsoft365Mailbox):
+            client.require("allow_send")
+            if any(value is not None for value in (to, cc, bcc, subject, body, attachments, retained_attachment_tokens)):
+                raise ApiError(409, "integration.operationUnsupported")
+            return await client.send_draft(user.id, idempotency_key, message_token, expected_version or "")
         locator, _part = locator_from_token(message_token, integration_id, revision)
         draft_reference = f"{locator.mailbox}\0{locator.uidvalidity}\0{locator.uid}"
         completed = await send_status(
@@ -534,19 +634,29 @@ async def send_message(
     integration_id: UUID,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
-    to: Annotated[list[str], Form()],
     idempotency_key: Annotated[
         str, Header(alias="Idempotency-Key", min_length=1, max_length=200)
     ],
+    to: Annotated[list[str] | None, Form()] = None,
     subject: Annotated[str, Form(max_length=1_000)] = "",
     body: Annotated[str, Form(max_length=100_000)] = "",
     cc: Annotated[list[str] | None, Form()] = None,
     bcc: Annotated[list[str] | None, Form()] = None,
     attachments: Annotated[list[UploadFile] | None, File()] = None,
 ) -> MailSendResult:
-    account, client, _revision = await _account(db, user, integration_id)
-    limits = await SettingsStore.load(db, InstanceLimits)
+    account, client, _revision = await _account(db, user, integration_id, allow_microsoft365=True)
     try:
+        if isinstance(client, Microsoft365Mailbox):
+            client.require("allow_send")
+            limits = await SettingsStore.load(db, InstanceLimits)
+            uploads = await _attachments(
+                attachments, limits, max_file_bytes=MAX_OUTGOING_BYTES,
+            ) if attachments else ()
+            return await client.send_message(
+                user.id, idempotency_key, to=to or (), cc=cc or (), bcc=bcc or (),
+                subject=subject, body=body, attachments=uploads, limits=limits,
+            )
+        limits = await SettingsStore.load(db, InstanceLimits)
         return await send_once(
             user_id=user.id,
             integration_id=integration_id,
@@ -567,6 +677,8 @@ async def send_message(
                 ),
             ),
         )
+    except ValidationError as exc:
+        raise ApiError(422, "validation.invalid") from exc
     except MailError as exc:
         raise _api_error(exc) from exc
 
@@ -580,9 +692,13 @@ async def delete_message(
     message_token: str,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    expected_version: Annotated[str | None, Query(alias="expectedVersion", min_length=1, max_length=4096)] = None,
 ) -> None:
-    _instance, client, revision = await _account(db, user, integration_id)
+    _instance, client, revision = await _account(db, user, integration_id, allow_microsoft365=True)
     try:
+        if isinstance(client, Microsoft365Mailbox):
+            await client.delete(message_token, expected_version or "")
+            return
         locator, _part = locator_from_token(message_token, integration_id, revision)
         await client.delete_message(locator)
     except ValueError as exc:
@@ -598,16 +714,19 @@ async def download_attachment(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> Response:
-    _instance, client, revision = await _account(db, user, integration_id)
+    _instance, client, revision = await _account(db, user, integration_id, allow_microsoft365=True)
     try:
-        locator, part = locator_from_token(
-            attachment_token, integration_id, revision, require_part=True
-        )
-        assert part is not None
-        data, filename, _content_type = await client.get_attachment(locator, part)
+        if isinstance(client, Microsoft365Mailbox):
+            data, filename = await client.attachment(attachment_token)
+        else:
+            locator, part = locator_from_token(
+                attachment_token, integration_id, revision, require_part=True
+            )
+            assert part is not None
+            data, filename, _content_type = await client.get_attachment(locator, part)
     except ValueError as exc:
         raise ApiError(409, "integration.staleReference") from exc
-    except MailError as exc:
+    except (MailError, Microsoft365Error) as exc:
         raise _api_error(exc) from exc
     return Response(
         data,
@@ -621,3 +740,20 @@ async def download_attachment(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.get("/accounts/{integration_id}/messages/{message_token}/attachments")
+async def list_attachments(
+    integration_id: UUID,
+    message_token: str,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    cursor: Annotated[str | None, Query(min_length=1, max_length=50_000)] = None,
+) -> dict:
+    _instance, client, _revision = await _account(db, user, integration_id, allow_microsoft365=True)
+    if not isinstance(client, Microsoft365Mailbox):
+        raise ApiError(409, "integration.operationUnsupported")
+    try:
+        return await client.attachments(message_token, cursor)
+    except Microsoft365Error as exc:
+        raise _api_error(exc) from exc

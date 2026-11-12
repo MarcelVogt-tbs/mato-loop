@@ -478,6 +478,7 @@ async def test_personal_policy_read_exposes_no_integration_configuration(
             "browser",
             "caldav",
             "imap_smtp",
+            "microsoft_graph",
             "opencode",
             "sonobin",
             "tbs-desk",

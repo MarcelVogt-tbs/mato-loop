@@ -4,7 +4,7 @@ import hashlib
 import json
 from email import policy
 from email.parser import BytesParser
-from typing import Literal
+from typing import Literal, Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -12,13 +12,17 @@ from sqlalchemy import delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from mato_loop_backend.db.session import AsyncSessionFactory
-from mato_loop_backend.integrations.mail.client import MailClient, MailError
+from mato_loop_backend.integrations.mail.client import MailError
 from mato_loop_backend.models import MailSendOperation
 
 
 class MailSendResult(BaseModel):
     sent: Literal[True] = True
     sent_copy_confirmed: bool | None = Field(serialization_alias="sentCopyConfirmed")
+
+
+class MailSender(Protocol):
+    async def send(self, raw: bytes) -> bool | None: ...
 
 
 def _digest(value: str | bytes) -> str:
@@ -74,6 +78,8 @@ async def send_status(
         raise MailError("mail.staleReference")
     if operation is not None and operation.status == "sent":
         return MailSendResult(sent_copy_confirmed=operation.sent_copy_confirmed)
+    if operation is not None:
+        raise MailError("mail.outcomeUnknown")
     return None
 
 
@@ -83,7 +89,7 @@ async def send_once(
     integration_id: UUID,
     idempotency_key: str,
     raw: bytes,
-    client: MailClient,
+    client: MailSender,
     draft_reference: str | None = None,
 ) -> MailSendResult:
     key_hash = _digest(idempotency_key)
@@ -128,7 +134,7 @@ async def send_once(
         sent_copy_confirmed = await client.send(raw)
     except MailError as exc:
         async with AsyncSessionFactory() as db:
-            if exc.code == "mail.outcomeUnknown":
+            if exc.code in {"mail.outcomeUnknown", "integration.outcomeUnknown"}:
                 await db.execute(
                     update(MailSendOperation)
                     .where(MailSendOperation.id == created)

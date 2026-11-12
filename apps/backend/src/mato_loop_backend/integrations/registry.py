@@ -16,6 +16,7 @@ from mato_loop_backend.integrations.jina.adapter import JINA_ADAPTER
 from mato_loop_backend.integrations.mail.adapter import MAIL_ADAPTER
 from mato_loop_backend.integrations.mcp.adapter import MCP_ADAPTER
 from mato_loop_backend.integrations.mealie.adapter import MEALIE_ADAPTER
+from mato_loop_backend.integrations.microsoft365.adapter import MICROSOFT365_ADAPTER
 from mato_loop_backend.integrations.opencode.adapter import OPENCODE_ADAPTER
 from mato_loop_backend.integrations.openscad.adapter import OPENSCAD_ADAPTER
 from mato_loop_backend.integrations.searxng.adapter import SEARXNG_ADAPTER
@@ -44,6 +45,7 @@ _ADAPTERS = {
     ("search", "searxng"): SEARXNG_ADAPTER,
     ("calendar", "caldav"): CALDAV_ADAPTER,
     ("mail", "imap_smtp"): MAIL_ADAPTER,
+    ("microsoft365", "microsoft_graph"): MICROSOFT365_ADAPTER,
     ("knowledge", "bookstack"): BOOKSTACK_ADAPTER,
     ("recipes", "mealie"): MEALIE_ADAPTER,
     ("infrastructure", "arcane"): ARCANE_ADAPTER,

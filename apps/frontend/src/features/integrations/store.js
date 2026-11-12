@@ -107,6 +107,7 @@ function clearIntegrations(store) {
   store.search = emptySearch()
   store.calendar = emptyCalendar()
   store.mail = emptyMail()
+  store.microsoft365 = emptyMail()
   store.tbsDesk = emptyTbsDesk()
   store.knowledge = emptyKnowledge()
   store.recipes = emptyRecipes()
@@ -126,6 +127,7 @@ export const useIntegrationStore = defineStore('integrations', {
     search: emptySearch(),
     calendar: emptyCalendar(),
     mail: emptyMail(),
+    microsoft365: emptyMail(),
     tbsDesk: emptyTbsDesk(),
     knowledge: emptyKnowledge(),
     recipes: emptyRecipes(),
@@ -153,7 +155,7 @@ export const useIntegrationStore = defineStore('integrations', {
   getters: {
     configuredIntegrations: (state) => [
       ...state.webfetch.providers,
-      ...state.search.providers, ...state.calendar.accounts, ...state.mail.accounts,
+      ...state.search.providers, ...state.calendar.accounts, ...state.mail.accounts, ...state.microsoft365.accounts,
       ...state.knowledge.bases, ...state.recipes.accounts, ...state.arcane.instances,
       ...state.music.instances, ...state.openscad.instances, ...state.coding.instances,
       ...state.tbsDesk.accounts,
@@ -173,6 +175,24 @@ export const useIntegrationStore = defineStore('integrations', {
     ...integrationActions('Webfetch', '/integrations/webfetch/providers', { scoped: false }),
     ...integrationActions('Calendar', '/integrations/calendar/accounts', { prepareUpdate: withoutEmptyPassword }),
     ...integrationActions('Mail', '/integrations/mail/accounts', { prepareUpdate: withoutEmptyPassword }),
+    ...integrationActions('Microsoft365', '/integrations/microsoft365'),
+    async startMicrosoft365Login(id) {
+      return (await api.post(`/integrations/microsoft365/${id}/login`, null, scopeConfig(this.scope))).data
+    },
+    async finishMicrosoft365Login(attemptId) {
+      return (await api.post(`/integrations/microsoft365/oauth/attempts/${attemptId}/finish`)).data
+    },
+    async cancelMicrosoft365Login(attemptId) {
+      await api.delete(`/integrations/microsoft365/oauth/attempts/${attemptId}`)
+    },
+    async disconnectMicrosoft365(id) {
+      const context = scopeContext(this)
+      await api.post(`/integrations/microsoft365/${id}/disconnect`, null, scopeConfig(context.scope))
+      if (!contextIsCurrent(this, context)) return
+      this.loadVersions.microsoft365 = (this.loadVersions.microsoft365 || 0) + 1
+      const account = this.microsoft365.accounts.find((item) => item.id === id)
+      if (account) Object.assign(account, { hasCredential: false, authStatus: 'authorization_required' })
+    },
     ...integrationActions('TbsDesk', '/integrations/support/tbs-desk', { scoped: false, prepareUpdate: withoutEmptyPassword }),
     ...integrationActions('Knowledge', '/integrations/knowledge/bases', {
       prepareUpdate(payload) {
@@ -212,7 +232,7 @@ export const useIntegrationStore = defineStore('integrations', {
         const result = await this.browserStatus(integration.id, true)
         return { type: result.state === 'ready' ? 'positive' : 'warning', message: browserStatusLabel(result) }
       }
-      const method = { webfetch: 'testWebfetch', search: 'testSearch', calendar: 'testCalendar', mail: 'testMail', support: 'testTbsDesk', knowledge: 'testKnowledge', recipes: 'testRecipes', infrastructure: 'testArcane', music: 'testSonoBin', openscad: 'testOpenScad', coding: 'testOpenCode' }[integration.integrationType]
+      const method = { webfetch: 'testWebfetch', search: 'testSearch', calendar: 'testCalendar', mail: 'testMail', microsoft365: 'testMicrosoft365', support: 'testTbsDesk', knowledge: 'testKnowledge', recipes: 'testRecipes', infrastructure: 'testArcane', music: 'testSonoBin', openscad: 'testOpenScad', coding: 'testOpenCode' }[integration.integrationType]
       const result = await this[method](integration.id)
       return integration.integrationType === 'openscad' && result?.headlessPreview === false
         ? { type: 'warning', message: 'OpenSCAD ist erreichbar, unterstützt aber keine Headless-Vorschau.' }
@@ -280,6 +300,7 @@ export const useIntegrationStore = defineStore('integrations', {
           this.fetchSearch(),
           this.fetchCalendar(),
           this.fetchMail(),
+          this.fetchMicrosoft365(),
           this.fetchKnowledge(),
           this.fetchRecipes(),
           this.fetchArcane(),
@@ -329,6 +350,9 @@ export const useIntegrationStore = defineStore('integrations', {
     },
     fetchMail() {
       return this.fetchResource('mail', '/integrations/mail')
+    },
+    fetchMicrosoft365() {
+      return this.fetchResource('microsoft365', '/integrations/microsoft365')
     },
     async fetchTbsDesk() {
       const context = scopeContext(this)

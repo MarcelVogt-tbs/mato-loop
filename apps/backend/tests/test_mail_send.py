@@ -7,6 +7,7 @@ import pytest
 # Initialize the agent package before the integrations package's public imports.
 import mato_loop_backend.integrations.mail.send as mail_send
 from mato_loop_backend.integrations.mail.client import MailError
+from mato_loop_backend.integrations.microsoft365.client import Microsoft365Error
 
 
 class _Session:
@@ -52,14 +53,15 @@ async def test_replayed_completed_send_does_not_use_smtp(monkeypatch, confirmed)
     client.send.assert_awaited_once_with(b"raw")
 
 
-async def test_unknown_send_is_persisted_and_never_retried(monkeypatch) -> None:
+@pytest.mark.parametrize("error", [MailError("mail.outcomeUnknown"), Microsoft365Error("integration.outcomeUnknown")])
+async def test_unknown_send_is_persisted_and_never_retried(monkeypatch, error) -> None:
     operation_id = uuid4()
     existing = SimpleNamespace(
         request_hash=mail_send._message_digest(b"raw"), status="outcome_unknown"
     )
     sessions = iter([_Session([operation_id]), _Session(), _Session([None, existing])])
     monkeypatch.setattr(mail_send, "AsyncSessionFactory", lambda: next(sessions))
-    client = SimpleNamespace(send=AsyncMock(side_effect=MailError("mail.outcomeUnknown")))
+    client = SimpleNamespace(send=AsyncMock(side_effect=error))
     arguments = {
         "user_id": uuid4(),
         "integration_id": uuid4(),
@@ -68,7 +70,7 @@ async def test_unknown_send_is_persisted_and_never_retried(monkeypatch) -> None:
         "client": client,
     }
 
-    with pytest.raises(MailError, match="mail.outcomeUnknown"):
+    with pytest.raises(MailError, match="outcomeUnknown"):
         await mail_send.send_once(**arguments)
     with pytest.raises(MailError, match="mail.outcomeUnknown"):
         await mail_send.send_once(**arguments)

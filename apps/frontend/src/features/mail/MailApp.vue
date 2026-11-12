@@ -56,7 +56,7 @@
             dense
             icon="edit"
             aria-label="E-Mail verfassen"
-            :disable="!activeAccount"
+            :disable="!can('createDraft') && !can('send')"
             @click="openCompose()"
           >
             <q-tooltip>E-Mail verfassen</q-tooltip>
@@ -72,6 +72,11 @@
           >
             <q-tooltip>E-Mails aktualisieren</q-tooltip>
           </q-btn>
+        </div>
+        <div v-if="folderParents.length || selectedMailbox?.childFolderCount || mail.nextMailboxCursor" class="col-12 row q-gutter-xs">
+          <q-btn v-if="folderParents.length" flat no-caps dense icon="arrow_upward" label="Übergeordnete Ordner" :disable="mail.mailboxesLoading" @click="backFolders" />
+          <q-btn v-if="selectedMailbox?.childFolderCount" flat no-caps dense icon="folder_open" label="Unterordner" :disable="mail.mailboxesLoading" @click="openSubfolders" />
+          <q-btn v-if="mail.nextMailboxCursor" flat no-caps dense label="Weitere Ordner laden" :loading="mail.mailboxesLoading" @click="loadMoreFolders" />
         </div>
       </div>
       <q-separator />
@@ -165,52 +170,69 @@
                   <div class="text-body2 q-mt-sm">Von: {{ sender(mail.detail) }}</div>
                   <div class="text-caption app-muted">An: {{ recipients(mail.detail.to) }}</div>
                   <div v-if="mail.detail.cc?.length" class="text-caption app-muted">Cc: {{ recipients(mail.detail.cc) }}</div>
+                  <div v-if="mail.detail.bcc?.length" class="text-caption app-muted">Bcc: {{ recipients(mail.detail.bcc) }}</div>
                   <time class="text-caption app-muted" :datetime="mail.detail.receivedAt || mail.detail.sentAt || mail.detail.date">
                     {{ formatAbsoluteDateTime(mail.detail.receivedAt || mail.detail.sentAt || mail.detail.date) }}
                   </time>
                 </div>
-                <q-btn v-if="mail.detail.isDraft" flat round dense icon="edit" aria-label="Entwurf bearbeiten" @click="openCompose(mail.detail)" />
-                <q-btn flat round dense color="negative" icon="delete" aria-label="E-Mail löschen" @click="deleteCurrent" />
+                <q-btn v-if="microsoft365 && can('createDraft') && !mail.detail.isDraft" flat round dense icon="reply" aria-label="Antwortentwurf erstellen" @click="openReply" />
+                <q-btn v-if="mail.detail.isDraft && can('editDraft')" flat round dense icon="edit" aria-label="Entwurf bearbeiten" @click="openCompose(mail.detail)" />
+                <q-btn v-if="microsoft365 && mail.detail.isDraft && can('send')" flat round dense icon="send" aria-label="Entwurf unverändert senden" :loading="draftSending" @click="sendCurrentDraft" />
+                <q-btn v-if="can('delete')" flat round dense color="negative" icon="delete" aria-label="E-Mail löschen" :disable="draftSending" @click="deleteCurrent" />
               </div>
               <q-separator class="q-my-md" />
               <div class="mail-plain-text">{{ plainBody }}</div>
               <div v-if="mail.detail.attachments?.length" class="q-mt-lg">
                 <div class="text-subtitle2 q-mb-xs">Anhänge</div>
                 <q-list bordered separator class="rounded-borders">
-                  <q-item v-for="attachment in mail.detail.attachments" :key="attachment.token" clickable tag="a" :href="attachmentUrl(attachment.token)" download>
+                  <q-item v-for="(attachment, index) in mail.detail.attachments" :key="attachment.token || index" :clickable="attachment.downloadSupported !== false" :tag="attachment.downloadSupported === false ? 'div' : 'a'" :href="attachment.downloadSupported === false ? undefined : attachmentUrl(attachment.token)" download>
                     <q-item-section avatar><q-icon name="attach_file" /></q-item-section>
-                    <q-item-section>{{ attachment.filename || attachment.name || 'Anhang' }}</q-item-section>
-                    <q-item-section side><q-icon name="download" /></q-item-section>
+                    <q-item-section>
+                      <q-item-label>{{ attachment.filename || attachment.name || 'Anhang' }}</q-item-label>
+                      <q-item-label v-if="attachment.downloadSupported === false" caption>Nur in Outlook verfügbar (Anhangstyp oder Größenlimit).</q-item-label>
+                    </q-item-section>
+                    <q-item-section v-if="attachment.downloadSupported !== false" side><q-icon name="download" /></q-item-section>
                   </q-item>
                 </q-list>
               </div>
+              <q-btn v-if="mail.detail.nextAttachmentCursor" flat no-caps label="Weitere Anhänge laden" :loading="mail.attachmentsLoading" class="q-mt-sm" @click="loadMoreAttachments" />
             </article>
           </q-scroll-area>
         </div>
       </div>
     </template>
 
-    <q-dialog v-model="composeOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" :persistent="composeSaving">
+    <q-dialog v-model="composeOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" :persistent="Boolean(composeSaving)">
       <q-card class="mail-compose app-surface column">
         <q-card-section class="row items-center no-wrap">
-          <div class="text-h6">{{ compose.token ? 'Entwurf bearbeiten' : 'E-Mail verfassen' }}</div>
+          <div class="text-h6">{{ compose.replyTo ? 'Antwortentwurf erstellen' : compose.token ? 'Entwurf bearbeiten' : 'E-Mail verfassen' }}</div>
           <q-space />
-          <q-btn flat round dense icon="close" aria-label="Editor schließen" :disable="composeSaving" @click="composeOpen = false" />
+          <q-btn flat round dense icon="close" aria-label="Editor schließen" :disable="Boolean(composeSaving)" @click="composeOpen = false" />
         </q-card-section>
         <q-separator />
-        <q-form class="col column no-wrap" @submit.prevent="sendCompose">
+        <q-form class="col column no-wrap" @submit.prevent="can('send') && !compose.replyTo ? sendCompose() : saveComposeDraft()">
           <q-card-section class="col scroll q-gutter-md">
             <q-banner v-if="compose.sendPayload" rounded class="bg-warning text-dark">
               Der Versandstatus ist unklar. Ein erneuter Versuch verwendet unverändert dieselbe E-Mail.
             </q-banner>
-             <q-input dense v-model="compose.to" outlined label="An" hint="Mehrere Adressen mit Komma trennen." :disable="Boolean(compose.sendPayload)" />
-            <div class="row q-col-gutter-sm">
+            <q-banner v-if="compose.draftOutcomeUnknown" rounded class="bg-warning text-dark">
+              Ob der Entwurf gespeichert wurde, ist unklar. Prüfe zuerst den Entwurfsordner in Outlook, bevor du einen neuen Versuch startest.
+            </q-banner>
+            <q-banner v-if="compose.replyTo" dense class="app-surface-tonal">
+              Outlook übernimmt Empfänger und Betreff aus der ursprünglichen E-Mail.
+            </q-banner>
+            <q-input v-if="!compose.replyTo" dense v-model="compose.to" outlined label="An" hint="Mehrere Adressen mit Komma trennen." :disable="Boolean(compose.sendPayload)" />
+            <div v-if="can('ccBcc')" class="row q-col-gutter-sm">
               <q-input dense v-model="compose.cc" outlined label="Cc" class="col-12 col-sm-6" :disable="Boolean(compose.sendPayload)" />
               <q-input dense v-model="compose.bcc" outlined label="Bcc" class="col-12 col-sm-6" :disable="Boolean(compose.sendPayload)" />
             </div>
-            <q-input dense v-model="compose.subject" outlined label="Betreff" :disable="Boolean(compose.sendPayload)" />
-            <q-input dense v-model="compose.body" outlined type="textarea" autogrow label="Nachricht" :disable="Boolean(compose.sendPayload)" />
-            <q-file dense v-model="compose.files" outlined multiple use-chips append clearable label="Anhänge hinzufügen" :disable="Boolean(compose.sendPayload)">
+            <q-input v-if="!compose.replyTo" dense v-model="compose.subject" outlined label="Betreff" :disable="Boolean(compose.sendPayload)" />
+            <q-input dense v-model="compose.body" outlined type="textarea" autogrow :label="compose.bodyFormat === 'html' ? 'Nachricht (HTML)' : 'Nachricht'" :hint="compose.bodyFormat === 'html' ? 'Formatierter Outlook-Entwurf: HTML-Quelltext bearbeiten. Bestehende Signatur und Inline-Bilder bleiben erhalten.' : undefined" :disable="Boolean(compose.sendPayload)" />
+            <div v-if="microsoft365 && !compose.token && activeAccount?.signatureHtml" class="mail-signature">
+              <div class="text-caption app-muted q-mb-xs">Diese Signatur wird angefügt:</div>
+              <div class="bg-white text-black q-pa-sm" v-html="safeSignature(activeAccount.signatureHtml)" />
+            </div>
+            <q-file v-if="can('uploadAttachments')" dense v-model="compose.files" outlined multiple use-chips append clearable label="Anhänge hinzufügen" :hint="microsoft365 ? 'Es gelten die Upload-Limits der Instanz und deines Microsoft-Postfachs; technisch höchstens 150 MiB insgesamt.' : undefined" :disable="Boolean(compose.sendPayload)">
               <template #prepend><q-icon name="attach_file" /></template>
             </q-file>
             <q-list v-if="compose.existingAttachments.length" bordered separator class="rounded-borders">
@@ -219,8 +241,8 @@
                 <q-item-section>{{ attachment.filename || attachment.name || 'Anhang' }}</q-item-section>
                 <q-item-section side>
                   <div class="row no-wrap">
-                    <q-btn flat round dense icon="download" :href="attachmentUrl(attachment.token)" download aria-label="Anhang herunterladen" />
-                    <q-btn flat round dense icon="close" aria-label="Anhang aus Entwurf entfernen" :disable="Boolean(compose.sendPayload)" @click="removeExistingAttachment(attachment.token)" />
+                    <q-btn flat round dense icon="download" :href="attachmentUrl(attachment.token)" :disable="attachment.downloadSupported === false" download aria-label="Anhang herunterladen" />
+                    <q-btn v-if="!attachment.isInline" flat round dense icon="close" aria-label="Anhang aus Entwurf entfernen" :disable="Boolean(compose.sendPayload)" @click="removeExistingAttachment(attachment.token)" />
                   </div>
                 </q-item-section>
               </q-item>
@@ -228,10 +250,10 @@
           </q-card-section>
           <q-separator />
           <q-card-actions class="q-pa-md">
-            <q-btn v-if="compose.token" flat no-caps color="negative" label="Entwurf löschen" :disable="Boolean(composeSaving) || Boolean(compose.sendPayload)" @click="deleteComposeDraft" />
+            <q-btn v-if="compose.token && can('delete')" flat no-caps color="negative" label="Entwurf löschen" :disable="Boolean(composeSaving) || Boolean(compose.sendPayload)" @click="deleteComposeDraft" />
             <q-space />
-            <q-btn flat no-caps label="Als Entwurf speichern" :loading="composeSaving === 'draft'" :disable="Boolean(composeSaving) || Boolean(compose.sendPayload)" @click="saveComposeDraft" />
-            <q-btn unelevated no-caps type="submit" color="primary" icon="send" :label="compose.sendPayload ? 'Erneut senden' : 'Senden'" :loading="composeSaving === 'send'" :disable="Boolean(composeSaving)" />
+            <q-btn v-if="can('createDraft')" flat no-caps label="Als Entwurf speichern" :loading="composeSaving === 'draft'" :disable="Boolean(composeSaving) || Boolean(compose.sendPayload) || compose.draftOutcomeUnknown" @click="saveComposeDraft" />
+            <q-btn v-if="can('send') && !compose.replyTo" unelevated no-caps type="submit" color="primary" icon="send" :label="compose.sendPayload ? 'Versandstatus prüfen' : 'Senden'" :loading="composeSaving === 'send'" :disable="Boolean(composeSaving) || compose.draftOutcomeUnknown" />
           </q-card-actions>
         </q-form>
       </q-card>
@@ -248,6 +270,7 @@ import { useConfirm } from 'src/composables/confirm'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
 import { randomUuid } from 'src/utils/random-id'
 import { useMailStore } from 'stores/mail'
+import { safeSignature } from './signature'
 
 defineOptions({ name: 'MailApp' })
 const $q = useQuasar()
@@ -256,11 +279,16 @@ const mail = useMailStore()
 const selectedAccountId = ref(null)
 const selectedMailboxKey = ref(null)
 const selectedToken = ref(null)
+const folderParents = ref([])
 const searchQuery = ref('')
 const composeOpen = ref(false)
 const composeSaving = ref(false)
+const draftSending = ref(false)
+const draftSendAttempts = new Map()
 const compose = reactive(emptyCompose())
 const activeAccount = computed(() => mail.accounts.find((account) => account.id === selectedAccountId.value))
+const microsoft365 = computed(() => activeAccount.value?.integrationType === 'microsoft365')
+const selectedMailbox = computed(() => mail.mailboxes.find((mailbox) => mailbox.key === selectedMailboxKey.value))
 const accountOptions = computed(() => mail.accounts.map((account) => ({ label: account.name, value: account.id })))
 const mailboxOptions = computed(() => mail.mailboxes.map((mailbox) => ({
   label: `${mailbox.label || mailbox.name}${mailbox.unreadCount ? ` (${mailbox.unreadCount})` : ''}`,
@@ -271,7 +299,7 @@ const plainBody = computed(() => mail.detail?.text || mail.detail?.bodyText || m
 
 function emptyCompose() {
   return {
-    token: null, to: '', cc: '', bcc: '', subject: '', body: '', files: [], existingAttachments: [],
+    token: null, replyTo: null, version: null, bodyFormat: 'text', originalBody: '', draftOutcomeUnknown: false, to: '', cc: '', bcc: '', subject: '', body: '', files: [], existingAttachments: [],
     idempotencyKey: randomUuid(), sendPayload: null
   }
 }
@@ -280,11 +308,18 @@ function addresses(value) {
   return String(value || '').split(',').map((address) => address.trim()).filter(Boolean)
 }
 
+function can(action) {
+  return Boolean(activeAccount.value && (activeAccount.value.capabilities?.[action] ?? !microsoft365.value))
+}
+
 function composePayload() {
   return {
     to: addresses(compose.to), cc: addresses(compose.cc), bcc: addresses(compose.bcc),
     subject: compose.subject.trim(), body: compose.body,
-    files: compose.files || [], existingAttachments: compose.existingAttachments
+    files: compose.files || [], existingAttachments: compose.existingAttachments, replyTo: compose.replyTo,
+    ...(microsoft365.value && compose.token ? {
+      expectedVersion: compose.version, bodyFormat: compose.bodyFormat, preserveBody: compose.body === compose.originalBody
+    } : {})
   }
 }
 
@@ -323,14 +358,50 @@ async function selectAccount(accountId) {
   selectedMailboxKey.value = null
   selectedToken.value = null
   searchQuery.value = ''
+  folderParents.value = []
+  composeOpen.value = false
+  await browseFolders(null)
+}
+
+async function browseFolders(parentKey) {
+  const accountId = selectedAccountId.value
   try {
-    const mailboxes = await mail.fetchMailboxes(accountId)
-    if (!mailboxes?.length || selectedAccountId.value !== accountId) return
+    const mailboxes = await mail.fetchMailboxes(accountId, parentKey)
+    if (!mailboxes || selectedAccountId.value !== accountId) return false
+    selectedToken.value = null
+    selectedMailboxKey.value = null
+    if (!mailboxes.length) return true
     const mailbox = mailboxes.find((item) => item.role === 'inbox' || item.specialUse === 'inbox') || mailboxes[0]
-    selectedMailboxKey.value = mailbox.key
-    await mail.fetchMessages(accountId, mailbox.key)
+    await selectMailbox(mailbox.key)
+    return true
   } catch {
     // Axios errors are displayed centrally; the retry state remains available.
+    return false
+  }
+}
+
+async function openSubfolders() {
+  const parent = mail.mailboxParentKey
+  if (await browseFolders(selectedMailboxKey.value)) folderParents.value.push(parent)
+}
+
+async function backFolders() {
+  if (await browseFolders(folderParents.value.at(-1))) folderParents.value.pop()
+}
+
+async function loadMoreFolders() {
+  try {
+    await mail.fetchMailboxes(selectedAccountId.value, mail.mailboxParentKey, mail.nextMailboxCursor)
+  } catch {
+    // Axios errors are displayed centrally; existing folders remain available.
+  }
+}
+
+async function loadMoreAttachments() {
+  try {
+    await mail.fetchAttachments(selectedAccountId.value, mail.detail.token, mail.detail.nextAttachmentCursor)
+  } catch {
+    // Axios errors are displayed centrally; existing attachments remain available.
   }
 }
 
@@ -390,6 +461,10 @@ function backToList() {
 }
 
 function openCompose(draft = null) {
+  if (draft?.nextAttachmentCursor) {
+    $q.notify({ type: 'warning', message: 'Lade zuerst alle Anhänge dieses Entwurfs nach.' })
+    return
+  }
   if (draft?.bodyTruncated || draft?.attachmentsTruncated) {
     $q.notify({
       type: 'warning',
@@ -399,22 +474,33 @@ function openCompose(draft = null) {
   }
   Object.assign(compose, emptyCompose(), draft ? {
     token: draft.token,
+    version: draft.version,
+    bodyFormat: draft.editBodyFormat || 'text',
     to: recipients(draft.to), cc: recipients(draft.cc), bcc: recipients(draft.bcc),
-    subject: draft.subject || '', body: draft.text || draft.bodyText || draft.body || '',
+    subject: draft.subject || '', body: draft.editBody ?? draft.text ?? draft.bodyText ?? draft.body ?? '',
+    originalBody: draft.editBody ?? draft.text ?? draft.bodyText ?? draft.body ?? '',
     existingAttachments: draft.attachments || []
   } : { body: activeAccount.value?.signature ? `\n\n${activeAccount.value.signature}` : '' })
   composeOpen.value = true
 }
 
+function openReply() {
+  openCompose()
+  compose.replyTo = mail.detail.token
+}
+
 async function saveComposeDraft() {
+  if (composeSaving.value || compose.draftOutcomeUnknown) return null
   composeSaving.value = 'draft'
   try {
     const draft = await mail.saveDraft(selectedAccountId.value, compose.token, composePayload())
     compose.token = draft.token
+    compose.version = draft.version
     compose.existingAttachments = draft.attachments || compose.existingAttachments
     compose.files = []
     selectedToken.value = draft.token
     $q.notify({ type: 'positive', message: 'Entwurf gespeichert' })
+    if (microsoft365.value) composeOpen.value = false
     const [detailResult] = await Promise.allSettled([
       mail.fetchMessage(selectedAccountId.value, draft.token),
       refresh()
@@ -424,7 +510,10 @@ async function saveComposeDraft() {
       compose.existingAttachments = detailResult.value.attachments || []
     }
     return draft
-  } catch {
+  } catch (error) {
+    if (microsoft365.value && error.response?.data?.error?.code === 'integration.outcomeUnknown') {
+      compose.draftOutcomeUnknown = true
+    }
     return null
   } finally {
     composeSaving.value = false
@@ -432,6 +521,7 @@ async function saveComposeDraft() {
 }
 
 async function sendCompose() {
+  if (composeSaving.value || compose.draftOutcomeUnknown || compose.replyTo) return
   if (![...addresses(compose.to), ...addresses(compose.cc), ...addresses(compose.bcc)].length) {
     $q.notify({ type: 'warning', message: 'Gib mindestens einen Empfänger an.' })
     return
@@ -439,26 +529,62 @@ async function sendCompose() {
   composeSaving.value = 'send'
   try {
     const payload = compose.sendPayload || composePayload()
-    compose.sendPayload = payload
+    if (microsoft365.value && compose.token && !compose.sendPayload) {
+      const saved = await mail.saveDraft(selectedAccountId.value, compose.token, payload)
+      compose.version = saved.version
+      compose.files = []
+      compose.existingAttachments = saved.attachments || compose.existingAttachments
+      compose.sendPayload = { unchanged: true, expectedVersion: saved.version }
+    } else {
+      compose.sendPayload = payload
+    }
     const result = compose.token
       ? await mail.sendDraft(
-        selectedAccountId.value, compose.token, payload, compose.idempotencyKey
+        selectedAccountId.value, compose.token, compose.sendPayload, compose.idempotencyKey
       )
       : await mail.sendMessage(selectedAccountId.value, payload, compose.idempotencyKey)
     composeOpen.value = false
-    $q.notify({
-      type: result.sentCopyConfirmed === true ? 'positive' : 'warning',
-      message: result.sentCopyConfirmed === true
-        ? 'E-Mail an den Mailserver übergeben und unter „Gesendet“ gespeichert.'
-        : result.sentCopyConfirmed === false
-          ? 'E-Mail an den Mailserver übergeben. Die Kopie unter „Gesendet“ konnte nicht bestätigt werden. Nicht erneut senden.'
-          : 'E-Mail an den Mailserver übergeben. Die Ablage unter „Gesendet“ ist unbekannt. Nicht erneut senden.'
-    })
+    notifySent(result)
     await refresh()
-  } catch {
-    // The editor and confirmed mail state remain available for retry.
+  } catch (error) {
+    if (microsoft365.value && !compose.sendPayload && error.response?.data?.error?.code === 'integration.outcomeUnknown') {
+      compose.draftOutcomeUnknown = true
+    }
   } finally {
     composeSaving.value = false
+  }
+}
+
+function notifySent(result) {
+  $q.notify({
+    type: result.sentCopyConfirmed === true ? 'positive' : 'warning',
+    message: result.sentCopyConfirmed === true
+      ? 'E-Mail an den Mailserver übergeben und unter „Gesendet“ gespeichert.'
+      : result.sentCopyConfirmed === false
+        ? 'E-Mail an den Mailserver übergeben. Die Kopie unter „Gesendet“ konnte nicht bestätigt werden. Nicht erneut senden.'
+        : 'E-Mail zum Versand angenommen. Zustellung und Ablage unter „Gesendet“ sind nicht bestätigt. Nicht erneut senden.'
+  })
+}
+
+async function sendCurrentDraft() {
+  if (draftSending.value || !mail.detail?.isDraft) return
+  const accountId = selectedAccountId.value
+  const { token, version } = mail.detail
+  if (!await confirm('Diesen Entwurf unverändert mit allen Empfängern und Anhängen senden?', 'Entwurf senden', { okLabel: 'Senden' })) return
+  if (selectedAccountId.value !== accountId || mail.detail?.token !== token || mail.detail?.version !== version) return
+  const attemptKey = `${accountId}:${token}`
+  if (!draftSendAttempts.has(attemptKey)) draftSendAttempts.set(attemptKey, { key: randomUuid(), version })
+  const attempt = draftSendAttempts.get(attemptKey)
+  draftSending.value = true
+  try {
+    const result = await mail.sendDraft(accountId, token, { unchanged: true, expectedVersion: attempt.version }, attempt.key)
+    selectedToken.value = null
+    notifySent(result)
+    await refresh()
+  } catch {
+    // Keep the original key and version; uncertain sends must never become new sends.
+  } finally {
+    draftSending.value = false
   }
 }
 
@@ -470,7 +596,7 @@ async function deleteComposeDraft() {
   if (!await confirm('Diesen Entwurf endgültig löschen?', 'Entwurf löschen', { okLabel: 'Löschen', okColor: 'negative' })) return
   composeSaving.value = 'delete'
   try {
-    await mail.deleteDraft(selectedAccountId.value, compose.token)
+    await mail.deleteDraft(selectedAccountId.value, compose.token, compose.version)
     composeOpen.value = false
     selectedToken.value = null
     $q.notify({ type: 'positive', message: 'Entwurf gelöscht' })
@@ -490,8 +616,8 @@ async function deleteCurrent() {
     { okLabel: 'Löschen', okColor: 'negative' }
   )) return
   try {
-    if (draft) await mail.deleteDraft(selectedAccountId.value, mail.detail.token)
-    else await mail.deleteMessage(selectedAccountId.value, mail.detail.token)
+    if (draft) await mail.deleteDraft(selectedAccountId.value, mail.detail.token, mail.detail.version)
+    else await mail.deleteMessage(selectedAccountId.value, mail.detail.token, mail.detail.version)
     selectedToken.value = null
     $q.notify({ type: 'positive', message: draft ? 'Entwurf gelöscht' : 'E-Mail gelöscht' })
   } catch {
@@ -532,6 +658,17 @@ onMounted(loadAccounts)
 .mail-plain-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.mail-signature {
+  min-width: 0;
+  max-width: 100%;
+  overflow: auto;
+}
+
+.mail-signature :deep(img) {
+  max-width: 100%;
+  height: auto;
 }
 
 .mail-compose {

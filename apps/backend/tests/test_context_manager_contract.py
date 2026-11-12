@@ -964,7 +964,7 @@ async def test_selected_computer_metadata_does_not_relocate_session_files(bound)
 @pytest.mark.parametrize("serialize, history_key", [
     (service_module._chat_body, "messages"), (service_module._responses_body, "input"),
 ])
-@pytest.mark.parametrize("large_result", [None, "shell", "mcp", "text", "browser", "attachment"])
+@pytest.mark.parametrize("large_result", [None, "shell", "mcp", "text", "browser", "attachment", "m365_todo"])
 async def test_recorded_computers_preserve_provider_request_prefix(serialize, history_key, large_result) -> None:
     session = _session()
     agent_id = uuid4()
@@ -976,10 +976,12 @@ async def test_recorded_computers_preserve_provider_request_prefix(serialize, hi
     bodies = []
     for index in range(2):
         call = _message(session.id, "assistant", "")
-        call.tool_calls = [{"id": str(index), "name": "browser" if large_result == "browser" else "shell_run",
+        call.tool_calls = [{"id": str(index), "name": "m365_todo" if large_result == "m365_todo" else "browser" if large_result == "browser" else "shell_run",
                             "arguments": {"command": "pwd"}}]
         result = _message(session.id, "tool", "/work")
-        if large_result == "attachment":
+        if large_result == "m365_todo":
+            result.content = json.dumps({"resources": [{"title": "Task", "resourceToken": "encrypted-token" * 1000}]})
+        elif large_result == "attachment":
             attachment = _attach_image(result)
             attachment.kind = "file"
             attachment.mime_type = "application/octet-stream"
@@ -998,7 +1000,10 @@ async def test_recorded_computers_preserve_provider_request_prefix(serialize, hi
         result.tool_call_id = str(index)
         result.provider_data = {"_matoloop": {"executionAgentId": str(agent_id), "executionAgentAlias": "Server"}}
         records.extend([call, result])
-        if large_result == "attachment":
+        if large_result == "m365_todo":
+            compact = json.loads(_projection_messages(system, None, records, TrustLevel.PRIVATE)[-1]["content"])
+            assert compact["resources"][0]["resourceToken"] == f"task:{result.id}:0"
+        elif large_result == "attachment":
             assert "Do not call provide_file" in message_dict(result)["content"]
         elif large_result:
             preview = json.loads(_projection_messages(system, None, records, TrustLevel.PRIVATE)[-1]["content"])

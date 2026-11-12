@@ -150,4 +150,22 @@ describe('mail store', () => {
 
     expect(api.put.mock.calls[0][1].get('replaceAttachments')).toBe('true')
   })
+
+  it('keeps folder pagination bound to the selected parent', async () => {
+    api.get.mockResolvedValueOnce({ data: { mailboxes: [{ key: 'first' }], nextCursor: 'next' } })
+      .mockResolvedValueOnce({ data: { mailboxes: [{ key: 'second' }] } })
+    const store = useMailStore()
+    await store.fetchMailboxes('work', 'parent')
+    await store.fetchMailboxes('work', 'parent', store.nextMailboxCursor)
+    expect(api.get).toHaveBeenLastCalledWith('/mail/accounts/work/mailboxes', {
+      params: { parentKey: 'parent', cursor: 'next' }
+    })
+    expect(store.mailboxes.map((mailbox) => mailbox.key)).toEqual(['first', 'second'])
+  })
+
+  it('passes a bound reply source when saving a new reply draft', async () => {
+    api.post.mockResolvedValue({ data: { messageToken: 'draft', isDraft: true } })
+    await useMailStore().saveDraft('work', null, { body: 'Reply', replyTo: 'source' })
+    expect(api.post.mock.calls[0][1].get('replyTo')).toBe('source')
+  })
 })

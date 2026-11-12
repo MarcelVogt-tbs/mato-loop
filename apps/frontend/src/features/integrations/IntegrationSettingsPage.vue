@@ -237,6 +237,7 @@ const showInstances = computed(() => section.value === 'management')
 const personalIntegrations = computed(
   () => [
     ...instanceIntegrations.value,
+    ...integrations.microsoft365.accounts,
     ...integrations.tbsDesk.accounts,
     ...integrations.openscad.instances,
     ...integrations.coding.instances,
@@ -297,7 +298,7 @@ function openCreateDialog() {
 
 function providerLabel(providerType) {
   return {
-    jina: 'Jina Reader', searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', 'tbs-desk': 'tbs.Desk', bookstack: 'BookStack', mealie: 'Mealie', arcane: 'Arcane', sonobin: 'SonoBin', openscad: 'OpenSCAD', opencode: 'OpenCode', browser: 'Chromium'
+    jina: 'Jina Reader', searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', microsoft_graph: 'Microsoft Graph', 'tbs-desk': 'tbs.Desk', bookstack: 'BookStack', mealie: 'Mealie', arcane: 'Arcane', sonobin: 'SonoBin', openscad: 'OpenSCAD', opencode: 'OpenCode', browser: 'Chromium'
   }[providerType] || providerType
 }
 
@@ -307,6 +308,7 @@ function typeLabel(integrationType) {
     webfetch: 'Webabruf',
     calendar: 'Kalender & Aufgaben',
     mail: 'E-Mail',
+    microsoft365: 'Microsoft 365',
     support: 'Support',
     knowledge: 'Wissensdatenbank',
     recipes: 'Rezepte & Essensplanung',
@@ -320,7 +322,7 @@ function typeLabel(integrationType) {
 
 function typeIcon(integrationType) {
   return {
-    search: 'travel_explore', calendar: 'calendar_month', mail: 'mail', support: 'confirmation_number', knowledge: 'menu_book', recipes: 'restaurant_menu', infrastructure: 'dns', music: 'library_music', openscad: 'view_in_ar', coding: 'code', browser: 'web'
+    search: 'travel_explore', calendar: 'calendar_month', mail: 'mail', microsoft365: 'mail', support: 'confirmation_number', knowledge: 'menu_book', recipes: 'restaurant_menu', infrastructure: 'dns', music: 'library_music', openscad: 'view_in_ar', coding: 'code', browser: 'web'
   }[integrationType] || 'extension'
 }
 
@@ -357,6 +359,7 @@ async function removeIntegration(integration) {
     if (integration.integrationType === 'calendar') await integrations.removeCalendar(integration.id)
     else if (integration.integrationType === 'webfetch') await integrations.removeWebfetch(integration.id)
     else if (integration.integrationType === 'mail') await integrations.removeMail(integration.id)
+    else if (integration.integrationType === 'microsoft365') await integrations.removeMicrosoft365(integration.id)
     else if (integration.integrationType === 'support') await integrations.removeTbsDesk(integration.id)
     else if (integration.integrationType === 'knowledge') await integrations.removeKnowledge(integration.id)
     else if (integration.integrationType === 'recipes') await integrations.removeRecipes(integration.id)

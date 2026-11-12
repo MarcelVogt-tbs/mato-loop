@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
-_CODE_PATTERN = re.compile(r"^[a-z][A-Za-z]*(?:\.[a-z][A-Za-z]*)+$")
+_CODE_PATTERN = re.compile(r"^[a-z][A-Za-z0-9]*(?:\.[a-z][A-Za-z0-9]*)+$")
 _GENERIC_MESSAGE = "The action failed."
 
 _MESSAGES = {
@@ -294,6 +294,14 @@ _MESSAGES = {
     "webPush.subscriptionConflict": "The push subscription is already registered.",
     "webPush.unavailable": "Web Push is temporarily unavailable.",
     "integration.authenticationFailed": "The integration credentials were rejected.",
+    "microsoft365.configurationInvalid": "Check the Microsoft Entra tenant, client, authentication flow, client secret and public callback URL.",
+    "microsoft365.authorizationRequired": "Sign in to Microsoft 365 again to authorize mailbox access.",
+    "microsoft365.authorizationFailed": "Microsoft 365 authorization failed. Check the app registration and tenant policies.",
+    "microsoft365.authorizationDenied": "Microsoft 365 authorization was declined.",
+    "microsoft365.loginExpired": "The Microsoft 365 login expired or is unavailable. Start a new login.",
+    "microsoft365.loginBusy": "The Microsoft 365 login is still processing. Try again shortly.",
+    "microsoft365.throttled": "Microsoft Graph is throttling requests. Try again later.",
+    "microsoft365.featureDisabled": "Enable the required Microsoft 365 connection option and sign in again.",
     "mail.alreadyConfigured": "This mail account is already configured.",
     "integration.adapterDisabled": "This integration adapter is disabled by the administrator.",
     "integration.attachmentTooLarge": "The file is too large to be attached.",

@@ -1,6 +1,6 @@
 # Integrationen einrichten
 
-Verbinde hier Kalender, E-Mail und andere Dienste mit MatoLoop. Gemeinsame Verbindungen stehen unter **Administration > Integrationen**, persönliche unter **Einstellungen > Integrationen**. Computergebundene Integrationen, OpenCode und tbs.Desk sind persönlich. Generische MCP-Server haben einen eigenen Menüpunkt.
+Verbinde hier Kalender, E-Mail und andere Dienste mit MatoLoop. Gemeinsame Verbindungen stehen unter **Administration > Integrationen**, persönliche unter **Einstellungen > Integrationen**. Computergebundene Integrationen, Microsoft 365, OpenCode und tbs.Desk sind persönlich. Generische MCP-Server haben einen eigenen Menüpunkt.
 
 ## Eine Verbindung anlegen und testen
 
@@ -20,6 +20,7 @@ Zugangsdaten werden verschlüsselt gespeichert und nicht wieder im Klartext ange
 | --- | --- | --- |
 | CalDAV | HTTPS-Serveradresse | Benutzername und Passwort/App-Passwort |
 | IMAP/SMTP | Beide Server, TLS-Modus und fester Absender | Benutzername und Passwort/App-Passwort; kein unverschlüsselter Betrieb |
+| Microsoft 365 | Mandanten-ID und Anwendungs-ID einer Entra-App | Gerätecode oder Browser-Anmeldung mit Client-Secret; [Postfach verbinden](#microsoft-365-postfach-lesen) |
 | Mealie | Basis-URL ohne `/api` | Langlebiger API-Token aus dem Mealie-Benutzerprofil |
 | BookStack | HTTPS-Serveradresse | Token-ID und Token-Secret aus dem Benutzerprofil |
 | Arcane | Manager-URL | API-Schlüssel mit passenden Umgebungsrechten |
@@ -71,6 +72,119 @@ Hinterlege bei Bedarf in den Kontoeinstellungen eine **Signatur (optional)**. Si
 
 !!! warning "Versand nicht blind wiederholen"
     Die Annahme durch SMTP bestätigt keine Zustellung beim Empfänger. Fehlt die Bestätigung der Kopie unter **Gesendet**, zeigt MatoLoop eine Warnung und erhält den Entwurf. Die Nachricht wurde trotzdem bereits an den Mailserver übergeben. Sende den Entwurf nicht erneut; prüfe zuerst den Mailserver. Bei einem unklaren Versand erfolgt ebenfalls keine automatische Wiederholung.
+
+## Microsoft-365-Postfach lesen
+
+Verbinde dein eigenes Firmen-/Schulkonto: **E-Mails lesen** ist die Grundfunktion. Entwürfe, Versand, Löschen sowie Kalender- und Aufgabenzugriffe schaltest du unabhängig zu. Freigegebene Postfächer und private Outlook.com-Konten werden nicht unterstützt.
+
+### Entra-App registrieren
+
+1. Registriere im [Microsoft Entra Admin Center](https://entra.microsoft.com/) unter **App-Registrierungen > Neue Registrierung** eine App nur für dein Organisationsverzeichnis. Notiere **Verzeichnis-ID (Mandant)** und **Anwendungs-ID (Client)**.
+2. Ergänze unter **API-Berechtigungen > Berechtigung hinzufügen > Microsoft Graph > Delegierte Berechtigungen** `Mail.Read`. MatoLoop fordert außerdem `offline_access` zur Token-Erneuerung an. Anwendungsberechtigungen sind nicht nötig; je nach Firmenrichtlinie muss ein Administrator zustimmen.
+3. Richte das gewünschte Anmeldeverfahren ein:
+
+| Verfahren | Entra-Konfiguration | Voraussetzung |
+| --- | --- | --- |
+| Gerätecode | [Öffentliche Clientflows aktivieren](#geratecode-offentliche-clientflows-aktivieren) | Kein Secret und keine Rückruf-URL; Conditional Access kann Gerätecode sperren |
+| Browser-Anmeldung | Unter **Authentifizierung** eine Plattform **Web** mit `https://<dein-matoloop-host>/api/integrations/microsoft365/oauth/callback` anlegen; unter **Zertifikate & Geheimnisse** ein Client-Secret erstellen | Öffentliche MatoLoop-Basis-URL unter **Administration > Grundeinstellungen** korrekt setzen; HTTPS verwenden, HTTP nur für `localhost` |
+
+Beide Verfahren können dieselbe App nutzen. Beim Client-Secret brauchst du den **Wert**, nicht die Secret-ID. Kopiere ihn nur in MatoLoops Passwortfeld, nicht in Chat oder Logs. Nach Ablauf ersetze ihn und melde dich erneut an.
+
+### Gerätecode: Öffentliche Clientflows aktivieren
+
+1. Öffne in **App-Registrierungen** deine App und wähle **Authentifizierung**.
+2. Stelle unter den erweiterten Einstellungen **Öffentliche Clientflows zulassen** (**Allow public client flows**) auf **Ja**.
+3. Wähle **Speichern** und starte einen bereits fehlgeschlagenen MatoLoop-Anmeldeversuch neu.
+
+Das erlaubt Gerätecode-Anmeldungen ohne Secret, macht dein Postfach aber nicht öffentlich und erteilt keine zusätzlichen Rechte. Anmeldung, Einwilligung und MFA-/Firmenrichtlinien gelten weiterhin. Für die reine Browser-Anmeldung ist der Schalter nicht nötig.
+
+!!! warning "Nur selbst gestartete Gerätecodes verwenden"
+    Verwende nur Gerätecodes aus deiner MatoLoop-Instanz nach **Bei Microsoft anmelden**. Fremde Codes aus Mails oder Chats können einer fremden Anwendung Kontozugriff geben.
+
+### Verbinden und verwenden
+
+Die Info-Knöpfe neben **Microsoft 365** und **Signatur (optional)** zeigen Einrichtungshinweise und Bildlimits, ohne das Formular dauerhaft zu verlängern.
+
+1. Wähle **Einstellungen > Integrationen > Verwaltung > Integration hinzufügen > Microsoft 365**. Trage Mandanten-ID, Anwendungs-ID und Anmeldeverfahren ein, bei Browser-Anmeldung auch das Secret. Wähle **Speichern**.
+2. Wähle **Bei Microsoft anmelden > Microsoft öffnen**, melde dich an und bestätige die angeforderten Rechte. Gib beim Gerätecode den angezeigten Code ein. Lass MatoLoop geöffnet, bis **Microsoft 365 ist verbunden.** erscheint. Bei Browser-Anmeldung muss die angezeigte Rückruf-URL exakt zur Entra-Registrierung passen.
+3. Wähle erst jetzt **Verbindung testen** und prüfe unter **Berechtigungen** die Aktion **E-Mails lesen** sowie die Profilverfügbarkeit.
+
+Im **Control Center > E-Mail** wählst du dein Konto. Start ist der Posteingang; **Unterordner** und **Übergeordnete Ordner** navigieren durch die Ordnerstruktur. Weitere Ordner, Mails und Anhänge lädst du bei Bedarf nach. Je nach Freigabe kannst du neue Mails mit Cc/Bcc und Anhängen verfassen, Antwortentwürfe speichern, vorhandene Entwürfe bearbeiten, senden und Mails löschen. Lade vor dem Bearbeiten alle Anhänge nach. Formatierte Outlook-Entwürfe zeigen unter **Nachricht (HTML)** ihren Quelltext; ändere HTML nur, wenn du mit dem Format vertraut bist. Ohne Textänderung bleiben Formatierung und Signatur unverändert. Normale Anhänge kannst du hinzufügen oder entfernen; eingebettete Bilder bleiben erhalten.
+
+### E-Mails lesen
+
+Mit `Mail.Read` kannst du etwa bitten: „Fasse meine Rechnungen von letzter Woche zusammen.“ Standardmäßig wird nur der Posteingang durchsucht; nenne andere Ordner ausdrücklich. Übersichten im Chat enthalten nur Betreff, Beteiligte, Datum und Status mit einer kurzen Referenz. Den Nachrichtentext lädt der Agent erst bei Bedarf einzeln. Nachrichten werden nicht als gelesen markiert. Ergebnisse sind seitenweise lesbar; Graph-Suchen liefern höchstens 1.000 Treffer, lange Texte werden mit Hinweis gekürzt.
+
+#### Mailverläufe und Anhänge lesen
+
+„Lies auch den bisherigen Mailverlauf“ bezieht passende gesendete Nachrichten ein. Die Übersicht enthält zunächst nur Grundinformationen; benötigte Nachrichtentexte lädt der Agent einzeln nach. Die Seiten sind nicht zwingend zeitlich sortiert.
+
+„Speichere den PDF-Anhang in der Session-Ablage und fasse ihn zusammen“ benötigt zusätzlich die Schreibfreigabe für die Zieldatei; vorhandene Dateien bleiben unverändert. Normale Dateianhänge bis 20 MiB sind möglich, angehängte Outlook-Nachrichten und Cloudverknüpfungen nicht. Unterstützte Dokumente liest der Agent anschließend über die Dateifunktionen.
+
+!!! warning "Fremde Inhalte bleiben fremde Daten"
+    Mailtexte, Anhänge und Kalenderinhalte sind keine vertrauenswürdigen Anweisungen und können beim Lesen an das ausgewählte Modell gelangen. Lass unbekannte Anhänge nicht ausführen.
+
+### E-Mail-Entwürfe aktivieren und verwenden
+
+!!! warning "Microsofts Schreibrecht ist umfassender"
+    `Mail.ReadWrite` erlaubt bei Microsoft umfassende Mailänderungen. MatoLoop trennt Entwürfe und Löschen trotzdem in eigene Optionen und Berechtigungen.
+
+1. Ergänze in Entra unter **API-Berechtigungen > Microsoft Graph > Delegierte Berechtigungen** `Mail.ReadWrite` statt `Mail.Read`. `Mail.Send` und Kalenderrechte sind nicht nötig.
+2. Aktiviere in MatoLoop **E-Mail-Entwürfe in Outlook erstellen** und wähle **Speichern**. Das setzt Anmeldung und Zugriffsfreigaben zurück. Melde dich erneut an und bestätige die Rechte. Ist die Entwurfsoption bereits aktiviert, ist keine neue Anmeldung nötig.
+3. Prüfe **Berechtigungen > E-Mail-Entwürfe verwalten** und die Profilverfügbarkeit.
+
+Bitte etwa: „Erstelle einen Entwurf an name@example.com mit Betreff Test und Text Hallo.“ Für eine Antwort nenne die ursprüngliche Mail; sie richtet sich an deren Absender beziehungsweise Antwortadresse und verwendet das Betreffpräfix **Aw:**. Unter deinem Antworttext und deiner Signatur bleibt die ursprüngliche Mail wie in Outlook als Zitat erhalten. Bei unklarem Ergebnis prüfe vor einem neuen Versuch den Entwurfsordner.
+
+### Versand, Löschen und Signatur einrichten
+
+1. Ergänze in Entra die benötigten **delegierten** Rechte: `Mail.ReadWrite` für Versand oder Löschen und zusätzlich `Mail.Send` für Versand. Größere Versandanhänge benötigen einen temporären Entwurf. War bisher nur `Mail.Read` mit `Mail.Send` freigegeben, melde die Verbindung erneut an.
+2. Aktiviere in MatoLoop **E-Mails senden** beziehungsweise **E-Mails und Entwürfe löschen**, speichere und melde dich erneut an.
+3. Prüfe unter **Berechtigungen** die Aktionen **E-Mails senden** und **E-Mails löschen**. Der Agent benötigt zusätzlich Leserechte auf angehängte Session-Dateien.
+
+Füge deine **Signatur** aus Outlook oder Word direkt in den Editor ein; Tabellen, Farben und Abstände bleiben erhalten. Nicht mitgelieferte oder extern verlinkte Bilder werden nicht nachgeladen; der Editor weist dich darauf hin. Ergänze sie mit **Signaturbild einfügen** an der gewünschten Stelle. Erlaubt sind PNG/JPEG/WebP mit je 200 KiB, zusammen 400 KiB, höchstens acht Bildern und 2048 Pixeln je Seite. Signaturänderungen benötigen keine neue Anmeldung. Neue Mails und Antwortentwürfe erhalten die Signatur automatisch; vorhandene Entwürfe bleiben unverändert. Die Kontenabfrage zeigt dem Modell den Signaturtext und weist es an, Grußformel, Name und Kontaktdaten nicht im Mailtext zu wiederholen.
+
+Für ausgehende Anhänge gelten die Upload-Limits deiner Instanz für Dateigröße, Anzahl und Gesamtgröße sowie die Grenzen deines Microsoft-Postfachs. MatoLoop begrenzt Anhänge einschließlich Signaturbilder zusätzlich auf insgesamt **150 MiB**; Microsoft kann kleinere Nachrichtenlimits vorgeben. Im Control Center wählst du lokale Dateien, im Chat nennst du Dateien aus der Session-Ablage. Größere Dateien werden automatisch in Teilstücken hochgeladen. Bei einem Abbruch kann ein unvollständiger Entwurf zurückbleiben: Prüfe Outlook vor einem neuen Versuch. Speichere Antworten zunächst als Entwurf und sende sie anschließend nach Prüfung.
+
+!!! warning "Versand und Löschen prüfen"
+    Prüfe Empfänger, Cc/Bcc, Text und Anhänge vor dem Versand. Microsoft bestätigt zunächst nur die Annahme, nicht die Zustellung. Bei unklarem Status prüfe Outlook und starte keinen neuen Versand. Löschen im Papierkorb kann endgültig sein.
+
+### Kalenderzugriff aktivieren und verwenden
+
+1. Ergänze in Entra unter **API-Berechtigungen > Microsoft Graph > Delegierte Berechtigungen** `Calendars.Read` zum Lesen oder `Calendars.ReadWrite` zum Erstellen, Ändern und Löschen. Antwortentwürfe und `Mail.ReadWrite` sind dafür nicht nötig.
+2. Aktiviere in MatoLoop nach Bedarf **Kalender lesen**, **Termine erstellen und ändern** und **Termine löschen**. Wähle **Speichern**, melde dich erneut an und bestätige die Rechte. Die Änderung setzt bisherige Zugriffsfreigaben zurück.
+3. Prüfe unter **Berechtigungen** die Aktionen **Kalender lesen**, **Kalender ändern** und **Kalendereinträge löschen** sowie die Profilverfügbarkeit.
+
+Bitte etwa: „Welche Termine habe ich morgen?“ oder „Erstelle morgen von 10 bis 11 Uhr einen Termin Projektplanung in meinem Hauptkalender.“ Nenne bei anderen Zeitzonen die gewünschte Zone. Für ganztägige Termine ist das Ende der erste nicht mehr enthaltene Tag. Standard ist dein Hauptkalender. Wiederkehrende Termine werden beim Lesen für höchstens 366 Tage aufgelöst. Du kannst einen einzelnen Termin oder ausdrücklich die gesamte Serie ändern und löschen. Nicht genannte Felder bleiben unverändert. Beschreibungen bestehender Online-Besprechungen lassen sich nicht ersetzen, damit ihre Beitrittsinformationen erhalten bleiben; andere Felder kannst du weiterhin ändern.
+
+Terminübersichten enthalten nur Titel, Beginn, Ende, Ort und Status mit einer kurzen Referenz. Beschreibungen, Teilnehmer und Wiederholungsdetails lädt der Agent erst bei Bedarf für den einzelnen Termin.
+
+!!! warning "Besprechungen und Serien prüfen"
+    Termine mit Teilnehmern versenden automatisch Einladungen. Änderungen können Aktualisierungen, das Löschen als Organisator Absagen auslösen. Prüfe Teilnehmer, Zeiten und die Auswahl zwischen Einzeltermin und ganzer Serie vor der Freigabe. Bei unklarem Ergebnis prüfe Outlook, bevor du den Auftrag wiederholst.
+
+### Microsoft To Do aktivieren und verwenden
+
+1. Ergänze in Entra die delegierte Berechtigung `Tasks.Read` zum Lesen oder `Tasks.ReadWrite` zum Erstellen, Ändern und Löschen.
+2. Aktiviere in MatoLoop nach Bedarf **Microsoft To Do lesen**, **Aufgaben, Listen und Anhänge erstellen und ändern** und **Aufgaben, Listen und Anhänge löschen**. Speichere und melde dich erneut bei Microsoft an. Vorhandene Zugriffsfreigaben werden zurückgesetzt.
+3. Prüfe unter **Berechtigungen** die Aktionen **Aufgaben lesen**, **Aufgaben ändern** und **Aufgaben löschen** sowie die Profilverfügbarkeit.
+
+Bitte etwa: „Zeige meine Aufgabenlisten“, „Erstelle in Arbeit die Aufgabe Angebot prüfen, fällig morgen, mit Erinnerung um 9 Uhr“ oder „Markiere Angebot prüfen als erledigt.“ Du kannst Listen und Aufgaben erstellen, umbenennen, bearbeiten und löschen sowie Aufgaben abschließen und wieder öffnen. Aufgaben unterstützen Notizen, Priorität, Beginn, Fälligkeit, Erinnerungen, Wiederholungen und bereits vorhandene Outlook-Kategorien. Checklistenpunkte lassen sich hinzufügen, ändern, abhaken und entfernen; verknüpfte Links lassen sich hinzufügen, ändern und löschen. Links werden nicht automatisch geöffnet.
+
+Aufgabenabfragen zeigen standardmäßig nur offene Aufgaben. Erledigte Aufgaben werden bereits bei Microsoft ausgefiltert und nicht erst nach dem Laden verworfen. Wenn du sie brauchst, bitte ausdrücklich darum, etwa: „Zeige in Arbeit auch die erledigten Aufgaben.“
+
+Die Übersicht enthält nur Titel, Status, Priorität, Fälligkeit und einen Anhanghinweis mit einer kurzen Referenz. Notizen, Erinnerungen und Wiederholungsdetails lädt der Agent erst bei Bedarf für die einzelne Aufgabe. Weitere Ergebnisseiten müssen vollständig gelesen sein, bevor eine Gesamtzahl feststeht.
+
+Anhänge kommen aus der Session-Ablage oder werden dorthin heruntergeladen. Nenne zum Hochladen die Datei und die Zielaufgabe. Es gelten die Upload-Limits deiner Instanz, einschließlich Anzahl und Gesamtgröße vorhandener Aufgabenanhänge, sowie höchstens **25 MiB pro Datei**. Größere Dateien werden in Teilstücken hochgeladen; vorhandene lokale Dateien werden beim Download nicht überschrieben. Nach einem Upload-Abbruch prüfe zuerst die Anhänge in Microsoft To Do.
+
+!!! warning "Aufgaben und Listen löschen"
+    Das Löschen einer Liste entfernt auch ihre Aufgaben mit Checklisten, Links und Anhängen. Das Löschen einer Aufgabe entfernt ihre zugehörigen Inhalte. Beim Abschließen einer Serienaufgabe kann Microsoft To Do automatisch die nächste Aufgabe erzeugen. Prüfe die Zielauswahl und wiederhole unklare Änderungen nicht ungeprüft.
+
+Kalender und Aufgaben bedienst du bisher über den Chat; eigene Control-Center-Ansichten gibt es dafür noch nicht. **Mein Tag**, die Verwaltung von Listenfreigaben und das Anlegen neuer Outlook-Kategorien werden nicht unterstützt.
+
+### Anmeldung erneuern oder trennen
+
+Token werden verschlüsselt gespeichert und automatisch erneuert. Bei abgelehnter Erneuerung melde dich erneut an. Nach Backend-Neustarts musst du nur laufende Anmeldeversuche neu starten. Bei Gerätecode-Konfigurationsfehlern prüfe zuerst **Öffentliche Clientflows zulassen**.
+
+Änderungen an App-Daten, Anmeldeverfahren, Secret oder Zusatzoptionen erfordern eine neue Anmeldung. Diese setzt Zugriffsfreigaben zurück; bei reinen Optionsänderungen bleibt das Browser-Secret erhalten. **Verbindung trennen** entfernt MatoLoops Token, nicht die App-Konfiguration oder Microsofts Einwilligung. Widerrufe die Einwilligung bei Bedarf zusätzlich in Entra beziehungsweise deinen Microsoft-App-Berechtigungen.
 
 ## Rezepte und Einkaufsliste mit Mealie
 

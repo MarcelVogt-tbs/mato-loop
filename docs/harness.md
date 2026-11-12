@@ -175,6 +175,12 @@ Preserve the longest **unchanged, still-authorized** provider prefix, not a perm
 
 The implementation owners are `agent/prompts.py` (system parts/reminders), `agent/projection.py` and `agent/context.py` (turns, checkpoints, fitting), `agent/turn_context.py` (optional context/preparation), and `agent/run_support.py` (ephemeral images).
 
+Inactive capability hints retain installed tool names with compact settings/profile locations or workflow prerequisites, not callable schemas. Adding names or changing hint wording intentionally invalidates that system-context suffix; unchanged inventories retain their deterministic order.
+
+Microsoft 365 calendar-write and To Do tools, including the task-list completion filter, and signature-aware composition guidance intentionally change the offered integration schemas and inactive-tool inventory prefix. Subsequent rounds retain their stable order. Configured signatures are returned by account discovery as turn-local tool data, not embedded into changing tool schemas or reconstructed historical turns.
+
+Microsoft 365 collections return basic fields, with individual details loaded explicitly. The existing session-result reference projection replaces their encrypted resource tokens with short deterministic references in both live and persisted history. This intentionally changes earlier projected Microsoft 365 result prefixes; canonical stored results remain unchanged. Resolving a reference still requires its original successful tool result in the current session, then current connection, permission and version checks. It does not confer authority or cache authorization.
+
 ### Stability and isolation rules
 
 Image-tool prompt profiles follow the resolved image target, not the active chat model.

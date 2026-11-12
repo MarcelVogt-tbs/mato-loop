@@ -32,11 +32,19 @@ function normalizeMessage(message) {
 
 function multipart(payload, replaceAttachments = false) {
   const data = new FormData()
+  if (payload.unchanged) {
+    data.append('expectedVersion', payload.expectedVersion)
+    return data
+  }
   for (const field of ['to', 'cc', 'bcc']) {
     for (const value of payload[field] || []) data.append(field, value)
   }
   data.append('subject', payload.subject || '')
   data.append('body', payload.body || '')
+  if (payload.expectedVersion) data.append('expectedVersion', payload.expectedVersion)
+  if (payload.bodyFormat) data.append('bodyFormat', payload.bodyFormat)
+  if (payload.preserveBody) data.append('preserveBody', 'true')
+  if (payload.replyTo) data.append('replyTo', payload.replyTo)
   for (const attachment of payload.existingAttachments || []) {
     data.append('retainedAttachmentToken', attachment.token)
   }
@@ -55,6 +63,8 @@ export const useMailStore = defineStore('mail', {
     mailboxKey: null,
     query: null,
     mailboxes: [],
+    mailboxParentKey: null,
+    nextMailboxCursor: null,
     mailboxesLoading: false,
     mailboxesLoadFailed: false,
     messages: [],
@@ -63,6 +73,7 @@ export const useMailStore = defineStore('mail', {
     messagesLoadFailed: false,
     detail: null,
     detailLoading: false,
+    attachmentsLoading: false,
     detailLoadFailed: false,
     accountsVersion: 0,
     mailboxesVersion: 0,
@@ -87,10 +98,13 @@ export const useMailStore = defineStore('mail', {
         if (version === this.accountsVersion) this.accountsLoading = false
       }
     },
-    async fetchMailboxes(accountId) {
+    async fetchMailboxes(accountId, parentKey = null, cursor = null) {
       const version = ++this.mailboxesVersion
+      const append = Boolean(cursor && this.accountId === accountId && this.mailboxParentKey === parentKey)
       if (this.accountId !== accountId) {
         this.mailboxes = []
+        this.mailboxParentKey = null
+        this.nextMailboxCursor = null
         this.messages = []
         this.nextCursor = null
         this.clearDetail()
@@ -99,9 +113,21 @@ export const useMailStore = defineStore('mail', {
       this.mailboxesLoading = true
       this.mailboxesLoadFailed = false
       try {
-        const { data } = await api.get(`/mail/accounts/${accountId}/mailboxes`)
+        const path = `/mail/accounts/${accountId}/mailboxes`
+        const params = { ...(parentKey ? { parentKey } : {}), ...(append ? { cursor } : {}) }
+        const { data } = Object.keys(params).length
+          ? await api.get(path, { params })
+          : await api.get(path)
         if (version !== this.mailboxesVersion || this.accountId !== accountId) return
-        this.mailboxes = list(data, 'mailboxes').map(normalizeMailbox)
+        if (this.mailboxParentKey !== parentKey) {
+          this.messages = []
+          this.nextCursor = null
+          this.clearDetail()
+        }
+        const items = list(data, 'mailboxes').map(normalizeMailbox)
+        this.mailboxes = append ? [...this.mailboxes, ...items] : items
+        this.mailboxParentKey = parentKey
+        this.nextMailboxCursor = data?.nextCursor ?? null
         return this.mailboxes
       } catch (error) {
         if (version === this.mailboxesVersion) this.mailboxesLoadFailed = true
@@ -164,8 +190,23 @@ export const useMailStore = defineStore('mail', {
     clearDetail() {
       this.detailVersion += 1
       this.detailLoading = false
+      this.attachmentsLoading = false
       this.detailLoadFailed = false
       this.detail = null
+    },
+    async fetchAttachments(accountId, token, cursor) {
+      const version = this.detailVersion
+      this.attachmentsLoading = true
+      try {
+        const { data } = await api.get(`/mail/accounts/${accountId}/messages/${encodeURIComponent(token)}/attachments`, {
+          params: { cursor }
+        })
+        if (version !== this.detailVersion || this.accountId !== accountId || this.detail?.token !== token) return
+        this.detail.attachments.push(...normalizeMessage({ attachments: data.attachments }).attachments)
+        this.detail.nextAttachmentCursor = data.nextAttachmentCursor ?? null
+      } finally {
+        if (version === this.detailVersion) this.attachmentsLoading = false
+      }
     },
     async saveDraft(accountId, token, payload) {
       const path = `/mail/accounts/${accountId}/drafts${token ? `/${encodeURIComponent(token)}` : ''}`
@@ -177,8 +218,10 @@ export const useMailStore = defineStore('mail', {
       if (this.accountId === accountId) this.detail = draft
       return draft
     },
-    async deleteDraft(accountId, token) {
-      await api.delete(`/mail/accounts/${accountId}/drafts/${encodeURIComponent(token)}`)
+    async deleteDraft(accountId, token, version = null) {
+      const path = `/mail/accounts/${accountId}/drafts/${encodeURIComponent(token)}`
+      if (version) await api.delete(path, { params: { expectedVersion: version } })
+      else await api.delete(path)
       this.removeConfirmed(token)
     },
     async sendDraft(accountId, token, payload, idempotencyKey) {
@@ -197,8 +240,10 @@ export const useMailStore = defineStore('mail', {
         { headers: { 'Idempotency-Key': idempotencyKey } }
       )).data
     },
-    async deleteMessage(accountId, token) {
-      await api.delete(`/mail/accounts/${accountId}/messages/${encodeURIComponent(token)}`)
+    async deleteMessage(accountId, token, version = null) {
+      const path = `/mail/accounts/${accountId}/messages/${encodeURIComponent(token)}`
+      if (version) await api.delete(path, { params: { expectedVersion: version } })
+      else await api.delete(path)
       this.removeConfirmed(token)
     },
     removeConfirmed(token) {
