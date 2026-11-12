@@ -448,15 +448,18 @@ describe('integration store', () => {
     expect(store.recipes.accounts).toHaveLength(1)
   })
 
-  it('keeps the stored Mealie token on a blank update', async () => {
+  it.each([
+    ['Mealie', 'Recipes', 'recipes', 'mealie-id'],
+    ['Paperless-ngx', 'Documents', 'documents', 'paperless-id']
+  ])('keeps the stored %s token on a blank update', async (_label, action, type, id) => {
     api.get.mockResolvedValue({ data: recipesResponse })
     api.put.mockResolvedValue({ data: recipesResponse })
     const store = useIntegrationStore()
 
-    await store.updateRecipes('mealie-id', { name: 'Familienküche', token: '   ', enabled: true })
+    await store[`update${action}`](id, { name: 'Familienküche', token: '   ', enabled: true })
 
     expect(api.put).toHaveBeenCalledWith(
-      '/integrations/recipes/accounts/mealie-id',
+      `/integrations/${type}/accounts/${id}`,
       { name: 'Familienküche', enabled: true },
       { params: { scope: 'instance' } }
     )
@@ -513,6 +516,7 @@ describe('integration store', () => {
       '/integrations/microsoft365': { configured: false, accounts: [] },
       '/integrations/knowledge': knowledgeResponse,
       '/integrations/recipes': recipesResponse,
+      '/integrations/documents': { configured: false, accounts: [] },
       '/integrations/infrastructure/arcane': { configured: false, instances: [] },
       '/integrations/music/sonobin': musicResponse,
       '/integrations/openscad': openScadResponse,

@@ -298,7 +298,7 @@ function openCreateDialog() {
 
 function providerLabel(providerType) {
   return {
-    jina: 'Jina Reader', searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', microsoft_graph: 'Microsoft Graph', 'tbs-desk': 'tbs.Desk', bookstack: 'BookStack', mealie: 'Mealie', arcane: 'Arcane', sonobin: 'SonoBin', openscad: 'OpenSCAD', opencode: 'OpenCode', browser: 'Chromium'
+    jina: 'Jina Reader', searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', microsoft_graph: 'Microsoft Graph', 'tbs-desk': 'tbs.Desk', bookstack: 'BookStack', mealie: 'Mealie', paperless: 'Paperless-ngx', arcane: 'Arcane', sonobin: 'SonoBin', openscad: 'OpenSCAD', opencode: 'OpenCode', browser: 'Chromium'
   }[providerType] || providerType
 }
 
@@ -312,6 +312,7 @@ function typeLabel(integrationType) {
     support: 'Support',
     knowledge: 'Wissensdatenbank',
     recipes: 'Rezepte & Essensplanung',
+    documents: 'Dokumente',
     infrastructure: 'Docker-Verwaltung',
     music: 'Musikbibliothek',
     openscad: '3D-Modellierung',
@@ -322,7 +323,7 @@ function typeLabel(integrationType) {
 
 function typeIcon(integrationType) {
   return {
-    search: 'travel_explore', calendar: 'calendar_month', mail: 'mail', microsoft365: 'mail', support: 'confirmation_number', knowledge: 'menu_book', recipes: 'restaurant_menu', infrastructure: 'dns', music: 'library_music', openscad: 'view_in_ar', coding: 'code', browser: 'web'
+    search: 'travel_explore', calendar: 'calendar_month', mail: 'mail', microsoft365: 'mail', support: 'confirmation_number', knowledge: 'menu_book', recipes: 'restaurant_menu', documents: 'description', infrastructure: 'dns', music: 'library_music', openscad: 'view_in_ar', coding: 'code', browser: 'web'
   }[integrationType] || 'extension'
 }
 
@@ -363,6 +364,7 @@ async function removeIntegration(integration) {
     else if (integration.integrationType === 'support') await integrations.removeTbsDesk(integration.id)
     else if (integration.integrationType === 'knowledge') await integrations.removeKnowledge(integration.id)
     else if (integration.integrationType === 'recipes') await integrations.removeRecipes(integration.id)
+    else if (integration.integrationType === 'documents') await integrations.removeDocuments(integration.id)
     else if (integration.integrationType === 'infrastructure') await integrations.removeArcane(integration.id)
     else if (integration.integrationType === 'music') await integrations.removeSonoBin(integration.id)
     else if (integration.integrationType === 'openscad') await integrations.removeOpenScad(integration.id)

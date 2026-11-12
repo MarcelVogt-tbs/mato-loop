@@ -206,6 +206,21 @@ it('creates a connection only after completing the page and opens its editor', a
   await vi.waitFor(() => expect(router.currentRoute.value.params.integrationId).toBe('new-calendar'))
 })
 
+it('creates a personal Paperless-ngx document connection', async () => {
+  api.get.mockImplementation(async (url) => ({ data: url === '/integrations/catalog'
+    ? { adapters: [{ integrationType: 'documents', adapterType: 'paperless', executionLocation: 'backend', availability: 'full' }] }
+    : { providers: [], accounts: [], bases: [], instances: [] } }))
+  api.post.mockResolvedValue({ data: {} })
+  await mountEditor('personal', true, 'documents')
+  await fill('Paperless-ngx-Basis-URL', 'http://paperless.test')
+  await fill('API-Token', 'test-token')
+  button('Speichern').click()
+  await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith('/integrations/documents/accounts', {
+    integration_type: 'documents', provider_type: 'paperless', name: 'Neu',
+    base_url: 'http://paperless.test', token: 'test-token', enabled: true
+  }, { params: { scope: 'personal' } }))
+})
+
 it('creates an instance-wide Jina connection without requiring an API key', async () => {
   const originalGet = api.get.getMockImplementation()
   const readers = []

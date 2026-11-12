@@ -22,6 +22,7 @@ Zugangsdaten werden verschlüsselt gespeichert und nicht wieder im Klartext ange
 | IMAP/SMTP | Beide Server, TLS-Modus und fester Absender | Benutzername und Passwort/App-Passwort; kein unverschlüsselter Betrieb |
 | Microsoft 365 | Mandanten-ID und Anwendungs-ID einer Entra-App | Gerätecode oder Browser-Anmeldung mit Client-Secret; [Postfach verbinden](#microsoft-365-postfach-lesen) |
 | Mealie | Basis-URL ohne `/api` | Langlebiger API-Token aus dem Mealie-Benutzerprofil |
+| Paperless-ngx | Basis-URL ohne `/api` | API-Token eines Kontos mit den benötigten Dokumentrechten |
 | BookStack | HTTPS-Serveradresse | Token-ID und Token-Secret aus dem Benutzerprofil |
 | Arcane | Manager-URL | API-Schlüssel mit passenden Umgebungsrechten |
 | SonoBin | HTTPS-Basis-URL; `/mcp/` wird abgeleitet | Persönlicher Bearer-Token aus den Kontoeinstellungen |
@@ -197,6 +198,21 @@ Bitte den Agenten, eine Bilddatei aus der Session-Ablage oder vom ausgewählten 
 Nicht angegebene Rezeptfelder bleiben erhalten; übergebene Zutaten- oder Zubereitungslisten ersetzen die jeweilige Liste vollständig. Nach einem unklaren Schreibergebnis prüfe Mealie vor einer Wiederholung: Bei einer Erstellung kann bereits ein teilweise befülltes Rezept vorhanden sein.
 
 Für eine Einkaufsliste richte eine CalDAV-Aufgabenliste ein und wähle sie als Standard. Bitte den Agenten, den Wochenplan und die Rezepte zu lesen und fehlende Einkaufsaufgaben anzulegen. Er fasst kompatible Mengen zusammen; unklare Einheiten bleiben getrennt. Bestehende offene Aufgaben bleiben erhalten. Es gibt weder automatische Synchronisierung noch native Mealie-Einkaufslisten.
+
+## Paperless-ngx verbinden
+
+Wähle beim Anlegen den Typ **Dokumente** und den Anbieter **Paperless-ngx**. Trage die Basis-URL deiner Instanz und den API-Token ein, speichere die Verbindung und teste sie. Beim Bearbeiten lässt du das Token-Feld leer, um den gespeicherten Token beizubehalten.
+
+Verwende außerhalb eines vertrauenswürdigen lokalen Netzes HTTPS: Über HTTP werden Token und Dokumentinhalte unverschlüsselt übertragen.
+
+Verwende ein Konto mit den benötigten Dokumentrechten statt eines Administratorkontos. Die Paperless-ngx-Kontorechte begrenzen den Zugriff zusätzlich zu den MatoLoop-Freigaben. Persönliche und globale Verbindungen verwenden dieselben Verfügbarkeits- und Berechtigungseinstellungen wie andere Integrationen.
+
+Der Agent kann Dokumente suchen, OCR-Text lesen, Dateien übertragen, Metadaten und Notizen bearbeiten sowie Tags, Korrespondenten, Dokumenttypen, Ablagepfade und eigene Felder verwalten. Stapelaktionen erlauben Klassifizierung, Neuverarbeitung und PDF-Bearbeitung. Versionsfunktionen benötigen eine entsprechend ausgestattete Paperless-Instanz; Dokumentaktionen verwenden API-Version 9, paginierte Statusabfragen Version 10. Auf älteren Instanzen benötigt die Statusabfrage die konkrete Task-ID des Auftrags; die gesamte Historie wird nicht geladen. Dateiübertragungen sind auf 32 MiB begrenzt.
+
+Klassifizierung läuft im normalen Chat oder in einer von dir angelegten Automation. Beschreibe dort, welche Dokumente bearbeitet werden sollen und ob neue Kategorien angelegt werden dürfen. Es gibt keinen zusätzlichen Klassifizierungsdienst und keine automatische Archivkopie. Vergib für unbeaufsichtigte Läufe vorher die benötigten Lese-, Schreib- und gegebenenfalls Löschrechte.
+
+!!! warning "Bestehende Daten gezielt ändern"
+    Vollständige Tag- und Feldlisten ersetzen die bisherigen Zuordnungen; additive Stapelaktionen erhalten nicht genannte Felder, überschreiben aber ausdrücklich gesetzte Werte. Leerungen, PDF-Änderungen am Original sowie Änderungen bestehender Feldtypen und Auswahloptionen benötigen zusätzlich Löschrechte. Entfernte Auswahloptionen können Werte aller zugeordneten Dokumente leeren. Endgültiges Löschen im Paperless-Papierkorb ist nicht rückgängig zu machen. Bei externer OCR kann Paperless Dokumente an seinen konfigurierten OCR-Dienst senden. Synchrone Metadatenänderungen werden direkt bestätigt; Uploads und Hintergrundaufträge sind erst nach erfolgreicher Verarbeitung abgeschlossen. Prüfe bei unklarem Ausgang den Status oder die betroffenen Dokumente vor einer Wiederholung. Gleichzeitige Änderungen in Paperless können durch vollständige Ersetzungen überschrieben werden.
 
 ## Wissen mit BookStack verwalten
 

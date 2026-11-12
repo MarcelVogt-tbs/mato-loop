@@ -107,7 +107,7 @@
               />
             </template>
             <q-banner
-              v-if="['recipes', 'coding', 'infrastructure', 'webfetch'].includes(form.integration_type) && form.base_url.trim().toLowerCase().startsWith('http://')"
+              v-if="['recipes', 'documents', 'coding', 'infrastructure', 'webfetch'].includes(form.integration_type) && form.base_url.trim().toLowerCase().startsWith('http://')"
               dense
               rounded
               class="app-surface-tonal"
@@ -231,12 +231,12 @@
               :rules="isEditing ? [tokenPairRule] : [requiredRule]"
             />
             <q-input dense
-              v-if="form.integration_type === 'recipes'"
+              v-if="['recipes', 'documents'].includes(form.integration_type)"
               v-model="form.token"
               outlined
               type="password"
               :label="integration?.hasCredential ? 'Neuer API-Token (optional)' : 'API-Token'"
-              :hint="integration?.hasCredential ? 'Leer lassen, um den gespeicherten API-Token beizubehalten.' : 'Langlebiger API-Token aus dem Mealie-Benutzerprofil.'"
+              :hint="integration?.hasCredential ? 'Leer lassen, um den gespeicherten API-Token beizubehalten.' : form.integration_type === 'documents' ? 'API-Token eines Paperless-ngx-Kontos mit den benötigten Dokumentrechten.' : 'Langlebiger API-Token aus dem Mealie-Benutzerprofil.'"
               lazy-rules
               :rules="isEditing ? [] : [requiredRule]"
             />
@@ -399,8 +399,8 @@ const baseUrlLabel = computed(
 const baseUrlPlaceholder = computed(
   () => providerDefaults[form.integration_type]?.placeholder
 )
-const requiresHttps = computed(() => !['search', 'recipes', 'coding', 'support', 'infrastructure', 'webfetch'].includes(form.integration_type))
-const dialogIcon = computed(() => ({ coding: 'code', mail: 'mail', microsoft365: 'mail', support: 'confirmation_number', music: 'library_music', infrastructure: 'dns', openscad: 'view_in_ar', browser: 'web' })[form.integration_type] || 'extension')
+const requiresHttps = computed(() => !['search', 'recipes', 'documents', 'coding', 'support', 'infrastructure', 'webfetch'].includes(form.integration_type))
+const dialogIcon = computed(() => ({ documents: 'description', coding: 'code', mail: 'mail', microsoft365: 'mail', support: 'confirmation_number', music: 'library_music', infrastructure: 'dns', openscad: 'view_in_ar', browser: 'web' })[form.integration_type] || 'extension')
 const securityOptions = [
   { label: 'TLS', value: 'tls' },
   { label: 'STARTTLS', value: 'starttls' }
@@ -669,6 +669,10 @@ async function save() {
         payload.token = form.token
         if (integration.value) await integrations.updateRecipes(integration.value.id, payload)
         else await integrations.createRecipes(payload)
+      } else if (form.integration_type === 'documents') {
+        payload.token = form.token
+        if (integration.value) await integrations.updateDocuments(integration.value.id, payload)
+        else await integrations.createDocuments(payload)
       } else if (integration.value) await integrations.updateSearch(integration.value.id, payload)
       else await integrations.createSearch(payload)
     }

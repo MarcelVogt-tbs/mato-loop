@@ -38,6 +38,7 @@ from mato_loop_backend.integrations.opencode.adapter import (
 )
 from mato_loop_backend.integrations.opencode.client import OpenCodeError
 from mato_loop_backend.integrations.openscad.service import OpenScadIntegrationService
+from mato_loop_backend.integrations.paperless.service import PaperlessIntegrationService
 from mato_loop_backend.integrations.registry import integration_adapter
 from mato_loop_backend.integrations.searxng.service import SearchIntegrationService
 from mato_loop_backend.integrations.service import (
@@ -71,6 +72,7 @@ _CONFIG_FIELDS = {
     "tbs-desk": ("base_url", "username"),
     "bookstack": ("base_url",),
     "mealie": ("base_url",),
+    "paperless": ("base_url",),
     "arcane": ("base_url",),
     "sonobin": ("base_url",),
     "openscad": ("execution_agent_id", "binary_path"),
@@ -82,6 +84,7 @@ _SECRETS = {
     "caldav": ("password", "username"), "imap_smtp": ("password", "username"),
     "tbs-desk": ("password", "username"), "bookstack": ("token_id", "token_secret"),
     "mealie": ("token",), "arcane": ("api_key",),
+    "paperless": ("token",),
     "sonobin": ("bearer_token",), "opencode": ("password", "username"),
     "mcp_streamable_http": ("bearer_token",),
 }
@@ -89,6 +92,7 @@ _SERVICES = {
     "searxng": SearchIntegrationService, "caldav": CalDavIntegrationService,
     "imap_smtp": MailIntegrationService, "tbs-desk": TbsDeskIntegrationService,
     "bookstack": BookStackIntegrationService, "mealie": MealieIntegrationService,
+    "paperless": PaperlessIntegrationService,
     "arcane": ArcaneIntegrationService, "sonobin": SonoBinIntegrationService,
     "openscad": OpenScadIntegrationService, "opencode": OpenCodeIntegrationService,
     "browser": BrowserIntegrationService, "mcp_streamable_http": McpIntegrationService,
@@ -320,7 +324,7 @@ async def manage_integrations(
                 return ToolResult.error("tool.invalidArguments", field="changes.base_url" if adapter_type == "sonobin" else "changes.endpoint", params={"reason": "invalid_format"})
         elif adapter_type not in {"opencode", "browser"}:
             adapter = next((item for item in (integration_adapter(kind, adapter_type) for kind in (
-                "search", "calendar", "mail", "support", "knowledge", "recipes", "infrastructure", "openscad"
+                "search", "calendar", "mail", "support", "knowledge", "recipes", "documents", "infrastructure", "openscad"
             )) if item is not None), None)
             if adapter is None:
                 return ToolResult.error("tool.unavailable")
@@ -409,6 +413,8 @@ async def manage_integrations(
             service, kwargs = BookStackIntegrationService, {**base, "base_url": config.get("base_url"), "token_id": credential_values.get("token_id"), "token_secret": credential_values.get("token_secret"), "owner_id": owner_id}
         elif adapter_type == "mealie":
             service, kwargs = MealieIntegrationService, {**base, "base_url": config.get("base_url"), "token": credential_values.get("token"), "owner_id": owner_id}
+        elif adapter_type == "paperless":
+            service, kwargs = PaperlessIntegrationService, {**base, "base_url": config.get("base_url"), "token": credential_values.get("token"), "owner_id": owner_id}
         elif adapter_type == "arcane":
             service, kwargs = ArcaneIntegrationService, {**base, "base_url": config.get("base_url"), "api_key": credential_values.get("api_key"), "owner_id": owner_id}
         elif adapter_type in {"mcp_streamable_http", "sonobin"}:

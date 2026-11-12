@@ -480,6 +480,7 @@ async def test_personal_policy_read_exposes_no_integration_configuration(
             "imap_smtp",
             "microsoft_graph",
             "opencode",
+            "paperless",
             "sonobin",
             "tbs-desk",
         ],

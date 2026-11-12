@@ -130,7 +130,8 @@ def test_full_initial_tool_contract_stays_within_conservative_budget() -> None:
     # Includes task continuation, explicit Git consent, progress updates, grounding, media, permission failures, automation scope, computer provenance, and explicit calendar context.
     # Global response-language precedence and artifact exceptions add at most 70 tokens.
     # Recipe clarification adds up to 150 tokens to the stable question contract.
-    assert prompt_tokens <= 9_650, prompt_tokens
+    # Paperless adds 68 estimated tokens for 14 names in the inactive tool inventory.
+    assert prompt_tokens <= 9_718, prompt_tokens
     # Session state and message metadata add 806 tokens; automation model overrides and
     # CalDAV pagination account for the remaining growth within a 1,200-token allowance.
     # Type-specific question variants add 375 estimated schema tokens.

@@ -37,6 +37,8 @@ const emptyRecipes = () => ({
   accounts: []
 })
 
+const emptyDocuments = () => ({ configured: false, accounts: [] })
+
 const emptyArcane = () => ({ configured: false, instances: [] })
 
 const emptyMusic = () => ({
@@ -111,6 +113,7 @@ function clearIntegrations(store) {
   store.tbsDesk = emptyTbsDesk()
   store.knowledge = emptyKnowledge()
   store.recipes = emptyRecipes()
+  store.documents = emptyDocuments()
   store.arcane = emptyArcane()
   store.music = emptyMusic()
   store.openscad = emptyOpenScad()
@@ -131,6 +134,7 @@ export const useIntegrationStore = defineStore('integrations', {
     tbsDesk: emptyTbsDesk(),
     knowledge: emptyKnowledge(),
     recipes: emptyRecipes(),
+    documents: emptyDocuments(),
     arcane: emptyArcane(),
     music: emptyMusic(),
     openscad: emptyOpenScad(),
@@ -156,7 +160,7 @@ export const useIntegrationStore = defineStore('integrations', {
     configuredIntegrations: (state) => [
       ...state.webfetch.providers,
       ...state.search.providers, ...state.calendar.accounts, ...state.mail.accounts, ...state.microsoft365.accounts,
-      ...state.knowledge.bases, ...state.recipes.accounts, ...state.arcane.instances,
+      ...state.knowledge.bases, ...state.recipes.accounts, ...state.documents.accounts, ...state.arcane.instances,
       ...state.music.instances, ...state.openscad.instances, ...state.coding.instances,
       ...state.tbsDesk.accounts,
       ...state.browser.instances.map((item) => ({ ...item, integrationType: 'browser', providerType: 'browser' }))
@@ -211,6 +215,13 @@ export const useIntegrationStore = defineStore('integrations', {
         return request
       }
     }),
+    ...integrationActions('Documents', '/integrations/documents/accounts', {
+      prepareUpdate(payload) {
+        const request = { ...payload }
+        if (typeof request.token === 'string' && request.token.trim() === '') delete request.token
+        return request
+      }
+    }),
     ...integrationActions('Arcane', '/integrations/infrastructure/arcane', {
       prepareUpdate(payload) {
         const request = { ...payload }
@@ -232,7 +243,7 @@ export const useIntegrationStore = defineStore('integrations', {
         const result = await this.browserStatus(integration.id, true)
         return { type: result.state === 'ready' ? 'positive' : 'warning', message: browserStatusLabel(result) }
       }
-      const method = { webfetch: 'testWebfetch', search: 'testSearch', calendar: 'testCalendar', mail: 'testMail', microsoft365: 'testMicrosoft365', support: 'testTbsDesk', knowledge: 'testKnowledge', recipes: 'testRecipes', infrastructure: 'testArcane', music: 'testSonoBin', openscad: 'testOpenScad', coding: 'testOpenCode' }[integration.integrationType]
+      const method = { webfetch: 'testWebfetch', search: 'testSearch', calendar: 'testCalendar', mail: 'testMail', microsoft365: 'testMicrosoft365', support: 'testTbsDesk', knowledge: 'testKnowledge', recipes: 'testRecipes', documents: 'testDocuments', infrastructure: 'testArcane', music: 'testSonoBin', openscad: 'testOpenScad', coding: 'testOpenCode' }[integration.integrationType]
       const result = await this[method](integration.id)
       return integration.integrationType === 'openscad' && result?.headlessPreview === false
         ? { type: 'warning', message: 'OpenSCAD ist erreichbar, unterstützt aber keine Headless-Vorschau.' }
@@ -303,6 +314,7 @@ export const useIntegrationStore = defineStore('integrations', {
           this.fetchMicrosoft365(),
           this.fetchKnowledge(),
           this.fetchRecipes(),
+          this.fetchDocuments(),
           this.fetchArcane(),
           this.fetchMusic(),
           this.fetchOpenScad(),
@@ -382,6 +394,9 @@ export const useIntegrationStore = defineStore('integrations', {
     },
     fetchRecipes() {
       return this.fetchResource('recipes', '/integrations/recipes')
+    },
+    fetchDocuments() {
+      return this.fetchResource('documents', '/integrations/documents')
     },
     fetchArcane() {
       return this.fetchResource('arcane', '/integrations/infrastructure/arcane')

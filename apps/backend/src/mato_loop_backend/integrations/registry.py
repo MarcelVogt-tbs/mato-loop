@@ -19,6 +19,7 @@ from mato_loop_backend.integrations.mealie.adapter import MEALIE_ADAPTER
 from mato_loop_backend.integrations.microsoft365.adapter import MICROSOFT365_ADAPTER
 from mato_loop_backend.integrations.opencode.adapter import OPENCODE_ADAPTER
 from mato_loop_backend.integrations.openscad.adapter import OPENSCAD_ADAPTER
+from mato_loop_backend.integrations.paperless.adapter import PAPERLESS_ADAPTER
 from mato_loop_backend.integrations.searxng.adapter import SEARXNG_ADAPTER
 from mato_loop_backend.integrations.sonobin.adapter import SONOBIN_ADAPTER
 from mato_loop_backend.integrations.tbs_desk.adapter import TBS_DESK_ADAPTER
@@ -48,6 +49,7 @@ _ADAPTERS = {
     ("microsoft365", "microsoft_graph"): MICROSOFT365_ADAPTER,
     ("knowledge", "bookstack"): BOOKSTACK_ADAPTER,
     ("recipes", "mealie"): MEALIE_ADAPTER,
+    ("documents", "paperless"): PAPERLESS_ADAPTER,
     ("infrastructure", "arcane"): ARCANE_ADAPTER,
     ("openscad", "openscad"): OPENSCAD_ADAPTER,
     ("coding", "opencode"): OPENCODE_ADAPTER,

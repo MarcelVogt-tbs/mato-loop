@@ -80,6 +80,13 @@ from mato_loop_backend.integrations.openscad.adapter import (
     OpenScadTestResult,
 )
 from mato_loop_backend.integrations.openscad.service import OpenScadIntegrationService
+from mato_loop_backend.integrations.paperless.adapter import (
+    PAPERLESS_CREDENTIAL_KIND,
+    PaperlessConfig,
+    paperless_error_code,
+)
+from mato_loop_backend.integrations.paperless.client import PaperlessClient, PaperlessError
+from mato_loop_backend.integrations.paperless.service import PaperlessIntegrationService
 from mato_loop_backend.integrations.registry import (
     integration_adapter,
     integration_adapter_type_registered,
@@ -263,6 +270,26 @@ class RecipeIntegrationRequest(BaseModel):
 
 
 class RecipeIntegrationCreateRequest(RecipeIntegrationRequest):
+    token: str = Field(min_length=1, max_length=10_000)
+
+
+class DocumentIntegrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    integration_type: Literal["documents"] = "documents"
+    provider_type: Literal["paperless"] = "paperless"
+    name: str = Field(min_length=1, max_length=160)
+    base_url: HttpUrl
+    token: str | None = Field(default=None, max_length=10_000)
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_url(self) -> DocumentIntegrationRequest:
+        PaperlessConfig(base_url=self.base_url)
+        return self
+
+
+class DocumentIntegrationCreateRequest(DocumentIntegrationRequest):
     token: str = Field(min_length=1, max_length=10_000)
 
 
@@ -493,6 +520,10 @@ def knowledge_settings_payload(settings: IntegrationSettings) -> dict:
 
 def recipe_settings_payload(settings: IntegrationSettingsDocument) -> dict:
     return _integration_settings_payload(settings, "recipes", "mealie", "accounts")
+
+
+def document_settings_payload(settings: IntegrationSettingsDocument) -> dict:
+    return _integration_settings_payload(settings, "documents", "paperless", "accounts")
 
 
 def sonobin_settings_payload(settings: IntegrationSettingsDocument) -> dict:
@@ -1493,6 +1524,134 @@ async def test_recipe_integration(
     except Exception as exc:
         await db.rollback()
         logger.warning("Mealie integration test failed with %s", type(exc).__name__)
+        raise ApiError(502, "integration.unavailable") from exc
+    return {"status": "ok"}
+
+
+@router.get("/documents")
+async def get_document_integrations(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(db, scope, user)
+    return document_settings_payload(settings)
+
+
+@router.post("/documents/accounts", status_code=status.HTTP_201_CREATED)
+async def create_document_integration(
+    payload: DocumentIntegrationCreateRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
+        db, scope, user, mutation=True, adapter_type="paperless"
+    )
+    try:
+        settings = await PaperlessIntegrationService.create(
+            db,
+            name=payload.name,
+            base_url=str(payload.base_url),
+            token=payload.token,
+            enabled=payload.enabled,
+            owner_id=owner_id,
+        )
+    except IntegrationSettingsError as exc:
+        raise ApiError(422, exc.code, field="token") from exc
+    return document_settings_payload(settings)
+
+
+@router.put("/documents/accounts/{integration_id}")
+async def update_document_integration(
+    integration_id: UUID,
+    payload: DocumentIntegrationRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
+        db, scope, user, mutation=True, adapter_type="paperless"
+    )
+    try:
+        settings = await PaperlessIntegrationService.update(
+            db,
+            integration_id,
+            name=payload.name,
+            base_url=str(payload.base_url),
+            token=payload.token,
+            enabled=payload.enabled,
+            owner_id=owner_id,
+        )
+    except IntegrationSettingsError as exc:
+        status_code = 404 if exc.code == "integration.notFound" else 422
+        raise ApiError(status_code, exc.code, field="token") from exc
+    return document_settings_payload(settings)
+
+
+@router.delete("/documents/accounts/{integration_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_document_integration(
+    integration_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> None:
+    _settings, owner_id = await api_integration_access._load_scoped_integrations(
+        db, scope, user, mutation=True, adapter_type="paperless"
+    )
+    try:
+        await PaperlessIntegrationService.delete(db, integration_id, owner_id=owner_id)
+    except IntegrationSettingsError as exc:
+        raise ApiError(404, exc.code) from exc
+
+
+@router.post("/documents/accounts/{integration_id}/test")
+async def test_document_integration(
+    integration_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict[str, str]:
+    settings, _owner_id = await api_integration_access._load_scoped_integrations(
+        db, scope, user, adapter_type="paperless"
+    )
+    account = PaperlessIntegrationService._find(settings, integration_id)
+    if account is None:
+        raise ApiError(404, "integration.notFound")
+    try:
+        if account.credential_id is None:
+            raise PaperlessError("paperless.authenticationFailed")
+        record = await load_credential(
+            db,
+            account.credential_id,
+            owner_id=account.owner_id,
+            populate_existing=True,
+        )
+        if record is None or record.kind != PAPERLESS_CREDENTIAL_KIND:
+            raise PaperlessError("paperless.authenticationFailed")
+        try:
+            credential = read_credential(record)
+        except Exception as exc:
+            raise PaperlessError("paperless.authenticationFailed") from exc
+        if (
+            not isinstance(credential, dict)
+            or set(credential) != {"token"}
+            or not isinstance(credential["token"], str)
+            or not credential["token"]
+        ):
+            raise PaperlessError("paperless.authenticationFailed")
+        config = PaperlessConfig.model_validate(account.config)
+        await db.rollback()
+        async with PaperlessClient(str(config.base_url), credential["token"]) as client:
+            await client.test_connection()
+    except PaperlessError as exc:
+        await db.rollback()
+        code = paperless_error_code(exc)
+        logger.warning("Paperless integration test failed: %s", code)
+        raise ApiError(502, code) from exc
+    except Exception as exc:
+        await db.rollback()
+        logger.warning("Paperless integration test failed with %s", type(exc).__name__)
         raise ApiError(502, "integration.unavailable") from exc
     return {"status": "ok"}
 

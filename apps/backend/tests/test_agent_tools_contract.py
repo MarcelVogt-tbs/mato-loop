@@ -2948,6 +2948,7 @@ async def test_personal_settings_refuses_disabled_mcp_before_network_access(monk
     ("tbs-desk", "support", {"base_url": "https://support.example.com", "username": "ada"}, "password"),
     ("bookstack", "knowledge", {"base_url": "https://books.example.com"}, "token_id"),
     ("mealie", "recipes", {"base_url": "https://recipes.example.com"}, "token"),
+    ("paperless", "documents", {"base_url": "https://paperless.example.test"}, "token"),
     ("arcane", "infrastructure", {"base_url": "https://arcane.example.com"}, "api_key"),
     ("sonobin", "music", {"base_url": "https://music.example.com"}, "bearer_token"),
     ("openscad", "openscad", {"execution_agent_id": str(uuid4()), "binary_path": "/usr/bin/openscad"}, None),

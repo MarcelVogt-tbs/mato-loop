@@ -63,7 +63,7 @@ def _record(session_id, tool, settings, *, observed_at=NOW, items=None, integrat
     )
 
 
-def test_only_the_ten_discovery_tools_opt_in():
+def test_only_account_and_resource_discovery_tools_opt_in():
     policies = {
         tool.name: tool_registry._contributed_definition(tool).snapshot_policy
         for adapter in integration_adapters()
@@ -74,6 +74,7 @@ def test_only_the_ten_discovery_tools_opt_in():
         "arcane_accounts", "arcane_environments", "mealie_list_accounts",
         "mail_list_accounts", "mail_list_folders", "knowledge_list_accounts",
         "calendar_list_accounts", "calendar_list_calendars", "tasks_list_accounts", "tasks_list_lists",
+        "paperless_list_accounts",
     }
     assert all(policy.max_age_seconds is None for name, policy in policies.items() if "accounts" in name)
 
