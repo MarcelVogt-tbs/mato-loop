@@ -20,14 +20,13 @@ services:
     volumes:
       - .:/source:ro
       - ./data/shell-decider-eval:/results
-      - shell_decider_eval_cache:/cache
+      - type: volume
+        source: download_cache
+        target: /cache/huggingface/hub
+        volume:
+          subpath: embedding
+          nocopy: true
     working_dir: /source/scripts/shell-decider-eval
     entrypoint: [python, -u, evaluate.py]
     networks:
       - mato-loop
-
-volumes:
-  shell_decider_eval_cache:
-    labels:
-      matoloop.dev.worktree: ${MATO_LOOP_DEV_WORKTREE:?Use ./scripts/eval.sh}
-      matoloop.dev.repository: ${MATO_LOOP_DEV_REPOSITORY:?Use ./scripts/eval.sh}

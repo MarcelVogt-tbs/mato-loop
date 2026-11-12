@@ -31,19 +31,16 @@ verify_resources() {
 }
 
 prepare_caches() {
-    local kind name labels
-    for kind in uv yarn embedding; do
-        name="$MATO_LOOP_DEV_CACHE_PREFIX-$kind-v1"
-        if [[ " $1 " != *" $name "* ]]; then continue; fi
-        if ! docker volume inspect "$name" >/dev/null 2>&1; then
-            [[ "$2" == prepare ]] || continue
-            docker volume create --label "matoloop.dev.repository=$MATO_LOOP_DEV_REPOSITORY" --label "matoloop.dev.cache=$kind" "$name" >/dev/null
-        fi
-        labels="$(docker volume inspect --format '{{index .Labels "matoloop.dev.repository"}}|{{index .Labels "matoloop.dev.cache"}}|{{index .Labels "matoloop.dev.worktree"}}' "$name")"
-        [[ "$labels" == "$MATO_LOOP_DEV_REPOSITORY|$kind|" || "$labels" == "$MATO_LOOP_DEV_REPOSITORY|$kind|<no value>" ]] || {
-            echo "Foreign or unverified cache: $name. No changes made." >&2; return 1;
-        }
-    done
+    local name="$MATO_LOOP_DEV_CACHE_PREFIX-downloads-v1" labels
+    [[ " $1 " == *" $name "* ]] || return 0
+    if ! docker volume inspect "$name" >/dev/null 2>&1; then
+        [[ "$2" == prepare ]] || return 0
+        docker volume create --label "matoloop.dev.repository=$MATO_LOOP_DEV_REPOSITORY" --label matoloop.dev.cache=downloads "$name" >/dev/null
+    fi
+    labels="$(docker volume inspect --format '{{index .Labels "matoloop.dev.repository"}}|{{index .Labels "matoloop.dev.cache"}}|{{index .Labels "matoloop.dev.worktree"}}' "$name")"
+    [[ "$labels" == "$MATO_LOOP_DEV_REPOSITORY|downloads|" || "$labels" == "$MATO_LOOP_DEV_REPOSITORY|downloads|<no value>" ]] || {
+        echo "Foreign or unverified cache: $name. No changes made." >&2; return 1;
+    }
 }
 
 cleanup() {
@@ -96,7 +93,7 @@ cleanup() {
         local selected=''
         for id in $volumes; do
             kind="$(docker volume inspect --format '{{index .Labels "com.docker.compose.volume"}}' "$id")"
-            case "$kind" in backend_uv_data|frontend_node_modules|frontend_yarn_cache|embedding_cache|matoloop_agent_dependency_data|shell_decider_eval_cache) selected+="$id " ;; esac
+            case "$kind" in dev_data|backend_uv_data|frontend_node_modules|frontend_yarn_cache|embedding_cache|matoloop_agent_dependency_data|shell_decider_eval_cache) selected+="$id " ;; esac
         done
         volumes="$selected"; networks=''
     fi
@@ -135,17 +132,25 @@ compose() {
     verify_resources "$project"
     local key name kind external path names='' prepare=check
     while IFS='|' read -r key name external; do
-        if [[ "$key" == shared_* ]]; then
-            kind="${key#shared_}"; kind="${kind%_cache}"
-            [[ "$external" == True && "$name" == "$MATO_LOOP_DEV_CACHE_PREFIX-$kind-v1" && "$kind" =~ ^(uv|yarn|embedding)$ ]] || return 1
+        if [[ "$key" == download_cache ]]; then
+            [[ "$external" == True && "$name" == "$MATO_LOOP_DEV_CACHE_PREFIX-downloads-v1" ]] || return 1
             names+=" $name "
         elif docker volume inspect "$name" >/dev/null 2>&1; then
             path="$(docker volume inspect --format '{{index .Labels "matoloop.dev.worktree"}}' "$name")"
             [[ "$path" == "$PROJECT_ROOT" ]] || { echo "Foreign or unverified volume: $name" >&2; return 1; }
+            if [[ "$key" == app_data && ( "${1:-}" == up || "${1:-}" == run || "${1:-}" == create || "${1:-}" == start || "${1:-}" == restart ) ]]; then
+                [[ "$(docker volume inspect --format '{{index .Labels "matoloop.dev.layout"}}' "$name")" == consolidated-v1 ]] || {
+                    echo 'Legacy app_data layout. Keep its stack unchanged; back up and migrate it or use a new stack name. No data was moved or deleted.' >&2; return 1;
+                }
+            fi
         fi
     done < <(python3 -c 'import json,sys; c=json.load(sys.stdin); [print(k,v["name"],v.get("external",False),sep="|") for k,v in c.get("volumes",{}).items()]' <<< "$config")
     case "${1:-}" in up|run|create) prepare=prepare ;; esac
     prepare_caches "$names" "$prepare"
+    if [[ "$prepare" == prepare ]]; then
+        # Subpaths must exist before Docker creates the service mounts. This service has no source mount.
+        "${command[@]}" --profile storage run --rm --no-deps storage-init
+    fi
     if [[ "${1:-}" == down ]]; then
         for arg in "${@:2}"; do
             if [[ "$arg" == --volumes* || ( "$arg" == -[^-]* && "$arg" == *v* ) ]]; then
@@ -206,7 +211,11 @@ run_backend() {
 }
 
 run_frontend() {
-    compose run --rm --no-deps --volume /workspace/apps/frontend/node_modules frontend sh -lc "$1"
+    compose run --rm --no-deps \
+        --volume /workspace/apps/frontend/node_modules \
+        --volume /workspace/apps/frontend/.quasar \
+        --volume /workspace/apps/frontend/dist \
+        --volume /workspace/apps/frontend/.yarn frontend sh -lc "$1"
 }
 
 run_matoloop_agent() {

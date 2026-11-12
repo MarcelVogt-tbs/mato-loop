@@ -66,8 +66,8 @@ This file defines the mandatory working rules for coding agents in MatoLoop.
 - Run evaluations through `./scripts/eval.sh`; it delegates to `./scripts/dev.sh compose` and adds `docker-compose.eval.yaml` only for evaluation-specific services.
 - Start the prepared production stack only when explicitly requested.
 - The development stack consists of `db`, `embedding`, `backend`, `frontend`, and `matoloop-agent`.
-- Backend development data lives in the `db_data` and `app_data` named volumes. MatoLoop Agent state uses `matoloop_agent_data`; its `/workspace` home uses `matoloop_agent_workspace`.
-- Installed Python and frontend dependencies use worktree-local volumes. Only reproducible downloads use repository-scoped shared caches; never put credentials or instance data there. See `docs/development.md#data`.
+- Each development stack owns `db_data` (PostgreSQL), `app_data` (separate backend, Agent state and Agent workspace subdirectories), and `dev_data` (installed dependencies and generated frontend files). Use `dev.sh` to initialize volume subpaths before starting containers; do not mount the entire application volume into individual services.
+- Only reproducible downloads use the repository-scoped `download_cache` volume, with separate uv, Yarn and embedding subdirectories; never put credentials or instance data there. Checks use disposable dependency/output mounts. See `docs/development.md#data`.
 - The repository bind mounts at `/workspace` (backend/frontend) and `/source` (Agent) exist only for HMR and live code changes.
 - `down` retains data. Outside the task-completion workflow above, `cleanup --dependencies` requires an explicit request to remove rebuildable dependencies; `cleanup --all`, `reset-storage`, and `down --volumes` require an explicit request to delete the affected instance's data. Confirmation flags are not authorization and never bypass tool approvals. Never prune unrelated Docker resources.
 

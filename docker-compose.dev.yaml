@@ -6,6 +6,24 @@ x-dev-volume: &dev-volume
     matoloop.dev.repository: ${MATO_LOOP_DEV_REPOSITORY:?Use ./scripts/dev.sh}
 
 services:
+  storage-init:
+    <<: *dev-volume
+    image: node:22-bookworm-slim
+    profiles: [storage]
+    network_mode: none
+    volumes:
+      - app_data:/app-data
+      - dev_data:/dev-data
+      - download_cache:/download-cache
+    entrypoint: [sh, -eu, -c]
+    command:
+      - >-
+        mkdir -p /app-data/backend /app-data/agent/state /app-data/agent/workspace
+        /dev-data/backend /dev-data/agent /dev-data/frontend/node_modules
+        /dev-data/frontend/quasar /dev-data/frontend/dist /dev-data/frontend/yarn
+        /download-cache/uv /download-cache/yarn /download-cache/embedding;
+        chmod 755 /download-cache /download-cache/embedding
+
   db:
     <<: *dev-volume
     image: pgvector/pgvector:0.8.5-pg17-bookworm
@@ -53,7 +71,12 @@ services:
         "7997",
       ]
     volumes:
-      - shared_embedding_cache:/app/.cache/huggingface/hub
+      - type: volume
+        source: download_cache
+        target: /app/.cache/huggingface/hub
+        volume:
+          subpath: embedding
+          nocopy: true
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7997/health', timeout=5)"]
       interval: 10s
@@ -87,9 +110,24 @@ services:
       MATO_LOOP_SESSION_COOKIE_NAME: ${MATO_LOOP_SESSION_COOKIE_NAME:-${COMPOSE_PROJECT_NAME}_session}
     volumes:
       - .:/workspace
-      - app_data:/data
-      - backend_uv_data:/opt/mato-loop/backend
-      - shared_uv_cache:/opt/mato-loop/backend/uv-cache
+      - type: volume
+        source: app_data
+        target: /data
+        volume:
+          subpath: backend
+          nocopy: true
+      - type: volume
+        source: dev_data
+        target: /opt/mato-loop/backend
+        volume:
+          subpath: backend
+          nocopy: true
+      - type: volume
+        source: download_cache
+        target: /opt/mato-loop/backend/uv-cache
+        volume:
+          subpath: uv
+          nocopy: true
     ports:
       - "${MATO_LOOP_HOST_BACKEND_PORT:-0}:${MATO_LOOP_BIND_BACKEND_PORT:-6020}"
     depends_on:
@@ -126,8 +164,36 @@ services:
       YARN_GLOBAL_FOLDER: /opt/mato-loop/yarn
     volumes:
       - .:/workspace
-      - frontend_node_modules:/workspace/apps/frontend/node_modules
-      - shared_yarn_cache:/opt/mato-loop/yarn
+      - type: volume
+        source: dev_data
+        target: /workspace/apps/frontend/node_modules
+        volume:
+          subpath: frontend/node_modules
+          nocopy: true
+      - type: volume
+        source: dev_data
+        target: /workspace/apps/frontend/.quasar
+        volume:
+          subpath: frontend/quasar
+          nocopy: true
+      - type: volume
+        source: dev_data
+        target: /workspace/apps/frontend/dist
+        volume:
+          subpath: frontend/dist
+          nocopy: true
+      - type: volume
+        source: dev_data
+        target: /workspace/apps/frontend/.yarn
+        volume:
+          subpath: frontend/yarn
+          nocopy: true
+      - type: volume
+        source: download_cache
+        target: /opt/mato-loop/yarn
+        volume:
+          subpath: yarn
+          nocopy: true
     ports:
       - "${MATO_LOOP_HOST_FRONTEND_PORT:-0}:${MATO_LOOP_BIND_FRONTEND_PORT:-10020}"
     depends_on:
@@ -142,7 +208,6 @@ services:
       ]
     networks:
       - mato-loop
-
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:' + process.env.MATO_LOOP_BIND_FRONTEND_PORT).then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
       interval: 5s
@@ -175,10 +240,30 @@ services:
       MATOLOOP_AGENT_PAIRING_TOKEN: ${MATOLOOP_AGENT_PAIRING_TOKEN:-}
     volumes:
       - .:/source
-      - matoloop_agent_data:/data
-      - matoloop_agent_workspace:/workspace
-      - matoloop_agent_dependency_data:/opt/matoloop-agent
-      - shared_uv_cache:/opt/matoloop-agent/uv-cache
+      - type: volume
+        source: app_data
+        target: /data
+        volume:
+          subpath: agent/state
+          nocopy: true
+      - type: volume
+        source: app_data
+        target: /workspace
+        volume:
+          subpath: agent/workspace
+          nocopy: true
+      - type: volume
+        source: dev_data
+        target: /opt/matoloop-agent
+        volume:
+          subpath: agent
+          nocopy: true
+      - type: volume
+        source: download_cache
+        target: /opt/matoloop-agent/uv-cache
+        volume:
+          subpath: uv
+          nocopy: true
     depends_on:
       backend:
         condition: service_healthy
@@ -194,28 +279,17 @@ services:
 
 volumes:
   app_data:
-    <<: *dev-volume
+    labels:
+      matoloop.dev.worktree: ${MATO_LOOP_DEV_WORKTREE:?Use ./scripts/dev.sh}
+      matoloop.dev.repository: ${MATO_LOOP_DEV_REPOSITORY:?Use ./scripts/dev.sh}
+      matoloop.dev.layout: consolidated-v1
   db_data:
     <<: *dev-volume
-  shared_embedding_cache:
-    name: ${MATO_LOOP_DEV_CACHE_PREFIX:?Use ./scripts/dev.sh}-embedding-v1
+  dev_data:
+    <<: *dev-volume
+  download_cache:
+    name: ${MATO_LOOP_DEV_CACHE_PREFIX:?Use ./scripts/dev.sh}-downloads-v1
     external: true
-  shared_uv_cache:
-    name: ${MATO_LOOP_DEV_CACHE_PREFIX:?Use ./scripts/dev.sh}-uv-v1
-    external: true
-  shared_yarn_cache:
-    name: ${MATO_LOOP_DEV_CACHE_PREFIX:?Use ./scripts/dev.sh}-yarn-v1
-    external: true
-  backend_uv_data:
-    <<: *dev-volume
-  frontend_node_modules:
-    <<: *dev-volume
-  matoloop_agent_dependency_data:
-    <<: *dev-volume
-  matoloop_agent_workspace:
-    <<: *dev-volume
-  matoloop_agent_data:
-    <<: *dev-volume
 
 networks:
   mato-loop:
