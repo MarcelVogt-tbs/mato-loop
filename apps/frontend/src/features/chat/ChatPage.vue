@@ -197,7 +197,6 @@
             <div v-if="message.voice" class="text-caption app-muted row items-center q-gutter-xs">
               <q-icon name="record_voice_over" size="14px" /><span>Sprachgespräch</span>
             </div>
-            <q-btn v-if="message.voiceTask?.sessionId && message.voiceTask.sessionId !== chat.current?.id" flat dense no-caps icon="open_in_new" label="Arbeitssession öffnen" :to="{ name: 'chat', query: { session: message.voiceTask.sessionId } }" />
             <FileChanges :actions="message.fileChanges" :git="currentGit" @open-file="openToolFile" @open-diff="openGitDiff" @resize-start="beginActivityResize" @resized="finishActivityResize" />
             <ChatFiles
               :actions="message.providedFiles"

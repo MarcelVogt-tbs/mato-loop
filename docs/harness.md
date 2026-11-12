@@ -44,14 +44,17 @@ is starting or active. Normal runs, queued-message admission, history mutations,
 policy changes, archiving and deletion cannot race that ownership. Restart marks
 connections failed rather than reconstructing media or replaying effects.
 
-The settings UI exposes one Realtime provider with an Azure/OpenAI service choice,
+The settings UI exposes one Realtime provider with an Azure/OpenAI-compatible service choice,
 separate from ordinary Chat Completions/Responses transports. Persisted
 `azure-openai-realtime` and `openai-realtime` adapter types retain their distinct
 authentication and endpoint validation. Existing connections use the same form
 without changing their stored service, credentials or model references; the service
 cannot be changed when editing a connection.
 Azure uses the resource root normalized to `/openai/v1` and deployment names;
-OpenAI-compatible endpoints require an HTTPS `/v1` base. An enabled Realtime model
+OpenAI-compatible endpoints require an HTTPS base ending in `/v1`, without a host
+allowlist. They must implement GA client secrets, WebRTC calls, sideband control
+and call termination; ordinary Chat Completions or transcription compatibility
+alone is insufficient. An enabled Realtime model
 has its own supported voice and explicit transcription model ID, distinct from
 the Realtime deployment name.
 Configuration uses the existing encrypted, instance/personal credential scopes.
@@ -72,8 +75,11 @@ Loss of control, playback permission, tab visibility, navigation or logout stops
 local media; no microphone reconnection occurs automatically. Heartbeat loss
 expires the backend call. Provider hangup is best effort, with unconfirmed hangup
 recorded as a visible failure rather than claimed as remote success.
+Authentication invalidation disposes local media and task state without awaiting
+authenticated HTTP teardown; backend control loss still terminates the call.
 
-The projection contains the selected profile/persona, project instructions,
+The projection uses the shared profile runtime-instruction helper and contains
+the selected profile/persona, project instructions,
 eligible maintained session context, a bounded earlier summary and recent
 user/assistant text. The stable voice contract requests German-only speech with
 clear, neutral Standard German pronunciation and no foreign accent. This is a
@@ -102,6 +108,8 @@ preserves tool-call/result ordering and the retained provider prefix as voice
 continues. Late transcript updates to earlier history can invalidate that prefix.
 It is not a native child/subagent lifecycle. Pending approvals and structured
 questions are handled here in the normal chat UI; spoken consent never resolves them.
+Voice corrections recheck pending UI state against a fresh run under normal
+continuation-admission locks before a continuation can supersede a waiter.
 
 Interrupting speech, ending voice or losing the browser does not cancel accepted
 work. Voice can be explicitly restarted while its own task continues. Explicit
@@ -117,8 +125,7 @@ by status is not announced again automatically in the same call. The stable voic
 contract asks the model to answer from the returned findings with their conclusions,
 qualifications, sources and dates, rather than substitute older knowledge or infer
 facts from completion alone. Result text remains untrusted data, not authority to
-follow instructions or grant permissions. Existing
-separate-session tasks retain their links and reconciliation behavior. Unknown
+follow instructions or grant permissions. Unknown
 dispatch outcomes are matched only to their reserved run and are never replayed.
 Known admission rejections close the reservation immediately and persist the
 operation's error when no reserved run was committed; already committed runs

@@ -21,9 +21,11 @@ function hardReload(path) {
   else window.location.reload()
 }
 
-async function endVoice() {
+async function endVoice({ localOnly = false } = {}) {
   const { useVoiceStore } = await import('src/features/voice/store')
-  await useVoiceStore().end()
+  const voice = useVoiceStore()
+  if (localOnly) voice.disposeLocal()
+  else await voice.end()
 }
 
 export const useAuthStore = defineStore('auth', {
@@ -38,7 +40,7 @@ export const useAuthStore = defineStore('auth', {
   }),
   actions: {
     async clearIdentityState() {
-      await endVoice()
+      await endVoice({ localOnly: true })
       const chat = useChatStore()
       try {
         await chat.clearAllDrafts()

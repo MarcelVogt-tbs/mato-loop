@@ -251,7 +251,7 @@ const apiTypes = [
 ]
 const realtimeServices = [
   { label: 'Azure', value: 'azure-openai-realtime' },
-  { label: 'OpenAI', value: 'openai-realtime' }
+  { label: 'OpenAI-kompatibel', value: 'openai-realtime' }
 ]
 const trustLevelOptions = [
   { label: 'Öffentlich', value: 'public' },
@@ -360,7 +360,7 @@ function urlRule(value) {
       return (url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash
         && (realtimeService.value === 'azure-openai-realtime'
           ? ['/', '/openai/v1', '/openai/v1/'].includes(url.pathname)
-          : /\/v1\/?$/.test(url.pathname))) || 'Bitte gib einen HTTPS-Realtime-Endpunkt ein; Azure ohne Pfad oder mit /openai/v1, OpenAI mit /v1.'
+          : /\/v1\/?$/.test(url.pathname))) || 'Bitte gib einen HTTPS-Realtime-Endpunkt ein; Azure ohne Pfad oder mit /openai/v1, OpenAI-kompatible Dienste mit /v1.'
     }
     if (isAzureSpeech.value) {
       return (url.protocol === 'https:' && !url.username && !url.password

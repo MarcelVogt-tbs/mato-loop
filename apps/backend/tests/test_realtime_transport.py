@@ -29,6 +29,7 @@ def mock_client(monkeypatch, handler):
         ("azure-openai-realtime", "https://voice.openai.azure.com/openai/v1", "api-key", "test-key", None),
         ("azure-openai-realtime", "https://voice.openai.azure.com/openai/v1", "api-key", "test-key", "/v1/realtime/calls/rtc_test"),
         ("openai-realtime", "https://api.openai.com/v1", "authorization", "Bearer test-key", None),
+        ("openai-realtime", "https://voice.example.com/custom/v1", "authorization", "Bearer test-key", None),
     ],
 )
 async def test_ga_negotiation_keeps_credentials_server_side_and_audio_disabled(

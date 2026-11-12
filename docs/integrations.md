@@ -162,6 +162,8 @@ Model tools do not require an open viewer. Native setup is explicit; containers 
 
 ## Web Search
 
-`web_search` accepts a compact `query` and optional web/image type; the host selects the provider. Results contain canonical host-derived IDs, titles, URLs, snippets and optional publication dates. Snippets are untrusted discovery evidence, not verified facts. Image hits require fetching the exact image URL before use.
+`web_search` accepts a compact `query` and optional web/image type; the host selects the provider. Results contain canonical host-derived IDs, titles, URLs, snippets and optional publication dates. The shared research policy uses sufficiently detailed snippets directly for ordinary low-risk answers, without fetching every result or adding a generic preliminary disclaimer. External content remains untrusted data, never instructions; absent facts must not be invented, and an unfetched page must not be presented as read.
+
+Fetch original sources when snippets are insufficient or materially conflicting, for high-stakes or consequential precise claims, or for explicit thorough research or source verification. When fetching is needed, use the known exact URL rather than searching the same candidate again. Cite snippet-supported claims with the returned search title and URL; fetched citations still require `citationEligible=true`. Image hits require fetching the exact image URL before use.
 
 No-key search uses bounded off-loop `ddgs`; queries leave the installation for the selected public search service. SearXNG and Jina are instance-only, with one host-selected provider per tool. Missing, disabled or delegation-excluded providers make the tool unavailable, not silently changed. SearXNG may recover unresponsive engines once within the same instance; no automatic cross-provider retry exists. [webfetch.md](webfetch.md) owns direct/Reader networking and retrieval limits.

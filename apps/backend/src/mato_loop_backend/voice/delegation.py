@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Literal
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -163,16 +163,17 @@ async def perform(
     if arguments.action == "stop":
         await AgentRuntime.cancel_and_wait(run.id)
         return await _finish(db, operation_id, {"taskId": str(task.id), "status": "stop_requested"})
-    if run.status in {"waiting_input", "waiting_approval"}:
-        return await _finish(db, operation_id, {**task_payload(task, run), "requiresUi": True})
     if not arguments.instruction or not arguments.instruction.strip():
         return await _finish(db, operation_id, {"error": {"code": "validation.required"}})
-    await service.continue_run(
-        task.work_session_id, run.id,
+    result = await service.continue_run(
+        source.id, run.id,
         VoiceCorrection(content="Explicit voice correction:\n" + arguments.instruction, message_id=uuid5(operation_id, "correction")),
         await db.get(UserAccount, source.user_id), db, attachments=None,
         owned_session_query=service.get_owned_session, message_serializer=message_payload,
+        allow_pending_interactions=False,
     )
+    if result.get("requiresUi"):
+        return await _finish(db, operation_id, {**task_payload(task, run), "requiresUi": True})
     return await _finish(db, operation_id, {"taskId": str(task.id), "status": "correction_accepted"})
 
 
@@ -194,13 +195,8 @@ async def reconcile(db: AsyncSession) -> None:
             task.status = run.status
             continue
         # A committed run may precede the final delegation update after interruption.
-        if run is None and task.work_session_id:
-            if task.work_session_id == task.source_session_id:
-                run = await db.get(AgentRun, uuid5(task.id, "run"))
-            else:
-                run = await db.scalar(select(AgentRun).where(
-                    AgentRun.session_id == task.work_session_id, AgentRun.parent_run_id.is_(None),
-                ).order_by(AgentRun.created_at.desc()).limit(1))
+        if run is None and task.source_session_id:
+            run = await db.get(AgentRun, uuid5(task.id, "run"))
             if run:
                 task.run_id = run.id
                 task.status = run.status
@@ -213,24 +209,6 @@ async def reconcile(db: AsyncSession) -> None:
         task.active = False
         task.status = run.status if run else "outcome_unknown"
         result = await db.get(Message, run.result_message_id) if run and run.result_message_id else None
-        if task.work_session_id == task.source_session_id:
-            task.result_message_id = result.id if result else None
-            task.announced = True
-            continue
-        if task.source_session_id and not task.announced:
-            content = result.content[:12_000] if result and result.content else "Kein Abschlusstext verfügbar."
-            status_label = {
-                "completed": "Abgeschlossen", "cancelled": "Gestoppt", "failed": "Fehlgeschlagen",
-                "outcome_unknown": "Ausgang unklar - Arbeitssession prüfen",
-            }.get(task.status, "Beendet")
-            receipt = Message(
-                id=uuid4(), session_id=task.source_session_id, role="assistant",
-                content=f"Sprachauftrag: {status_label}\n\n{content}",
-                trust_level=result.trust_level if result else "private",
-                provider_data={"_matoloop": {"voiceTask": task_payload(task, run), "origin": "host"}},
-            )
-            db.add(receipt)
-            await db.flush()
-            task.result_message_id = receipt.id
-            task.announced = True
+        task.result_message_id = result.id if result else None
+        task.announced = True
     await db.commit()

@@ -105,7 +105,7 @@ it('recognizes a saved Kimi connection without replacing its protocol, name, or 
 
 it.each([
   ['Azure', 'azure-openai-realtime', 'https://my-resource.openai.azure.com'],
-  ['OpenAI', 'openai-realtime', 'https://api.openai.com/v1']
+  ['OpenAI-kompatibel', 'openai-realtime', 'https://voice.example.com/custom/v1']
 ])('creates %s through the shared Realtime provider form', async (service, adapterType, endpoint) => {
   const { createProvider } = await mountDialog()
   await selectProvider('Realtime')
@@ -127,7 +127,7 @@ it.each([
 
 it.each([
   ['Azure', 'azure-openai-realtime', 'https://my-resource.openai.azure.com/openai/v1'],
-  ['OpenAI', 'openai-realtime', 'https://api.openai.com/v1']
+  ['OpenAI-kompatibel', 'openai-realtime', 'https://voice.example.com/custom/v1']
 ])('preserves a saved %s connection in the shared Realtime form', async (service, adapterType, endpoint) => {
   const { updateProvider } = await mountDialog(ProviderConfigDialog, { provider: {
     id: 'voice', name: 'Meine Sprachverbindung', adapterType, hasCredential: true,

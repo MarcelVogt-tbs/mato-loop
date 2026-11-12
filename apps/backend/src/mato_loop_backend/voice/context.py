@@ -6,6 +6,7 @@ import json
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.agent.prompts import agent_profile_runtime_instructions
 from mato_loop_backend.models import ChatSession, ContextSummary, Message, Project
 from mato_loop_backend.privacy import RequestPseudonymizer
 from mato_loop_backend.sessions.context_state import session_context_state
@@ -44,7 +45,7 @@ async def project_context(
 ) -> tuple[str, list[dict]]:
     profile = await load_agent_profile(db, session.user_id, session.agent_profile_id)
     identity = await load_effective_agent_identity(db, session.user_id, agent_profile=profile)
-    instructions = INSTRUCTIONS + "\n\nSelected agent restrictions:\n" + profile.instructions + "\n\n" + identity.persona.instructions
+    instructions = INSTRUCTIONS + "\n\n" + agent_profile_runtime_instructions(profile, model_id=model.model_id) + "\n\n" + identity.persona.instructions
     project = await db.get(Project, session.project_id) if session.project_id else None
     if project and project.user_id == session.user_id and project.instructions:
         instructions += "\n\nProject instructions:\n" + project.instructions

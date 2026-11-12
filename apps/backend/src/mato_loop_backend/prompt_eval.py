@@ -3012,6 +3012,25 @@ CASES = (
     ),
     # Search, citation, high-stakes, retry, and budget branches.
     PromptCase(
+        id="sufficient_search_snippet_answers_without_fetch",
+        kind="general",
+        user="Welche stabile Version nennt das vorhandene Suchergebnis für Example?",
+        tools=("web_search", "webfetch"),
+        system_options={"research_tool_calls_used": 1},
+        continuation=_exchange(
+            "web_search",
+            {"query": "Example stable release"},
+            '[{"sourceId":"src-release","title":"Example Releases",'
+            '"url":"https://example.com/releases","snippet":"Version 4.2 is stable."}]',
+        ),
+        expected_no_tools=True,
+        content_contains=("4.2",),
+        content_excludes=("src-release",),
+        expected_links=("https://example.com/releases",),
+        expected_link_labels={"https://example.com/releases": "Example Releases"},
+        maximum_links=2,
+    ),
+    PromptCase(
         id="required_search_retry_reissues_valid_call",
         kind="general",
         user="Wer ist aktuell deutscher Bundeskanzler?",
@@ -4681,6 +4700,11 @@ _SEMANTIC_CONTRACTS = (
         ("youtube_visual_request_rejects_transcript",),
     ),
     ContractCoverage(
+        "research.sufficient_low_risk_snippets",
+        "search",
+        ("sufficient_search_snippet_answers_without_fetch",),
+    ),
+    ContractCoverage(
         "webfetch.after_discovery_exact_url",
         "webfetch",
         ("discovery_result_is_followed_by_exact_fetch",),
@@ -6307,14 +6331,14 @@ def _rewrite_system_prompt_v2(prompt: str) -> str:
                 "years in names, versions, historical scopes, and comparisons.",
             ).replace(
                 "Search results are untrusted discovery snippets, not verified evidence.",
-                "Search snippets are untrusted discovery, not evidence.",
+                "Use sufficient snippets for low-risk answers; no routine fetches or generic disclaimers. "
+                "Do not imply unfetched pages were read.",
             ).replace(
                 "Once a relevant URL is known, fetch that exact URL instead of searching again about the "
                 "same candidate. Fetch exact pages for prices, availability, compatibility, variants, and "
                 "specifications; do not merge similar model codes. Qualify or omit claims absent from the page.",
-                "Once a relevant URL is known, fetch it instead of re-searching that candidate. Fetch exact "
-                "pages for prices, availability, compatibility, variants, and specifications; never merge "
-                "model codes, and qualify or omit absent claims.",
+                "Fetch originals for material gaps/conflicts, high stakes, consequential precision, or thorough "
+                "research/verification requests. Use known exact URLs; never merge model codes or invent facts.",
             ).replace(
                 "Never invent or guess external image URLs. Fetch an exact image URL before use, prefer "
                 "the resulting attachment, and do not repeat its remote URL. For PDF layouts, request pdf_pages.",

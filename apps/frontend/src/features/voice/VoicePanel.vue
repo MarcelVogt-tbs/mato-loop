@@ -21,10 +21,9 @@
     <q-item v-for="task in tasks" :key="task.taskId">
       <q-item-section>
         <q-item-label>Sprachauftrag · {{ taskStatus(task.status) }}</q-item-label>
-        <q-item-label v-if="task.requiresUi" caption>{{ task.sessionId === chat.current?.id ? 'Beantworte die Freigabe oder Rückfrage hier im Chat.' : 'Öffne die Arbeitssession für die Freigabe oder Rückfrage.' }}</q-item-label>
+        <q-item-label v-if="task.requiresUi" caption>Beantworte die Freigabe oder Rückfrage hier im Chat.</q-item-label>
       </q-item-section>
       <q-item-section side>
-        <q-btn v-if="task.sessionId && task.sessionId !== chat.current?.id" flat dense no-caps label="Öffnen" :to="{ name: 'chat', query: { session: task.sessionId } }" @click="voice.active && voice.end()" />
         <q-btn v-if="task.active && task.runId" flat dense no-caps color="negative" label="Stoppen" @click="stopTask(task)" />
       </q-item-section>
     </q-item>
@@ -100,7 +99,7 @@ watch(() => chat.current?.id, (id) => {
   void refreshTasks()
 }, { immediate: true })
 watch(() => chat.current?.messages?.length, () => { void refreshTasks() })
-watch(() => voice.active, (active) => { if (!active) void refreshTasks() })
+watch(() => voice.active, (active) => { if (!active && voice.sessionId) void refreshTasks() })
 onBeforeUnmount(() => {
   disposed = true
   clearTimeout(refreshTimer)

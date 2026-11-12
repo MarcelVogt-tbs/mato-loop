@@ -17,12 +17,13 @@ export const useVoiceStore = defineStore('voice', {
       this.phase = 'starting'
       this.muted = false
       this.wakeLockActive = null
+      this.tasks = []
       const client = createVoiceClient({
         negotiate: async (id, payload, signal) => {
           const { data } = await api.post(`/sessions/${id}/voice`, payload, { signal })
-          if (generation !== this.generation) {
+          if (generation !== this.generation && this.sessionId === id) {
             await api.delete(`/sessions/${id}/voice/${data.connectionId}`)
-          } else this.connectionId = data.connectionId
+          } else if (generation === this.generation) this.connectionId = data.connectionId
           return data
         },
         onPhase: (phase) => { if (generation === this.generation) this.phase = phase },
@@ -40,7 +41,7 @@ export const useVoiceStore = defineStore('voice', {
       })
       clients.set(this, client)
       try { await client.start(sessionId) } catch {
-        await this.end()
+        if (generation === this.generation) await this.end()
         // Axios already displayed the controlled API error.
       }
     },
@@ -49,27 +50,35 @@ export const useVoiceStore = defineStore('voice', {
       clients.get(this)?.mute(this.muted)
     },
     interrupt() { clients.get(this)?.interrupt() },
-    async end() {
-      if (this.phase === 'closing' || (!this.active && !this.connectionId)) return
-      const sessionId = this.sessionId, connectionId = this.connectionId
+    disposeLocal() {
       this.generation += 1
       clients.get(this)?.close()
       clients.delete(this)
-      this.phase = 'closing'
+      this.phase = 'ended'
+      this.sessionId = null
       this.connectionId = null
       this.muted = false
       this.wakeLockActive = null
+      this.tasks = []
+    },
+    async end() {
+      if (this.phase === 'closing' || (!this.active && !this.connectionId)) return
+      const sessionId = this.sessionId, connectionId = this.connectionId
+      this.disposeLocal()
+      const generation = this.generation
+      this.sessionId = sessionId
+      this.phase = 'closing'
       try {
         if (sessionId && connectionId) await api.delete(`/sessions/${sessionId}/voice/${connectionId}`)
       } catch (error) {
         if (!error?.isAxiosError) notifyError(error)
       } finally {
-        if (sessionId && useChatStore().current?.id === sessionId) {
+        if (generation === this.generation && sessionId && useChatStore().current?.id === sessionId) {
           try { await useChatStore().refreshSession(sessionId) } catch (error) {
             if (!error?.isAxiosError) notifyError(error)
           }
         }
-        this.phase = 'ended'
+        if (generation === this.generation) this.phase = 'ended'
       }
     }
   }

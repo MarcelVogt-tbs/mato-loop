@@ -31,6 +31,7 @@ from mato_loop_backend.security import store_credential
 from mato_loop_backend.sessions.service import SessionServiceError
 from mato_loop_backend.settings import SettingsStore
 from mato_loop_backend.settings.models import (
+    AgentProfile,
     AiProviderSettings,
     LlmProviderConfig,
     ModelCapability,
@@ -224,6 +225,33 @@ async def test_rejected_voice_admission_only_releases_unstarted_tasks(voice_db, 
     assert output.get("error", {}).get("code") == ("voice.taskBusy" if admitted else None)
 
 
+async def test_voice_correction_rechecks_ui_wait_after_revalidation(voice_db):
+    tree = voice_db
+    live, _ = await begin(tree)
+    await tree.coordinator._task(live, {
+        "name": "agent_task", "call_id": "start",
+        "arguments": json.dumps({"action": "delegate", "instruction": "Inspect the repository."}),
+    })
+    async with tree.factory() as db:
+        task = await db.scalar(select(VoiceDelegation))
+        run = await db.get(AgentRun, task.run_id)
+        run.status = "running"
+        await db.commit()
+
+        async def revalidate(_db):
+            async with tree.factory() as other:
+                current = await other.get(AgentRun, run.id)
+                current.status = "waiting_input"
+                await other.commit()
+
+        result = await delegation.perform(
+            db, await db.get(VoiceConnection, live.id), "correction",
+            delegation.TaskArguments(action="correct", task_id=str(task.id), instruction="Yes, do that."),
+            revalidate=revalidate,
+        )
+        assert result.get("requiresUi") is True
+
+
 async def test_unknown_voice_dispatch_never_adopts_an_older_chat_run(voice_db):
     tree = voice_db
     async with tree.factory() as db:
@@ -361,7 +389,7 @@ async def test_public_voice_context_excludes_private_history(monkeypatch):
         Message(role="user", content="Private detail", trust_level="private"),
         Message(role="user", content="Public detail", trust_level="public"),
     ])
-    monkeypatch.setattr(context, "load_agent_profile", AsyncMock(return_value=SimpleNamespace(instructions="Keep restrictions.")))
+    monkeypatch.setattr(context, "load_agent_profile", AsyncMock(return_value=AgentProfile(name="Voice", instructions="Keep restrictions.")))
     monkeypatch.setattr(context, "load_effective_agent_identity", AsyncMock(return_value=SimpleNamespace(persona=SimpleNamespace(instructions=""))))
     _, history = await context.project_context(
         db, ChatSession(id=uuid4(), user_id=uuid4()), ModelConfig(provider_id=uuid4(), model_id="voice"),

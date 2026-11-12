@@ -1341,6 +1341,7 @@ async def continue_run(
     attachments: list[AttachmentInput] | None,
     owned_session_query,
     message_serializer: MessageSerializer,
+    allow_pending_interactions: bool = True,
 ) -> dict[str, Any]:
     session = await owned_session_query(db, session_id, user.id, for_update=True)
     if session is None:
@@ -1367,9 +1368,11 @@ async def continue_run(
         AgentRun.id == run_id,
         AgentRun.session_id == session_id,
         AgentRun.parent_run_id.is_(None),
-    ).with_for_update())
+    ).with_for_update().execution_options(populate_existing=True))
     if run is None or run.status not in ACTIVE_RUN_STATUSES:
         raise SessionServiceError(409, "session.runInactive")
+    if not allow_pending_interactions and run.status in {"waiting_input", "waiting_approval"}:
+        return {"requiresUi": True}
     reservation = AgentRuntime.reserve_continuation(run_id, queued=run.status == "queued")
     if reservation is None:
         raise SessionServiceError(409, "session.runInactive")

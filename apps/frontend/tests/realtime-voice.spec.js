@@ -91,7 +91,18 @@ describe('Realtime microphone and media lifecycle', () => {
     } finally { await voice.end(); app.unmount() }
   })
 
-  it('keeps task approvals here and stops the run without navigating to another chat', async () => {
+  it('clears previous chat tasks before starting a new voice session', async () => {
+    setActivePinia(createPinia())
+    const voice = useVoiceStore()
+    voice.$patch({ sessionId: 'chat-a', tasks: [{ taskId: 'task-a', sessionId: 'chat-a', runId: 'run-a', active: true }] })
+    api.post.mockResolvedValue({ data: { connectionId: 'connection', sdpAnswer: 'v=0\r\nanswer' } })
+    try {
+      await voice.start('chat-b')
+      expect(voice.tasks).toEqual([])
+    } finally { await voice.end() }
+  })
+
+  it('keeps task approvals here and reloads target chat tasks after ending voice on navigation', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     useChatStore().current = { id: 'chat', messages: [] }
@@ -111,7 +122,7 @@ describe('Realtime microphone and media lifecycle', () => {
     app.component('QDialog', { render: () => null })
     app.component('QBtn', { props: ['label'], render() { return h('button', this.label) } })
     try {
-      app.mount(root)
+      const panel = app.mount(root)
       expect(root.textContent).toContain('Beantworte die Freigabe oder Rückfrage hier im Chat.')
       expect(root.textContent).toContain('Bildschirm kann sich sperren.')
       const buttons = [...root.querySelectorAll('button')]
@@ -119,6 +130,15 @@ describe('Realtime microphone and media lifecycle', () => {
       buttons.find((button) => button.textContent === 'Stoppen').click()
       await nextTick()
       expect(api.post).toHaveBeenCalledWith('/sessions/chat/runs/run/cancel')
+      let finishEnd
+      api.delete.mockReturnValue(new Promise((resolve) => { finishEnd = resolve }))
+      api.get.mockResolvedValue({ data: { tasks: [
+        { taskId: 'next-task', sessionId: 'next-chat', runId: 'next-run', status: 'running', active: true }
+      ] } })
+      useChatStore().current = { id: 'next-chat', messages: [] }
+      await nextTick()
+      finishEnd({})
+      await vi.waitFor(() => expect(panel.canStartWhileRunning).toBe(true))
     } finally { app.unmount() }
   })
 
