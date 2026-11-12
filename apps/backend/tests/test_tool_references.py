@@ -71,6 +71,22 @@ def test_model_tool_references_replace_registered_tokens_only() -> None:
         ("mail_create_draft", "mail_update_draft", None, "messageToken", "message_token", "mail"),
         ("mail_update_draft", "mail_send_draft", None, "messageToken", "message_token", "mail"),
         ("mail_create_draft", "mail_delete_draft", None, "messageToken", "message_token", "mail"),
+        ("m365_search", "m365_get_message", "messages", "messageToken", "message_token", "mail"),
+        ("m365_get_message", "m365_reply", "messages", "messageToken", "message_token", "mail"),
+        ("m365_get_message", "m365_delete", "message", "messageToken", "message_token", "mail"),
+        ("m365_get_message", "m365_download", "attachments", "attachmentToken", "attachment_token", "attachment"),
+        ("m365_draft", "m365_send", "draft", "messageToken", "message_token", "mail"),
+        ("m365_reply", "m365_draft", "draft", "messageToken", "message_token", "mail"),
+        ("m365_calendar", "m365_get_event", "events", "eventToken", "event_token", "event"),
+        ("m365_get_event", "m365_update_event", "event", "eventToken", "event_token", "event"),
+        ("m365_update_event", "m365_delete_event", "event", "eventToken", "event_token", "event"),
+        ("m365_create_event", "m365_get_event", "event", "eventToken", "event_token", "event"),
+        ("m365_todo", "m365_todo", "resources", "resourceToken", "resource_token", "task"),
+        ("m365_todo", "m365_todo_create", "resources", "resourceToken", "parent_token", "task"),
+        ("m365_todo", "m365_todo_update", "resource", "resourceToken", "resource_token", "task"),
+        ("m365_todo_create", "m365_todo_attach", "resource", "resourceToken", "resource_token", "task"),
+        ("m365_todo_update", "m365_todo_delete", "resource", "resourceToken", "resource_token", "task"),
+        ("m365_todo_attach", "m365_todo_download", "attachment", "resourceToken", "resource_token", "task"),
     ],
 )
 async def test_resolve_tool_references_restores_canonical_token(
@@ -82,7 +98,7 @@ async def test_resolve_tool_references_restores_canonical_token(
     kind: str,
 ) -> None:
     item = {token_key: "encrypted-token"}
-    payload = [item] if source_tool in {"tasks_create_many", "mail_search"} else item
+    payload = [item] if container in {"created", "messages", "events", "resources", "attachments"} else item
     source = _message(source_tool, {container: payload} if container else item)
     db = AsyncMock(spec=AsyncSession)
     db.scalar.return_value = source

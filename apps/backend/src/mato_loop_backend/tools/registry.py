@@ -480,11 +480,10 @@ class ToolRegistry:
 
         templates = {
             "integrations": (
-                "Integration tools [{names}]: configure under Integrationen or the agent profile."
+                "Enable [{names}]: Integrationen/profile."
             ),
             "media": (
-                'Media tools [{names}]: enable them under "Einstellungen > Tools" and configure '
-                'a capable model under "Einstellungen > Standardmodelle".'
+                "Enable [{names}]: Tools; capable model: Standardmodelle."
             ),
             "web": (
                 'Web tools [{names}]: enable web access for the session or under '
@@ -494,14 +493,14 @@ class ToolRegistry:
                 'Memory tools [{names}]: enable Memory for the session and its model.'
             ),
             "settings": (
-                "Optional tools [{names}]: configure under Tools or integration settings."
+                "Optional tools [{names}]: Tools/integrations."
             ),
             "temporary": (
-                "Temporarily unavailable tools [{names}]: finish the current required workflow first."
+                "Unavailable [{names}]: finish required workflow."
             ),
         }
         return tuple(
-            templates[reason].format(names=", ".join(names))
+            templates[reason].format(names=",".join(names))
             for reason, names in grouped.items()
             if names
         )

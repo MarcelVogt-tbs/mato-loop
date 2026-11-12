@@ -26,6 +26,7 @@ from mato_loop_backend.files.service import RootFileError
 from mato_loop_backend.integrations.arcane.client import ArcaneError
 from mato_loop_backend.integrations.contracts import IntegrationResource, remote_error_params
 from mato_loop_backend.integrations.mail.client import MailError
+from mato_loop_backend.integrations.microsoft365.client import Microsoft365Error
 from mato_loop_backend.integrations.registry import integration_adapter
 from mato_loop_backend.integrations.search import SearchIntegrationError
 from mato_loop_backend.integrations.tbs_desk.client import TbsDeskError
@@ -424,6 +425,7 @@ async def execute_definition(
         AttachmentError,
         ExecutionClientError,
         MailError,
+        Microsoft365Error,
         RootFileError,
         SearchIntegrationError,
         TbsDeskError,

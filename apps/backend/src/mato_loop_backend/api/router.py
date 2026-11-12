@@ -23,6 +23,10 @@ from mato_loop_backend.api.routes.mcp import callback_router as mcp_callback_rou
 from mato_loop_backend.api.routes.mcp import router as mcp_router
 from mato_loop_backend.api.routes.media import router as media_router
 from mato_loop_backend.api.routes.memories import router as memories_router
+from mato_loop_backend.api.routes.microsoft365 import (
+    callback_router as microsoft365_callback_router,
+)
+from mato_loop_backend.api.routes.microsoft365 import router as microsoft365_router
 from mato_loop_backend.api.routes.model_defaults import router as model_defaults_router
 from mato_loop_backend.api.routes.notifications import router as notifications_router
 from mato_loop_backend.api.routes.personal_variables import router as personal_variables_router
@@ -68,6 +72,8 @@ api_router.include_router(browsers_router, tags=["browsers"])
 api_router.include_router(mail_router, tags=["mail"])
 api_router.include_router(mcp_router, tags=["mcp"])
 api_router.include_router(mcp_callback_router, tags=["mcp"])
+api_router.include_router(microsoft365_router, tags=["microsoft365"])
+api_router.include_router(microsoft365_callback_router, tags=["microsoft365"])
 api_router.include_router(memories_router, tags=["memories"])
 api_router.include_router(notifications_router, tags=["notifications"])
 api_router.include_router(personal_variables_router, tags=["personal-variables"])

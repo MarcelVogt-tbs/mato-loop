@@ -7,7 +7,7 @@
           <div class="text-h6 text-weight-bold">{{ integration?.name || 'Integration hinzufügen' }}</div>
           <div class="text-body2 app-muted">{{ providerDefaults[form.integration_type]?.label }} · {{ scope === 'instance' ? 'Globale Verbindung' : 'Persönliche Verbindung' }}</div>
         </div>
-        <q-btn unelevated no-caps color="primary" icon="save" label="Speichern" :loading="saving || accessRef?.saving" :disable="blocked || loading || loadFailed || testing || (section === 'permissions' ? !accessRef?.canSave : !dirty)" @click="section === 'permissions' ? accessRef?.save() : save()" />
+        <q-btn unelevated no-caps color="primary" icon="save" label="Speichern" :loading="saving || accessRef?.saving" :disable="blocked || loading || loadFailed || testing || microsoftLoginBusy || (section === 'permissions' ? !accessRef?.canSave : !dirty)" @click="section === 'permissions' ? accessRef?.save() : save()" />
       </q-toolbar>
 
       <q-tabs v-model="section" dense no-caps align="left" active-color="primary" indicator-color="primary" class="q-mb-md">
@@ -20,7 +20,7 @@
         <template #action><q-btn flat no-caps label="Erneut laden" @click="load" /></template>
       </q-banner>
       <q-banner v-else-if="blocked && !loading" rounded class="app-surface-tonal q-mb-md">Diese Integration kann hier nicht bearbeitet werden.</q-banner>
-      <q-form v-if="!loading && !loadFailed && !blocked" v-show="section === 'settings'" ref="formRef" :inert="saving || testing" @submit.prevent="save">
+      <q-form v-if="!loading && !loadFailed && !blocked" v-show="section === 'settings'" ref="formRef" :inert="saving || testing || microsoftLoginBusy" @submit.prevent="save">
         <q-card flat class="app-surface">
         <q-card-section class="q-gutter-md">
             <q-banner v-if="['search', 'webfetch'].includes(form.integration_type)" rounded class="app-surface-tonal">
@@ -36,7 +36,7 @@
               :rules="[requiredRule]"
             />
             <q-input dense
-              v-if="!['openscad', 'mail', 'browser'].includes(form.integration_type)"
+              v-if="!['openscad', 'mail', 'browser', 'microsoft365'].includes(form.integration_type)"
               v-model="form.base_url"
               outlined
               :label="baseUrlLabel"
@@ -44,6 +44,42 @@
               lazy-rules
               :rules="[requiredRule, urlRule]"
             />
+            <template v-if="form.integration_type === 'microsoft365'">
+              <div class="row items-center no-wrap">
+                <div class="text-subtitle2 col">Microsoft 365</div>
+                <q-btn flat round dense icon="info_outline" aria-label="Hinweise zur Microsoft-365-Einrichtung" @click="microsoftInfoOpen = true" />
+              </div>
+              <div class="row q-col-gutter-md">
+                <q-input dense v-model.trim="form.microsoftTenantId" outlined hide-bottom-space label="Mandanten-ID (Tenant-ID)" class="col-12 col-sm-6" lazy-rules :rules="[requiredRule]" />
+                <q-input dense v-model.trim="form.microsoftClientId" outlined hide-bottom-space label="Anwendungs-ID (Client-ID)" class="col-12 col-sm-6" lazy-rules :rules="[requiredRule]" />
+                <AppSelect dense v-model="form.microsoftAuthFlow" outlined emit-value map-options label="Anmeldeverfahren" :class="form.microsoftAuthFlow === 'browser' ? 'col-12 col-sm-6' : 'col-12'" :options="microsoftAuthFlows" />
+                <q-input v-if="form.microsoftAuthFlow === 'browser'" dense v-model="form.microsoftClientSecret" outlined hide-bottom-space type="password" autocomplete="new-password" class="col-12 col-sm-6" :label="integration?.hasClientSecret ? 'Neues Client-Secret (optional)' : 'Client-Secret'" lazy-rules :rules="integration?.hasClientSecret && integration.config?.auth_flow === 'browser' && form.microsoftTenantId === integration.config?.tenant_id && form.microsoftClientId === integration.config?.client_id ? [] : [requiredRule]" />
+              </div>
+              <div class="row q-col-gutter-sm">
+                <div class="col-12 col-sm-6"><q-toggle dense v-model="form.microsoftAllowDrafts" label="E-Mail-Entwürfe in Outlook erstellen" /></div>
+                <div class="col-12 col-sm-6"><q-toggle dense v-model="form.microsoftAllowSend" label="E-Mails senden" /></div>
+                <div class="col-12 col-sm-6">
+                  <q-toggle dense v-model="form.microsoftAllowDelete" label="E-Mails und Entwürfe löschen" />
+                  <div v-if="form.microsoftAllowDelete" class="text-caption app-muted q-mt-xs">Löschen im Papierkorb kann endgültig sein.</div>
+                </div>
+                <div class="col-12 col-sm-6"><q-toggle dense v-model="form.microsoftReadCalendar" label="Kalender lesen" /></div>
+                <div class="col-12 col-sm-6"><q-toggle dense v-model="form.microsoftWriteCalendar" label="Termine erstellen und ändern" /></div>
+                <div class="col-12 col-sm-6"><q-toggle dense v-model="form.microsoftDeleteCalendar" label="Termine löschen" /></div>
+                <div class="col-12 col-sm-6"><q-toggle dense v-model="form.microsoftReadTasks" label="Microsoft To Do lesen" /></div>
+                <div class="col-12 col-sm-6"><q-toggle dense v-model="form.microsoftWriteTasks" label="Aufgaben, Listen und Anhänge erstellen und ändern" /></div>
+                <div class="col-12 col-sm-6"><q-toggle dense v-model="form.microsoftDeleteTasks" label="Aufgaben, Listen und Anhänge löschen" /></div>
+              </div>
+              <div v-if="form.microsoftWriteCalendar || form.microsoftDeleteCalendar" class="text-caption app-muted">
+                Termine mit Teilnehmern können Einladungen, Aktualisierungen oder Absagen versenden.
+              </div>
+              <div v-if="form.microsoftDeleteTasks" class="text-caption app-muted">
+                Beim Löschen einer Aufgabenliste werden auch ihre Aufgaben und Anhänge gelöscht.
+              </div>
+              <div class="text-caption app-muted">
+                Geänderte Zugangsdaten oder Zugriffsoptionen erfordern eine neue Anmeldung und setzen Zugriffsfreigaben zurück.
+              </div>
+              <MailSignatureEditor v-model="form.microsoftSignatureHtml" />
+            </template>
             <template v-if="form.integration_type === 'mail'">
               <div class="text-subtitle2 text-weight-medium">Posteingang (IMAP)</div>
               <div class="row q-col-gutter-sm">
@@ -263,14 +299,43 @@
         </q-card-section>
         <q-separator />
         <q-card-section>
-          <q-btn outline no-caps icon="network_check" label="Verbindung testen" :loading="testing" :disable="!integration || saving || dirty" @click="testConnection" />
+          <q-btn outline no-caps icon="network_check" label="Verbindung testen" :loading="testing" :disable="!integration || saving || dirty || microsoftLoginBusy" @click="testConnection" />
           <div v-if="!integration || dirty" class="text-caption app-muted q-mt-sm">Speichere die Konfiguration vor dem Verbindungstest.</div>
           <div v-if="testResult" class="text-body2 q-mt-sm" role="status">{{ testResult }}</div>
         </q-card-section>
         </q-card>
       </q-form>
+      <Microsoft365Login v-if="integration?.integrationType === 'microsoft365' && !loading && !loadFailed && !blocked" v-show="section === 'settings'" :key="integration.id" :integration="integration" :disabled="dirty || saving || testing" @busy="microsoftLoginBusy = $event" @changed="load" />
       <IntegrationAccessPage v-if="integration && accessOpened && !loading && !loadFailed && !blocked" v-show="section === 'permissions'" ref="accessRef" :key="integration.id" embedded />
       <q-inner-loading :showing="loading" />
+      <q-dialog v-model="microsoftInfoOpen" :transition-duration="0" :maximized="$q.screen.lt.sm" aria-labelledby="microsoft-info-title">
+        <q-card class="app-surface column no-wrap full-width" style="max-width: 40rem">
+          <q-card-section class="row items-center no-wrap">
+            <h2 id="microsoft-info-title" class="text-h6 col q-my-none">Microsoft 365 einrichten</h2>
+            <q-btn v-close-popup flat round dense icon="close" aria-label="Dialog schließen" />
+          </q-card-section>
+          <q-separator />
+          <q-card-section class="col scroll">
+            <h3 class="text-subtitle2 q-mt-none q-mb-sm">Entra-App</h3>
+            <p>Registriere in Microsoft Entra eine App mit der delegierten Berechtigung <code>Mail.Read</code>. Der Zugriff gilt für dein eigenes Firmen-/Schulkonto; freigegebene Postfächer werden nicht unterstützt.</p>
+            <h3 class="text-subtitle2 q-mb-sm">Anmeldung</h3>
+            <p v-if="form.microsoftAuthFlow === 'device_code'">Aktiviere in der Entra-App „Öffentliche Clientflows zulassen“. Kein Client-Secret und keine Rückruf-URL nötig. Firmenrichtlinien können dieses Verfahren sperren.</p>
+            <template v-else>
+              <p>Registriere eine Web-Rückruf-URL für die öffentliche MatoLoop-Adresse und hinterlege ein Client-Secret:</p>
+              <p><code style="overflow-wrap: anywhere">{{ microsoftCallbackUrl }}</code></p>
+              <p>Maßgeblich ist die konfigurierte öffentliche Basis-URL. Die Anmeldung zeigt Microsoft die tatsächlich verwendete URL.</p>
+            </template>
+            <p>Speichere zuerst die Einstellungen und melde dich danach bei Microsoft an.</p>
+            <h3 class="text-subtitle2 q-mb-sm">Optionale Zugriffe</h3>
+            <ul class="q-pl-md q-my-sm">
+              <li>Entwürfe, Versand und Löschen: <code>Mail.ReadWrite</code> statt <code>Mail.Read</code>; auch größere Versandanhänge werden über einen Entwurf hochgeladen. MatoLoop schaltet die Aktionen separat frei.</li>
+              <li>Versand: zusätzlich <code>Mail.Send</code>. Der Agent benötigt eine passende Versandfreigabe.</li>
+              <li>Kalender lesen: <code>Calendars.Read</code>. Termine erstellen, ändern oder löschen: stattdessen <code>Calendars.ReadWrite</code>.</li>
+              <li>Microsoft To Do lesen: <code>Tasks.Read</code>. Aufgaben, Listen, Checklisten, Links und Anhänge ändern oder löschen: stattdessen <code>Tasks.ReadWrite</code>.</li>
+            </ul>
+          </q-card-section>
+        </q-card>
+      </q-dialog>
   <BrowserSetupDialog v-if="setupOpen && integration?.id" v-model="setupOpen" :integration-id="integration.id" />
   </section>
 </template>
@@ -286,6 +351,8 @@ import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useIntegrationStore } from 'stores/integrations'
 import BrowserSetupDialog from 'src/features/browser/BrowserSetupDialog.vue'
 import IntegrationAccessPage from './IntegrationAccessPage.vue'
+import Microsoft365Login from './Microsoft365Login.vue'
+import MailSignatureEditor from 'src/features/mail/MailSignatureEditor.vue'
 import { agentDisplayName } from 'src/features/computers/display'
 import { providerDefaults, integrationTypes as allIntegrationTypes } from './configuration'
 
@@ -319,6 +386,13 @@ const executionAgents = useExecutionAgentStore()
 const formRef = ref(null)
 const saving = ref(false)
 const setupOpen = ref(false)
+const microsoftInfoOpen = ref(false)
+const microsoftLoginBusy = ref(false)
+const microsoftAuthFlows = [
+  { label: 'Gerätecode (ohne Client-Secret)', value: 'device_code' },
+  { label: 'Browser-Anmeldung (mit Client-Secret)', value: 'browser' }
+]
+const microsoftCallbackUrl = `${window.location.origin}/api/integrations/microsoft365/oauth/callback`
 const baseUrlLabel = computed(
   () => `${providerDefaults[form.integration_type]?.label}-Basis-URL`
 )
@@ -326,7 +400,7 @@ const baseUrlPlaceholder = computed(
   () => providerDefaults[form.integration_type]?.placeholder
 )
 const requiresHttps = computed(() => !['search', 'recipes', 'coding', 'support', 'infrastructure', 'webfetch'].includes(form.integration_type))
-const dialogIcon = computed(() => ({ coding: 'code', mail: 'mail', support: 'confirmation_number', music: 'library_music', infrastructure: 'dns', openscad: 'view_in_ar', browser: 'web' })[form.integration_type] || 'extension')
+const dialogIcon = computed(() => ({ coding: 'code', mail: 'mail', microsoft365: 'mail', support: 'confirmation_number', music: 'library_music', infrastructure: 'dns', openscad: 'view_in_ar', browser: 'web' })[form.integration_type] || 'extension')
 const securityOptions = [
   { label: 'TLS', value: 'tls' },
   { label: 'STARTTLS', value: 'starttls' }
@@ -366,6 +440,20 @@ function defaultForm() {
     smtp_security: 'tls',
     from_address: '',
     signature: '',
+    microsoftTenantId: '',
+    microsoftClientId: '',
+    microsoftAuthFlow: 'device_code',
+    microsoftClientSecret: '',
+    microsoftAllowDrafts: false,
+    microsoftAllowSend: false,
+    microsoftAllowDelete: false,
+    microsoftSignatureHtml: '',
+    microsoftReadCalendar: false,
+    microsoftWriteCalendar: false,
+    microsoftDeleteCalendar: false,
+    microsoftReadTasks: false,
+    microsoftWriteTasks: false,
+    microsoftDeleteTasks: false,
     token_id: '',
     token_secret: '',
     token: '',
@@ -461,7 +549,7 @@ function urlRule(value) {
 }
 
 async function save() {
-  if (blocked.value || loading.value || saving.value || testing.value || loadFailed.value) return
+  if (blocked.value || loading.value || saving.value || testing.value || microsoftLoginBusy.value || loadFailed.value) return
   if (!await formRef.value?.validate()) return
   integrations.selectScope(scope.value)
   const previousIds = new Set(integrations.configuredIntegrations.map((item) => item.id))
@@ -480,6 +568,21 @@ async function save() {
       }
       if (integration.value) await integrations.updateOpenScad(integration.value.id, payload)
       else await integrations.createOpenScad(payload)
+    } else if (form.integration_type === 'microsoft365') {
+      const payload = {
+        name: form.name.trim(), enabled: form.enabled,
+        config: {
+          tenant_id: form.microsoftTenantId, client_id: form.microsoftClientId, auth_flow: form.microsoftAuthFlow,
+          allow_drafts: form.microsoftAllowDrafts, allow_send: form.microsoftAllowSend,
+          allow_delete: form.microsoftAllowDelete, signature_html: form.microsoftSignatureHtml,
+          read_calendar: form.microsoftReadCalendar,
+          write_calendar: form.microsoftWriteCalendar, delete_calendar: form.microsoftDeleteCalendar,
+          read_tasks: form.microsoftReadTasks, write_tasks: form.microsoftWriteTasks, delete_tasks: form.microsoftDeleteTasks
+        }
+      }
+      if (form.microsoftAuthFlow === 'browser' && form.microsoftClientSecret) payload.client_secret = form.microsoftClientSecret
+      if (integration.value) await integrations.updateMicrosoft365(integration.value.id, payload)
+      else await integrations.createMicrosoft365(payload)
     } else if (form.integration_type === 'mail') {
       const payload = {
         integration_type: 'mail',
@@ -610,6 +713,19 @@ function assignForm(value = null) {
     smtp_security: value.config?.smtpSecurity || 'tls',
     from_address: value.config?.fromAddress || '',
     signature: value.config?.signature || '',
+    microsoftTenantId: value.config?.tenant_id || '',
+    microsoftClientId: value.config?.client_id || '',
+    microsoftAuthFlow: value.config?.auth_flow || 'device_code',
+    microsoftAllowDrafts: value.config?.allow_drafts || false,
+    microsoftAllowSend: value.config?.allow_send || false,
+    microsoftAllowDelete: value.config?.allow_delete || false,
+    microsoftSignatureHtml: value.config?.signature_html || '',
+    microsoftReadCalendar: value.config?.read_calendar || false,
+    microsoftWriteCalendar: value.config?.write_calendar || false,
+    microsoftDeleteCalendar: value.config?.delete_calendar || false,
+    microsoftReadTasks: value.config?.read_tasks || false,
+    microsoftWriteTasks: value.config?.write_tasks || false,
+    microsoftDeleteTasks: value.config?.delete_tasks || false,
     password: '',
     removePassword: false,
     token_id: '',
@@ -662,7 +778,7 @@ async function load() {
 }
 
 async function testConnection() {
-  if (!integration.value || dirty.value || blocked.value || saving.value || testing.value) return
+  if (!integration.value || dirty.value || blocked.value || saving.value || testing.value || microsoftLoginBusy.value) return
   integrations.selectScope(scope.value)
   testing.value = true
   testResult.value = ''
@@ -674,6 +790,7 @@ async function testConnection() {
 
 async function confirmDiscardedChanges() {
   if (saving.value || testing.value || accessRef.value?.saving) return false
+  if (microsoftLoginBusy.value && !await confirm('Die laufende Microsoft-Anmeldung wird hier nicht weiter abgefragt. Fortfahren?', 'Anmeldung verlassen?', { okLabel: 'Verlassen' })) return false
   if (!dirty.value && !accessRef.value?.dirty) return true
   return confirm('Sollen die ungespeicherten Änderungen verworfen werden?', 'Änderungen verwerfen?', { okLabel: 'Verwerfen' })
 }

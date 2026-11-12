@@ -510,6 +510,7 @@ describe('integration store', () => {
       '/integrations/search': searchResponse,
       '/integrations/calendar': calendarResponse,
       '/integrations/mail': { configured: false, accounts: [] },
+      '/integrations/microsoft365': { configured: false, accounts: [] },
       '/integrations/knowledge': knowledgeResponse,
       '/integrations/recipes': recipesResponse,
       '/integrations/infrastructure/arcane': { configured: false, instances: [] },

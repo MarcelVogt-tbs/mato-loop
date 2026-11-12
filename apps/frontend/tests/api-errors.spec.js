@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { apiErrorMessage, decodeBlobApiError, errorDescriptor } from '../src/utils/api-errors'
 
 describe('API error messages', () => {
+  it('explains a disabled Microsoft 365 connection feature', () => {
+    expect(apiErrorMessage({ error: { code: 'microsoft365.featureDisabled', message: 'private detail' } })).toBe(
+      'Aktiviere die benötigte Option in deiner Microsoft-365-Verbindung, speichere und melde dich erneut bei Microsoft an.'
+    )
+  })
   it('locates missing worktree removal rights without suggesting a blind retry', () => {
     expect(apiErrorMessage({ error: { code: 'git.worktreePermissionDenied', params: { path: '/worktree/cache' } } })).toBe(
       'Worktree nicht entfernt: Fehlende Löschrechte bei „/worktree/cache“. Prüfe Zugriffsrechte und Eigentümer.'

@@ -14,6 +14,7 @@ vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm }) }))
 
 import Dialog from '../src/features/integrations/IntegrationCreateDialog.vue'
 import Editor from '../src/features/integrations/IntegrationEditorPage.vue'
+import SignatureEditor from '../src/features/mail/MailSignatureEditor.vue'
 import { useAuthStore } from '../src/stores/auth'
 import { useIntegrationStore } from '../src/stores/integrations'
 import { api } from 'src/boot/axios'
@@ -23,6 +24,7 @@ const account = { id: 'calendar-1', integrationType: 'calendar', providerType: '
 const adapters = [{ integrationType: 'calendar', adapterType: 'caldav', executionLocation: 'backend', availability: 'full' }]
 beforeEach(() => {
   vi.resetAllMocks()
+  document.execCommand = vi.fn()
   confirm.mockResolvedValue(true)
   accounts = [{ ...account }]
   api.get.mockImplementation(async (url) => ({ data: url === '/integrations/catalog' ? { adapters } : url.endsWith('/permissions') ? {
@@ -38,6 +40,7 @@ afterEach(() => {
   app?.unmount()
   root?.remove()
   vi.restoreAllMocks()
+  delete document.execCommand
 })
 
 function mount(render, pinia, router) {
@@ -89,6 +92,87 @@ it('collects only basics without creating a connection', async () => {
   button('Weiter').click()
   await vi.waitFor(() => expect(proceed).toHaveBeenCalledWith({ type: 'calendar', name: 'CalDAV' }))
   expect(api.post).not.toHaveBeenCalled()
+})
+
+it('pastes Outlook tables and formatting without loading missing images or keeping active styles', async () => {
+  mount(() => h(SignatureEditor, { modelValue: '' }), createPinia())
+  expect(root.textContent).not.toContain('Füge deine Signatur aus Outlook oder Word direkt ein.')
+  root.querySelector('[aria-label="Hinweise zur E-Mail-Signatur"]').click()
+  await vi.waitUntil(() => document.getElementById('signature-info-title'))
+  const info = document.getElementById('signature-info-title').closest('.q-card')
+  expect(info.textContent).toContain('höchstens 8 Bilder')
+  info.querySelector('[aria-label="Dialog schließen"]').click()
+  await vi.waitUntil(() => !document.getElementById('signature-info-title'))
+  const paste = new Event('paste', { bubbles: true, cancelable: true })
+  const images = '<img src="data:image/png;base64, iVBORw0KGgo= ">'.repeat(7)
+  Object.defineProperty(paste, 'clipboardData', { value: { getData: () => `
+    <table class="MsoNormalTable" cellpadding="0" cellspacing="0" style="border-collapse:collapse;mso-padding-alt:0">
+      <tr><td valign="top">${images}<img src="file:///C:/signature/logo.png" alt="Logo"></td>
+      <td style="border-left:2px solid #800080;padding-left:6px;color:#800080;font-size:11pt;position:fixed;background-image:url(https://example.com/track.png)">
+        <font face="Arial" color="#800080"><b>Team</b></font>
+      </td></tr>
+    </table>` } })
+  root.querySelector('[contenteditable]').dispatchEvent(paste)
+  const insertions = document.execCommand.mock.calls.filter(([command]) => command === 'insertHTML')
+  expect(insertions).toHaveLength(1)
+  const inserted = insertions[0][2]
+  expect(inserted).toContain('<table cellpadding="0" cellspacing="0" style="border-collapse:collapse">')
+  expect(inserted).toContain('border-left:2px solid #800080;padding-left:6px;color:#800080;font-size:11pt')
+  expect(inserted).toContain('<font face="Arial" color="#800080"><b>Team</b></font>')
+  expect(inserted).not.toMatch(/file:|url\(|position:|mso-|class=/)
+  expect(inserted.match(/<img src="data:image\/png;base64,iVBORw0KGgo=">/g)).toHaveLength(7)
+  expect(app.config.globalProperties.$q.notify).toHaveBeenCalledWith(expect.objectContaining({ type: 'warning' }))
+})
+
+it.each(['device_code', 'browser'])('saves Microsoft 365 %s settings before offering login', async (flow) => {
+  const originalGet = api.get.getMockImplementation()
+  let connection = null
+  api.get.mockImplementation(async (url, ...args) => {
+    if (url === '/integrations/catalog') return { data: { adapters: [
+      ...adapters, { integrationType: 'microsoft365', adapterType: 'microsoft_graph', executionLocation: 'backend', availability: 'full', personalOnly: true }
+    ] } }
+    if (url === '/integrations/microsoft365') return { data: { accounts: connection ? [connection] : [] } }
+    return originalGet(url, ...args)
+  })
+  api.post.mockImplementation(async (_url, payload) => {
+    connection = { id: 'microsoft365', integrationType: 'microsoft365', providerType: 'microsoft_graph', ...payload, hasClientSecret: flow === 'browser' }
+    return { data: { status: 'ok' } }
+  })
+  const { router } = await mountEditor('personal', true, 'microsoft365')
+  await fill('Mandanten-ID (Tenant-ID)', '11111111-1111-4111-8111-111111111111')
+  await fill('Anwendungs-ID (Client-ID)', '22222222-2222-4222-8222-222222222222')
+  if (flow === 'browser') {
+    root.querySelector('[role="combobox"]').click()
+    let option
+    await vi.waitFor(() => {
+      option = [...document.querySelectorAll('[role="option"]')].find((item) => item.textContent.includes('Browser-Anmeldung'))
+      expect(option).toBeTruthy()
+    })
+    option.click()
+    await nextTick()
+    await fill('Client-Secret', 'test-client-secret')
+    for (const label of ['E-Mail-Entwürfe in Outlook erstellen', 'E-Mails senden', 'E-Mails und Entwürfe löschen', 'Kalender lesen', 'Termine erstellen und ändern', 'Termine löschen', 'Microsoft To Do lesen', 'Aufgaben, Listen und Anhänge erstellen und ändern', 'Aufgaben, Listen und Anhänge löschen']) {
+      [...root.querySelectorAll('.q-toggle')].find((item) => item.textContent.includes(label)).click()
+    }
+    await nextTick()
+  }
+  expect(root.textContent).not.toContain('Öffentliche Clientflows zulassen')
+  root.querySelector('[aria-label="Hinweise zur Microsoft-365-Einrichtung"]').click()
+  await vi.waitUntil(() => document.getElementById('microsoft-info-title'))
+  const info = document.getElementById('microsoft-info-title').closest('.q-card')
+  expect(info.textContent).toContain(flow === 'device_code' ? 'Öffentliche Clientflows zulassen' : '/api/integrations/microsoft365/oauth/callback')
+  expect(info.textContent).toContain('Mail.ReadWrite')
+  info.querySelector('[aria-label="Dialog schließen"]').click()
+  await vi.waitUntil(() => !document.getElementById('microsoft-info-title'))
+  expect(button('Bei Microsoft anmelden')).toBeUndefined()
+  button('Speichern').click()
+  await vi.waitFor(() => expect(router.currentRoute.value.params.integrationId).toBe('microsoft365'))
+  expect(api.post).toHaveBeenCalledWith('/integrations/microsoft365', {
+    name: 'Neu', enabled: true,
+    config: { tenant_id: '11111111-1111-4111-8111-111111111111', client_id: '22222222-2222-4222-8222-222222222222', auth_flow: flow, allow_drafts: flow === 'browser', allow_send: flow === 'browser', allow_delete: flow === 'browser', signature_html: '', read_calendar: flow === 'browser', write_calendar: flow === 'browser', delete_calendar: flow === 'browser', read_tasks: flow === 'browser', write_tasks: flow === 'browser', delete_tasks: flow === 'browser' },
+    ...(flow === 'browser' ? { client_secret: 'test-client-secret' } : {})
+  }, { params: { scope: 'personal' } })
+  await vi.waitFor(() => expect(button('Bei Microsoft anmelden')).toBeTruthy())
 })
 
 it.each(['instance', 'personal'])('edits and tests the saved %s connection without replacing its password', async (scope) => {

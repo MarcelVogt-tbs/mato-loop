@@ -1996,7 +1996,7 @@ def test_inactive_capability_catalog_includes_installed_tools_without_schemas() 
     assert "memory_browse" in catalog
     assert "webfetch" in catalog
     assert "calendar_create_event" not in catalog
-    assert "configure under Integrationen or the agent profile" in catalog
+    assert "Integrationen/profile" in catalog
     assert "question" not in catalog
     assert "parameters" not in catalog
 
@@ -2023,11 +2023,11 @@ def test_policy_disabled_integration_tool_points_to_integration_settings(monkeyp
         tool_settings=settings,
     )
     integration_group = next(
-        group for group in groups if group.startswith("Integration tools")
+        group for group in groups if group.startswith("Enable [")
     )
 
     assert "tasks_read" in integration_group
-    assert "configure under Integrationen or the agent profile" in integration_group
+    assert "Integrationen/profile" in integration_group
     assert all(
         "tasks_read" not in group
         for group in groups

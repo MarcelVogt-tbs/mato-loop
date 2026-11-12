@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.models import Message
 
 _REFERENCE = re.compile(
-    r"^(event|task|mail):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(\d{1,3})$"
+    r"^(event|task|mail|attachment):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(\d{1,3})$"
 )
 _SOURCES = {
     "calendar_query_events": ("event", "events", "eventToken", True),
@@ -26,6 +26,27 @@ _SOURCES = {
     "mail_get_message": ("mail", "message", "messageToken", False),
     "mail_create_draft": ("mail", None, "messageToken", False),
     "mail_update_draft": ("mail", None, "messageToken", False),
+    "m365_search": ("mail", "messages", "messageToken", True),
+    "m365_reply": ("mail", "draft", "messageToken", False),
+    "m365_draft": ("mail", "draft", "messageToken", False),
+    "m365_calendar": ("event", "events", "eventToken", True),
+    "m365_get_event": ("event", "event", "eventToken", False),
+    "m365_create_event": ("event", "event", "eventToken", False),
+    "m365_update_event": ("event", "event", "eventToken", False),
+    "m365_todo_create": ("task", "resource", "resourceToken", False),
+    "m365_todo_update": ("task", "resource", "resourceToken", False),
+    "m365_todo_attach": ("task", "attachment", "resourceToken", False),
+}
+_VARIANT_SOURCES = {
+    "m365_todo": (
+        ("task", "resources", "resourceToken", True),
+        ("task", "resource", "resourceToken", False),
+    ),
+    "m365_get_message": (
+        ("mail", "message", "messageToken", False),
+        ("mail", "messages", "messageToken", True),
+        ("attachment", "attachments", "attachmentToken", True),
+    ),
 }
 _TARGETS = {
     "calendar_update_event": ("event", "event_token"),
@@ -38,7 +59,34 @@ _TARGETS = {
     "mail_delete_draft": ("mail", "message_token"),
     "mail_send_draft": ("mail", "message_token"),
     "mail_delete_message": ("mail", "message_token"),
+    "m365_get_message": ("mail", "message_token"),
+    "m365_reply": ("mail", "message_token"),
+    "m365_draft": ("mail", "message_token"),
+    "m365_send": ("mail", "message_token"),
+    "m365_delete": ("mail", "message_token"),
+    "m365_download": ("attachment", "attachment_token"),
+    "m365_get_event": ("event", "event_token"),
+    "m365_update_event": ("event", "event_token"),
+    "m365_delete_event": ("event", "event_token"),
+    "m365_todo": ("task", "resource_token"),
+    "m365_todo_create": ("task", "parent_token"),
+    "m365_todo_update": ("task", "resource_token"),
+    "m365_todo_delete": ("task", "resource_token"),
+    "m365_todo_attach": ("task", "resource_token"),
+    "m365_todo_download": ("task", "resource_token"),
 }
+
+
+def _source(
+    tool_name: str | None, payload: dict[str, Any],
+) -> tuple[str, str | None, str, bool] | None:
+    source = _SOURCES.get(tool_name or "")
+    if source is not None:
+        return source
+    return next(
+        (item for item in _VARIANT_SOURCES.get(tool_name or "", ()) if item[1] in payload),
+        None,
+    )
 
 
 class InvalidToolReference(ValueError):
@@ -59,7 +107,7 @@ def model_tool_reference_arguments(
     projected = dict(arguments)
     if target and projected.get(target[1]) == "[Redacted]":
         if (
-            tool_name == "mail_get_message" and result is not None
+            tool_name in {"mail_get_message", "m365_get_message"} and result is not None
             and (result.provider_data or {}).get("_matoloop", {}).get("toolName") == tool_name
         ):
             try:
@@ -97,16 +145,18 @@ def model_secret_references(content: str, available_references: set[str]) -> str
 def model_tool_references(
     tool_name: str | None, content: str, message_id: UUID
 ) -> str:
-    source = _SOURCES.get(tool_name or "")
-    if source is None:
+    if tool_name not in _SOURCES and tool_name not in _VARIANT_SOURCES:
         return content
-    kind, container_key, token_key, multiple = source
     try:
         payload = json.loads(content)
     except (TypeError, json.JSONDecodeError):
         return content
     if not isinstance(payload, dict):
         return content
+    source = _source(tool_name, payload)
+    if source is None:
+        return content
+    kind, container_key, token_key, multiple = source
     container = payload.get(container_key) if container_key is not None else payload
     if multiple and not isinstance(container, list):
         return content
@@ -152,17 +202,17 @@ async def resolve_tool_references(
     if source_message is None:
         raise InvalidToolReference(field)
     metadata = (source_message.provider_data or {}).get("_matoloop", {})
-    source = _SOURCES.get(metadata.get("toolName"))
-    if source is None or source[0] != kind:
-        raise InvalidToolReference(field)
-    _kind, container_key, token_key, multiple = source
     try:
         payload = json.loads(source_message.content)
     except (TypeError, json.JSONDecodeError) as exc:
         raise InvalidToolReference(field) from exc
-    container = (
-        payload.get(container_key) if container_key is not None else payload
-    ) if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        raise InvalidToolReference(field)
+    source = _source(metadata.get("toolName"), payload)
+    if source is None or source[0] != kind:
+        raise InvalidToolReference(field)
+    _kind, container_key, token_key, multiple = source
+    container = payload.get(container_key) if container_key is not None else payload
     index = int(index_text)
     item = (
         container[index]
