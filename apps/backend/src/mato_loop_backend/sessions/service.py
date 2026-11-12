@@ -649,7 +649,8 @@ async def message_attributions(
         AgentRun.agent_profile_id,
         AgentRun.result_message_id,
         AgentRun.session_id,
-    ).where(
+        Message.provider_data.label("input_provider_data"),
+    ).outerjoin(Message, Message.id == AgentRun.input_message_id).where(
         or_(
             AgentRun.result_message_id.in_(message_ids),
             AgentRun.id.in_(error_run_ids | set(stamped_run_ids.values())),
@@ -658,6 +659,11 @@ async def message_attributions(
     ))).all())
     run_sessions = {row.id: row.session_id for row in runs}
     profiles = {row.id: row.agent_profile_id for row in runs}
+    historical_profiles = {
+        row.id: ((getattr(row, "input_provider_data", None) or {}).get("_matoloop", {})
+                 .get("agentProfileIdsByRun", {}).get(str(row.id), []))
+        for row in runs
+    }
     for message in assistants:
         if (
             message.id not in stamped_messages
@@ -701,8 +707,10 @@ async def message_attributions(
             if automation_run_ids
             else run_sessions.get(run_id) == sessions_by_message[message_id]
         )
-        if valid_run and profiles.get(run_id) == stamped_profile_ids[message_id]:
-            resolved[message_id] = (run_id, profiles.get(run_id))
+        stamped_profile = stamped_profile_ids[message_id]
+        if valid_run and (profiles.get(run_id) == stamped_profile
+                          or str(stamped_profile) in historical_profiles.get(run_id, [])):
+            resolved[message_id] = (run_id, stamped_profile)
         else:
             invalid_stamps.add(message_id)
 
@@ -1373,6 +1381,13 @@ async def continue_run(
         raise SessionServiceError(409, "session.runInactive")
     if not allow_pending_interactions and run.status in {"waiting_input", "waiting_approval"}:
         return {"requiresUi": True}
+    requested_profile = getattr(payload, "agent_profile_id", None)
+    if requested_profile is not None:
+        from mato_loop_backend.settings.effective import session_agent_allowed
+
+        await validate_agent_profile(db, user.id, requested_profile)
+        if not session_agent_allowed(session, requested_profile):
+            raise SessionServiceError(409, "agentProfile.selectedUnavailable", field="agentProfileId")
     reservation = AgentRuntime.reserve_continuation(run_id, queued=run.status == "queued")
     if reservation is None:
         raise SessionServiceError(409, "session.runInactive")
@@ -1391,6 +1406,7 @@ async def continue_run(
             source_type="app",
             provider_data={"_matoloop": {
                 "continuationRunId": str(run_id),
+                **({"requestedAgentProfileId": str(requested_profile)} if requested_profile is not None else {}),
                 **({"activeFile": active_file} if active_file is not None else {}),
             }},
         )

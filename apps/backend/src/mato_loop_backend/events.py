@@ -9,7 +9,7 @@ from uuid import UUID
 
 TERMINAL_EVENTS = {"run.completed", "run.failed", "run.cancelled"}
 LIVE_EVENTS = {
-    "run.started", "run.phase", "run.timing", "message.delta", "reasoning.updated",
+    "run.started", "run.profile.updated", "run.phase", "run.timing", "message.delta", "reasoning.updated",
     "context.summary.updated", "process.output", "run.warning",
     "message.completed", "message.interrupted", "message.continued", "context.compacted",
     "tool.completed",

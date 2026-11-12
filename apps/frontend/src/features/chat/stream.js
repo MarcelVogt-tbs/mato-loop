@@ -122,6 +122,20 @@ export const streamActions = {
         if (this.eventSource !== source) return
         this.setRunTiming(JSON.parse(event.data))
       })
+      source.addEventListener('run.profile.updated', (event) => {
+        if (this.eventSource !== source) return
+        const payload = JSON.parse(event.data)
+        this.runAgentProfileId = payload.agentProfileId
+        this.streamModelName = payload.modelName
+        this.updateCachedSession(sessionId, (session) => ({ ...session, agentProfileId: payload.agentProfileId }))
+        if (this.current?.id === sessionId) {
+          this.current.agentProfileId = payload.agentProfileId
+          if (this.current.activeRun?.id === runId) {
+            this.current.activeRun.agentProfileId = payload.agentProfileId
+            this.current.activeRun.modelName = payload.modelName
+          }
+        }
+      })
       source.addEventListener('run.phase', (event) => {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)

@@ -186,6 +186,9 @@ class ContinueRunRequest(BaseModel):
 
     content: str = Field(max_length=200_000)
     message_id: UUID
+    agent_profile_id: UUID | None = Field(
+        default=None, validation_alias=AliasChoices("agentProfileId", "agent_profile_id")
+    )
     voice_attachment_indices: list[StrictInt] = Field(
         default_factory=list, alias="voiceAttachmentIndices"
     )

@@ -44,7 +44,12 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.security import require_user
 from mato_loop_backend.sessions import cleanup
-from mato_loop_backend.settings.models import AiSettings, LlmProviderConfig, ModelConfig
+from mato_loop_backend.settings.models import (
+    PLAN_PROFILE_ID,
+    AiSettings,
+    LlmProviderConfig,
+    ModelConfig,
+)
 
 
 @pytest.fixture
@@ -116,6 +121,7 @@ async def test_message_queue_persists_deduplicates_and_dispatches_fifo_with_uplo
     request_id, second_id = uuid4(), uuid4()
     response = await client.post(f"/api/sessions/{session.id}/messages/with-attachments", data={"payload": json.dumps({
         "content": "First", "run_id": str(request_id), "enqueue": True,
+        "agent_profile_id": str(PLAN_PROFILE_ID),
     })}, files=[("attachments", ("note.txt", b"saved upload", "text/plain"))])
     response.raise_for_status()
     followup = await client.post(f"/api/sessions/{session.id}/messages", json={
@@ -139,6 +145,7 @@ async def test_message_queue_persists_deduplicates_and_dispatches_fifo_with_uplo
     monkeypatch.setattr(message_queue, "AsyncSessionFactory", lambda: nullcontext(db))
     db.expunge_all()
     await message_queue.deliver_next(session.id)
+    assert start.await_args.kwargs["agent_profile_id_override"] == PLAN_PROFILE_ID
     assert (start.await_args.args[2], start.await_args.kwargs["attachments"][0].data) == ("First", b"saved upload")
     assert await db.get(QueuedAttachment, (request_id, 0)) is None
     assert [item["id"] for item in await message_queue.list_entries(db, tree.user.id)] == [str(second_id)]

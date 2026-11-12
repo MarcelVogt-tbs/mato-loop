@@ -277,6 +277,30 @@ async def execute_loop_body(
                 await run_events.publish(run.id, {"type": "run.timing", "runId": str(run.id), **run_timing_payload(run)})
             await cls._transcribe_continuation_messages(db, run)
         if continuation_received or continuation_context_stale:
+            if await cls._apply_continuation_profile(db, run):
+                agent_profile_id = run.agent_profile_id
+                prompt_agent_profile = await load_agent_profile(db, chat_session.user_id, agent_profile_id)
+                ai_settings = apply_session_ai(await load_effective_ai(db, chat_session.user_id), chat_session, agent_profile_id)
+                model = agent_run_support._model_for_id(ai_settings, run.model_config_id)
+                provider = agent_run_support._provider_for_model(ai_settings, model)
+                if model_trust_level != TrustLevel(run.trust_level):
+                    live_tool_calls.clear()
+                model_trust_level = TrustLevel(run.trust_level)
+                run_pseudonymization_enabled = run.pseudonymization_enabled
+                profile_instructions = agent_profile_runtime_instructions(
+                    prompt_agent_profile, model_id=model.model_id, delegated=delegated,
+                )
+                model_reasoning_profile = reasoning_profile(model.model_id, model.discovery_metadata)
+                can_disable_reasoning = model_reasoning_profile is not None and ReasoningEffort.NONE in model_reasoning_profile.options
+                agent_identity = await load_effective_agent_identity(db, chat_session.user_id, prompt_agent_profile)
+                user_profile_payload = user_profile_runtime_payload(user_profile, model_trust_level)
+                pseudonymization_key = CredentialCipher().derive_key(
+                    b"matoloop:privacy-session:v1\0" + chat_session.user_id.bytes + chat_session.id.bytes
+                ) if run_pseudonymization_enabled else secrets.token_bytes(32)
+                tool_call_limit = prompt_agent_profile.max_tool_calls
+                budget_finalization = tool_call_limit is not None and tool_calls_used >= tool_call_limit
+                provider_turn_state = ProviderTurnState()
+                pdf_cache.clear()
             selected_execution_agent = None
             memory_cache.invalidate(continuation=True)
             if project is not None:

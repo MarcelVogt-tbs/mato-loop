@@ -66,7 +66,13 @@ Der Kopierbutton in der Metazeile übernimmt den vollständigen Markdown-Antwort
 
 Die bisherige Antwort mit ihren Aktivitäten bleibt oberhalb deiner Direktnachricht stehen. Die Fortsetzung erscheint darunter als eigener Antwortabschnitt, auch nach dem Neuladen. Bereits laufende Tool-Aktionen bleiben ihrem ursprünglichen Abschnitt zugeordnet; der reservierte Platz unter deiner Nachricht bleibt bis zum neuen Antwortabschnitt erhalten. Technisch bleibt es derselbe Lauf.
 
+Bei **Jetzt senden** gilt dein beim Absenden gewähltes Agentenprofil ab der nächsten Modellanfrage, sobald aktive Tool-Arbeit beendet ist. Dabei wechseln auch die Profilanweisungen, verfügbaren Tools, Berechtigungen und die profilabhängige Modellwahl. Frühere Antworten behalten ihr ursprüngliches Profil; bereits ausgeführte Aktionen werden nicht rückgängig gemacht.
+
 **Nach dem Lauf senden** reiht eine Nachricht für einen anschließenden Auftrag ein. Bis zur Serverbestätigung sichert der Browser Text und Anhänge lokal. Danach übernimmt MatoLoop die gespeicherte Queue: Angenommene Nachrichten warten in Reihenfolge auf das Ende des laufenden Auftrags, auch bei offenen Freigaben oder Rückfragen. Sie bleiben nach Schließen des Browsers und einem Backend-Neustart erhalten. Abmelden oder Kontowechsel entfernt nur den lokalen Postausgang, nicht bereits angenommene Aufträge.
+
+Jede vorgemerkte Nachricht behält das beim Absenden gewählte Agentenprofil und verwendet es beim späteren Lauf. Eine spätere Auswahl im Profilwähler ändert bereits vorgemerkte Nachrichten nicht.
+
+Deine zuletzt gewählte Profilauswahl bleibt im Eingabebereich erhalten – nach normalen Nachrichten, **Jetzt senden**, **Nach dem Lauf senden** und dem Laufende. Auch ein älterer Queue-Auftrag mit anderem Profil stellt sie nicht um. Ändere sie selbst, wenn deine nächste Nachricht ein anderes Profil verwenden soll.
 
 Halte **Cmd** oder **Strg** gedrückt, um vorübergehend vorzumerken: Das Sende-Icon wechselt
 zum Vormerken-Symbol. Sende mit **Cmd/Strg+Enter** oder klicke bei gedrückter Taste auf Senden.

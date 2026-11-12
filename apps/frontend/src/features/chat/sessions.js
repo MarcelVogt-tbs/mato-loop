@@ -489,6 +489,10 @@ export const sessionsActions = {
       if (this.loading) return
       if (this.current) {
         const sessionId = this.current.id
+        const profileSelection = Object.hasOwn(patch, 'agent_profile_id') || Object.hasOwn(patch, 'session_template_id')
+        const selectionVersion = profileSelection
+          ? (this.profileSelectionVersions[sessionId] || 0) + 1 : null
+        if (profileSelection) this.profileSelectionVersions[sessionId] = selectionVersion
         if (
           Object.hasOwn(patch, 'agent_profile_id')
           && (draftOnly || this.running || this.stopping || this.runId || this.activeQueuedMessages.length)
@@ -498,7 +502,11 @@ export const sessionsActions = {
           return
         }
         await this.updateCurrent(patch)
-        if (Object.hasOwn(patch, 'agent_profile_id') || Object.hasOwn(patch, 'session_template_id')) {
+        if (profileSelection && this.profileSelectionVersions[sessionId] !== selectionVersion) return
+        if (Object.hasOwn(patch, 'agent_profile_id')) {
+          this.drafts.sessionAgentProfiles[sessionId] = patch.agent_profile_id
+          this.persistDrafts()
+        } else if (Object.hasOwn(patch, 'session_template_id')) {
           delete this.drafts.sessionAgentProfiles[sessionId]
           this.persistDrafts()
         }

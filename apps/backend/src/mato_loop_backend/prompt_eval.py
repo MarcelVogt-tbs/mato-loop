@@ -2885,6 +2885,33 @@ CASES = (
     ),
     # Deterministic tool-result continuations.
     PromptCase(
+        id="additional_message_keeps_unanswered_question",
+        kind="general",
+        user="Außerdem: Formuliere die Antwort kurz und nenne die Alternative.",
+        history=(
+            {"role": "user", "content": "Ist der Beispielserver mit unserem Sprachmodus kompatibel?"},
+            {"role": "assistant", "content": "Ich prüfe den API-Vertrag."},
+            *_exchange("read", {"root": "files", "path": "voice-api.md"},
+                       "Verified: the server supports transcription only. The voice mode needs bidirectional audio. The alternative is transcription, chat, then speech synthesis."),
+        ),
+        tools=("read",),
+        expected_no_tools=True,
+        content_contains_any=(("nicht kompatibel", "nicht direkt", "nicht vollständig", "nein"),
+                              ("Transkription", "Spracherkennung"), ("Sprachausgabe", "Sprachsynthese")),
+        max_content_words=100,
+    ),
+    PromptCase(
+        id="replacement_message_cancels_unanswered_question",
+        kind="general",
+        user="Vergiss die Kompatibilitätsfrage. Antworte stattdessen nur mit BEREIT.",
+        history=(
+            {"role": "user", "content": "Ist der Beispielserver mit unserem Sprachmodus kompatibel?"},
+            {"role": "assistant", "content": "Ich prüfe den API-Vertrag."},
+        ),
+        expected_no_tools=True,
+        content_exact_values=("BEREIT",),
+    ),
+    PromptCase(
         id="successful_tool_result_allows_confirmation",
         kind="general",
         user="Erstelle note.txt mit Hallo und bestätige erst nach Erfolg.",
@@ -4595,6 +4622,8 @@ _SEMANTIC_CONTRACTS = (
         "continuation.success_failed_denied_untrusted",
         "continuation",
         (
+            "additional_message_keeps_unanswered_question",
+            "replacement_message_cancels_unanswered_question",
             "sysadmin_completed_prerequisite_resumes_execution",
             "successful_tool_result_allows_confirmation",
             "failed_tool_call_is_not_repeated_unchanged",

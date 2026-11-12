@@ -118,7 +118,7 @@ def test_inventory_is_complete() -> None:
         "pdf",
         "provider",
     } <= categories
-    assert 80 <= len(CASES) <= 258
+    assert 80 <= len(CASES) <= 260
     assert {case.scope for case in CASES} == {
         "hard",
         "quality",
@@ -2155,6 +2155,19 @@ def test_continuation_checks_repeated_calls_and_premature_success() -> None:
     )
 
 
+def test_direct_message_cases_keep_open_questions_unless_replaced() -> None:
+    additional = _case("additional_message_keeps_unanswered_question")
+    messages, _tools = build_case(additional)
+    assert "Keep unanswered questions" in messages[0]["content"]
+    assert "replace only conflicting or cancelled/replaced parts" in messages[0]["content"]
+    assert "Beispielserver" in str(messages)
+    assert evaluate(additional, ProviderResult(content="Verstanden, künftig kurz."))
+    assert evaluate(additional, ProviderResult(content="Nicht direkt kompatibel. Alternative: Transkription → Chat → Sprachausgabe.")) == []
+    replacement = _case("replacement_message_cancels_unanswered_question")
+    assert evaluate(replacement, ProviderResult(content="BEREIT")) == []
+    assert evaluate(replacement, ProviderResult(content="Nicht kompatibel."))
+
+
 def test_negative_outcomes_accept_semantic_variants_without_accepting_success_claims() -> None:
     valid_outputs = {
         "denied_tool_result_does_not_claim_success": "Der Löschvorgang wurde verweigert.",
@@ -2405,10 +2418,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 142
-    assert payload["contractCount"] == 400
-    assert "Cases: 258" in report
+    assert payload["contractCount"] == 402
+    assert "Cases: 260" in report
     assert "Semantic contracts: 142" in report
-    assert "All inventory rows: 400" in report
+    assert "All inventory rows: 402" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

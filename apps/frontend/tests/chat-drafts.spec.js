@@ -761,6 +761,25 @@ describe('chat drafts', () => {
     expect(api.post.mock.calls[0]?.[0]).toBe('/sessions/session-1/messages')
   })
 
+  it.each([false, true])('keeps a newer composer selection when an older profile save completes (restored: %s)', async (restored) => {
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', agentProfileId: 'agent-a' }
+    chat.selectedSessionId = 'session-1'
+    let resolvePatch
+    api.patch.mockImplementationOnce(() => new Promise(resolve => { resolvePatch = resolve }))
+    const saving = chat.updateActive({ agent_profile_id: 'agent-b' })
+    await vi.waitFor(() => expect(resolvePatch).toBeTypeOf('function'))
+    if (restored) {
+      vi.spyOn(chat, 'removeQueuedMessage').mockResolvedValue({ sessionId: 'session-1', content: 'Restored', agentProfileId: 'agent-c', attachments: [] })
+      await chat.restoreQueuedMessage('queued')
+    } else {
+      await chat.updateActive({ agent_profile_id: 'agent-c' }, { draftOnly: true })
+    }
+    resolvePatch({ data: { id: 'session-1', agentProfileId: 'agent-b' } })
+    await saving
+    expect(chat.activeAgentProfileId).toBe('agent-c')
+  })
+
   it('applies queued model and reasoning edits to the latest saved profile', async () => {
     const chat = useChatStore()
     chat.current = { id: 'session-1', sessionProfile: { agentModels: { agent: { modelId: 'old' } } } }

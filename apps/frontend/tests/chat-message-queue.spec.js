@@ -231,12 +231,14 @@ describe('chat message queue', () => {
     const chat = useChatStore()
     const audio = new File(['wav'], 'rejected.wav', { type: 'audio/wav' })
     chat.setAudioDictation({ files: [audio] })
+    chat.drafts.newSession.options.agentProfileId = 'agent-b'
     vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
     vi.spyOn(useControlCenterStore(), 'attachCreatedSession').mockResolvedValue(null)
     api.post.mockResolvedValue({
       data: { session: { id: 'session-1' }, message: { id: 'sent' }, runId: 'run-1' }
     })
     await chat.startSession('Text')
+    expect(chat.activeAgentProfileId).toBe('agent-b')
     expect(chat.getAudioDictation('session-1').files[0]).toBe(audio)
     expect(chat.getAudioDictation()).toBeNull()
   })
@@ -246,6 +248,8 @@ describe('chat message queue', () => {
     api.post.mockReturnValue(new Promise((resolve) => { resolveSend = resolve }))
     const chat = useChatStore()
     activeSession(chat)
+    chat.current.agentProfileId = 'agent-a'
+    await chat.updateActive({ agent_profile_id: 'agent-b' }, { draftOnly: true })
     vi.spyOn(chat, 'watchRun').mockImplementation(() => {})
     chat.attachmentDrafts.sessionMessages['session-1'] = [attachment()]
     const displayed = []
@@ -275,6 +279,7 @@ describe('chat message queue', () => {
     await sending
     stopWatching()
 
+    expect(chat.activeAgentProfileId).toBe('agent-b')
     expect(chat.activeQueuedMessages).toEqual([])
     expect(displayed.every((count) => count === 1)).toBe(true)
     expect(chat.current.messages).toEqual([
@@ -385,7 +390,7 @@ describe('chat message queue', () => {
     expect(api.post).toHaveBeenCalledWith('/sessions/session-1/messages', {
       content: 'Im Hintergrund', run_id: entry.id, agent_profile_id: 'agent-b', enqueue: true
     }, { suppressErrorToast: true })
-    expect(chat.drafts.sessionAgentProfiles['session-1']).toBeUndefined()
+    expect(chat.drafts.sessionAgentProfiles['session-1']).toBe('agent-b')
   })
 
   it('queues the first message again immediately after undoing it', async () => {
@@ -548,6 +553,7 @@ describe('chat message queue', () => {
     activeSession(chat)
     chat.watchRun('session-1', 'run-1', { status: 'running' })
     await chat.queueMessage('Später')
+    chat.drafts.sessionAgentProfiles['session-1'] = 'agent-b'
     api.post.mockImplementation(async (_url, payload) => {
       expect((await loadChatOutbox('user-1')).map((entry) => entry.content)).toEqual([
         'Jetzt', 'Später'
@@ -559,7 +565,11 @@ describe('chat message queue', () => {
 
     expect(api.post).toHaveBeenCalledTimes(1)
     expect(api.post.mock.calls[0][0]).toBe('/sessions/session-1/runs/run-1/messages')
-    expect(api.post.mock.calls[0][1]).toMatchObject({ content: 'Jetzt', message_id: expect.any(String) })
+    expect(api.post.mock.calls[0][1]).toMatchObject({ content: 'Jetzt', message_id: expect.any(String), agent_profile_id: 'agent-b' })
+    chat.eventSource.listeners.get('run.profile.updated')({ data: JSON.stringify({ agentProfileId: 'agent-b', modelName: 'New model' }) })
+    expect([chat.runAgentProfileId, chat.current.agentProfileId, chat.streamModelName]).toEqual(['agent-b', 'agent-b', 'New model'])
+    chat.eventSource.listeners.get('run.profile.updated')({ data: JSON.stringify({ agentProfileId: 'agent-a', modelName: 'Older queued model' }) })
+    expect(chat.activeAgentProfileId).toBe('agent-b')
     expect(chat.eventSource.url).toBe('/api/sessions/session-1/runs/run-1/events')
     expect(chat.current.messages.map((message) => message.content)).toEqual(['Jetzt'])
     expect(chat.activeQueuedMessages.map((entry) => entry.content)).toEqual(['Später'])

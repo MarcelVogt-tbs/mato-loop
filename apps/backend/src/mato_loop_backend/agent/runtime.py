@@ -661,6 +661,67 @@ class AgentRuntime:
         return False
 
     @classmethod
+    async def _apply_continuation_profile(cls, db: AsyncSession, run: AgentRun) -> bool:
+        """Apply submitted profile choices only after the previous tool/model segment ends."""
+        message = await db.scalar(select(Message).where(
+            Message.session_id == run.session_id,
+            Message.role == "user",
+            Message.provider_data["_matoloop"]["continuationRunId"].as_string() == str(run.id),
+            Message.provider_data["_matoloop"]["requestedAgentProfileId"].as_string().is_not(None),
+        ).order_by(Message.created_at.desc(), Message.id.desc()).limit(1))
+        if not isinstance(message, Message):
+            return False
+        profile_id = UUID(message.provider_data["_matoloop"]["requestedAgentProfileId"])
+        if profile_id == run.agent_profile_id:
+            return False
+        session = await db.get(ChatSession, run.session_id, with_for_update=True, populate_existing=True)
+        if session is None:
+            raise AgentRunError("session.notFound")
+        apply_run_session_settings(session, run)
+        from mato_loop_backend.settings.effective import session_agent_allowed
+
+        if not session_agent_allowed(session, profile_id):
+            raise AgentRunError("agentProfile.selectedUnavailable")
+        try:
+            profile = await load_agent_profile(db, session.user_id, profile_id)
+        except AgentProfileUnavailable as exc:
+            raise AgentRunError("agentProfile.selectedUnavailable") from exc
+        if not profile.enabled:
+            raise AgentRunError("agentProfile.selectedUnavailable")
+        ai = apply_session_ai(await load_effective_ai(db, session.user_id), session, profile_id)
+        model = agent_run_support._model_for_id(ai, ai.default_model_id)
+        provider = agent_run_support._provider_for_model(ai, model) if model is not None else None
+        if model is None or provider is None:
+            raise AgentRunError("session.modelUnavailable")
+        if not model.supports_tools:
+            raise AgentRunError("session.modelToolsUnavailable")
+        input_message = await db.get(Message, run.input_message_id)
+        data = input_message.provider_data or {}
+        metadata = data.get("_matoloop", {})
+        history = dict(metadata.get("agentProfileIdsByRun", {}))
+        history[str(run.id)] = list(dict.fromkeys([
+            *history.get(str(run.id), []),
+            *([str(run.agent_profile_id)] if run.agent_profile_id else []), str(profile_id),
+        ]))
+        input_message.provider_data = {**data, "_matoloop": {**metadata, "agentProfileIdsByRun": history}}
+        agent_run_support._snapshot_tool_call_limit(input_message, run.id, profile.max_tool_calls)
+        run.agent_profile_id = profile_id
+        run.model_config_id = model.id
+        run.model_name = model.name or model.model_id
+        run.trust_level = effective_model_trust(provider, model).value
+        run.pseudonymization_enabled = effective_model_pseudonymization(provider, model)
+        await cls._prepare_run(db, run)
+        await db.execute(delete(PermissionGrant).where(PermissionGrant.session_id == run.session_id))
+        await db.refresh(session, attribute_names=["agent_profile_id"])
+        session.agent_profile_id = profile_id
+        await db.commit()
+        await run_events.publish(run.id, {
+            "type": "run.profile.updated", "runId": str(run.id),
+            "agentProfileId": str(profile_id), "modelName": run.model_name,
+        })
+        return True
+
+    @classmethod
     async def _resume_continuation(
         cls, db: AsyncSession, run: AgentRun, visible_response: _VisibleResponse
     ) -> None:

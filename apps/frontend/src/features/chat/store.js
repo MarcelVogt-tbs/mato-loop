@@ -47,6 +47,7 @@ export const useChatStore = defineStore('chat', {
     historyActionPending: false,
     sessionSettingsPending: 0,
     sessionSettingsPromise: null,
+    profileSelectionVersions: {},
     sessionRequestController: null,
     sessionRefreshPromise: null,
     sessionRefreshQueued: null,
@@ -191,6 +192,10 @@ export const useChatStore = defineStore('chat', {
       if (this.current?.agentProfileId === profileId) {
         this.current.agentProfileId = replacementId
       }
+      for (const [sessionId, selectedId] of Object.entries(this.drafts.sessionAgentProfiles)) {
+        if (selectedId === profileId) this.drafts.sessionAgentProfiles[sessionId] = replacementId
+      }
+      this.persistDrafts()
     },
     removeCachedSession(id) {
       if (this.personalChatSessionId === id) this.personalChatSessionId = null

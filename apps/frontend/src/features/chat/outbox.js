@@ -104,6 +104,10 @@ export const outboxActions = {
           ? { continuationRunId: this.runId } : {}),
         paused: false
       }
+      if (sessionId && entry.agentProfileId) {
+        this.drafts.sessionAgentProfiles[sessionId] = entry.agentProfileId
+        this.persistDrafts()
+      }
       this.pendingOutboxEntry = { ...entry, preserveDraft }
       try {
         await saveChatOutboxEntry(toRaw(entry))
@@ -183,7 +187,10 @@ export const outboxActions = {
       const sessionId = entry.sessionId || null
       if (sessionId) this.drafts.sessionMessages[sessionId] = entry.content
       else this.drafts.newSession.message = entry.content
-      if (sessionId && entry.agentProfileId) this.drafts.sessionAgentProfiles[sessionId] = entry.agentProfileId
+      if (sessionId && entry.agentProfileId) {
+        this.profileSelectionVersions[sessionId] = (this.profileSelectionVersions[sessionId] || 0) + 1
+        this.drafts.sessionAgentProfiles[sessionId] = entry.agentProfileId
+      }
       this.replaceAttachmentFiles(entry.attachments.map((attachment) => attachment.file), sessionId, entry.attachments)
       this.persistDrafts()
       return entry
@@ -308,6 +315,7 @@ export const outboxActions = {
           const payload = {
             content: entry.content,
             message_id: entry.id,
+            ...(entry.agentProfileId ? { agent_profile_id: entry.agentProfileId } : {}),
             ...(entry.activeFile ? { active_file: entry.activeFile } : {})
           }
           const url = `/sessions/${entry.sessionId}/runs/${entry.continuationRunId}/messages`
@@ -351,22 +359,8 @@ export const outboxActions = {
           entry.serverQueued = true
           this.serverQueueVersion += 1
           await deleteChatOutboxEntry(entry.id)
-          if (this.drafts.sessionAgentProfiles[entry.sessionId] === entry.agentProfileId
-            && !this.queuedMessages[entry.sessionId]?.some((item) => item.id !== entry.id && !item.serverQueued)) {
-            delete this.drafts.sessionAgentProfiles[entry.sessionId]
-            this.persistDrafts()
-          }
           await this.refreshServerQueue()
           return { created: false, sessionId: entry.sessionId }
-        }
-        if (
-          entry.sessionId
-          && !entry.continuationRunId
-          && this.queuedMessages[queueKeyForEntry(entry)]?.length === 1
-          && this.drafts.sessionAgentProfiles[entry.sessionId] === entry.agentProfileId
-        ) {
-          delete this.drafts.sessionAgentProfiles[entry.sessionId]
-          this.persistDrafts()
         }
         const key = queueKeyForEntry(entry)
         await deleteChatOutboxEntry(entry.id)
@@ -522,6 +516,10 @@ export const outboxActions = {
         ])
         const recordings = this.getAudioDictation(null, projectId)
         if (recordings) this.setAudioDictation(recordings, session.id)
+        const composerProfileId = stillSelected
+          ? this.drafts.newSession.options.agentProfileId || options.agentProfileId
+          : options.agentProfileId
+        if (composerProfileId) this.drafts.sessionAgentProfiles[session.id] = composerProfileId
         this.resetNewDraft(projectId)
         if (queuedEntry) {
           const key = newSessionQueueKey(projectId)

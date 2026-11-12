@@ -54,15 +54,22 @@ from mato_loop_backend.personal_variables import (
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.security import require_user
-from mato_loop_backend.settings import AiSettings, SettingsStore, ToolSettings
+from mato_loop_backend.settings import (
+    AiSettings,
+    SettingsStore,
+    ToolSettings,
+    load_agent_profile_tools,
+)
 from mato_loop_backend.settings.models import (
     BUILD_PROFILE_ID,
     PLAN_PROFILE_ID,
     LlmProviderConfig,
     ModelConfig,
     ToolExecutionPolicy,
+    TrustLevel,
     UserAgentProfilesSettings,
 )
+from mato_loop_backend.skill_migration import initialize_skill_library
 from mato_loop_backend.tools.arguments import PersonalSettingsArguments
 from mato_loop_backend.web.fetch import WebFetchResult
 
@@ -97,6 +104,7 @@ async def native_database(request, tmp_path, monkeypatch):
             # checkfirst would see public tables through search_path and skip isolation.
             await db.run_sync(lambda connection: Base.metadata.create_all(connection, checkfirst=False))
         async with factory() as db:
+            await initialize_skill_library(db)
             user = UserAccount(username=f"native-{uuid4().hex}", password_hash="test")
             db.add(user)
             await db.flush()
@@ -254,16 +262,23 @@ async def test_coding_command_does_not_block_other_sessions(native_database, mon
 
 
 @pytest.mark.parametrize("with_project", [False, True], ids=["without-project", "with-project"])
-async def test_direct_message_during_model_response(native_database, monkeypatch, with_project):
+@pytest.mark.parametrize("initial_profile,selected_profile", [(BUILD_PROFILE_ID, PLAN_PROFILE_ID), (PLAN_PROFILE_ID, BUILD_PROFILE_ID)])
+async def test_direct_message_during_model_response(native_database, monkeypatch, with_project, initial_profile, selected_profile):
     fixture = native_database
     session_id, run_id, message_id = uuid4(), uuid4(), uuid4()
     fixture.owned_runs.add(run_id)
     started = asyncio.Event()
     requests = []
+    next_model = fixture.model.model_copy(update={"id": uuid4(), "model_id": "profile-model", "trust_level": TrustLevel.PUBLIC})
 
     async def complete(db, **kwargs):
         requests.append(kwargs)
         if len(requests) == 1:
+            return ProviderResult(tool_calls=[ToolCall("private-note", "message_metadata", {
+                "operation": "write", "namespace": "note", "data": {"text": "private-context-sentinel"},
+            })], finish_reason="tool_calls")
+        if len(requests) == 2:
+            assert "private-context-sentinel" in str(kwargs["messages"])
             await kwargs["on_delta"]("Partial answer")
             started.set()
             await asyncio.Future()
@@ -272,6 +287,13 @@ async def test_direct_message_during_model_response(native_database, monkeypatch
     monkeypatch.setattr(ProviderService, "complete", complete)
     async with fixture.factory() as db:
         project = None
+        ai = await SettingsStore.load(db, AiSettings)
+        ai.models[0].trust_level = TrustLevel.PRIVATE
+        ai.models.append(next_model)
+        await SettingsStore.save(db, ai)
+        await SettingsStore.save(db, ToolSettings(private_permissions={"policies": {
+            "session.state.write": "auto", "session.read": "auto",
+        }}))
         if with_project:
             project = Project(user_id=fixture.user.id, name="Continuation regression")
             db.add(project)
@@ -280,7 +302,8 @@ async def test_direct_message_during_model_response(native_database, monkeypatch
             id=session_id, user_id=fixture.user.id,
             project_id=project.id if project else None,
             title="Direct message regression", title_generation_status="skipped",
-            agent_profile_id=BUILD_PROFILE_ID, model_config_id=fixture.model.id,
+            agent_profile_id=initial_profile, model_config_id=fixture.model.id,
+            session_profile={"agent_models": {str(selected_profile): {"model_id": str(next_model.id)}}},
             memory_mode="disabled", web_search_policy="available",
             preferred_execution_agent_id=fixture.agent.id, current_directory="/workspace",
         )
@@ -292,7 +315,7 @@ async def test_direct_message_during_model_response(native_database, monkeypatch
     await asyncio.wait_for(started.wait(), timeout=20)
     response = await fixture.client.post(
         f"/api/sessions/{session_id}/runs/{run_id}/messages",
-        json={"message_id": str(message_id), "content": "Keep the PDF file small."},
+        json={"message_id": str(message_id), "content": "Keep the PDF file small.", "agent_profile_id": str(selected_profile)},
     )
     assert response.status_code == 202, response.text
     assert response.json()["runId"] == str(run_id)
@@ -308,7 +331,15 @@ async def test_direct_message_during_model_response(native_database, monkeypatch
         run = await db.get(AgentRun, run_id)
         assert run.status == "completed", run.error
         assert (await db.get(Message, run.result_message_id)).content == "Updated answer"
-    assert len(requests) == 2
+        tools, _ = await load_agent_profile_tools(db, fixture.user.id, run.agent_profile_id, TrustLevel(run.trust_level))
+        assert tools._agent_permissions.policies["filesystem.write"] == (
+            ToolExecutionPolicy.ASK if selected_profile == PLAN_PROFILE_ID else ToolExecutionPolicy.AUTO
+        )
+    detail = (await fixture.client.get(f"/api/sessions/{session_id}")).json()
+    assert [message["agentProfileId"] for message in detail["messages"] if message["role"] == "assistant"] == [str(initial_profile), str(initial_profile), str(selected_profile)]
+    assert [request["model"].id for request in requests] == [fixture.model.id, fixture.model.id, next_model.id]
+    assert "private-context-sentinel" not in str([item for item in requests[-1]["messages"] if item["role"] == "tool"])
+    assert len(requests) == 3
     assert "Keep the PDF file small." in str(requests[-1]["messages"])
 
 
