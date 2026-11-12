@@ -46,6 +46,17 @@ _HALOGEN_FLASH_NEXT = ReasoningProfile(
     supports_disable=True,
 )
 
+_GUFO_FLASH_NEXT = ReasoningProfile(
+    efforts=(*_HALOGEN_FLASH_NEXT.efforts, ReasoningEffort.MAX),
+    default_effort=ReasoningEffort.XHIGH,
+    supports_disable=True,
+)
+
+_FLASH_NEXT_ALIASES = {
+    "halogen-qwen3.8-flash-next": _HALOGEN_FLASH_NEXT,
+    "gufo-flash-next": _GUFO_FLASH_NEXT,
+}
+
 
 def reasoning_profile(
     model_id: str, metadata: dict[str, object] | None = None
@@ -71,8 +82,8 @@ def reasoning_profile(
         if default in efforts:
             return ReasoningProfile(tuple(efforts), default, supports_responses=is_kimi)
 
-    if name == "halogen-qwen3.8-flash-next":
-        return _HALOGEN_FLASH_NEXT
+    if name in _FLASH_NEXT_ALIASES:
+        return _FLASH_NEXT_ALIASES[name]
     if name == "qwen3.8-27b" or name.startswith(("qwen3.8-27b-", "qwen3.8-27b:")):
         return _QWEN_3_8_27B
     if is_kimi:

@@ -282,9 +282,10 @@ def test_codex_reasoning_profile_uses_catalog_metadata() -> None:
     assert profile.supports_disable is False
 
 
-def test_halogen_profile_is_exact_and_discovery_takes_precedence() -> None:
+@pytest.mark.parametrize("model_id", ["halogen-qwen3.8-flash-next", "gufo-flash-next"])
+def test_flash_next_profile_is_exact_and_discovery_takes_precedence(model_id) -> None:
     assert reasoning_profile("halogen-unrelated") is None
-    profile = reasoning_profile("halogen-qwen3.8-flash-next", {
+    profile = reasoning_profile(model_id, {
         "reasoning_efforts": ["low", "medium"], "default_reasoning_effort": "low",
     })
     assert profile.default_effort == ReasoningEffort.LOW

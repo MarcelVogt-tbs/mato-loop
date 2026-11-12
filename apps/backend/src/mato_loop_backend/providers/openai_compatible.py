@@ -61,6 +61,15 @@ class DiscoveredModel(BaseModel):
     default_reasoning_effort: ReasoningEffort | None = None
     reasoning_efforts: list[ReasoningEffort] | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_input_modalities(cls, value: Any) -> Any:
+        if isinstance(value, dict) and value.get("input_modalities") is None:
+            architecture = value.get("architecture")
+            if isinstance(architecture, dict) and isinstance(architecture.get("input_modalities"), list):
+                return {**value, "input_modalities": architecture["input_modalities"]}
+        return value
+
     @field_validator("capabilities", mode="before")
     @classmethod
     def normalize_capabilities(cls, value: Any) -> Any:
@@ -69,6 +78,7 @@ class DiscoveredModel(BaseModel):
         if isinstance(value, (list, set, tuple)):
             aliases = {
                 "chat_completion": ModelCapability.CHAT,
+                "function_calling": ModelCapability.CHAT,
                 "image_to_image": ModelCapability.IMAGE_EDITING,
             }
             known = {item.value for item in ModelCapability}

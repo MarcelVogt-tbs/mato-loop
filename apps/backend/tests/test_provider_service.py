@@ -1594,6 +1594,7 @@ async def test_transient_error_is_not_retried_after_stream_output() -> None:
         "chat_completion": True, "completion": False, "embeddings": False,
         "fine_tune": False, "inference": True,
     }}, {ModelCapability.CHAT}),
+    ({"capabilities": {"function_calling": True, "vision": True}}, {ModelCapability.CHAT}),
     ({"capabilities": {
         "chat": True, "tools": True, "reasoning": True,
         "image_generation": False, "reasoning_efforts": None,
@@ -1989,8 +1990,12 @@ async def test_kimi_reasoning_reaches_both_protocols_and_keeps_thinking_enabled(
         await ProviderService.complete(AsyncMock(spec=AsyncSession), reasoning_effort="none", **kwargs)
 
 
-@pytest.mark.parametrize("effort", [None, "none", "minimal", "low", "medium", "high", "xhigh"])
-async def test_halogen_reasoning_options_reach_chat_transport(monkeypatch, effort):
+@pytest.mark.parametrize("model_id,options", [
+    ("halogen-qwen3.8-flash-next", ["none", "minimal", "low", "medium", "high", "xhigh"]),
+    ("gufo-flash-next", ["none", "minimal", "low", "medium", "high", "xhigh", "max"]),
+])
+@pytest.mark.parametrize("effort", [None, "none", "minimal", "low", "medium", "high", "xhigh", "max"])
+async def test_flash_next_reasoning_options_reach_chat_transport(monkeypatch, effort, model_id, options):
     from mato_loop_backend.api.routes.providers import (
         _model_reasoning_default,
         _model_reasoning_options,
@@ -2000,11 +2005,16 @@ async def test_halogen_reasoning_options_reach_chat_transport(monkeypatch, effor
         name="Local", adapter_type="openai-compatible", pseudonymization_enabled=False,
         config={"base_url": "http://provider.test/v1", "api_type": "chat_completions"},
     )
-    model = ModelConfig(provider_id=provider.id, model_id="halogen-qwen3.8-flash-next")
+    if effort is not None and effort not in options:
+        with pytest.raises(ProviderError, match="selected reasoning effort"):
+            await ProviderService.prepare_request(
+                provider=provider, model=ModelConfig(provider_id=provider.id, model_id=model_id),
+                messages=[], tools=[], reasoning_effort=effort,
+            )
+        return
+    model = ModelConfig(provider_id=provider.id, model_id=model_id)
     assert _model_reasoning_default(provider, model) == "xhigh"
-    assert _model_reasoning_options(provider, model) == [
-        "none", "minimal", "low", "medium", "high", "xhigh",
-    ]
+    assert _model_reasoning_options(provider, model) == options
     transport = AsyncMock(return_value=ProviderResult(content="OK"))
     monkeypatch.setattr(service_module, "chat_completions", transport)
     await ProviderService.complete(

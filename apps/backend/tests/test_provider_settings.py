@@ -437,11 +437,22 @@ def test_sync_refreshes_explicit_capabilities_without_overwriting_manual_values(
     )
 
 
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("modalities,expected", [
+    ({"input_modalities": ["text", "audio", "video"]}, {"text", "audio", "video"}),
+    ({"architecture": {"input_modalities": ["text", "image"]}}, {"text", "image"}),
+    ({"input_modalities": ["text"], "architecture": {"input_modalities": ["text", "image"]}}, {"text"}),
+])
 async def test_sync_retains_discovered_input_modalities_without_name_inference(
     monkeypatch,
+    existing,
+    modalities,
+    expected,
 ) -> None:
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
-    settings = AiSettings(providers=[provider])
+    settings = AiSettings(providers=[provider], models=[ModelConfig(
+        provider_id=provider.id, model_id="plain-model", origin=ModelOrigin.DISCOVERED,
+    )] if existing else [])
     _mock_settings(monkeypatch, settings)
     monkeypatch.setattr(
         ProviderService,
@@ -450,7 +461,7 @@ async def test_sync_retains_discovered_input_modalities_without_name_inference(
             return_value=[
                 DiscoveredModel(
                     id="plain-model",
-                    input_modalities={"text", "audio", "video"},
+                    **modalities,
                 ),
                 DiscoveredModel(id="video-in-name-only"),
             ]
@@ -459,14 +470,10 @@ async def test_sync_retains_discovered_input_modalities_without_name_inference(
 
     result = await sync_provider_models(provider.id, _db())
 
-    assert settings.models[0].input_modalities == {
-        ModelInputModality.TEXT,
-        ModelInputModality.AUDIO,
-        ModelInputModality.VIDEO,
-    }
+    assert settings.models[0].input_modalities == expected
     assert settings.models[1].input_modalities == {ModelInputModality.TEXT}
-    assert result["models"][0]["inputModalities"] == ["audio", "text", "video"]
-    assert result["models"][0]["supportsImageInput"] is False
+    assert result["models"][0]["inputModalities"] == sorted(expected)
+    assert result["models"][0]["supportsImageInput"] is ("image" in expected)
 
 
 @pytest.mark.parametrize(
