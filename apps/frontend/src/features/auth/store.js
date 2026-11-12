@@ -21,6 +21,11 @@ function hardReload(path) {
   else window.location.reload()
 }
 
+async function endVoice() {
+  const { useVoiceStore } = await import('src/features/voice/store')
+  await useVoiceStore().end()
+}
+
 export const useAuthStore = defineStore('auth', {
   state: () => ({
     statusLoaded: false,
@@ -33,6 +38,7 @@ export const useAuthStore = defineStore('auth', {
   }),
   actions: {
     async clearIdentityState() {
+      await endVoice()
       const chat = useChatStore()
       try {
         await chat.clearAllDrafts()
@@ -104,6 +110,7 @@ export const useAuthStore = defineStore('auth', {
       hardReload('/login')
     },
     async logout() {
+      await endVoice()
       await useInAppNotificationStore().removePushForLogout()
       await api.post('/auth/logout')
       await this.clearIdentityState()

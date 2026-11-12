@@ -58,6 +58,10 @@ class ChatHistoryService:
             raise ChatHistoryError("session.notFound", 404)
         if session.parent_session_id is not None:
             raise ChatHistoryError("session.readOnly", 403)
+        from mato_loop_backend.voice.admission import active_connection
+
+        if await active_connection(db, session_id):
+            raise ChatHistoryError("voice.busy", 409)
         return session
 
     @staticmethod

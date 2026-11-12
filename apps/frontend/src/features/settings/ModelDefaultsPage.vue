@@ -102,6 +102,7 @@ const fields = [
   { key: 'imageGenerationModelId', label: 'Bilder', capability: 'image_generation' },
   { key: 'imageEditingModelId', label: 'Abweichendes Modell für Bildbearbeitung', capability: 'image_editing' },
   { key: 'speechGenerationModelId', label: 'Spracherzeugung', capability: 'speech_generation' },
+  { key: 'realtimeModelId', label: 'Echtzeit-Sprachmodus', capability: 'realtime_audio' },
   { key: 'audioGenerationModelId', label: 'Audioerzeugung', capability: 'audio_generation' }, { key: 'audioTranscriptionModelId', label: 'Transkription', capability: 'audio_transcription' }
 ]
 const options = (field) => [{ label: 'Automatische Auswahl', value: null }, ...(field.options ? providers[field.options] : providers.selectionOptions(form.value[field.key], field.tools, field.capability || 'chat'))]

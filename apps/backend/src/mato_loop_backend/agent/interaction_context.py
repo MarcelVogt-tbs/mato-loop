@@ -45,13 +45,15 @@ def run_records(records, run):
     owner = None
     for item in records[input_index:]:
         metadata = (item.provider_data or {}).get("_matoloop", {})
+        if metadata.get("voice"):
+            continue
         if item.role == "user":
             owner = (str(run.id) if item.id == run.input_message_id else
                      metadata.get("continuationRunId") or metadata.get("requestId") or str(run.id))
         belongs = (metadata.get("runId") == str(run.id) if metadata.get("runId")
                    else owner == str(run.id))
         (own if belongs else others).append(item)
-    if not others:
+    if not others and len(own) == len(records) - input_index:
         return records
     view = [*records[:input_index], *others, *own]
     # This marker is process-local; canonical content and timestamps stay intact.

@@ -16,6 +16,19 @@ Verwende Basis-URL, optionalen API-Schlüssel und entweder Chat Completions oder
 
 MatoLoop übernimmt Eingabemodalitäten aus `input_modalities` oder ersatzweise `architecture.input_modalities`. Synchronisiere bestehende Modelle erneut, um diese Angaben zu aktualisieren. Gufo meldet Bildunterstützung nur mit geladenem Vision-Projektor (`mmproj`); der Modellname allein schaltet sie nicht frei. Für den Alias `gufo-flash-next` stehen mit Chat Completions **Aus**, **Minimal**, **Niedrig**, **Mittel**, **Hoch**, **Sehr hoch** und **Maximum** mit **Sehr hoch** als Standard bereit. Gültige Reasoning-Angaben aus der Modellerkennung haben Vorrang. Video- und Audioeingabe werden nicht aus diesem Alias abgeleitet.
 
+### Azure OpenAI Realtime und OpenAI Realtime
+
+Der Provider **Realtime** ermöglicht [Echtzeit-Sprachgespräche](anhaenge-und-medien.md#echtzeit-sprachgesprache) über Azure oder OpenAI.
+Er ist von Azure Speech und normalen OpenAI-kompatiblen Chatmodellen getrennt.
+
+1. Füge unter **Provider** den Typ **Realtime** hinzu und wähle unter **Dienst** entweder **Azure** oder **OpenAI**. Verwende bei Azure den HTTPS-Ressourcenendpunkt ohne Pfad oder mit `/openai/v1`; für OpenAI den HTTPS-Endpunkt mit `/v1`, beispielsweise `https://api.openai.com/v1`. Ausdrücklich Realtime-GA-kompatible Endpunkte verwendest du mit **OpenAI**. Bestehende Realtime-Verbindungen erscheinen in derselben Maske; ihr Dienst, ihre Zugangsdaten und Modelle bleiben erhalten. Der Dienst einer gespeicherten Verbindung ist festgelegt.
+2. Hinterlege den API-Key im Passwortfeld. MatoLoop speichert ihn verschlüsselt, nicht im Chat. Ohne gültigen Schlüssel ist kein Gespräch möglich. Entra ID wird hier noch nicht unterstützt.
+3. Füge das Modell manuell hinzu und aktiviere es. Bei Azure ist die **Modell-ID** der Name deines Realtime-Deployments. Verwende nur ein Deployment mit Realtime-GA-, WebRTC- und Tool-Unterstützung; Region, Quoten und Zugriff müssen dazu passen.
+4. Trage unter **Realtime-Stimme** eine unterstützte Stimme ein. Unter **Transkriptionsmodell** gehört eine vom Realtime-Dienst unterstützte Modell-ID hinein, zum Beispiel `gpt-4o-mini-transcribe`, nicht der Name deines Realtime-Deployments. Prüfe, welche Stimmen und Transkriptionsmodelle dein Dienst unterstützt.
+5. Wähle das Modell unter **Standardmodelle > Echtzeit-Sprachmodus**. Die Headset-Taste im Chat startet das Gespräch direkt mit diesem Modell und dessen Stimme. Ist kein Standard gesetzt, verwendet MatoLoop das erste verfügbare Realtime-Modell.
+
+Das Mikrofon-Audio wird direkt an den Provider übertragen und kann nicht textlich pseudonymisiert werden. MatoLoop speichert den Textverlauf, keine Audioaufnahme; für die Aufbewahrung beim Provider gelten dessen Einstellungen. Gespräch und Transkription können Kosten verursachen. Die Auswahl des Realtime-Modells ändert nicht das normale Agentmodell für übergebene Aufgaben.
+
 ### Kimi Code (Abonnement)
 
 Wähle **Kimi Code (Abonnement)** und trage einen API-Key aus der [Kimi-Code-Konsole](https://www.kimi.com/code/console) ein. Die Vorlage setzt `https://api.kimi.ai/coding/v1` und **Responses API** voraus; für China kann `https://api.kimi.com/coding/v1` verwendet werden. Gespeichert wird eine normale OpenAI-kompatible Verbindung mit verschlüsseltem Schlüssel. Moonshot-API-Keys und separat abgerechnetes API-Guthaben sind damit nicht austauschbar.

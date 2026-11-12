@@ -175,6 +175,7 @@ class AgentRuntime:
         content: str,
         *,
         run_id: UUID | None = None,
+        voice_connection_id: UUID | None = None,
         attachments: list[AttachmentInput] | None = None,
         automation_run: AutomationRun | None = None,
         model_id_override: UUID | None = None,
@@ -202,6 +203,19 @@ class AgentRuntime:
         if locked_session is None:
             raise AgentRunError("session.notFound")
         chat_session = locked_session
+        from mato_loop_backend.voice.admission import active_connection, active_session_task
+
+        connection = await active_connection(db, chat_session.id)
+        if voice_connection_id is not None:
+            from uuid import uuid5
+
+            if connection is None or connection.id != voice_connection_id or connection.status != "active":
+                raise AgentRunError("voice.notActive")
+            task = await active_session_task(db, chat_session)
+            if task is None or uuid5(task.id, "run") != run_id:
+                raise AgentRunError("voice.busy")
+        elif connection:
+            raise AgentRunError("voice.busy")
         from mato_loop_backend.sessions.archive import is_session_archived
 
         if await is_session_archived(db, chat_session):
@@ -227,7 +241,7 @@ class AgentRuntime:
         from mato_loop_backend.sessions.service import SessionServiceError
 
         await cls._ensure_user_active(db, chat_session.user_id, for_update=True)
-        selected_command = parse_command(content)
+        selected_command = parse_command(content) if voice_connection_id is None else None
         command_data = None
         if selected_command is not None:
             try:
@@ -269,7 +283,7 @@ class AgentRuntime:
         model = agent_run_support._model_for_id(ai_settings, model_id)
         provider = agent_run_support._provider_for_model(ai_settings, model) if model is not None else None
         trust_level = effective_model_trust(provider, model) if provider and model else TrustLevel.PUBLIC
-        if chat_session.trust_level is None and not (automation_run is not None and model_id_override is not None):
+        if voice_connection_id is None and chat_session.trust_level is None and not (automation_run is not None and model_id_override is not None):
             chat_session.trust_level = trust_level.value if provider and model else TrustLevel.PRIVATE.value
         pseudonymization_enabled = (
             provider is not None and model is not None
@@ -349,7 +363,7 @@ class AgentRuntime:
             execution_operations=execution_operations,
         )
         db.add_all([message, run])
-        generate_title = chat_session.title_generation_status == TitleGenerationStatus.PENDING.value
+        generate_title = voice_connection_id is None and chat_session.title_generation_status == TitleGenerationStatus.PENDING.value
         if generate_title:
             chat_session.title_generation_status = TitleGenerationStatus.RUNNING.value
         created_attachments = []
@@ -398,7 +412,7 @@ class AgentRuntime:
                         category="user_upload",
                     )
                 )
-            if chat_session.title == "Neue Session":
+            if voice_connection_id is None and chat_session.title == "Neue Session":
                 initial_content = content.strip() or ", ".join(
                     attachment.filename or "attachment"
                     for attachment in created_attachments

@@ -2,6 +2,7 @@ const unavailableStates = new Set(['missing', 'unavailable'])
 
 export const MODEL_CAPABILITY_OPTIONS = Object.freeze([
   { label: 'Chat', value: 'chat', icon: 'chat' },
+  { label: 'Echtzeit-Sprache', value: 'realtime_audio', icon: 'record_voice_over' },
   { label: 'Bildgenerierung', value: 'image_generation', icon: 'image' },
   { label: 'Bildbearbeitung', value: 'image_editing', icon: 'edit' },
   { label: 'Sprachausgabe', value: 'speech_generation', icon: 'record_voice_over' },
@@ -29,7 +30,7 @@ export function isModelPresent(model) {
 export function isProviderEffective(provider, codex = {}) {
   if (!provider?.enabled) return false
   if (provider.effectiveEnabled === false) return false
-  if (provider.adapterType === 'azure-speech' && provider.hasCredential !== true) return false
+  if (['azure-speech', 'azure-openai-realtime', 'openai-realtime'].includes(provider.adapterType) && provider.hasCredential !== true) return false
   return provider.adapterType !== 'openai-codex'
     || provider.hasCredential === true
     || codex.authenticated === true

@@ -11,6 +11,15 @@ _load_optional = SettingsStore.load_optional
 
 
 @pytest.fixture
+def no_active_voice(monkeypatch):
+    """Keep existing session unit mocks independent of Realtime database admission."""
+    from mato_loop_backend.voice import admission
+
+    monkeypatch.setattr(admission, "active_connection", AsyncMock(return_value=None))
+    monkeypatch.setattr(admission, "active_connections", AsyncMock(return_value=None))
+
+
+@pytest.fixture
 def skill_library(monkeypatch, tmp_path):
     import mato_loop_backend.skill_storage as storage
     from mato_loop_backend.settings import DEFAULT_SKILLS
@@ -23,6 +32,7 @@ def skill_library(monkeypatch, tmp_path):
 
 
 def pytest_addoption(parser):
+    parser.addoption("--voice-db", action="store_true", help="Run Realtime PostgreSQL integration tests")
     parser.addoption("--subagent-db", action="store_true", help="Run native session PostgreSQL integration tests")
     parser.addoption("--memory-db", action="store_true", help="Run memory approval PostgreSQL integration tests")
     parser.addoption(

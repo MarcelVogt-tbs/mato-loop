@@ -68,6 +68,30 @@ def _db() -> AsyncMock:
     return db
 
 
+@pytest.mark.parametrize("adapter_type", ["azure-openai-realtime", "openai-realtime"])
+@pytest.mark.parametrize("scope", ["instance", "personal"])
+async def test_realtime_provider_keeps_credentials_outside_settings(monkeypatch, adapter_type, scope):
+    settings = AiSettings() if scope == "instance" else UserAiSettings()
+    owner = uuid4() if scope == "personal" else None
+    db = _db()
+    _mock_settings(monkeypatch, settings)
+    credential = SimpleNamespace(id=uuid4())
+    store = AsyncMock(return_value=credential)
+    monkeypatch.setattr(provider_routes, "store_credential", store)
+    azure = adapter_type == "azure-openai-realtime"
+    result = await provider_routes._save_realtime_provider(
+        db, settings, provider_routes.RealtimeProviderRequest(
+            name="Voice", base_url="https://voice.openai.azure.com/" if azure else "https://api.openai.com/v1",
+            api_key="test-key",
+        ), adapter_type, owner_id=owner,
+    )
+    assert settings.providers[0].owner_id == owner
+    assert store.await_args.kwargs["owner_id"] == owner
+    assert result["providers"][0]["hasCredential"] is True
+    assert "test-key" not in str(result)
+    assert result["providers"][0]["config"]["baseUrl"].endswith("/openai/v1" if azure else "/v1")
+
+
 def _mock_settings(monkeypatch, settings: AiSettings) -> ModelDefaultsSettings:
     defaults = ModelDefaultsSettings(**settings.model_dump(include=set(ModelDefaults.model_fields)))
     async def load(_db, settings_type, **_kwargs):

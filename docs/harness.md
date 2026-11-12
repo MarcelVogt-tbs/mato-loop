@@ -36,6 +36,105 @@ automations and Dreaming. Each processor has an independent loop and database se
 long-running Dreaming work cannot hold up message delivery. Their existing service and
 persistence contracts remain separate; this is not a new job framework.
 
+### Realtime voice
+
+The voice coordinator shares the single-worker deployment boundary. A persisted,
+leased connection exclusively owns an ordinary source chat while its browser call
+is starting or active. Normal runs, queued-message admission, history mutations,
+policy changes, archiving and deletion cannot race that ownership. Restart marks
+connections failed rather than reconstructing media or replaying effects.
+
+The settings UI exposes one Realtime provider with an Azure/OpenAI service choice,
+separate from ordinary Chat Completions/Responses transports. Persisted
+`azure-openai-realtime` and `openai-realtime` adapter types retain their distinct
+authentication and endpoint validation. Existing connections use the same form
+without changing their stored service, credentials or model references; the service
+cannot be changed when editing a connection.
+Azure uses the resource root normalized to `/openai/v1` and deployment names;
+OpenAI-compatible endpoints require an HTTPS `/v1` base. An enabled Realtime model
+has its own supported voice and explicit transcription model ID, distinct from
+the Realtime deployment name.
+Configuration uses the existing encrypted, instance/personal credential scopes.
+Azure may return a call location under `/v1/realtime/calls/` despite the
+`/openai/v1` request base. Both Azure path forms are accepted only on the configured
+origin; controller authentication always uses the configured resource endpoint.
+Entra ID, preview APIs, automatic model discovery and an STT/agent/TTS fallback
+are not implemented.
+
+The backend negotiates SDP with a short-lived credential that never reaches the
+browser. Browser WebRTC carries raw audio directly to the selected provider.
+A backend controller imports bounded text context and enables VAD/tools; the
+browser enables its microphone track only after both that readiness barrier and
+the media connection succeed. The browser data channel cannot authorize host
+tools. Its separate cookie-authenticated control WebSocket accepts only
+heartbeat, interrupt and end, with origin, ownership and live login checks.
+Loss of control, playback permission, tab visibility, navigation or logout stops
+local media; no microphone reconnection occurs automatically. Heartbeat loss
+expires the backend call. Provider hangup is best effort, with unconfirmed hangup
+recorded as a visible failure rather than claimed as remote success.
+
+The projection contains the selected profile/persona, project instructions,
+eligible maintained session context, a bounded earlier summary and recent
+user/assistant text. The stable voice contract requests German-only speech with
+clear, neutral Standard German pronunciation and no foreign accent. This is a
+model instruction, not acoustic accent validation. Updating this contract
+invalidates earlier voice prompt prefixes; existing calls keep their original
+instructions until explicitly restarted.
+Public voice models exclude private history/context and any
+summary covering private or unclassified messages. No raw tools, reasoning,
+attachments or cross-session memory are imported. Host-sent text uses call-local
+pseudonymization when enabled; raw microphone audio cannot be pseudonymized.
+Provider retention remains external to MatoLoop. Text history and generated
+assistant transcripts are canonical messages; provider item IDs deduplicate
+final/late events. Interrupted generated text is marked potentially unheard.
+MatoLoop does not archive voice audio.
+
+The only model-facing voice tool is `agent_task`: delegate, status, explicit
+correction or stop. It revalidates the live source binding before effects and
+uses durable call-operation deduplication. At most one linked task is active
+per source chat. Work runs through normal agent admission in that same chat,
+using its profile, model policy, project, permissions and computer/directory.
+Only the live connection with a persisted, exact task/run reservation may bypass
+the normal voice/run exclusion. Spoken task text is not parsed as a profile-switch
+command and cannot turn Plan into Build. Later voice conversation is excluded
+from the executing run's turn; only explicit task corrections reach it. This
+preserves tool-call/result ordering and the retained provider prefix as voice
+continues. Late transcript updates to earlier history can invalidate that prefix.
+It is not a native child/subagent lifecycle. Pending approvals and structured
+questions are handled here in the normal chat UI; spoken consent never resolves them.
+
+Interrupting speech, ending voice or losing the browser does not cancel accepted
+work. Voice can be explicitly restarted while its own task continues. Explicit
+task stop uses normal run cancellation; deleting the chat or containing project
+uses the ordinary run/session deletion lifecycle. Task results remain the normal
+assistant messages in this chat, without duplicate completion receipts, including
+after media ends. Completed status calls include the available answer immediately,
+even before background reconciliation links its message. Both status replies and
+quiet-boundary announcements apply the voice model's trust filter, call-local
+text pseudonymization and context budget; private results never flow to a public
+voice model. Missing, UI-only and truncated results are explicit. A result returned
+by status is not announced again automatically in the same call. The stable voice
+contract asks the model to answer from the returned findings with their conclusions,
+qualifications, sources and dates, rather than substitute older knowledge or infer
+facts from completion alone. Result text remains untrusted data, not authority to
+follow instructions or grant permissions. Existing
+separate-session tasks retain their links and reconciliation behavior. Unknown
+dispatch outcomes are matched only to their reserved run and are never replayed.
+Known admission rejections close the reservation immediately and persist the
+operation's error when no reserved run was committed; already committed runs
+retain their reservation for reconciliation.
+Backend restart retains the ordinary run interruption contract above, not a
+promise of resumable work.
+
+Offline regression coverage lives in `tests/test_realtime_transport.py`,
+`tests/test_voice.py` and the frontend `tests/realtime-voice.spec.js`.
+Run the PostgreSQL voice cases with
+`./scripts/dev.sh test backend tests/test_voice.py --voice-db` against the
+worktree's own development database. A real provider acceptance test additionally
+requires configured deployments, a safely stored key and explicit authorization
+for provider charges; mocked protocol tests cannot establish region/model
+availability, actual audio quality, autoplay behavior or end-to-end latency.
+
 ### Message queue
 
 The browser submits ordinary messages through the existing message endpoints with

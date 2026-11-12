@@ -61,7 +61,7 @@
         <q-avatar color="grey-7" text-color="white" icon="hub" />
         <div>
           <div class="text-weight-medium">Noch kein Provider konfiguriert</div>
-          <div class="text-body2 app-muted">Füge ChatGPT Codex, Lemonade, Azure Speech oder einen OpenAI-kompatiblen Endpunkt hinzu.</div>
+          <div class="text-body2 app-muted">Füge ChatGPT Codex, Lemonade, Realtime, Azure Speech oder einen OpenAI-kompatiblen Endpunkt hinzu.</div>
         </div>
       </div>
     </q-card>
@@ -343,7 +343,7 @@ const listedModels = ref([])
 const scope = computed(() => admin ? 'instance' : 'personal')
 const showManagement = computed(() => !admin || section.value === 'management')
 const llmProviders = computed(() => listedProviders.value.filter((item) => (
-  ['openai-codex', 'openai-compatible', 'lemonade', 'azure-speech'].includes(item.adapterType)
+  ['openai-codex', 'openai-compatible', 'lemonade', 'azure-speech', 'azure-openai-realtime', 'openai-realtime'].includes(item.adapterType)
 )))
 const personalBlocked = computed(() => !providers.personalProvidersEnabled && !auth.isAdmin)
 const canEdit = (provider) => provider.scope === scope.value && (admin ? auth.isAdmin : !personalBlocked.value)
@@ -435,12 +435,13 @@ function providerIcon(provider) {
   if (provider.adapterType === 'openai-codex') return 'key'
   if (provider.adapterType === 'lemonade') return 'developer_board'
   if (provider.adapterType === 'azure-speech') return 'graphic_eq'
+  if (['azure-openai-realtime', 'openai-realtime'].includes(provider.adapterType)) return 'record_voice_over'
   return 'hub'
 }
 
 function providerStatus(provider) {
   if (!provider.enabled) return { label: 'Deaktiviert', color: 'grey-7' }
-  if (provider.adapterType === 'azure-speech' && !provider.hasCredential) {
+  if (['azure-speech', 'azure-openai-realtime', 'openai-realtime'].includes(provider.adapterType) && !provider.hasCredential) {
     return { label: 'API-Key fehlt', color: 'warning' }
   }
   if (provider.adapterType === 'openai-codex' && !provider.hasCredential) {
@@ -450,6 +451,10 @@ function providerStatus(provider) {
 }
 
 function providerDescription(provider) {
+  if (['azure-openai-realtime', 'openai-realtime'].includes(provider.adapterType)) {
+    const service = provider.adapterType === 'azure-openai-realtime' ? 'Azure' : 'OpenAI'
+    return `${provider.config?.baseUrl || provider.config?.base_url || 'Globale Verbindung'} · Realtime · ${service}`
+  }
   if (provider.adapterType === 'openai-codex') return 'ChatGPT-Abonnement · Codex OAuth'
   if (provider.scope === 'instance' && !Object.keys(provider.config || {}).length) return 'Globale Verbindung'
   if (provider.adapterType === 'lemonade') {

@@ -46,6 +46,7 @@ vi.mock('src/features/chat/components/MessageContent.vue', () => ({ default: {
 vi.mock('src/features/chat/components/ChatFiles.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/questions/QuestionDock.vue', () => ({ default: { render: () => null } }))
 vi.mock('src/features/subagents/SubagentInspector.vue', () => ({ default: { render: () => null } }))
+vi.mock('src/features/voice/VoicePanel.vue', () => ({ default: { render: () => null } }))
 
 import ChatComposer from '../src/features/chat/components/ChatComposer.vue'
 import { quotedMessage } from '../src/features/chat/quote-drafts'

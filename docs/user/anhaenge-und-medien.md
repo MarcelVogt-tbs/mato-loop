@@ -32,6 +32,29 @@ Gesendete Aufnahmen besitzen einen Audioplayer und einen Download der Originalda
 
 Verhindert eine Anhangsgrenze das Hinzufügen, bleibt die Aufnahme für einen weiteren Versuch, einen Download oder das ausdrückliche Verwerfen verfügbar. Beim Wechsel der Session bleiben fertige Aufnahmen im ursprünglichen Entwurf erhalten. Ungesendete Aufnahmen sind Entwürfe im Browserspeicher und keine serverseitigen Sessiondateien; eingereihte Nachrichten verwenden den dauerhaften Browser-Postausgang.
 
+## Echtzeit-Sprachgespräche
+
+Richte zuerst einen [Realtime-Provider mit Modell und Transkriptionsmodell](provider-und-modelle.md#azure-openai-realtime-und-openai-realtime) ein. Dein Browser benötigt Mikrofonzugriff über HTTPS oder `localhost` und eine WebRTC-Verbindung zum Provider.
+
+Dein Mikrofon-Audio wird direkt an den Provider übertragen und nicht textlich pseudonymisiert. MatoLoop speichert den Textverlauf, keine Audioaufnahme; für die Aufbewahrung beim Provider gelten dessen Einstellungen. Gespräch und Transkription können Kosten verursachen.
+
+1. Öffne eine normale Session und wähle die Headset-Taste **Sprachmodus starten** neben der Aufnahmetaste. Der Sprachmodus startet direkt mit dem unter **Standardmodelle > Echtzeit-Sprachmodus** konfigurierten Modell und dessen Stimme, ohne Auswahldialog. Ist kein Standard gesetzt, verwendet MatoLoop das erste verfügbare Realtime-Modell. Ein anderer laufender Agentenauftrag muss vorher beendet werden; bei einem Sprachauftrag kannst du das Gespräch erneut starten. Ohne bestehende Session legt MatoLoop eine normale Session an.
+2. Erteile gegebenenfalls die Browserberechtigung für das Mikrofon. Das Mikrofon bleibt bis zum vollständigen Verbindungsaufbau ausgeschaltet.
+3. Sprich nach **Ich höre zu**. Du kannst die Antwort durch Sprechen unterbrechen oder **Sprache stoppen** wählen. Das stoppt die Sprachausgabe, nicht einen bereits angenommenen Auftrag.
+4. Verwende **Stummschalten**, **Zum Textchat** oder **Gespräch beenden**. Normale Textnachrichten sind erst nach Gesprächsende wieder möglich.
+
+Während des Gesprächs hält MatoLoop den Bildschirm nach Möglichkeit eingeschaltet und gibt ihn beim Gesprächsende wieder frei. Das funktioniert auch in einer zum iPhone-Home-Bildschirm hinzugefügten Webapp ab iOS 18.4 über HTTPS. Im Sprachmodus siehst du, ob das Wachhalten aktiv ist. Lehnt das Gerät es etwa wegen des Stromsparmodus ab oder unterstützt der Browser es nicht, bleibt der Sprachchat nutzbar und zeigt einen Hinweis. Prüfe dann bei Bedarf die automatische Bildschirmsperre in den Geräteeinstellungen. Manuelles Sperren oder ein Appwechsel beendet weiterhin die Sprachverbindung; das Wachhalten ermöglicht kein Hintergrundgespräch.
+
+Der Sprachmodus erhält die Anweisung, immer Deutsch mit neutraler hochdeutscher Aussprache ohne fremdsprachigen Akzent zu sprechen. Die tatsächliche Aussprache hängt vom Modell und der Stimme ab. Er erhält einen begrenzten Textausschnitt des bisherigen Chats und geeigneten Sessionkontext, nicht automatisch Anhänge oder vollständige Tool-Ergebnisse. Private Inhalte werden nicht in einen öffentlichen Sprachkontext übernommen. Erkennung und Transkription können ungenau sein. Im Chat steht bei abgebrochenen Antworten, dass erzeugter Text möglicherweise nicht vollständig gehört wurde.
+
+Bitte für Arbeiten ausdrücklich den Agenten, etwa im Internet zu suchen. Der Auftrag läuft hier im selben Chat; eine andere Session ist nicht nötig. Höchstens ein Sprachauftrag läuft gleichzeitig. Profilbeschränkungen bleiben erhalten: **Plan** darf nicht durch einen Sprachauftrag zu **Build** werden. Beantworte Freigaben oder strukturierte Rückfragen direkt hier im Chat. Ein gesprochenes „Ja“ erteilt keine Tool-Freigabe. **Stoppen** auf der Auftragskarte beendet den Auftrag bestmöglich; bereits ausgeführte Aktionen werden nicht rückgängig gemacht.
+
+Angenommene Aufträge laufen nach Gesprächsende oder Verbindungsverlust weiter. Ergebnisse erscheinen direkt im Chat, auch wenn der Sprachmodus bereits beendet ist. Das Löschen dieses Chats oder seines Projekts beendet die laufenden Aufträge nach den normalen Sessionregeln. Ältere Aufträge in eigenen Arbeitssessions bleiben über ihre Auftragskarten erreichbar. Ein Backend-Neustart unterbricht aktive Arbeit nach den normalen Sessionregeln.
+
+Der Sprachagent erhält verfügbare Ergebnisse automatisch oder bei einer Statusabfrage und soll deine Frage anhand dieser Ergebnisse beantworten, einschließlich wichtiger Einschränkungen, Quellen und Informationsstand. Private Ergebnisse bleiben im Chat, wenn sie nicht an den gewählten Sprachprovider übermittelt werden dürfen; der Sprachmodus weist dann darauf hin. Fehlende Antworttexte oder gekürzte Auszüge werden ausdrücklich gekennzeichnet.
+
+Beim Sessionwechsel, Ausblenden des Tabs, Verlassen der Seite oder Abmelden endet die lokale Sprachverbindung; das Mikrofon verbindet sich nicht automatisch neu. Bei einem Fehler prüfst du den Hinweis im Chat und startest das Gespräch bewusst erneut. Damit ist dieser Modus kein Hintergrundmikrofon und keine Audioaufzeichnung.
+
 ## Mediengenerierung
 
 Für das OpenAI-kompatible Bildmodell mit der Modell-ID `Qwen-Image-2.1-Turbo`
