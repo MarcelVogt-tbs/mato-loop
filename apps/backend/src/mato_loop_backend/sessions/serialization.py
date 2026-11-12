@@ -453,6 +453,8 @@ def message_payload(
         **({"commandPrompt": command_prompt} if isinstance(command_prompt, str) else {}),
         "modelName": item.model_name,
         "generationStatus": item.generation_status or "completed",
+        "voice": runtime_data.get("voice") is True,
+        **({"voiceTask": runtime_data["voiceTask"]} if isinstance(runtime_data.get("voiceTask"), dict) else {}),
         "continuationSegment": item.role == "assistant" and isinstance(runtime_data, dict)
         and runtime_data.get("continuationSegment") is True,
         "redirected": (

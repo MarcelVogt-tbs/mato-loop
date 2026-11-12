@@ -118,7 +118,7 @@ def test_inventory_is_complete() -> None:
         "pdf",
         "provider",
     } <= categories
-    assert 80 <= len(CASES) <= 257
+    assert 80 <= len(CASES) <= 258
     assert {case.scope for case in CASES} == {
         "hard",
         "quality",
@@ -2254,6 +2254,10 @@ def test_privacy_cases_use_exact_generated_marker_and_instruction() -> None:
 
 
 def test_citation_and_marker_continuation_checks() -> None:
+    assert evaluate(
+        _case("sufficient_search_snippet_answers_without_fetch"),
+        ProviderResult(content="Example 4.2. [Example Releases](https://example.com/releases)"),
+    ) == []
     citation = _case("researched_answer_uses_exact_citation")
     assert evaluate(
         citation,
@@ -2400,11 +2404,11 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
     report = markdown_report(payload)
 
     assert payload["caseCount"] == len(CASES)
-    assert payload["semanticContractCount"] == 141
-    assert payload["contractCount"] == 398
-    assert "Cases: 257" in report
-    assert "Semantic contracts: 141" in report
-    assert "All inventory rows: 398" in report
+    assert payload["semanticContractCount"] == 142
+    assert payload["contractCount"] == 400
+    assert "Cases: 258" in report
+    assert "Semantic contracts: 142" in report
+    assert "All inventory rows: 400" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

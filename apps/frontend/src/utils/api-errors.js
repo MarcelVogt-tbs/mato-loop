@@ -84,6 +84,23 @@ function fieldLabel(field) {
 }
 
 const messages = {
+  'voice.unavailable': () => 'Richte zuerst einen Realtime-Provider und ein verfügbares Modell ein.',
+  'voice.busy': () => 'Beende zuerst das laufende Sprachgespräch.',
+  'voice.notActive': () => 'Das Sprachgespräch ist nicht mehr aktiv.',
+  'voice.bindingChanged': () => 'Konfiguration oder Berechtigungen haben sich geändert. Starte den Sprachmodus erneut.',
+  'voice.connectionLost': () => 'Die Sprachverbindung wurde getrennt. Starte sie bei Bedarf erneut.',
+  'voice.startFailed': () => 'Das Sprachgespräch konnte nicht gestartet werden.',
+  'voice.protocolError': () => 'Der Provider unterstützt das erforderliche Realtime-Protokoll nicht.',
+  'voice.transcriptFailed': () => 'Der Provider konnte das Audio nicht transkribieren. Prüfe das Transkriptionsmodell.',
+  'voice.hangupFailed': () => 'Das lokale Audio ist gestoppt. Das Gesprächsende beim Provider konnte nicht bestätigt werden.',
+  'voice.backendRestarted': () => 'Das Sprachgespräch wurde durch einen Backend-Neustart beendet.',
+  'voice.taskBusy': () => 'Ein Sprachauftrag läuft bereits.',
+  'voice.taskNotFound': () => 'Der verknüpfte Sprachauftrag ist nicht verfügbar.',
+  'voice.taskOutcomeUnknown': () => 'Der Auftragsstart wurde unterbrochen. Prüfe die Arbeitssession, bevor du den Auftrag erneut erteilst.',
+  'voice.browserUnsupported': () => 'Der Sprachmodus benötigt HTTPS oder localhost und einen Browser mit Mikrofonzugriff und WebRTC.',
+  'voice.microphoneDenied': () => 'Der Mikrofonzugriff wurde nicht erlaubt.',
+  'voice.microphoneFailed': () => 'Das Mikrofon konnte nicht verwendet werden.',
+  'voice.playbackFailed': () => 'Der Browser konnte die Sprache nicht abspielen. Prüfe die Audioberechtigungen.',
   'browser.unavailable': () => 'Der Browser ist derzeit nicht erreichbar.',
   'browser.notReady': () => 'Der Browser ist noch nicht einsatzbereit. Öffne die Einrichtung in den Integrationen.',
   'browser.busy': () => 'Der Browser ist bereits belegt oder führt eine Aktion aus. Warte, bis er freigegeben ist.',

@@ -680,6 +680,7 @@ class ModelAvailability(StrEnum):
 
 class ModelCapability(StrEnum):
     CHAT = "chat"
+    REALTIME_AUDIO = "realtime_audio"
     IMAGE_GENERATION = "image_generation"
     IMAGE_EDITING = "image_editing"
     SPEECH_GENERATION = "speech_generation"
@@ -752,6 +753,8 @@ class ModelConfig(BaseModel):
         ),
     )
     config: dict[str, Any] = Field(default_factory=dict)
+    realtime_voice: str = Field(default="marin", min_length=1, max_length=100)
+    realtime_transcription_model: str = Field(default="gpt-4o-mini-transcribe", min_length=1, max_length=300)
     context_window_tokens: int = Field(
         default=128_000,
         ge=2,
@@ -1279,6 +1282,7 @@ class ModelDefaults(BaseModel):
     speech_generation_voices: dict[UUID, Annotated[str, Field(strict=True, min_length=1, max_length=500)]] = Field(default_factory=dict, max_length=1000)
     audio_generation_model_id: UUID | None = None
     audio_transcription_model_id: UUID | None = None
+    realtime_model_id: UUID | None = None
 
 
 class ModelDefaultsSettings(SettingsDocument, ModelDefaults):

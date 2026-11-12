@@ -13,6 +13,7 @@ from mato_loop_backend.models import ChatSession, Credential, UserAccount
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.media import media_model_available
 from mato_loop_backend.providers.openai_compatible import DiscoveredModel
+from mato_loop_backend.providers.realtime.settings import ADAPTER_TYPES, realtime_model_available
 from mato_loop_backend.security import scoped_credentials
 from mato_loop_backend.settings import (
     AiProviderSettings,
@@ -44,6 +45,7 @@ ScopedSettingsLoader = Callable[
 ModelDiscovery = Callable[..., Awaitable[list[DiscoveredModel]]]
 
 DEFAULT_MODEL_FIELDS: dict[str, tuple[str, ModelCapability]] = {
+    "realtime_model_id": ("realtimeModelId", ModelCapability.REALTIME_AUDIO),
     "default_model_id": ("defaultModelId", ModelCapability.CHAT),
     "compaction_model_id": ("compactionModelId", ModelCapability.CHAT),
     "title_generation_model_id": ("titleGenerationModelId", ModelCapability.CHAT),
@@ -167,8 +169,12 @@ def model_reference_available(
             )
         )
         and not (
-            capability != ModelCapability.CHAT
+            capability not in {ModelCapability.CHAT, ModelCapability.REALTIME_AUDIO}
             and not media_model_available(settings, capability, model_id)
+        )
+        and (
+            capability != ModelCapability.REALTIME_AUDIO
+            or realtime_model_available(settings, value, provider(settings, value.provider_id))
         )
     )
 
@@ -676,7 +682,12 @@ class ProviderSettingsService:
         values: dict[str, Any],
         enabled: bool | None,
     ) -> None:
-        provider(settings, provider_id)
+        owner = provider(settings, provider_id)
+        if owner.adapter_type in ADAPTER_TYPES and (
+            set(values.get("capabilities", {ModelCapability.CHAT})) != {ModelCapability.REALTIME_AUDIO}
+            or not values.get("supports_tools", True)
+        ):
+            raise ProviderSettingsError("provider.modelCapabilityUnavailable", field="capabilities")
         _ensure_unique_model_id(
             settings, provider_id=provider_id, model_id=values["model_id"]
         )
@@ -720,6 +731,10 @@ class ProviderSettingsService:
         except ValidationError as exc:
             raise ProviderSettingsError("provider.configurationInvalid") from exc
         model_provider = provider(settings, validated.provider_id)
+        if model_provider.adapter_type in ADAPTER_TYPES and (
+            validated.capabilities != {ModelCapability.REALTIME_AUDIO} or not validated.supports_tools
+        ):
+            raise ProviderSettingsError("provider.modelCapabilityUnavailable", field="capabilities")
         if (
             model_provider.adapter_type == "openai-compatible"
             and current.origin == ModelOrigin.DISCOVERED

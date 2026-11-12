@@ -41,6 +41,8 @@ from mato_loop_backend.settings.session_profiles import (
     UserSessionTemplatesSettings,
 )
 
+pytestmark = pytest.mark.usefixtures("no_active_voice")
+
 
 @pytest.fixture
 def documents(monkeypatch):

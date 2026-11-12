@@ -20,7 +20,8 @@
         <q-icon name="attach_file" size="28px" />
         <span class="text-weight-medium">Dateien hier ablegen</span>
       </div>
-      <q-form @submit.prevent="submit">
+      <VoicePanel ref="voicePanel" />
+      <q-form v-show="!voice.active" @submit.prevent="submit">
         <q-input
           :key="session?.sessionProfile?.messageSize || 'standard'"
           ref="input"
@@ -126,6 +127,13 @@
               <q-icon name="fiber_manual_record" size="12px" class="composer-recording__pulse" />
               <span>{{ recordingDuration }}</span>
             </div>
+            <q-btn
+              flat round dense icon="headset_mic" class="composer-action" type="button"
+              aria-label="Sprachmodus starten"
+              :loading="voicePanel?.starting"
+              :disable="inputDisabled || voicePanel?.starting || (running && !voicePanel?.canStartWhileRunning) || voiceActivity || chat.activeQueuedMessages.length > 0"
+              @click="voicePanel.start()"
+            />
             <q-btn
               flat
               round
@@ -238,6 +246,8 @@ import { clipboardAttachmentFiles } from 'src/features/chat/attachment-drafts'
 import { formatAttachmentDuration } from 'src/features/files/attachments'
 import { sessionModel } from '../session-model'
 import CommandList from 'src/features/commands/CommandList.vue'
+import VoicePanel from 'src/features/voice/VoicePanel.vue'
+import { useVoiceStore } from 'src/features/voice/store'
 
 defineOptions({ name: 'ChatComposer' })
 
@@ -256,6 +266,8 @@ const $q = useQuasar()
 const identity = useAgentIdentityStore()
 const agentProfiles = useAgentProfileStore()
 const chat = useChatStore()
+const voice = useVoiceStore()
+const voicePanel = ref(null)
 const providers = useProviderStore()
 const toolSettings = useToolSettingsStore()
 const input = ref(null)

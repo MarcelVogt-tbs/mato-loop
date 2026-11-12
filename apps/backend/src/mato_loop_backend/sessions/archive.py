@@ -39,6 +39,16 @@ async def set_archived(db: AsyncSession, item: ChatSession | Project, archived: 
 
     if (item.archived_at is not None) == archived:
         return
+    from mato_loop_backend.sessions.service import SessionServiceError
+    from mato_loop_backend.voice.admission import active_connections
+
+    session_ids = select(ChatSession.id).where(
+        ChatSession.user_id == item.user_id,
+        ChatSession.project_id == item.id if isinstance(item, Project) else ChatSession.id == item.id,
+    )
+    await db.execute(session_ids.with_for_update())
+    if await active_connections(db, session_ids):
+        raise SessionServiceError(409, "voice.busy")
     now = datetime.now(UTC)
     item.archived_at = now if archived else None
     sessions = select(ChatSession.id).where(

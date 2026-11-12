@@ -25,6 +25,17 @@
           :disable="isEditing"
         />
 
+        <AppSelect dense
+          v-if="isRealtime"
+          v-model="realtimeService"
+          outlined
+          emit-value
+          map-options
+          label="Dienst"
+          :options="realtimeServices"
+          :disable="isEditing"
+        />
+
         <div v-if="providerType" class="provider-form-grid">
           <AppSelect dense
             v-if="auth.modelTrustEnabled"
@@ -101,6 +112,12 @@
             Keine Live-Transkription, kein Chat und keine Tool-Aufrufe.
             Das Originalaudio wird ohne Pseudonymisierung an Azure gesendet – auch wenn der Schutz für Kennungen und Secrets aktiviert ist.
             Nach der Modellerkennung kannst du die Modelle unter Standardmodelle für Transkription und Spracherzeugung auswählen.
+          </q-banner>
+          <q-banner v-if="isRealtime" rounded class="provider-form-section app-surface-tonal">
+            Echtzeit-Sprachgespräche senden dein Mikrofon-Audio direkt an den Provider.
+            Die Pseudonymisierung schützt übertragene Texte, nicht deine Stimme oder gesprochene Inhalte.
+            MatoLoop speichert den Textverlauf, keine Audioaufnahme. Die Datenaufbewahrung beim Provider ist davon unabhängig.
+            Füge das Realtime-Modell bzw. Azure-Deployment anschließend manuell hinzu.
           </q-banner>
           <q-banner v-if="providerType === 'kimi-code'" rounded class="provider-form-section app-surface-tonal">
             Verwende einen API-Key aus der Kimi-Code-Konsole, keinen Moonshot-API-Key.
@@ -219,6 +236,7 @@ const { confirm } = useConfirm()
 const providers = useProviderStore()
 const auth = useAuthStore()
 const providerType = ref(null)
+const realtimeService = ref('openai-realtime')
 const formRef = ref(null)
 const saving = ref(false)
 const codexLoading = ref(false)
@@ -230,6 +248,10 @@ let pollInFlight = false
 const apiTypes = [
   { label: 'Chat Completions', value: 'chat_completions' },
   { label: 'Responses API', value: 'responses' }
+]
+const realtimeServices = [
+  { label: 'Azure', value: 'azure-openai-realtime' },
+  { label: 'OpenAI-kompatibel', value: 'openai-realtime' }
 ]
 const trustLevelOptions = [
   { label: 'Öffentlich', value: 'public' },
@@ -243,10 +265,14 @@ const memoryPolicyOptions = [
 const isEditing = computed(() => Boolean(props.provider))
 const hasCodexProvider = computed(() => providers.providers.some((item) => item.adapterType === 'openai-codex'))
 const isAzureSpeech = computed(() => providerType.value === 'azure-speech')
+const isRealtime = computed(() => providerType.value === 'realtime')
 const isOpenAICompatible = computed(() => ['openai-compatible', 'kimi-code'].includes(providerType.value))
-const isConfiguredProvider = computed(() => isOpenAICompatible.value || ['lemonade', 'azure-speech'].includes(providerType.value))
+const isConfiguredProvider = computed(() => isOpenAICompatible.value || isRealtime.value || ['lemonade', 'azure-speech'].includes(providerType.value))
 const endpointPlaceholder = computed(() => {
   if (isAzureSpeech.value) return 'https://my-speech.cognitiveservices.azure.com'
+  if (isRealtime.value) return realtimeService.value === 'azure-openai-realtime'
+    ? 'https://my-resource.openai.azure.com'
+    : 'https://api.openai.com/v1'
   return providerType.value === 'lemonade' ? 'http://lemonade-host:13305/v1' : 'https://api.example.com/v1'
 })
 const apiKeyHint = computed(() => {
@@ -281,6 +307,12 @@ const providerOptions = computed(() => [
     description: 'Lokaler Lemonade-Server für Chat- und Medienmodelle'
   },
   {
+    label: 'Realtime',
+    value: 'realtime',
+    icon: 'record_voice_over',
+    description: 'Echtzeit-Sprachgespräche über Azure, OpenAI oder Realtime-GA-kompatible Endpunkte'
+  },
+  {
     label: 'Azure Speech',
     value: 'azure-speech',
     icon: 'graphic_eq',
@@ -291,6 +323,7 @@ const dialogTitle = computed(() => isEditing.value ? `${props.provider.name} bea
 const dialogIcon = computed(() => ({
   'openai-codex': 'key',
   lemonade: 'developer_board',
+  realtime: 'record_voice_over',
   'azure-speech': 'graphic_eq'
 })[providerType.value] || 'hub')
 
@@ -323,6 +356,12 @@ function urlRule(value) {
     : 'Bitte gib eine gültige HTTP-URL ein.'
   try {
     const url = new URL(value)
+    if (isRealtime.value) {
+      return (url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash
+        && (realtimeService.value === 'azure-openai-realtime'
+          ? ['/', '/openai/v1', '/openai/v1/'].includes(url.pathname)
+          : /\/v1\/?$/.test(url.pathname))) || 'Bitte gib einen HTTPS-Realtime-Endpunkt ein; Azure ohne Pfad oder mit /openai/v1, OpenAI-kompatible Dienste mit /v1.'
+    }
     if (isAzureSpeech.value) {
       return (url.protocol === 'https:' && !url.username && !url.password
         && url.pathname === '/' && !url.search && !url.hash) || message
@@ -336,7 +375,10 @@ function urlRule(value) {
 function initialize() {
   clearPolling()
   codexLogin.value = null
-  providerType.value = props.provider?.adapterType || null
+  const adapterType = props.provider?.adapterType || null
+  const realtime = realtimeServices.some((service) => service.value === adapterType)
+  realtimeService.value = realtime ? adapterType : 'openai-realtime'
+  providerType.value = realtime ? 'realtime' : adapterType
   const baseUrl = props.provider?.config?.baseUrl || props.provider?.config?.base_url || ''
   if (providerType.value === 'openai-compatible' && [
     'https://api.kimi.ai/coding/v1', 'https://api.kimi.com/coding/v1'
@@ -369,7 +411,9 @@ async function saveConfiguredProvider() {
     if (props.provider) {
       await providers.updateProvider(props.provider.id, payload)
     } else {
-      providerId = await providers.createProvider(isOpenAICompatible.value ? 'openai-compatible' : providerType.value, payload)
+      const adapterType = isOpenAICompatible.value ? 'openai-compatible'
+        : isRealtime.value ? realtimeService.value : providerType.value
+      providerId = await providers.createProvider(adapterType, payload)
     }
     $q.notify({ type: 'positive', message: 'Provider gespeichert' })
     close()

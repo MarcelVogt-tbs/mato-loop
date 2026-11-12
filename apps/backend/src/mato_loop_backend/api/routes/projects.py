@@ -318,7 +318,10 @@ async def archive_project(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ProjectResponse:
     project = await _owned_project(db, project_id, user.id, for_update=True)
-    await set_archived(db, project, payload.archived)
+    try:
+        await set_archived(db, project, payload.archived)
+    except SessionServiceError as exc:
+        raise ApiError(exc.status_code, exc.code) from exc
     await db.commit()
     return _payload(project, await _session_count(db, project))
 
@@ -540,6 +543,11 @@ async def delete_project(
                 )
             ).all()
         )
+        from mato_loop_backend.voice.admission import active_connection
+
+        for session in sessions:
+            if await active_connection(db, session.id):
+                raise ApiError(409, "voice.busy")
         linked_automations = await _linked_automations(
             db, project_db_id, owner_id, for_update=True
         )

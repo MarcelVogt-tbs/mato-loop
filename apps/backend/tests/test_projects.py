@@ -30,6 +30,8 @@ from mato_loop_backend.models import Automation, ChatSession, Project, UserAccou
 from mato_loop_backend.security import require_user
 from mato_loop_backend.settings import SettingsStore, UserPreferences
 
+pytestmark = pytest.mark.usefixtures("no_active_voice")
+
 
 def _user() -> UserAccount:
     return UserAccount(id=uuid4(), username="test", password_hash="hash")

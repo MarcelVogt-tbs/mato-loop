@@ -211,6 +211,7 @@ async def test_child_storage_is_purged_or_restored_with_transaction(tmp_path, mo
     assert "DELETE FROM chat_sessions" in str(db.execute.await_args.args[0])
 
 
+@pytest.mark.usefixtures("no_active_voice")
 async def test_parent_delete_cancels_descendants_before_trashing_all_storage(tmp_path, monkeypatch) -> None:
     user = UserAccount(id=uuid4())
     parent = ChatSession(id=uuid4(), user_id=user.id, title="Parent")

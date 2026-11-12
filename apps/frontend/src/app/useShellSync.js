@@ -6,6 +6,7 @@ import { useApprovalStore } from 'stores/approvals'
 import { useAutomationStore } from 'stores/automations'
 import { useBrowserStore } from 'stores/browser'
 import { useChatStore } from 'src/features/chat/store'
+import { useVoiceStore } from 'src/features/voice/store'
 import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
@@ -33,6 +34,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   const automations = useAutomationStore()
   const browser = useBrowserStore()
   const chat = useChatStore()
+  const voice = useVoiceStore()
   const home = useHomeStore()
   const controlCenter = useControlCenterStore()
   const executionAgents = useExecutionAgentStore()
@@ -159,7 +161,8 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     if ((sessionsChanged || resources.has('approvals') || resources.has('questions'))
       && route.name === 'chat' && !routeSessionId.value && !Object.hasOwn(route.query, 'new')) reload('messages', home.load(config))
     if (sessionsChanged) {
-      if (route.name === 'chat' && routeSessionId.value && !chat.running
+      if (route.name === 'chat' && routeSessionId.value
+        && (!chat.running || (voice.active && voice.sessionId === routeSessionId.value))
         && (all || !sessionIds.size || sessionIds.has(routeSessionId.value))) {
         reload('messages', chat.refreshSession(routeSessionId.value, config), routeSessionId.value)
       }

@@ -16,6 +16,7 @@ Begin with the [architecture overview](architecture.md) and [module ownership](m
 | Topic | Reference |
 | --- | --- |
 | Runtime, profiles, execution, files and context budgets | [Agent harness](harness.md) |
+| Native speech, controller lifetime and independent voice tasks | [Realtime voice](harness.md#realtime-voice) |
 | Tool actions, policy defaults and consent scopes | [Tool permissions](tool-permissions.md) |
 | Product adapters, resources, tool loading and MCP | [Integrations](integrations.md) |
 | Commands, Git management and worktrees | [Commands](commands.md) |

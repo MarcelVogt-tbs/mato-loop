@@ -1341,6 +1341,7 @@ async def continue_run(
     attachments: list[AttachmentInput] | None,
     owned_session_query,
     message_serializer: MessageSerializer,
+    allow_pending_interactions: bool = True,
 ) -> dict[str, Any]:
     session = await owned_session_query(db, session_id, user.id, for_update=True)
     if session is None:
@@ -1367,9 +1368,11 @@ async def continue_run(
         AgentRun.id == run_id,
         AgentRun.session_id == session_id,
         AgentRun.parent_run_id.is_(None),
-    ).with_for_update())
+    ).with_for_update().execution_options(populate_existing=True))
     if run is None or run.status not in ACTIVE_RUN_STATUSES:
         raise SessionServiceError(409, "session.runInactive")
+    if not allow_pending_interactions and run.status in {"waiting_input", "waiting_approval"}:
+        return {"requiresUi": True}
     reservation = AgentRuntime.reserve_continuation(run_id, queued=run.status == "queued")
     if reservation is None:
         raise SessionServiceError(409, "session.runInactive")
@@ -1453,6 +1456,10 @@ async def send_message(
     if duplicate is not None:
         return duplicate
     content = payload.content.strip()
+    from mato_loop_backend.voice.admission import active_connection
+
+    if await active_connection(db, session_id):
+        raise SessionServiceError(409, "voice.busy")
     if not content and not attachments:
         raise SessionServiceError(422, "validation.required", field="content")
     after_run_id = getattr(payload, "after_run_id", None)
@@ -1556,6 +1563,10 @@ async def update_session(
     item = await owned_session_query(db, session_id, user.id)
     if item is None:
         raise SessionServiceError(404, "session.notFound")
+    from mato_loop_backend.voice.admission import active_connection
+
+    if fields & (policy_fields | {"trust_level"}) and await active_connection(db, session_id):
+        raise SessionServiceError(409, "voice.busy")
     if "session_template_id" in fields:
         from mato_loop_backend.sessions.templates import load_template
 
@@ -1981,6 +1992,10 @@ async def delete_session(
         raise SessionServiceError(404, "session.notFound")
     if item.parent_session_id is not None:
         raise SessionServiceError(403, "session.readOnly")
+    from mato_loop_backend.voice.admission import active_connection
+
+    if await active_connection(db, session_id):
+        raise SessionServiceError(409, "voice.busy")
     initial_descendants = await descendant_sessions(db, [session_id])
     initial_reference_count = await _external_file_reference_count_for_roots(
         db, [session_id, *(child_id for child_id, _ in initial_descendants)]
@@ -2052,6 +2067,8 @@ async def delete_session(
     item = await owned_session_query(db, session_id, user_id, for_update=True)
     if item is None:
         raise SessionServiceError(404, "session.notFound")
+    if await active_connection(db, session_id):
+        raise SessionServiceError(409, "voice.busy")
     linked_automations = list(
         (
             await db.scalars(

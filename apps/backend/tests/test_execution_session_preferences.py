@@ -42,6 +42,8 @@ from mato_loop_backend.settings.models import (
     plan_profile,
 )
 
+pytestmark = pytest.mark.usefixtures("no_active_voice")
+
 
 def _agent(user_id=None, **values):
     return ExecutionAgent(

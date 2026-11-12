@@ -90,6 +90,8 @@ from mato_loop_backend.settings.models import (
     ModelDefaultsSettings,
 )
 
+pytestmark = pytest.mark.usefixtures("no_active_voice")
+
 
 @pytest.mark.parametrize(("enabled", "stored", "expected"), [
     (True, "public", TrustLevel.PUBLIC),

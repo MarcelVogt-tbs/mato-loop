@@ -43,6 +43,7 @@ from mato_loop_backend.api.routes.terminals import router as terminals_router
 from mato_loop_backend.api.routes.tool_settings import router as tool_settings_router
 from mato_loop_backend.api.routes.user_profile import router as user_profile_router
 from mato_loop_backend.api.routes.users import router as users_router
+from mato_loop_backend.api.routes.voice import router as voice_router
 from mato_loop_backend.api.routes.workspace import router as workspace_router
 
 api_router = APIRouter()
@@ -80,6 +81,7 @@ api_router.include_router(personal_variables_router, tags=["personal-variables"]
 api_router.include_router(media_router, tags=["media"])
 api_router.include_router(search_router, tags=["search"])
 api_router.include_router(sessions_router, tags=["sessions"])
+api_router.include_router(voice_router, tags=["voice"])
 api_router.include_router(skills_router, tags=["skills"])
 api_router.include_router(approvals_router, tags=["approvals"])
 api_router.include_router(questions_router, tags=["questions"])

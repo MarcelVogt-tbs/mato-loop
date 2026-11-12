@@ -44,6 +44,7 @@ from mato_loop_backend.models.memory import (
     MemorySourceType,
 )
 from mato_loop_backend.models.setting import SettingRecord
+from mato_loop_backend.models.voice import VoiceConnection, VoiceDelegation, VoiceItem, VoiceOperation
 
 __all__ = [
     "AgentRun",
@@ -92,4 +93,8 @@ __all__ = [
     "UserAuthIdentity",
     "WebPushSubscription",
     "WebSearchPolicy",
+    "VoiceConnection",
+    "VoiceDelegation",
+    "VoiceItem",
+    "VoiceOperation",
 ]

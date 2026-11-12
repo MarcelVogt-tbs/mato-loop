@@ -46,6 +46,7 @@ from mato_loop_backend.models import (
 from mato_loop_backend.projects.coding import CodingScheduler
 from mato_loop_backend.settings import InstanceLimits, SettingsStore
 from mato_loop_backend.skill_migration import initialize_skill_library
+from mato_loop_backend.voice.service import voice_coordinator
 
 runtime_config = get_runtime_config()
 if not logging.getLogger().handlers:
@@ -119,6 +120,7 @@ async def _application_lifespan(_app: FastAPI):
             attachments = AttachmentService(settings=await SettingsStore.load(db, InstanceLimits))
             await attachments.backfill_derived_files(db)
             await AgentRuntime.recover(db)
+            await voice_coordinator.recover(db)
             await db.commit()
             await AutomationService.recover(db)
             await db.execute(
@@ -206,7 +208,7 @@ async def _application_lifespan(_app: FastAPI):
         from mato_loop_backend.integrations.mcp.oauth import oauth_logins
 
         await asyncio.gather(
-            terminal_coordinator.shutdown(), browser_coordinator.shutdown(), AgentRuntime.shutdown()
+            terminal_coordinator.shutdown(), browser_coordinator.shutdown(), AgentRuntime.shutdown(), voice_coordinator.shutdown()
         )
         await oauth_logins.shutdown()
         session_secrets.clear_all()

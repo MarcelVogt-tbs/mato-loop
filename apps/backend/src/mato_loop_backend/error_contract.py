@@ -9,6 +9,19 @@ _CODE_PATTERN = re.compile(r"^[a-z][A-Za-z0-9]*(?:\.[a-z][A-Za-z0-9]*)+$")
 _GENERIC_MESSAGE = "The action failed."
 
 _MESSAGES = {
+    "voice.unavailable": "Configure an available Realtime provider and model first.",
+    "voice.busy": "End the active voice conversation before changing this chat.",
+    "voice.notActive": "The voice conversation is no longer active.",
+    "voice.bindingChanged": "The voice configuration or permissions changed. Start a new conversation.",
+    "voice.connectionLost": "The voice connection was lost. Start a new conversation explicitly.",
+    "voice.startFailed": "The voice conversation could not be started.",
+    "voice.protocolError": "The provider does not support the required Realtime protocol.",
+    "voice.transcriptFailed": "The provider could not transcribe the audio.",
+    "voice.hangupFailed": "Local audio stopped, but provider call termination could not be confirmed.",
+    "voice.backendRestarted": "The voice conversation ended because the backend restarted.",
+    "voice.taskBusy": "A linked voice task is already active.",
+    "voice.taskNotFound": "The linked task is unavailable.",
+    "voice.taskOutcomeUnknown": "Task dispatch was interrupted. Inspect the work session before retrying.",
     "git.sessionRequired": "Select a coding session before running this command.",
     "git.notRepository": "The selected directory is not a Git repository.",
     "git.configurationRequired": "Configure the Git source and target branch for this action.",

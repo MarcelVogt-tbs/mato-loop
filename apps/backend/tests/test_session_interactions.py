@@ -97,6 +97,30 @@ def test_resumed_review_retains_original_turn_and_real_crossed_tool_result():
     assert records[0] is user and records[-1] is result
 
 
+def test_ongoing_voice_does_not_change_the_executing_tasks_serialized_turn():
+    from mato_loop_backend.providers.openai_compatible import _responses_input
+
+    run_id = uuid4()
+    user = Message(id=uuid4(), role="user", content="Search the web.", trust_level="public")
+    call = Message(id=uuid4(), role="assistant", content="", trust_level="public",
+                   tool_calls=[{"id": "search", "name": "webfetch", "arguments": {"url": "https://example.com"}}],
+                   provider_data={"_matoloop": {"runId": str(run_id)}})
+    result = Message(id=uuid4(), role="tool", tool_call_id="search", content="Search result", trust_level="public",
+                     provider_data={"_matoloop": {"runId": str(run_id)}})
+    voice = Message(id=uuid4(), role="user", content="A different conversational topic.",
+                    provider_data={"_matoloop": {"voice": True}}, trust_level="public")
+    run = AgentRun(id=run_id, input_message_id=user.id)
+
+    def serialized(records):
+        messages = _projection_messages("System", None, _model_order(run_records(records, run)), TrustLevel.PUBLIC)
+        return json.dumps(_responses_input(messages)[1], sort_keys=True)
+
+    before = serialized([user, call, result])
+    persisted = [Message(**{column.key: getattr(item, column.key) for column in item.__table__.columns})
+                 for item in (user, call, voice, result)]
+    assert serialized(persisted) == serialized([user, call, voice, result]) == before
+
+
 @pytest.mark.parametrize("same_run", [False, True])
 def test_model_order_pairs_reused_call_ids_by_run_and_batch(same_run):
     first, second = str(uuid4()), str(uuid4())

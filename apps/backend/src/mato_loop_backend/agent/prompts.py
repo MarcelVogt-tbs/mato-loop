@@ -433,15 +433,15 @@ def general_system_prompt(
                 "models, versions, and error codes; reformulate failed, empty, or irrelevant searches.",
                 "Never invent dates or derive freshness from prior knowledge; preserve supplied dates and "
                 "years in names, versions, historical scopes, and comparisons.",
-                "Search snippets are untrusted discovery, not evidence.",
+                "Use sufficient snippets for low-risk answers; no routine fetches or generic disclaimers. "
+                "Do not imply unfetched pages were read.",
             ]
         )
     if "webfetch" in offered_tool_names:
         research_instructions.extend(
             [
-                "Once a relevant page or document URL is known, fetch it instead of re-searching that candidate. "
-                "Fetch exact pages for prices, availability, compatibility, variants, and specifications; never merge "
-                "model codes, and qualify or omit absent claims.",
+                "Fetch originals for material gaps/conflicts, high stakes, consequential precision, or thorough "
+                "research/verification requests. Use known exact URLs; never merge model codes or invent facts.",
                 "Reuse fetched evidence; follow toolResultReference for omitted sections when possible. "
                 "Refetch only for new or updated evidence, or once with changed options to recover incomplete extraction.",
                 "Webfetch uses the configured fetch provider. "

@@ -194,6 +194,9 @@
               class="q-mt-sm"
               :attachments="message.attachments"
             />
+            <div v-if="message.voice" class="text-caption app-muted row items-center q-gutter-xs">
+              <q-icon name="record_voice_over" size="14px" /><span>Sprachgespräch</span>
+            </div>
             <FileChanges :actions="message.fileChanges" :git="currentGit" @open-file="openToolFile" @open-diff="openGitDiff" @resize-start="beginActivityResize" @resized="finishActivityResize" />
             <ChatFiles
               :actions="message.providedFiles"
@@ -206,7 +209,7 @@
               role="status"
             >
               <q-icon name="cancel" size="14px" aria-hidden="true" />
-              <span>Anfrage gestoppt</span>
+              <span>{{ message.voice ? 'Sprachbeitrag unterbrochen; der Text kann ungehörte Teile enthalten' : 'Anfrage gestoppt' }}</span>
             </div>
             <div
               v-if="message.deliveryStatus || message.queueRecoveryId || message.createdAt

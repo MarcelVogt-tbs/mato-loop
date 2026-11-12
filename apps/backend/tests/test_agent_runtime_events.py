@@ -70,6 +70,8 @@ from mato_loop_backend.settings.models import (
 )
 from mato_loop_backend.tools.arguments import QuestionArguments, TaskArguments
 
+pytestmark = pytest.mark.usefixtures("no_active_voice")
+
 
 @pytest.fixture(autouse=True)
 def prepared_execution(monkeypatch):

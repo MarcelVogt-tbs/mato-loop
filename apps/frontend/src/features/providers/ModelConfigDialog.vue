@@ -74,6 +74,10 @@
               :provider-pseudonymization-enabled="provider?.pseudonymizationEnabled"
               :model-trust-enabled="auth.modelTrustEnabled"
             />
+            <template v-else-if="isRealtime">
+              <q-input v-model="form.realtimeVoice" dense outlined label="Realtime-Stimme" :rules="[requiredRule]" hint="Zum Beispiel marin; die Stimme muss vom Deployment unterstützt werden." />
+              <q-input v-model="form.realtimeTranscriptionModel" dense outlined label="Transkriptionsmodell" :rules="[requiredRule]" hint="Vom Realtime-Dienst unterstützte Modell-ID, zum Beispiel gpt-4o-mini-transcribe; nicht das Realtime-Deployment." />
+            </template>
             <q-banner v-else rounded class="provider-form-section app-surface-tonal">
               Die LLM-Laufzeitfelder gelten nur für Chatmodelle. Die ausgewählten Medienfähigkeiten bleiben davon unabhängig.
             </q-banner>
@@ -129,6 +133,7 @@ const capabilitiesAreAuthoritative = computed(() => (
   )
 ))
 const supportsChat = computed(() => modelSupportsCapability({ capabilities: form.capabilities }, 'chat'))
+const isRealtime = computed(() => ['azure-openai-realtime', 'openai-realtime'].includes(props.provider?.adapterType))
 const capabilityHint = computed(() => {
   if (capabilitiesAreAuthoritative.value) return 'Der Provider gibt diese Fähigkeiten bei der Modellerkennung verbindlich vor.'
   if (isDiscovered.value) return 'Erkannte Fähigkeiten können korrigiert oder ergänzt werden. Eigene Änderungen bleiben bei der Synchronisierung erhalten.'
@@ -142,6 +147,8 @@ function defaultForm() {
     modelId: '',
     name: '',
     enabled: true,
+    realtimeVoice: 'marin',
+    realtimeTranscriptionModel: 'gpt-4o-mini-transcribe',
     ...modelRuntimeForm()
   }
 }
@@ -151,8 +158,10 @@ function initialize() {
     modelId: props.model.modelId,
     name: props.model.name === props.model.modelId ? '' : props.model.name || '',
     enabled: props.model.enabled,
+    realtimeVoice: props.model.realtimeVoice || 'marin',
+    realtimeTranscriptionModel: props.model.realtimeTranscriptionModel || 'gpt-4o-mini-transcribe',
     ...modelRuntimeForm(props.model)
-  } : {})
+  } : isRealtime.value ? { capabilities: ['realtime_audio'] } : {})
 }
 
 function requiredRule(value) {
@@ -174,6 +183,11 @@ async function save() {
       name: form.name.trim() || null,
       enabled: form.enabled,
       ...runtimePayload
+    }
+    if (isRealtime.value) {
+      payload.capabilities = ['realtime_audio']
+      payload.realtime_voice = form.realtimeVoice.trim()
+      payload.realtime_transcription_model = form.realtimeTranscriptionModel.trim()
     }
     if (props.model) await providers.updateModel(props.model.id, payload)
     else await providers.createModel(props.provider.id, payload)

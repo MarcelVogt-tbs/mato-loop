@@ -104,6 +104,48 @@ it('recognizes a saved Kimi connection without replacing its protocol, name, or 
 })
 
 it.each([
+  ['Azure', 'azure-openai-realtime', 'https://my-resource.openai.azure.com'],
+  ['OpenAI-kompatibel', 'openai-realtime', 'https://voice.example.com/custom/v1']
+])('creates %s through the shared Realtime provider form', async (service, adapterType, endpoint) => {
+  const { createProvider } = await mountDialog()
+  await selectProvider('Realtime')
+  field('Dienst').querySelector('.q-field__native').click()
+  const option = await vi.waitUntil(() => [...document.querySelectorAll('.q-item__label')]
+    .find((element) => element.textContent === service))
+  option.closest('.q-item').click()
+  await nextTick()
+  await fill('Name', 'Meine Sprachverbindung')
+  await fill('Base URL', endpoint)
+  await fill('API-Key (optional)', 'test-key')
+  save()
+  await vi.waitFor(() => expect(createProvider).toHaveBeenCalledWith(adapterType, {
+    name: 'Meine Sprachverbindung', base_url: endpoint, api_key: 'test-key',
+    remove_api_key: false, trust_level: 'public', pseudonymization_enabled: true,
+    memory_policy: 'inherit'
+  }))
+})
+
+it.each([
+  ['Azure', 'azure-openai-realtime', 'https://my-resource.openai.azure.com/openai/v1'],
+  ['OpenAI-kompatibel', 'openai-realtime', 'https://voice.example.com/custom/v1']
+])('preserves a saved %s connection in the shared Realtime form', async (service, adapterType, endpoint) => {
+  const { updateProvider } = await mountDialog(ProviderConfigDialog, { provider: {
+    id: 'voice', name: 'Meine Sprachverbindung', adapterType, hasCredential: true,
+    trustLevel: 'private', pseudonymizationEnabled: false, memoryPolicy: 'deny',
+    config: { baseUrl: endpoint }
+  } })
+  expect(field('Provider').textContent).toContain('Realtime')
+  expect(field('Dienst').textContent).toContain(service)
+  expect(field('Dienst').classList.contains('q-field--disabled')).toBe(true)
+  save('Änderungen speichern')
+  await vi.waitFor(() => expect(updateProvider).toHaveBeenCalledWith('voice', {
+    name: 'Meine Sprachverbindung', base_url: endpoint, api_key: null,
+    remove_api_key: false, trust_level: 'private', pseudonymization_enabled: false,
+    memory_policy: 'deny'
+  }))
+})
+
+it.each([
   'https://my-speech.cognitiveservices.azure.com',
   'https://westeurope.api.cognitive.microsoft.com'
 ])('creates Azure Speech with its HTTPS resource endpoint %s and public defaults', async (endpoint) => {

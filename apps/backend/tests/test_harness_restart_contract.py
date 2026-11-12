@@ -89,6 +89,7 @@ async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypat
     monkeypatch.setattr(app_module, "AsyncSessionFactory", lambda: nullcontext(db))
     recover_runs = AsyncMock(side_effect=lambda _db: order.append("recover"))
     monkeypatch.setattr(AgentRuntime, "recover", recover_runs)
+    monkeypatch.setattr(app_module.voice_coordinator, "recover", AsyncMock())
     monkeypatch.setattr(app_module.AutomationService, "recover", AsyncMock())
     monkeypatch.setattr(app_module, "engine", engine)
     monkeypatch.setattr(app_module.MemoryIndexService, "recover", AsyncMock())

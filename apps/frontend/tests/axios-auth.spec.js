@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 
-import { recoverControlledAuth } from '../src/boot/axios'
+import { api, recoverControlledAuth } from '../src/boot/axios'
 import { useAuthStore } from '../src/stores/auth'
+import { useChatStore } from '../src/features/chat/store'
+import { useVoiceStore } from '../src/features/voice/store'
 
 function storage() {
   const values = new Map()
@@ -58,10 +60,15 @@ describe('Axios auth recovery', () => {
     expect(window.location.reload).toHaveBeenCalledOnce()
   })
 
-  it('invalidates a controlled expired session only once', async () => {
+  it('invalidates an expired session with active voice only once without authenticated cleanup requests', async () => {
     const auth = useAuthStore()
     auth.authenticated = true
     auth.userId = 'user-1'
+    useVoiceStore().$patch({ phase: 'listening', sessionId: 'chat', connectionId: 'connection' })
+    useChatStore().current = { id: 'chat', messages: [] }
+    const request = vi.fn().mockResolvedValue({ data: { id: 'chat', messages: [] } })
+    vi.spyOn(api, 'delete').mockImplementation(request)
+    vi.spyOn(api, 'get').mockImplementation(request)
     const error = {
       config: {},
       response: { data: { error: { code: 'auth.sessionExpired' } } }
@@ -72,5 +79,6 @@ describe('Axios auth recovery', () => {
     expect(auth.authenticated).toBe(false)
     expect(window.location.replace).toHaveBeenCalledOnce()
     expect(window.location.replace).toHaveBeenCalledWith('/login')
+    expect(request).not.toHaveBeenCalled()
   })
 })

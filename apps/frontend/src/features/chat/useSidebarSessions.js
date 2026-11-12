@@ -268,7 +268,7 @@ export function useSidebarSessions({
       const selection = await new Promise(resolve => {
         $q.dialog({
           title: 'Session löschen', transitionDuration: 0,
-          message: `Session „${title || 'Ohne Titel'}“ löschen? Optional kannst du auch den Worktree „${impact.worktree.path}“ entfernen. Dabei werden nicht committete Änderungen sowie zusätzliche und ignorierte Dateien wie .env unwiderruflich gelöscht. Commits, die durch keinen Branch gesichert sind, können danach verloren gehen. Vorhandene Branches bleiben erhalten.${others.length ? ` ${others.length} weitere Session${others.length === 1 ? '' : 's'} wechseln zu Lokal: ${others.map(item => item.title || 'Ohne Titel').join(', ')}.` : ''}`,
+          message: `Session „${title || 'Ohne Titel'}“ löschen? Laufende Aufträge in dieser Session werden beendet. Optional kannst du auch den Worktree „${impact.worktree.path}“ entfernen. Dabei werden nicht committete Änderungen sowie zusätzliche und ignorierte Dateien wie .env unwiderruflich gelöscht. Commits, die durch keinen Branch gesichert sind, können danach verloren gehen. Vorhandene Branches bleiben erhalten.${others.length ? ` ${others.length} weitere Session${others.length === 1 ? '' : 's'} wechseln zu Lokal: ${others.map(item => item.title || 'Ohne Titel').join(', ')}.` : ''}`,
           options: { type: 'checkbox', model: [], items: [{
             label: removalError ? `Worktree ebenfalls entfernen – ${apiErrorMessage({ error: removalError })}` : 'Worktree ebenfalls entfernen',
             value: impact.worktree.impact, disable: Boolean(removalError)
@@ -279,7 +279,7 @@ export function useSidebarSessions({
       })
       if (selection === null) return
       worktreeImpact = removalError ? null : selection[0] || null
-    } else if (!await confirm(`Session „${title || 'Ohne Titel'}“ löschen?${impact.hasWorktree ? ' Der Worktree kann hier derzeit nicht geprüft oder entfernt werden und bleibt erhalten.' : ''}`, 'Session löschen', { okLabel: 'Löschen' })) return
+    } else if (!await confirm(`Session „${title || 'Ohne Titel'}“ löschen? Laufende Aufträge in dieser Session werden beendet.${impact.hasWorktree ? ' Der Worktree kann hier derzeit nicht geprüft oder entfernt werden und bleibt erhalten.' : ''}`, 'Session löschen', { okLabel: 'Löschen' })) return
     if (worktreeImpact && workspace.hasDirtyEditors) {
       $q.notify({ type: 'warning', message: 'Bitte zuerst die ungespeicherten Editoränderungen speichern oder verwerfen.' })
       return

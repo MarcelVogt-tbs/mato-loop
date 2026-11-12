@@ -29,6 +29,8 @@ from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.media import MediaService, TranscriptionResult
 from mato_loop_backend.settings import InstanceLimits, SettingsStore, ToolSettings, UserPreferences
 
+pytestmark = pytest.mark.usefixtures("no_active_voice")
+
 
 def wav_bytes() -> bytes:
     buffer = BytesIO()

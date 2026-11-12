@@ -4,7 +4,7 @@ import logging
 from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -28,6 +28,11 @@ from mato_loop_backend.providers.codex_oauth import (
     poll_device_code,
 )
 from mato_loop_backend.providers.media import media_model_available
+from mato_loop_backend.providers.realtime.settings import (
+    ADAPTER_TYPES,
+    endpoint_for,
+    realtime_model_available,
+)
 from mato_loop_backend.providers.reasoning import ReasoningProfile, reasoning_profile
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.providers.settings_service import (
@@ -160,6 +165,8 @@ class ApiRequest(BaseModel):
 
 
 class ModelRuntimeRequest(ApiRequest):
+    realtime_voice: str = Field(default="marin", min_length=1, max_length=100)
+    realtime_transcription_model: str = Field(default="gpt-4o-mini-transcribe", min_length=1, max_length=300)
     capabilities: set[ModelCapability] = Field(
         default_factory=lambda: {ModelCapability.CHAT}
     )
@@ -263,6 +270,11 @@ class AzureSpeechProviderRequest(LemonadeProviderRequest):
     def validate_azure_endpoint(self) -> Self:
         validate_endpoint(self.base_url)
         return self
+
+
+class RealtimeProviderRequest(LemonadeProviderRequest):
+    trust_level: TrustLevel = TrustLevel.PUBLIC
+    pseudonymization_enabled: bool = True
 
 
 class ModelRequest(ModelRuntimeRequest):
@@ -374,10 +386,16 @@ def _settings_payload(
                 "lastSeenAt": model.last_seen_at.isoformat() if model.last_seen_at else None,
                 "discoveryMetadata": model.discovery_metadata,
                 "capabilities": sorted(item.value for item in model.capabilities),
+                "realtimeVoice": model.realtime_voice,
+                "realtimeTranscriptionModel": model.realtime_transcription_model,
                 "executableCapabilities": sorted(
                     capability.value
                     for capability in model.capabilities
                     if capability == ModelCapability.CHAT
+                    or (
+                        capability == ModelCapability.REALTIME_AUDIO
+                        and realtime_model_available(settings, model, providers_by_id[model.provider_id])
+                    )
                     or media_model_available(settings, capability, model.id)
                 ),
                 "contextWindowTokens": model.context_window_tokens,
@@ -492,6 +510,50 @@ async def _save_media_provider(
     return await _settings_response(db, settings, owner_id)
 
 
+async def _save_realtime_provider(
+    db: AsyncSession,
+    settings: AiSettingsDocument,
+    payload: RealtimeProviderRequest,
+    adapter_type: str,
+    configured: LlmProviderConfig | None = None,
+    owner_id: UUID | None = None,
+) -> dict[str, Any]:
+    try:
+        endpoint = endpoint_for(adapter_type, str(payload.base_url))
+        if payload.api_key:
+            endpoint.headers(payload.api_key)
+    except ProviderError as exc:
+        raise ApiError(400, exc.code) from exc
+    await _apply_settings(ProviderSettingsService.save_configured_provider(
+        db, settings, adapter_type=adapter_type, credential_kind=f"{adapter_type}-api-key",
+        name=payload.name, config={"base_url": endpoint.base_url},
+        api_key=payload.api_key, remove_api_key=payload.remove_api_key,
+        trust_level=payload.trust_level,
+        pseudonymization_enabled=payload.pseudonymization_enabled,
+        memory_policy=payload.memory_policy, provider_config=configured, owner_id=owner_id,
+        load_credential=load_credential, store_credential=store_credential,
+        delete_credential=delete_credential,
+    ))
+    return await _settings_response(db, settings, owner_id)
+
+
+@router.post("/azure-openai-realtime", status_code=status.HTTP_201_CREATED)
+@router.post("/openai-realtime", status_code=status.HTTP_201_CREATED)
+async def save_realtime_provider(
+    payload: RealtimeProviderRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    request: Request,
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    settings, owner_id = await _load_scoped_ai(db, scope, user, for_update=True, mutation=True)
+    adapter_type = request.url.path.rsplit("/", 1)[-1]
+    result = await _save_realtime_provider(db, settings, payload, adapter_type, owner_id=owner_id)
+    result["providerId"] = str(settings.providers[-1].id)
+    await db.commit()
+    return result
+
+
 @router.get("")
 async def list_providers(
     db: Annotated[AsyncSession, Depends(get_db_session)],
@@ -599,7 +661,12 @@ async def update_openai_provider(
         db, scope, user, for_update=True, mutation=True
     )
     provider = _provider(settings, provider_id)
-    if provider.adapter_type == "openai-compatible":
+    if provider.adapter_type in ADAPTER_TYPES:
+        result = await _save_realtime_provider(
+            db, settings, RealtimeProviderRequest.model_validate(payload.model_dump(exclude_unset=True)),
+            provider.adapter_type, provider, owner_id,
+        )
+    elif provider.adapter_type == "openai-compatible":
         if not isinstance(payload, OpenAIProviderRequest):
             payload = OpenAIProviderRequest.model_validate(payload.model_dump(exclude_unset=True))
         result = await _save_openai_provider(

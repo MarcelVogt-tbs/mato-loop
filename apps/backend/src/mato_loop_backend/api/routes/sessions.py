@@ -436,7 +436,10 @@ async def archive_session(
     item = await _mutable_session(db, session_id, user.id, for_update=True)
     if item is None:
         raise ApiError(404, "session.notFound")
-    await set_archived(db, item, payload.archived)
+    try:
+        await set_archived(db, item, payload.archived)
+    except session_service.SessionServiceError as exc:
+        _raise_api_error(exc)
     await db.commit()
     return await _session_payload(db, item)
 
