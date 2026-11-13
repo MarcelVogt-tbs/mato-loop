@@ -471,11 +471,9 @@ class WriteFileArguments(ElevatedArguments):
     path: str = Field(min_length=1, max_length=1_000)
     content: str | None = Field(
         default=None, max_length=1_000_000,
-        description="Text string, including serialized JSON. Omit when using protected_content.",
+        description="Text, including serialized JSON.",
     )
-    protected_content: ProtectedText | None = Field(
-        default=None, description="Protected text with a real secret reference. Omit content.",
-    )
+    protected_content: ProtectedText | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -493,19 +491,15 @@ class EditFileArguments(ElevatedArguments):
     path: str = Field(min_length=1, max_length=1_000)
     old_text: str | None = Field(
         default=None, alias="oldString", min_length=1, max_length=1_000_000,
-        description="Exact search text. Omit when using protected_oldString.",
     )
     new_text: str | None = Field(
         default=None, alias="newString", max_length=1_000_000,
-        description="Replacement text string. Omit when using protected_newString.",
     )
     protected_old_text: ProtectedText | None = Field(
         default=None, alias="protected_oldString",
-        description="Protected search text with a real secret reference. Omit oldString.",
     )
     protected_new_text: ProtectedText | None = Field(
         default=None, alias="protected_newString",
-        description="Protected replacement text with a real secret reference. Omit newString.",
     )
     replace_all: bool = Field(default=False, alias="replaceAll")
 

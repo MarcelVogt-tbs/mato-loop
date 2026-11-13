@@ -1251,10 +1251,10 @@ PROVIDE_FILE = ToolDefinition(
 
 WRITE_FILE = ToolDefinition(
             "write_file",
-            "Create or overwrite one file with complete UTF-8 content. root defaults to computer; use files for session storage. "
-            "Parent directories must exist; use create_directory first when missing. Use edit_file for partial changes. "
-            "Use content for text strings (serialize JSON), or protected_content for secret_input value_ref parts; omit the other. Resolve only after "
-             "file access is authorized. elevated=true uses administrator rights for root=computer; "
+            "Create/overwrite a UTF-8 file. root defaults to computer; use files for session storage. "
+            "Parents must exist; otherwise use create_directory. Use edit_file for partial changes. "
+            "Set exactly one: content (string) or protected_content (secret_input value_ref parts). Resolve after authorization. "
+             "elevated=true uses administrator rights for root=computer; "
               "pass a matching sudo_password_ref or omit it for automatic authentication reuse or protected input.",
             WriteFileArguments,
             _write_file,
@@ -1270,9 +1270,9 @@ WRITE_FILE = ToolDefinition(
 
 EDIT_FILE = ToolDefinition(
             "edit_file",
-            "Replace exact text in one existing UTF-8 file. root defaults to computer; use files for session storage. "
-             "oldString must be unique unless replaceAll is true. Copy indentation exactly and omit read output's line-number prefixes. "
-             "Use string fields for plain text; use protected_oldString/protected_newString for secret_input value_ref parts instead. "
+            "Replace exact text in a UTF-8 file. root defaults to computer; use files for session storage. "
+             "oldString must be unique unless replaceAll=true. Preserve indentation; omit line-number prefixes. "
+             "For each input set exactly one: plain string or protected_oldString/protected_newString with value_ref parts. "
               "elevated=true uses administrator rights for root=computer; "
               "pass a matching sudo_password_ref or omit it for automatic authentication reuse or protected input.",
             EditFileArguments,
