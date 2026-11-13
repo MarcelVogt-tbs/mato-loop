@@ -86,6 +86,8 @@
           v-else-if="chat.current || chat.activeQueuedMessages.length"
           ref="virtualScroll"
           class="chat-transcript q-pa-md"
+          :class="{ invisible: transcriptPreparing }"
+          :inert="transcriptPreparing"
           :items="displayMessages"
           scroll-target="#chat-scroll-area > .scroll"
           :virtual-scroll-item-size="96"
@@ -729,8 +731,12 @@ let virtualScrollRefreshPending = false
 let virtualScrollResetPending = false
 let searchHighlightTimer = null
 let readingAnchor = null
-const sessionApprovals = computed(() => chat.current ? approvals.forSession(chat.current.id) : [])
-const sessionQuestions = computed(() => chat.current ? questions.forSession(chat.current.id) : [])
+const transcriptReadySessionId = ref(null)
+const transcriptPreparing = computed(() => Boolean(chat.current && transcriptReadySessionId.value !== chat.current.id))
+const sessionApprovals = computed(() => !chat.loading && chat.current?.id === routeSessionId.value
+  ? approvals.forSession(chat.current.id) : [])
+const sessionQuestions = computed(() => !chat.loading && chat.current?.id === routeSessionId.value
+  ? questions.forSession(chat.current.id) : [])
 const activeQuestion = computed(() => sessionQuestions.value[0] || null)
 const transcript = computed(() => buildChatTranscript(
   chat.current?.messages,
@@ -1107,7 +1113,9 @@ async function reconcileRouteProject() {
 
 async function revealRouteMessage() {
   const messageId = routeMessageId.value
-  if (!messageId || chat.current?.id !== routeSessionId.value) return
+  const sessionId = routeSessionId.value
+  const isCurrent = () => chat.current?.id === sessionId && routeSessionId.value === sessionId && routeMessageId.value === messageId
+  if (!messageId || !isCurrent()) return
   const matchesMessage = (message) => message.id === messageId
     || message.workHistory?.entries?.some((entry) => entry.message?.id === messageId || entry.batchId === messageId)
   let index = displayMessages.value.findIndex(matchesMessage)
@@ -1118,9 +1126,17 @@ async function revealRouteMessage() {
       return
     }
     await nextTick()
+    if (!isCurrent()) return
     index = displayMessages.value.findIndex(matchesMessage)
   }
   if (index < 0) return
+  if (transcriptPreparing.value) {
+    await new Promise((resolve) => watch(
+      () => !transcriptPreparing.value || !isCurrent(),
+      () => resolve(), { once: true, flush: 'post' }
+    ))
+    if (!isCurrent()) return
+  }
   const displayedMessage = displayMessages.value[index]
   if (displayedMessage.id !== messageId) {
     setWorkHistoryExpanded(displayedMessage.workHistory.id || displayedMessage.id, true)
@@ -1129,8 +1145,11 @@ async function revealRouteMessage() {
   clearReadingAnchor()
   highlightedMessageId.value = displayedMessage.id
   await nextTick()
+  if (!isCurrent()) return
   virtualScroll.value?.scrollTo(index, 'center-force')
   await new Promise((resolve) => window.requestAnimationFrame(resolve))
+  await nextTick()
+  if (!isCurrent()) return
   const target = findMessageElement(displayedMessage.id)
   // Align the rendered message after virtual scrolling; expanded history changes item heights.
   if (target && scrollTarget) {
@@ -1234,6 +1253,8 @@ function scheduleTranscriptLayout(resetSizes = false) {
     if (virtualScrollResetPending) virtualScroll.value?.reset()
     else virtualScroll.value?.refresh(-1)
     virtualScrollResetPending = false
+    // Refreshes at the same virtual index do not emit another virtual-scroll event.
+    void completeVirtualScrollRefresh()
   })
 }
 
@@ -1243,6 +1264,10 @@ async function completeVirtualScrollRefresh() {
   await nextTick()
   await new Promise((resolve) => window.requestAnimationFrame(resolve))
   if (request !== virtualScrollRefreshRequest) return
+  if (displayMessages.value.length && !renderedMessageElements().length) {
+    virtualScroll.value?.scrollTo(0, 'start-force')
+    return
+  }
   if (!userScrollActive && followingBottom.value) {
     const lastMessage = displayMessages.value.at(-1)
     if (lastMessage && !findMessageElement(lastMessage.id)) {
@@ -1266,6 +1291,7 @@ async function completeVirtualScrollRefresh() {
       id: element?.dataset.renderId || request.anchor.id
     }
   }
+  transcriptReadySessionId.value = chat.current?.id || null
   virtualScrollRefreshRequest = null
   if (virtualScrollRefreshPending) scheduleTranscriptLayout()
 }
@@ -1475,14 +1501,22 @@ watch(
   () => chat.current?.id,
   async (sessionId, previousSessionId) => {
     virtualScrollRefreshRequest = null
+    transcriptReadySessionId.value = null
     if (!sessionId || sessionId === previousSessionId) return
+    userScrollActive = false
+    touchActive = false
+    clearTimeout(userScrollTimer)
     followingBottom.value = true
     clearReadingAnchor()
     if (routeMessageId.value) {
       followingBottom.value = false
-      return
     }
     await nextTick()
+    if (chat.current?.id !== sessionId) return
+    if (!displayMessages.value.length) {
+      transcriptReadySessionId.value = sessionId
+      return
+    }
     scheduleTranscriptLayout(true)
   }
 )

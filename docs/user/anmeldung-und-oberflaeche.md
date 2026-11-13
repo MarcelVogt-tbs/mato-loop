@@ -18,6 +18,8 @@ Unter **Zuletzt aktiv** auf Home rücken Sessions bei einer neuen Nutzernachrich
 
 Die Seitenleiste bleibt nach deiner letzten Nachricht sortiert, neueste zuerst; angepinnte Sessions stehen oben. Bei leeren Sessions zählt der Erstellungszeitpunkt. Status und Ungelesen-Markierungen bleiben überall aktuell.
 
+Eine bereits geladene Home-Übersicht wird auch während eines Chats im Hintergrund aktualisiert. Beim Zurückkehren bleibt sie erhalten, statt allein durch den Seitenwechsel erneut geladen zu werden.
+
 ### Suche
 
 Die Suche findet eigene Projekte, Sessions und Nachrichten ab zwei Zeichen. **Strg+F** bzw. **Cmd+F** öffnet die Anwendungssuche; ist sie bereits offen, bleibt die Browsersuche verfügbar. Ohne Embedding-Dienst funktioniert die lexikalische Suche weiter. Suchergebnisse öffnen den passenden Gesprächskontext.

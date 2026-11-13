@@ -285,6 +285,19 @@ describe('voice attachment composer', () => {
     expect(root.querySelector('.chat-composer__dropzone')).toBeNull()
   })
 
+  it('reveals a switched session only after its transcript has been positioned', async () => {
+    mocks.api.get.mockImplementation(async url => ({ data: url === '/sessions/session-1'
+      ? { id: 'session-1', messages: [{ id: 'answer', role: 'assistant', content: 'Answer' }] }
+      : { items: [] } }))
+    showPage.value = true
+    await vi.waitFor(() => expect(root.querySelector('.chat-transcript:not(.invisible) [data-message-id="answer"]')).not.toBeNull())
+    chat.current = { id: 'session-2', messages: [{ id: 'next', role: 'user', content: 'Next' }] }
+    await nextTick()
+    const preparing = root.querySelector('.chat-transcript').classList.contains('invisible')
+    await vi.waitFor(() => expect(root.querySelector('.chat-transcript:not(.invisible) [data-message-id="next"]')).not.toBeNull())
+    expect(preparing).toBe(true)
+  })
+
   it('keeps the final touch-scroll position when a transcript update was deferred during the gesture', async () => {
     mocks.api.get.mockResolvedValue({ data: { items: [] } })
     await router.push('/?project=draft')
@@ -321,6 +334,10 @@ describe('voice attachment composer', () => {
   })
 
   it('reveals a search result merged into the final assistant message', async () => {
+    const focus = HTMLElement.prototype.focus
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (options) {
+      if (!this.closest('[inert="true"], [inert=""]')) focus.call(this, options)
+    })
     chat.outboxLoaded = true
     mocks.api.get.mockImplementation(async (url) => ({ data: url === '/sessions/session-1'
       ? { id: 'session-1', messages: [
@@ -331,7 +348,9 @@ describe('voice attachment composer', () => {
       : url.endsWith('/children') ? [] : { items: [] } }))
     await router.push('/?session=session-1&message=source')
     showPage.value = true
-    await vi.waitFor(() => expect(root.querySelector('[data-message-id="final"].chat-message--search-target')).not.toBeNull())
+    try {
+      await vi.waitFor(() => expect(document.activeElement).toBe(root.querySelector('[data-message-id="final"].chat-message--search-target')))
+    } finally { focusSpy.mockRestore() }
   })
 
   it('shows the saved command prompt instead of its invocation in the user message', async () => {

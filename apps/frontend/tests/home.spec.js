@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { createApp, h, nextTick } from 'vue'
+import { createApp, h, nextTick, watch } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -29,11 +29,15 @@ it('reloads after a change received during the initial Home request', async () =
   mocks.get.mockReturnValueOnce(new Promise((resolve) => { finishLoad = resolve }))
     .mockResolvedValue({ data: { items: [{ id: 'new' }] } })
   const home = useHomeStore()
+  home.sessions = [{ id: 'cached' }]
+  const displayed = []
+  const stop = watch(() => home.sessions, items => displayed.push(items.map(item => item.id)), { flush: 'sync' })
   const loading = home.load()
   const refreshing = home.load()
   finishLoad({ data: { items: [] } })
   await Promise.all([loading, refreshing])
-  expect(home.sessions).toEqual([{ id: 'new' }])
+  stop()
+  expect(displayed).toEqual([['new']])
 })
 
 it('shows effective status, opens a session and lets failed or empty data be refreshed', async () => {
@@ -113,8 +117,10 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   })
   root.querySelector('.home-activity-row').click()
   await vi.waitFor(() => expect(router.currentRoute.value.query).toEqual({ session: 'session-1', project: 'project-1' }))
+  const sessionRequests = mocks.get.mock.calls.filter(([path]) => path === '/sessions').length
   await router.push('/home')
   await vi.waitFor(() => expect(root.textContent).toContain('Ein Gespräch fortsetzen'))
+  expect(mocks.get.mock.calls.filter(([path]) => path === '/sessions')).toHaveLength(sessionRequests)
   failed = true
   await useHomeStore().load().catch(() => {})
   await vi.waitFor(() => expect(root.textContent).toContain('Sessions konnten nicht geladen werden.'))

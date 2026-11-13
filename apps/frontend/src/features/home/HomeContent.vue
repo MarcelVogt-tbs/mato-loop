@@ -160,7 +160,7 @@ async function refresh() {
   }
 }
 
-onMounted(() => { void Promise.allSettled([home.load(), profile.fetchProfile()]) })
+onMounted(() => { void Promise.allSettled([home.ensureLoaded(), profile.fetchProfile()]) })
 </script>
 
 <style scoped>
