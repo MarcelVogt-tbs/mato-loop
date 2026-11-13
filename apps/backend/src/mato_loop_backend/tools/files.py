@@ -565,12 +565,16 @@ async def _write_file(arguments: WriteFileArguments, context: ToolContext) -> To
         allowed = await tools_access.allow(context, request)
     if not allowed:
         return ToolResult.error("permission.denied")
-    resolved = await resolve_protected_text(context, arguments.content)
+    resolved = await resolve_protected_text(
+        context, arguments.content if arguments.content is not None else arguments.protected_content,
+    )
     if isinstance(resolved, ToolResult):
         return resolved
     content, _protected = resolved
     try:
-        WriteFileArguments.model_validate({**arguments.model_dump(by_alias=True), "content": content})
+        WriteFileArguments.model_validate({
+            **arguments.model_dump(by_alias=True, exclude={"protected_content"}), "content": content,
+        })
     except ValidationError as exc:
         return argument_error(exc, {"content": content})
     if _omitted_file_content(content):
@@ -662,16 +666,21 @@ async def _edit_file(arguments: EditFileArguments, context: ToolContext) -> Tool
         allowed = await tools_access.allow(context, request)
     if not allowed:
         return ToolResult.error("permission.denied")
-    old = await resolve_protected_text(context, arguments.old_text)
+    old = await resolve_protected_text(
+        context, arguments.old_text if arguments.old_text is not None else arguments.protected_old_text,
+    )
     if isinstance(old, ToolResult):
         return old
-    new = await resolve_protected_text(context, arguments.new_text)
+    new = await resolve_protected_text(
+        context, arguments.new_text if arguments.new_text is not None else arguments.protected_new_text,
+    )
     if isinstance(new, ToolResult):
         return new
     old_text, new_text = old[0], new[0]
     try:
         EditFileArguments.model_validate({
-            **arguments.model_dump(by_alias=True), "oldString": old_text, "newString": new_text,
+            **arguments.model_dump(by_alias=True, exclude={"protected_old_text", "protected_new_text"}),
+            "oldString": old_text, "newString": new_text,
         })
     except ValidationError as exc:
         return argument_error(exc, {"oldString": old_text, "newString": new_text})
@@ -1243,8 +1252,8 @@ PROVIDE_FILE = ToolDefinition(
 WRITE_FILE = ToolDefinition(
             "write_file",
             "Create or overwrite one file with complete UTF-8 content. root defaults to computer; use files for session storage. "
-            "Parent directories must exist; use create_directory first when missing. For partial changes use edit_file. content may "
-            "contain protected text parts with value_ref from secret_input; resolve only after "
+            "Parent directories must exist; use create_directory first when missing. Use edit_file for partial changes. "
+            "Use content for text strings (serialize JSON), or protected_content for secret_input value_ref parts; omit the other. Resolve only after "
              "file access is authorized. elevated=true uses administrator rights for root=computer; "
               "pass a matching sudo_password_ref or omit it for automatic authentication reuse or protected input.",
             WriteFileArguments,
@@ -1263,7 +1272,7 @@ EDIT_FILE = ToolDefinition(
             "edit_file",
             "Replace exact text in one existing UTF-8 file. root defaults to computer; use files for session storage. "
              "oldString must be unique unless replaceAll is true. Copy indentation exactly and omit read output's line-number prefixes. "
-             "oldString and newString may contain protected text parts with value_ref from secret_input. "
+             "Use string fields for plain text; use protected_oldString/protected_newString for secret_input value_ref parts instead. "
               "elevated=true uses administrator rights for root=computer; "
               "pass a matching sudo_password_ref or omit it for automatic authentication reuse or protected input.",
             EditFileArguments,

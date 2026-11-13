@@ -56,7 +56,10 @@ async def authorize(context: ToolContext, request: PermissionRequest, reference=
         else (("content", "Dateiinhalt"),) if context.tool_call.name == "write_file" else ()
     )
     for field, label in fields:
-        value = context.tool_call.arguments.get(field)
+        value = (
+            None if context.tool_call.arguments.get(f"protected_{field}") is not None
+            else context.tool_call.arguments.get(field)
+        )
         preview = value[:8000] + ("\n[Vorschau gekürzt]" if len(value) > 8000 else "") if isinstance(value, str) else "Geschützter Text"
         previews.append(PermissionDisplayItem(label, preview, "code"))
     if context.tool_call.name == "delete_path":

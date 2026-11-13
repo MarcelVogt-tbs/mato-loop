@@ -429,6 +429,14 @@ def _model_tool_calls(
                 projected_arguments["url"] = projected_arguments["url"].removesuffix(
                     "REDACTED"
                 ) + "QUERY_VALUES_OMITTED_RECONSTRUCT_BEFORE_REUSE"
+            for protected, plain in (
+                ("protected_content", "content"),
+                ("protected_oldString", "oldString"),
+                ("protected_newString", "newString"),
+            ):
+                value = projected_arguments.get(protected)
+                if isinstance(value, dict) and value.get("redacted") is True:
+                    projected_arguments[plain] = projected_arguments.pop(protected)
             content = projected_arguments.get("content")
             if isinstance(content, dict) and isinstance(content.get("preview"), str):
                 preview = content["preview"]

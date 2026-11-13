@@ -510,7 +510,8 @@ def test_message_projection_restores_redacted_tool_content_as_string() -> None:
     }
 
 
-def test_message_projection_never_restores_persisted_write_file_content() -> None:
+@pytest.mark.parametrize("field", ["content", "protected_content"])
+def test_message_projection_never_restores_persisted_write_file_content(field) -> None:
     message = _message(uuid4(), "assistant", "Datei schreiben")
     message.tool_calls = [
         {
@@ -519,7 +520,7 @@ def test_message_projection_never_restores_persisted_write_file_content() -> Non
             "arguments": {
                 "root": "session",
                 "path": "note.txt",
-                "content": {"characters": 17, "redacted": True},
+                field: {"characters": 17, "redacted": True},
             },
         }
     ]
@@ -534,7 +535,8 @@ def test_message_projection_never_restores_persisted_write_file_content() -> Non
     assert "note.txt" not in content
 
 
-def test_message_projection_never_restores_persisted_edit_file_text() -> None:
+@pytest.mark.parametrize("fields", [("oldText", "newText"), ("protected_oldString", "protected_newString")])
+def test_message_projection_never_restores_persisted_edit_file_text(fields) -> None:
     message = _message(uuid4(), "assistant", "Datei bearbeiten")
     message.tool_calls = [
         {
@@ -543,16 +545,17 @@ def test_message_projection_never_restores_persisted_edit_file_text() -> None:
             "arguments": {
                 "root": "session",
                 "path": "note.txt",
-                "oldText": {"characters": 11, "redacted": True},
-                "newText": {"characters": 12, "redacted": True},
+                fields[0]: {"characters": 11, "redacted": True},
+                fields[1]: {"characters": 12, "redacted": True},
             },
         }
     ]
 
     arguments = message_dict(message)["tool_calls"][0]["arguments"]
 
-    assert arguments["oldText"].startswith("[Persisted edit text omitted: 11")
-    assert arguments["newText"].startswith("[Persisted edit text omitted: 12")
+    old, new = ("oldString", "newString") if fields[0].startswith("protected_") else fields
+    assert arguments[old].startswith("[Persisted edit text omitted: 11")
+    assert arguments[new].startswith("[Persisted edit text omitted: 12")
 
 
 def test_projection_uses_live_tool_calls_without_mutating_persisted_history() -> None:

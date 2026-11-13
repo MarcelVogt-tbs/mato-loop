@@ -17,6 +17,13 @@ def _argument_path(error: dict[str, Any], arguments: Any) -> tuple[list[str | in
         if isinstance(value, dict) and part in value:
             path.append(part)
             value = value[part]
+        elif (isinstance(value, dict) and isinstance(part, str) and part.startswith("protected_")
+              and isinstance(value.get(part.removeprefix("protected_")), dict)
+              and "parts" in value[part.removeprefix("protected_")]):
+            # File argument migration preserves legacy raw calls and their approval binding.
+            legacy = part.removeprefix("protected_")
+            path.append(legacy)
+            value = value[legacy]
         elif isinstance(value, list) and isinstance(part, int) and 0 <= part < len(value):
             path.append(part)
             value = value[part]

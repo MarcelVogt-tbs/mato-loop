@@ -468,10 +468,12 @@ def _safe_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str,
         )
     elif isinstance(content, dict) and tool_name in {"write_file", "generate_qr_code"}:
         safe["content"] = {"redacted": True}
+    if tool_name == "write_file" and "protected_content" in safe:
+        safe["protected_content"] = {"redacted": True}
     if tool_name == "generate_qr_code" and isinstance(safe.get("wifi"), dict):
         safe["wifi"] = {"redacted": True}
     if tool_name == "edit_file":
-        for key in ("oldText", "newText", "oldString", "newString"):
+        for key in ("oldText", "newText", "oldString", "newString", "protected_oldString", "protected_newString"):
             text = safe.get(key)
             if isinstance(text, str):
                 safe[key] = {"characters": len(text), "redacted": True}

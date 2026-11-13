@@ -1579,15 +1579,16 @@ def test_qr_code_content_is_fully_redacted_before_persistence() -> None:
     assert wifi["wifi"] == {"redacted": True}
     assert "private value" not in str(wifi)
 
-    protected_file = _safe_tool_arguments("write_file", {
-        "content": {"parts": ["sensitive literal", {"value_ref": f"run-secret:{uuid4()}"}]},
-    })
-    assert protected_file["content"] == {"redacted": True}
-    assert "sensitive literal" not in str(protected_file)
-    protected_edit = _safe_tool_arguments("edit_file", {
-        "newText": {"parts": ["sensitive literal", {"value_ref": f"run-secret:{uuid4()}"}]},
-    })
-    assert protected_edit["newText"] == {"redacted": True}
+    for tool, field in (
+        ("write_file", "content"), ("write_file", "protected_content"),
+        ("edit_file", "newText"), ("edit_file", "protected_oldString"),
+        ("edit_file", "protected_newString"),
+    ):
+        protected = _safe_tool_arguments(tool, {
+            field: {"parts": ["sensitive literal", {"value_ref": f"run-secret:{uuid4()}"}]},
+        })
+        assert protected[field] == {"redacted": True}
+        assert "sensitive literal" not in str(protected)
 
 
 @pytest.mark.parametrize(

@@ -252,7 +252,7 @@ async def test_permission_preparation_never_executes_the_proposed_write(tmp_path
     ({"tool": "functions.write_file", "arguments": {}},
      "tool.invalidArguments", "requests.1.tool", {"reason": "invalid_choice"}),
     ({"tool": "write_file", "arguments": {"root": "files", "path": "report.txt"}},
-     "tool.invalidArguments", "requests.1.arguments.content", {"reason": "missing"}),
+     "tool.invalidArguments", "requests.1.arguments.content", {"reason": "invalid_value", "hint": "Set exactly one of content (text string) and protected_content (protected text object). Omit the other."}),
     ({"tool": "notify", "arguments": {"title": "Ready", "body": "Report ready"}},
      "permission.preflightUnavailable", "requests.1", None),
 ])
@@ -734,7 +734,7 @@ async def test_dynamic_tool_unresolved_local_ref_is_unavailable(
 
 
 @pytest.mark.parametrize("name,arguments,field,params", [
-    ("write_file", {"path": "file.json", "content": {"private": "secret"}}, "content.parts", {"reason": "missing"}),
+    ("write_file", {"path": "file.json", "content": {"private": "secret"}}, "content", {"reason": "invalid_type", "expectedType": "string"}),
     ("write_file", {"path": "file.json", "content": {"parts": [{"value_ref": "not-a-reference"}]}}, "content.parts.0.value_ref", {"reason": "invalid_uuid"}),
     ("write_file", {"path": "file.json", "content": "x" * 1_000_001}, "content", {"reason": "too_long", "maxLength": 1_000_000}),
     ("read", {"root": "files", "path": "file.txt", "limit": 1001}, "limit", {"reason": "above_maximum", "maximum": 1000}),
@@ -742,7 +742,9 @@ async def test_dynamic_tool_unresolved_local_ref_is_unavailable(
     ("edit_file", {"path": "file.txt", "oldString": "private", "newString": "private"}, "newString", {"reason": "invalid_value", "hint": "newString must differ from oldString."}),
     ("provide_file", {"root": "files", "path": "one", "paths": ["two"]}, "path", {"reason": "invalid_value", "hint": "Provide exactly one of path or paths."}),
     ("memory_write", {"action": "forget"}, "memory_id", {"reason": "missing", "hint": "Provide memory_id for update and forget."}),
-    ("write_file", {"path": "file.txt", "content": {"parts": ["private"]}}, "content.parts", {"reason": "invalid_value", "hint": "Include at least one protected value reference in parts."}),
+    ("write_file", {"path": "file.txt", "protected_content": {"parts": ["private"]}}, "protected_content.parts", {"reason": "invalid_value", "hint": "Include at least one protected value reference in parts."}),
+    ("write_file", {"path": "file.txt"}, "content", {"reason": "invalid_value", "hint": "Set exactly one of content (text string) and protected_content (protected text object). Omit the other."}),
+    ("write_file", {"path": "file.txt", "content": "", "protected_content": {"parts": [{"value_ref": "9c378708-eae2-4c19-acbd-e1f39e24473b"}]}}, "content", {"reason": "invalid_value", "hint": "Set exactly one of content (text string) and protected_content (protected text object). Omit the other."}),
 ])
 async def test_tool_argument_errors_explain_constraints_without_rejected_values(tmp_path, name, arguments, field, params):
     call = ToolCall("invalid", name, arguments)
@@ -845,11 +847,12 @@ async def test_protected_wifi_qr_escapes_values_without_releasing_password(tmp_p
     assert "x" * 200 not in rejected.content
 
 
-async def test_protected_text_can_write_file_after_authorization(tmp_path) -> None:
+@pytest.mark.parametrize("explicit", [False, True])
+async def test_protected_text_can_write_file_after_authorization(tmp_path, explicit) -> None:
     secret_id = uuid4()
     call = ToolCall("write-protected", "write_file", {
         "root": "session", "path": "credentials.txt",
-        "content": {"parts": ["token=", {"value_ref": f"run-secret:{secret_id}"}]},
+        "protected_content" if explicit else "content": {"parts": ["token=", {"value_ref": f"run-secret:{secret_id}"}]},
     })
     context = _context(tmp_path, call)
     context.one_time_secrets[secret_id] = "private-value"
@@ -866,8 +869,8 @@ async def test_protected_text_can_write_file_after_authorization(tmp_path) -> No
 
     edit = ToolCall("edit-protected", "edit_file", {
         "root": "session", "path": "credentials.txt",
-        "oldString": {"parts": ["token=", {"value_ref": f"run-secret:{secret_id}"}]},
-        "newString": {"parts": ["token=", {"value_ref": f"run-secret:{secret_id}"}, "-updated"]},
+        "protected_oldString" if explicit else "oldString": {"parts": ["token=", {"value_ref": f"run-secret:{secret_id}"}]},
+        "protected_newString" if explicit else "newString": {"parts": ["token=", {"value_ref": f"run-secret:{secret_id}"}, "-updated"]},
     })
     context.tool_call = edit
     edited = await tool_registry.execute(edit, context)
@@ -1465,9 +1468,9 @@ def test_file_tool_schemas_require_explicit_roots_and_exact_paths() -> None:
         assert "path" in parameters["properties"]
     assert schemas["read"]["parameters"]["properties"]["offset"]["default"] == 1
     assert schemas["read"]["parameters"]["properties"]["limit"]["default"] == 1000
-    for name, required in (("write_file", {"path", "content"}), ("edit_file", {"path", "oldString", "newString"})):
+    for name in ("write_file", "edit_file"):
         parameters = schemas[name]["parameters"]
-        assert set(parameters["required"]) == required
+        assert set(parameters["required"]) == {"path"}
         assert parameters["properties"]["root"]["default"] == "computer"
         assert "expectedSha256" not in parameters["properties"]
     assert "revision" not in schemas["read"]["parameters"]["properties"]

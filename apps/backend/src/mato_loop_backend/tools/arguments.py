@@ -446,22 +446,79 @@ class ProvideFileArguments(SessionFileReadArguments):
         return self
 
 
+def _legacy_protected_file_text(value: Any, fields: tuple[str, ...]) -> Any:
+    """Read persisted protected calls without rewriting their approval-bound arguments."""
+    if not isinstance(value, dict):
+        return value
+    result = dict(value)
+    for field in fields:
+        protected = f"protected_{field}"
+        if isinstance(result.get(field), dict) and "parts" in result[field] and protected not in result:
+            result[protected] = result.pop(field)
+    return result
+
+
+def _require_file_text(text: str | None, protected: ProtectedText | None, field: str) -> None:
+    if (text is None) == (protected is None):
+        raise invalid_argument(
+            f"Set exactly one of {field} (text string) and protected_{field} (protected text object). Omit the other.",
+            field=field,
+        )
+
+
 class WriteFileArguments(ElevatedArguments):
     root: Literal["session", "workspace"] = "workspace"
     path: str = Field(min_length=1, max_length=1_000)
-    content: Annotated[str, Field(max_length=1_000_000)] | ProtectedText
+    content: str | None = Field(
+        default=None, max_length=1_000_000,
+        description="Text string, including serialized JSON. Omit when using protected_content.",
+    )
+    protected_content: ProtectedText | None = Field(
+        default=None, description="Protected text with a real secret reference. Omit content.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_protected_text(cls, value: Any) -> Any:
+        return _legacy_protected_file_text(value, ("content",))
+
+    @model_validator(mode="after")
+    def require_content(self) -> WriteFileArguments:
+        _require_file_text(self.content, self.protected_content, "content")
+        return self
 
 
 class EditFileArguments(ElevatedArguments):
     root: Literal["session", "workspace"] = "workspace"
     path: str = Field(min_length=1, max_length=1_000)
-    old_text: Annotated[str, Field(min_length=1, max_length=1_000_000)] | ProtectedText = Field(alias="oldString")
-    new_text: Annotated[str, Field(max_length=1_000_000)] | ProtectedText = Field(alias="newString")
+    old_text: str | None = Field(
+        default=None, alias="oldString", min_length=1, max_length=1_000_000,
+        description="Exact search text. Omit when using protected_oldString.",
+    )
+    new_text: str | None = Field(
+        default=None, alias="newString", max_length=1_000_000,
+        description="Replacement text string. Omit when using protected_newString.",
+    )
+    protected_old_text: ProtectedText | None = Field(
+        default=None, alias="protected_oldString",
+        description="Protected search text with a real secret reference. Omit oldString.",
+    )
+    protected_new_text: ProtectedText | None = Field(
+        default=None, alias="protected_newString",
+        description="Protected replacement text with a real secret reference. Omit newString.",
+    )
     replace_all: bool = Field(default=False, alias="replaceAll")
+
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_protected_text(cls, value: Any) -> Any:
+        return _legacy_protected_file_text(value, ("oldString", "newString"))
 
     @model_validator(mode="after")
     def require_change(self) -> EditFileArguments:
-        if self.old_text == self.new_text:
+        _require_file_text(self.old_text, self.protected_old_text, "oldString")
+        _require_file_text(self.new_text, self.protected_new_text, "newString")
+        if (self.old_text, self.protected_old_text) == (self.new_text, self.protected_new_text):
             raise invalid_argument("newString must differ from oldString.", field="newString")
         return self
 
