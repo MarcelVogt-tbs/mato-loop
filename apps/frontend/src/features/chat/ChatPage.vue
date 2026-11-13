@@ -119,197 +119,32 @@
                   || (message.deliveryStatus === 'sending' && message.outboxId === sendingMessageId)
               }"
             >
-            <div
-              :class="[
-                'chat-message',
-                `chat-message--${message.role}`,
-                {
-                  'chat-message--turn-continues': message.continuesAssistantTurn,
-                  'chat-message--search-target': highlightedMessageId === message.id
-                }
-              ]"
-              :data-message-id="message.id"
-              :data-render-id="message.renderId || message.id"
-              tabindex="-1"
-            >
-            <span v-if="message.role === 'user'" class="app-sr-only">Benutzernachricht</span>
-            <span v-else-if="message.showAgentLabel" class="app-sr-only">Assistentenantwort</span>
-            <template
-              v-if="message.content
-                || message.workHistory
-                || message.generationStatus === 'interrupted'"
-            >
-              <AgentActivityPanel
-                hide-provided-files
-                :history="message.workHistory"
+              <ChatMessage
+                :message="message"
                 :subagents="childrenByMessage.get(message.id) || emptyItems"
                 :show-active-subagents="message.id === latestAssistantMessageId"
-                :activity="message.currentTurn ? chat.activity : null"
-                :presentation="message.currentTurn ? runPresentation : null"
-                :reasoning="message.currentTurn ? chat.streamReasoning : null"
-                :context-summary="message.currentTurn ? chat.streamContextSummary : null"
-                :warnings="message.currentTurn ? chat.runWarnings : emptyItems"
+                :run-presentation="runPresentation"
                 :trusted-image-origins="trustedImageOrigins"
-                :running="chat.running && message.currentTurn"
-                :expanded="expandedWorkHistoryIds.has(message.workHistory?.id || message.id)"
+                :work-history-expanded="expandedWorkHistoryIds.has(message.workHistory?.id || message.id)"
+                :highlighted="highlightedMessageId === message.id"
+                :can-quote="canQuote"
+                :git="currentGit"
+                :message-action-id="messageActionId"
+                :timestamp-now="messageTimestampNow"
+                @undo="undoMessage"
+                @undo-queued="undoQueuedMessage"
+                @retry="retryMessage"
+                @recover="chat.resumeQueuedSend()"
                 @open-file="openToolFile"
-                @history-expanded="setWorkHistoryExpanded(message.workHistory?.id || message.id, $event)"
+                @open-diff="openGitDiff"
+                @quote="addQuote"
+                @prepared-reply="sendPreparedAnswer"
+                @history-expanded="setWorkHistoryExpanded"
                 @rendered="handleMessageRendered"
                 @resize-start="beginActivityResize"
                 @resized="finishActivityResize"
                 @trust-image-origin="trustImageOrigin"
-              >
-                <MessageContent
-                  v-if="message.preparedReply"
-                  :content="message.preparedReply.markdown"
-                  :prepared-replies="message.preparedReply.options"
-                  class="q-mb-sm"
-                  @prepared-reply="sendPreparedAnswer"
-                />
-                <MessageContent
-                  v-if="message.content && message.role === 'assistant'"
-                  class="chat-message__content"
-                  :content="message.content"
-                  :role="message.error ? 'alert' : undefined"
-                  :file-actions="message.fileActions"
-                  :research-sources="message.research?.linkedSources || emptyItems"
-                  :streaming="message.streaming"
-                  :quotable="canQuote"
-                  :message-size="chat.activeContext.sessionProfile?.messageSize"
-                  :trusted-image-origins="trustedImageOrigins"
-                  @open-file="openToolFile"
-                  @rendered="handleMessageRendered"
-                  @trust-image-origin="trustImageOrigin"
-                  @quote="addQuote"
-                />
-                <div v-else-if="message.quotedContent" class="chat-message__content">
-                  <template v-for="(block, index) in message.quotedContent" :key="index">
-                    <ComposerQuote v-if="block.type === 'quote'" :quote="block" :editable="false" :message-size="chat.activeContext.sessionProfile?.messageSize" class="q-my-sm" />
-                    <div v-else-if="block.text">{{ block.text }}</div>
-                  </template>
-                </div>
-                <div v-else-if="message.content" class="chat-message__content">{{ message.commandPrompt || message.content }}</div>
-              </AgentActivityPanel>
-            </template>
-            <ChatFiles
-              v-if="message.attachments?.length"
-              class="q-mt-sm"
-              :attachments="message.attachments"
-            />
-            <div v-if="message.voice" class="text-caption app-muted row items-center q-gutter-xs">
-              <q-icon name="record_voice_over" size="14px" /><span>Sprachgespräch</span>
-            </div>
-            <FileChanges :actions="message.fileChanges" :git="currentGit" @open-file="openToolFile" @open-diff="openGitDiff" @resize-start="beginActivityResize" @resized="finishActivityResize" />
-            <ChatFiles
-              :actions="message.providedFiles"
-              class="q-my-sm"
-              @open-file="openToolFile"
-            />
-            <div
-              v-if="message.generationStatus === 'interrupted' && !message.redirected"
-              class="app-muted text-caption row items-center q-gutter-x-xs q-mt-sm"
-              role="status"
-            >
-              <q-icon name="cancel" size="14px" aria-hidden="true" />
-              <span>{{ message.voice ? 'Sprachbeitrag unterbrochen; der Text kann ungehörte Teile enthalten' : 'Anfrage gestoppt' }}</span>
-            </div>
-            <div
-              v-if="message.deliveryStatus || message.queueRecoveryId || message.createdAt
-                || showMessageModel(message)
-                || agentProfileName(message)
-                || userMessageSource(message)"
-              class="chat-message__meta items-center wrap"
-            >
-              <q-btn
-                v-if="message.role === 'user' && !chat.current?.archived && !String(message.id).startsWith('local-')"
-                flat
-                round
-                dense
-                size="sm"
-                icon="undo"
-                class="chat-message__meta-action chat-message__meta-action--hover"
-                :loading="messageActionId === message.id"
-                :disable="chat.loading || message.deliveryStatus === 'sending' || (messageActionId !== null && messageActionId !== message.id)"
-                aria-label="Nachricht rückgängig machen"
-                @click.stop="message.outboxId ? undoQueuedMessage(message.outboxId) : undoMessage(message)"
-              >
-                <q-tooltip>Nachricht rückgängig machen</q-tooltip>
-              </q-btn>
-              <template v-if="agentProfileName(message)">
-                <span class="chat-message__meta-agent">{{ agentProfileName(message) }}</span>
-                <span v-if="showMessageModel(message) || userMessageSource(message) || message.createdAt" aria-hidden="true">·</span>
-              </template>
-              <span
-                v-if="showMessageModel(message)"
-                class="chat-message__meta-model"
-                :title="message.origin === 'host' ? 'Host' : message.modelName"
-              >
-                {{ message.origin === 'host' ? 'Host' : message.modelName }}
-              </span>
-              <span
-                v-if="showMessageModel(message) && (userMessageSource(message) || message.createdAt)"
-                aria-hidden="true"
-              >·</span>
-              <template v-if="userMessageSource(message)">
-                <span class="chat-message__meta-source">{{ userMessageSource(message) }}</span>
-                <span v-if="message.createdAt" aria-hidden="true">·</span>
-              </template>
-              <time
-                v-if="message.createdAt && !message.deliveryStatus"
-                :datetime="message.createdAt"
-                :title="formatAbsoluteDateTime(message.createdAt)"
-                :aria-label="`Gesendet am ${formatAbsoluteDateTime(message.createdAt)}`"
-              >
-                {{ formatRelativeDateTime(message.createdAt, messageTimestampNow) }}
-              </time>
-              <span
-                v-if="message.deliveryStatus"
-                class="row inline items-center q-gutter-x-xs"
-                :class="{ 'text-negative': message.deliveryStatus === 'failed' }"
-                role="status"
-              >
-                <q-icon :name="message.deliveryStatus === 'failed' ? 'error_outline' : 'schedule'" size="1em" aria-hidden="true" />
-                <span>{{ message.deliveryStatus === 'sending' ? 'Wird gesendet …' : message.deliveryStatus === 'failed' ? 'Nicht gesendet' : 'Noch nicht gesendet' }}</span>
-              </span>
-              <span v-if="message.queueRecoveryId" class="text-negative" role="status">Lokaler Versand pausiert</span>
-              <q-btn
-                v-if="(message.deliveryStatus === 'failed' && message.outboxId === chat.activeQueuedMessages[0]?.id)
-                  || (message.queueRecoveryId && message.queueRecoveryId === chat.activeQueuedMessages[0]?.id)"
-                flat
-                round
-                dense
-                size="sm"
-                icon="refresh"
-                color="negative"
-                class="chat-message__meta-action"
-                :aria-label="message.queueRecoveryId ? 'Versand fortsetzen' : 'Nachricht erneut senden'"
-                @click.stop="chat.resumeQueuedSend()"
               />
-              <q-btn
-                v-if="canRetryMessage(message)"
-                flat
-                round
-                dense
-                size="sm"
-                icon="refresh"
-                color="negative"
-                class="chat-message__meta-action chat-message__meta-action--retry"
-                :loading="messageActionId === message.id"
-                :disable="chat.loading || (messageActionId !== null && messageActionId !== message.id)"
-                aria-label="Anfrage erneut starten"
-                @click.stop="retryMessage(message)"
-              >
-                <q-tooltip>Erneut versuchen</q-tooltip>
-              </q-btn>
-              <q-btn
-                v-if="message.role === 'assistant' && message.content"
-                flat round dense size="xs" icon="content_copy"
-                class="chat-message__meta-action chat-message__meta-action--hover q-ml-auto"
-                aria-label="Antwort kopieren"
-                @click.stop="copyAnswer(message.content)"
-              />
-            </div>
-            </div>
             </div>
           </template>
           <template #after>
@@ -479,34 +314,7 @@
         </aside>
       </template>
     </q-splitter>
-    <q-dialog
-      :transition-duration="0"
-      :model-value="Boolean(approvalDraftPreview)"
-      maximized
-      aria-labelledby="approval-draft-preview-title"
-      @update:model-value="approvalDraftPreview = null"
-    >
-      <q-card v-if="approvalDraftPreview" class="column no-wrap full-height">
-        <q-card-section class="row items-center no-wrap q-gutter-sm">
-          <div class="col overflow-hidden">
-            <h2 id="approval-draft-preview-title" class="text-subtitle1 text-weight-bold q-my-none ellipsis">{{ approvalDraftPreview.filename }}</h2>
-            <div class="text-caption app-muted">Skill-Entwurf des Subagenten · Nur Lesezugriff</div>
-          </div>
-          <q-btn flat round icon="close" aria-label="Entwurfsvorschau schließen" @click="approvalDraftPreview = null" />
-        </q-card-section>
-        <q-separator />
-        <q-scroll-area class="col">
-          <div v-if="approvalDraftPreview.loading" class="row justify-center q-pa-lg" role="status">
-            <q-spinner color="primary" size="32px" />
-            <span class="app-sr-only">Entwurf wird geladen</span>
-          </div>
-          <q-banner v-else-if="approvalDraftPreview.error" class="app-surface-tonal q-ma-md" role="alert">
-            {{ apiErrorMessage(approvalDraftPreview.error) }}
-          </q-banner>
-          <pre v-else class="file-viewer__text q-pa-md">{{ approvalDraftPreview.content }}</pre>
-        </q-scroll-area>
-      </q-card>
-    </q-dialog>
+    <SkillDraftPreview ref="skillDraftPreview" />
     <ProjectDialog v-if="draftProjectDialogOpen" v-model="draftProjectDialogOpen" @created="selectCreatedDraftProject" />
   </q-page>
 </template>
@@ -514,23 +322,23 @@
 <script setup>
 import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { copyToClipboard, useQuasar } from 'quasar'
+import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import RequestDock from 'src/features/chat/components/RequestDock.vue'
+import SkillDraftPreview from 'src/features/approvals/SkillDraftPreview.vue'
 import AgentActivityPanel from 'src/features/chat/components/AgentActivityPanel.vue'
-import FileChanges from 'src/features/chat/components/FileChanges.vue'
+import ChatMessage from 'src/features/chat/components/ChatMessage.vue'
 import HomeContent from 'src/features/home/HomeContent.vue'
 import ComputerChoiceStrip from 'src/features/chat/components/ComputerChoiceStrip.vue'
 import ProjectDialog from 'src/features/projects/ProjectDialog.vue'
 import ChatComposer from 'src/features/chat/components/ChatComposer.vue'
-import ComposerQuote from 'src/features/chat/components/ComposerQuote.vue'
 import { parseQuotedMessage } from './quote-drafts'
+import { useChatViewport } from './useChatViewport'
+import { useChatNavigation } from './useChatNavigation'
 import SessionTodoStrip from 'src/features/chat/components/SessionTodoStrip.vue'
 import SessionSettingsFields from 'src/features/chat/components/SessionSettingsFields.vue'
 import WorkspaceField from 'src/features/coding/WorkspaceField.vue'
 import ControlCenterPanel from 'src/app/control-center/ControlCenterPanel.vue'
-import MessageContent from 'src/features/chat/components/MessageContent.vue'
-import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
 import SubagentInspector from 'src/features/subagents/SubagentInspector.vue'
 import SubagentRows from 'src/features/subagents/SubagentRows.vue'
 import { isActiveSubagent, useSubagentStore } from 'stores/subagents'
@@ -556,20 +364,11 @@ import { gitContext, gitContextKey, useGitChangesStore } from 'src/features/file
 import { useConfirm } from 'src/composables/confirm'
 import { agentRunPresentation } from 'src/features/chat/agent-activity'
 import {
-  chatBottomDistance,
-  chatReadingAnchor,
-  chatShouldFollowBottom,
-  restoreChatReadingAnchor,
-  scrollChatToBottom
-} from 'src/features/chat/scroll'
-import {
   buildChatTranscript,
-  retryAvailableForMessage,
   withQueuedTranscriptMessages
 } from 'src/features/chat/transcript'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { notifyError } from 'src/utils/notifications'
-import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-time'
 
 defineOptions({ name: 'ChatPage' })
 
@@ -656,48 +455,27 @@ const sendingMessageId = computed(() => chat.queueSendingEntryId || (
   chat.activity.phase === 'submitting' || chat.activePendingMessage?.continuationRunId
     ? chat.activePendingMessage?.id : null
 ))
-const followingBottom = ref(true)
 const messageTimestampNow = ref(Date.now())
+let messageTimestampTimer, runAnnouncementTimer
 const messageActionId = ref(null)
-const approvalDraftPreview = ref(null)
+const skillDraftPreview = ref(null)
 const announcedRunStatus = ref('')
-const bottomThreshold = 64
 const liveWorkHistory = computed(() => ({
   entries: [],
   observedDurationMs: null,
   activeDurationMs: chat.activity.activeDurationMs,
   activeDurationUpdatedAt: chat.activity.activeDurationUpdatedAt
 }))
-const userMessageSource = (message) => (
-  message.role !== 'user' ? ''
-    : message.sourceType === 'automationRun' ? `Automation${message.automationName ? ` · ${message.automationName}` : ''}`
-    : message.source?.type === 'endpoint' && message.source.provider === 'telegram'
-    ? 'Telegram'
-    : ''
-)
-const agentProfileName = (message) => (
-  message.role === 'assistant' && !message.continuesAssistantTurn && message.origin !== 'host'
-    && !(chat.running && message.currentTurn)
-    ? agentProfiles.byId(message.agentProfileId)?.name || 'Allgemein'
-    : ''
-)
 function setWorkHistoryExpanded(messageId, expanded) {
   const next = new Set(expandedWorkHistoryIds.value)
   if (expanded) next.add(messageId)
   else next.delete(messageId)
   expandedWorkHistoryIds.value = next
 }
-const routeSessionId = computed(() => (
-  typeof route.query.session === 'string' ? route.query.session : null
-))
-const routeSubagentId = computed(() => (
-  typeof route.query.subagent === 'string' ? route.query.subagent : null
-))
-const routeProjectId = computed(() => (
-  typeof route.query.project === 'string' ? route.query.project : null
-))
+const { routeSessionId, routeProjectId, routeSubagentId, newSessionRequested, loadRouteSession } = useChatNavigation({
+  chat, route, router, composer, controlCenter, subagents, projects
+})
 const isNewConversation = computed(() => !routeSessionId.value && !chat.current && !chat.loading && !chat.loadError)
-const newSessionRequested = computed(() => Object.hasOwn(route.query, 'new'))
 const showHome = computed(() => isNewConversation.value && !newSessionRequested.value && !chat.activeQueuedMessages.length)
 const draftProjectLabel = computed(() => routeProjectId.value
   ? projects.items.find(project => project.id === routeProjectId.value)?.name || 'Projekt'
@@ -713,26 +491,6 @@ const draftProjectDisabled = computed(() => changingDraftProject.value || !isNew
   || routeProjectId.value !== chat.sessionsProjectId || !chat.outboxLoaded
   || chat.running || chat.outboxSaving
   || chat.activeQueuedMessages.length > 0 || Boolean(chat.emptySessionPromise || chat.queueDrainPromise))
-const routeMessageId = computed(() => (
-  typeof route.query.message === 'string' ? route.query.message : null
-))
-const highlightedMessageId = ref(null)
-let resizeObserver = null
-let scrollTarget = null
-let lastScrollTop = 0
-let userScrollActive = false
-let userScrollTimer = null
-let messageTimestampTimer = null
-let runAnnouncementTimer = null
-let touchActive = false
-let virtualScrollRefreshFrame = null
-let virtualScrollRefreshRequest = null
-let virtualScrollRefreshPending = false
-let virtualScrollResetPending = false
-let searchHighlightTimer = null
-let readingAnchor = null
-const transcriptReadySessionId = ref(null)
-const transcriptPreparing = computed(() => Boolean(chat.current && transcriptReadySessionId.value !== chat.current.id))
 const sessionApprovals = computed(() => !chat.loading && chat.current?.id === routeSessionId.value
   ? approvals.forSession(chat.current.id) : [])
 const sessionQuestions = computed(() => !chat.loading && chat.current?.id === routeSessionId.value
@@ -803,6 +561,15 @@ const runPresentation = computed(() => agentRunPresentation({
 const trustedImageOrigins = computed(() => (
   trustedImageOriginsBySession.value.get(chat.current?.id) || emptyItems
 ))
+const {
+  followingBottom, transcriptPreparing, highlightedMessageId,
+  scheduleTranscriptLayout, loadOlderHistory, enableFollowMode,
+  beginActivityResize, finishActivityResize, handleMessageRendered,
+  handleVirtualScroll, handleScrollKey, handleScrollAreaMouseDown, scrollToTop
+} = useChatViewport({
+  chat, route, scrollArea, scrollContent, virtualScroll,
+  displayMessages, setWorkHistoryExpanded
+})
 const sessionLoadErrorMessage = computed(() => (
   apiErrorMessage(chat.loadError, 'Die Session konnte nicht geladen werden.')
 ))
@@ -840,38 +607,8 @@ async function openToolFile(action) {
   if (target && chat.current?.id === sessionId) await controlCenter.openFile(target)
 }
 
-async function openApprovalDraft(approval) {
-  const draft = approval?.details?.draftFile
-  const sessionId = approval?.sessionId
-  if (!['build_skill', 'edit_skill'].includes(approval?.actionKind) || !draft || chat.current?.id !== sessionId) return
-  if (approval.payload?.subagentSessionId) {
-    approvalDraftPreview.value = { filename: draft.filename, loading: true, content: '', error: null }
-    const preview = approvalDraftPreview.value
-    try {
-      const data = await approvals.previewSkillDraft(approval)
-      if (approvalDraftPreview.value !== preview) return
-      if (data?.kind !== 'text' || typeof data.content !== 'string' || !draft.fileRevision) {
-        preview.error = { code: 'skill.draftInvalid' }
-      } else if (data.revision !== draft.fileRevision) {
-        preview.error = { code: 'file.changed' }
-      } else {
-        preview.content = data.content
-      }
-    } catch (error) {
-      if (approvalDraftPreview.value === preview) preview.error = error
-    } finally {
-      if (approvalDraftPreview.value === preview) preview.loading = false
-    }
-    return
-  }
-  const tabId = await controlCenter.openFile({
-    scope: 'session',
-    path: draft.path,
-    name: draft.filename,
-    rootIdentity: draft.rootIdentity || sessionId,
-    readOnly: false
-  })
-  if (tabId) workspace.startFileTabEdit(tabId)
+function openApprovalDraft(approval) {
+  return skillDraftPreview.value?.open(approval)
 }
 
 function trustImageOrigin(origin) {
@@ -882,29 +619,9 @@ function trustImageOrigin(origin) {
   trustedImageOriginsBySession.value = next
 }
 
-function showMessageModel(message) {
-  if (message.origin === 'host') return true
-  return message.role === 'assistant'
-    && Boolean(message.hasAssistantContent || message.content)
-    && Boolean(message.modelName)
-}
-
-function canRetryMessage(message) {
-  return !chat.current?.archived && retryAvailableForMessage(message, chat.current?.messages, chat.running)
-}
-
 async function addQuote(quote) {
   if (!canQuote.value) return
   await composer.value?.insertQuote(quote)
-}
-
-async function copyAnswer(content) {
-  try {
-    await copyToClipboard(content)
-    $q.notify({ type: 'positive', message: 'Antwort kopiert' })
-  } catch {
-    $q.notify({ type: 'negative', message: 'Die Antwort konnte nicht kopiert werden.' })
-  }
 }
 
 async function undoMessage(message) {
@@ -1037,157 +754,6 @@ async function changeDraftProject(projectId) {
   }
 }
 
-let routeLoadVersion = 0
-// Same-session deep links are consumed after loading; draft route changes still invalidate it.
-watch(() => routeSessionId.value || route.fullPath, () => { routeLoadVersion += 1 }, { flush: 'sync' })
-
-async function loadRouteSession() {
-  const version = ++routeLoadVersion
-  const owner = chat.draftOwnerUserId
-  const isCurrent = () => version === routeLoadVersion && owner === chat.draftOwnerUserId
-  const sessionId = routeSessionId.value
-  await composer.value?.prepareAudioNavigation?.()
-  if (!isCurrent()) return
-  if (Object.hasOwn(route.query, 'personal') && !sessionId && !Object.hasOwn(route.query, 'session')
-    && !newSessionRequested.value && !Object.hasOwn(route.query, 'project')) {
-    await chat.loadSession(null)
-    if (!isCurrent()) return
-    chat.loading = true
-    try {
-      const personalSessionId = await chat.ensurePersonalChat()
-      if (!isCurrent() || !personalSessionId) return
-      const query = { ...route.query, session: personalSessionId }
-      delete query.personal
-      await router.replace({ name: 'chat', query })
-    } catch (error) {
-      if (isCurrent()) chat.loadError = error
-    } finally {
-      if (isCurrent()) chat.loading = false
-    }
-    return
-  }
-  const session = await chat.loadSession(sessionId).catch(() => null)
-  if (!isCurrent()) return
-  if (session?.readOnly && session.parentSessionId) {
-    await router.replace({ name: 'chat', query: { session: session.parentSessionId, subagent: session.id } })
-    return
-  }
-  if (chat.selectedSessionId !== sessionId || chat.loadError) return
-  await reconcileRouteProject()
-  const requestedApp = typeof route.query.controlCenter === 'string'
-    ? route.query.controlCenter
-    : null
-  if (requestedApp) {
-    try {
-      await controlCenter.openApp(requestedApp)
-    } catch {
-      // The central API interceptor displays the error and restores the previous tabs.
-    }
-  }
-  await nextTick()
-  if (routeMessageId.value) await revealRouteMessage()
-  else if (!showHome.value) composer.value?.focus()
-}
-
-async function reconcileRouteProject() {
-  if (
-    !chat.current
-    || chat.current.id !== routeSessionId.value
-    || (chat.current.projectId || null) === routeProjectId.value
-  ) return
-  await router.replace({
-    name: 'chat',
-    query: {
-      ...(chat.current.projectId ? { project: chat.current.projectId } : {}),
-      session: chat.current.id,
-      ...(routeSubagentId.value ? { subagent: routeSubagentId.value } : {}),
-      ...(typeof route.query.controlCenter === 'string'
-        ? { controlCenter: route.query.controlCenter }
-        : {}),
-      ...(routeMessageId.value ? { message: routeMessageId.value } : {}),
-      ...(typeof route.query.automation === 'string' ? { automation: route.query.automation } : {}),
-      ...(typeof route.query.run === 'string' ? { run: route.query.run } : {})
-    }
-  })
-}
-
-async function revealRouteMessage() {
-  const messageId = routeMessageId.value
-  const sessionId = routeSessionId.value
-  const isCurrent = () => chat.current?.id === sessionId && routeSessionId.value === sessionId && routeMessageId.value === messageId
-  if (!messageId || !isCurrent()) return
-  const matchesMessage = (message) => message.id === messageId
-    || message.workHistory?.entries?.some((entry) => entry.message?.id === messageId || entry.batchId === messageId)
-  let index = displayMessages.value.findIndex(matchesMessage)
-  if (index < 0 && chat.current.nextMessageCursor) {
-    try {
-      await chat.loadThroughMessage(messageId)
-    } catch {
-      return
-    }
-    await nextTick()
-    if (!isCurrent()) return
-    index = displayMessages.value.findIndex(matchesMessage)
-  }
-  if (index < 0) return
-  if (transcriptPreparing.value) {
-    await new Promise((resolve) => watch(
-      () => !transcriptPreparing.value || !isCurrent(),
-      () => resolve(), { once: true, flush: 'post' }
-    ))
-    if (!isCurrent()) return
-  }
-  const displayedMessage = displayMessages.value[index]
-  if (displayedMessage.id !== messageId) {
-    setWorkHistoryExpanded(displayedMessage.workHistory.id || displayedMessage.id, true)
-  }
-  followingBottom.value = false
-  clearReadingAnchor()
-  highlightedMessageId.value = displayedMessage.id
-  await nextTick()
-  if (!isCurrent()) return
-  virtualScroll.value?.scrollTo(index, 'center-force')
-  await new Promise((resolve) => window.requestAnimationFrame(resolve))
-  await nextTick()
-  if (!isCurrent()) return
-  const target = findMessageElement(displayedMessage.id)
-  // Align the rendered message after virtual scrolling; expanded history changes item heights.
-  if (target && scrollTarget) {
-    restoreChatReadingAnchor(scrollTarget, target, {
-      offsetTop: Math.max(0, (scrollTarget.clientHeight - target.getBoundingClientRect().height) / 2)
-    })
-  }
-  target?.focus({ preventScroll: true })
-  rememberReadingAnchor()
-  clearTimeout(searchHighlightTimer)
-  searchHighlightTimer = window.setTimeout(() => {
-    if (highlightedMessageId.value === displayedMessage.id) highlightedMessageId.value = null
-  }, 2500)
-}
-
-async function loadOlderHistory() {
-  if (!chat.current?.nextMessageCursor || chat.olderMessagesLoading) return
-  try {
-    await chat.loadOlderMessages()
-  } catch {
-    // The store exposes the retry state above the transcript.
-  }
-}
-
-function handleVirtualScroll({ from, direction }) {
-  if (virtualScrollRefreshRequest) {
-    void completeVirtualScrollRefresh()
-  }
-  if (!followingBottom.value) rememberReadingAnchor()
-  if (
-    userScrollActive
-    && direction === 'decrease'
-    && from <= 3
-    && !followingBottom.value
-    && chat.current?.nextMessageCursor
-  ) void loadOlderHistory()
-}
-
 async function loadBackgroundData() {
   const [providerResult, , integrationResult, , , , defaultsResult] = await Promise.allSettled([
     providers.fetchEffective(),
@@ -1237,214 +803,6 @@ function addAttachmentFiles(files, done, options) {
   done?.(result)
 }
 
-function scheduleTranscriptLayout(resetSizes = false) {
-  virtualScrollRefreshPending = true
-  virtualScrollResetPending ||= resetSizes
-  if (userScrollActive || virtualScrollRefreshRequest || virtualScrollRefreshFrame !== null
-    || !virtualScroll.value || !displayMessages.value.length) return
-  virtualScrollRefreshFrame = window.requestAnimationFrame(() => {
-    virtualScrollRefreshFrame = null
-    if (userScrollActive || !virtualScroll.value || !displayMessages.value.length) return
-    virtualScrollRefreshPending = false
-    virtualScrollRefreshRequest = {
-      anchor: followingBottom.value ? null : readingAnchor || captureReadingAnchor(),
-      revealing: false
-    }
-    if (virtualScrollResetPending) virtualScroll.value?.reset()
-    else virtualScroll.value?.refresh(-1)
-    virtualScrollResetPending = false
-    // Refreshes at the same virtual index do not emit another virtual-scroll event.
-    void completeVirtualScrollRefresh()
-  })
-}
-
-async function completeVirtualScrollRefresh() {
-  const request = virtualScrollRefreshRequest
-  if (!request) return
-  await nextTick()
-  await new Promise((resolve) => window.requestAnimationFrame(resolve))
-  if (request !== virtualScrollRefreshRequest) return
-  if (displayMessages.value.length && !renderedMessageElements().length) {
-    virtualScroll.value?.scrollTo(0, 'start-force')
-    return
-  }
-  if (!userScrollActive && followingBottom.value) {
-    const lastMessage = displayMessages.value.at(-1)
-    if (lastMessage && !findMessageElement(lastMessage.id)) {
-      virtualScroll.value?.scrollTo(displayMessages.value.length - 1, 'end-force')
-      return
-    }
-    scrollChatToBottom(scrollTarget)
-  } else if (!userScrollActive && request.anchor) {
-    const element = findMessageElement(request.anchor.id)
-    if (!element && !request.revealing) {
-      const index = displayMessages.value.findIndex((message) => (message.renderId || message.id) === request.anchor.id)
-      if (index >= 0) {
-        request.revealing = true
-        virtualScroll.value?.scrollTo(index, 'start-force')
-        return
-      }
-    }
-    restoreChatReadingAnchor(scrollTarget, element, request.anchor)
-    readingAnchor = {
-      ...request.anchor,
-      id: element?.dataset.renderId || request.anchor.id
-    }
-  }
-  transcriptReadySessionId.value = chat.current?.id || null
-  virtualScrollRefreshRequest = null
-  if (virtualScrollRefreshPending) scheduleTranscriptLayout()
-}
-
-function handleMessageRendered() {
-  scheduleTranscriptLayout()
-}
-
-function renderedMessageElements() {
-  return [...(scrollContent.value?.querySelectorAll('[data-message-id]') || [])]
-}
-
-function findMessageElement(messageId) {
-  return renderedMessageElements().find((element) => (
-    element.dataset.messageId === messageId || element.dataset.renderId === messageId
-  ))
-}
-
-function captureReadingAnchor() {
-  return chatReadingAnchor(scrollTarget, renderedMessageElements())
-}
-
-function rememberReadingAnchor() {
-  if (followingBottom.value || virtualScrollRefreshRequest) return
-  readingAnchor = captureReadingAnchor() || readingAnchor
-}
-
-function clearReadingAnchor() {
-  readingAnchor = null
-  if (virtualScrollRefreshRequest) virtualScrollRefreshRequest.anchor = null
-}
-
-function beginActivityResize() {
-  if (!chat.current) return
-  followingBottom.value = false
-  clearReadingAnchor()
-}
-
-function finishActivityResize() {
-  scheduleTranscriptLayout()
-}
-
-function updateFollowState() {
-  if (!scrollTarget) return
-  const scrollTop = scrollTarget.scrollTop
-  const movedUp = scrollTop < lastScrollTop
-  lastScrollTop = scrollTop
-  if (virtualScrollRefreshRequest && !userScrollActive) return
-  const atBottom = chatBottomDistance(scrollTarget) <= bottomThreshold
-  const shouldFollow = chatShouldFollowBottom(
-    followingBottom.value,
-    userScrollActive && movedUp,
-    userScrollActive && atBottom
-  )
-  if (shouldFollow && !followingBottom.value) {
-    followingBottom.value = true
-    clearReadingAnchor()
-  }
-  else if (!shouldFollow && followingBottom.value) {
-    followingBottom.value = false
-  }
-  if (!followingBottom.value) rememberReadingAnchor()
-  if (userScrollActive && !touchActive) scheduleUserScrollEnd()
-}
-
-function beginUserScroll() {
-  if (virtualScrollRefreshRequest) clearReadingAnchor()
-  userScrollActive = true
-  clearTimeout(userScrollTimer)
-  userScrollTimer = null
-}
-
-function scheduleUserScrollEnd() {
-  clearTimeout(userScrollTimer)
-  userScrollTimer = setTimeout(() => {
-    userScrollTimer = null
-    userScrollActive = false
-    // Capture where the gesture ended before applying deferred layout changes.
-    if (!followingBottom.value) readingAnchor = captureReadingAnchor()
-    scheduleTranscriptLayout()
-  }, 180)
-}
-
-function handleTouchStart() {
-  touchActive = true
-  beginUserScroll()
-}
-
-function handleTouchMove() {
-  if (!userScrollActive) beginUserScroll()
-}
-
-function handleTouchEnd() {
-  touchActive = false
-  if (userScrollActive) scheduleUserScrollEnd()
-}
-
-function handleWheel(event) {
-  if (!event.deltaY) return
-  beginUserScroll()
-  scheduleUserScrollEnd()
-}
-
-function handleScrollKey(event) {
-  if (
-    event.defaultPrevented
-    || event.altKey
-    || event.ctrlKey
-    || event.metaKey
-    || !['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)
-  ) return
-  beginUserScroll()
-  scheduleUserScrollEnd()
-}
-
-function handleScrollAreaMouseDown(event) {
-  if (event.button !== 0 || !scrollTarget || scrollTarget.contains(event.target)) return
-  beginUserScroll()
-  window.removeEventListener('mouseup', handleScrollAreaMouseUp)
-  window.addEventListener('mouseup', handleScrollAreaMouseUp, { once: true })
-}
-
-function handleScrollAreaMouseUp() {
-  scheduleUserScrollEnd()
-}
-
-function enableFollowMode() {
-  touchActive = false
-  userScrollActive = false
-  clearTimeout(userScrollTimer)
-  userScrollTimer = null
-  followingBottom.value = true
-  clearReadingAnchor()
-  scheduleTranscriptLayout()
-}
-
-function observeChatSize() {
-  scrollTarget = scrollArea.value?.getScrollTarget?.() || null
-  if (scrollTarget) {
-    lastScrollTop = scrollTarget.scrollTop
-    scrollTarget.addEventListener('scroll', updateFollowState, { passive: true })
-    scrollTarget.addEventListener('touchstart', handleTouchStart, { passive: true })
-    scrollTarget.addEventListener('touchmove', handleTouchMove, { passive: true })
-    scrollTarget.addEventListener('touchend', handleTouchEnd, { passive: true })
-    scrollTarget.addEventListener('touchcancel', handleTouchEnd, { passive: true })
-    scrollTarget.addEventListener('wheel', handleWheel, { passive: true })
-  }
-  if (typeof ResizeObserver === 'undefined') return
-  resizeObserver = new ResizeObserver(() => scheduleTranscriptLayout())
-  if (scrollContent.value) resizeObserver.observe(scrollContent.value)
-  if (scrollTarget) resizeObserver.observe(scrollTarget)
-}
-
 function chatPageStyle(offset, height) {
   return {
     minHeight: '0px',
@@ -1461,28 +819,8 @@ watch([newSessionRequested, routeProjectId], async ([requested]) => {
 watch(showHome, async (shown) => {
   if (!shown) return
   await nextTick()
-  if (scrollTarget) scrollTarget.scrollTop = 0
+  scrollToTop()
 })
-let previousRouteSessionId
-watch(() => route.fullPath, () => {
-  const id = routeSessionId.value
-  const previousId = previousRouteSessionId
-  previousRouteSessionId = id
-  approvalDraftPreview.value = null
-  void subagents.loadChildren(id)
-  if (id && (id === previousId || previousId === null && chat.current?.id === id)) return
-  void loadRouteSession()
-}, { immediate: true })
-watch(routeProjectId, () => void reconcileRouteProject())
-watch(routeMessageId, () => void revealRouteMessage())
-watch(() => chat.activeContext.sessionProfile?.messageSize || 'standard', () => {
-  scheduleTranscriptLayout(true)
-}, { flush: 'pre' })
-watch(
-  displayMessages,
-  () => scheduleTranscriptLayout(),
-  { flush: 'pre' }
-)
 watch(
   () => runPresentation.value.announcement,
   (value) => {
@@ -1496,29 +834,6 @@ watch(
     }, 250)
   },
   { immediate: true }
-)
-watch(
-  () => chat.current?.id,
-  async (sessionId, previousSessionId) => {
-    virtualScrollRefreshRequest = null
-    transcriptReadySessionId.value = null
-    if (!sessionId || sessionId === previousSessionId) return
-    userScrollActive = false
-    touchActive = false
-    clearTimeout(userScrollTimer)
-    followingBottom.value = true
-    clearReadingAnchor()
-    if (routeMessageId.value) {
-      followingBottom.value = false
-    }
-    await nextTick()
-    if (chat.current?.id !== sessionId) return
-    if (!displayMessages.value.length) {
-      transcriptReadySessionId.value = sessionId
-      return
-    }
-    scheduleTranscriptLayout(true)
-  }
 )
 watch(
   [activeQuestion, () => chat.running],
@@ -1535,25 +850,7 @@ watch(
   },
   { immediate: true }
 )
-watch(
-  () => chat.createdSessionResult,
-  async (result) => {
-    if (!result) return
-    chat.createdSessionResult = null
-    if (routeProjectId.value) void projects.fetchAll().catch(() => {})
-    await router.replace({
-      name: 'chat',
-      query: {
-        ...(routeProjectId.value ? { project: routeProjectId.value } : {}),
-        session: result.sessionId,
-        ...(result.appId ? { controlCenter: result.appId } : {}),
-        ...(result.appId === 'automation' ? { automation: 'new' } : {})
-      }
-    })
-  }
-)
 onMounted(() => {
-  observeChatSize()
   messageTimestampTimer = window.setInterval(() => {
     messageTimestampNow.value = Date.now()
   }, 60_000)
@@ -1561,24 +858,9 @@ onMounted(() => {
   executionAgents.startPolling()
 })
 onBeforeUnmount(() => {
-  routeLoadVersion += 1
   draftProjectCreationContext = null
-  approvalDraftPreview.value = null
-  void subagents.loadChildren(null)
-  virtualScrollRefreshRequest = null
-  resizeObserver?.disconnect()
-  scrollTarget?.removeEventListener('scroll', updateFollowState)
-  scrollTarget?.removeEventListener('touchstart', handleTouchStart)
-  scrollTarget?.removeEventListener('touchmove', handleTouchMove)
-  scrollTarget?.removeEventListener('touchend', handleTouchEnd)
-  scrollTarget?.removeEventListener('touchcancel', handleTouchEnd)
-  scrollTarget?.removeEventListener('wheel', handleWheel)
   window.clearInterval(messageTimestampTimer)
   executionAgents.stopPolling()
   clearTimeout(runAnnouncementTimer)
-  clearTimeout(userScrollTimer)
-  clearTimeout(searchHighlightTimer)
-  window.removeEventListener('mouseup', handleScrollAreaMouseUp)
-  if (virtualScrollRefreshFrame !== null) window.cancelAnimationFrame(virtualScrollRefreshFrame)
 })
 </script>

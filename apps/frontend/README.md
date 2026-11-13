@@ -28,6 +28,8 @@ The default URL is `http://localhost:10020`. Installed packages live in `fronten
 
 See [module ownership](../../docs/modularity.md). Register Control Center apps in `src/app/control-center/manifest.js`; persisted IDs are inert data, not component paths or remote code.
 
+`ChatPage.vue` composes the chat surface. `useChatNavigation` owns route-driven session loading and stale-navigation guards; `useChatViewport` owns one cancellable layout operation for initial positioning, search, following and reading anchors. `ChatMessage.vue` renders a message and its metadata. Domain-specific skill previews belong to approvals, not the page. Keep server state in the existing stores and presentation timing inside the viewport helper.
+
 ## API Errors and Runtime State
 
 The central error formatter, exposed through `src/utils/api-errors.js`, translates stable backend codes into German. The Axios response interceptor displays one negative Quasar toast; components must not duplicate it. Unknown codes use a safe HTTP-status fallback, dynamic values come only from `error.params`, and structured errors/raw backend text must never be rendered or compared directly.
