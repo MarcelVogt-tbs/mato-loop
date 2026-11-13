@@ -321,7 +321,9 @@ Regression tests in normal backend CI protect [serialized prefixes across tool r
 Run affected tests when changing these boundaries. Under unchanged authorization and context constraints, compare the retained serialized prefix and schemas without normalizing away differences; intentional invalidation needs an explicit reason. Prefer deterministic prefix and scan/request-count assertions to provider latency or cache-hit thresholds. The [dated session-cache evaluation](session-cache-evaluation-2026-10.md) records the live serialization regression and measured fix, not current performance guarantees or a new validation run.
 
 Host/profile prompt changes, including the global response-language contract, intentionally
-invalidate older prefixes. The shared open-request continuation contract also intentionally
+invalidate older prefixes. The general factuality contract retains verification requirements
+without a blanket instruction to enumerate evidence gaps; this wording change intentionally
+invalidates older system prefixes. The shared open-request continuation contract also intentionally
 changes this stable prefix; subsequent rounds keep the same contract and retained turns.
 The shell-progress rule keeps useful progress, errors and final
 summaries visible when long-running commands also save logs, preserving command failure status

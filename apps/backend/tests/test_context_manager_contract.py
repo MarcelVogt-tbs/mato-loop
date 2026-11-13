@@ -1940,8 +1940,8 @@ def test_general_system_prompt_requires_supported_factual_claims() -> None:
 
     assert "Never invent facts or present uncertain inferences as facts" in prompt
     assert "current, exact, or high-impact claims" in prompt
-    assert "briefly state uncertainty" in prompt
-    assert "otherwise omit the claim" in prompt
+    assert "Verify code with tests and other claims with suitable evidence." in prompt
+    assert "briefly state uncertainty" not in prompt and "State gaps." not in prompt
 
 
 def test_general_system_prompt_requires_explicit_git_mutation_request() -> None:
