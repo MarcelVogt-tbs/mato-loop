@@ -367,6 +367,7 @@ async def execute_tool_batch(
         index: int, call: ToolCall, *, parallel: bool,
     ) -> AsyncGenerator[asyncio.Task[ToolResult], None]:
         nonlocal superseded, repository_deferred
+        read_started = False
         bound_tool = toolset.tools.get(call.name) if toolset is not None else None
         tool_label = bound_tool.definition.label if bound_tool else None
         display = serialized_calls[index]["toolDisplay"]
@@ -555,6 +556,7 @@ async def execute_tool_batch(
                     handler_started = asyncio.get_running_loop().create_future()
                     tool_context.handler_started = lambda: handler_started.set_result(None)
                     task = asyncio.create_task(toolset.execute(call, tool_context))
+                    read_started = True
                     active_reads.add(task)
                     # Only the opted-in handler may overlap. Registry preparation and
                     # authorization still own the shared database session exclusively.
@@ -678,6 +680,8 @@ async def execute_tool_batch(
                     )
                 attachment.data = b""
             attachments = tuple(attachment for attachment in attachments if not attachment.ephemeral)
+        if parallel and not read_started:
+            await finish_reads()
         workflow_repair = (
             (call.name == "web_search" and session.web_search_policy == WebSearchPolicy.REQUIRED)
             or call.name == "memory_write"

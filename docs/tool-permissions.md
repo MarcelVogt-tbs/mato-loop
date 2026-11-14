@@ -52,7 +52,8 @@ Only handler I/O overlaps. Microsoft 365 mail, calendar and To Do reads opt in;
 downloads, writes and other tools remain serial barriers.
 
 Results are persisted in model-call order, not completion order, preserving the
-live and replayed history. Duplicate calls drain earlier results before execution.
+live and replayed history. Immediate pre-execution rejections also wait for
+earlier results. Duplicate calls drain earlier results before execution.
 Explicit denial during preparation prevents admission of later calls; reads
 already started may finish. Cancellation cancels and joins outstanding reads.
 

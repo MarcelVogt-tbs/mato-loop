@@ -32,6 +32,7 @@ from mato_loop_backend.models import Credential, UserAccount, WebSearchPolicy
 from mato_loop_backend.permissions.policy import PermissionDecision
 from mato_loop_backend.permissions.resolution import tool_execution_policy
 from mato_loop_backend.providers.base import ProviderResult, ToolCall
+from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.security import CredentialCipher
 from mato_loop_backend.settings import (
     InstanceLimits,
@@ -111,6 +112,7 @@ async def _parallel_todo_runtime(monkeypatch, count):
     return db, run, response.tool_calls
 
 
+@pytest.mark.usefixtures("skill_library")
 async def test_existing_todo_reads_overlap_with_a_bound_and_keep_result_order(monkeypatch):
     db, run, calls = await _parallel_todo_runtime(monkeypatch, 6)
     gates = {4: asyncio.Event(), 6: asyncio.Event()}
@@ -152,6 +154,7 @@ async def test_existing_todo_reads_overlap_with_a_bound_and_keep_result_order(mo
     assert [message.tool_call_id for message in _tool_messages(db)] == [call.id for call in calls]
 
 
+@pytest.mark.usefixtures("skill_library")
 @pytest.mark.parametrize("misdeclared_write", [False, True])
 async def test_non_read_tool_drains_reads_before_starting_the_next_group(monkeypatch, misdeclared_write):
     db, run, calls = await _parallel_todo_runtime(monkeypatch, 3)
@@ -185,6 +188,7 @@ async def test_non_read_tool_drains_reads_before_starting_the_next_group(monkeyp
     assert trace.index("end:1") < trace.index("barrier") < trace.index("start:3")
 
 
+@pytest.mark.usefixtures("skill_library")
 @pytest.mark.parametrize("decision,executed", [
     (PermissionDecision.USER_DENIED, []),
     (PermissionDecision.DENY, [2]),
@@ -200,6 +204,7 @@ async def test_parallel_reads_keep_denials_before_effects(monkeypatch, decision,
     assert [call.kwargs["params"]["$top"] for call in page.call_args_list] == executed
 
 
+@pytest.mark.usefixtures("skill_library")
 async def test_cancelling_a_run_joins_started_parallel_reads(monkeypatch):
     db, run, _calls = await _parallel_todo_runtime(monkeypatch, 2)
     started, cancelled = set(), set()
@@ -224,6 +229,44 @@ async def test_cancelling_a_run_joins_started_parallel_reads(monkeypatch):
         with pytest.raises(asyncio.CancelledError):
             await execution
     assert cancelled == {1, 2}
+
+
+@pytest.mark.usefixtures("skill_library")
+async def test_rejected_read_waits_for_earlier_parallel_results(monkeypatch):
+    db, run, calls = await _parallel_todo_runtime(monkeypatch, 2)
+    read_started = False
+    release = asyncio.Event()
+
+    async def page(_client, _path, _model, *, params, **kwargs):
+        nonlocal read_started
+        if params["$top"] == 2:
+            raise client.Microsoft365Error("microsoft365.invalidResponse")
+        read_started = True
+        await release.wait()
+        return [], None
+
+    async def refresh(_session):
+        if read_started:
+            release.set()
+
+    db.refresh.side_effect = refresh
+    monkeypatch.setattr(ProviderService, "complete", AsyncMock(side_effect=[
+        ProviderResult(tool_calls=[
+            ToolCall("previous-failure", calls[1].name, dict(calls[1].arguments)),
+        ]),
+        ProviderResult(tool_calls=calls),
+        ProviderResult(content="Done"),
+    ]))
+    monkeypatch.setattr(client.GraphClient, "page", page)
+    await asyncio.wait_for(AgentRuntime._execute_loop(db, run), timeout=10)
+    assert [
+        (message.tool_call_id, message.provider_data["_matoloop"].get("errorCode"))
+        for message in _tool_messages(db)
+    ] == [
+        ("previous-failure", "microsoft365.invalidResponse"),
+        ("1", None),
+        ("2", "agent.repeatedToolCall"),
+    ]
 
 
 @pytest.fixture
