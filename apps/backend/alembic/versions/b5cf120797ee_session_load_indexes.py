@@ -1,7 +1,7 @@
 """session load indexes
 
 Revision ID: b5cf120797ee
-Revises: 20ed2d643118
+Revises: c0d8c740723e
 Create Date: 2026-11-15 21:59:12.292653
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = 'b5cf120797ee'
-down_revision: str | None = '20ed2d643118'
+down_revision: str | None = 'c0d8c740723e'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
