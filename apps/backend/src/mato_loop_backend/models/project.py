@@ -3,7 +3,17 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    true,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from mato_loop_backend.db.base import Base
@@ -48,6 +58,9 @@ class Project(Base):
     git_target_branch: Mapped[str | None] = mapped_column(String(300), nullable=True)
     git_workspace_mode: Mapped[str] = mapped_column(
         String(20), nullable=False, default="local", server_default="local"
+    )
+    git_fetch_before_actions: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
     )
     coding_integration_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
     coding_project_key: Mapped[str | None] = mapped_column(String(300), nullable=True)

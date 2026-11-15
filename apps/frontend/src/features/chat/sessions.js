@@ -528,7 +528,8 @@ export const sessionsActions = {
         preferred_execution_agent_id: 'preferredExecutionAgentId',
         current_directory: 'currentDirectory',
         workspace_mode: 'workspaceMode',
-        workspace_path: 'workspacePath'
+        workspace_path: 'workspacePath',
+        git_fetch_before_actions: 'gitFetchBeforeActions'
       }
       const normalizedPatch = { ...patch }
       if (Object.hasOwn(patch, 'preferred_execution_agent_id') || Object.hasOwn(patch, 'current_directory')) normalizedPatch.workspace_path = null

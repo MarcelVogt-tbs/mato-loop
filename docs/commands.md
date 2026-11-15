@@ -60,12 +60,17 @@ An occupied destination selects another short ID, with at most ten candidates.
 Candidates derive from the independent creation UUID so repeated requests authorize
 the same paths; the Agent records its choice before preparation. It never adopts or
 overwrites an occupied destination. Existing worktrees retain their paths and branches.
-Preparation requires a committed local target branch. When a remote is selected and
-contains the same-named target branch, preparation fetches it and fast-forwards the
-local target before freezing the base. Local commits already containing the remote
-tip are retained. Fetch failures, local changes in the target checkout, divergent
-history, or a target checked out in another worktree stop creation without resetting
-or stashing local work. No remote or an absent remote branch uses the local target.
+Preparation requires a committed local target branch. `gitFetchBeforeActions` defaults
+to true per project; `codingWorkspace.fetchBeforeActions` is a nullable session override.
+The Git app exposes inheritance, on and off, including before initial session creation.
+When enabled, preparation makes one bounded attempt to query and fetch the selected
+remote target (20 seconds per network command). It freezes the descendant of the local
+and remote commits without moving the local target or changing any existing checkout.
+Local-ahead commits are retained. Fetch failure, an absent remote branch, or divergence
+uses the local commit and persists an informational host message in the session.
+No selected remote or disabled fetching uses the local target without a network request.
+Dirty or occupied target checkouts do not prevent creation. Existing permission and
+filesystem safeguards still apply; no reset or stash is performed.
 Already prepared worktrees and frozen preparation bases are not refreshed on retry.
 It freezes that base commit and checks it out under
 `<agent-data>/worktrees/<project-id8>/<eight-hex-id>`. The project folder uses the first eight hex digits of the project UUID;
@@ -193,10 +198,20 @@ selection and ingress semantics.
 | `/git-review` | Review working changes and unpublished commits without editing or publishing. |
 | `/git-commit` | Inspect and explicitly commit selected task changes without fetching or pushing. |
 | `/git-finish` | Complete missing review, safe in-scope repairs, affected checks and task commits; integrate locally only when not already on the target branch. Never publish. |
-| `/git-merge` | Commit task changes if needed, rebase own unpublished commits onto the local target, review, check, and fast-forward the clean original checkout. No fetch or push. |
+| `/git-merge` | Commit task changes if needed, follow the fetch preference, integrate own unpublished commits, review, check, and fast-forward the clean original checkout. No push. |
 | `/git-push` | Publish existing commits to a project-appropriate remote branch without committing, fetching or merging. |
 | `/git-pr` | Commit task changes if needed, incorporate the fetched remote target in the source worktree, review, check, normally push to the selected publication branch and create or update the PR. Never update the local target or merge the PR. |
 | `/git-sync` | Fetch and fast-forward the clean original project checkout without switching branches or discarding work. |
+
+`git-finish` and `git-merge` pass the effective `fetchBeforeActions` preference and
+the frozen `baseCommit` to the agent through the existing command context. The agent,
+not another host merge engine, performs permitted fetching, integration, conflict
+resolution and verification. A failed/denied fetch or divergent remote target keeps
+the existing local workflow with a reported fallback, never bypassing permissions.
+The frozen base separates task commits from upstream commits. Only own unpublished
+commits may be rebased; original checkouts are updated only by fast-forward from
+their own directory. Finish and Merge never push. These prompt/context additions
+intentionally change the Git command prefix; unchanged requests remain deterministic.
 | `/git-remote [name] [url]` | Configure only the explicitly requested remote through normal agent tools; ask for missing values. |
 
 All Git actions follow current repository instructions and referenced guidelines for branches,

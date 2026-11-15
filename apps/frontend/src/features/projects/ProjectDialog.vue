@@ -100,6 +100,7 @@
               </template>
             </AppSelect>
             <AppSelect v-model="gitWorkspaceMode" dense outlined emit-value map-options label="Standard-Arbeitsbereich" :options="[{ label: 'Lokal', value: 'local' }, { label: 'Worktree', value: 'worktree' }]" hint="Vorgabe für neue Sessions; vor dem Sessionstart änderbar." />
+            <AppSelect v-model="gitFetchBeforeActions" dense outlined emit-value map-options class="q-mt-md" label="Remote vor Git-Aktionen abrufen" :options="[{ label: 'An', value: true }, { label: 'Aus', value: false }]" hint="Projektvorgabe; in der Git-App der Session änderbar." />
           </template>
         </q-card-section>
         <q-card-actions align="right" class="q-pa-md q-pt-none">
@@ -154,6 +155,7 @@ const executionAgentId = ref(null)
 const currentDirectory = ref(null)
 const gitTargetBranch = ref(null)
 const gitWorkspaceMode = ref('local')
+const gitFetchBeforeActions = ref(true)
 const { repository, loading: repositoryLoading, error: repositoryError, refresh: refreshRepository } = useRepositoryProbe(executionAgentId, currentDirectory, open)
 const branchSearch = ref('')
 const branchOptions = computed(() => [...new Set([
@@ -198,6 +200,7 @@ watch(open, (shown) => {
   gitTargetBranch.value = props.project?.gitTargetBranch || null
   branchSearch.value = ''
   gitWorkspaceMode.value = props.project?.gitWorkspaceMode || 'local'
+  gitFetchBeforeActions.value = props.project?.gitFetchBeforeActions ?? true
   directoryPickerOpen.value = false
   void executionAgents.fetchAll({ suppressErrorToast: true }).catch(() => {})
   void templates.load().catch(() => {})
@@ -216,7 +219,8 @@ async function save() {
     defaultExecutionAgentId: executionAgentId.value,
     defaultCurrentDirectory: executionAgentId.value ? currentDirectory.value?.trim() || null : null,
     gitTargetBranch: gitTargetBranch.value || null,
-    gitWorkspaceMode: gitWorkspaceMode.value
+    gitWorkspaceMode: gitWorkspaceMode.value,
+    gitFetchBeforeActions: gitFetchBeforeActions.value
   }
   saving.value = true
   try {

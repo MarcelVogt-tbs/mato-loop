@@ -2,7 +2,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, StrictBool, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +15,7 @@ from mato_loop_backend.sessions.coding import (
     RepositoryResult,
     coding_client,
     inspect_repository,
+    persist_worktree_warning,
     remove_worktree,
     resolve_git_target,
     select_session_workspace,
@@ -59,6 +60,9 @@ class GitTargetRequest(BaseModel):
     remote: str | None = Field(default=None, min_length=1, max_length=200)
     remote_identity: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     target_branch: str | None = Field(default=None, min_length=1, max_length=300)
+    fetch_before_actions: StrictBool | None = Field(
+        default=None, validation_alias=AliasChoices("fetchBeforeActions", "fetch_before_actions")
+    )
 
     _remote = field_validator("remote")(validate_git_remote)
     _target = field_validator("target_branch")(validate_git_branch)
@@ -106,6 +110,11 @@ async def set_target(
                        "executionAgentId": str(session.preferred_execution_agent_id)}
         if payload.remote is not None:
             binding.update(remote=payload.remote, remoteIdentity=info.remote_identities[payload.remote])
+        if "fetch_before_actions" in payload.model_fields_set:
+            if payload.fetch_before_actions is None:
+                binding.pop("fetchBeforeActions", None)
+            else:
+                binding["fetchBeforeActions"] = payload.fetch_before_actions
         binding.update(targetBranch=payload.target_branch or binding.get("targetBranch") or (project.git_target_branch if configured else None) or info.default_branch,
                        commonDirectory=info.common_directory)
         session.coding_workspace = binding
@@ -177,6 +186,7 @@ async def switch_workspace(session_id: UUID, payload: SessionWorkspaceRequest,
     try:
         session, project = await workspace_session(db, user, session_id)
         policy = await select_session_workspace(db, session, project, payload.directory, create=payload.create, worktree_id=payload.worktree_id)
+        await persist_worktree_warning(db, session)
         ai = apply_session_ai(await load_effective_ai(db, user.id), session)
         model = model_for_session(ai, ai.default_model_id)
         provider = provider_for_session(ai, model)

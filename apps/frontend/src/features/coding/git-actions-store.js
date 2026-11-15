@@ -67,6 +67,7 @@ export const useGitActionStore = defineStore('git-actions', {
             Object.assign(chat.current, data)
             useControlCenterStore().syncSession(chat.current)
           }
+          if (data.codingWorkspace?.warningCode) await chat.refreshSession(session.id)
         } else {
           await api.post(`/coding/sessions/${session.id}/git`, { action, directory: session.currentDirectory, ...values })
           await chat.refreshSession(session.id)
@@ -102,6 +103,15 @@ export const useGitActionStore = defineStore('git-actions', {
         preserveDraft: true, activeFile: null
       })
       return sessionId || result?.sessionId || null
+    },
+    async setFetchBeforeActions(fetchBeforeActions) {
+      const chat = useChatStore()
+      if (this.busy) return null
+      if (!chat.current) return chat.updateActive({ git_fetch_before_actions: fetchBeforeActions })
+      chat.sessionSettingsPending += 1
+      try {
+        return await this.updateTarget({ fetchBeforeActions })
+      } finally { chat.sessionSettingsPending -= 1 }
     },
     async updateTarget(values) {
       const chat = useChatStore()

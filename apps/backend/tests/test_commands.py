@@ -100,7 +100,7 @@ def test_git_reviews_share_risk_and_simplicity_criteria_without_optional_blocker
 @pytest.mark.parametrize("name", ["git-merge", "git-finish"])
 def test_git_merge_prepares_the_workspace_before_requiring_a_clean_original(name):
     instructions = parse_command(f"/{name}").instructions
-    assert instructions.index("original checkout may remain dirty") < instructions.index("Use the current local target")
+    assert instructions.index("original checkout may remain dirty") < instructions.index("Before integration, follow fetchBeforeActions")
     assert instructions.index("Only before updating the original checkout") < instructions.index("both clean working trees")
     assert "fast-forward-only merge" in instructions
 
@@ -171,7 +171,7 @@ async def test_command_binds_worktree_target_and_displays_its_prompt_without_run
     agent_id = uuid4()
     session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=agent_id, current_directory="/worktree", workspace_mode="worktree", coding_workspace={
         "mode": "worktree", "executionAgentId": str(agent_id), "repository": "/project", "path": "/worktree", "branch": "session",
-        "remote": None, "targetBranch": "develop",
+        "remote": None, "targetBranch": "develop", "fetchBeforeActions": False, "baseCommit": "a" * 40,
     })
     monkeypatch.setattr("mato_loop_backend.sessions.git_commands.inspect_repository", AsyncMock(return_value=RepositoryResult(
         repository="/worktree", remotes=["origin"], defaultRemote="origin", defaultBranch="main", branch="session",
@@ -184,6 +184,8 @@ async def test_command_binds_worktree_target_and_displays_its_prompt_without_run
     result = message_dict(message)
     assert '"targetBranch": "develop"' in result["content"]
     assert command["context"]["remote"] is None
+    finish = await prepare_command(db, session, parse_command("/git-finish"))
+    assert (finish["context"]["fetchBeforeActions"], finish["context"]["baseCommit"]) == (False, "a" * 40)
     assert message.content == "/git-review only parser changes"
     assert message_payload(message)["commandPrompt"] == (
         definition.instructions + "\n\n" + OUTPUT_RULES + OUTPUT_FORMATS[definition.name] + "\n\nonly parser changes"
@@ -273,12 +275,14 @@ async def test_worktree_checks_destination_policy_before_creating_files(monkeypa
 @pytest.mark.parametrize("outside", [False, True])
 @pytest.mark.parametrize("attached", [False, True])
 @pytest.mark.parametrize("remote", [None, "upstream"])
-async def test_worktree_creation_binds_an_independent_identity(monkeypatch, outside, attached, remote):
+@pytest.mark.parametrize("fetch", [True, False])
+async def test_worktree_creation_binds_an_independent_identity(monkeypatch, outside, attached, remote, fetch):
     from mato_loop_backend.sessions.coding import select_session_workspace
 
     agent_id = uuid4()
     session = ChatSession(id=uuid4(), user_id=uuid4(), preferred_execution_agent_id=agent_id, session_profile={"worktrees_enabled": True})
     project = Project(id=uuid4(), user_id=session.user_id, default_execution_agent_id=agent_id, default_current_directory="/project", git_target_branch="develop", git_remote=remote)
+    session.coding_workspace = {"executionAgentId": str(agent_id), "path": "/project", "repository": "/project", "fetchBeforeActions": fetch}
     identity = uuid4()
     name = uuid5(identity, "1").hex[:8]
     destination = f"/data/worktrees/{str(project.id)[:8]}/{name}"
@@ -288,6 +292,7 @@ async def test_worktree_creation_binds_an_independent_identity(monkeypatch, outs
         branch=f"worktree-{name}" if attached else None,
         baseCommit="a" * 40, targetBranch="develop", commonDirectory="/project/.git",
         gitDirectory="/project/.git/worktrees/session",
+        warningCode="git.fetchFailed" if fetch else None,
     )
     monkeypatch.setattr("mato_loop_backend.sessions.coding.coding_client", AsyncMock(return_value=client))
     monkeypatch.setattr("mato_loop_backend.sessions.coding.inspect_repository", AsyncMock(return_value=RepositoryResult(
@@ -306,7 +311,9 @@ async def test_worktree_creation_binds_an_independent_identity(monkeypatch, outs
     monkeypatch.setattr("mato_loop_backend.sessions.service.validate_execution_preferences", AsyncMock(return_value=(destination, "auto")))
     await select_session_workspace(db, session, project, create=True, worktree_id=identity)
     assert (session.current_directory, client.request.await_args.args[1]["sessionId"],
-            client.request.await_args.args[1]["remote"]) == (destination, str(identity), remote)
+            client.request.await_args.args[1]["remote"], session.coding_workspace["baseCommit"],
+            session.coding_workspace["warningCode"], session.coding_workspace["fetchBeforeActions"]) == (
+                destination, str(identity), remote if fetch else None, "a" * 40, "git.fetchFailed" if fetch else None, fetch)
 
 
 @pytest.mark.parametrize("registered", [True, False])
@@ -520,6 +527,50 @@ async def test_target_adoption_does_not_change_an_unrelated_project_default(monk
     db.scalar.return_value = project
     result = await set_target(session.id, GitTargetRequest(remote="origin", remote_identity="a" * 64), user, db)
     assert (result["projectId"], project.git_remote, session.coding_workspace["remote"]) == (None, "upstream", "origin")
+
+
+@pytest.mark.parametrize("override", [False, True, None])
+async def test_fetch_override_updates_only_the_bound_session(monkeypatch, override):
+    from mato_loop_backend.api.routes.git import GitTargetRequest, set_target
+    from mato_loop_backend.sessions.coding import effective_git_fetch
+
+    user = UserAccount(id=uuid4())
+    agent_id = uuid4()
+    project = Project(id=uuid4(), user_id=user.id, default_execution_agent_id=agent_id,
+                      default_current_directory="/project", git_fetch_before_actions=False)
+    binding = {"executionAgentId": str(agent_id), "repository": "/project", "path": "/worktree",
+               "commonDirectory": "/project/.git", "baseCommit": "a" * 40, "fetchBeforeActions": True}
+    session = ChatSession(id=uuid4(), user_id=user.id, project_id=project.id,
+                          preferred_execution_agent_id=agent_id, current_directory="/worktree", coding_workspace=binding)
+    monkeypatch.setattr("mato_loop_backend.api.routes.git.get_owned_session", AsyncMock(return_value=session))
+    monkeypatch.setattr("mato_loop_backend.sessions.archive.is_session_archived", AsyncMock(return_value=False))
+    monkeypatch.setattr("mato_loop_backend.api.routes.git.inspect_repository", AsyncMock(return_value=RepositoryResult(
+        repository="/worktree", commonDirectory="/project/.git", remotes=[], defaultRemote=None,
+        defaultBranch="main", branch="task")))
+    db = AsyncMock()
+    db.scalar.return_value = project
+    await set_target(session.id, GitTargetRequest(fetchBeforeActions=override), user, db)
+    assert (session.coding_workspace.get("fetchBeforeActions"), session.coding_workspace["baseCommit"],
+            project.git_fetch_before_actions, effective_git_fetch(session.coding_workspace, project)) == (
+                override, "a" * 40, False, override if override is not None else False)
+
+
+async def test_worktree_warning_is_a_normal_host_message_visible_to_the_model_once():
+    from unittest.mock import Mock
+
+    from mato_loop_backend.sessions.coding import persist_worktree_warning
+
+    session = ChatSession(id=uuid4(), coding_workspace={"mode": "worktree", "path": "/worktree",
+        "executionAgentId": str(uuid4()), "baseCommit": "a" * 40, "warningCode": "git.fetchFailed"})
+    db = AsyncMock()
+    db.add = Mock()
+    db.scalar.side_effect = [None, uuid4()]
+    await persist_worktree_warning(db, session)
+    await persist_worktree_warning(db, session)
+    message = db.add.call_args.args[0]
+    message.attachments = []
+    assert (db.add.call_count, message.role, message.error_code, message_payload(message)["origin"],
+            message_dict(message)["content"]) == (1, "assistant", None, "host", message.content)
 
 
 @pytest.mark.parametrize("directory", ["/worktree", "/unrelated"])

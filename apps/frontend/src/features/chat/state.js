@@ -17,6 +17,7 @@ export function defaultSessionOptions() {
     currentDirectory: null,
     workspaceMode: 'local',
     workspacePath: null,
+    gitFetchBeforeActions: null,
     workspaceContext: null
   }
 }
@@ -40,6 +41,7 @@ export function sessionCreatePayload(options, projectId, controlCenter) {
     memory_mode: options.memoryMode,
     ...(options.trustLevel ? { trust_level: options.trustLevel } : {}),
     web_search_policy: options.webSearchPolicy,
+    ...(typeof options.gitFetchBeforeActions === 'boolean' ? { git_fetch_before_actions: options.gitFetchBeforeActions } : {}),
     preferred_execution_agent_id: options.preferredExecutionAgentId,
     workspace_mode: projectId && options.preferredExecutionAgentId && options.currentDirectory ? options.workspaceMode || 'local' : 'local',
     ...(projectId && options.workspaceMode === 'worktree' && options.workspacePath ? { workspace_path: options.workspacePath } : {}),
@@ -129,6 +131,7 @@ export function normalizedNewSessionDraft(value) {
       currentDirectory: typeof options.currentDirectory === 'string' ? options.currentDirectory : null,
       workspaceMode: options.workspaceMode === 'worktree' ? 'worktree' : 'local',
       workspacePath: typeof options.workspacePath === 'string' ? options.workspacePath : null,
+      gitFetchBeforeActions: typeof options.gitFetchBeforeActions === 'boolean' ? options.gitFetchBeforeActions : null,
       workspaceContext: null
     })
   }

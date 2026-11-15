@@ -117,8 +117,9 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
             (arguments.destinations[0], None, None, ["develop"]),
         )
 
-    async def test_worktree_refreshes_the_selected_remote_before_freezing_its_base(self):
+    async def test_worktree_uses_the_selected_remote_without_updating_the_local_target(self):
         source, args = await self.managed_source()
+        local = self.git("rev-parse", "HEAD", cwd=source).decode().strip()
         remote = self.root / "remote.git"
         self.git("clone", "--bare", str(source), str(remote))
         self.git("remote", "add", "selected", str(remote), cwd=source)
@@ -132,6 +133,7 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
 
         async def local_remote(directory, *arguments, **kwargs):
             if kwargs.get("protocols"):
+                self.assertEqual(kwargs.get("timeout_seconds"), 20)
                 kwargs["protocols"] = "file"
             return await original(directory, *arguments, **kwargs)
 
@@ -142,59 +144,88 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             (
                 result["baseCommit"],
+                result.get("warningCode"),
                 self.git("rev-parse", "HEAD", cwd=source).decode().strip(),
                 (source / "file.txt").read_text(),
                 (Path(result["path"]) / "file.txt").read_text(),
             ),
-            (latest, latest, "remote update\n", "remote update\n"),
+            (latest, None, local, "old\n", "remote update\n"),
         )
 
-    async def test_worktree_remote_refresh_preserves_local_work_on_failure(self):
-        source, args = await self.managed_source()
+    async def test_worktree_remote_base_selection_preserves_local_work(self):
+        seed, _ = await self.managed_source()
         remote = self.root / "remote.git"
-        self.git("clone", "--bare", str(source), str(remote))
-        self.git("remote", "add", "origin", str(remote), cwd=source)
-        args = args.model_copy(update={"remote": "origin"})
+        self.git("clone", "--bare", str(seed), str(remote))
+        publisher = self.root / "publisher"
+        self.git("clone", str(remote), str(publisher))
+        (publisher / "file.txt").write_text("remote update\n")
+        self.git("commit", "-am", "Remote update", cwd=publisher)
+        self.git("push", "origin", "develop", cwd=publisher)
+        latest = self.git("rev-parse", "HEAD", cwd=publisher).decode().strip()
         original = git_module._git
 
         async def local_remote(directory, *arguments, **kwargs):
             if kwargs.get("protocols"):
+                self.assertEqual(kwargs.get("timeout_seconds"), 20)
                 kwargs["protocols"] = "file"
+            if arguments[0] == "fetch":
+                if scenario == "fetchFailed":
+                    return 1, b"", b"fetch failed"
+                if scenario == "timeout":
+                    raise AgentError("path.unavailable", "Git operation timed out")
             return await original(directory, *arguments, **kwargs)
 
-        with patch.object(git_module, "_git", side_effect=local_remote):
-            (source / "file.txt").write_text("uncommitted work\n")
-            with self.assertRaises(AgentError) as dirty:
-                await prepare_worktree(self.config, self.fs, args)
-            self.git("commit", "-am", "Local work", cwd=source)
-            local = self.git("rev-parse", "HEAD", cwd=source).decode().strip()
-            self.git("checkout", "--detach", "HEAD~1", cwd=source)
-            self.git("commit", "--allow-empty", "-m", "Divergent remote", cwd=source)
-            self.git("push", "origin", "HEAD:develop", cwd=source)
-            self.git("checkout", "develop", cwd=source)
-            with self.assertRaises(AgentError) as divergent:
-                await prepare_worktree(self.config, self.fs, args)
-            self.git("remote", "set-url", "origin", str(self.root / "missing.git"), cwd=source)
-            with self.assertRaises(AgentError) as unavailable:
-                await prepare_worktree(self.config, self.fs, args)
-        self.assertEqual(
-            (
-                dirty.exception.code,
-                divergent.exception.code,
-                unavailable.exception.code,
-                self.git("rev-parse", "HEAD", cwd=source).decode().strip(),
-                (source / "file.txt").read_text(),
-                Path(args.destinations[0]).exists(),
-            ),
-            (
-                "git.dirty",
-                "git.actionFailed",
-                "git.fetchFailed",
-                local,
-                "uncommitted work\n",
-                False,
-            ),
-        )
+        for scenario, warning in [
+            ("equal", None),
+            ("localAhead", None),
+            ("dirty", None),
+            ("checkedOutElsewhere", None),
+            ("diverged", "git.remoteDiverged"),
+            ("fetchFailed", "git.fetchFailed"),
+            ("timeout", "git.fetchFailed"),
+            ("missingBranch", "git.remoteBranchMissing"),
+            ("remoteRequired", "git.remoteRequired"),
+        ]:
+            with self.subTest(scenario=scenario):
+                source = self.root / scenario
+                self.git("clone", str(seed), str(source))
+                self.git("remote", "set-url", "origin", str(remote), cwd=source)
+                if scenario in {"equal", "localAhead"}:
+                    self.git("fetch", "origin", cwd=source)
+                    self.git("reset", "--hard", latest, cwd=source)
+                if scenario in {"localAhead", "diverged"}:
+                    self.git("commit", "--allow-empty", "-m", "Local work", cwd=source)
+                target = "develop"
+                if scenario == "missingBranch":
+                    target = "local-only"
+                    self.git("checkout", "-b", target, cwd=source)
+                if scenario == "remoteRequired":
+                    self.git("remote", "remove", "origin", cwd=source)
+                working = source
+                if scenario == "checkedOutElsewhere":
+                    self.git("checkout", "--detach", cwd=source)
+                    working = self.root / "occupied"
+                    self.git("worktree", "add", str(working), target, cwd=source)
+                (working / "file.txt").write_text("uncommitted work\n")
+                local = self.git("rev-parse", target, cwd=source).decode().strip()
+                before = self.git("status", "--porcelain=v1", cwd=working)
+                args = self.arguments(source).model_copy(
+                    update={"remote": "origin", "target_branch": target}
+                )
+                with patch.object(git_module, "_git", side_effect=local_remote):
+                    result = await prepare_worktree(self.config, self.fs, args)
+                base = latest if scenario in {"dirty", "checkedOutElsewhere"} else local
+                self.assertEqual(
+                    (
+                        result["baseCommit"],
+                        self.git("rev-parse", "HEAD", cwd=result["path"]).decode().strip(),
+                        result.get("warningCode"),
+                        self.git("rev-parse", target, cwd=source).decode().strip(),
+                        self.git("status", "--porcelain=v1", cwd=working),
+                        (working / "file.txt").read_text(),
+                    ),
+                    (base, base, warning, local, before, "uncommitted work\n"),
+                )
 
     async def test_project_folders_reuse_short_ids_and_disambiguate_collisions(self):
         source = self.local_source()
@@ -535,8 +566,9 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
             (
                 (Path(result["path"]) / "file.txt").read_text(),
                 (source / "file.txt").read_text(),
+                result.get("warningCode"),
             ),
-            ("local target\n", "uncommitted work\n"),
+            ("local target\n", "uncommitted work\n", None),
         )
 
     @unittest.skipUnless(os.geteuid() == 0, "Requires ownership changes")
@@ -666,8 +698,9 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
             await prepare_worktree(self.config, self.fs, args)
         self.assertEqual((Path(result["path"]) / "file.txt").read_text(), "old\n")
 
-    async def test_retry_uses_the_frozen_base_after_failed_checkout(self):
+    async def test_retry_uses_the_frozen_base_and_warning_after_failed_checkout(self):
         source, args = await self.managed_source()
+        args = args.model_copy(update={"remote": "origin"})
         base = self.git("rev-parse", "HEAD", cwd=source)
         original = git_module._git
 
@@ -679,8 +712,12 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(git_module, "_git", fail_checkout), self.assertRaises(AgentError):
             await prepare_worktree(self.config, self.fs, args)
         self.git("commit", "--allow-empty", "-m", "New target", cwd=source)
+        self.git("remote", "add", "origin", str(source), cwd=source)
         result = await prepare_worktree(self.config, self.fs, args)
-        self.assertEqual(self.git("rev-parse", "HEAD", cwd=result["path"]), base)
+        self.assertEqual(
+            (self.git("rev-parse", "HEAD", cwd=result["path"]), result.get("warningCode")),
+            (base, "git.remoteRequired"),
+        )
 
     async def test_recovery_keeps_existing_branch_based_worktrees(self):
         source, args = await self.managed_source()

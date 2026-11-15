@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import re
+from typing import Literal
 from urllib.parse import urlsplit
 from uuid import UUID, uuid5
 
@@ -18,7 +19,7 @@ from mato_loop_backend.execution.client import (
 )
 from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.execution.paths import absolute_path, within
-from mato_loop_backend.models import AgentRun, ChatSession, ExecutionAgent, Project
+from mato_loop_backend.models import AgentRun, ChatSession, ExecutionAgent, Message, Project
 
 
 def validate_git_remote(value: str | None) -> str | None:
@@ -110,6 +111,7 @@ class WorktreeResult(ExecutionResult):
     target_branch: str
     common_directory: str
     git_directory: str
+    warning_code: Literal["git.fetchFailed", "git.remoteDiverged", "git.remoteBranchMissing", "git.remoteRequired"] | None = None
 
     _paths = field_validator("repository", "path", "common_directory", "git_directory")(
         lambda value: absolute_path(value) if value is not None else None
@@ -136,6 +138,39 @@ def resolve_git_target(
         binding["remote"] if "remote" in binding else (project.git_remote if configured else None) or info.default_remote,
         binding.get("targetBranch") or (project.git_target_branch if configured else None) or info.default_branch,
     )
+
+
+def effective_git_fetch(binding: dict, project: Project | None) -> bool:
+    override = binding.get("fetchBeforeActions")
+    if isinstance(override, bool):
+        return override
+    configured = project.git_fetch_before_actions if project is not None else None
+    return configured if configured is not None else True
+
+
+async def persist_worktree_warning(db: AsyncSession, session: ChatSession) -> None:
+    binding = session.coding_workspace or {}
+    explanations = {
+        "git.fetchFailed": "Die Remote-Aktualisierung ist fehlgeschlagen.",
+        "git.remoteDiverged": "Der lokale Zielbranch und der Remote-Branch sind auseinander gelaufen.",
+        "git.remoteBranchMissing": "Der Zielbranch fehlt auf dem Remote.",
+        "git.remoteRequired": "Es ist kein verwendbares Remote konfiguriert.",
+    }
+    explanation = explanations.get(binding.get("warningCode"))
+    if not explanation or binding.get("mode") != "worktree":
+        return
+    message_id = uuid5(session.id, f"worktree-warning:{binding.get('executionAgentId')}:{binding.get('path')}")
+    if await db.scalar(select(Message.id).where(Message.id == message_id)) is not None:
+        return
+    db.add(Message(
+        id=message_id, session_id=session.id, role="assistant",
+        content=f"Hinweis zum Worktree: {explanation} Der Worktree wurde trotzdem mit dem festgelegten Basis-Commit erstellt. Der lokale Zielbranch wurde nicht verändert.",
+        provider_data={"_matoloop": {"origin": "host", "worktreeWarning": {
+            "code": binding["warningCode"], "path": binding["path"],
+            "executionAgentId": binding["executionAgentId"], "baseCommit": binding.get("baseCommit"),
+        }}},
+    ))
+    await db.flush()
 
 
 async def coding_client(db: AsyncSession, user_id: UUID, agent_id: UUID | None) -> ExecutionClient:
@@ -251,7 +286,7 @@ async def select_session_workspace(db, session, project, directory=None, *, crea
             created = await client.request("git.worktree", {
                 "path": root, "commonDirectory": original.common_directory,
                 "ownerId": str(session.user_id), "projectId": str(project.id), "sessionId": identity,
-                "targetBranch": target, "remote": remote, "destinations": paths,
+                "targetBranch": target, "remote": remote if effective_git_fetch(previous, project) else None, "destinations": paths,
             }, WorktreeResult, timeout=300)
         except ExecutionClientError as exc:
             raise SessionServiceError(409, exc.code) from exc
@@ -275,6 +310,11 @@ async def select_session_workspace(db, session, project, directory=None, *, crea
         "mode": session.workspace_mode, "executionAgentId": str(agent_id), "repository": root,
         "path": directory, "targetBranch": target, "remote": remote, "commonDirectory": info.common_directory,
         "remoteIdentity": previous.get("remoteIdentity") if previous.get("remote") == remote else info.remote_identities.get(remote),
+        **({"fetchBeforeActions": previous["fetchBeforeActions"]} if "fetchBeforeActions" in previous else {}),
+        **({"baseCommit": created.base_commit, "warningCode": created.warning_code} if create else {
+            key: previous[key] for key in ("baseCommit", "warningCode")
+            if previous.get("path") == directory and key in previous
+        }),
     }
     return directory_policy
 
@@ -357,7 +397,8 @@ async def remove_worktree(db, session, info: RepositoryResult, directory, *, for
     except ExecutionClientError as exc:
         raise SessionServiceError(409, exc.code, params=exc.params) from exc
     for item in affected:
-        item.coding_workspace = {**(item.coding_workspace or {}), "mode": "local",
+        item.coding_workspace = {**{key: value for key, value in (item.coding_workspace or {}).items()
+                                   if key not in {"baseCommit", "warningCode"}}, "mode": "local",
             "executionAgentId": str(item.preferred_execution_agent_id),
             "repository": root, "path": root, "commonDirectory": info.common_directory}
         item.current_directory = root
