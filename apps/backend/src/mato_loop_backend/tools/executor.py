@@ -389,6 +389,9 @@ async def execute_definition(
             context.tool_settings = await profile_tool_settings(context)
             if not _tool_available(definition.name, context.tool_settings):
                 return ToolResult.error("tool.unavailable")
+            if (definition.policy_resource_key is not None and selected_integration_id is not None
+                    and not self._actions_enabled(definition, context.tool_settings, selected_integration_id)):
+                return ToolResult.error("permission.denied")
             context.integration_settings = await context.current_integrations()
             bound_ids = set(aggregate_integration_ids)
             if selected_integration_id is not None:

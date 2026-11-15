@@ -257,7 +257,7 @@ def summary(report):
 async def runtime_flow(output, integrations, tool_settings, profile, provider, model):
     """Exercise the implemented selector and search handler; simulate business tools only."""
     complete = tool_registry.effective(integrations, tool_settings=tool_settings, webfetch_enabled=True)
-    names = {mcp_model_tool_name(item.id, tool["name"]): tool["name"] for item in integrations.instances for tool in item.config.get("tools", [])}
+    names = {mcp_model_tool_name(item.id, tool["name"], item.name): tool["name"] for item in integrations.instances for tool in item.config.get("tools", [])}
     messages = [{"role": "system", "content": SYSTEM}]
     records, rows = [], []
     report = {"model": model.model_id, "provider": provider.name, "fullCatalogCount": len(complete.tools),

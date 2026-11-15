@@ -54,6 +54,57 @@ def test_shell_delete_split_preserves_explicit_overrides_only():
     }
 
 
+def test_mcp_name_restrictions_move_to_stable_connection_resources():
+    from uuid import UUID, uuid4
+
+    from mato_loop_backend.integrations.mcp.adapter import mcp_model_tool_name, mcp_resource_key
+    from mato_loop_backend.settings.effective import apply_integration_permissions
+    from mato_loop_backend.settings.models import IntegrationSettings, ToolSettings
+
+    migration = _migration_module("c0d8c740723e_mcp_tool_restrictions.py")
+    connection, owner, other = str(uuid4()), uuid4(), uuid4()
+    base, child, allowed = (str(uuid4()) for _ in range(3))
+
+    names = {name: mcp_model_tool_name(UUID(connection), name) for name in ("global", "profile")}
+    resources = {name: mcp_resource_key(name) for name in names}
+    rows = [
+        {"key": "tools", "user_id": None, "data": {"tool_availability": {names["global"]: False, "read": False, "mcp_unknown": False}}},
+        {"key": "integrations", "user_id": owner, "data": {"instances": [{
+            "id": connection, "name": "SonoBin", "integration_type": "music", "adapter_type": "sonobin",
+            "config": {"tools": [{"name": name} for name in names]},
+            "permissions": {"resourceAvailability": {resources["global"]: True}},
+            "profile_permissions": {child: {"resourceAvailability": {resources["global"]: True, resources["profile"]: True}}},
+        }]}},
+        {"key": "agent-profiles", "user_id": None, "data": {
+            "builtin_access_overrides": {base: {"toolAvailability": {names["profile"]: False}}},
+        }},
+        {"key": "agent-profiles", "user_id": owner, "data": {"profiles": [
+            {"id": child, "base_profile_id": base, "overrides": {}},
+            {"id": allowed, "base_profile_id": base, "overrides": {"toolAvailability": {names["profile"]: True}}},
+        ]}},
+        {"key": "agent-profiles", "user_id": other, "data": {"profiles": [
+            {"id": str(uuid4()), "base_profile_id": base, "overrides": {"toolAvailability": {names["profile"]: False}}},
+        ]}},
+    ]
+    migrated = migration.migrate_settings(rows)
+    instance = migrated[1]["data"]["instances"][0]
+    assert (migrated[0]["data"]["tool_availability"], instance["permissions"]["resourceAvailability"],
+            instance["profile_permissions"], migrated[2]["data"], migrated[3]["data"]) == (
+        {"read": False, "mcp_unknown": False}, {resources["global"]: False},
+        {base: {"resourceAvailability": {resources["global"]: False, resources["profile"]: False}},
+         child: {"resourceAvailability": {resources["global"]: False, resources["profile"]: False}},
+         allowed: {"resourceAvailability": {resources["global"]: False, resources["profile"]: True}}},
+        {"builtin_access_overrides": {base: {"toolAvailability": {}}}},
+        {"profiles": [{"id": child, "base_profile_id": base, "overrides": {}},
+                      {"id": allowed, "base_profile_id": base, "overrides": {"toolAvailability": {}}}]},
+    )
+    tools = ToolSettings()
+    apply_integration_permissions(
+        tools, IntegrationSettings.model_validate(migrated[1]["data"]), uuid4(), base_profile_id=UUID(base),
+    )
+    assert tools.permissions.resource_availability[connection][resources["profile"]] is False
+
+
 def test_migration_applies_new_defaults_and_preserves_custom_overrides() -> None:
     migration = _migration_module()
 

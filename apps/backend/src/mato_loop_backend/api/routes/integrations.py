@@ -1937,7 +1937,10 @@ async def get_integration_permissions(
     tools = await SettingsStore.load(db, ToolSettings)
     tools._agent_profile = profile
     only = IntegrationSettings(instances=[instance])
-    apply_integration_permissions(tools, only if profile_id is not None else IntegrationSettings())
+    apply_integration_permissions(
+        tools, only if profile_id is not None else IntegrationSettings(),
+        profile.base_profile_id if profile is not None else None,
+    )
     inherited = {
         trust.value: api_integration_resources._access_payload(instance, resources, tools.model_copy(deep=True).select_trust(trust))
         for trust in TrustLevel

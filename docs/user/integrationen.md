@@ -53,6 +53,8 @@ Die allgemeine Auswahl **Integrationen standardmäßig verfügbar** steht im Age
 
 Die anderen mitgelieferten Profile verwenden **Bei Bedarf**. **Tool-Ladeverhalten anpassen** an einer Verbindung überschreibt dies für die Verbindung oder ein Profil. Das Laden gewährt keine Ausführungsrechte. Nach Kontextverdichtung können Werkzeuge erneut gesucht werden müssen.
 
+Nenne bei ähnlichen Werkzeugen den gewünschten Dienst, etwa „Nutze MatoLoop Debug, nicht SonoBin“. Der Agent kann die Werkzeugsuche auf diese Verbindung begrenzen; die Treffer enthalten die Herkunft. MCP-Werkzeugnamen enthalten außerdem einen lesbaren Server- und Werkzeuganteil. Prüfe die Zielverbindung weiterhin vor einer Freigabe.
+
 ## Kalender und Aufgaben mit CalDAV
 
 Nach dem Verbindungstest wähle unter **Standardressourcen dieses Kontos** einen Standardkalender und eine Standard-Aufgabenliste. Unspezifische Anfragen nutzen diese Auswahl; eine ausdrücklich benannte Ressource hat Vorrang.

@@ -361,7 +361,10 @@ async def load_effective_tools(
     return instance.select_trust(trust_level)
 
 
-def apply_integration_permissions(tools: ToolSettings, integrations: IntegrationSettings, profile_id: UUID | None = None) -> None:
+def apply_integration_permissions(
+    tools: ToolSettings, integrations: IntegrationSettings, profile_id: UUID | None = None,
+    *, base_profile_id: UUID | None = None,
+) -> None:
     for field in ("private_permissions", "public_permissions"):
         target = getattr(tools, field)
         target.integration_policies = {}
@@ -372,8 +375,10 @@ def apply_integration_permissions(tools: ToolSettings, integrations: Integration
             policies = dict(branch.policies)
             resources = {key: dict(value) for key, value in branch.resource_policies.items()}
             availability = dict(instance.permissions.resource_availability)
-            override = instance.profile_permissions.get(profile_id)
-            if override is not None:
+            for selected_id in dict.fromkeys((base_profile_id, profile_id)):
+                override = instance.profile_permissions.get(selected_id)
+                if override is None:
+                    continue
                 selected = getattr(override, field)
                 policies.update(selected.policies)
                 for key, value in selected.resource_policies.items():
@@ -510,5 +515,6 @@ async def load_agent_profile_tools(
     tools._temporary_files_enabled = profile.temporary_files_enabled
     apply_integration_permissions(
         tools, integrations if integrations is not None else await load_effective_integrations(db, user_id), profile.id,
+        base_profile_id=profile.base_profile_id,
     )
     return tools, profile

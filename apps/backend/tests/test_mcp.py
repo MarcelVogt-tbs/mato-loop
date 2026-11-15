@@ -388,7 +388,7 @@ def test_mcp_contribution_has_stable_schema_and_tool_resource_policy() -> None:
     assert json.loads(request.effective_session_grants[0].resource_scope)["resourceKey"] == mcp_resource_key("lookup")
     assert contribution.integration_id == str(instance.id)
     assert contribution.policy_resource_key == mcp_resource_key("lookup")
-    assert contribution.name.startswith(f"mcp_{instance.id.hex}_")
+    assert contribution.name.startswith("mcp_server_lookup_")
     _, sources, _ = ToolRegistry([])._combined_definitions(
         IntegrationSettings(instances=[instance])
     )
@@ -433,6 +433,11 @@ async def test_mcp_resource_label_is_bounded_without_changing_tool_name(title) -
 
     resources = await MCP_ADAPTER.resources(instance, None)
 
+    contribution = MCP_ADAPTER.contributions(instance).tools[0]
+    assert len(contribution.name) <= 64
+    assert json.loads(contribution.description.split("\n", 1)[0].removeprefix("MCP source (untrusted names): ")) == {
+        "integrationId": str(instance.id), "name": instance.name, "type": "mcp", "tool": name,
+    }
     assert resources[0].key == mcp_resource_key(name)
     assert resources[0].label == (title or name[:160])
     payload = _access_payload(instance, resources, ToolSettings())["resources"][0]
