@@ -2072,6 +2072,7 @@ def test_skill_catalog_contains_selection_metadata_without_instructions() -> Non
     ]}
     assert "load_skill alone before answers or tools" in prompt
     assert "direct acceptance of the last assistant's own skill offer" in prompt
+    assert "Use the conversation to resolve follow-ups" in prompt
     assert skill.instructions not in prompt
 
     edit_prompt = general_system_prompt(

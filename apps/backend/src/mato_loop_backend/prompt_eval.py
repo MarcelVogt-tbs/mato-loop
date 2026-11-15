@@ -1654,6 +1654,20 @@ CASES = (
         expected_tool_call_count=1,
     ),
     PromptCase(
+        id="letter_revision_followup_loads_writing_style",
+        kind="general",
+        history=(
+            {"role": "user", "content": "Schreibe eine Mail an meinen Vermieter: Die Heizung ist seit gestern ausgefallen. Bitte um Reparatur."},
+            {"role": "assistant", "content": "Guten Tag, seit gestern funktioniert meine Heizung nicht mehr. Bitte veranlassen Sie eine Reparatur. Vielen Dank!"},
+        ),
+        user="Mach das bitte kürzer und etwas lockerer.",
+        tools=("load_skill", "edit_skill", "save_skill", "question"),
+        system_options={"skill_catalog": (DEFAULT_SKILLS[WRITING_STYLE_SKILL_ID].model_dump(),)},
+        expected_tool="load_skill",
+        expected_arguments={"skill_id": str(WRITING_STYLE_SKILL_ID)},
+        expected_tool_call_count=1,
+    ),
+    PromptCase(
         id="accepted_writing_style_offer_loads_skill",
         kind="general",
         history=(
