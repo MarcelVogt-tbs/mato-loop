@@ -33,6 +33,18 @@ import { useConfirm } from 'src/composables/confirm'
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks(); vi.clearAllMocks(); vi.useRealTimers() })
 
+it.each([false, null])('persists the Git fetch override without losing false or inheritance (%s)', async fetchBeforeActions => {
+  setActivePinia(createPinia())
+  const chat = useChatStore()
+  chat.outboxLoaded = true
+  chat.current = { id: 'session', codingWorkspace: { fetchBeforeActions: true } }
+  api.put.mockResolvedValue({ data: { codingWorkspace: { fetchBeforeActions } } })
+  await useGitActionStore().setFetchBeforeActions(fetchBeforeActions)
+  expect([api.put.mock.calls, chat.current.codingWorkspace.fetchBeforeActions]).toEqual([
+    [['/coding/sessions/session/target', { fetchBeforeActions }]], fetchBeforeActions
+  ])
+})
+
 it('hides a directly opened personal chat after restoring its binding', async () => {
   setActivePinia(createPinia())
   const chat = useChatStore()
@@ -417,8 +429,9 @@ it('groups existing worktrees below local and new without repeating their type',
 it('uses an existing worktree at session creation without requesting another worktree', () => {
   setActivePinia(createPinia())
   const chat = useChatStore()
-  const options = { ...chat.activeContext, preferredExecutionAgentId: 'agent', currentDirectory: '/repo', workspaceMode: 'worktree', workspacePath: '/existing' }
-  expect(sessionCreatePayload(options, 'project', {}).workspace_path).toBe('/existing')
+  const options = { ...chat.activeContext, preferredExecutionAgentId: 'agent', currentDirectory: '/repo', workspaceMode: 'worktree', workspacePath: '/existing', gitFetchBeforeActions: false }
+  const payload = sessionCreatePayload(options, 'project', {})
+  expect([payload.workspace_path, payload.git_fetch_before_actions]).toEqual(['/existing', false])
 })
 
 it('keeps the selected workspace unchanged after a failed switch', async () => {

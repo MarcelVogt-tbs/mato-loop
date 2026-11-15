@@ -69,6 +69,10 @@ class ProjectRequest(BaseModel):
     git_workspace_mode: Literal["local", "worktree"] = Field(
         default="local", validation_alias=AliasChoices("gitWorkspaceMode", "git_workspace_mode")
     )
+    git_fetch_before_actions: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("gitFetchBeforeActions", "git_fetch_before_actions"),
+    )
 
     _remote = field_validator("git_remote")(validate_git_remote)
     _branch = field_validator("git_target_branch")(validate_git_branch)
@@ -101,6 +105,7 @@ class ProjectResponse(BaseModel):
     git_remote: str | None = Field(alias="gitRemote")
     git_target_branch: str | None = Field(alias="gitTargetBranch")
     git_workspace_mode: Literal["local", "worktree"] = Field(alias="gitWorkspaceMode")
+    git_fetch_before_actions: bool = Field(default=True, alias="gitFetchBeforeActions")
     session_count: int = Field(alias="sessionCount")
     has_unread_messages: bool = Field(default=False, alias="hasUnreadMessages")
     created_at: datetime = Field(alias="createdAt")
@@ -139,6 +144,11 @@ def _payload(project: Project, session_count: int, has_unread_messages: bool = F
         gitRemote=project.git_remote,
         gitTargetBranch=project.git_target_branch,
         gitWorkspaceMode=project.git_workspace_mode or "local",
+        gitFetchBeforeActions=(
+            project.git_fetch_before_actions
+            if project.git_fetch_before_actions is not None
+            else True
+        ),
         sessionCount=session_count,
         hasUnreadMessages=has_unread_messages,
         createdAt=project.created_at,
@@ -353,6 +363,7 @@ async def create_project(
         git_remote=payload.git_remote,
         git_target_branch=payload.git_target_branch,
         git_workspace_mode=payload.git_workspace_mode,
+        git_fetch_before_actions=payload.git_fetch_before_actions,
     )
     db.add(project)
     await db.commit()
@@ -384,6 +395,8 @@ async def update_project(
         project.git_target_branch = payload.git_target_branch
     if "git_workspace_mode" in payload.model_fields_set:
         project.git_workspace_mode = payload.git_workspace_mode
+    if "git_fetch_before_actions" in payload.model_fields_set:
+        project.git_fetch_before_actions = payload.git_fetch_before_actions
     execution_fields = {
         "default_execution_agent_id",
         "default_current_directory",

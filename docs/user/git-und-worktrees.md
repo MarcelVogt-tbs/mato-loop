@@ -36,9 +36,13 @@ Worktrees stehen für Projekt-Sessions mit konfiguriertem Computer, Repository u
 
 1. Wähle vor dem Sessionstart unter **Arbeitsbereich** **Neuer Worktree**.
 2. Prüfe den lokalen Zielbranch. Er muss einen Commit besitzen.
-3. Starte die Session. MatoLoop erstellt daraus eine getrennte Arbeitskopie am letzten Commit des lokalen Zielbranches, zunächst ohne eigenen Branch (**Losgelöster Stand**, technisch Detached HEAD).
+3. Starte die Session. Bei aktiviertem **Remote vor Git-Aktionen abrufen** versucht MatoLoop, den Zielbranch vom ausgewählten Remote abzurufen. Der neuere, linear passende lokale oder Remote-Commit wird zur Basis der getrennten Arbeitskopie, zunächst ohne eigenen Branch (**Losgelöster Stand**, technisch Detached HEAD).
 
-Es findet kein Fetch statt und ein Remote ist nicht nötig. Du und der Agent können in diesem Worktree normal arbeiten und committen. Für eine Veröffentlichung wählt der Agent einen passenden Remote-Branch; ein lokaler Branch ist auch für Pull Requests und lokale Merges nicht nötig. Uncommittete Änderungen bleiben im ursprünglichen Verzeichnis. Laufende Sessions desselben Projekts verhindern das Anlegen nicht. Bestehende Worktrees behalten ihre Branches. **Lokal** und die Auswahl eines bestehenden Worktrees erstellen keinen Branch.
+Der ursprüngliche Checkout und der lokale Zielbranch bleiben unverändert, auch bei uncommitteten Änderungen oder einem anderswo ausgecheckten Zielbranch. Ist der Abruf nicht möglich, fehlt der Remote-Branch oder sind die Stände auseinander gelaufen, verwendet MatoLoop den lokalen Commit und speichert einen Host-Hinweis im Chat. Ohne ausgewählten Remote oder bei ausgeschaltetem Abruf wird direkt der lokale Stand verwendet. Bereits erstellte Worktrees und eingefrorene Vorbereitungsstände werden nicht erneut aktualisiert.
+
+**Remote vor Git-Aktionen abrufen** ist im Projekt standardmäßig eingeschaltet. Unter **Control Center > Git > Repository > Einstellungen** kannst du vor und nach dem Sessionstart **Projektvorgabe**, **An** oder **Aus** wählen; ohne passendes Projekt gilt **Standard (An)**. Die Auswahl ändert nur diese Session. Sie startet keine Aktion und aktualisiert keinen bestehenden Worktree.
+
+Du und der Agent können in diesem Worktree normal arbeiten und committen. Für eine Veröffentlichung wählt der Agent einen passenden Remote-Branch; ein lokaler Branch ist auch für Pull Requests und lokale Merges nicht nötig. Uncommittete Änderungen bleiben im ursprünglichen Verzeichnis. Laufende Sessions desselben Projekts verhindern das Anlegen nicht. Bestehende Worktrees behalten ihre Branches. **Lokal** und die Auswahl eines bestehenden Worktrees erstellen keinen Branch.
 
 !!! warning "Worktrees isolieren nicht die ganze Umgebung"
     Mehrere Sessions können denselben Worktree und damit Dateien und Änderungen teilen. Worktrees teilen Git-Metadaten; das ursprüngliche Repository muss erreichbar bleiben. `.env`-Dateien, Abhängigkeiten, Prozesse, Ports und Datenbanken werden nicht automatisch kopiert oder getrennt.
@@ -54,6 +58,8 @@ Ein Branchwechsel betrifft alle Sessions dieses Arbeitsbereichs. Belegte Branche
 Beim Wechsel von einem losgelösten Stand warnt die Git-App vor dem möglichen Verlust von Commits, die durch keinen Branch gesichert sind. Du kannst trotzdem bestätigen und wechseln. Möchtest du die Commits behalten, integriere sie vorher oder sichere sie mit **Branch erstellen** am aktuellen Stand.
 
 ## Remote einrichten und veröffentlichen
+
+**Abschließen** und **Lokal übernehmen** beachten dieselbe Abruf-Einstellung. Der Agent ruft den Remote bei Bedarf erneut ab, berücksichtigt neue linear passende Zielcommits und prüft die Integration. Scheitert der Abruf oder divergieren die Zielstände, führt er den lokalen Ablauf mit einem Hinweis fort. Konflikte innerhalb der Aufgabe löst er nach den normalen Git-Regeln; Schutz vor Datenverlust und die Freigaben bleiben bestehen. Ein Push erfolgt weiterhin nur auf ausdrücklichen Auftrag. Zwischen Abruf und späterem Push können weitere Remote-Commits hinzukommen; ein erfolgreicher Abruf garantiert deshalb keinen späteren Push-Erfolg.
 
 Unter **Git > Repository > Einstellungen** wählst du einen vorhandenen Remote oder beauftragst über **Einrichten/Bearbeiten** den Agenten, seine Adresse zu ändern. Verwende HTTPS-/SSH-Adressen ohne Zugangsdaten; richte die Anmeldung auf dem Computer ein.
 

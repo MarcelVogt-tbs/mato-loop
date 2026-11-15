@@ -564,13 +564,18 @@ async def session_message_page(
     ).all()
     page_anchors = anchors[:page_size]
     if not page_anchors:
+        if cursor is None:
+            messages = list(await db.scalars(select(Message).where(Message.session_id == session_id)
+                .options(selectinload(Message.attachments)).order_by(Message.created_at, Message.id)))
+            return messages, [], None
         return [], [], None
 
     lower_bound = (page_anchors[-1].created_at, page_anchors[-1].id)
     messages_statement = select(Message).where(
         Message.session_id == session_id,
-        tuple_(Message.created_at, Message.id) >= lower_bound,
     )
+    if len(anchors) > page_size:
+        messages_statement = messages_statement.where(tuple_(Message.created_at, Message.id) >= lower_bound)
     if upper_bound is not None:
         messages_statement = messages_statement.where(
             tuple_(Message.created_at, Message.id) < upper_bound
@@ -1171,6 +1176,11 @@ async def create_session(
     )
     item.current_directory = current_directory
     if item.workspace_mode == "worktree":
+        if payload.git_fetch_before_actions is not None:
+            item.coding_workspace = {
+                "executionAgentId": str(agent_id), "repository": current_directory, "path": current_directory,
+                "fetchBeforeActions": payload.git_fetch_before_actions,
+            }
         from mato_loop_backend.sessions.coding import select_session_workspace
 
         if payload.workspace_path is None and project and current_directory != project.default_current_directory:
@@ -1185,6 +1195,13 @@ async def create_session(
             "remote": project.git_remote, "targetBranch": project.git_target_branch,
             "executionAgentId": str(agent_id),
         }
+    if payload.git_fetch_before_actions is not None:
+        item.coding_workspace = {
+            **(item.coding_workspace or {
+                "executionAgentId": str(agent_id), "repository": current_directory, "path": current_directory,
+            }),
+            "fetchBeforeActions": payload.git_fetch_before_actions,
+        }
     try:
         db.add(item)
         await db.flush()
@@ -1194,6 +1211,9 @@ async def create_session(
         if duplicate is not None:
             return duplicate
         raise SessionServiceError(409, "http.conflict") from exc
+    from mato_loop_backend.sessions.coding import persist_worktree_warning
+
+    await persist_worktree_warning(db, item)
     item_id = item.id
     item_project_id = item.project_id
     session_storage = storage_factory()

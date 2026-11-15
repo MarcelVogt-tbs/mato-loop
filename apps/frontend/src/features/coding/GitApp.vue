@@ -51,13 +51,17 @@
                 <GitActionList :disabled="saving" @refresh="refreshCommands" />
               </q-card>
             </section>
-            <section v-if="repository?.repository || initCommand || finishAvailable" aria-labelledby="git-settings-title">
+            <section v-if="chat.current || project || repository?.repository || initCommand || finishAvailable" aria-labelledby="git-settings-title">
               <h2 id="git-settings-title" class="text-subtitle2 q-mt-none q-mb-sm">Einstellungen</h2>
               <GitWorkspacePanel v-if="repository?.repository || finishAvailable" :project="project" :repository="repository" :loading="loading" :target-branch="targetBranch"
                 :remote="remote" :remote-disabled="busy || !online" @changed="refresh" @edit-remote="openRemote"
                 :finish-available="finishAvailable" :finish-disabled="finishDisabled" @finish-queued="setFinishQueued"
                 @inspect-worktrees="refreshRepository({ worktreeDetails: true })"
                 @project-defaults="projectOpen = true" />
+              <AppSelect :model-value="fetchBeforeActions" dense outlined emit-value map-options class="q-mt-md"
+                label="Remote vor Git-Aktionen abrufen" :options="fetchOptions" :disable="busy || !online || !repository?.repository" :loading="savingFetch"
+                :hint="`Wirksam: ${effectiveFetchBeforeActions ? 'An' : 'Aus'}. Vor neuen Worktrees und beim Abschließen oder lokalen Übernehmen. Kein automatischer Push.`"
+                @update:model-value="setFetchBeforeActions" />
               <q-card v-if="!repository?.repository && initCommand" flat bordered class="app-surface">
                 <q-list>
                   <q-item clickable :disable="saving || commands.messageDisabled" @click="initRepository">
@@ -142,6 +146,16 @@ const remoteScope = ref(null)
 const scopeKey = computed(() => JSON.stringify([context.value?.preferredExecutionAgentId, context.value?.currentDirectory,
   chat.current?.projectId || chat.sessionsProjectId]))
 const binding = computed(() => chat.current?.codingWorkspace || {})
+const savingFetch = ref(false)
+const fetchBeforeActions = computed(() => chat.current
+  ? (boundContext.value ? binding.value.fetchBeforeActions : null) ?? null
+  : context.value.gitFetchBeforeActions ?? null)
+const effectiveFetchBeforeActions = computed(() => fetchBeforeActions.value ?? projectDefaults.value?.gitFetchBeforeActions ?? true)
+const fetchOptions = computed(() => [
+  { label: projectDefaults.value ? 'Projektvorgabe' : 'Standard (An)', value: null },
+  { label: 'An', value: true },
+  { label: 'Aus', value: false }
+])
 const { repository, loading, error, refresh: refreshRepository } = useRepositoryProbe(
   () => context.value?.preferredExecutionAgentId,
   () => context.value?.currentDirectory, visible
@@ -162,7 +176,7 @@ const finishDisabled = computed(() => commands.finishEntry
   ? commands.messageDisabled || commands.finishEntry.id === chat.queueSendingEntryId
   : saving.value || (catalog.loading && !catalog.loaded) || commands.messageDisabled)
 const activeRun = computed(() => Boolean(chat.running || chat.runId || chat.current?.activeRun))
-const busy = computed(() => saving.value || commands.busy)
+const busy = computed(() => saving.value || savingFetch.value || commands.busy)
 const remoteChanged = computed(() => boundContext.value && binding.value.remoteIdentity
   && repository.value?.remoteIdentities?.[remote.value] && binding.value.remoteIdentity !== repository.value.remoteIdentities[remote.value])
 const requiredRule = value => Boolean(String(value || '').trim()) || 'Pflichtfeld'
@@ -185,6 +199,15 @@ watch(() => chat.current?.id, (id, previous) => {
 watch(scopeKey, () => { remoteOpen.value = false; projectOpen.value = false })
 
 function selectRemote(name) { remoteUrl.value = repository.value?.remoteUrls?.[name] || '' }
+async function setFetchBeforeActions(value) {
+  if (busy.value) return
+  savingFetch.value = true
+  try {
+    await commands.setFetchBeforeActions(value)
+    $q.notify({ type: 'positive', message: 'Git-Einstellung gespeichert.' })
+  } catch { /* Central API toast; keep the persisted value. */ }
+  finally { savingFetch.value = false }
+}
 async function setFinishQueued(enabled) {
   try { await commands.setFinishQueued(enabled) } catch { /* Central API toast. */ }
 }

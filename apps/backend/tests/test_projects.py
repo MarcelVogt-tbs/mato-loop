@@ -91,6 +91,7 @@ def test_project_fields_are_trimmed_and_bounded() -> None:
     request = ProjectRequest(name="  Work  ", instructions="  Use Python.  ")
     assert request.name == "Work"
     assert request.instructions == "Use Python."
+    assert request.git_fetch_before_actions is True
     assert ProjectRequest(
         name="Work", defaultExecutionAgentId=str(agent_id)
     ).default_execution_agent_id == agent_id
@@ -131,6 +132,7 @@ async def test_project_list_is_owner_scoped_and_counts_sessions(monkeypatch) -> 
 
     assert response.items[0].session_count == 3
     assert response.items[0].has_unread_messages is True
+    assert response.items[0].git_fetch_before_actions is True
     assert response.items[0].coding_service["analysisModelVariant"] == "high"
     assert response.items[0].coding_service["executionModelVariant"] == "max"
     statement = db.execute.await_args.args[0]
@@ -178,7 +180,8 @@ def test_project_order_rejects_duplicates() -> None:
         ProjectOrderRequest(projectIds=[project_id, project_id])
 
 
-async def test_create_and_update_project_commit_owner_scoped_changes() -> None:
+@pytest.mark.parametrize("fetch_before_actions", [True, False])
+async def test_create_and_update_project_commit_owner_scoped_changes(fetch_before_actions) -> None:
     user = _user()
     now = datetime(2026, 8, 18, 12, tzinfo=UTC)
     db = AsyncMock(spec=AsyncSession)
@@ -190,14 +193,18 @@ async def test_create_and_update_project_commit_owner_scoped_changes() -> None:
 
     db.add.side_effect = persist
     created = await create_project(
-        ProjectCreateRequest(name=" New ", instructions=" Use Python. "), user, db
+        ProjectCreateRequest(
+            name=" New ", instructions=" Use Python. ", gitFetchBeforeActions=fetch_before_actions
+        ), user, db
     )
 
     project = _project(user.id)
     db.scalar.side_effect = [project, 2, True]
     updated = await update_project(
         project.id,
-        ProjectRequest(name=" Renamed ", instructions=" Be concise. "),
+        ProjectRequest(
+            name=" Renamed ", instructions=" Be concise. ", git_fetch_before_actions=fetch_before_actions
+        ),
         user,
         db,
     )
@@ -205,9 +212,13 @@ async def test_create_and_update_project_commit_owner_scoped_changes() -> None:
     assert created.name == "New"
     assert created.instructions == "Use Python."
     assert created.coding_service is None
+    assert created.model_dump(by_alias=True)["gitFetchBeforeActions"] is fetch_before_actions
+    assert db.add.call_args.args[0].git_fetch_before_actions is fetch_before_actions
     assert updated.name == "Renamed"
     assert updated.instructions == "Be concise."
     assert updated.session_count == 2
+    assert updated.model_dump(by_alias=True)["gitFetchBeforeActions"] is fetch_before_actions
+    assert project.git_fetch_before_actions is fetch_before_actions
     owner_query = db.scalar.await_args_list[0].args[0]
     assert user.id in owner_query.compile().params.values()
     assert db.commit.await_count == 2
@@ -217,6 +228,7 @@ async def test_update_project_preserves_omitted_instructions() -> None:
     user = _user()
     project = _project(user.id)
     project.instructions = "Keep this."
+    project.git_fetch_before_actions = False
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [project, 0, False]
 
@@ -225,6 +237,7 @@ async def test_update_project_preserves_omitted_instructions() -> None:
     )
 
     assert updated.instructions == "Keep this."
+    assert updated.git_fetch_before_actions is False
 
 
 async def test_update_project_validates_changed_session_defaults(monkeypatch) -> None:

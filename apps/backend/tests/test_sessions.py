@@ -825,6 +825,7 @@ async def test_opening_an_app_creates_an_empty_session_with_storage(monkeypatch,
 
     result = await create_session(SessionCreateRequest(
         content=None,
+        gitFetchBeforeActions=False,
         control_center={
             "tabs": [{"app_id": "session", "pinned": False}, {"app_id": "browser", "pinned": False}],
             "active_app_id": "browser",
@@ -841,6 +842,40 @@ async def test_opening_an_app_creates_an_empty_session_with_storage(monkeypatch,
     assert result["session"]["titleGenerationStatus"] == "pending"
     assert result["session"]["lastMessageAt"] is None
     assert "message" not in result and "runId" not in result
+    assert session.coding_workspace["fetchBeforeActions"] is False
+
+
+async def test_initial_worktree_receives_fetch_override_and_persists_warning_before_run(monkeypatch):
+    from mato_loop_backend.api.routes import sessions as sessions_route
+    from mato_loop_backend.settings.session_profiles import CODING_TEMPLATE_ID
+
+    user = _user()
+    project = Project(id=uuid4(), user_id=user.id, default_execution_agent_id=uuid4(),
+                      default_current_directory="/project", default_session_template_id=CODING_TEMPLATE_ID)
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=AiSettings()))
+    monkeypatch.setattr(sessions_route, "SessionStorage", MagicMock)
+    monkeypatch.setattr("mato_loop_backend.sessions.service.validate_execution_preferences",
+                        AsyncMock(return_value=("/project", "auto")))
+
+    async def select_workspace(db, session, *_args, **_kwargs):
+        assert session.coding_workspace["fetchBeforeActions"] is False
+        session.current_directory = "/worktree"
+        session.coding_workspace = {**session.coding_workspace, "mode": "worktree", "path": "/worktree",
+                                    "baseCommit": "a" * 40, "warningCode": "git.fetchFailed"}
+        return "auto"
+
+    monkeypatch.setattr("mato_loop_backend.sessions.coding.select_session_workspace", select_workspace)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [project, None]
+
+    async def start(*_args, **_kwargs):
+        assert [item.args[0].role for item in db.add.call_args_list if isinstance(item.args[0], Message)] == ["assistant"]
+        raise RuntimeError("Run boundary reached")
+
+    monkeypatch.setattr(AgentRuntime, "start", start)
+    with pytest.raises(RuntimeError, match="Run boundary reached"):
+        await create_session(SessionCreateRequest(content="Task", project_id=project.id,
+            workspace_mode="worktree", gitFetchBeforeActions=False), user, db)
 
 
 async def test_first_session_retry_returns_canonical_session_and_attachment() -> None:

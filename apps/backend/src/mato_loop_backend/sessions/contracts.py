@@ -3,7 +3,15 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictInt, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    model_validator,
+)
 
 from mato_loop_backend.execution.paths import is_absolute_path
 from mato_loop_backend.files.service import RootFileService
@@ -255,6 +263,9 @@ class SessionCreateRequest(SessionOptionsRequest):
     current_directory: str | None = Field(default=None, max_length=4_096)
     workspace_mode: Literal["local", "worktree"] | None = None
     workspace_path: str | None = Field(default=None, max_length=4096)
+    git_fetch_before_actions: StrictBool | None = Field(
+        default=None, validation_alias=AliasChoices("gitFetchBeforeActions", "git_fetch_before_actions")
+    )
     control_center: ControlCenterState = Field(default_factory=default_control_center_state)
     active_file: ActiveFileRequest | None = Field(
         default=None, validation_alias=AliasChoices("active_file", "activeFile")

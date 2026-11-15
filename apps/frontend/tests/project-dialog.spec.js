@@ -18,7 +18,7 @@ it.each([false, true])('saves project fields through the shared dialog (editing=
   api.get.mockImplementation(url => Promise.resolve({ data: url === '/session-templates'
     ? { templates: [{ id: 'coding', name: 'Coding' }] }
     : { items: [{ id: 'computer', alias: 'Rechner', connected: true, operations: [], homeDirectory: '/home/user' }] } }))
-  const project = { id: 'project', name: 'Bestehend', instructions: 'Anweisungen', defaultSessionTemplateId: 'coding', defaultExecutionAgentId: 'computer', defaultCurrentDirectory: '/home/user/project', gitTargetBranch: 'main' }
+  const project = { id: 'project', name: 'Bestehend', instructions: 'Anweisungen', defaultSessionTemplateId: 'coding', defaultExecutionAgentId: 'computer', defaultCurrentDirectory: '/home/user/project', gitTargetBranch: 'main', gitFetchBeforeActions: false }
   const request = editing ? api.patch : api.post
   request.mockReset().mockRejectedValueOnce(new Error('unavailable')).mockResolvedValue({ data: project })
   const open = ref(true), created = vi.fn()
@@ -49,7 +49,8 @@ it.each([false, true])('saves project fields through the shared dialog (editing=
     defaultExecutionAgentId: editing ? 'computer' : null,
     defaultCurrentDirectory: editing ? '/home/user/project' : null,
     gitTargetBranch: editing ? 'main' : null,
-    gitWorkspaceMode: 'local'
+    gitWorkspaceMode: 'local',
+    gitFetchBeforeActions: !editing
   })
   if (editing) expect(created).not.toHaveBeenCalled()
   else expect(created).toHaveBeenCalledWith(project)

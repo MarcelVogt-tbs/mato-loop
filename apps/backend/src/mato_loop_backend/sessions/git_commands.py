@@ -8,6 +8,7 @@ from sqlalchemy import select
 from mato_loop_backend.models import Project
 from mato_loop_backend.sessions.coding import (
     RepositoryResult,
+    effective_git_fetch,
     inspect_repository,
     resolve_git_target,
     validate_git_remote,
@@ -50,10 +51,20 @@ REBASE_INSTRUCTIONS = (
     "evidence, not stale tracking refs or author identity. Ask before rewriting published, shared, unrelated or merge commits, "
     "or when publication is uncertain. Never create merge commits, drop intended changes or force-push. "
 )
+FETCH_INSTRUCTIONS = (
+    "Before integration, follow fetchBeforeActions in the host-resolved context. When true and a remote is selected, "
+    "verify its saved identity and try once to fetch the selected target branch with a short timeout and no interactive login. "
+    "Do not move local branches or modify the original checkout during this fetch. When false, do not fetch. "
+    "If the remote is absent, changed, unreachable, denied, or its target has diverged from the local target, "
+    "continue the existing local workflow and clearly report the fallback; never bypass denied access or force synchronization. "
+    "After a successful fetch, use the descendant of the local and remote target commits as the integration target. "
+    "Use baseCommit, when present, to identify only this task's commits; never rebase remote/base commits as task changes "
+    "or rebase onto an older target. If the reviewed result already contains the integration target, skip rebase. "
+)
 MERGE_INSTRUCTIONS = (
     "Local integration: require a separate clean worktree and an existing local target; an attached source branch must differ from it. "
     "The original checkout may remain dirty or on another branch during preparation/review; leave it unchanged. "
-    + COMMIT_RULES + "Use the current local target as the rebase target. " + REBASE_INSTRUCTIONS +
+    + COMMIT_RULES + FETCH_INSTRUCTIONS + REBASE_INSTRUCTIONS +
     "Resolve clear workspace conflicts preserving both tasks. For ambiguous intent, inspect relevant project sessions within "
     "profile limits, then ask with options and a recommendation. Resume only this action's pending rebase after an answer. "
     "Review integration effects, including semantic errors; fix required in-scope findings, review repairs, rerun affected checks "
@@ -61,7 +72,7 @@ MERGE_INSTRUCTIONS = (
     "Only before updating the original checkout, require both clean working trees and the original checkout on the target branch. "
     "Verify the reviewed commit; update from the target's own checkout with fast-forward-only merge. If the target advanced, "
     "incorporate it and recheck integration effects before retrying. Do not edit original-checkout files, switch branches, "
-    "remove the worktree, fetch or push. "
+    "remove the worktree or push. "
 )
 
 COMMON_INSTRUCTIONS = (
@@ -131,13 +142,15 @@ OUTPUT_FORMATS = {
 
 COMMANDS = (
     Command("git-finish", "Abschließen", "Prüfen, nötige Fehler beheben und lokal abschließen. Kein Push.",
-        "Local completion only: do not fetch, push, create a PR or remove the worktree. "
+        "Local completion only: do not push, create a PR or remove the worktree. "
         "Require a complete implementation, valid review and successful required checks for all task changes; reuse valid prior evidence. "
         "Fix required in-scope findings; "
         "review repairs and rerun affected checks. Do not proceed with required findings or failed checks. "
         + REVIEW_INSTRUCTIONS + COMMIT_INSTRUCTIONS +
         "If this checkout is already on the configured target branch, follow the commit rules below and finish locally after the task commit; "
-        "no separate worktree, rebase or integration is needed. Otherwise perform the following local integration: " + MERGE_INSTRUCTIONS,
+        "no separate worktree, rebase or integration is needed. Follow the fetch preference below and safely incorporate "
+        "a successfully fetched linear remote target before completing; verify integration effects and do not rewrite published commits. "
+        "Otherwise perform the following local integration: " + MERGE_INSTRUCTIONS,
         icon="fact_check", mutates_workspace=True),
     Command("git-init", "Git-Repository anlegen", "Git im gewählten Workspace initialisieren.",
         "Inspect the selected workspace and its parents. If it already belongs to a Git repository, report that and stop. "
@@ -244,6 +257,8 @@ async def prepare_git_command(db, session, command: Command, content: str | None
                  "arguments": command_arguments(content)}
     if command.name in {"git-finish", "git-merge"}:
         context["commonDirectory"] = info.common_directory
+        context["fetchBeforeActions"] = effective_git_fetch(binding, project)
+        context["baseCommit"] = binding.get("baseCommit")
     if command.name == "git-remote":
         try:
             arguments = shlex.split(content or "/git-remote")[1:]
@@ -279,6 +294,6 @@ def validate_git_context(saved, current):
 
     if any(current.get(key) != saved.get(key) for key in (
                 "repository", "originalProjectDirectory", "workspaceDirectory", "commonDirectory", "branch", "targetBranch",
-                "remote", "remoteIdentity",
+                "remote", "remoteIdentity", "fetchBeforeActions", "baseCommit",
             )):
         raise SessionServiceError(409, "git.worktreeChanged")
