@@ -16,6 +16,7 @@ from sqlalchemy import (
     and_,
     delete,
     func,
+    literal_column,
     or_,
     select,
     tuple_,
@@ -367,13 +368,15 @@ async def get_owned_session(
 
 def unread_response_clause():
     tool_message = aliased(Message, name="silence_message")
+    # Keep the partial-index predicate static even in generic prepared plans.
+    runtime = "silence_message.provider_data['_matoloop']"
     silenced = select(tool_message.id).where(
         tool_message.session_id == Message.session_id,
-        tool_message.role == "tool",
-        tool_message.provider_data["_matoloop"]["runId"].as_string()
+        tool_message.role == literal_column("'tool'"),
+        literal_column(f"{runtime} ->> 'runId'", String)
         == Message.provider_data["_matoloop"]["runId"].as_string(),
-        tool_message.provider_data["_matoloop"]["toolName"].as_string() == "silence",
-        tool_message.provider_data["_matoloop"]["suppressResponseNotification"].as_boolean().is_(True),
+        literal_column(f"{runtime} ->> 'toolName'", String) == literal_column("'silence'"),
+        literal_column(f"CAST(({runtime} ->> 'suppressResponseNotification') AS BOOLEAN)").is_(True),
     ).correlate(Message).exists()
     return and_(
         Message.role == "assistant",

@@ -21,6 +21,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    and_,
     func,
     text,
 )
@@ -282,6 +283,20 @@ class Message(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="MessageSearchChunk.chunk_index",
+    )
+
+    __table_args__ += (
+        Index("ix_messages_session_created", session_id, created_at, id),
+        Index(
+            "ix_messages_silenced_run",
+            session_id,
+            text("(provider_data['_matoloop'::text] ->> 'runId'::text)"),
+            postgresql_where=and_(
+                role == "tool",
+                provider_data["_matoloop"]["toolName"].astext == "silence",
+                provider_data["_matoloop"]["suppressResponseNotification"].as_boolean().is_(True),
+            ),
+        ),
     )
 
 

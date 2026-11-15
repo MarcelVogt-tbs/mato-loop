@@ -1193,6 +1193,7 @@ async def test_session_detail_contains_active_run_and_aggregate_metrics(todo_sta
     aggregate_sql = str(aggregate_statement)
     assert "count(messages.id) FILTER (WHERE messages.role" in aggregate_sql
     aggregate_params = list(aggregate_statement.compile().params.values())
+    assert "silence" not in aggregate_params
     assert "_matoloop" in aggregate_params
     assert "performance" in aggregate_params
     assert "messages_1.created_at DESC, messages_1.id DESC" in aggregate_sql
