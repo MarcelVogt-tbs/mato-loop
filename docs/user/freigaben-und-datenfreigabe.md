@@ -77,6 +77,8 @@ Ohne Modelltrennung ist das Dropdown ausgeblendet. Alle Modelle und Sessions gel
 
 Pseudonymisierung ist unabhängig vom Vertrauenslevel am Provider und optional am Modell einstellbar. Die ausdrückliche Auswahl **Öffentlich** schaltet sie im Formular zunächst ein; du kannst sie danach ausschalten. Die Auswahl **Privat** oder das Abschalten der Trennung ändert den gespeicherten Pseudonymisierungswert nicht. Sie erkennt bestimmte Kennungen und strukturierte Secrets, aber nicht beliebige vertrauliche Aussagen, Personen oder Orte. Bilder, Audio und andere Binärdaten werden nicht pseudonymisiert. Die Erkennung ersetzt keine bewusste Provider- und Datenwahl.
 
+Kurze reine Ziffernfolgen mit weniger als sieben Stellen ohne führende Null, etwa Issue-Nummern, werden nicht allein als Telefonnummer geschützt. Rufnummern mit internationaler Vorwahl wie `+49 1649` bleiben von dieser Ausnahme unberührt.
+
 ## Rückfragen und geschützte Eingaben
 
 Normale Rückfragen erlauben Auswahl/Freitext und **Fertig** auch bei unbeantworteten Fragen. Sie erzeugen keine Tool-Rechte. Geschützte Credential-Felder verbergen Werte vor dem Modell und liefern nur Referenzen. Auch ein eingegebenes oder gemerktes Administratorpasswort dient ausschließlich der Authentifizierung; Aktionen benötigen weiterhin passende Regeln oder Freigaben. Die Einzelheiten stehen unter [Variablen und Secrets](variablen-und-secrets.md).

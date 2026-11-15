@@ -192,7 +192,15 @@ def _analyze(text: str) -> list[RecognizerResult]:
             nlp_artifacts=None,
         )
         minimum_score = 0.4 if isinstance(recognizer, PhoneRecognizer) else 0.45
-        results.extend(result for result in current if result.score >= minimum_score)
+        for result in current:
+            if result.score < minimum_score:
+                continue
+            if isinstance(recognizer, PhoneRecognizer):
+                candidate = text[result.start : result.end]
+                # Short identifiers can match German pager numbers without a dialing prefix.
+                if candidate.isdecimal() and len(candidate) < 7 and not candidate.startswith("0"):
+                    continue
+            results.append(result)
     return results
 
 
