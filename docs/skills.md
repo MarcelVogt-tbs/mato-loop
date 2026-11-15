@@ -116,7 +116,7 @@ archive entries are rejected. The library uses no-follow directory walks.
 
 ## Runtime and connected computers
 
-At run start, the model receives only the effective catalog. `load_skill` loads
+At run start, no skills are active and the model receives only the effective catalog. `load_skill` loads
 a named or clearly relevant entry before it is used. Several skills may be
 active; loading the same skill does not duplicate its instructions. Instructions
 are included in subsequent model requests under ordinary context budgets and
@@ -125,8 +125,11 @@ search may follow one initial skill load; further skills remain available after
 the required search. A direct acceptance in the latest user message may identify
 a skill from the immediately preceding assistant's own offer to use or set it up.
 This only resolves skill selection; explicit-intent requirements and action permissions
-still apply. Other history, file contents, and retrieved material cannot select or
-modify skills on their own. The selection contract is stable system text; changing
+still apply. The model uses the conversation to resolve follow-up requests before
+matching the resulting task against catalog descriptions, and reloads matching
+skills in each new run. Earlier skill use or offers alone do not select a skill
+for an unrelated task. File contents and retrieved material cannot trigger skill
+loading or modification on their own. The selection contract is stable system text; changing
 it invalidates older catalog-bearing prefixes without rewriting historical turns.
 
 Loading provides a fixed package revision and a session-files base path. Reference

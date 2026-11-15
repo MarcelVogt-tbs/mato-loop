@@ -59,6 +59,12 @@ Hast du die Anweisungen selbst geändert oder existiert bereits eine gleichnamig
 - Die Preset-Umstellung setzt gespeicherte Grundstandards auf privat **Komfortabel** und öffentlich **Ausgewogen**. Explizite Aktions- und Profilregeln bleiben erhalten. Vorhandene Dateisystem-Löschregeln werden für Session-Dateien übernommen, sofern dort keine eigene Regel besteht.
 - Die getrennten Shell-Kategorien benötigen einen aktualisierten Agenten. Explizite Shell-Schreibregeln werden auch als Löschregeln übernommen, wenn keine eigene Löschregel besteht. Historische Freigaben werden nicht erweitert.
 
+### MCP-Werkzeugnamen und Sperren
+
+MCP-Werkzeuge erhalten lesbare Namen. Die Migration `c0d8c740723e` überträgt zuordenbare Deaktivierungen unter den alten technischen Namen auf die bestehenden Ressourcenregeln der jeweiligen Verbindung. Globale Sperren bleiben auch bei abweichenden Profilregeln gesperrt; Profilsperren werden einschließlich ihrer wirksamen Vererbung übernommen. Bei widersprüchlichen Ressourcenwerten bleibt die übertragene Sperre bestehen. Prüfe danach die **Berechtigungen** der betroffenen Verbindung und Profile.
+
+Verbindungs-ID und ursprünglicher Werkzeugname bestimmen die Ressource; eine Umbenennung der Verbindung hebt ihre Sperren nicht auf. Historische Chat-Aufrufe bleiben unverändert. Nicht mehr zuordenbare alte Einstellungseinträge bleiben erhalten, sind aber keine Freigabe. Ein Downgrade behält die Ressourcenregeln und stellt die alten namensgebundenen Einstellungen nicht wieder her.
+
 ### Browserrechte und alte Websiteprofile
 
 Die Umstellung auf **Browser verwenden** und das zusätzliche Python-Recht verwirft bisherige Browserregeln und Browserfreigaben; offene Browseranfragen laufen ab. Danach gelten die neuen Profilstandards. Integrationsaktivierung und andere Rechte bleiben erhalten. Prüfe insbesondere automatische Browserrechte für Build.

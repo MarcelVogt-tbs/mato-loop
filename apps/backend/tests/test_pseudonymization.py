@@ -43,7 +43,8 @@ def test_json_tool_result_keeps_secret_field_detection(payload, secret):
 def test_pseudonymizer_preserves_names_locations_and_technical_terms() -> None:
     pseudonymizer = RequestPseudonymizer()
     source = (
-        "Anna Müller nutzt docker compose in Berlin mit lemonade, llama und modelmanager."
+        "Anna Müller nutzt docker compose in Berlin mit lemonade, llama und modelmanager. "
+        "Check Issue 1649: https://example.com/owner/repo/issues/1649"
     )
 
     protected = pseudonymizer.protect_text(source)
@@ -60,6 +61,7 @@ def test_pseudonymizer_preserves_names_locations_and_technical_terms() -> None:
         "DE89370400440532013000",
         "4111 1111 1111 1111",
         "+49 30 123456",
+        "+49 1649",
     ],
 )
 def test_pseudonymizer_protects_valid_identifiers(sensitive_value: str) -> None:

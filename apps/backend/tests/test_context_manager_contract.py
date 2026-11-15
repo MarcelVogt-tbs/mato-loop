@@ -43,6 +43,8 @@ from mato_loop_backend.agent.run_support import _project_ephemeral_images
 from mato_loop_backend.agent.turn_context import build_turn_context
 from mato_loop_backend.execution import (
     ExecutionClient,
+    ExecutionClientError,
+    WorkspaceListResult,
     WorkspaceReadResult,
     WorkspaceStatResult,
 )
@@ -967,7 +969,7 @@ async def test_selected_computer_metadata_does_not_relocate_session_files(bound)
 @pytest.mark.parametrize("serialize, history_key", [
     (service_module._chat_body, "messages"), (service_module._responses_body, "input"),
 ])
-@pytest.mark.parametrize("large_result", [None, "shell", "mcp", "text", "browser", "attachment", "m365_todo"])
+@pytest.mark.parametrize("large_result", [None, "shell", "mcp", "text", "browser", "attachment", "m365_todo", "m365_search", "m365_calendar"])
 async def test_recorded_computers_preserve_provider_request_prefix(serialize, history_key, large_result) -> None:
     session = _session()
     agent_id = uuid4()
@@ -977,13 +979,24 @@ async def test_recorded_computers_preserve_provider_request_prefix(serialize, hi
                                    execution_agent_id=agent_id, execution_agent_connected=True)
     records = [_message(session.id, "user", "Inspect the computer.")]
     bodies = []
+    collection = {
+        "m365_todo": ("resources", "resourceToken", "task"),
+        "m365_search": ("messages", "messageToken", "mail"),
+        "m365_calendar": ("events", "eventToken", "event"),
+    }.get(large_result)
     for index in range(2):
         call = _message(session.id, "assistant", "")
-        call.tool_calls = [{"id": str(index), "name": "m365_todo" if large_result == "m365_todo" else "browser" if large_result == "browser" else "shell_run",
+        call.tool_calls = [{"id": str(index), "name": large_result if collection else "browser" if large_result == "browser" else "shell_run",
                             "arguments": {"command": "pwd"}}]
         result = _message(session.id, "tool", "/work")
-        if large_result == "m365_todo":
-            result.content = json.dumps({"resources": [{"title": "Task", "resourceToken": "encrypted-token" * 1000}]})
+        if collection:
+            items, token, prefix = collection
+            result.content = json.dumps({items: [{
+                "title" if items == "resources" else "subject": "Item",
+                token: "encrypted-token" * 1000,
+                **({"hasNotes": False, "isRecurring": False} if items == "resources"
+                   else {"bodyPreview": "Known preview", "importance": "high"}),
+            }]})
         elif large_result == "attachment":
             attachment = _attach_image(result)
             attachment.kind = "file"
@@ -1003,9 +1016,9 @@ async def test_recorded_computers_preserve_provider_request_prefix(serialize, hi
         result.tool_call_id = str(index)
         result.provider_data = {"_matoloop": {"executionAgentId": str(agent_id), "executionAgentAlias": "Server"}}
         records.extend([call, result])
-        if large_result == "m365_todo":
+        if collection:
             compact = json.loads(_projection_messages(system, None, records, TrustLevel.PRIVATE)[-1]["content"])
-            assert compact["resources"][0]["resourceToken"] == f"task:{result.id}:0"
+            assert compact[items][0][token] == f"{prefix}:{result.id}:0"
         elif large_result == "attachment":
             assert "Do not call provide_file" in message_dict(result)["content"]
         elif large_result:
@@ -2059,6 +2072,7 @@ def test_skill_catalog_contains_selection_metadata_without_instructions() -> Non
     ]}
     assert "load_skill alone before answers or tools" in prompt
     assert "direct acceptance of the last assistant's own skill offer" in prompt
+    assert "Use the conversation to resolve follow-ups" in prompt
     assert skill.instructions not in prompt
 
     edit_prompt = general_system_prompt(
@@ -2790,7 +2804,8 @@ def _settings(**values) -> AgentRuntimeSettings:
 
 
 @pytest.mark.parametrize("changed", [False, True])
-async def test_repository_instructions_fit_small_model_request_budget(monkeypatch, changed) -> None:
+@pytest.mark.parametrize("rule_file", ["AGENTS.md", ".github/copilot-instructions.md"])
+async def test_repository_instructions_fit_small_model_request_budget(monkeypatch, changed, rule_file) -> None:
     session = _session()
     run = AgentRun(id=uuid4(), session_id=session.id)
     db = AsyncMock(spec=AsyncSession)
@@ -2798,11 +2813,17 @@ async def test_repository_instructions_fit_small_model_request_budget(monkeypatc
     model = _model(context_window_tokens=8_192).model_copy(update={"characters_per_token": 4, "max_output_tokens": None})
     provider = LlmProviderConfig(id=model.provider_id, name="Test", adapter_type="openai-compatible", pseudonymization_enabled=False)
     content = "Use project conventions.\n" * 1_200
-    monkeypatch.setattr(ExecutionClient, "request", AsyncMock(side_effect=[
-        WorkspaceStatResult(path="/work/.git", kind="directory", size=0, modified_at=0.0),
-        WorkspaceStatResult(path="/work/AGENTS.md", kind="file", size=len(content), modified_at=0.0),
-        WorkspaceReadResult(content=content, lines_read=1_200, has_more=False, truncated_lines=[], sha256="a" * 64),
-    ]))
+    async def request(_client, operation, arguments, _model):
+        path = arguments["path"]
+        if operation == "filesystem.read":
+            return WorkspaceReadResult(content=content, lines_read=1_200, has_more=False,
+                                       truncated_lines=[], sha256="a" * 64)
+        if path in {"/work/.git", "/work/main.py", "/work/" + rule_file}:
+            return WorkspaceStatResult(path=path, kind="directory" if path.endswith(".git") else "file",
+                                       size=len(content), modified_at=0.0)
+        raise ExecutionClientError("file.pathNotFound")
+
+    monkeypatch.setattr(ExecutionClient, "request", request)
     records = [_message(session.id, "user", "Inspect the repository.")]
     client = ExecutionClient(uuid4(), frozenset({"filesystem.stat", "filesystem.read"}), "/work")
     authorize = AsyncMock(return_value=PermissionDecision.ALLOW)
@@ -2822,18 +2843,75 @@ async def test_repository_instructions_fit_small_model_request_budget(monkeypatc
         ),
     )
     assert "Some repository instructions could not be loaded." in projection.messages[0]["content"]
-    updated = "Use updated conventions." if changed else content
-    monkeypatch.setattr(ExecutionClient, "request", AsyncMock(side_effect=[
-        WorkspaceStatResult(path="/work/.git", kind="directory", size=0, modified_at=0.0),
-        WorkspaceStatResult(path="/work/main.py", kind="file", size=4, modified_at=0.0),
-        WorkspaceStatResult(path="/work/AGENTS.md", kind="file", size=len(updated), modified_at=0.0),
-        WorkspaceReadResult(content=updated, lines_read=1, has_more=False, truncated_lines=[], sha256="b" * 64),
-    ]))
+    if changed:
+        content = "Use updated conventions."
     _, deferred = await check_repository_instruction_targets(
         execution_directory_permission(client.agent_id, "/work/main.py", capability="filesystem.write"),
         client, records, authorize, checked_entries,
     )
     assert deferred == changed
+
+
+@pytest.mark.parametrize("serialize,history_key", [
+    (service_module._chat_body, "messages"), (service_module._responses_body, "input"),
+])
+async def test_portable_repository_rules_preserve_serialized_prefix_after_persisted_tool_history(
+    monkeypatch, serialize, history_key,
+) -> None:
+    files = {
+        "/work/.github/copilot-instructions.md": "Use the existing project commands.",
+        "/work/.github/instructions/python.instructions.md": '---\napplyTo: "src/**/*.py"\n---\nUse typed functions.',
+    }
+
+    async def request(_client, operation, arguments, _model):
+        path = arguments["path"]
+        if operation == "filesystem.read":
+            return WorkspaceReadResult(content=files[path], lines_read=1, has_more=False,
+                                       truncated_lines=[], sha256="a" * 64)
+        if operation == "filesystem.list":
+            child = "/work/.github/instructions/python.instructions.md"
+            return WorkspaceListResult(entries=[{
+                "path": child, "name": "python.instructions.md", "kind": "file",
+                "size": len(files[child]), "modifiedAt": 0.0,
+            }], has_more=False)
+        if path in {"/work/.git", "/work/.github/instructions"} or path in files:
+            return WorkspaceStatResult(path=path, kind="file" if path in files else "directory",
+                                       size=len(files[path]) if path in files else None, modified_at=0.0)
+        raise ExecutionClientError("file.pathNotFound")
+
+    monkeypatch.setattr(ExecutionClient, "request", request)
+    session = _session()
+    client = ExecutionClient(uuid4(), frozenset({"filesystem.stat", "filesystem.list", "filesystem.read"}), "/work")
+    model = _model(context_window_tokens=32_000)
+    provider = LlmProviderConfig(id=model.provider_id, name="Test", adapter_type="openai-compatible")
+    records = [_message(session.id, "user", "Inspect the Python source.")]
+    bodies = []
+    for index in range(2):
+        path = f"/work/src/file-{index}.py"
+        call = _message(session.id, "assistant", "")
+        call.tool_calls = [{"id": str(index), "name": "read", "arguments": {"root": "computer", "path": path}}]
+        result = _message(session.id, "tool", "Source content")
+        result.tool_call_id = str(index)
+        result.provider_data = {"_matoloop": {"computerRead": {
+            "executionAgentId": str(client.agent_id), "currentDirectory": "/work", "path": path,
+        }}}
+        records.extend([call, result])
+        if index:
+            for record in records:
+                record.provider_data = json.loads(json.dumps(record.provider_data, sort_keys=True))
+                record.tool_calls = json.loads(json.dumps(record.tool_calls, sort_keys=True))
+            records.append(_message(session.id, "user", "Continue."))
+        instructions = await repository_instructions_prompt(
+            client, records, AsyncMock(return_value=PermissionDecision.ALLOW),
+        )
+        assert all(text in instructions for text in ("Use the existing project commands.", "Use typed functions."))
+        prepared = await ProviderService.prepare_request(
+            provider=provider, model=model, tools=[], pseudonymization_enabled=False,
+            messages=_projection_messages("System\n" + instructions, None, records, TrustLevel.PRIVATE),
+        )
+        bodies.append(serialize(prepared.request))
+    retained = {**bodies[1], history_key: bodies[1][history_key][:len(bodies[0][history_key])]}
+    assert json.dumps(retained) == json.dumps(bodies[0])
 
 
 @pytest.mark.parametrize("counted", [777, None])

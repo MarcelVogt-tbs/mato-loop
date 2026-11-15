@@ -257,6 +257,22 @@ async def test_denied_approval_does_not_fetch_content_or_mutate(preflight):
     case.mutation.assert_not_awaited()
 
 
+async def test_bound_tool_resource_disable_during_approval_blocks_handler(preflight):
+    case = preflight
+    tool = case.effective.tools[case.call.name]
+    case.effective.tools[case.call.name] = replace(
+        tool, definition=replace(tool.definition, policy_resource_key=case.resource.key),
+    )
+
+    async def approve(_request):
+        case.settings.permissions.resource_availability[str(case.instance.id)] = {case.resource.key: False}
+        return PermissionDecision.ALLOW
+
+    case.context.ask_handler.side_effect = approve
+    await case.effective.execute(case.call, case.context)
+    case.handler.assert_not_awaited()
+
+
 @pytest.mark.parametrize("change", ["owner", "revision"])
 @pytest.mark.parametrize("when", ["before", "before_metadata", "while_waiting"])
 async def test_changed_binding_blocks_metadata_and_execution(preflight, change, when):

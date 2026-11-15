@@ -6,6 +6,8 @@ Skills sind wiederverwendbare Anweisungen für bestimmte Aufgaben. Ein Skill-Pak
 
 Bei einer klar passenden Anfrage lädt der Agent den Skill aus dem wirksamen Katalog. Du kannst Skills auch ausdrücklich nennen und mehrere in einem Lauf kombinieren. Vor dem Laden sieht das Modell nur Name und Einsatzbeschreibung, danach die vollständigen Anweisungen. Referenzdateien liest es bei Bedarf nach.
 
+Bei Folgeaufträgen wie „Mach das kürzer“ bezieht der Agent den Gesprächskontext ein und lädt einen passenden Skill erneut. Bei einem Themenwechsel werden zuvor verwendete Skills nicht automatisch übernommen. Beschreibe deshalb in der Einsatzbeschreibung, wann ein Skill verwendet werden soll; Hinweise nur im Anweisungstext sind vor dem Laden nicht sichtbar.
+
 Ist Webrecherche für die Session verpflichtend, darf der Agent zunächst einen eindeutig passenden Skill laden. Die vorgeschriebene Suche bleibt trotzdem erforderlich und folgt im nächsten Schritt.
 
 Im gewählten Agentenprofil legst du die Rechte für **Skills laden** und **Skills speichern** getrennt für private und öffentliche Modelle fest:

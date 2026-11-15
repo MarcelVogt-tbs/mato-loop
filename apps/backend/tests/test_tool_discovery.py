@@ -99,9 +99,9 @@ async def test_search_reloads_persisted_tools_without_changing_initial_prefix(mo
     record = discovery(result)
     reloaded = offer([instance], profile, [record])
     assert "tasks_create" in reloaded.tools
-    assert reloaded.schemas()[:len(initial.tools)] == initial.schemas()
+    assert json.dumps(reloaded.schemas()[:len(initial.tools)]) == json.dumps(initial.schemas())
     record.provider_data = json.loads(json.dumps(record.provider_data, sort_keys=True))
-    assert offer([instance], profile, [record]).schemas() == reloaded.schemas()
+    assert json.dumps(offer([instance], profile, [record]).schemas()) == json.dumps(reloaded.schemas())
     other = AgentProfile(name="Other", instructions="Task")
     assert offer([instance], other, [record]).schemas() == reloaded.schemas()
     instance.profile_permissions[other.id] = IntegrationPermissions(available=False)
@@ -118,9 +118,15 @@ async def test_shared_tool_schema_loads_only_pinned_accounts_and_search_rechecks
     assert schema["parameters"]["properties"]["integration_id"]["enum"] == [str(pinned.id)]
     assert str(disabled.id) not in json.dumps(initial.schemas())
     context = SimpleNamespace(current_integrations=AsyncMock(side_effect=[
-        IntegrationSettings(instances=[pinned, deferred]), IntegrationSettings(instances=[]),
+        IntegrationSettings(instances=[pinned, deferred]), IntegrationSettings(instances=[pinned, deferred]),
+        IntegrationSettings(instances=[]),
     ]))
     await initial.tools["search_tools"].definition.handler(SearchToolsArguments(query="tasks_create"), context)
+    scoped = await initial.tools["search_tools"].definition.handler(
+        SearchToolsArguments(query="tasks_create", integration_id=deferred.id), context,
+    )
+    scoped_offer = offer([deferred, calendar("Unrelated")], profile, [discovery(scoped)])
+    assert scoped_offer.tools["tasks_create"].schema()["parameters"]["properties"]["integration_id"]["enum"] == [str(deferred.id)]
     result = await initial.tools["search_tools"].definition.handler(SearchToolsArguments(query="tasks_create"), context)
     assert json.loads(result.content)["tools"] == []
 
@@ -170,7 +176,49 @@ async def test_search_prioritizes_original_mcp_names_over_verbose_neighbor_descr
     offered = offer([instance], profile)
     context = SimpleNamespace(current_integrations=AsyncMock(return_value=IntegrationSettings(instances=[instance])))
     result = await offered.tools["search_tools"].definition.handler(SearchToolsArguments(query="ha_get_state read entity state"), context)
-    assert json.loads(result.content)["tools"][0]["name"] == mcp_model_tool_name(instance.id, "ha_get_state")
+    assert json.loads(result.content)["tools"][0]["name"] == mcp_model_tool_name(instance.id, "ha_get_state", instance.name)
+
+
+async def test_search_scopes_diagnostics_to_the_requested_integration():
+    debug = IntegrationInstance(name="mato-loop Debug", integration_type="mcp", adapter_type="mcp_streamable_http", config={
+        "endpoint": "https://debug.example.test/mcp", "tools": [
+            {"name": "get_diagnostics", "description": "List durable diagnostic events.", "input_schema": {"type": "object"}},
+        ],
+    })
+    sonobin = IntegrationInstance(name="SonoBin", integration_type="music", adapter_type="sonobin", config={
+        "endpoint": "https://music.example.test/mcp/", "tools": [
+            {"name": "get_diagnostics_overview", "description": "Get live runtime, storage, database, worker, performance diagnostics.",
+             "input_schema": {"type": "object"}},
+        ],
+    })
+    instances = [debug, sonobin]
+    context = SimpleNamespace(current_integrations=AsyncMock(return_value=IntegrationSettings(instances=instances)))
+    offered = offer(instances, AgentProfile(name="Agent", instructions="Task"))
+    result = await offered.tools["search_tools"].definition.handler(
+        SearchToolsArguments(query="performance diagnostics runtime", integration_id=debug.id), context,
+    )
+    assert [item["integrations"] for item in json.loads(result.content)["tools"]] == [
+        [{"id": str(debug.id), "name": debug.name, "type": "mcp"}],
+    ]
+    unknown = await offered.tools["search_tools"].definition.handler(
+        SearchToolsArguments(query="diagnostics", integration_id=uuid4()), context,
+    )
+    assert json.loads(unknown.content)["tools"] == []
+
+
+def test_legacy_mcp_discovery_reloads_current_name():
+    instance = IntegrationInstance(name="Debug", integration_type="mcp", adapter_type="mcp_streamable_http", config={
+        "endpoint": "https://debug.example.test/mcp", "tools": [
+            {"name": "get_diagnostics", "input_schema": {"type": "object"}},
+        ],
+    })
+    legacy = mcp_model_tool_name(instance.id, "get_diagnostics")
+    record = Message(id=uuid4(), role="tool", provider_data={"_matoloop": {
+        "toolName": "search_tools", "toolDiscovery": {"tools": {legacy: [str(instance.id)]}},
+    }})
+    profile = AgentProfile(name="Agent", instructions="Task")
+    name = mcp_model_tool_name(instance.id, "get_diagnostics", instance.name)
+    assert name in offer([instance], profile, [record]).tools
 
 
 async def test_runtime_persists_search_results_before_offering_discovered_tools(monkeypatch, skill_library):
@@ -180,7 +228,7 @@ async def test_runtime_persists_search_results_before_offering_discovered_tools(
         "endpoint": "https://mcp.example.test/", "tools": [{"name": "get_ticket", "description": "Read ticket details.",
         "input_schema": {"type": "object", "properties": {"ticket_id": {"type": "integer"}}, "required": ["ticket_id"]}}],
     })
-    name = mcp_model_tool_name(instance.id, "get_ticket")
+    name = mcp_model_tool_name(instance.id, "get_ticket", instance.name)
     execute = tool_registry._execute_definition
     db, run, requests, _, _ = await _runtime_setup(monkeypatch, [
         ProviderResult(tool_calls=[ToolCall("find", "search_tools", {"query": "get_ticket"})]),

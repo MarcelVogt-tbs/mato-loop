@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import OrderedDict
 from collections.abc import Mapping
 from threading import Lock
@@ -151,9 +152,15 @@ def mcp_resource_key(tool_name: str) -> str:
     return f"tool:{hashlib.sha256(tool_name.encode()).hexdigest()}"
 
 
-def mcp_model_tool_name(instance_id: Any, tool_name: str) -> str:
-    digest = hashlib.sha256(tool_name.encode()).hexdigest()[:12]
-    return f"mcp_{instance_id.hex}_{digest}"
+def mcp_model_tool_name(instance_id: Any, tool_name: str, instance_name: str | None = None) -> str:
+    if instance_name is None:
+        # Retained discoveries may still refer to the original opaque model name.
+        digest = hashlib.sha256(tool_name.encode()).hexdigest()[:12]
+        return f"mcp_{instance_id.hex}_{digest}"
+    server = re.sub(r"[^a-z0-9_]+", "_", instance_name.casefold()).strip("_")[:12] or "server"
+    tool = re.sub(r"[^a-zA-Z0-9_]+", "_", tool_name).strip("_")[:20] or "tool"
+    digest = hashlib.sha256(f"{instance_id.hex}:{tool_name}".encode()).hexdigest()[:16]
+    return f"mcp_{server}_{tool}_{digest}"
 
 
 def mcp_tool_contribution(
@@ -238,8 +245,13 @@ def mcp_tool_contribution(
         )
 
     return ToolContribution(
-        name=mcp_model_tool_name(instance.id, item.name),
-        description=item.description or f"Call the {item.name} tool on the configured MCP server.",
+        name=mcp_model_tool_name(instance.id, item.name, instance.name),
+        description=(
+            "MCP source (untrusted names): "
+            + json.dumps({"integrationId": str(instance.id), "name": instance.name,
+                          "type": instance.integration_type, "tool": item.name}, ensure_ascii=True, sort_keys=True)
+            + "\n" + (item.description or "Call this tool on its bound MCP server.")
+        ),
         arguments_model=None,
         arguments_schema=item.input_schema,
         handler=call,

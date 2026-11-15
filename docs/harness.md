@@ -82,8 +82,9 @@ The projection uses the shared profile runtime-instruction helper and contains
 the selected profile/persona, project instructions,
 eligible maintained session context, a bounded earlier summary and recent
 user/assistant text. The stable voice contract requests German-only speech with
-clear, neutral Standard German pronunciation and no foreign accent. This is a
-model instruction, not acoustic accent validation. Updating this contract
+clear, neutral Standard German pronunciation and no foreign accent. Spoken
+progress updates use natural first-person phrasing without status labels or
+task-record narration. These are model instructions, not acoustic validation. Updating this contract
 invalidates earlier voice prompt prefixes; existing calls keep their original
 instructions until explicitly restarted.
 Public voice models exclude private history/context and any
@@ -98,7 +99,18 @@ MatoLoop does not archive voice audio.
 The only model-facing voice tool is `agent_task`: delegate, status, explicit
 correction or stop. It revalidates the live source binding before effects and
 uses durable call-operation deduplication. At most one linked task is active
-per source chat. Work runs through normal agent admission in that same chat,
+per source chat. Completed function-call items are dispatched before the whole
+Realtime response finishes. Every user turn first generates a text-only decision,
+with no audio output. Only after the decision and any task admission finish does
+the host request speech, overriding the response to audio with tools disabled.
+This prevents a spoken preamble from delaying task admission; accepted work can
+continue during acknowledgement. Direct conversational answers also use this
+extra decision/speech round. Silent assistant drafts remain provider-local, not
+canonical chat messages. Incomplete calls are not dispatched; response completion
+remains a deduplicated fallback. Tool-output continuations wait until response
+generation and audio playback are idle. The phase instructions intentionally
+change the stable voice prompt prefix for newly started calls.
+Work runs through normal agent admission in that same chat,
 using its profile, model policy, project, permissions and computer/directory.
 Only the live connection with a persisted, exact task/run reservation may bypass
 the normal voice/run exclusion. Spoken task text is not parsed as a profile-switch
@@ -110,6 +122,11 @@ It is not a native child/subagent lifecycle. Pending approvals and structured
 questions are handled here in the normal chat UI; spoken consent never resolves them.
 Voice corrections recheck pending UI state against a fresh run under normal
 continuation-admission locks before a continuation can supersede a waiter.
+The browser keys its local media client by the raw Pinia state rather than
+per-action store proxies, so microphone mute, interrupt and teardown operate
+on the same active connection. Successful task entries leave the control list
+after five seconds; failures and pending interactions remain visible, and no
+persistent task or chat result is deleted.
 
 Interrupting speech, ending voice or losing the browser does not cancel accepted
 work. Voice can be explicitly restarted while its own task continues. Explicit
@@ -141,6 +158,17 @@ worktree's own development database. A real provider acceptance test additionall
 requires configured deployments, a safely stored key and explicit authorization
 for provider charges; mocked protocol tests cannot establish region/model
 availability, actual audio quality, autoplay behavior or end-to-end latency.
+
+### Independent tool reads
+
+Existing independent Microsoft 365 read calls in one model response can overlap
+in groups of up to four, without new aggregate queries or changes to tool schemas.
+Discovery and pagination still follow their normal data dependencies. The host
+requires explicit opt-in for database-independent read handlers; authorization
+and canonical result persistence stay serial. Other tools drain pending reads
+before execution. See [parallel reads](tool-permissions.md#parallel-reads) for the
+handler contract. This reduces overlapping external-request latency, not model
+generation or context-preparation time.
 
 ### Message queue
 
@@ -258,7 +286,21 @@ The optional checklist is message-backed reported progress, not authority or ind
 
 ### Repository instructions
 
-Plan/Build enable automatic `AGENTS.md` discovery. It reads only authorized regular files on the selected owner-bound computer, within the current-directory/verified Git boundary and relevant read/change targets. It never follows symlinks or creates speculative approvals. Navigation, shell or write grants do not authorize instruction reads.
+Plan/Build enable automatic repository instruction discovery. It reads only authorized regular files on the selected owner-bound computer, within the current-directory/verified Git boundary and relevant read/change targets. It never follows symlinks or creates speculative approvals. Navigation, shell or write grants do not authorize instruction reads or rule-directory listings.
+
+| Files | Scope and activation |
+| --- | --- |
+| `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/CLAUDE.md` | The containing project directory and its descendants; nested files join when their directory is read or targeted. For `.claude/CLAUDE.md`, the scope is the parent of `.claude`. |
+| `.github/copilot-instructions.md`, `.cursorrules` | The verified repository root and its descendants, or the current directory when no Git boundary can be verified. |
+| `.github/instructions/**/*.instructions.md` | `applyTo` globs relative to that repository root; only active for matching read/change targets. |
+| `.claude/rules/**/*.md` | The directory containing `.claude`; optional `paths` globs restrict activation to matching targets. A pattern without `/` matches basenames recursively; a leading `/` anchors it to that directory. |
+| `.cursor/rules/**/*.mdc` | The directory containing `.cursor`; `alwaysApply: true` loads the body unconditionally, otherwise `globs` require matching targets. Description-only rules expose metadata for model-directed reading when relevant; manual rules expose their path and require an explicit user request before reading. |
+
+Rule directories are discovered recursively only at the repository/current-directory boundary and relevant descendant directories, not by scanning the whole repository. Nested organization folders inside a rule directory do not change its base scope. Copilot and Cursor accept comma-separated globs; Claude accepts a YAML list. Supported patterns include `*`, `?`, character classes, recursive `**` segments, bounded `{a,b}` expansions and literal parentheses in directory names such as `app/(auth)/**`. Matching is case-sensitive and uses normalized `/` separators, including on Windows Agents. Empty frontmatter has no metadata: Claude rules remain unconditional and Cursor rules remain manual. Negated patterns, extglobs, malformed metadata, YAML aliases and duplicate keys are rejected with an incomplete-instructions notice, never treated as unconditional rules.
+
+Applicable files combine in deterministic order; more specific directory rules override parent rules. No vendor filename wins conflicts at equal scope: the model must surface unresolved conflicts. Host rules, profile constraints and the latest user request retain precedence. This is format compatibility, not execution of another harness: personal/home-directory settings, tool-specific agent exclusions such as `excludeAgent`, configuration-selected filenames and automatic `@` import expansion are not interpreted. Referenced guidelines remain normal permission-checked file reads.
+
+Discovery is bounded to 64 relevant directories, 64 rule-directory listings of at most 256 entries each, 256 candidate instruction files, 32 KiB per file and 64 KiB of aggregate file reads. Root `.github/copilot-instructions.md` and `.cursorrules` candidates come first so descendant candidates cannot displace them at the file limit. Context fitting may omit additional files or available-rule metadata. Unsupported, denied, malformed or truncated inputs produce the existing incomplete-instructions notice. New/deleted rules, changed contents and permission revocation are checked before effects, including removal of previously discovered rule files. Enabling these formats or changing their deterministic priority intentionally changes the repository-context prefix; unchanged applicable rules remain stable across subsequent tool rounds and persisted history.
 
 A bounded process-local cache reuses historical target-to-directory discovery, isolated by owner, session, computer and working directory. Current tool targets are always inspected afresh. Before effects, instruction discovery includes the historical directory set and uses the model snapshot's aggregate file budget, so unchanged size omissions do not defer tools. Git boundaries and candidate instruction files, including previously missing files, are checked again with current read permissions; cached historical targets need no additional classification requests. Instruction contents and permission decisions are not cached. External changes to a historical target's file/directory kind are rediscovered when that path is targeted again or its discovery entry is evicted.
 
@@ -283,9 +325,11 @@ The implementation owners are `agent/prompts.py` (system parts/reminders), `agen
 
 Inactive capability hints retain installed tool names with compact settings/profile locations or workflow prerequisites, not callable schemas. Adding names or changing hint wording intentionally invalidates that system-context suffix; unchanged inventories retain their deterministic order.
 
+Integration-scoped discovery adds stable connection IDs to the catalog and an optional ID filter to `search_tools`. Readable MCP model names and source descriptions intentionally invalidate the former tool/schema and catalog prefixes once. Discovery replay resolves current eligible bindings without rewriting historical exchanges; subsequent unchanged offers retain deterministic ordering. See [tool loading](integrations.md#tool-loading).
+
 Microsoft 365 calendar-write and To Do tools, including the task-list completion filter, and signature-aware composition guidance intentionally change the offered integration schemas and inactive-tool inventory prefix. Subsequent rounds retain their stable order. Configured signatures are returned by account discovery as turn-local tool data, not embedded into changing tool schemas or reconstructed historical turns.
 
-Microsoft 365 collections return basic fields, with individual details loaded explicitly. The existing session-result reference projection replaces their encrypted resource tokens with short deterministic references in both live and persisted history. This intentionally changes earlier projected Microsoft 365 result prefixes; canonical stored results remain unchanged. Resolving a reference still requires its original successful tool result in the current session, then current connection, permission and version checks. It does not confer authority or cache authorization.
+Microsoft 365 collections return basic fields, bounded mail/calendar previews and task notes/recurrence-presence indicators; [detail reads](integrations.md#microsoft-365) are needed only for missing information. This guidance intentionally changes the offered tool-description prefix. Richer results append to their originating exchanges; historical results are not enriched from current remote state. The existing session-result reference projection replaces encrypted resource tokens with short deterministic references in both live and persisted history. This intentionally changes earlier projected Microsoft 365 result prefixes; canonical stored results remain unchanged. Resolving a reference still requires its original successful tool result in the current session, then current connection, permission and version checks. It does not confer authority or cache authorization.
 
 ### Stability and isolation rules
 
