@@ -59,6 +59,8 @@ export const streamActions = {
         if (actions.size) void workspace.refreshStorageUsage(sessionId)
       }
       let finished = false
+      // Capture before replayed completion events can promote a newer message.
+      let recoveryAnchor = [...(this.current?.messages || [])].reverse().find((message) => message.role !== 'tool')
       this.eventSource = markRaw(source)
       this.runSessionId = sessionId
       this.runId = runId
@@ -107,13 +109,19 @@ export const streamActions = {
         this.completedToolCallId = null
         // Rebuild the presentation without discarding the current run clock.
         if (payload.events?.length) this.setActivity('idle')
+        // Reserve anchored reconciliation before replay handlers queue refreshes.
+        const reconciliation = this.refreshSession(sessionId, { recoveryAnchor })
         for (const item of payload.events || []) {
           source.dispatchEvent(new MessageEvent(item.type, { data: JSON.stringify(item) }))
         }
         if (payload.content) source.dispatchEvent(new MessageEvent('message.delta', {
           data: JSON.stringify({ delta: payload.content })
         }))
-        void this.refreshSession(sessionId).catch(() => {})
+        void reconciliation.then((session) => {
+          if (session && this.eventSource === source) {
+            recoveryAnchor = [...(session.messages || [])].reverse().find((message) => message.role !== 'tool')
+          }
+        }).catch(() => {})
         void useApprovalStore().fetchPending().catch(() => {})
         void useQuestionStore().fetchPending().catch(() => {})
         if (useSubagentStore().parentId === sessionId) void useSubagentStore().loadChildren()
@@ -252,9 +260,9 @@ export const streamActions = {
         this.streamReasoning = null
         this.streamContextSummary = null
       }
-      source.addEventListener('message.updated', () => {
+      source.addEventListener('message.updated', (event) => {
         if (this.eventSource !== source || this.current?.id !== sessionId) return
-        void this.refreshSession(sessionId).catch(() => {})
+        void this.refreshMessage(sessionId, JSON.parse(event.data).messageId).catch(() => {})
       })
       source.addEventListener('message.completed', (event) => {
         if (this.eventSource !== source) return
@@ -267,7 +275,7 @@ export const streamActions = {
           toolCallId: tool.id,
           toolDisplay: tool.toolDisplay
         } : { activityLabel: payload.activityLabel })
-        this.refreshSession(sessionId)
+        void this.refreshMessage(sessionId, payload.message?.id).catch(() => {})
       })
       source.addEventListener('message.interrupted', (event) => {
         if (this.eventSource !== source) return
@@ -289,17 +297,19 @@ export const streamActions = {
           payload.metadata?.sources
         )
         this.completedToolCallId = payload.toolCallId || null
-        const refresh = this.refreshSession(sessionId)
+        const refresh = this.refreshMessage(sessionId, payload.messageId)
         void refresh?.then(async (session) => {
           if (!session || this.current?.id !== sessionId) return
           const result = session.messages?.find((message) => (
-            message.role === 'tool' && message.toolCallId === payload.toolCallId
+            payload.messageId ? message.id === payload.messageId
+              : message.role === 'tool' && message.toolCallId === payload.toolCallId
           ))
           const workspace = useWorkspaceStore()
           const attachmentAction = result?.attachments
             ?.map((attachment) => managedSessionFileTarget(attachment, sessionId))
             .find(Boolean)
           const toolCall = session.messages
+            ?.filter((message) => !message.runId || message.runId === runId)
             ?.flatMap((message) => message.toolCalls || [])
             .find((item) => item.id === payload.toolCallId)
           const argumentsValue = toolCall?.arguments || {}

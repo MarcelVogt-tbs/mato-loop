@@ -83,7 +83,7 @@ vi.mock('src/features/chat/store', async () => {
 })
 vi.mock('stores/projects', () => ({ useProjectStore: () => projects }))
 vi.mock('src/features/home/store', () => {
-  const store = { loaded: false, load: vi.fn().mockResolvedValue() }
+  const store = { loaded: false, displayed: false, load: vi.fn().mockResolvedValue(), invalidate: vi.fn() }
   return { useHomeStore: () => store }
 })
 vi.mock('stores/approvals', () => ({ useApprovalStore: () => pending }))
@@ -248,17 +248,36 @@ it('refreshes only changed data through SSE without recurring REST polling', asy
   visibility.mockRestore()
 })
 
-it('refreshes cached Home sessions on a project-only invalidation while viewing a session', async () => {
+it.each([false, true])('refreshes displayed Home and only invalidates hidden Home (displayed=%s)', async (displayed) => {
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
   const home = useHomeStore()
   home.loaded = true
+  home.displayed = displayed
   const load = vi.spyOn(home, 'load').mockResolvedValue()
   useRoute().query = { session: 'standalone' }
   try {
     EventSource.instances[0].emit([{ resource: 'projects' }])
     await vi.advanceTimersByTimeAsync(50)
-    expect(load).toHaveBeenCalledWith({ suppressErrorToast: true })
-  } finally { load.mockRestore(); visibility.mockRestore() }
+    expect([load.mock.calls.length, home.invalidate.mock.calls.length]).toEqual(displayed ? [1, 0] : [0, 1])
+  } finally { home.displayed = false; load.mockRestore(); visibility.mockRestore() }
+})
+
+it.each([
+  ['known', { resource: 'sessions', sessionId: 'standalone' }, [null]],
+  ['new', { resource: 'sessions', sessionId: 'new-session' }, [null, 'a', 'b']],
+  ['unscoped', { resource: 'sessions' }, [null, 'a', 'b']],
+  ['deleted', { resource: 'all' }, [null, 'a', 'b']],
+  ['moved', { resource: 'sessions', sessionId: 'standalone' }, [null, null, 'a', 'b']]
+])('scopes list refreshes safely for a %s session hint', async (kind, change, scopes) => {
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  const list = useChatStore().sessionLists.standalone
+  const originalItems = list.items
+  if (kind === 'moved') chat.refreshSessions.mockImplementationOnce(async () => { list.items = [] })
+  try {
+    EventSource.instances[0].emit([change])
+    await vi.advanceTimersByTimeAsync(100)
+    expect(chat.refreshSessions.mock.calls.map(([, scope]) => scope)).toEqual(scopes)
+  } finally { list.items = originalItems; visibility.mockRestore() }
 })
 
 it('retries a failed notification reload without polling unrelated resources', async () => {

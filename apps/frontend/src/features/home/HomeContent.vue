@@ -73,7 +73,7 @@
 </template>
 
 <script setup>
-import { computed, inject, onMounted, ref } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRoute, useRouter } from 'vue-router'
 import AppLogo from 'src/shared/ui/AppLogo.vue'
@@ -160,7 +160,11 @@ async function refresh() {
   }
 }
 
-onMounted(() => { void Promise.allSettled([home.ensureLoaded(), profile.fetchProfile()]) })
+onMounted(() => {
+  home.displayed = true
+  void Promise.allSettled([home.ensureLoaded(), profile.fetchProfile()])
+})
+onBeforeUnmount(() => { home.displayed = false })
 </script>
 
 <style scoped>

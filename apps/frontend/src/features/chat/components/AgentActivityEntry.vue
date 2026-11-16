@@ -109,12 +109,22 @@
     <div v-if="hasDetails && detailsOpen" :id="detailsId" class="work-history__reasoning-detail">
       <p v-if="errorDetails" class="tool-call__message" :class="`tool-call__status--${status.name}`" role="status">{{ errorDetails }}</p>
       <template v-if="isTool">
+        <p v-if="resultLoading" role="status">Vollständige Tool-Details werden geladen …</p>
+        <div v-else-if="resultLoadError" role="status" class="q-mb-sm text-negative">
+          {{ resultLoadError }}
+          <q-btn flat dense label="Erneut laden" @click="loadFullResult" />
+        </div>
+        <p v-else-if="tool.argumentsTruncated" role="status">Tool-Argumente sind noch nicht vollständig geladen.</p>
         <ShellToolOutput v-if="shellCommandText" :command="shellCommandText" :output="typeof result.stdout === 'string' ? result : entry.processOutput || {}" />
         <div v-for="(item, index) in toolDetails" :key="index" class="q-mb-sm">
           <div class="text-weight-medium">{{ item.label }}</div>
           <ul v-if="item.format === 'list'" class="q-my-none q-pl-md"><li v-for="(value, i) in item.value" :key="i">{{ value }}</li></ul>
           <pre v-else-if="item.format === 'code'" class="activity-row__code q-ma-none">{{ item.value }}</pre>
           <div v-else>{{ item.value }}</div>
+        </div>
+        <div v-if="resultMessage?.content && !shellCommandText && !errorDetails" class="q-mb-sm">
+          <div class="text-weight-medium">Tool-Ergebnis{{ resultMessage.contentTruncated ? ' (Vorschau)' : '' }}</div>
+          <pre class="activity-row__code q-ma-none">{{ resultMessage.content }}</pre>
         </div>
       </template>
       <p v-else-if="entry.type === 'context-summary'" class="work-history__reasoning-block" :class="{ 'text-warning': entry.warning }">{{ entry.text }}</p>
@@ -169,7 +179,11 @@
 </template>
 
 <script setup>
-import { computed, nextTick, useId } from 'vue'
+import { computed, nextTick, ref, useId, watch } from 'vue'
+import { api } from 'src/boot/axios'
+import { useChatStore } from 'src/features/chat/store'
+import { useSubagentStore } from 'src/stores/subagents'
+import { apiErrorMessage } from 'src/utils/api-errors'
 import AgentActivityRow from 'src/features/chat/components/AgentActivityRow.vue'
 import ChatFiles from 'src/features/chat/components/ChatFiles.vue'
 import MessageContent from 'src/features/chat/components/MessageContent.vue'
@@ -204,10 +218,21 @@ const identity = computed(() => isTool.value || isGroup.value
         : props.entry.presentation?.title,
       icon: props.entry.presentation?.icon
     })
-const result = computed(() => isTool.value ? parseToolResult(props.entry.result?.content, props.entry.tool.name) : {})
-const toolInfo = computed(() => isTool.value ? toolPresentation(props.entry.tool, props.entry.approval?.details?.displayItems) : null)
+const hydratedResult = ref(null)
+const hydratedCarrier = ref(null)
+watch(() => props.entry.tool, () => { hydratedCarrier.value = null }, { flush: 'sync' })
+watch(() => props.entry.result, () => { hydratedResult.value = null }, { flush: 'sync' })
+const tool = computed(() => hydratedCarrier.value?.id === props.entry.batchId
+  ? hydratedCarrier.value?.toolCalls?.find((call) => call.id === props.entry.tool?.id) || props.entry.tool
+  : props.entry.tool)
+const resultLoading = ref(false)
+const resultLoadError = ref('')
+const resultMessage = computed(() => hydratedResult.value && hydratedResult.value.id === props.entry.result?.id
+  ? hydratedResult.value : props.entry.result)
+const result = computed(() => isTool.value ? parseToolResult(resultMessage.value?.content, props.entry.tool.name, resultMessage.value) : {})
+const toolInfo = computed(() => isTool.value ? toolPresentation(tool.value, props.entry.approval?.details?.displayItems) : null)
 const summary = computed(() => isTool.value ? result.value.summary || toolInfo.value.summary : reasoningSummary.value ? '' : props.entry.presentation?.summary)
-const shellCommandText = computed(() => isTool.value ? shellCommand(props.entry.tool) : '')
+const shellCommandText = computed(() => isTool.value ? shellCommand(tool.value) : '')
 const status = computed(() => {
   if (isGroup.value) {
     const statuses = props.entry.items.map(toolStatus)
@@ -216,7 +241,7 @@ const status = computed(() => {
       || statuses.find((item) => ['approval', 'question'].includes(item.name))
       || { name: '', label: '' }
   }
-  return isTool.value ? toolStatus(props.entry) : { name: props.entry.warning ? 'interrupted' : '', label: 'Warnung' }
+  return isTool.value ? toolStatus({ ...props.entry, result: resultMessage.value }) : { name: props.entry.warning ? 'interrupted' : '', label: 'Warnung' }
 })
 const statusIcon = computed(() => ({ failed: 'error', denied: 'error', interrupted: 'warning', approval: 'pending_actions', question: 'help_outline' })[status.value.name])
 const errorDetails = computed(() => result.value.errorMessage || '')
@@ -228,11 +253,58 @@ const hasDetails = computed(() => {
       .replace(/^\*{1,2}|\*{1,2}$/g, '').replace(/\s+/g, ' ').trim()
     return Boolean(text && text !== reasoningSummary.value)
   }
-  return Boolean(errorDetails.value || shellCommandText.value || toolDetails.value.length || props.entry.text?.trim() || props.entry.blocks?.length)
+  return Boolean(tool.value?.argumentsTruncated || resultMessage.value?.content || errorDetails.value || shellCommandText.value || toolDetails.value.length || props.entry.text?.trim() || props.entry.blocks?.length)
 })
 const detailKey = computed(() => isTool.value ? `${props.entry.runId || ''}:${props.entry.tool.id || props.entry.key}` : props.entry.key)
 const detailsOpen = computed(() => props.expandedDetails.has(detailKey.value))
 const detailsLabel = computed(() => `${identity.value.label}: Details ${detailsOpen.value ? 'ausblenden' : 'anzeigen'}`)
+watch([detailsOpen, () => props.entry.result, () => props.entry.tool, () => props.entry.batchId], ([open]) => {
+  resultLoadError.value = ''
+  if (open) loadFullResult()
+}, { immediate: true })
+async function loadFullResult() {
+  const message = resultMessage.value
+  const batchId = props.entry.batchId
+  const sourceTool = props.entry.tool
+  const sourceResult = props.entry.result
+  if (!isTool.value || resultLoading.value) return
+  const chat = useChatStore()
+  const subagents = useSubagentStore()
+  const fallbackSessionId = props.readOnly ? subagents.current?.id : chat.current?.id
+  const targets = [
+    ...(tool.value?.argumentsTruncated ? [{ id: batchId, sessionId: tool.value.sessionId || fallbackSessionId, carrier: true }] : []),
+    ...(message?.contentTruncated ? [{ id: message.id, sessionId: message.sessionId || fallbackSessionId }] : [])
+  ].filter((target) => target.id && target.sessionId)
+  if (!targets.length) return
+  resultLoading.value = true
+  resultLoadError.value = ''
+  try {
+    for (const target of targets) {
+      try {
+        const { data } = await api.get(`/sessions/${target.sessionId}/messages/${target.id}`)
+        if (data.id !== target.id) continue
+        if (target.carrier
+          ? props.entry.batchId !== batchId || props.entry.tool !== sourceTool
+          : props.entry.result !== sourceResult) continue
+        for (const session of [chat.current, subagents.current]) {
+          if (session?.id !== target.sessionId) continue
+          const index = session.messages?.findIndex((item) => item.id === target.id) ?? -1
+          if (index !== -1) session.messages.splice(index, 1, data)
+        }
+        if (target.carrier && props.entry.batchId === target.id) hydratedCarrier.value = data
+        if (!target.carrier && props.entry.result?.id === target.id) hydratedResult.value = data
+      } catch (error) {
+        if (props.entry.batchId === batchId && props.entry.result?.id === message?.id) {
+          resultLoadError.value = apiErrorMessage(error, 'Die Tool-Details konnten nicht geladen werden.')
+        }
+      }
+    }
+  } finally {
+    resultLoading.value = false
+    if (detailsOpen.value && (props.entry.result !== sourceResult || props.entry.tool !== sourceTool || props.entry.batchId !== batchId)) loadFullResult()
+    nextTick(() => emit('resized'))
+  }
+}
 function toggleDetails() {
   if (!hasDetails.value) return
   emit('resize-start')

@@ -1,6 +1,6 @@
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -431,6 +431,61 @@ async def test_session_list_next_page_uses_full_keyset_and_preserves_order(sort)
     assert exc_info.value.field == "cursor"
 
 
+async def test_session_list_batches_payload_inputs_without_changing_payloads(monkeypatch) -> None:
+    from mato_loop_backend.api.routes import sessions as route
+
+    user = _user()
+    project_id, agent_id, revoked_agent_id = uuid4(), uuid4(), uuid4()
+    provider = LlmProviderConfig(name="Test", adapter_type="openai-compatible")
+    model = ModelConfig(provider_id=provider.id, model_id="test", name="Test")
+    denied_model = model.model_copy(update={"id": uuid4(), "memory_policy": "deny"})
+    ai = AsyncMock(return_value=AiSettings(
+        providers=[provider], models=[model, denied_model], default_model_id=model.id,
+    ))
+    memory = AsyncMock(return_value=MemorySettings())
+    monkeypatch.setattr(route, "load_effective_ai", ai)
+    monkeypatch.setattr(SettingsStore, "load", memory)
+    monkeypatch.setattr(route.execution_agent_connections, "snapshot", lambda _id: {"filesystem.read": {}})
+    sessions = [ChatSession(
+        id=uuid4(), user_id=user.id, project_id=project_id,
+        preferred_execution_agent_id=selected_agent,
+        model_config_id=selected_model, memory_mode=mode,
+        created_at=datetime(2026, 7, 1, tzinfo=UTC),
+    ) for mode, selected_agent, selected_model in [
+        ("full", agent_id, model.id),
+        ("read_only", agent_id, denied_model.id),
+        ("disabled", revoked_agent_id, None),
+    ]]
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.side_effect = [
+        project_id, SimpleNamespace(id=agent_id),
+        project_id, SimpleNamespace(id=agent_id),
+        project_id, None,
+    ]
+    expected = [await route._session_payload(db, item, last_message_at=None, has_unread_messages=False)
+                for item in sessions]
+    ai.reset_mock()
+    memory.reset_mock()
+    db.scalar.side_effect = AssertionError("Per-session state query")
+    db.scalars.side_effect = [
+        MagicMock(all=MagicMock(return_value=[project_id])),
+        MagicMock(all=MagicMock(return_value=[agent_id])),
+    ]
+    db.execute.return_value = MagicMock()
+    db.execute.return_value.all.return_value = [
+        (item, None, None, None, item.created_at, None) for item in sessions
+    ]
+
+    result = await list_sessions(user, db, include_archived=True)
+
+    payloads = [{key: value for key, value in item.items()
+                 if key not in {"activeRunStatus", "lastUserMessageAt"}}
+                for item in result["items"]]
+    assert (payloads, ai.await_count, memory.await_count, db.scalars.await_count) == (
+        expected, 1, 1, 2,
+    )
+
+
 async def test_session_list_rejects_malformed_cursor() -> None:
     db = AsyncMock(spec=AsyncSession)
 
@@ -456,6 +511,7 @@ async def test_session_list_scopes_projects_and_standalone_sessions() -> None:
 
     project_statement = project_db.execute.await_args.args[0]
     assert project_id in project_statement.compile().params.values()
+    assert str(project_statement).count("chat_sessions.project_id = :project_id_1") == 2
     owner_statement = project_db.scalar.await_args.args[0]
     assert user.id in owner_statement.compile().params.values()
 
@@ -465,6 +521,7 @@ async def test_session_list_scopes_projects_and_standalone_sessions() -> None:
     assert "chat_sessions.project_id IS NULL" in str(
         standalone_db.execute.await_args.args[0]
     )
+    assert str(standalone_db.execute.await_args.args[0]).count("chat_sessions.project_id IS NULL") == 2
     assert "NOT (EXISTS" in str(standalone_db.execute.await_args.args[0])
 
 
@@ -1247,7 +1304,8 @@ def test_session_payload_ignores_invalid_persisted_file_view() -> None:
     }
 
 
-async def test_session_payload_marks_latest_restart_error_retryable() -> None:
+@pytest.mark.parametrize("input_outside_page", [False, True])
+async def test_session_payload_marks_latest_restart_error_retryable(input_outside_page) -> None:
     user = _user()
     session = ChatSession(
         id=uuid4(),
@@ -1276,11 +1334,14 @@ async def test_session_payload_marks_latest_restart_error_retryable() -> None:
     user_message.created_at = created_at
     error_message.created_at = created_at
     messages = MagicMock()
-    messages.all.return_value = [user_message, error_message]
+    messages.all.return_value = [error_message] if input_outside_page else [user_message, error_message]
     summaries = MagicMock()
     summaries.all.return_value = []
     anchors = MagicMock()
-    anchors.all.return_value = [SimpleNamespace(created_at=created_at, id=user_message.id)]
+    anchors.all.return_value = [
+        SimpleNamespace(created_at=created_at, id=error_message.id, payload_bytes=2_000),
+        SimpleNamespace(created_at=created_at, id=user_message.id, payload_bytes=192_000),
+    ] if input_outside_page else [SimpleNamespace(created_at=created_at, id=user_message.id)]
     aggregate = MagicMock()
     aggregate.one.return_value = (created_at, created_at, 1, None, created_at)
     direct_links = MagicMock()
@@ -1299,39 +1360,52 @@ async def test_session_payload_marks_latest_restart_error_retryable() -> None:
     todo_messages = MagicMock()
     todo_messages.all.return_value = []
     db.scalars.side_effect = [messages, summaries, todo_messages]
-    db.scalar.side_effect = [session, None, None]
-    db.execute.side_effect = [anchors, direct_links, no_automation_links, aggregate]
+    db.scalar.side_effect = [session, None, None, False] if input_outside_page else [session, None, None]
+    input_result = MagicMock()
+    input_result.one_or_none.return_value = SimpleNamespace(created_at=created_at, id=user_message.id)
+    db.execute.side_effect = [anchors, direct_links, no_automation_links] + (
+        [input_result] if input_outside_page else []
+    ) + [aggregate]
 
     result = await get_session(session.id, user, db)
 
-    assert [message["retryAvailable"] for message in result["messages"]] == [False, True]
+    assert [message["retryAvailable"] for message in result["messages"]] == (
+        [True] if input_outside_page else [False, True]
+    )
 
 
-async def test_session_message_page_returns_complete_turns_and_cursor() -> None:
+@pytest.mark.parametrize(("page_size", "older_bytes", "continuation"), [
+    (1, 2_000, False), (2, 192_000, False), (1, 2_000, True),
+])
+async def test_session_message_page_keeps_non_tool_anchor_with_results_and_cursor(page_size, older_bytes, continuation) -> None:
     session_id = uuid4()
     created_at = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
-    oldest = Message(
-        id=uuid4(), session_id=session_id, role="user", content="Älter", created_at=created_at
-    )
     newest = Message(
-        id=uuid4(), session_id=session_id, role="user", content="Neu", created_at=created_at
+        id=uuid4(), session_id=session_id, role="user", content="Neu", created_at=created_at - timedelta(seconds=1)
     )
     assistant = Message(
         id=uuid4(), session_id=session_id, role="assistant", content="Antwort", created_at=created_at
     )
-    for message in (oldest, newest, assistant):
+    tool_result = Message(
+        id=uuid4(), session_id=session_id, role="tool", content="Result", created_at=created_at + timedelta(seconds=2)
+    )
+    assistant.tool_calls = [{"id": "call-1", "name": "read", "arguments": {}}]
+    tool_result.tool_call_id = "call-1"
+    for message in (newest, assistant, tool_result):
         message.attachments = []
     anchors = MagicMock()
     anchors.all.return_value = [
-        SimpleNamespace(created_at=created_at, id=newest.id),
-        SimpleNamespace(created_at=created_at, id=oldest.id),
+        SimpleNamespace(created_at=created_at, id=assistant.id, payload_bytes=2_000),
+        SimpleNamespace(created_at=newest.created_at, id=newest.id, payload_bytes=older_bytes),
     ]
     messages = MagicMock()
-    messages.all.return_value = [newest, assistant]
+    messages.all.return_value = [assistant]
+    results = MagicMock()
+    results.all.return_value = [tool_result]
     summary = ContextSummary(
         id=uuid4(),
         session_id=session_id,
-        covered_through_message_id=newest.id,
+        covered_through_message_id=assistant.id,
         content="Verdichteter Verlauf",
         estimated_tokens=20,
         is_fallback=True,
@@ -1340,19 +1414,46 @@ async def test_session_message_page_returns_complete_turns_and_cursor() -> None:
     summaries = MagicMock()
     summaries.all.return_value = [summary]
     db = AsyncMock(spec=AsyncSession)
-    db.execute.return_value = anchors
-    db.scalars.side_effect = [messages, summaries]
+    continuation_id = uuid4()
+    cursor_result = MagicMock()
+    cursor_result.one_or_none.return_value = SimpleNamespace(
+        created_at=created_at + timedelta(seconds=1), id=continuation_id,
+    )
+    db.execute.side_effect = ([cursor_result] if continuation else []) + [anchors]
+    db.scalars.side_effect = [messages, results, summaries]
 
     items, context_summaries, next_cursor = await session_message_page(
         db,
         session_id,
-        page_size=1,
-        cursor=None,
+        page_size=page_size,
+        cursor=continuation_id if continuation else None,
     )
 
-    assert [message.id for message in items] == [newest.id, assistant.id]
+    assert [message.id for message in items] == [assistant.id, tool_result.id]
     assert context_summaries == [summary]
-    assert next_cursor == str(newest.id)
+    assert next_cursor == str(assistant.id)
+    anchor_query = db.execute.await_args.args[0]
+    assert list(anchor_query.selected_columns.keys()) == ["created_at", "id", "payload_bytes"]
+    assert "chat_sessions" not in str(anchor_query)
+    assert "messages.role !=" in str(anchor_query)
+    message_query, result_query = [call.args[0] for call in db.scalars.await_args_list[:2]]
+    assert [assistant.id] in message_query.compile().params.values()
+    assert "messages.role !=" in str(message_query)
+    result_sql = str(result_query)
+    assert "messages_1.tool_calls @> jsonb_build_array" in result_sql
+    assert "messages_1.created_at DESC, messages_1.id DESC" in result_sql
+    assert "messages_1.session_id = messages.session_id" in result_sql
+    assert "runId" in result_query.compile().params.values()
+    assert ["call-1"] in result_query.compile().params.values()
+    assert continuation_id not in result_query.compile().params.values()
+
+
+async def test_session_message_page_omits_legacy_orphan_results() -> None:
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value = MagicMock(all=MagicMock(return_value=[]))
+
+    assert await session_message_page(db, uuid4(), page_size=20, cursor=None) == ([], [], None)
+    db.scalars.assert_not_awaited()
 
 
 async def test_session_owner_cannot_read_another_users_session() -> None:

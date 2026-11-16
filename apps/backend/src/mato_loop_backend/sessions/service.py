@@ -438,6 +438,31 @@ async def session_detail_payload(
         )
         if retry_source is not None:
             retry_message_id = messages[-1].id
+        elif next_message_cursor is not None:
+            target = messages[-1]
+            if target.role == "assistant" and target.error_code and target.error_run_id:
+                failed_run = await db.get(AgentRun, target.error_run_id)
+                if failed_run and failed_run.session_id == item.id and failed_run.status == "failed":
+                    input_row = (await db.execute(select(Message.created_at, Message.id).where(
+                        Message.id == failed_run.input_message_id,
+                        Message.session_id == item.id, Message.role == "user",
+                    ))).one_or_none()
+                    if input_row is not None:
+                        # Check the omitted suffix without loading message bodies. The
+                        # retry action still revalidates the complete locked history.
+                        run_id = Message.provider_data["_matoloop"]["runId"].as_string()
+                        continuation = Message.provider_data["_matoloop"]["continuationRunId"].as_string()
+                        conflict = await db.scalar(select(select(Message.id).where(
+                            Message.session_id == item.id,
+                            tuple_(Message.created_at, Message.id) > (input_row.created_at, input_row.id),
+                            or_(
+                                and_(run_id.is_not(None), run_id != str(failed_run.id)),
+                                and_(Message.error_run_id.is_not(None), Message.error_run_id != failed_run.id),
+                                and_(Message.role == "user", continuation.is_distinct_from(str(failed_run.id))),
+                            ),
+                        ).exists()))
+                        if conflict is False:
+                            retry_message_id = target.id
     performance_message = aliased(Message)
     latest_performance_provider_data = (
         select(performance_message.provider_data)
@@ -546,7 +571,7 @@ async def session_message_page(
                 select(Message.created_at, Message.id).where(
                     Message.id == cursor,
                     Message.session_id == session_id,
-                    Message.role == "user",
+                    Message.role != "tool",
                 )
             )
         ).one_or_none()
@@ -554,9 +579,17 @@ async def session_message_page(
             raise SessionServiceError(400, "validation.invalid", field="cursor")
         upper_bound = (cursor_row.created_at, cursor_row.id)
 
-    anchors_statement = select(Message.created_at, Message.id).where(
+    # Page by individual visible messages, not user turns. Keep each tool-call
+    # carrier with its results so the transcript never receives orphan results.
+    anchors_statement = select(
+        Message.created_at, Message.id,
+        (func.octet_length(Message.content)
+         + func.least(func.coalesce(func.octet_length(Message.tool_calls.cast(String)), 0), 4_000)
+         + func.coalesce(func.octet_length(Message.public_reasoning.cast(String)), 0)
+         + 2_000).label("payload_bytes"),
+    ).where(
         Message.session_id == session_id,
-        Message.role == "user",
+        Message.role != "tool",
     )
     if upper_bound is not None:
         anchors_statement = anchors_statement.where(
@@ -570,23 +603,24 @@ async def session_message_page(
         )
     ).all()
     page_anchors = anchors[:page_size]
+    # This is an approximate visible-message budget, not a response-size cap.
+    # A carrier and its parallel results remain atomic; tool bodies/arguments are lazy.
+    size = 0
+    for index, anchor in enumerate(page_anchors):
+        size += getattr(anchor, "payload_bytes", 0)
+        if index and size > 192_000:
+            page_anchors = page_anchors[:index]
+            break
     if not page_anchors:
-        if cursor is None:
-            messages = list(await db.scalars(select(Message).where(Message.session_id == session_id)
-                .options(selectinload(Message.attachments)).order_by(Message.created_at, Message.id)))
-            return messages, [], None
+        # Legacy tool-only histories have no carrier to render safely.
         return [], [], None
 
     lower_bound = (page_anchors[-1].created_at, page_anchors[-1].id)
     messages_statement = select(Message).where(
         Message.session_id == session_id,
+        Message.role != "tool",
+        Message.id.in_([anchor.id for anchor in page_anchors]),
     )
-    if len(anchors) > page_size:
-        messages_statement = messages_statement.where(tuple_(Message.created_at, Message.id) >= lower_bound)
-    if upper_bound is not None:
-        messages_statement = messages_statement.where(
-            tuple_(Message.created_at, Message.id) < upper_bound
-        )
     messages = list(
         (
             await db.scalars(
@@ -596,6 +630,34 @@ async def session_message_page(
             )
         ).all()
     )
+    call_ids = {
+        call["id"] for message in messages if message.role == "assistant"
+        for call in (message.tool_calls or [])
+        if isinstance(call, dict) and isinstance(call.get("id"), str)
+    }
+    if call_ids:
+        carrier = aliased(Message)
+        carrier_run = carrier.provider_data["_matoloop"]["runId"].as_string()
+        result_run = Message.provider_data["_matoloop"]["runId"].as_string()
+        # Reused legacy call IDs belong to the nearest compatible carrier, not
+        # every page containing that ID. Results may follow a continuation user.
+        result_carrier = select(carrier.id).where(
+            carrier.session_id == Message.session_id,
+            carrier.role == "assistant",
+            carrier.tool_calls.contains(func.jsonb_build_array(
+                func.jsonb_build_object("id", Message.tool_call_id),
+            )),
+            tuple_(carrier.created_at, carrier.id) < tuple_(Message.created_at, Message.id),
+            or_(carrier_run.is_(None), result_run.is_(None), carrier_run == result_run),
+        ).order_by(carrier.created_at.desc(), carrier.id.desc()).limit(1).correlate(Message).scalar_subquery()
+        results = (await db.scalars(select(Message).where(
+            Message.session_id == session_id,
+            Message.role == "tool",
+            Message.tool_call_id.in_(call_ids),
+            result_carrier.in_([message.id for message in messages if message.role == "assistant"]),
+        ).options(selectinload(Message.attachments)))).all()
+        messages.extend(results)
+        messages.sort(key=lambda message: (message.created_at, message.id))
     summaries_statement = select(ContextSummary).where(
         ContextSummary.session_id == session_id,
         tuple_(ContextSummary.created_at, ContextSummary.id) >= lower_bound,
@@ -613,7 +675,7 @@ async def session_message_page(
             )
         ).all()
     )
-    next_cursor = str(lower_bound[1]) if len(anchors) > page_size else None
+    next_cursor = str(lower_bound[1]) if len(anchors) > len(page_anchors) else None
     return messages, context_summaries, next_cursor
 
 
@@ -899,7 +961,9 @@ async def list_sessions(
     cursor: str | None,
     project_id: UUID | None,
     standalone: bool,
-    session_serializer: PayloadSerializer,
+    session_serializer_factory: Callable[
+        [AsyncSession, list[ChatSession]], Awaitable[PayloadSerializer]
+    ],
     archived: bool = False,
     include_archived: bool = False,
     sort: Literal["pinned", "recent"] = "pinned",
@@ -933,6 +997,27 @@ async def list_sessions(
         .correlate(ChatSession)
         .scalar_subquery()
     )
+    session_filters = [
+        ChatSession.user_id == user_id,
+        ChatSession.session_type == "chat",
+        ChatSession.parent_session_id.is_(None),
+        ~deleted_session_clause(),
+        ~select(SettingRecord.id).where(
+            SettingRecord.user_id == user_id,
+            SettingRecord.key == "assistant",
+            SettingRecord.data["session_id"].astext == ChatSession.id.cast(String),
+        ).correlate(ChatSession).exists(),
+    ]
+    if project_id is not None:
+        session_filters.append(ChatSession.project_id == project_id)
+    elif standalone:
+        session_filters.append(ChatSession.project_id.is_(None))
+    if not include_archived:
+        session_filters.append(~active_session_clause() if archived else active_session_clause())
+        if archived and project_id is None:
+            session_filters.append(~select(Project.id).where(
+                Project.id == ChatSession.project_id, Project.archived_at.is_not(None),
+            ).correlate(ChatSession).exists())
     latest_messages = (
         select(
             Message.session_id.label("session_id"),
@@ -946,7 +1031,7 @@ async def list_sessions(
         )
         .join(ChatSession, ChatSession.id == Message.session_id)
         .where(
-            ChatSession.user_id == user_id,
+            *session_filters,
             Message.role.in_(VISIBLE_MESSAGE_ROLES),
         )
         .group_by(Message.session_id)
@@ -1011,28 +1096,8 @@ async def list_sessions(
             latest_messages.c.last_user_message_at,
         )
         .outerjoin(latest_messages, latest_messages.c.session_id == ChatSession.id)
-        .where(
-            ChatSession.user_id == user_id,
-            ChatSession.session_type == "chat",
-            ChatSession.parent_session_id.is_(None),
-            ~deleted_session_clause(),
-            ~select(SettingRecord.id).where(
-                SettingRecord.user_id == user_id,
-                SettingRecord.key == "assistant",
-                SettingRecord.data["session_id"].astext == ChatSession.id.cast(String),
-            ).exists(),
-        )
+        .where(*session_filters)
     )
-    if project_id is not None:
-        statement = statement.where(ChatSession.project_id == project_id)
-    elif standalone:
-        statement = statement.where(ChatSession.project_id.is_(None))
-    if not include_archived:
-        statement = statement.where(~active_session_clause() if archived else active_session_clause())
-        if archived and project_id is None:
-            statement = statement.where(~select(Project.id).where(
-                Project.id == ChatSession.project_id, Project.archived_at.is_not(None),
-            ).exists())
     if cursor is not None:
         cursor_priority, cursor_activity_at, cursor_id = _decode_session_cursor(
             cursor, user_id, scope
@@ -1059,6 +1124,9 @@ async def list_sessions(
         )
     ).all()
     page = rows[:page_size]
+    if not page:
+        return {"items": [], "nextCursor": None}
+    session_serializer = await session_serializer_factory(db, [row[0] for row in page])
     items = [
         {
             **(

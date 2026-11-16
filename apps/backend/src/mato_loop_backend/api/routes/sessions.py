@@ -40,6 +40,7 @@ from mato_loop_backend.chat_history import ChatHistoryError, ChatHistoryService
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.error_contract import describe_error
 from mato_loop_backend.events import run_events
+from mato_loop_backend.execution import execution_agent_connections
 from mato_loop_backend.files.service import RootFileError
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.media.attachments import (
@@ -102,6 +103,7 @@ from mato_loop_backend.sessions.serialization import (
 from mato_loop_backend.sessions.state import deleted_session_clause
 from mato_loop_backend.sessions.templates import load_template
 from mato_loop_backend.settings import (
+    AiSettings,
     InstanceLimits,
     MemorySettings,
     SettingsStore,
@@ -370,9 +372,15 @@ async def _session_payload(
     *,
     last_message_at: Any = _LAST_MESSAGE_AT_UNSET,
     has_unread_messages: bool | None = None,
+    base_ai: AiSettings | None = None,
+    memory_settings: MemorySettings | None = None,
+    archived: bool | None = None,
+    workspace_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    archived = await is_session_archived(db, item)
-    workspace_context = await session_service.workspace_context(db, item)
+    if archived is None:
+        archived = await is_session_archived(db, item)
+    if workspace_context is None:
+        workspace_context = await session_service.workspace_context(db, item)
     if item.memory_mode == MemoryMode.DISABLED.value:
         return {**session_payload(
             item,
@@ -383,8 +391,12 @@ async def _session_payload(
             last_message_at=last_message_at,
             has_unread_messages=has_unread_messages,
         ), "archived": archived}
-    ai = apply_session_ai(await load_effective_ai(db, item.user_id), item)
-    memory = await SettingsStore.load(db, MemorySettings, user_id=item.user_id)
+    ai = apply_session_ai(
+        base_ai if base_ai is not None else await load_effective_ai(db, item.user_id), item
+    )
+    memory = memory_settings if memory_settings is not None else await SettingsStore.load(
+        db, MemorySettings, user_id=item.user_id
+    )
     model_id = ai.default_model_id
     model = _model_for_session(ai, model_id) if _model_available(ai, model_id) else None
     state = effective_memory(item, memory, _provider_for_session(ai, model), model)
@@ -397,6 +409,52 @@ async def _session_payload(
         last_message_at=last_message_at,
         has_unread_messages=has_unread_messages,
     ), "archived": archived}
+
+
+async def _session_list_serializer(
+    db: AsyncSession, items: list[ChatSession]
+) -> session_service.PayloadSerializer:
+    """Prepare shared payload inputs for this page only, without caching authorization."""
+    user_id = items[0].user_id
+    project_ids = {item.project_id for item in items if item.project_id is not None}
+    archived_project_ids = set((await db.scalars(select(Project.id).where(
+        Project.id.in_(project_ids), Project.archived_at.is_not(None),
+    ))).all()) if project_ids else set()
+    agent_ids = {
+        item.preferred_execution_agent_id for item in items
+        if item.preferred_execution_agent_id is not None
+    }
+    available_agent_ids = (await db.scalars(select(ExecutionAgent.id).where(
+        ExecutionAgent.id.in_(agent_ids),
+        ExecutionAgent.user_id == user_id,
+        ExecutionAgent.revoked_at.is_(None),
+    ))).all() if agent_ids else []
+    snapshots = {
+        agent_id: execution_agent_connections.snapshot(agent_id)
+        for agent_id in available_agent_ids
+    }
+    ai = memory = None
+    if any(item.memory_mode != MemoryMode.DISABLED.value for item in items):
+        ai = await load_effective_ai(db, user_id)
+        memory = await SettingsStore.load(db, MemorySettings, user_id=user_id)
+
+    async def serialize(db: AsyncSession, item: ChatSession, **kwargs) -> dict[str, Any]:
+        agent_id = item.preferred_execution_agent_id
+        snapshot = snapshots.get(agent_id)
+        return await _session_payload(
+            db, item,
+            base_ai=ai,
+            memory_settings=memory,
+            archived=item.archived_at is not None or item.project_id in archived_project_ids,
+            workspace_context={
+                "executionAgentId": str(agent_id) if agent_id else None,
+                "connected": snapshot is not None,
+                "operations": sorted(snapshot) if snapshot is not None else [],
+            },
+            **kwargs,
+        )
+
+    return serialize
 
 
 async def _duplicate_submission_response(
@@ -439,7 +497,7 @@ async def list_sessions(
             cursor=cursor,
             project_id=project_id,
             standalone=standalone,
-            session_serializer=_session_payload,
+            session_serializer_factory=_session_list_serializer,
             archived=archived,
             include_archived=include_archived,
             sort=sort,
@@ -716,7 +774,7 @@ async def get_session(
         db,
         item,
         session_serializer=_session_payload,
-        message_serializer=message_payload,
+        message_serializer=partial(message_payload, compact=True),
         context_summary_serializer=context_summary_payload,
     )
 
@@ -747,6 +805,7 @@ async def get_session_messages(
                 message,
                 attribution=attributions.get(message.id),
                 attribution_resolved=True,
+                compact=True,
             )
             for message in messages
         ],
@@ -805,6 +864,7 @@ async def get_session_message(
     message_id: UUID,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    compact: bool = False,
 ) -> dict[str, Any]:
     if await _owned_session(db, session_id, user.id) is None:
         raise ApiError(404, "session.notFound")
@@ -820,6 +880,7 @@ async def get_session_message(
         message,
         attribution=attributions.get(message.id),
         attribution_resolved=True,
+        compact=compact,
     )
 
 

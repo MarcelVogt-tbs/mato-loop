@@ -2,6 +2,8 @@
 
 Eine Session ist eine gespeicherte Unterhaltung mit eigenen Einstellungen, Dateien und Verlauf. Projekte gruppieren Sessions, teilen aber nicht deren Dateiablage.
 
+Beim Öffnen erscheint zuerst der jüngste Verlauf. Scrolle nach oben, um ältere Nachrichten nachzuladen; deine Leseposition bleibt dabei erhalten. Große Tool-Ausgaben und Aufrufargumente werden erst beim Aufklappen ihrer Details vollständig geladen. Bei einem Ladefehler wähle **Erneut laden**. Der gespeicherte Verlauf und der Modellkontext werden dadurch nicht gekürzt.
+
 Chatnachrichten verwenden kompakte Zeilen-, Absatz- und Nachrichtenabstände. Auf dem Desktop mit Maus ist auch die Seitenleiste dichter; auf Touch-Geräten bleiben ihre größeren Bedienflächen erhalten. Die Einstellung **Nachrichtengröße > Klein** reduziert zusätzlich die Schriftgröße und die Nachrichtenabstände.
 
 Unter **Einstellungen > Grundeinstellungen > Position der Sessions** wählst du, ob der Bereich **Sessions** über oder unter den Projekten erscheint. Standard ist **Unter den Projekten**. Speichere die Auswahl; sie gilt für dein Konto auf allen Geräten. Sessions innerhalb eines Projekts bleiben beim jeweiligen Projekt.

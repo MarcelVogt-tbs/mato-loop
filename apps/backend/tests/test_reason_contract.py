@@ -30,7 +30,7 @@ def read_call(identifier, path="note.txt", **extra):
 async def test_reason_repair_through_runtime_and_real_registry(monkeypatch, extra):
     initial = read_call("initial", **extra)
     repaired = read_call("repaired", _reason="Die Datei wird für die Antwort benötigt.")
-    db, run, requests, _, _ = await _runtime_setup(
+    db, run, requests, _, events = await _runtime_setup(
         monkeypatch,
         [ProviderResult(tool_calls=[initial]), ProviderResult(tool_calls=[repaired]), ProviderResult(content="Gelesen.")],
         search_policy=WebSearchPolicy.AVAILABLE,
@@ -55,6 +55,7 @@ async def test_reason_repair_through_runtime_and_real_registry(monkeypatch, extr
     first, second = _tool_messages(db)
     assert message_payload(first)["argumentsRejected"] is True
     assert message_payload(first)["toolRepair"] == "recovered"
+    assert {"type": "message.updated", "messageId": str(first.id)} in events
     assert message_dict(first) == message_dict(Message(role="tool", content=first.content, tool_call_id=first.tool_call_id))
     assert json.loads(first.content)["error"] == {
         "code": "tool.invalidArguments",

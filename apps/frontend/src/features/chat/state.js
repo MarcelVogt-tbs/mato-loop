@@ -198,19 +198,6 @@ export function sessionBeforeUserMessage(session, messageId) {
   }
 }
 
-export function sessionBeforeFailedResponse(session, messageId, activeRun) {
-  const errorIndex = session.messages?.findIndex((message) => message.id === messageId) ?? -1
-  if (errorIndex < 0) return { ...session, activeRun }
-  let userIndex = errorIndex - 1
-  while (userIndex >= 0 && session.messages[userIndex].role !== 'user') userIndex -= 1
-  const messages = userIndex >= 0 ? session.messages.slice(0, userIndex + 1) : session.messages
-  const removedIds = new Set(session.messages.slice(messages.length).map((message) => message.id))
-  const contextSummaries = (session.contextSummaries || []).filter((summary) => (
-    !removedIds.has(summary.coveredThroughMessageId)
-  ))
-  return { ...session, messages, contextSummaries, activeRun, lastMessageAt: lastVisibleMessageAt(messages) }
-}
-
 export function loadDrafts(ownerUserId) {
   if (!ownerUserId || typeof window === 'undefined') return emptyDrafts()
   try {

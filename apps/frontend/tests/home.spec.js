@@ -33,7 +33,8 @@ it('reloads after a change received during the initial Home request', async () =
   const displayed = []
   const stop = watch(() => home.sessions, items => displayed.push(items.map(item => item.id)), { flush: 'sync' })
   const loading = home.load()
-  const refreshing = home.load()
+  home.invalidate()
+  const refreshing = home.ensureLoaded()
   finishLoad({ data: { items: [] } })
   await Promise.all([loading, refreshing])
   stop()
@@ -121,6 +122,10 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   await router.push('/home')
   await vi.waitFor(() => expect(root.textContent).toContain('Ein Gespräch fortsetzen'))
   expect(mocks.get.mock.calls.filter(([path]) => path === '/sessions')).toHaveLength(sessionRequests)
+  await router.push({ name: 'chat' })
+  useHomeStore().invalidate()
+  await router.push('/home')
+  await vi.waitFor(() => expect(mocks.get.mock.calls.filter(([path]) => path === '/sessions')).toHaveLength(sessionRequests + 1))
   failed = true
   await useHomeStore().load().catch(() => {})
   await vi.waitFor(() => expect(root.textContent).toContain('Sessions konnten nicht geladen werden.'))

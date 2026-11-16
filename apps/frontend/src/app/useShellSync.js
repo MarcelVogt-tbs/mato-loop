@@ -149,6 +149,9 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     const all = resources.has('all')
     const sessionsChanged = all || resources.has('sessions') || resources.has('messages')
     const sessionIds = new Set(changes.map((change) => change.sessionId).filter(Boolean))
+    const listChanges = changes.filter((change) => ['sessions', 'messages'].includes(change.resource))
+    const refreshAllLists = all || listChanges.some((change) => !change.sessionId
+      || !Object.values(chat.sessionLists).some((list) => list.items.some((session) => session.id === change.sessionId)))
     const config = { suppressErrorToast: true }
     const requests = []
     const reload = (resource, request, sessionId = null) => requests.push({ resource, sessionId, request })
@@ -158,8 +161,11 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     if (all || resources.has('approvals')) reload('approvals', approvals.fetchPending(config))
     if (all || resources.has('questions')) reload('questions', questions.fetchPending(config))
     if (all || resources.has('notifications')) reload('notifications', notifications.fetchLatest(config))
-    if ((sessionsChanged || resources.has('projects') || resources.has('approvals') || resources.has('questions'))
-      && (home.loaded || home.loadRequest)) reload('messages', home.load(config))
+    if ((sessionsChanged || resources.has('home') || resources.has('projects') || resources.has('approvals') || resources.has('questions'))
+      && (home.loaded || home.loadRequest)) {
+      if (home.displayed) reload('home', home.load(config))
+      else home.invalidate()
+    }
     if (sessionsChanged) {
       if (route.name === 'chat' && routeSessionId.value
         && (!chat.running || (voice.active && voice.sessionId === routeSessionId.value))
@@ -167,8 +173,16 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
         reload('messages', chat.refreshSession(routeSessionId.value, config), routeSessionId.value)
       }
       for (const [scope, list] of Object.entries(chat.sessionLists)) {
-        if ((list.loaded || list.loadRequest) && (all || resources.has('sessions') || list.items.some((session) => sessionIds.has(session.id)))) {
-          reload('sessions', chat.refreshSessions(config, scope === 'standalone' ? null : scope))
+        const affectedIds = listChanges.filter((change) => list.items.some((session) => session.id === change.sessionId))
+          .map((change) => change.sessionId)
+        if ((list.loaded || list.loadRequest) && (refreshAllLists || affectedIds.length)) {
+          const request = chat.refreshSessions(config, scope === 'standalone' ? null : scope).then(() => {
+            // A disappeared item may have moved into another already-loaded project.
+            if (!refreshAllLists && affectedIds.some((id) => !chat.sessionLists[scope]?.items.some((session) => session.id === id))) {
+              queueChanges([{ resource: 'sessions' }])
+            }
+          })
+          reload('sessions', request)
         }
       }
     }

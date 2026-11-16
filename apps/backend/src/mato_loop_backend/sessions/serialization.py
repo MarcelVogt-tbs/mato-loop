@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
+from itertools import islice
 from typing import Any, Literal
 from urllib.parse import urlencode
 from uuid import UUID
@@ -33,6 +35,7 @@ from mato_loop_backend.tools.display import enrich_tool_calls
 from mato_loop_backend.web.fetch import WebFetchError, canonicalize_url
 
 LAST_MESSAGE_AT_UNSET = object()
+_TOOL_PREVIEW_BYTES = 2_000
 _PUBLIC_WARNING_CODES = {"privacy.placeholderRestorationIncomplete", "agent.toolCallLimitReached"}
 
 
@@ -389,12 +392,47 @@ def _control_center_file_view_payload(
     }
 
 
+def _tool_result_summary(content: str) -> dict[str, Any]:
+    """Keep display metadata independent of a potentially incomplete JSON preview."""
+    try:
+        value = json.loads(content)
+    except (ValueError, RecursionError):
+        return {"error": None}
+    if not isinstance(value, dict):
+        return {"error": None}
+    raw_error = value.get("error", value)
+    code = "mcp.callFailed" if value.get("isError") is True else (
+        raw_error.get("code") if isinstance(raw_error, dict) else None
+    )
+    error = None
+    if isinstance(code, str):
+        # Error parameters can themselves contain the entire tool output. Never
+        # copy arbitrary containers or unbounded strings into a compact response.
+        params = raw_error.get("params") if isinstance(raw_error, dict) else None
+        bounded_params = {
+            key: parameter[:128] if isinstance(parameter, str) else parameter
+            for key, parameter in islice(params.items(), 8)
+            if isinstance(key, str) and len(key) <= 80
+            and (parameter is None or isinstance(parameter, (str, bool, int, float)))
+        } if isinstance(params, dict) else None
+        field = raw_error.get("field") if isinstance(raw_error, dict) else None
+        error = describe_error(
+            code if len(code) <= 160 else None,
+            field=field[:200] if isinstance(field, str) else None,
+            params=bounded_params,
+        ).payload()
+    session = value.get("session")
+    title = session.get("title") if isinstance(session, dict) else None
+    return {"error": error, **({"summary": title[:140]} if isinstance(title, str) else {})}
+
+
 def message_payload(
     item: Message,
     *,
     retry_available: bool = False,
     attribution: tuple[UUID, UUID | None] | None = None,
     attribution_resolved: bool = False,
+    compact: bool = False,
 ) -> dict[str, Any]:
     runtime_data = (item.provider_data or {}).get("_matoloop", {})
     command = runtime_data.get("codingCommand") if item.role == "user" and isinstance(runtime_data, dict) else None
@@ -436,6 +474,34 @@ def message_payload(
         else None
     )
     source = (item.provider_data or {}).get("_matoloop", {}).get("source", {})
+    content = (
+        error.message if error
+        else canonical_assistant_content(item.content) if item.role == "assistant"
+        else item.content
+    )
+    compact_fields = {}
+    tool_calls = enrich_tool_calls(item.tool_calls)
+    if compact and isinstance(tool_calls, list):
+        encoder = json.JSONEncoder(ensure_ascii=False)
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                continue
+            size = 0
+            for chunk in encoder.iterencode(call.get("arguments")):
+                size += len(chunk.encode("utf-8"))
+                if size > _TOOL_PREVIEW_BYTES:
+                    call.update(arguments={}, argumentsTruncated=True, sessionId=str(item.session_id))
+                    compact_fields.update(argumentsTruncated=True, sessionId=str(item.session_id))
+                    break
+    if compact and item.role == "tool":
+        preview = content[:_TOOL_PREVIEW_BYTES].encode("utf-8")[:_TOOL_PREVIEW_BYTES].decode("utf-8", errors="ignore")
+        if len(preview) < len(content):
+            compact_fields.update({
+                "contentTruncated": True,
+                "sessionId": str(item.session_id),
+                "resultSummary": _tool_result_summary(content),
+            })
+            content = preview
     return {
         "id": str(item.id),
         "role": item.role,
@@ -443,13 +509,8 @@ def message_payload(
         "kind": "runtime_error" if error else "message",
         "state": "error" if error else "normal",
         "origin": "host" if error or runtime_data.get("origin") == "host" else item.role,
-        "content": (
-            error.message
-            if error
-            else canonical_assistant_content(item.content)
-            if item.role == "assistant"
-            else item.content
-        ),
+        "content": content,
+        **compact_fields,
         **({"commandPrompt": command_prompt} if isinstance(command_prompt, str) else {}),
         "modelName": item.model_name,
         "generationStatus": item.generation_status or "completed",
@@ -467,7 +528,7 @@ def message_payload(
         "toolCallId": item.tool_call_id,
         **({"argumentsRejected": True} if item.role == "tool" and runtime_data.get("argumentsRejected") is True else {}),
         **({"toolRepair": runtime_data["toolRepair"]} if item.role == "tool" and runtime_data.get("toolRepair") in {"pending", "recovered", "superseded"} else {}),
-        "toolCalls": enrich_tool_calls(item.tool_calls),
+        "toolCalls": tool_calls,
         "reasoning": item.public_reasoning,
         "activeDurationMs": _public_active_duration_ms(item),
         "warnings": _public_warnings(item),

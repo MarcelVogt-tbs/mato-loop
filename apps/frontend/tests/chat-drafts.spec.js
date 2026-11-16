@@ -1338,6 +1338,20 @@ describe('chat drafts', () => {
     expect(chat.current.nextMessageCursor).toBeNull()
   })
 
+  it('orders overlapping message pages by UUID when timestamps are equal', async () => {
+    const messages = [1, 2, 3].map((index) => ({
+      id: `550e8400-e29b-41d4-a716-44665544000${index}`,
+      role: 'assistant', createdAt: '2026-11-16T20:00:00.000000Z'
+    }))
+    api.get.mockResolvedValue({ data: { items: messages.slice(0, 2), nextCursor: null } })
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', nextMessageCursor: 'older', messages: [messages[0], messages[2]] }
+
+    await chat.loadOlderMessages()
+
+    expect(chat.current.messages.map((message) => message.id)).toEqual(messages.map((message) => message.id))
+  })
+
   it('shares an in-flight older-message request', async () => {
     let resolvePage
     api.get.mockReturnValue(new Promise((resolve) => { resolvePage = resolve }))
@@ -1393,6 +1407,47 @@ describe('chat drafts', () => {
       { id: 'summary-3', content: 'Neu' }
     ])
     expect(chat.current.nextMessageCursor).toBe('older-cursor')
+  })
+
+  it.each([[false, false], [true, false], [false, true], [true, true]])('bridges multiple reconnect pages completely and in order (equal timestamps: %s, queued refresh: %s)', async (equalTimestamps, queuedRefresh) => {
+    global.EventSource = EventSourceMock
+    const messages = Array.from({ length: 6 }, (_, index) => ({
+      id: `550e8400-e29b-41d4-a716-44665544000${index}`,
+      role: 'assistant',
+      createdAt: `2026-11-16T20:00:0${equalTimestamps && index < 4 ? 0 : index}.000000Z`
+    }))
+    api.get.mockImplementation((url) => Promise.resolve(url.endsWith('/messages/' + messages[5].id)
+      ? { data: messages[5] }
+      : url.endsWith('/messages')
+        ? { data: { items: messages.slice(0, 4), nextCursor: null } }
+        : { data: {
+      id: 'session-1', messages: messages.slice(4), nextMessageCursor: 'gap-1'
+    } }))
+    const chat = useChatStore()
+    chat.selectedSessionId = 'session-1'
+    chat.current = { id: 'session-1', messages: [messages[0]], nextMessageCursor: null }
+    let finishRefresh
+    const refreshes = []
+    if (queuedRefresh) {
+      api.get.mockImplementationOnce(() => new Promise(resolve => { finishRefresh = resolve }))
+      refreshes.push(chat.refreshSession('session-1'))
+      await vi.waitFor(() => expect(finishRefresh).toBeTypeOf('function'))
+      refreshes.push(chat.refreshSession('session-1'))
+    }
+
+    chat.watchRun('session-1', 'run-1', { status: 'running', reconnecting: true })
+    EventSourceMock.instances[0].emit('run.snapshot', {
+      events: [
+        { type: 'message.completed', message: messages[5] },
+        { type: 'context.compacted', summary: { id: 'summary-new' } }
+      ]
+    })
+    finishRefresh?.({ data: {
+      id: 'session-1', messages: messages.slice(4), nextMessageCursor: 'gap-1'
+    } })
+    await Promise.all(refreshes)
+
+    await vi.waitFor(() => expect(chat.current.messages.map((message) => message.id)).toEqual(messages.map((message) => message.id)))
   })
 
   it('discovers an externally started run while refreshing the open session', async () => {
@@ -2173,13 +2228,14 @@ describe('chat drafts', () => {
       downloadUrl: `/api/workspace/files/download?path=result.md&scope=session&session_id=${sessionId}&root_identity=${rootIdentity}`
     }
     let resolveToolRefresh
-    let sessionRefreshCalls = 0
     api.get.mockImplementation((url) => {
-      if (url !== `/sessions/${sessionId}`) return Promise.resolve({ data: { entries: [] } })
-      sessionRefreshCalls += 1
-      return sessionRefreshCalls === 1
-        ? new Promise((resolve) => { resolveToolRefresh = resolve })
-        : Promise.resolve({ data: { id: sessionId, messages: [] } })
+      if (url === `/sessions/${sessionId}/messages/tool-1`) {
+        return new Promise((resolve) => { resolveToolRefresh = resolve })
+      }
+      if (url === `/sessions/${sessionId}/messages/assistant-1`) {
+        return Promise.resolve({ data: { id: 'assistant-1', role: 'assistant', content: 'Serverstand', toolCalls: [] } })
+      }
+      return Promise.resolve({ data: { entries: [] } })
     })
     const workspace = useWorkspaceStore()
     workspace.sessionId = sessionId
@@ -2188,34 +2244,30 @@ describe('chat drafts', () => {
     const controlCenter = useControlCenterStore()
     const open = vi.spyOn(controlCenter, 'openFile').mockResolvedValue('file-result')
     const chat = useChatStore()
-    chat.current = { id: sessionId, projectId: rootIdentity, messages: [] }
+    chat.current = { id: sessionId, projectId: rootIdentity, messages: [
+      { id: 'tool-request', role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { root: 'files', path: 'result.md', content: 'Fertig' } }] }
+    ] }
     chat.selectedSessionId = sessionId
     chat.watchRun(sessionId, 'run-1', { status: 'running' })
     const source = EventSourceMock.instances[0]
 
     source.emit('run.phase', { phase: 'processing_tool', tool: 'write_file', toolCallId: 'call-1' })
-    source.emit('tool.completed', { tool: 'write_file', toolCallId: 'call-1', metadata: {} })
-    await vi.waitFor(() => expect(sessionRefreshCalls).toBe(1))
+    source.emit('tool.completed', { tool: 'write_file', toolCallId: 'call-1', messageId: 'tool-1', metadata: {} })
+    await vi.waitFor(() => expect(resolveToolRefresh).toBeTypeOf('function'))
     source.emit('message.completed', {
       message: { id: 'assistant-1', role: 'assistant', content: 'Fertig', toolCalls: [] }
     })
-    await vi.waitFor(() => expect(sessionRefreshCalls).toBe(1))
-    const sessionRequests = () => api.get.mock.calls.filter(([url]) => url === `/sessions/${sessionId}`)
-    expect(sessionRequests()[0][1].signal.aborted).toBe(false)
+    await vi.waitFor(() => expect(chat.current.messages.find((message) => message.id === 'assistant-1')?.content).toBe('Serverstand'))
     resolveToolRefresh({
-      data: {
-        id: sessionId,
-        projectId: rootIdentity,
-        messages: [
-          { role: 'assistant', toolCalls: [{ id: 'call-1', name: 'write_file', arguments: { root: 'files', path: 'result.md', content: 'Fertig' } }] },
-          { role: 'tool', toolCallId: 'call-1', fileActions: [action] }
-        ]
-      }
+      data: { id: 'tool-1', role: 'tool', toolCallId: 'call-1', fileActions: [action] }
     })
 
-    await vi.waitFor(() => expect(sessionRefreshCalls).toBe(2))
+    await vi.waitFor(() => expect(chat.current.messages.find((message) => message.id === 'tool-1')?.fileActions).toEqual([action]))
     expect(open).not.toHaveBeenCalled()
-    expect(sessionRequests()[1][1].signal.aborted).toBe(false)
+    expect(api.get.mock.calls.filter(([url]) => url.startsWith(`/sessions/${sessionId}`))).toEqual([
+      [`/sessions/${sessionId}/messages/tool-1`, { params: { compact: true } }],
+      [`/sessions/${sessionId}/messages/assistant-1`, { params: { compact: true } }]
+    ])
   })
 
   it('keeps a dirty open file and warns when the agent mutates it', async () => {
@@ -2490,9 +2542,9 @@ describe('chat drafts', () => {
   it('promotes canonical completed content before refreshing the persisted message', async () => {
     global.EventSource = EventSourceMock
     let resolveRefresh
-    api.get.mockImplementation(() => new Promise((resolve) => {
-      resolveRefresh = resolve
-    }))
+    api.get.mockImplementation((url) => url === '/sessions/session-1/messages/message-1'
+      ? new Promise((resolve) => { resolveRefresh = resolve })
+      : Promise.resolve({ data: { id: 'message-2', role: 'assistant', content: '', reasoning: null, toolCalls: [] } }))
     const chat = useChatStore()
     chat.current = { id: 'session-1', messages: [] }
     chat.selectedSessionId = 'session-1'
@@ -2535,10 +2587,7 @@ describe('chat drafts', () => {
     expect(chat.current.messages[1]).toMatchObject({ content: '', reasoning: null })
     await vi.waitFor(() => expect(resolveRefresh).toBeTypeOf('function'))
     resolveRefresh({
-      data: {
-        id: 'session-1',
-        messages: [{ id: 'message-1', role: 'assistant', content: 'Serverstand' }]
-      }
+      data: { id: 'message-1', role: 'assistant', content: 'Serverstand' }
     })
     await vi.waitFor(() => expect(chat.current.messages[0].content).toBe('Serverstand'))
   })
@@ -3044,6 +3093,20 @@ describe('chat drafts', () => {
     expect(payload.voiceAttachmentIndices).toEqual(voiceMessage && voiceTranscriptionStatus !== 'completed' ? [0] : [])
   })
 
+  it('keeps the newest same-message refresh when an older response arrives last', async () => {
+    const chat = useChatStore()
+    chat.current = { id: 'session-1', messages: [{ id: 'message-1', role: 'assistant', content: 'Initial' }] }
+    const responses = []
+    api.get.mockImplementation(() => new Promise(resolve => { responses.push(resolve) }))
+    const older = chat.refreshMessage('session-1', 'message-1')
+    const newer = chat.refreshMessage('session-1', 'message-1')
+    responses[1]({ data: { id: 'message-1', role: 'assistant', content: 'Newest' } })
+    await newer
+    responses[0]({ data: { id: 'message-1', role: 'assistant', content: 'Older' } })
+    await older
+    expect(chat.current.messages[0].content).toBe('Newest')
+  })
+
   it('refreshes a transcribed user message without promoting or clearing the assistant stream', async () => {
     global.EventSource = EventSourceMock
     const chat = useChatStore()
@@ -3055,8 +3118,7 @@ describe('chat drafts', () => {
     chat.streamReasoning = { text: 'Reasoning' }
     const phase = chat.activity.phase
     api.get.mockResolvedValue({ data: {
-      id: 'session-1',
-      messages: [{ id: 'user-1', role: 'user', content: 'Transcript', attachments: [{ metadata: { voiceTranscriptionStatus: 'completed' } }] }]
+      id: 'user-1', role: 'user', content: 'Transcript', attachments: [{ metadata: { voiceTranscriptionStatus: 'completed' } }]
     } })
 
     source.emit('message.updated', { messageId: 'user-1' })
@@ -3066,6 +3128,7 @@ describe('chat drafts', () => {
     expect(chat.streamContent).toBe('Unfinished assistant response')
     expect(chat.streamReasoning).toEqual({ text: 'Reasoning' })
     expect(chat.activity.phase).toBe(phase)
+    expect(api.get).toHaveBeenCalledWith('/sessions/session-1/messages/user-1', { params: { compact: true } })
     api.get.mockClear()
     chat.current = { id: 'session-2', messages: [] }
     chat.selectedSessionId = 'session-2'
@@ -3151,7 +3214,10 @@ describe('chat drafts', () => {
 
   it('retries the latest runtime error without replacing the user draft', async () => {
     global.EventSource = EventSourceMock
-    api.get.mockResolvedValue(sessionPage())
+    api.get.mockResolvedValue({ data: {
+      id: 'session-1', messages: [{ id: 'user-1', role: 'user', content: 'Ursprünglicher Auftrag' }],
+      nextMessageCursor: 'canonical-cursor', contextSummaries: []
+    } })
     api.post.mockResolvedValue({
       data: {
         runId: 'run-2',
@@ -3167,7 +3233,8 @@ describe('chat drafts', () => {
     const error = { id: 'error-1', role: 'assistant', kind: 'runtime_error' }
     chat.current = {
       id: 'session-1',
-      messages: [{ id: 'user-1', role: 'user', content: 'Ursprünglicher Auftrag' }, error]
+      messages: [{ id: 'continuation', role: 'user', content: 'Fortsetzung' }, error],
+      nextMessageCursor: 'deleted-carrier', contextSummaries: [{ id: 'deleted-summary' }]
     }
     chat.selectedSessionId = 'session-1'
     chat.setDraft('Nicht verändern')
@@ -3182,8 +3249,34 @@ describe('chat drafts', () => {
     expect(chat.current.messages).toEqual([
       { id: 'user-1', role: 'user', content: 'Ursprünglicher Auftrag' }
     ])
+    expect([chat.current.nextMessageCursor, chat.current.contextSummaries]).toEqual(['canonical-cursor', []])
     expect(chat.activeDraft).toBe('Nicht verändern')
     expect(chat.runId).toBe('run-2')
     expect(chat.running).toBe(true)
+  })
+
+  it('replaces retry history even when an earlier refresh completes during retry', async () => {
+    let finishRefresh, finishRetry
+    const failure = { id: 'error', role: 'assistant', kind: 'runtime_error' }
+    const canonical = { id: 'session-1', messages: [{ id: 'input', role: 'user' }], nextMessageCursor: null }
+    let reads = 0
+    api.get.mockImplementation(url => url !== '/sessions/session-1'
+      ? Promise.resolve(sessionPage()) : ++reads === 1
+        ? new Promise(resolve => { finishRefresh = resolve }) : Promise.resolve({ data: canonical }))
+    api.post.mockReset().mockImplementation(url => url.endsWith('/retry')
+      ? new Promise(resolve => { finishRetry = resolve }) : Promise.resolve({ data: {} }))
+    const chat = useChatStore()
+    chat.selectedSessionId = 'session-1'
+    chat.current = { id: 'session-1', messages: [failure], nextMessageCursor: 'deleted' }
+    const refreshing = chat.refreshSession('session-1')
+    await vi.waitFor(() => expect(finishRefresh).toBeTypeOf('function'))
+    const retrying = chat.retryFailedMessage(failure)
+    expect(chat.historyActionPending).toBe(true)
+    await chat.refreshSession('session-1')
+    finishRefresh({ data: { id: 'session-1', messages: [], nextMessageCursor: 'deleted' } })
+    await refreshing
+    finishRetry({ data: { runId: null } })
+    await retrying
+    expect([chat.current.messages, chat.current.nextMessageCursor]).toEqual([canonical.messages, null])
   })
 })

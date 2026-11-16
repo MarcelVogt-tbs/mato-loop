@@ -64,7 +64,8 @@ function mergeMessages(existing = [], incoming = []) {
   merged.push(...incoming.filter((message) => !existingIds.has(message.id)))
   // Partial responses can precede a direct message by only one microsecond.
   return merged.sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt)
-    || Number(left.createdAt?.match(/\.\d+/u)?.[0] || 0) - Number(right.createdAt?.match(/\.\d+/u)?.[0] || 0))
+    || Number(left.createdAt?.match(/\.\d+/u)?.[0] || 0) - Number(right.createdAt?.match(/\.\d+/u)?.[0] || 0)
+    || (left.createdAt && right.createdAt ? left.id.localeCompare(right.id) : 0))
 }
 
 async function sessionStateAfterMutation(sessionId, messageId) {

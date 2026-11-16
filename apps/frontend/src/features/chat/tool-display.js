@@ -335,7 +335,7 @@ export function toolPresentation(tool, displayItems = []) {
       ['path', 'Pfad'], ['source_path', 'Quelle'], ['destination_path', 'Ziel'], ['url', 'Adresse'],
       ['title', 'Titel'], ['name', 'Name'], ['prompt', 'Auftrag'], ['text', 'Text'], ['brief', 'Auftrag'],
       ['to', 'An'], ['cc', 'Cc'], ['bcc', 'Bcc'], ['subject', 'Betreff'], ['body', 'Nachricht'],
-      ['markdown', 'Inhalt'],
+      ['markdown', 'Inhalt'], ['content', 'Inhalt'], ['patchText', 'Patch'],
       ['display_name', 'Agent-Name'], ['instructions', 'Persona-Anweisungen'],
       ['code', 'Python-Code'], ['function', 'JavaScript'], ['element', 'Element']
     ].flatMap(([key, label]) => {
@@ -348,7 +348,7 @@ export function toolPresentation(tool, displayItems = []) {
       if (!value) value = '(leer)'
       if (args[key]?.characters > value.length) value += '\n[Vorschau gekürzt]'
       return [{ label, value: key === 'url' ? cleanUrlForDisplay(value) : value,
-        format: ['code', 'function', 'instructions', 'body', 'markdown'].includes(key) ? 'code' : 'text' }]
+        format: ['code', 'function', 'instructions', 'body', 'markdown', 'content', 'patchText'].includes(key) ? 'code' : 'text' }]
     })
   }
 }
@@ -514,8 +514,19 @@ function localizePlainToolResult(content, toolName) {
     : text
 }
 
-export function parseToolResult(content, toolName = null) {
+export function parseToolResult(content, toolName = null, message = null) {
   if (typeof content !== 'string') return { text: '', error: null }
+  if (message?.contentTruncated) {
+    const error = errorDescriptor(message.resultSummary?.error)
+    return {
+      text: content,
+      fullText: content,
+      textTruncated: true,
+      error,
+      errorMessage: error ? apiErrorMessage(error, 'Die Tool-Aktion ist fehlgeschlagen.') : null,
+      summary: message.resultSummary?.summary || ''
+    }
+  }
   try {
     const value = JSON.parse(content)
     const error = value?.isError === true ? { code: 'mcp.callFailed' } : errorDescriptor(value)
@@ -593,7 +604,7 @@ export function toolStatus({ result, approval, question, active }) {
     return { name: 'question', label: 'Antwort erforderlich', icon: 'help_outline', color: 'primary' }
   }
   if (result) {
-    const { error } = parseToolResult(result.content)
+    const { error } = parseToolResult(result.content, null, result)
     if (error?.code === 'permission.denied') {
       return { name: 'denied', label: 'Abgelehnt', icon: 'block', color: 'negative' }
     }

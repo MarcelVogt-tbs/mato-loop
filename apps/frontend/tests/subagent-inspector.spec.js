@@ -48,6 +48,53 @@ afterEach(() => {
 })
 
 describe('subagent inspector navigation and presentation', () => {
+  it.each([
+    [false, false], [true, false], [false, true], [true, true]
+  ])('loads compact tool details only on opening and retries in its own session (readOnly: %s, argumentsOnly: %s)', async (readOnly, argumentsOnly) => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const chat = useChatStore()
+    store = useSubagentStore()
+    const sessionId = readOnly ? 'child' : 'parent'
+    const call = { id: 'call', name: 'write_file', arguments: {}, argumentsTruncated: true, sessionId }
+    const message = argumentsOnly
+      ? { id: 'carrier', role: 'assistant', sessionId, argumentsTruncated: true, toolCalls: [call] }
+      : { id: 'result', sessionId, role: 'tool', content: 'Preview', contentTruncated: true, resultSummary: { error: null } }
+    chat.current = { id: 'parent', messages: readOnly ? [] : [message] }
+    store.current = { id: 'child', messages: readOnly ? [message] : [] }
+    const full = argumentsOnly
+      ? { id: 'carrier', role: 'assistant', toolCalls: [{ id: 'call', name: 'write_file', arguments: { path: 'output.txt', content: 'Complete tool arguments' } }] }
+      : { id: 'result', role: 'tool', content: 'Complete tool output' }
+    api.get.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ data: full })
+    const entry = computed(() => ({
+      key: 'tool', type: 'tool', active: true,
+      batchId: argumentsOnly ? 'carrier' : undefined,
+      tool: argumentsOnly ? (readOnly ? store.current : chat.current).messages[0].toolCalls[0] : { id: 'call', name: 'read', arguments: {} },
+      result: argumentsOnly ? null : (readOnly ? store.current : chat.current).messages[0]
+    }))
+    root = document.createElement('div')
+    document.body.append(root)
+    app = createApp({ render: () => h(AgentActivityPanel, {
+      readOnly, running: true, activity: { phase: 'processing_tool', toolCallId: 'call' },
+      history: { entries: [entry.value] }
+    }) })
+    app.use(pinia).use(Quasar, { components })
+    mountApp()
+    expect(api.get).not.toHaveBeenCalled()
+    root.querySelector('.tool-call__header').click()
+    await vi.waitFor(() => expect(root.textContent).toContain('Erneut laden'))
+    ;[...root.querySelectorAll('button')].find((button) => button.textContent.includes('Erneut laden')).click()
+    await vi.waitFor(() => expect(root.textContent).toContain(argumentsOnly ? 'Complete tool arguments' : full.content))
+    expect({ calls: api.get.mock.calls.map(([url]) => url), message: (readOnly ? store.current : chat.current).messages[0] }).toEqual({
+      calls: Array(2).fill(`/sessions/${sessionId}/messages/${message.id}`), message: full
+    })
+    ;(readOnly ? store.current : chat.current).messages[0] = argumentsOnly
+      ? { ...full, toolCalls: [{ ...full.toolCalls[0], arguments: { content: 'Authoritative update' } }] }
+      : { ...full, content: 'Authoritative update' }
+    await nextTick()
+    expect(root.textContent).toContain('Authoritative update')
+  })
+
   it.each([false, true])('hides rejected arguments from live activity and history (expanded: %s)', async (expanded) => {
     root = document.createElement('div')
     document.body.append(root)

@@ -693,18 +693,11 @@ async def execute_tool_batch(
         repair_key = tool_repair_key(call, run)
         repairable = repairable_tool_error(call, metadata, workflow=workflow_repair)
         error_code = metadata.get("errorCode")
+        previous_repair = None
         if not metadata.get("repositoryInstructionsDeferred") and (
             repairable or not error_code or error_code == "agent.repeatedToolCall"
         ):
             previous_repair = pending_tool_repairs.pop(repair_key, None)
-            if previous_repair is not None:
-                previous_repair.provider_data = {
-                    **previous_repair.provider_data,
-                    "_matoloop": {
-                        **previous_repair.provider_data["_matoloop"],
-                        "toolRepair": "superseded" if error_code else "recovered",
-                    },
-                }
         if repairable:
             metadata["toolRepair"] = "pending"
         tool_message, content, metadata = await persist_tool_result(
@@ -714,11 +707,24 @@ async def execute_tool_batch(
             limits=limits, attachment_service=attachment_service,
             execution_binding=execution_binding,
         )
+        if previous_repair is not None:
+            previous_repair.provider_data = {
+                **previous_repair.provider_data,
+                "_matoloop": {
+                    **previous_repair.provider_data["_matoloop"],
+                    "toolRepair": "superseded" if metadata.get("errorCode") else "recovered",
+                },
+            }
+            await db.commit()
+            await run_events.publish(run.id, {
+                "type": "message.updated", "messageId": str(previous_repair.id),
+            })
         error_code = metadata.get("errorCode")
         if repairable:
             pending_tool_repairs[repair_key] = tool_message
         await run_events.publish(run.id, {
             "type": "tool.completed", "tool": call.name, "toolLabel": tool_label,
+            "messageId": str(tool_message.id),
             "toolDisplay": display, "toolCallId": call.id,
             "output": content[:500], "metadata": metadata,
         })

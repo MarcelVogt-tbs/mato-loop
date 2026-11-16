@@ -7,6 +7,19 @@ import {
 } from '../src/features/chat/transcript'
 
 describe('chat transcript', () => {
+  it('does not give a new run result to an unanswered earlier call with the same id', () => {
+    const transcript = buildChatTranscript([
+      { id: 'user-1', role: 'user', content: 'First request' },
+      { id: 'old', role: 'assistant', runId: 'run-1', toolCalls: [{ id: 'shared', name: 'read' }] },
+      { id: 'user-2', role: 'user', content: 'New request' },
+      { id: 'new', role: 'assistant', runId: 'run-2', toolCalls: [{ id: 'shared', name: 'read' }] },
+      { id: 'result', role: 'tool', runId: 'run-2', toolCallId: 'shared', content: 'New result' }
+    ])
+    expect(transcript.messages.filter((message) => message.workHistory)
+      .map((message) => message.workHistory.entries[0].result?.id || null))
+      .toEqual([null, 'result'])
+  })
+
   it('keeps direct messages between separate assistant sections', () => {
     const transcript = buildChatTranscript([
       { id: 'start', role: 'user', content: 'Start' },

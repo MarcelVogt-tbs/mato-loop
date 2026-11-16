@@ -6,7 +6,7 @@ import { useQuestionStore } from 'src/stores/questions'
 import { useInAppNotificationStore } from 'src/stores/in-app-notifications'
 import { useProjectStore } from 'src/stores/projects'
 import { downloadMessageAttachmentFiles, releaseAttachmentDrafts } from 'src/features/chat/attachments'
-import { defaultSessionOptions, lastAssistantMessage, sanitizedSessionOptions, sessionBeforeFailedResponse, sessionBeforeUserMessage, sessionCreatePayload, sessionScopeKey, sessionScopeParams, sortSessions } from 'src/features/chat/state'
+import { defaultSessionOptions, lastAssistantMessage, sanitizedSessionOptions, sessionBeforeUserMessage, sessionCreatePayload, sessionScopeKey, sessionScopeParams, sortSessions } from 'src/features/chat/state'
 import { deleteChatOutboxEntries, saveChatOutboxEntries } from 'src/features/chat/outbox-storage'
 import { notifyError } from 'src/utils/notifications'
 import { SESSION_PAGE_SIZE, ACTIVE_TITLE_GENERATION_STATUSES, mergeMessages, sessionStateAfterMutation } from 'src/features/chat/model'
@@ -380,14 +380,37 @@ export const sessionsActions = {
         }
       }
     },
-    async refreshSession(id, { suppressErrorToast = false } = {}) {
+    async refreshMessage(sessionId, messageId) {
+      if (!messageId) return this.refreshSession(sessionId)
+      const version = this.sessionLoadVersion
+      const key = `${sessionId}:${messageId}`
+      const token = Symbol()
+      this.messageRefreshRequests[key] = token
+      try {
+        const { data } = await api.get(`/sessions/${sessionId}/messages/${messageId}`, {
+          params: { compact: true }
+        })
+        if (this.current?.id !== sessionId || this.sessionLoadVersion !== version) return
+        if (this.messageRefreshRequests[key] === token) {
+          this.current.messages = mergeMessages(this.current.messages, [data])
+        }
+        return this.current
+      } finally {
+        if (this.messageRefreshRequests[key] === token) delete this.messageRefreshRequests[key]
+      }
+    },
+    async refreshSession(id, { suppressErrorToast = false, recoveryAnchor } = {}) {
+      if (this.historyActionPending) return
       if (this.selectedSessionId === id && this.sessionLoadPromise) await this.sessionLoadPromise.catch(() => {})
       if (this.selectedSessionId !== id || this.loading) return
-      if (this.sessionRefreshQueued?.id === id) return this.sessionRefreshQueued.promise
-      const queued = { id, promise: null }
+      if (this.sessionRefreshQueued?.id === id) {
+        if (recoveryAnchor) this.sessionRefreshQueued.recoveryAnchor = recoveryAnchor
+        return this.sessionRefreshQueued.promise
+      }
+      const queued = { id, promise: null, recoveryAnchor }
       const refresh = (this.sessionRefreshPromise || Promise.resolve()).catch(() => {}).then(async () => {
         if (this.sessionRefreshQueued === queued) this.sessionRefreshQueued = null
-        if (this.selectedSessionId !== id || this.loading) return
+        if (this.selectedSessionId !== id || this.loading || this.historyActionPending) return
         this.sessionRequestController?.abort()
         this.sessionLoadVersion += 1
         const loadVersion = this.sessionLoadVersion
@@ -398,8 +421,24 @@ export const sessionsActions = {
             signal: controller.signal,
             ...(suppressErrorToast ? { suppressErrorToast: true } : {})
           })).data
+          if (this.historyActionPending) return
           if (this.selectedSessionId === id && this.sessionLoadVersion === loadVersion) {
             if (this.current?.id === id) {
+              // After a disconnect, bridge a gap larger than the newest page.
+              // Normal live updates fetch single messages and never enter this loop.
+              const latest = queued.recoveryAnchor || [...(this.current.messages || [])].reverse().find((message) => message.role !== 'tool')
+              let cursor = session.nextMessageCursor
+              while (latest?.createdAt && cursor && !session.messages.some((message) => message.id === latest.id)
+                && Date.parse(session.messages[0]?.createdAt) >= Date.parse(latest.createdAt)) {
+                const { data } = await api.get(`/sessions/${id}/messages`, {
+                  signal: controller.signal, params: { cursor, pageSize: SESSION_PAGE_SIZE }
+                })
+                if (this.selectedSessionId !== id || this.sessionLoadVersion !== loadVersion) return
+                session.messages = mergeMessages(data.items, session.messages)
+                session.contextSummaries = mergeMessages(data.contextSummaries, session.contextSummaries)
+                if (cursor === data.nextCursor) break
+                cursor = data.nextCursor
+              }
               session.messages = mergeMessages(this.current.messages, session.messages)
               session.contextSummaries = mergeMessages(
                 this.current.contextSummaries,
@@ -455,7 +494,7 @@ export const sessionsActions = {
         )
         const addedSummaries = (data.contextSummaries || [])
           .filter((summary) => !existingSummaryIds.has(summary.id))
-        this.current.messages = [...added, ...(this.current.messages || [])]
+        this.current.messages = mergeMessages(added, this.current.messages)
         this.current.contextSummaries = [
           ...addedSummaries,
           ...(this.current.contextSummaries || [])
@@ -905,12 +944,25 @@ export const sessionsActions = {
           activeDurationRunning: data.activeDurationRunning,
           activeTimingRevision: data.activeTimingRevision
         } : null
+        // Retry deletes a suffix which may include our page cursor and inputs
+        // outside this page. Replace canonical history instead of merging it.
+        const version = this.sessionLoadVersion
+        let updatedSession = recoveredSession
+        try {
+          updatedSession ||= (await api.get(`/sessions/${session.id}`)).data
+        } catch (error) {
+          if (this.current?.id === session.id && this.sessionLoadVersion === version) {
+            this.sessionRequestController?.abort()
+            this.sessionLoadVersion += 1
+            this.clearRunTracking()
+            this.current = null
+            this.sessionDetails = this.sessionDetails.filter((item) => item.id !== session.id)
+            this.loadError = error
+          }
+          throw error
+        }
         const stillSelected = this.selectedSessionId === session.id && this.current?.id === session.id
-        const updatedSession = recoveredSession || sessionBeforeFailedResponse(
-          stillSelected ? this.current : session,
-          message.id,
-          activeRun
-        )
+          && this.sessionLoadVersion === version
         if (stillSelected) {
           this.sessionRequestController?.abort()
           this.sessionLoadVersion += 1

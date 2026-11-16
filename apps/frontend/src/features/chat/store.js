@@ -51,6 +51,7 @@ export const useChatStore = defineStore('chat', {
     sessionRequestController: null,
     sessionRefreshPromise: null,
     sessionRefreshQueued: null,
+    messageRefreshRequests: {},
     olderMessagesLoading: false,
     olderMessagesLoadFailed: false,
     olderMessagesPromise: null,

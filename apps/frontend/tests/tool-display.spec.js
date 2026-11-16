@@ -14,6 +14,14 @@ import {
 } from '../src/features/chat/tool-display'
 
 describe('tool display', () => {
+  it('preserves error status without parsing incomplete compact JSON', () => {
+    const result = {
+      content: '{"output":"incomplete', contentTruncated: true,
+      resultSummary: { error: { code: 'permission.denied' } }
+    }
+    expect(toolStatus({ result }).name).toBe('denied')
+  })
+
   it('shows shell commands exactly as requested', () => {
     const command = 'set -e\nprintf "%s\\n" "hello world"'
 

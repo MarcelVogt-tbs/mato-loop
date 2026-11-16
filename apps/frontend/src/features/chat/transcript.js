@@ -84,11 +84,22 @@ export function buildChatTranscript(
     }
   }
   const results = new Map()
+  const carriers = new Map()
   for (const message of messages) {
+    if (message.role === 'assistant') {
+      for (const tool of message.toolCalls || []) {
+        const matches = carriers.get(tool.id) || []
+        matches.push(message)
+        carriers.set(tool.id, matches)
+      }
+    }
     if (message.role !== 'tool' || !message.toolCallId) continue
-    const matches = results.get(message.toolCallId) || []
-    matches.push(message)
-    results.set(message.toolCallId, matches)
+    const carrier = [...(carriers.get(message.toolCallId) || [])].reverse().find((candidate) => (
+      !candidate.runId || !message.runId || candidate.runId === message.runId
+    ))
+    if (!carrier) continue
+    if (!results.has(carrier)) results.set(carrier, new Map())
+    results.get(carrier).set(message.toolCallId, message)
   }
 
   const approvalsByToolCall = new Map()
@@ -117,7 +128,7 @@ export function buildChatTranscript(
       _sourceIndex: index,
       toolCalls: (message.toolCalls || []).map((tool, toolIndex) => {
         const currentRound = running && (index > lastUserIndex || Boolean(runId && message.runId === runId))
-        const result = results.get(tool.id)?.shift() || null
+        const result = results.get(message)?.get(tool.id) || null
         const toolRunId = message.runId || result?.runId || (currentRound ? runId : null)
         const requestKey = `${toolRunId || ''}:${tool.id}`
         const approval = currentRound ? approvalsByToolCall.get(requestKey) || null : null
