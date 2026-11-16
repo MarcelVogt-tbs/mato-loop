@@ -3,6 +3,7 @@ from uuid import UUID
 
 import httpx
 import pytest
+from icalendar import Calendar
 
 from mato_loop_backend.integrations.caldav.client import (
     CalDavCalendar,
@@ -374,7 +375,7 @@ END:VCALENDAR
     assert tasks[0].due == datetime(2026, 8, 8, 9)
 
 
-async def test_task_query_marks_unrepresented_parameters_as_mutation_unsafe() -> None:
+async def test_task_query_allows_preservable_language_parameter() -> None:
     task_data = """BEGIN:VCALENDAR
 VERSION:2.0
 BEGIN:VTODO
@@ -403,15 +404,22 @@ END:VCALENDAR
         tasks = await client.query_tasks(_calendar())
 
     assert tasks[0].title == "Einkaufen"
-    assert tasks[0].mutation_safe is False
+    assert tasks[0].mutation_safe is True
 
 
 async def test_task_conditional_create_update_and_delete() -> None:
     requests: list[httpx.Request] = []
+    stored = b""
+    etag = '"created"'
 
     def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal stored, etag
         requests.append(request)
-        etag = '"created"' if len(requests) == 1 else '"updated"'
+        if request.method == "GET":
+            return httpx.Response(200, content=stored, headers={"ETag": etag})
+        if request.method == "PUT":
+            stored = request.content
+            etag = '"created"' if len(requests) == 1 else '"updated"'
         return httpx.Response(201 if len(requests) == 1 else 204, headers={"ETag": etag})
 
     key = UUID("87654321-4321-8765-4321-876543218765")
@@ -441,13 +449,13 @@ async def test_task_conditional_create_update_and_delete() -> None:
     assert b"UID:87654321-4321-8765-4321-876543218765@mato-loop" in requests[0].content
     assert b"DUE;VALUE=DATE:20260808" in requests[0].content
     assert b"STATUS:NEEDS-ACTION" in requests[0].content
-    assert requests[1].headers["if-match"] == '"created"'
-    assert b"DUE:20260808T070000Z" in requests[1].content
-    assert b"STATUS:COMPLETED" in requests[1].content
-    assert b"COMPLETED:20260808T080000Z" in requests[1].content
+    assert requests[2].headers["if-match"] == '"created"'
+    assert b"DUE:20260808T070000Z" in requests[2].content
+    assert b"STATUS:COMPLETED" in requests[2].content
+    assert b"COMPLETED:20260808T080000Z" in requests[2].content
     assert updated.completed_at == datetime(2026, 8, 8, 8, tzinfo=UTC)
-    assert requests[2].headers["if-match"] == '"updated"'
-    assert [request.method for request in requests] == ["PUT", "PUT", "DELETE"]
+    assert requests[4].headers["if-match"] == '"updated"'
+    assert [request.method for request in requests] == ["PUT", "GET", "PUT", "GET", "DELETE"]
 
 
 async def test_task_delete_rejects_multi_component_resource() -> None:
@@ -458,12 +466,27 @@ async def test_task_delete_rejects_multi_component_resource() -> None:
         title="Task",
         mutation_safe=False,
     )
-    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: None)) as http:
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method != "GET":
+            pytest.fail("multi-component resource must not be deleted")
+        return httpx.Response(
+            200,
+            headers={"ETag": '"etag"'},
+            text="BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VTODO\nUID:task-1\n"
+            "END:VTODO\nBEGIN:VTODO\nUID:task-2\nEND:VTODO\nEND:VCALENDAR\n",
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = CalDavClient(
             "https://calendar.example.test/", "alice", "secret", client=http
         )
-        with pytest.raises(CalDavError, match="caldav.unsupportedMutation"):
+        with pytest.raises(CalDavError, match="caldav.unsupportedMutation") as error:
             await client.delete_task(task)
+
+    assert error.value.params == {
+        "reason": "multiple_components", "source": "matoloop", "action": "delete",
+    }
 
 
 async def test_task_update_does_not_reuse_stale_etag_when_server_omits_one() -> None:
@@ -474,7 +497,14 @@ async def test_task_update_does_not_reuse_stale_etag_when_server_omits_one() -> 
         title="Task",
     )
 
-    def handler(_request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                headers={"ETag": '"old"'},
+                text="BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VTODO\nUID:task-1\n"
+                "SUMMARY:Task\nEND:VTODO\nEND:VCALENDAR\n",
+            )
         return httpx.Response(204)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
@@ -484,6 +514,119 @@ async def test_task_update_does_not_reuse_stale_etag_when_server_omits_one() -> 
         updated = await client.update_task(existing, CalDavTaskDraft(title="Updated"))
 
     assert updated.etag is None
+
+
+@pytest.mark.parametrize("edit_description", [False, True])
+async def test_task_due_update_preserves_original_properties_and_subcomponents(edit_description) -> None:
+    original = """BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Original client//EN
+BEGIN:VTODO
+UID:task-1
+SUMMARY;LANGUAGE=de:Bericht
+DESCRIPTION;ALTREP="data:text/html,Old";LANGUAGE=en:Keep this note
+DTSTART;VALUE=DATE:20260801
+DUE;VALUE=DATE:20260808
+PRIORITY:3
+PERCENT-COMPLETE:40
+STATUS:IN-PROCESS
+SEQUENCE:4
+DTSTAMP:20260801T080000Z
+LAST-MODIFIED:20260801T080000Z
+X-CLIENT-DATA:keep me
+BEGIN:VALARM
+ACTION:DISPLAY
+TRIGGER:-PT15M
+DESCRIPTION:Reminder
+END:VALARM
+END:VTODO
+END:VCALENDAR
+"""
+    writes: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=original, headers={"ETag": '"etag"'})
+        writes.append(request.content)
+        return httpx.Response(204, headers={"ETag": '"updated"'})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = CalDavClient(
+            "https://calendar.example.test/", "alice", "secret", client=http
+        )
+        await client.update_task(
+            CalDavTask("task-1", "https://calendar.example.test/task-1.ics", '"etag"', "Bericht"),
+            CalDavTaskDraft(title="Bericht", due=date(2026, 8, 9), description="New note"),
+            fields=frozenset({"due", "description"} if edit_description else {"due"}),
+        )
+
+    before, after = Calendar.from_ical(original), Calendar.from_ical(writes[0])
+    if edit_description:
+        task = before.walk("VTODO")[0]
+        task.pop("DESCRIPTION")
+        task.add("DESCRIPTION", "New note", parameters={"LANGUAGE": "en"})
+    updated_due = after.walk("VTODO")[0]["DUE"].dt
+    for calendar in (before, after):
+        for name in ("DUE", "SEQUENCE", "DTSTAMP", "LAST-MODIFIED"):
+            calendar.walk("VTODO")[0].pop(name, None)
+    assert (updated_due, after.to_ical()) == (date(2026, 8, 9), before.to_ical())
+
+
+@pytest.mark.parametrize("action", ["update", "delete"])
+@pytest.mark.parametrize("uid,etag", [("task-1", '"changed"'), ("other-task", '"etag"')])
+async def test_task_mutation_rejects_changed_uid_or_etag(action, uid, etag) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method != "GET":
+            pytest.fail("changed resource must not be mutated")
+        return httpx.Response(
+            200, headers={"ETag": etag},
+            text=f"BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VTODO\nUID:{uid}\n"
+            "SUMMARY:Task\nEND:VTODO\nEND:VCALENDAR\n",
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = CalDavClient(
+            "https://calendar.example.test/", "alice", "secret", client=http
+        )
+        task = CalDavTask("task-1", "https://calendar.example.test/task-1.ics", '"etag"', "Task")
+        with pytest.raises(CalDavError, match="caldav.conflict"):
+            if action == "update":
+                await client.update_task(task, CalDavTaskDraft(title="Updated"))
+            else:
+                await client.delete_task(task)
+
+
+@pytest.mark.parametrize(
+    "properties,reason",
+    [
+        ("RRULE:FREQ=DAILY\n", "recurring"),
+        ("ORGANIZER:mailto:owner@example.test\n", "scheduled"),
+        ("END:VTODO\nBEGIN:VTODO\nUID:task-2\n", "multiple_components"),
+        ("SUMMARY:Duplicate\n", "ambiguous_fields"),
+        ("STATUS:UNKNOWN\n", "invalid_task_state"),
+        ("DUE;VALUE=DATE:20260808\nBEGIN:VALARM\nACTION:DISPLAY\nDESCRIPTION:Reminder\n"
+         "TRIGGER;RELATED=END:-PT15M\nEND:VALARM\n", "unsupported_data"),
+    ],
+)
+async def test_task_update_reports_unsafe_resource_reason(properties, reason) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method != "GET":
+            pytest.fail("unsafe resource must not be mutated")
+        return httpx.Response(
+            200, headers={"ETag": '"etag"'},
+            text="BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VTODO\nUID:task-1\n"
+            f"SUMMARY:Task\n{properties}END:VTODO\nEND:VCALENDAR\n",
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = CalDavClient(
+            "https://calendar.example.test/", "alice", "secret", client=http
+        )
+        task = CalDavTask("task-1", "https://calendar.example.test/task-1.ics", '"etag"', "Task")
+        with pytest.raises(CalDavError, match="caldav.unsupportedMutation") as error:
+            await client.update_task(task, CalDavTaskDraft(title="Updated"))
+
+    assert error.value.params == {"reason": reason, "source": "matoloop", "action": "update"}
 
 
 def test_all_day_writes_remain_date_values() -> None:

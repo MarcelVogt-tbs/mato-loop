@@ -88,7 +88,7 @@ def _mock_task_client(monkeypatch, client, revision: str) -> None:
     monkeypatch.setattr(integrations_caldav_adapter, "_task_list", AsyncMock())
 
 
-async def _updated_task(existing, draft) -> CalDavTask:
+async def _updated_task(existing, draft, **_kwargs) -> CalDavTask:
     return replace(
         existing,
         title=draft.title,
@@ -1260,6 +1260,7 @@ async def test_task_update_preserves_omitted_and_clears_explicit_fields(
         context,
     )
     preserved_draft = client.update_task.await_args.args[1]
+    assert client.update_task.await_args.kwargs == {"fields": frozenset({"title"})}
     cleared = await integrations_caldav_adapter.tasks_update(
         integrations_caldav_adapter.TaskUpdateArguments(
             integration_id=account.id,
@@ -1271,6 +1272,7 @@ async def test_task_update_preserves_omitted_and_clears_explicit_fields(
         context,
     )
     cleared_draft = client.update_task.await_args.args[1]
+    assert client.update_task.await_args.kwargs == {"fields": frozenset({"description", "due"})}
 
     assert preserved_draft.title == "Neu"
     assert preserved_draft.description == "Beschreibung"
@@ -1306,6 +1308,7 @@ async def test_task_completion_sets_timestamp_and_reopen_clears_it(monkeypatch) 
         context,
     )
     completed_draft = client.update_task.await_args.args[1]
+    assert client.update_task.await_args.kwargs == {"fields": frozenset({"completed"})}
     reopened = await integrations_caldav_adapter.tasks_set_completed(
         integrations_caldav_adapter.TaskSetCompletedArguments(
             integration_id=account.id,
@@ -1348,6 +1351,33 @@ async def test_task_delete_uses_token_target(monkeypatch) -> None:
         "contentIsUntrusted": True,
     }
     client.delete_task.assert_awaited_once_with(task)
+
+
+async def test_task_update_returns_concrete_local_mutation_reason(monkeypatch) -> None:
+    account = _account()
+    revision = _revision(account)
+    key = f"tasklist:{'a' * 32}"
+    client = AsyncMock()
+    client.update_task.side_effect = integrations_caldav_adapter.CalDavError(
+        "caldav.unsupportedMutation", reason="due_before_start", action="update", field="due",
+    )
+    _mock_task_client(monkeypatch, client, revision)
+
+    result = await integrations_caldav_adapter.tasks_update(
+        integrations_caldav_adapter.TaskUpdateArguments(
+            integration_id=account.id,
+            task_list_key=key,
+            task_token=integrations_caldav_adapter._task_token(_task(), account.id, revision, key),
+            due=date(2026, 8, 1),
+        ),
+        _task_context(account, revision),
+    )
+
+    error = json.loads(result.content)["error"]
+    assert (error["code"], error["field"], error["params"]) == (
+        "integration.mutationBlocked", "due",
+        {"reason": "due_before_start", "source": "matoloop", "action": "update"},
+    )
 
 
 async def test_task_mutation_rejects_invalid_or_wrong_binding_tokens() -> None:

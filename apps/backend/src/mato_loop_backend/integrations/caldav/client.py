@@ -28,12 +28,14 @@ CalDavComponent = Literal["VEVENT", "VTODO"]
 
 
 class CalDavError(RuntimeError):
-    def __init__(self, code: str, *, status_code: int | None = None, field: str | None = None, hint: str | None = None) -> None:
+    def __init__(self, code: str, *, status_code: int | None = None, field: str | None = None, hint: str | None = None, reason: str | None = None, action: str | None = None) -> None:
         super().__init__(code)
         self.code = code
         self.status_code = status_code
         self.field = field
         self.params = {"reason": "invalid_value", "hint": hint} if hint else None
+        if reason:
+            self.params = {"source": "matoloop", "reason": reason, "action": action}
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,10 +134,11 @@ class CalDavTask:
     sequence: int = 0
     recurring: bool = False
     mutation_safe: bool = True
+    mutation_blocked_reason: str | None = None
 
 
-def _error(code: str, *, status_code: int | None = None, field: str | None = None, hint: str | None = None) -> CalDavError:
-    return CalDavError(f"caldav.{code}", status_code=status_code, field=field, hint=hint)
+def _error(code: str, *, status_code: int | None = None, field: str | None = None, hint: str | None = None, reason: str | None = None, action: str | None = None) -> CalDavError:
+    return CalDavError(f"caldav.{code}", status_code=status_code, field=field, hint=hint, reason=reason, action=action)
 
 
 def _origin(url: httpx.URL) -> tuple[str, str, int]:
@@ -190,17 +193,27 @@ def _property(response: ElementTree.Element, name: str) -> ElementTree.Element |
     )
 
 
-def _task_properties_are_safe(component: ICalendarTodo) -> bool:
-    for name in component.keys():
-        value = component.get(name)
-        if isinstance(value, list):
-            return False
-        parameters = {str(key).upper() for key in getattr(value, "params", {})}
-        if parameters and (
-            str(name).upper() != "DUE" or not parameters <= {"VALUE", "TZID"}
-        ):
-            return False
-    return True
+def _task_mutation_reason(calendar: ICalendar, task: ICalendarTodo) -> str | None:
+    if any(component.errors for component in calendar.walk()):
+        return "unsupported_data"
+    primary = [item for item in calendar.subcomponents if item.name != "VTIMEZONE"]
+    if len(primary) != 1 or primary[0] is not task:
+        return "multiple_components"
+    if any(task.get(name) is not None for name in ("rrule", "recurrence-id", "rdate", "exdate")):
+        return "recurring"
+    if any(task.get(name) is not None for name in ("organizer", "attendee")) or calendar.get("method") is not None:
+        return "scheduled"
+    if any(isinstance(task.get(name), list) for name in (
+        "uid", "summary", "description", "due", "dtstart", "duration", "status",
+        "completed", "created", "sequence", "dtstamp", "last-modified", "percent-complete",
+    )):
+        return "ambiguous_fields"
+    status = str(task.get("status", "")).upper()
+    if status not in {"", "NEEDS-ACTION", "IN-PROCESS", "COMPLETED", "CANCELLED"} or (
+        status != "COMPLETED" and task.get("completed") is not None
+    ):
+        return "invalid_task_state"
+    return None
 
 
 def _privileges(value: ElementTree.Element | None) -> frozenset[CalDavPrivilege]:
@@ -642,18 +655,7 @@ class CalDavClient:
             etag = etag_value.text.strip() if etag_value is not None and etag_value.text else None
             try:
                 parsed = ICalendar.from_ical(calendar_data.text)
-                calendar_safe = {str(key).upper() for key in parsed.keys()} <= {
-                    "PRODID",
-                    "VERSION",
-                    "CALSCALE",
-                }
                 components = [component for component in parsed.walk() if component.name == "VTODO"]
-                primary_components = [
-                    component
-                    for component in parsed.subcomponents
-                    if component.name != "VTIMEZONE"
-                ]
-                single_task = len(primary_components) == 1 and len(components) == 1
                 for component in components:
                     task_count += 1
                     if task_count > MAX_EVENTS:
@@ -698,6 +700,7 @@ class CalDavClient:
                             component.get(name) is not None
                             for name in ("rrule", "recurrence-id", "rdate", "exdate")
                         )
+                        mutation_reason = _task_mutation_reason(parsed, component)
                         tasks.append(
                             CalDavTask(
                                 uid=uid,
@@ -715,31 +718,8 @@ class CalDavClient:
                                 created=created,
                                 sequence=sequence,
                                 recurring=recurring,
-                                mutation_safe=(
-                                    single_task
-                                    and calendar_safe
-                                    and _task_properties_are_safe(component)
-                                    and not recurring
-                                    and component.get("related-to") is None
-                                    and not component.subcomponents
-                                    and status in {"", "NEEDS-ACTION", "COMPLETED"}
-                                    and (completed or completed_at is None)
-                                    and len(str(component.get("summary", ""))) <= 500
-                                    and len(str(component.get("description", ""))) <= 10_000
-                                    and {str(key).upper() for key in component.keys()}
-                                    <= {
-                                        "UID",
-                                        "DTSTAMP",
-                                        "DUE",
-                                        "SUMMARY",
-                                        "DESCRIPTION",
-                                        "STATUS",
-                                        "COMPLETED",
-                                        "CREATED",
-                                        "LAST-MODIFIED",
-                                        "SEQUENCE",
-                                    }
-                                ),
+                                mutation_safe=mutation_reason is None,
+                                mutation_blocked_reason=mutation_reason,
                             )
                         )
             except CalDavError:
@@ -860,7 +840,7 @@ class CalDavClient:
         if not existing.etag:
             raise _error("etagRequired")
         if existing.recurring or existing.scheduled or not existing.mutation_safe:
-            raise _error("unsupportedMutation")
+            raise _error("unsupportedMutation", reason="recurring" if existing.recurring else "scheduled" if existing.scheduled else "unsupported_data", action="update")
         event_url = self._url(existing.href)
         _body, headers = await self._request(
             "PUT",
@@ -880,7 +860,7 @@ class CalDavClient:
         if not existing.etag:
             raise _error("etagRequired")
         if existing.recurring or existing.scheduled:
-            raise _error("unsupportedMutation")
+            raise _error("unsupportedMutation", reason="recurring" if existing.recurring else "scheduled", action="delete")
         await self._request(
             "DELETE",
             self._url(existing.href),
@@ -907,15 +887,86 @@ class CalDavClient:
         )
         return self._task_from_draft(uid, str(task_url), headers.get("etag"), draft)
 
+    async def _task_resource(
+        self, existing: CalDavTask, action: str,
+    ) -> tuple[ICalendar, ICalendarTodo]:
+        if not existing.etag:
+            raise _error("etagRequired")
+        body, headers = await self._request("GET", self._url(existing.href), expected={200})
+        if headers.get("etag") != existing.etag:
+            raise _error("conflict")
+        try:
+            calendar = ICalendar.from_ical(body)
+            if calendar.name != "VCALENDAR":
+                raise ValueError
+            tasks = [item for item in calendar.walk() if item.name == "VTODO"]
+            if not tasks:
+                raise ValueError
+        except Exception as exc:
+            raise _error("malformedCalendarData") from exc
+        task = tasks[0]
+        reason = _task_mutation_reason(calendar, task)
+        if reason:
+            raise _error("unsupportedMutation", reason=reason, action=action)
+        if str(task.get("uid", "")).strip() != existing.uid:
+            raise _error("conflict")
+        return calendar, task
+
     async def update_task(
         self,
         existing: CalDavTask,
         draft: CalDavTaskDraft,
+        *,
+        fields: frozenset[str] = frozenset({"title", "description", "due", "completed"}),
     ) -> CalDavTask:
-        if not existing.etag:
-            raise _error("etagRequired")
-        if existing.recurring or not existing.mutation_safe:
-            raise _error("unsupportedMutation")
+        calendar, task = await self._task_resource(existing, "update")
+        values = {}
+        for field, name in (("title", "summary"), ("description", "description"), ("due", "due")):
+            if field in fields:
+                values[name] = getattr(draft, field)
+        if "due" in fields and draft.due is None and not (
+            task.get("dtstart") is not None and task.get("duration") is not None
+        ) and any(
+            str(getattr(alarm.get("trigger"), "params", {}).get("RELATED", "")).upper() == "END"
+            for alarm in task.subcomponents if alarm.name == "VALARM"
+        ):
+            raise _error("unsupportedMutation", reason="unsupported_data", action="update", field="due")
+        if "due" in fields and draft.due is not None:
+            start = getattr(task.get("dtstart"), "dt", None)
+            try:
+                invalid_due = start is not None and (
+                    isinstance(start, datetime) != isinstance(draft.due, datetime)
+                    or draft.due <= start
+                )
+            except TypeError:
+                invalid_due = True
+            if invalid_due:
+                raise _error("unsupportedMutation", reason="due_before_start", action="update", field="due")
+            # DUE and DURATION are mutually exclusive in VTODO.
+            task.pop("duration", None)
+        if "completed" in fields:
+            values.update({
+                "status": "COMPLETED" if draft.completed else "NEEDS-ACTION",
+                "completed": draft.completed_at if draft.completed else None,
+                "percent-complete": 100 if draft.completed else 0,
+            })
+        try:
+            sequence = int(task.get("sequence", 0))
+            if sequence < 0:
+                raise ValueError
+            now = datetime.now(UTC)
+            values.update({"sequence": sequence + 1, "dtstamp": now, "last-modified": now})
+            for name, value in values.items():
+                parameters = dict(getattr(task.get(name), "params", {})) if name in {"summary", "description"} else {}
+                parameters.pop("ALTREP", None)
+                if isinstance(value, datetime) and value.tzinfo is not None and value.utcoffset() is not None:
+                    value = value.astimezone(UTC)
+                task.pop(name, None)
+                if value is not None:
+                    task.add(name, value, parameters=parameters)
+            content = calendar.to_ical()
+        except Exception as exc:
+            raise _error("unsupportedMutation", reason="unsupported_data", action="update") from exc
         task_url = self._url(existing.href)
         _body, headers = await self._request(
             "PUT",
@@ -924,18 +975,24 @@ class CalDavClient:
                 "Content-Type": "text/calendar; charset=utf-8",
                 "If-Match": existing.etag,
             },
-            content=self._task_calendar_data(existing.uid, draft),
+            content=content,
             expected={200, 201, 204},
         )
-        return self._task_from_draft(
-            existing.uid, str(task_url), headers.get("etag"), draft
+        return replace(
+            existing,
+            etag=headers.get("etag"),
+            title=str(task.get("summary", "")),
+            description=str(task["description"]) if "description" in task else None,
+            due=getattr(task.get("due"), "dt", None),
+            completed=str(task.get("status", "")).upper() == "COMPLETED",
+            completed_at=getattr(task.get("completed"), "dt", None),
+            sequence=sequence + 1,
+            mutation_safe=True,
+            mutation_blocked_reason=None,
         )
 
     async def delete_task(self, existing: CalDavTask) -> None:
-        if not existing.etag:
-            raise _error("etagRequired")
-        if existing.recurring or not existing.mutation_safe:
-            raise _error("unsupportedMutation")
+        await self._task_resource(existing, "delete")
         await self._request(
             "DELETE",
             self._url(existing.href),

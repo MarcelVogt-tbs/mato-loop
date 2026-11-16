@@ -50,6 +50,21 @@ describe('API error messages', () => {
   ])('explains %s with reason %s without exposing external details', (code, reason, expected) => {
     expect(apiErrorMessage({ error: { code, field: 'patchText', params: { reason, hint: 'private detail' } } })).toBe(expected)
   })
+  it.each([
+    ['recurring', 'Wiederkehrende Einträge können in MatoLoop nicht verändert oder gelöscht werden.'],
+    ['scheduled', 'Einträge mit Einladungs- oder Planungsdaten können in MatoLoop nicht verändert oder gelöscht werden.'],
+    ['multiple_components', 'Die Ressource enthält mehrere Haupteinträge und kann in MatoLoop nicht sicher verändert oder gelöscht werden.'],
+    ['ambiguous_fields', 'Die Aufgabenfelder sind mehrdeutig und können in MatoLoop nicht sicher verändert werden.'],
+    ['invalid_task_state', 'Der Aufgabenstatus kann in MatoLoop nicht sicher verarbeitet werden.'],
+    ['unsupported_data', 'Die Eintragsdaten können in MatoLoop nicht sicher verarbeitet werden.'],
+    ['due_before_start', 'Die Fälligkeit muss nach dem Aufgabenbeginn liegen und denselben Datum-/Zeittyp verwenden.'],
+    ['private server detail', 'Die Eintragsdaten werden für diese Aktion in MatoLoop nicht unterstützt.']
+  ])('explains the local CalDAV mutation restriction %s without exposing server text', (reason, explanation) => {
+    expect(apiErrorMessage({ error: {
+      code: 'integration.mutationBlocked', message: 'private server detail',
+      params: { reason, source: 'matoloop', action: 'update' }
+    } })).toBe(`MatoLoop blockiert diese Aktion lokal. Es wurde keine Änderung an den CalDAV-Server gesendet. ${explanation}`)
+  })
   it('explains unavailable native audio analysis', () => {
     expect(apiErrorMessage({ error: { code: 'audio.analysisUnavailable' } })).toBe(
       'Für die direkte Audioanalyse ist kein audiofähiges Chatmodell verfügbar.'

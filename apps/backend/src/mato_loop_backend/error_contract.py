@@ -336,6 +336,7 @@ _MESSAGES = {
     "integration.providerUnavailable": "The selected integration provider is unavailable.",
     "integration.providerUnsupported": "The integration adapter is not supported.",
     "integration.operationUnsupported": "The integration does not support this operation.",
+    "integration.mutationBlocked": "MatoLoop blocked this mutation locally; no change was sent. Inspect error.params.reason for the specific restriction. Do not replace the requested action with a different mutation.",
     "integration.outcomeUnknown": "The remote outcome is unknown. Check the remote service before retrying.",
     "integration.permissionDenied": "The integration does not permit this operation.",
     "integration.rateLimited": "The integration rate limit was reached. Wait before retrying.",

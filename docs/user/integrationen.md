@@ -65,6 +65,8 @@ Bitte beispielsweise: „Lege morgen um 10 Uhr einen Termin im Kalender an.“ T
 
 Aufgaben unterstützen Titel, Notiz, Fälligkeit und offen/erledigt. Erledigte Aufgaben werden standardmäßig ausgeblendet. Bis zu 50 fehlende Aufgaben können gemeinsam erstellt werden; gleichnamige offene Aufgaben werden übersprungen. Wiederholungen, Unteraufgaben, Erinnerungen, Kategorien und Prioritäten lassen sich nicht bearbeiten.
 
+Bei Aufgabenänderungen bleiben zusätzliche Eigenschaften wie Erinnerungen, Kategorien und Prioritäten erhalten. Hat sich die Aufgabe zwischenzeitlich geändert, musst du sie erneut abfragen. Wiederkehrende Aufgaben, Einladungen und Ressourcen mit mehreren Haupteinträgen bleiben geschützt. Eine neue Fälligkeit muss nach dem Beginn liegen und denselben Datum-/Zeittyp verwenden. Meldet MatoLoop eine lokale Schutzgrenze, wurde keine Änderung gesendet; das ist keine Ablehnung des CalDAV-Servers. Der Agent soll dann den Grund nennen und nicht eigenmächtig eine Ersatzaufgabe anlegen oder die alte löschen beziehungsweise erledigen.
+
 ## E-Mail lesen und senden
 
 Bei einem aktiven Konto erscheint **E-Mail** im Control Center. Wähle einen Ordner und bestätige Suchbegriffe mit Enter oder dem Suchsymbol. **Weitere laden** zeigt ältere Nachrichten oder weitere Treffer. Du kannst Anhänge herunterladen, Entwürfe speichern und senden. Externe HTML-Inhalte werden nicht nachgeladen; eine lokale Mail-Synchronisationsdatenbank gibt es nicht.

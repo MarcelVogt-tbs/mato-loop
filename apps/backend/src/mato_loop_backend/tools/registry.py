@@ -173,8 +173,8 @@ def _tool_prompt_fragments(tools: dict[str, BoundTool]) -> tuple[str, ...]:
         )
     if {"tasks_update", "tasks_set_completed", "tasks_delete"} & tools.keys():
         fragments.append(
-            "For task mutations, copy taskToken, integrationId, and taskListKey from one returned "
-            "task. Success requires a confirming task or deleted=true."
+            "Tasks: copy taskToken, integrationId, and taskListKey; need task/deleted=true. "
+            "Failure: report; no unapproved substitute. Unknown outcome: read first."
         )
     for tool in tools.values():
         if tool.default_calendar.get("integration_id") in dict(tool.integration_revisions):

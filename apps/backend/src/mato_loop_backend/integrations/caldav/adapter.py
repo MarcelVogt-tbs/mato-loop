@@ -430,7 +430,7 @@ _CALDAV_ERROR_CODES = {
     "caldav.tooManyEvents": "integration.responseTooLarge",
     "caldav.unavailable": "integration.unavailable",
     "caldav.unexpectedStatus": "integration.unavailable",
-    "caldav.unsupportedMutation": "integration.operationUnsupported",
+    "caldav.unsupportedMutation": "integration.mutationBlocked",
 }
 
 
@@ -843,6 +843,7 @@ def _task_payload(
             task.completed_at.isoformat() if task.completed_at is not None else None
         ),
         "recurring": task.recurring,
+        **({"mutationBlockedReason": task.mutation_blocked_reason} if task.mutation_blocked_reason else {}),
     }
 
 
@@ -1057,7 +1058,7 @@ async def calendar_update_event(
         )
         timing = arguments.timing if "timing" in arguments.model_fields_set else token.timing
         if timing is None:
-            raise CalDavError("caldav.unsupportedMutation")
+            raise CalDavError("caldav.unsupportedMutation", reason="unsupported_data", action="update")
         async with _selected_client(arguments.integration_id, context) as (client, _revision):
             await _calendar(client, arguments.calendar_key, context)
             event = await client.update_event(
@@ -1276,6 +1277,7 @@ async def tasks_update(arguments: TaskUpdateArguments, context: Any) -> Any:
                     created=token.created,
                     sequence=token.sequence + 1,
                 ),
+                fields=frozenset(arguments.model_fields_set & {"title", "description", "due"}),
             )
         return _result(
             {
@@ -1322,6 +1324,7 @@ async def tasks_set_completed(
                     created=token.created,
                     sequence=token.sequence + 1,
                 ),
+                fields=frozenset({"completed"}),
             )
         return _result(
             {

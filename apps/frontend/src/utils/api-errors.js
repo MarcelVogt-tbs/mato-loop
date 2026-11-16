@@ -367,6 +367,21 @@ const messages = {
   'integration.endpointNotFound': () => 'Der Endpunkt der Integration wurde nicht gefunden.',
   'integration.invalidConfiguration': () => 'Die Integrationskonfiguration ist ungültig.',
   'integration.invalidResponse': () => 'Die Integration hat eine ungültige Antwort geliefert.',
+  'integration.mutationBlocked': ({ params }) => {
+    const reasons = {
+      recurring: 'Wiederkehrende Einträge können in MatoLoop nicht verändert oder gelöscht werden.',
+      scheduled: 'Einträge mit Einladungs- oder Planungsdaten können in MatoLoop nicht verändert oder gelöscht werden.',
+      multiple_components: 'Die Ressource enthält mehrere Haupteinträge und kann in MatoLoop nicht sicher verändert oder gelöscht werden.',
+      ambiguous_fields: 'Die Aufgabenfelder sind mehrdeutig und können in MatoLoop nicht sicher verändert werden.',
+      invalid_task_state: 'Der Aufgabenstatus kann in MatoLoop nicht sicher verarbeitet werden.',
+      unsupported_data: 'Die Eintragsdaten können in MatoLoop nicht sicher verarbeitet werden.',
+      due_before_start: 'Die Fälligkeit muss nach dem Aufgabenbeginn liegen und denselben Datum-/Zeittyp verwenden.'
+    }
+    const explanation = Object.hasOwn(reasons, params?.reason)
+      ? reasons[params.reason]
+      : 'Die Eintragsdaten werden für diese Aktion in MatoLoop nicht unterstützt.'
+    return `MatoLoop blockiert diese Aktion lokal. Es wurde keine Änderung an den CalDAV-Server gesendet. ${explanation}`
+  },
   'integration.notConfigured': () => 'Die Integration ist noch nicht eingerichtet.',
   'integration.notFound': () => 'Die Integration wurde nicht gefunden.',
   'integration.personalDisabled': () => 'Persönliche Integrationen sind für diese Instanz deaktiviert.',
