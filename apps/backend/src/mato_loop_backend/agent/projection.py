@@ -720,7 +720,7 @@ def _projection_messages(
     *,
     memory_context: str | None = None,
     memory_contexts: dict[UUID, str] | None = None,
-    session_contexts: dict[UUID, str] | None = None,
+    session_contexts: dict[UUID, str | dict[str, str]] | None = None,
     tool_snapshots: list[dict[str, Any]] | None = None,
     tool_snapshot_characters: int = 8_000,
     runtime_instructions: str = "",
@@ -835,6 +835,7 @@ def _projection_messages(
     browser_inspect_calls: set[str] = set()
     user_edited_tool_arguments = False
     previous_memory_context = None
+    previous_project_worktrees = None
     for record_index, item in enumerate(records):
         turn_memory = memory_context if item.id == latest_user_id else (memory_contexts or {}).get(item.id)
         projected = message_dict(
@@ -863,9 +864,16 @@ def _projection_messages(
             projected["content"] = memory_prefix + projected["content"]
             previous_memory_context = turn_memory
         if item.role == "user" and (saved_context := (session_contexts or {}).get(item.id)):
+            if isinstance(saved_context, dict):
+                worktrees = saved_context.get("worktrees", "")
+                saved_context = "\n\n".join(filter(None, (
+                    worktrees if worktrees != previous_project_worktrees else "", saved_context.get("session"),
+                )))
+                previous_project_worktrees = worktrees
             prefix = saved_context + "\n\n"
-            projected["content"] = prefix + projected["content"]
-            projected["image_reference_offset"] = projected.get("image_reference_offset", 0) + len(prefix)
+            if saved_context:
+                projected["content"] = prefix + projected["content"]
+                projected["image_reference_offset"] = projected.get("image_reference_offset", 0) + len(prefix)
         if live_tool_calls is not None and item.id in live_tool_calls:
             projected["tool_calls"] = _model_tool_calls(live_tool_calls[item.id])
         if item.role == "assistant":

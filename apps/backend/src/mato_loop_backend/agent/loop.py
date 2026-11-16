@@ -15,6 +15,7 @@ from mato_loop_backend.agent.media_model_helpers import media_model_handlers
 from mato_loop_backend.agent.memory_context import MemoryCache, prepare_memory_context
 from mato_loop_backend.agent.model_turn import complete_model_turn, persist_model_response
 from mato_loop_backend.agent.pdf_attachments import prepare_pdf_attachments
+from mato_loop_backend.agent.project_worktrees import prepare_project_worktrees
 from mato_loop_backend.agent.projection import ContextError
 from mato_loop_backend.agent.prompts import (
     agent_profile_runtime_instructions,
@@ -434,6 +435,19 @@ async def execute_loop_body(
             db, chat_session, records, run_id=run.id, profile=_active_agent_profile,
             trust_level=model_trust_level, authorize=session_context_authorize,
         )
+        async def authorize_project_metadata(request, root_files=root_files):
+            return await cls._authorize(
+                db, run, chat_session,
+                ToolCall(id=f"project-worktrees:{run.id}",
+                         name="read" if request.capability == "file.read" else "context_search", arguments={}),
+                request, root_files=root_files, check_only=True,
+            )
+
+        for message_id, worktrees in (await prepare_project_worktrees(
+            db, chat_session, project, records, run_id=run.id,
+            trust_level=model_trust_level, authorize=authorize_project_metadata,
+        )).items():
+            session_contexts[message_id] = {"session": session_contexts.get(message_id, ""), "worktrees": worktrees}
         if chat_session.parent_session_id is None and has_other_runs(run.id, chat_session.id):
             records, review_context = await interaction_context(db, chat_session, run, records)
         memory_started = time.monotonic()

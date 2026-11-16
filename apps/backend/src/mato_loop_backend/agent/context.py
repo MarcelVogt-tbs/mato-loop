@@ -61,7 +61,7 @@ class ContextManager:
         target_trust_level: TrustLevel = TrustLevel.PUBLIC,
         memory_context: str | None = None,
         memory_contexts: dict[UUID, str] | None = None,
-        session_contexts: dict[UUID, str] | None = None,
+        session_contexts: dict[UUID, str | dict[str, str]] | None = None,
         runtime_instructions: str = "",
         runtime_context: str | None = None,
         live_tool_calls: dict[UUID, list[dict[str, Any]]] | None = None,

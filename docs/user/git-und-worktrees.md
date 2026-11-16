@@ -2,6 +2,8 @@
 
 Git läuft auf dem ausgewählten Computer mit dessen Git-Installation und Anmeldung. Es gibt keine eigene Git-Integration oder Backend-Clonefunktion. Die **Git**-App im Control Center zeigt Änderungen und verwaltet den Arbeitsbereich; Agentenaufträge verwenden die normalen Shell-Rechte.
 
+In Projekt-Sessions erhält der Agent bei vorhandenen Leserechten eine kompakte Übersicht der Worktrees im Repository auf dem Projektcomputer, mit zugeordneten Hauptsessions desselben Projekts. Dafür brauchst du kein zusätzliches Tool zu aktivieren. Die Übersicht bleibt innerhalb eines Nutzerturns unverändert; Kürzungen und eine nicht verfügbare Repository-Prüfung werden gekennzeichnet. Eine fehlende Sessionzuordnung bedeutet nicht, dass der Worktree ungenutzt ist. Vor Änderungen oder einer Bereinigung muss der Agent den aktuellen Git-Zustand und die Nutzung prüfen; die Übersicht erteilt keine zusätzlichen Rechte.
+
 ## Ein Repository verwenden
 
 1. Wähle einen verbundenen Computer und einen zugänglichen Arbeitsordner mit Git-Repository.
