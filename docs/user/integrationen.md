@@ -213,6 +213,8 @@ Verwende ein Konto mit den benötigten Dokumentrechten statt eines Administrator
 
 Der Agent kann Dokumente suchen, OCR-Text lesen, Dateien übertragen, Metadaten und Notizen bearbeiten sowie Tags, Korrespondenten, Dokumenttypen, Ablagepfade und eigene Felder verwalten. Stapelaktionen erlauben Klassifizierung, Neuverarbeitung und PDF-Bearbeitung. Versionsfunktionen benötigen eine entsprechend ausgestattete Paperless-Instanz; Dokumentaktionen verwenden API-Version 9, paginierte Statusabfragen Version 10. Auf älteren Instanzen benötigt die Statusabfrage die konkrete Task-ID des Auftrags; die gesamte Historie wird nicht geladen. Dateiübertragungen sind auf 32 MiB begrenzt.
 
+Suchtreffer sowie gelesene und aktualisierte Dokumente enthalten direkte Links zur Paperless-Weboberfläche. Die Links verwenden die konfigurierte Basis-URL einschließlich eines möglichen Unterpfads; du musst die Adresse nicht erneut im Chat angeben.
+
 Klassifizierung läuft im normalen Chat oder in einer von dir angelegten Automation. Beschreibe dort, welche Dokumente bearbeitet werden sollen und ob neue Kategorien angelegt werden dürfen. Es gibt keinen zusätzlichen Klassifizierungsdienst und keine automatische Archivkopie. Vergib für unbeaufsichtigte Läufe vorher die benötigten Lese-, Schreib- und gegebenenfalls Löschrechte.
 
 !!! warning "Bestehende Daten gezielt ändern"

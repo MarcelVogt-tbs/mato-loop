@@ -61,6 +61,15 @@ def _base_url(value: str) -> httpx.URL:
     return url.copy_with(raw_path=path + b"/api/")
 
 
+def web_base_url(value: str) -> str:
+    api_url = _base_url(value)
+    return str(api_url.copy_with(raw_path=api_url.raw_path[:-4]))
+
+
+def document_url(base_url: str, document_id: int) -> str:
+    return f"{web_base_url(base_url)}documents/{_identifier(document_id)}/"
+
+
 def _identifier(value: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise _error("invalidRequest")

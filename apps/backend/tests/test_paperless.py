@@ -225,6 +225,29 @@ async def test_bulk_additive_tags_preserve_unrelated_tags(monkeypatch, receipt, 
     assert json.loads(result.content)["completed"] is completed
 
 
+@pytest.mark.parametrize("path,web_path", [("", "/"), ("/", "/"), ("/api/", "/"), ("/archive/", "/archive/"), ("/archive/api", "/archive/")])
+async def test_document_links_use_configured_web_root(monkeypatch, path, web_path) -> None:
+    account = _account()
+    account.config = {"base_url": f"https://paperless.example.test{path}"}
+    context = _context(account)
+    context.bound_options["integration_ids"] = [str(account.id)]
+    client = AsyncMock()
+    client.list.return_value = {"count": 1, "results": [{"id": 7}]}
+    client.get_document.return_value = {"id": 7}
+    client.update_document.return_value = {"id": 7}
+    _mock_client(monkeypatch, client)
+
+    accounts = json.loads((await paperless.paperless_list_accounts(paperless.Arguments(), context)).content)
+    search = json.loads((await paperless.paperless_execute(paperless.SearchArguments(integration_id=account.id), context)).content)
+    read = json.loads((await paperless.paperless_execute(paperless.ReadArguments(integration_id=account.id, document_id=7), context)).content)
+    update = json.loads((await paperless.paperless_execute(paperless.UpdateArguments(integration_id=account.id, document_id=7, changes={"title": "Invoice"}), context)).content)
+
+    base_url = f"https://paperless.example.test{web_path}"
+    assert (accounts["accounts"][0]["baseUrl"], search["results"][0]["document_url"], read["document"]["document_url"], update["document"]["document_url"]) == (
+        base_url, *([f"{base_url}documents/7/"] * 3),
+    )
+
+
 async def test_search_requests_sparse_document_fields(monkeypatch) -> None:
     account = _account()
     client = AsyncMock()
