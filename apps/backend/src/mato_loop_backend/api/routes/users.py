@@ -83,6 +83,8 @@ class UserPreferencesRequest(BaseModel):
     sessions_position: Literal["aboveProjects", "belowProjects"] = Field(
         default="belowProjects", alias="sessionsPosition",
     )
+    trash_enabled: bool = Field(default=False, alias="trashEnabled")
+    trash_retention_days: int = Field(default=30, alias="trashRetentionDays", ge=1, le=3650)
     preferred_language: str | None = Field(
         default=None, alias="preferredLanguage", min_length=2, max_length=35,
         pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$",
@@ -98,6 +100,8 @@ async def get_user_preferences(
     return {
         "preferredLanguage": settings.preferred_language,
         "sessionsPosition": settings.sessions_position,
+        "trashEnabled": settings.trash_enabled,
+        "trashRetentionDays": settings.trash_retention_days,
     }
 
 
@@ -115,6 +119,8 @@ async def update_user_preferences(
     return {
         "preferredLanguage": settings.preferred_language,
         "sessionsPosition": settings.sessions_position,
+        "trashEnabled": settings.trash_enabled,
+        "trashRetentionDays": settings.trash_retention_days,
     }
 
 

@@ -246,7 +246,11 @@ async def test_runtime_persists_search_results_before_offering_discovered_tools(
         return await execute(call, context, tool) if call.name == "search_tools" else ToolResult.json({"ticket": 4711})
 
     db.add.side_effect = add
-    db.scalar.side_effect = lambda statement: None if statement.column_descriptions[0]["entity"] is ContextSummary else True
+    db.scalar.side_effect = lambda statement: (
+        None if statement.column_descriptions[0]["entity"] is ContextSummary
+        else False if "delete_at" in str(statement)
+        else True
+    )
     monkeypatch.setattr(tool_registry, "_execute_definition", execute_call)
     await AgentRuntime._execute_loop(db, run)
     assert [name in {tool["name"] for tool in request["tools"]} for request in requests] == [False, True, True]

@@ -85,6 +85,7 @@ from mato_loop_backend.providers.base import (
     ToolCall,
 )
 from mato_loop_backend.providers.media import MediaService
+from mato_loop_backend.sessions.state import is_session_deleted, session_work_blocked
 from mato_loop_backend.settings import (
     AgentProfileUnavailable,
     AgentRuntimeSettings,
@@ -216,10 +217,8 @@ class AgentRuntime:
                 raise AgentRunError("voice.busy")
         elif connection:
             raise AgentRunError("voice.busy")
-        from mato_loop_backend.sessions.archive import is_session_archived
-
-        if await is_session_archived(db, chat_session):
-            raise AgentRunError("session.archived")
+        if blocked := await session_work_blocked(db, chat_session):
+            raise AgentRunError(blocked)
         from mato_loop_backend.agent.session_execution import parked_runs
 
         bypass = parked_runs() if automation_run is not None else ()
@@ -461,10 +460,8 @@ class AgentRuntime:
         *,
         before_execution: bool = False,
     ) -> AgentRun:
-        from mato_loop_backend.sessions.archive import is_session_archived
-
-        if await is_session_archived(db, chat_session):
-            raise AgentRunError("session.archived")
+        if blocked := await session_work_blocked(db, chat_session):
+            raise AgentRunError(blocked)
         if failed_run.session_id != chat_session.id or failed_run.status != "failed":
             raise AgentRunError("session.retryUnavailable")
         await cls._ensure_user_active(db, chat_session.user_id, for_update=True)
@@ -961,6 +958,8 @@ class AgentRuntime:
         session = await db.get(ChatSession, run.session_id)
         if session is None:
             raise AgentRunError("session.notFound")
+        if await is_session_deleted(db, session):
+            raise AgentRunError("session.inTrash")
         apply_run_session_settings(session, run)
         try:
             profile = await load_agent_profile(db, session.user_id, run.agent_profile_id or session.agent_profile_id)
@@ -1712,6 +1711,8 @@ class AgentRuntime:
         *,
         check_only: bool = False,
     ) -> PermissionDecision:
+        if await is_session_deleted(db, chat_session):
+            raise AgentRunError("session.inTrash")
         apply_run_session_settings(chat_session, run)
         origin = await permission_origin(db, chat_session)
         ceiling = await delegation_snapshot(db, run, chat_session)
@@ -1917,6 +1918,8 @@ class AgentRuntime:
                 definition, {**call.arguments, **(request.approval_edit_defaults or {})},
             ),
         )
+        if await is_session_deleted(db, chat_session):
+            raise AgentRunError("session.inTrash")
         if isinstance(resolution, ApprovalResolution) and resolution.argument_edits:
             edits = {
                 (name,): value for name, value in (request.approval_edit_defaults or {}).items()

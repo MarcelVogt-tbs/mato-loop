@@ -267,7 +267,7 @@ async def _owned_project(
     db: AsyncSession, project_id: UUID, user_id: UUID
 ) -> Project:
     project = await db.scalar(
-        select(Project).where(Project.id == project_id, Project.user_id == user_id)
+        select(Project).where(Project.id == project_id, Project.user_id == user_id, Project.delete_at.is_(None))
     )
     if project is None:
         raise ApiError(status.HTTP_404_NOT_FOUND, "project.notFound")

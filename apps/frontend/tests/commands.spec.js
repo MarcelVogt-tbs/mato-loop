@@ -291,6 +291,7 @@ it.each([false, true, 'blocked'])('offers optional worktree removal when deletin
   const pinia = createPinia()
   setActivePinia(pinia)
   const chat = useChatStore(), impact = 'a'.repeat(64)
+  api.get.mockResolvedValueOnce({ data: { trashEnabled: false } })
   vi.spyOn(chat, 'sessionDeleteImpact').mockResolvedValue({ worktree: { path: '/worktree', impact, sessions: [],
     removalError: remove === 'blocked' ? { code: 'git.worktreePermissionDenied', params: { path: '/worktree/cache' } } : null } })
   const deleted = vi.spyOn(chat, 'deleteSession').mockResolvedValue()
@@ -299,7 +300,7 @@ it.each([false, true, 'blocked'])('offers optional worktree removal when deletin
   app = createApp({ setup() {
     const sidebar = useSidebarSessions({
       chat, projects: useProjectStore(), controlCenter: useControlCenterStore(), workspace: {},
-      route: { query: {} }, $q: { dialog: Dialog.create },
+      route: { query: {} }, $q: { dialog: Dialog.create, notify: vi.fn() },
       confirm: vi.fn().mockResolvedValue(true)
     })
     return () => h('button', { onClick: () => sidebar.removeSession({ id: 'other', title: 'Auftrag' }) }, 'Löschen')
@@ -317,8 +318,36 @@ it.each([false, true, 'blocked'])('offers optional worktree removal when deletin
   await nextTick()
   ;[...document.querySelectorAll('.q-dialog button')].find(button => button.textContent === 'Löschen').click()
   await vi.waitFor(() => expect(deleted).toHaveBeenCalledWith('other', {
-    automationMode: null, automationImpact: null, worktreeImpact: remove === true ? impact : null
+    permanent: true, automationMode: null, automationImpact: null, worktreeImpact: remove === true ? impact : null
   }))
+})
+
+it('moves a session to trash without hard-delete impact or destructive options', async () => {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const chat = useChatStore()
+  api.get.mockResolvedValueOnce({ data: { trashEnabled: true, trashRetentionDays: 7 } })
+  const impact = vi.spyOn(chat, 'sessionDeleteImpact')
+  const deleted = vi.spyOn(chat, 'deleteSession').mockResolvedValue()
+  root = document.createElement('div'); document.body.append(root)
+  app = createApp({ setup() {
+    const sidebar = useSidebarSessions({ chat, projects: useProjectStore(),
+      controlCenter: useControlCenterStore(), workspace: {}, automations: { fetchAutomations: vi.fn().mockResolvedValue() },
+      route: { query: {} }, $q: { dialog: Dialog.create, notify: vi.fn() } })
+    return () => h('button', { onClick: () => sidebar.removeSession({ id: 'other', title: 'Auftrag' }) }, 'Löschen')
+  } })
+  app.use(pinia).use(Quasar, { ...quasarOptions, plugins: { Dialog } }).mount(root)
+  root.querySelector('button').click()
+  await vi.waitFor(() => expect(document.querySelector('.q-dialog')?.textContent).toContain('7 Tage'))
+  const checkbox = document.querySelector('.q-dialog [role="checkbox"]')
+  checkbox.click()
+  await nextTick()
+  expect(document.querySelector('.q-dialog').textContent).toContain('Unwiderruflich')
+  checkbox.click()
+  await nextTick()
+  ;[...document.querySelectorAll('.q-dialog button')].find(button => button.textContent === 'In Papierkorb verschieben').click()
+  await vi.waitFor(() => expect(deleted).toHaveBeenCalledWith('other', { permanent: false }))
+  expect(impact).not.toHaveBeenCalled()
 })
 
 it('adopts a draft remote without changing an unrelated project workspace', async () => {

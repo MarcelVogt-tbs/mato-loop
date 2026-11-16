@@ -32,8 +32,8 @@ from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.realtime import transport
 from mato_loop_backend.providers.realtime.settings import endpoint_for, realtime_model_available
 from mato_loop_backend.security import load_credential, read_credential
-from mato_loop_backend.sessions.archive import is_session_archived
 from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
+from mato_loop_backend.sessions.state import session_work_blocked
 from mato_loop_backend.settings import (
     AgentProfileUnavailable,
     effective_model_pseudonymization,
@@ -67,7 +67,9 @@ async def owned_chat(db: AsyncSession, session_id: UUID, user_id: UUID, *, lock:
         raise SessionServiceError(401, "auth.notAuthenticated")
     if session is None:
         raise SessionServiceError(404, "session.notFound")
-    if session.session_type != "chat" or await is_session_archived(db, session):
+    if blocked := await session_work_blocked(db, session):
+        raise SessionServiceError(409, blocked)
+    if session.session_type != "chat":
         raise SessionServiceError(409, "session.archived")
     return session
 

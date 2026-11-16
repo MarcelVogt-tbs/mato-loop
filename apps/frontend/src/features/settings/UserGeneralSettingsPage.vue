@@ -3,9 +3,9 @@
     <header class="settings-section-header">
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Grundeinstellungen</h2>
-        <p class="text-body2 app-muted q-mb-none q-mt-xs">Persönliche Vorgaben für Sprache und Seitenleiste.</p>
+        <p class="text-body2 app-muted q-mb-none q-mt-xs">Persönliche Vorgaben für Sprache, Seitenleiste und Papierkorb.</p>
       </div>
-      <q-btn color="primary" unelevated no-caps icon="save" label="Speichern" :loading="settings.saving" :disable="settings.loading || !settings.loaded || settings.loadFailed || !dirty" @click="save" />
+      <q-btn color="primary" unelevated no-caps icon="save" label="Speichern" :loading="settings.saving" :disable="settings.loading || !settings.loaded || settings.loadFailed || !dirty || !validRetention" @click="save" />
     </header>
     <q-banner v-if="settings.loadFailed" rounded class="bg-negative text-white q-mb-md">
       Die Grundeinstellungen konnten nicht geladen werden.
@@ -16,6 +16,12 @@
         <AppSelect v-model="language" outlined emit-value map-options use-input label="Bevorzugte Sprache" :options="languageOptions" :disable="settings.loading || settings.saving || !settings.loaded || settings.loadFailed" @new-value="addLanguage" />
         <p class="text-body2 app-muted q-mb-none q-mt-md">Vorgabe für Chatantworten, Transkriptionen und die Browser-Sprache von Jina Reader. Eine ausdrücklich angegebene Sprache hat Vorrang. Bei „Automatisch“ folgt der Chat deinem persönlichen Sprachprofil, sonst deiner Anfrage; Dienste verwenden ihre Erkennung oder Vorgabe. Keine Übersetzung abgerufener Inhalte oder Änderung der Oberflächensprache.</p>
         <p class="text-caption app-muted q-mb-none">Weitere Sprachen können als BCP-47-Kürzel eingegeben werden, zum Beispiel de-CH. Die Unterstützung hängt vom Dienst ab.</p>
+      </q-card-section>
+      <q-separator />
+      <q-card-section>
+        <q-toggle v-model="trashEnabled" label="Papierkorb verwenden" :disable="settings.loading || settings.saving || !settings.loaded || settings.loadFailed" />
+        <q-input v-model.number="trashRetentionDays" class="q-mt-md" outlined type="number" min="1" max="3650" step="1" label="Aufbewahrung in Tagen" :rules="[() => validRetention || 'Bitte eine ganze Zahl von 1 bis 3650 eingeben.']" :disable="settings.loading || settings.saving || !settings.loaded || settings.loadFailed" />
+        <p class="text-body2 app-muted q-mb-none">Standardmäßig ausgeschaltet; Vorgabe für die Aufbewahrung: 30 Tage. Änderungen gelten nur für künftige Löschvorgänge. Deaktivieren leert den Papierkorb nicht; vorhandene Einträge bleiben über die Seitenleiste bis zu ihrer festen Frist wiederherstellbar.</p>
       </q-card-section>
     </q-card>
     <q-card flat class="app-surface q-mt-md">
@@ -44,9 +50,10 @@ const sessionsPositionOptions = [
   { label: 'Unter den Projekten', value: 'belowProjects' },
   { label: 'Über den Projekten', value: 'aboveProjects' }
 ]
-const dirty = computed(() => settings.loaded && (
-  language.value !== settings.preferredLanguage || sessionsPosition.value !== settings.sessionsPosition
-))
+const trashEnabled = ref(false)
+const trashRetentionDays = ref(30)
+const validRetention = computed(() => Number.isInteger(trashRetentionDays.value) && trashRetentionDays.value >= 1 && trashRetentionDays.value <= 3650)
+const dirty = computed(() => settings.loaded && (language.value !== settings.preferredLanguage || sessionsPosition.value !== settings.sessionsPosition || trashEnabled.value !== settings.trashEnabled || trashRetentionDays.value !== settings.trashRetentionDays))
 const languagePattern = /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/
 const languageOptions = computed(() => {
   const options = [{ label: 'Automatisch', value: null }, { label: 'Deutsch', value: 'de-DE' }, { label: 'Englisch', value: 'en-US' }]
@@ -62,21 +69,22 @@ function addLanguage(value, done) {
   }
 }
 async function load() {
-  try {
-    await settings.fetchSettings()
-    language.value = settings.preferredLanguage
-    sessionsPosition.value = settings.sessionsPosition
-  }
+  try { await settings.fetchSettings(); reset() }
   catch { /* Central API toast. */ }
 }
 async function save() {
-  if (settings.loading || settings.saving || !settings.loaded || settings.loadFailed || !dirty.value) return
+  if (settings.loading || settings.saving || !settings.loaded || settings.loadFailed || !dirty.value || !validRetention.value) return
   try {
-    await settings.saveSettings({ preferredLanguage: language.value, sessionsPosition: sessionsPosition.value })
-    language.value = settings.preferredLanguage
-    sessionsPosition.value = settings.sessionsPosition
+    await settings.saveSettings({ preferredLanguage: language.value, sessionsPosition: sessionsPosition.value, trashEnabled: trashEnabled.value, trashRetentionDays: trashRetentionDays.value })
+    reset()
     $q.notify({ type: 'positive', message: 'Grundeinstellungen gespeichert.' })
   } catch { /* Central API toast. */ }
+}
+function reset() {
+  language.value = settings.preferredLanguage
+  sessionsPosition.value = settings.sessionsPosition
+  trashEnabled.value = settings.trashEnabled
+  trashRetentionDays.value = settings.trashRetentionDays
 }
 onMounted(load)
 onBeforeRouteLeave(() => !settings.saving && (!dirty.value || confirm('Sollen die ungespeicherten Änderungen verworfen werden?', 'Änderungen verwerfen?', { okLabel: 'Verwerfen' })))

@@ -262,7 +262,7 @@ async def test_executor_preferences_can_change_without_moving_the_active_run(mon
     db = AsyncMock(spec=AsyncSession)
     db.get.return_value = session
     run = AgentRun(id=uuid4(), session_id=session.id, execution_agent_id=agent.id, current_directory_snapshot="/home/user")
-    db.scalar.return_value = session.id
+    db.scalar.side_effect = [session.id, session, False]
     db.scalars.return_value = Mock(all=lambda: [run.id])
     monkeypatch.setattr(AgentRuntime, "_session_settings", {})
     monkeypatch.setattr(AgentRuntime, "_tasks", {run.id: SimpleNamespace(done=lambda: False)})
@@ -323,7 +323,7 @@ async def test_start_persists_rootless_executor_snapshot(monkeypatch, revoked, c
         current_directory="/home/user/project",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, True, agent, True]
+    db.scalar.side_effect = [session, False, None, True, agent, True]
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
     monkeypatch.setattr(EpisodeIndexService, "enqueue", AsyncMock())
     monkeypatch.setattr(AgentRuntime, "_schedule_run", lambda _run: None)

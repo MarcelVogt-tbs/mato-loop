@@ -1166,7 +1166,11 @@ async def test_runtime_grant_lifetime_and_boundaries(tmp_path, monkeypatch, life
             stored.add(grant)
             stored.commit()
             db = AsyncMock(spec=AsyncSession)
-            db.scalar.side_effect = lambda statement: agent if statement.column_descriptions[0]["entity"] is ExecutionAgent else stored.scalar(statement)
+            db.scalar.side_effect = lambda statement: (
+                agent if statement.column_descriptions[0]["entity"] is ExecutionAgent
+                else False if "delete_at" in str(statement)
+                else stored.scalar(statement)
+            )
             db.scalars.side_effect = stored.scalars
 
             async def authorize(current_run=run, permission=request, tool_call=call):

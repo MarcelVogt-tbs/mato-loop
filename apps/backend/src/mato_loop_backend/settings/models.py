@@ -1814,6 +1814,8 @@ class UserPreferences(SettingsDocument):
     dark_mode: bool = False
     session_drawer_open: bool = True
     sessions_position: Literal["aboveProjects", "belowProjects"] = "belowProjects"
+    trash_enabled: bool = False
+    trash_retention_days: int = Field(default=30, ge=1, le=3650)
     project_order: list[UUID] = Field(default_factory=list)
     default_execution_agent_id: UUID | None = None
     preferred_language: str | None = Field(

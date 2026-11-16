@@ -11,7 +11,7 @@ class BackgroundProcessing:
     _tasks: list[asyncio.Task[None]] = []
 
     @classmethod
-    def start(cls) -> None:
+    def start(cls, processors=()) -> None:
         if cls._tasks:
             return
         from mato_loop_backend.automations import process_pending as automations
@@ -20,6 +20,7 @@ class BackgroundProcessing:
 
         cls._tasks = [asyncio.create_task(cls._repeat(name, process, interval)) for name, process, interval in (
             ("messages", messages, 1), ("automations", automations, 5), ("dreaming", dreaming, 30),
+            *processors,
         )]
 
     @classmethod

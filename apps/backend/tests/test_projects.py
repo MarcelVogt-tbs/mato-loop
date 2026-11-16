@@ -112,6 +112,33 @@ def test_project_fields_are_trimmed_and_bounded() -> None:
         )
 
 
+@pytest.mark.parametrize("kind", ["session", "project"])
+async def test_explicit_soft_delete_rejects_disabled_trash(monkeypatch, kind) -> None:
+    from mato_loop_backend.api.routes import projects, sessions
+
+    user = _user()
+    item = ChatSession(id=uuid4(), user_id=user.id) if kind == "session" else _project(user.id)
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = item
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=UserPreferences(trash_enabled=False)))
+    if kind == "session":
+        monkeypatch.setattr(sessions, "_deletable_session", AsyncMock(return_value=item))
+        route = sessions.delete_session
+        permanent_delete = AsyncMock()
+        monkeypatch.setattr(sessions.session_service, "delete_session", permanent_delete)
+    else:
+        monkeypatch.setattr(projects, "_owned_project", AsyncMock(return_value=item))
+        route = projects.delete_project
+        permanent_delete = AsyncMock()
+        monkeypatch.setattr(projects, "purge_project", permanent_delete)
+
+    with pytest.raises(ApiError) as exc:
+        await route(item.id, user, db, permanent=False)
+
+    assert exc.value.code == "trash.disabled"
+    permanent_delete.assert_not_awaited()
+
+
 async def test_project_list_is_owner_scoped_and_counts_sessions(monkeypatch) -> None:
     user = _user()
     project = _project(user.id)
@@ -331,7 +358,7 @@ async def test_delete_project_with_sessions_trashes_tree_and_database_rows(
     shared_file.write_text("shared", encoding="utf-8")
     monkeypatch.setattr(projects_route, "SessionStorage", lambda: storage)
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [project, project, 0, None]
+    db.scalar.side_effect = [project, project, project, 0, None]
     db.scalars.side_effect = [
         _rows(session.id),
         _rows(),
@@ -346,6 +373,7 @@ async def test_delete_project_with_sessions_trashes_tree_and_database_rows(
         project.id,
         user,
         db,
+        permanent=True,
         automation_impact=project_delete_impact_token([session.id], []),
     )
 
@@ -395,6 +423,7 @@ async def test_delete_project_enforces_automation_mode_and_impact() -> None:
             project.id,
             user,
             missing_mode_db,
+            permanent=True,
             automation_impact=project_delete_impact_token([session_id], [automation]),
         )
     assert missing_mode.value.code == "session.automationOutputRequired"
@@ -408,6 +437,7 @@ async def test_delete_project_enforces_automation_mode_and_impact() -> None:
             user,
             stale_db,
             automation_mode="deleteAutomations",
+            permanent=True,
             automation_impact="0" * 64,
         )
     assert stale.value.code == "session.automationImpactChanged"
@@ -421,6 +451,7 @@ async def test_delete_project_enforces_automation_mode_and_impact() -> None:
             user,
             unlink_db,
             automation_mode="unlink",
+            permanent=True,
             automation_impact=project_delete_impact_token([session_id], [automation]),
         )
     assert unlink.value.code == "session.automationOutputRequired"
@@ -436,7 +467,7 @@ async def test_delete_project_revalidates_locked_session_membership() -> None:
         id=uuid4(), user_id=user.id, project_id=project.id, title="Late"
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [project, project, None]
+    db.scalar.side_effect = [project, project, project, None]
     db.scalars.side_effect = [
         _rows(original_session.id),
         _rows(),
@@ -450,6 +481,7 @@ async def test_delete_project_revalidates_locked_session_membership() -> None:
             project.id,
             user,
             db,
+            permanent=True,
             automation_impact=project_delete_impact_token(
                 [original_session.id], []
             ),
@@ -469,7 +501,7 @@ async def test_delete_project_rejects_files_referenced_outside_project(
         id=uuid4(), user_id=user.id, project_id=project.id, title="Referenced"
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [project, project, 3]
+    db.scalar.side_effect = [project, project, project, 3]
     db.scalars.side_effect = [
         _rows(session.id),
         _rows(),
@@ -488,12 +520,13 @@ async def test_delete_project_rejects_files_referenced_outside_project(
             project.id,
             user,
             db,
+            permanent=True,
             automation_impact=project_delete_impact_token([session.id], []),
         )
 
     assert exc_info.value.code == "session.filesReferenced"
     assert exc_info.value.params == {"referenceCount": 3}
-    query = db.scalar.await_args_list[2].args[0].compile()
+    query = db.scalar.await_args_list[3].args[0].compile()
     assert {session.id, child_id} in [
         set(value) for value in query.params.values() if isinstance(value, list)
     ]
@@ -508,7 +541,7 @@ async def test_delete_project_rejects_uncancellable_active_database_run(
     session_id = uuid4()
     run_id = uuid4()
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [project, run_id]
+    db.scalar.side_effect = [project, project, run_id]
     db.scalars.side_effect = [
         _rows(session_id),
         _rows(),
@@ -522,6 +555,7 @@ async def test_delete_project_rejects_uncancellable_active_database_run(
             project.id,
             user,
             db,
+            permanent=True,
             automation_impact=project_delete_impact_token([session_id], []),
         )
 
@@ -533,6 +567,8 @@ async def test_delete_project_rejects_uncancellable_active_database_run(
 def test_delete_project_rejects_unknown_automation_mode() -> None:
     user = _user()
     db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = _project(user.id)
+    db.scalars.return_value = _rows()
 
     async def override_db():
         yield db
@@ -544,18 +580,17 @@ def test_delete_project_rejects_unknown_automation_mode() -> None:
     app.dependency_overrides[get_db_session] = override_db
 
     client = TestClient(app)
-    missing_impact = client.delete(f"/projects/{uuid4()}")
+    missing_impact = client.delete(f"/projects/{uuid4()}?permanent=true")
     response = client.delete(
         f"/projects/{uuid4()}?automationMode=invalid&automationImpact={'0' * 64}"
     )
 
-    assert missing_impact.status_code == 422
-    assert missing_impact.json()["error"]["code"] == "validation.required"
-    assert missing_impact.json()["error"]["field"] == "automationImpact"
+    assert missing_impact.status_code == 409
+    assert missing_impact.json()["error"]["code"] == "session.automationImpactChanged"
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation.invalidChoice"
     assert response.json()["error"]["field"] == "automationMode"
-    db.scalar.assert_not_awaited()
+    assert db.scalar.await_count == 2
 
 
 async def test_delete_project_restores_storage_when_commit_fails(
@@ -585,7 +620,7 @@ async def test_delete_project_restores_storage_when_commit_fails(
     execution_file.write_text("history", encoding="utf-8")
     monkeypatch.setattr(projects_route, "SessionStorage", lambda: storage)
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [project, project, 0, None]
+    db.scalar.side_effect = [project, project, project, 0, None]
     db.scalars.side_effect = [
         _rows(session.id),
         _rows(automation),
@@ -608,6 +643,7 @@ async def test_delete_project_restores_storage_when_commit_fails(
             user,
             db,
             automation_mode="deleteAutomations",
+            permanent=True,
             automation_impact=project_delete_impact_token(
                 [session.id], [automation]
             ),

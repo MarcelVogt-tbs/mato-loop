@@ -115,6 +115,8 @@ async def _read(arguments: ReadArguments, context: ToolContext) -> ToolResult:
     )
     if not await tools_access.allow(context, request):
         return ToolResult.error("permission.denied")
+    if target_session_id != context.session.id and await files_access.project_read_files(arguments, context) is None:
+        return ToolResult.error("permission.denied")
     normalized_path = files_access.file_path(
         context, arguments.root, arguments.path, root_files=root_files,
     )
@@ -368,6 +370,8 @@ async def _glob(arguments: GlobArguments, context: ToolContext) -> ToolResult:
     )
     if not await tools_access.allow(context, request):
         return ToolResult.error("permission.denied")
+    if target_session_id != context.session.id and await files_access.project_read_files(arguments, context) is None:
+        return ToolResult.error("permission.denied")
     if arguments.root == "workspace":
         result = await files_access.workspace_request(
             context,
@@ -411,6 +415,8 @@ async def _grep(arguments: GrepArguments, context: ToolContext) -> ToolResult:
         target_session_id=target_session_id,
     )
     if not await tools_access.allow(context, request):
+        return ToolResult.error("permission.denied")
+    if target_session_id != context.session.id and await files_access.project_read_files(arguments, context) is None:
         return ToolResult.error("permission.denied")
     if arguments.root == "workspace":
         result = await files_access.workspace_request(
@@ -477,6 +483,8 @@ async def _provide_file(
         if not await authorize(source):
             return ToolResult.error("permission.denied")
 
+    if target_session_id != context.session.id and await files_access.project_read_files(arguments, context) is None:
+        return ToolResult.error("permission.denied")
     revision = None
     size = None
     for path in paths:

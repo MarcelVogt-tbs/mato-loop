@@ -38,7 +38,9 @@ from mato_loop_backend.sessions.service import (
     unread_response_clause,
     validate_execution_preferences,
 )
+from mato_loop_backend.sessions.state import deleted_session_clause
 from mato_loop_backend.sessions.templates import load_template
+from mato_loop_backend.sessions.trash import move_to_trash
 from mato_loop_backend.settings import SettingsStore, UserPreferences
 
 router = APIRouter(prefix="/projects", dependencies=[Depends(require_user)])
@@ -172,11 +174,14 @@ def _payload(project: Project, session_count: int, has_unread_messages: bool = F
 
 
 async def _owned_project(
-    db: AsyncSession, project_id: UUID, user_id: UUID, *, for_update: bool = False
+    db: AsyncSession, project_id: UUID, user_id: UUID, *,
+    for_update: bool = False, include_deleted: bool = False,
 ) -> Project:
     statement = select(Project).where(Project.id == project_id, Project.user_id == user_id)
+    if not include_deleted:
+        statement = statement.where(Project.delete_at.is_(None))
     if for_update:
-        statement = statement.with_for_update()
+        statement = statement.with_for_update().execution_options(populate_existing=True)
     project = await db.scalar(statement)
     if project is None:
         raise ApiError(status.HTTP_404_NOT_FOUND, "project.notFound")
@@ -189,6 +194,7 @@ async def _session_count(db: AsyncSession, project: Project) -> int:
             ChatSession.project_id == project.id,
             ChatSession.user_id == project.user_id,
             ChatSession.parent_session_id.is_(None),
+            ~deleted_session_clause(),
         )
     )
     return count or 0
@@ -275,9 +281,14 @@ async def list_projects(
                 ChatSession,
                 (ChatSession.project_id == Project.id)
                 & (ChatSession.user_id == Project.user_id)
-                & ChatSession.parent_session_id.is_(None),
+                & ChatSession.parent_session_id.is_(None)
+                & ~deleted_session_clause(),
             )
-            .where(Project.user_id == user.id, Project.archived_at.is_not(None) if archived else Project.archived_at.is_(None))
+            .where(
+                Project.user_id == user.id,
+                Project.delete_at.is_(None),
+                Project.archived_at.is_not(None) if archived else Project.archived_at.is_(None),
+            )
             .group_by(Project.id)
             .order_by(Project.updated_at.desc(), Project.id.desc())
         )
@@ -299,6 +310,7 @@ async def reorder_projects(
 ) -> None:
     owned_ids = set(await db.scalars(select(Project.id).where(
         Project.user_id == user.id,
+        Project.delete_at.is_(None),
     )))
     requested_ids = set(payload.project_ids)
     if not requested_ids <= owned_ids:
@@ -316,6 +328,7 @@ def _unread_project_sessions():
     return select(ChatSession.id).join(Message, Message.session_id == ChatSession.id).where(
         ChatSession.project_id == Project.id, ChatSession.user_id == Project.user_id,
         ChatSession.parent_session_id.is_(None), ChatSession.archived_at.is_(None),
+        ~deleted_session_clause(),
         unread_response_clause(),
         or_(ChatSession.last_read_at.is_(None), Message.created_at > ChatSession.last_read_at),
     ).correlate(Project).exists()
@@ -442,7 +455,7 @@ async def project_delete_impact(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict[str, int | str | list[str]]:
-    project = await _owned_project(db, project_id, user.id)
+    project = await _owned_project(db, project_id, user.id, include_deleted=True)
     project_db_id = project.id
     owner_id = project.user_id
     if await db.scalar(
@@ -487,15 +500,48 @@ async def delete_project(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
     automation_impact: Annotated[
-        str,
+        str | None,
         Query(alias="automationImpact", min_length=64, max_length=64),
-    ],
+    ] = None,
     automation_mode: Annotated[
         Literal["unlink", "deleteAutomations"] | None,
         Query(alias="automationMode"),
     ] = None,
+    permanent: bool | None = None,
 ) -> None:
-    project = await _owned_project(db, project_id, user.id)
+    project = await _owned_project(db, project_id, user.id, include_deleted=True)
+    if not permanent:
+        preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id)
+        if permanent is False or preferences.trash_enabled:
+            try:
+                await move_to_trash(db, project)
+            except SessionServiceError as exc:
+                raise ApiError(exc.status_code, exc.code, field=exc.field, params=exc.params) from exc
+            return
+        if project.delete_at is not None:
+            raise ApiError(409, "project.inTrash")
+    await purge_project(
+        project_id, user.id, db,
+        automation_impact=automation_impact, automation_mode=automation_mode,
+        allow_deleted=bool(permanent),
+    )
+
+
+async def purge_project(
+    project_id: UUID,
+    user_id: UUID,
+    db: AsyncSession,
+    *,
+    automation_impact: str | None,
+    automation_mode: Literal["unlink", "deleteAutomations"] | None = None,
+    expired_only: bool = False,
+    allow_deleted: bool = True,
+) -> None:
+    project = await _owned_project(db, project_id, user_id, include_deleted=True)
+    if not allow_deleted and project.delete_at is not None:
+        raise ApiError(409, "project.inTrash")
+    if expired_only and (project.delete_at is None or project.delete_at > datetime.now(UTC)):
+        return
     project_db_id = project.id
     owner_id = project.user_id
     session_ids = list(
@@ -543,7 +589,13 @@ async def delete_project(
         await AgentRuntime.cancel_descendants(session_id)
 
     for attempt in range(2):
-        project = await _owned_project(db, project_db_id, owner_id, for_update=True)
+        project = await _owned_project(
+            db, project_db_id, owner_id, for_update=True, include_deleted=True
+        )
+        if not allow_deleted and project.delete_at is not None:
+            raise ApiError(409, "project.inTrash")
+        if expired_only and (project.delete_at is None or project.delete_at > datetime.now(UTC)):
+            return
         sessions = list(
             (
                 await db.scalars(

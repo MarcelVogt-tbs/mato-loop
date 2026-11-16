@@ -32,6 +32,7 @@ from mato_loop_backend.models import (
     ProjectPlanExecution,
     UserAccount,
 )
+from mato_loop_backend.sessions.state import deleted_session_clause
 from mato_loop_backend.settings import (
     IntegrationAdapterAvailability,
     IntegrationSettings,
@@ -290,7 +291,7 @@ class ProjectCodingService:
     ) -> Project | None:
         return await db.scalar(
             select(Project)
-            .where(Project.id == project_id, Project.user_id == user_id)
+            .where(Project.id == project_id, Project.user_id == user_id, Project.delete_at.is_(None))
             .execution_options(populate_existing=True)
             .with_for_update()
         )
@@ -305,7 +306,7 @@ class ProjectCodingService:
         project_key: str,
         workspace_key: str,
     ) -> Project:
-        if project.user_id != user_id:
+        if project.user_id != user_id or project.delete_at is not None:
             raise ProjectCodingError("project.notFound")
         await db.scalar(
             select(UserAccount.id)
@@ -349,7 +350,7 @@ class ProjectCodingService:
     async def clear_binding(
         cls, db: AsyncSession, user_id: UUID, project: Project
     ) -> Project:
-        if project.user_id != user_id:
+        if project.user_id != user_id or project.delete_at is not None:
             raise ProjectCodingError("project.notFound")
         await db.scalar(
             select(UserAccount.id)
@@ -378,7 +379,7 @@ class ProjectCodingService:
     async def resolve(
         cls, db: AsyncSession, user_id: UUID, project: Project
     ) -> _BoundCodingProject:
-        if project.user_id != user_id:
+        if project.user_id != user_id or project.delete_at is not None:
             raise ProjectCodingError("project.notFound")
         if (
             project.coding_integration_id is None
@@ -617,7 +618,7 @@ class ProjectCodingService:
             external_session_id = _identifier(
                 external_session_id, "externalSessionId"
             )
-        if project.user_id != user_id:
+        if project.user_id != user_id or project.delete_at is not None:
             raise ProjectCodingError("project.notFound")
         locked = await cls._lock_project(db, user_id, project.id)
         if locked is None:
@@ -628,6 +629,7 @@ class ProjectCodingService:
             session_id = await db.scalar(
                 select(ChatSession.id).where(
                     ChatSession.id == originating_session_id,
+                    ~deleted_session_clause(),
                     ChatSession.user_id == user_id,
                     ChatSession.project_id == project.id,
                     ChatSession.session_type == "chat",
@@ -656,7 +658,7 @@ class ProjectCodingService:
     async def list_plans(
         db: AsyncSession, user_id: UUID, project: Project
     ) -> tuple[ProjectPlan, ...]:
-        if project.user_id != user_id:
+        if project.user_id != user_id or project.delete_at is not None:
             raise ProjectCodingError("project.notFound")
         return tuple(
             (
@@ -727,7 +729,7 @@ class ProjectCodingService:
     async def list_executions(
         db: AsyncSession, user_id: UUID, project: Project
     ) -> tuple[ProjectPlanExecution, ...]:
-        if project.user_id != user_id:
+        if project.user_id != user_id or project.delete_at is not None:
             raise ProjectCodingError("project.notFound")
         return tuple(
             (
@@ -948,6 +950,7 @@ class CodingScheduler:
                         ProjectPlanExecution.status == "queued",
                         Project.coding_queue_pause_reason.is_(None),
                         Project.archived_at.is_(None),
+                        Project.delete_at.is_(None),
                         UserAccount.is_active.is_(True),
                         ~active.exists(),
                     )

@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { sessionSidebarStatus } from 'src/features/chat/session-groups'
 import { notifyError } from 'src/utils/notifications'
 import { apiErrorMessage } from 'src/utils/api-errors'
+import { chooseDeletion } from 'src/features/archive/deletion-choice'
 
 const emptySidebarList = Object.freeze({
   items: [],
@@ -241,26 +242,30 @@ export function useSidebarSessions({
     await loadMoreSessions(projectId)
   }
 
-  async function removeSession(session) {
+  async function removeSession(session, { permanent = false } = {}) {
     const id = typeof session === 'string' ? session : session.id
     const sourceProjectId = typeof session === 'string'
       ? chat.findCachedSession(id)?.projectId || null
       : session.projectId || null
-    let impact
+    const title = typeof session === 'string' ? chat.findCachedSession(id)?.title : session.title
     try {
-      impact = await chat.sessionDeleteImpact(id, { suppressErrorToast: true })
+      permanent = await chooseDeletion($q, 'Session', title || 'Ohne Titel', permanent)
+    } catch { return false }
+    if (permanent === null) return false
+    let impact = {}
+    try {
+      if (permanent) impact = await chat.sessionDeleteImpact(id, { suppressErrorToast: true })
     } catch (error) {
       notifyError(error)
-      return
+      return false
     }
     if (impact.fileReferenceCount) {
       $q.notify({
         type: 'negative',
         message: `${impact.fileReferenceCount} Dateireferenz${impact.fileReferenceCount === 1 ? '' : 'en'} ${impact.fileReferenceCount === 1 ? 'verhindert' : 'verhindern'} das Löschen dieser Session.`
       })
-      return
+      return false
     }
-    const title = typeof session === 'string' ? chat.findCachedSession(id)?.title : session.title
     let worktreeImpact = null
     if (impact.worktree) {
       const others = impact.worktree.sessions
@@ -268,7 +273,7 @@ export function useSidebarSessions({
       const selection = await new Promise(resolve => {
         $q.dialog({
           title: 'Session löschen', transitionDuration: 0,
-          message: `Session „${title || 'Ohne Titel'}“ löschen? Laufende Aufträge in dieser Session werden beendet. Optional kannst du auch den Worktree „${impact.worktree.path}“ entfernen. Dabei werden nicht committete Änderungen sowie zusätzliche und ignorierte Dateien wie .env unwiderruflich gelöscht. Commits, die durch keinen Branch gesichert sind, können danach verloren gehen. Vorhandene Branches bleiben erhalten.${others.length ? ` ${others.length} weitere Session${others.length === 1 ? '' : 's'} wechseln zu Lokal: ${others.map(item => item.title || 'Ohne Titel').join(', ')}.` : ''}`,
+          message: `Session „${title || 'Ohne Titel'}“ unwiderruflich löschen? Eine Wiederherstellung ist nicht möglich. Laufende Aufträge in dieser Session werden beendet. Optional kannst du auch den Worktree „${impact.worktree.path}“ entfernen. Dabei werden nicht committete Änderungen sowie zusätzliche und ignorierte Dateien wie .env unwiderruflich gelöscht. Commits, die durch keinen Branch gesichert sind, können danach verloren gehen. Vorhandene Branches bleiben erhalten.${others.length ? ` ${others.length} weitere Session${others.length === 1 ? '' : 's'} wechseln zu Lokal: ${others.map(item => item.title || 'Ohne Titel').join(', ')}.` : ''}`,
           options: { type: 'checkbox', model: [], items: [{
             label: removalError ? `Worktree ebenfalls entfernen – ${apiErrorMessage({ error: removalError })}` : 'Worktree ebenfalls entfernen',
             value: impact.worktree.impact, disable: Boolean(removalError)
@@ -277,12 +282,12 @@ export function useSidebarSessions({
           cancel: { label: 'Abbrechen', flat: true, noCaps: true }
         }).onOk(resolve).onCancel(() => resolve(null)).onDismiss(() => resolve(null))
       })
-      if (selection === null) return
+      if (selection === null) return false
       worktreeImpact = removalError ? null : selection[0] || null
-    } else if (!await confirm(`Session „${title || 'Ohne Titel'}“ löschen? Laufende Aufträge in dieser Session werden beendet.${impact.hasWorktree ? ' Der Worktree kann hier derzeit nicht geprüft oder entfernt werden und bleibt erhalten.' : ''}`, 'Session löschen', { okLabel: 'Löschen' })) return
+    } else if (permanent && !await confirm(`Session „${title || 'Ohne Titel'}“ unwiderruflich löschen? Eine Wiederherstellung ist nicht möglich. Laufende Aufträge in dieser Session werden beendet.${impact.hasWorktree ? ' Der Worktree kann hier derzeit nicht geprüft oder entfernt werden und bleibt erhalten.' : ''}`, 'Session endgültig löschen', { okLabel: 'Endgültig löschen' })) return false
     if (worktreeImpact && workspace.hasDirtyEditors) {
       $q.notify({ type: 'warning', message: 'Bitte zuerst die ungespeicherten Editoränderungen speichern oder verwerfen.' })
-      return
+      return false
     }
     let automationMode = null
     if (impact.requiredAutomationCount) {
@@ -292,7 +297,7 @@ export function useSidebarSessions({
         'Abhängige Automationen löschen?',
         { okLabel: 'Alles löschen' }
       )
-      if (!accepted) return
+      if (!accepted) return false
       automationMode = 'deleteAutomations'
     }
     const affectedTabs = controlCenter.fileTabs.filter((tab) => (
@@ -301,16 +306,16 @@ export function useSidebarSessions({
     if (
       affectedTabs.some((tab) => workspace.fileTabDirty(tab.tabId))
       && !await confirmDiscardedEdit({ discard: false })
-    ) return
+    ) return false
     try {
       await chat.deleteSession(id, {
-        automationMode,
-        automationImpact: automationMode ? impact.automationImpact : null,
-        worktreeImpact
+        permanent,
+        ...(permanent ? { automationMode,
+          automationImpact: automationMode ? impact.automationImpact : null, worktreeImpact } : {})
       })
       if (sourceProjectId) void projects.fetchAll().catch(() => {})
     } catch {
-      return
+      return false
     }
     if (workspace.sessionId !== id && affectedTabs.length) {
       void controlCenter.removeFileTabs(affectedTabs.map((tab) => tab.tabId)).catch(() => {})
@@ -319,10 +324,12 @@ export function useSidebarSessions({
     if (worktreeImpact && impact.worktree.sessions.some(item => item.id === chat.current?.id)) {
       void chat.refreshSession(chat.current.id).catch(() => {})
     }
-    if (automationMode) void automations.fetchAutomations().catch(() => {})
+    if (automationMode || !permanent) void automations.fetchAutomations().catch(() => {})
     if (route.query.session === id) {
       await router.push({ name: 'chat', query: chatQuery(null, sourceProjectId) })
     }
+    $q.notify({ type: 'positive', message: permanent ? 'Session endgültig gelöscht.' : 'Session in den Papierkorb verschoben.' })
+    return true
   }
 
   async function archiveSession(session) {

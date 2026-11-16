@@ -79,7 +79,7 @@ async def test_file_context_hides_foreign_sessions() -> None:
     user = _user()
     foreign = ChatSession(id=uuid4(), user_id=uuid4(), title="Foreign")
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = foreign
+    db.scalar.return_value = foreign
 
     with pytest.raises(ApiError) as exc_info:
         await workspace_route._file_context(
@@ -148,8 +148,7 @@ async def test_file_context_resolves_explicit_same_project_session_root() -> Non
     current = ChatSession(id=uuid4(), user_id=user.id, project_id=project_id, title="Current")
     owner = ChatSession(id=uuid4(), user_id=user.id, project_id=project_id, title="Owner")
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = current
-    db.scalar.return_value = owner
+    db.scalar.side_effect = [current, owner]
 
     context = await workspace_route._file_context(
         FileScope.SESSION,
@@ -171,8 +170,7 @@ async def test_file_context_rejects_explicit_root_outside_current_project() -> N
     user = _user()
     current = ChatSession(id=uuid4(), user_id=user.id, project_id=uuid4(), title="Current")
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = current
-    db.scalar.return_value = None
+    db.scalar.side_effect = [current, None]
 
     with pytest.raises(ApiError) as exc_info:
         await workspace_route._file_context(
@@ -656,7 +654,7 @@ async def test_historical_endpoints_reject_foreign_owners_and_roots(monkeypatch,
     user = _user()
     session = ChatSession(id=uuid4(), user_id=uuid4(), title="Foreign")
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    db.scalar.return_value = session
     monkeypatch.setattr(
         "mato_loop_backend.api.workspace_service.SettingsStore.load",
         AsyncMock(return_value=InstanceLimits()),

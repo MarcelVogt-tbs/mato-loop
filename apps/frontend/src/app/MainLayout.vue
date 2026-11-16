@@ -9,7 +9,7 @@
     }"
     :style="visualViewportStyle"
   >
-    <AppNavigation v-model="drawerOpen" :confirm-discarded-edit="confirmDiscardedEdit" />
+    <AppNavigation ref="navigation" v-model="drawerOpen" :confirm-discarded-edit="confirmDiscardedEdit" />
 
     <div v-if="showFloatingControls" class="app-floating-controls" aria-label="Schnellaktionen">
       <q-btn
@@ -85,6 +85,11 @@ defineOptions({ name: 'MainLayout' })
 
 const $q = useQuasar()
 const drawerOpen = ref(!$q.screen.lt.md)
+const navigation = ref(null)
+provide('deleteActions', {
+  sessions: (session) => navigation.value?.removeSession(session, { permanent: true }),
+  projects: (project) => navigation.value?.deleteProject(project, { permanent: true })
+})
 const route = useRoute()
 const chat = useChatStore()
 const controlCenter = useControlCenterStore()

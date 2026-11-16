@@ -521,7 +521,7 @@ async def test_runtime_preserves_stored_audio_when_commit_outcome_is_uncertain(
         title="Test",
         model_config_id=model.id,
     )
-    db.scalar.side_effect = [session, None, True, True]
+    db.scalar.side_effect = [session, False, None, True, True]
 
     with pytest.raises(RuntimeError, match="commit failed"):
         await AgentRuntime.start(
@@ -595,7 +595,7 @@ async def test_runtime_waits_for_commit_before_propagating_cancellation(
         title="Test",
         model_config_id=model.id,
     )
-    db.scalar.side_effect = [session, None, True, True]
+    db.scalar.side_effect = [session, False, None, True, True]
     schedule = MagicMock()
     monkeypatch.setattr(AgentRuntime, "_schedule_run", schedule)
     task = asyncio.create_task(

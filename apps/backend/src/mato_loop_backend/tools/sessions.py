@@ -28,6 +28,7 @@ from mato_loop_backend.permissions.policy import (
     session_permission,
     session_search_permission,
 )
+from mato_loop_backend.sessions.state import deleted_session_clause
 from mato_loop_backend.sessions.trust import session_visibility_filters
 from mato_loop_backend.settings import TrustLevel
 from mato_loop_backend.tools.actions import (
@@ -180,10 +181,15 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
             field="after_message_id",
             params={"retryArguments": retry_arguments},
         )
+    target, current_permission = await session_read_permission(context, target_id)
     if target is None:
-        target, _permission = await session_read_permission(context, target_id)
-        if target is None:
-            return ToolResult.error("session.notFound")
+        return ToolResult.error("session.notFound")
+    if current_permission.capability != permission.capability:
+        if not await tools_access.allow(context, current_permission):
+            return ToolResult.error("permission.denied")
+        target, final_permission = await session_read_permission(context, target_id)
+        if target is None or final_permission.capability != current_permission.capability:
+            return ToolResult.error("permission.denied")
     records = list(
         (
             await context.db.scalars(
@@ -308,6 +314,7 @@ async def _session_read(arguments: SessionReadArguments, context: ToolContext) -
 async def session_read_permission(context: ToolContext, target_id: UUID):
     target = await context.db.scalar(select(ChatSession).where(
         ChatSession.id == target_id,
+        ~deleted_session_clause(),
         ChatSession.user_id == context.session.user_id,
         or_(ChatSession.session_type == "chat", ChatSession.id == context.session.id),
         or_(ChatSession.parent_session_id.is_(None), ChatSession.parent_session_id == context.session.id,
@@ -402,6 +409,7 @@ async def _session_browse(
             .where(
                 ChatSession.user_id == context.session.user_id,
                 ChatSession.id != context.session.id,
+                ~deleted_session_clause(),
                 ChatSession.session_type == "chat",
                 or_(ChatSession.parent_session_id.is_(None), ChatSession.parent_session_id == context.session.id),
                 *session_visibility_filters(TrustLevel.PRIVATE if arguments.include_private else context.model_trust_level),
@@ -460,6 +468,7 @@ async def _session_search(
             .where(
                 ChatSession.user_id == context.session.user_id,
                 ChatSession.id != context.session.id,
+                ~deleted_session_clause(),
                 ChatSession.session_type == "chat",
                 or_(ChatSession.parent_session_id.is_(None), ChatSession.parent_session_id == context.session.id),
                 *session_visibility_filters(TrustLevel.PRIVATE if arguments.include_private else context.model_trust_level),

@@ -67,12 +67,13 @@ export const useProjectStore = defineStore('projects', {
       await this.fetchAll()
       return data
     },
-    async remove(id, { automationMode = null, automationImpact, suppressErrorToast = false } = {}) {
+    async remove(id, { permanent = false, automationMode = null, automationImpact, suppressErrorToast = false } = {}) {
       const config = {
         ...(suppressErrorToast ? { suppressErrorToast: true } : {}),
         params: {
+          permanent,
           ...(automationMode ? { automationMode } : {}),
-          automationImpact
+          ...(automationImpact ? { automationImpact } : {})
         }
       }
       await api.delete(`/projects/${id}`, config)

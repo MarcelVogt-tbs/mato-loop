@@ -72,6 +72,11 @@ def env(monkeypatch):
                 raise OperationalError("select", {}, Exception("unavailable"))
             return objects.get((model, key))
 
+        async def scalar(self, _statement):
+            if self.failure:
+                raise OperationalError("select", {}, Exception("unavailable"))
+            return False
+
         async def __aenter__(self):
             return self
 

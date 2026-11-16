@@ -842,7 +842,7 @@ async def test_start_persists_effective_run_policy_snapshot(
         trust_level=session_trust,
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, True, True]
+    db.scalar.side_effect = [session, False, None, True, True]
 
     requested_run_id = uuid4()
     run = await AgentRuntime.start(
@@ -885,7 +885,7 @@ async def test_start_accepts_unavailable_model_for_persisted_host_failure(monkey
         model_config_id=missing_model_id,
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, True, True]
+    db.scalar.side_effect = [session, False, None, True, True]
     monkeypatch.setattr(mock_agent_runtime.EpisodeIndexService, "enqueue", AsyncMock())
     run = await AgentRuntime.start(db, session, "Nachricht")
     assert run.model_config_id is None
@@ -899,7 +899,7 @@ async def test_start_rejects_disabled_profile_before_persisting(monkeypatch) -> 
     monkeypatch.setattr(mock_agent_runtime, "load_agent_profile", AsyncMock(return_value=profile))
     session = ChatSession(id=uuid4(), user_id=uuid4(), agent_profile_id=profile.id)
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, True]
+    db.scalar.side_effect = [session, False, None, True]
 
     with pytest.raises(AgentRunError) as exc_info:
         await AgentRuntime.start(db, session, "Work")
@@ -935,7 +935,7 @@ async def test_start_switches_profile_with_run_and_discards_session_grants(monke
         id=uuid4(), user_id=uuid4(), agent_profile_id=uuid4(), model_config_id=model.id
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, True, True]
+    db.scalar.side_effect = [session, False, None, True, True]
 
     run = await AgentRuntime.start(
         db, session, "Next message", agent_profile_id_override=profile.id
@@ -995,7 +995,7 @@ async def test_start_schedules_title_generation_after_agent_run(monkeypatch, tit
     )
     run_id = uuid4()
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, True, True]
+    db.scalar.side_effect = [session, False, None, True, True]
 
     def assign_ids(items):
         next(item for item in items if isinstance(item, AgentRun)).id = run_id

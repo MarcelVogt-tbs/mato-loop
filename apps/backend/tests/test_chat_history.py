@@ -272,7 +272,7 @@ async def test_runtime_retry_rejects_unowned_or_revoked_execution_agent(
         execution_agent_id=uuid4(),
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [True, None]
+    db.scalar.side_effect = [False, True, None]
     monkeypatch.setattr(
         SettingsStore,
         "load",

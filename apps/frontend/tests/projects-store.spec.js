@@ -77,7 +77,7 @@ describe('projects store', () => {
       instructions: renamed.instructions
     })
     expect(api.delete).toHaveBeenCalledWith('/projects/project-1', {
-      params: { automationImpact: 'impact-token' }
+      params: { permanent: false, automationImpact: 'impact-token' }
     })
     expect(store.items).toEqual([])
   })
@@ -177,6 +177,7 @@ describe('projects store', () => {
     })
     expect(api.delete).toHaveBeenCalledWith('/projects/project-1', {
       params: {
+        permanent: false,
         automationMode: 'deleteAutomations',
         automationImpact: 'impact-token'
       }

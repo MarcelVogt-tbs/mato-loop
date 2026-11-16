@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.models import AgentRun, ChatSession, MemoryDreamRun, Message
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.providers.service import ProviderService
+from mato_loop_backend.sessions.state import deleted_session_clause
 from mato_loop_backend.sessions.trust import effective_session_trust, session_visibility_filters
 from mato_loop_backend.settings import (
     AgentRuntimeSettings,
@@ -83,6 +84,7 @@ async def prepare_summary(db, session, settings, model, *, explicit: bool) -> tu
         return None, []
     latest = await db.scalar(select(Message).where(
         Message.session_id == session.id, Message.role.in_(["user", "assistant"]),
+        Message.chat_session.has(~deleted_session_clause()),
         Message.generation_status == "completed", Message.error_code.is_(None), Message.content != "",
     ).order_by(Message.created_at.desc(), Message.id.desc()).limit(1))
     if latest is None:
@@ -190,6 +192,7 @@ async def selected_summaries(
         return {}
     filters = [
         ChatSession.id.in_(ids), ChatSession.user_id == owner_id,
+        ~deleted_session_clause(),
         ChatSession.id != current_session_id, ChatSession.memory_mode == "full",
         ChatSession.session_type == "chat", ChatSession.parent_session_id.is_(None),
         *session_visibility_filters(trust),

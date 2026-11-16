@@ -25,6 +25,7 @@ from mato_loop_backend.models import (
     UserAccount,
 )
 from mato_loop_backend.sessions.archive import active_session_clause, is_session_archived
+from mato_loop_backend.sessions.state import session_work_blocked
 
 logger = logging.getLogger(__name__)
 ACTIVE_STATUSES = ("queued", "running", "waiting_approval", "waiting_input")
@@ -308,8 +309,8 @@ class AutomationService:
         if expected_revision is not None and automation.revision != expected_revision:
             raise AutomationError("automation.changed", params={"currentRevision": automation.revision})
         session = await db.get(ChatSession, automation.execution_session_id)
-        if session is not None and await is_session_archived(db, session):
-            raise AutomationError("session.archived")
+        if session is not None and (blocked := await session_work_blocked(db, session)):
+            raise AutomationError(blocked)
         active = await db.scalar(select(AutomationRun.id).where(
             AutomationRun.automation_id == automation.id, AutomationRun.status.in_(ACTIVE_STATUSES),
             AutomationRun.agent_run_id.is_(None) | AutomationRun.agent_run_id.not_in(parked_runs()),
@@ -422,15 +423,24 @@ class AutomationService:
         run = await db.get(AutomationRun, run_id)
         if run is None:
             return
-        run.status = "failed"
-        run.error_code = code
-        run.completed_at = datetime.now(UTC)
         automation = await db.get(Automation, run.automation_id)
         message = None
         if automation is not None:
-            await db.scalar(select(ChatSession).where(
+            await db.execute(select(UserAccount.id).where(
+                UserAccount.id == automation.user_id,
+            ).with_for_update(key_share=True))
+            session = await db.scalar(select(ChatSession).where(
                 ChatSession.id == automation.execution_session_id,
-            ).with_for_update())
+            ).with_for_update().execution_options(populate_existing=True))
+            # Rollback released the claim: trash may have cancelled it in the meantime.
+            await db.refresh(run, with_for_update=True)
+            if run.status != "queued" or session is None or await session_work_blocked(db, session):
+                await db.rollback()
+                return
+        run.status = "failed"
+        run.error_code = code
+        run.completed_at = datetime.now(UTC)
+        if automation is not None:
             if await db.scalar(select(AgentRun.id).where(
                 AgentRun.session_id == automation.execution_session_id,
                 AgentRun.parent_run_id.is_(None), AgentRun.status.in_(ACTIVE_STATUSES),
@@ -464,7 +474,8 @@ class AutomationService:
                    active_session_clause(),
                    (AutomationRun.trigger == "manual") | Automation.enabled.is_(True))
             .order_by(AutomationRun.created_at, AutomationRun.id)
-            .with_for_update(of=(AutomationRun, Automation), skip_locked=True).limit(1)
+            # Claim every row Runtime.start locks without waiting behind a trash barrier.
+            .with_for_update(of=(AutomationRun, Automation, UserAccount, ChatSession), skip_locked=True).limit(1)
         )
         if run is None:
             await db.rollback()
@@ -549,7 +560,7 @@ class AutomationService:
         if source_run.automation_origin or source_run.parent_run_id is not None:
             return
         source = await db.get(ChatSession, source_run.session_id)
-        if source is None or source.parent_session_id is not None or await is_session_archived(db, source):
+        if source is None or source.parent_session_id is not None or await session_work_blocked(db, source):
             return
         # Keep only references: reading another conversation still uses its normal permission path.
         event = {"type": trigger, "sessionId": str(source.id), "runId": str(source_run.id),

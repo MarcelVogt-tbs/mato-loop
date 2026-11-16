@@ -26,6 +26,7 @@ from mato_loop_backend.execution.client import (
 )
 from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.models import ChatSession, ExecutionAgent, LoginSession, Message, UserAccount
+from mato_loop_backend.sessions.state import deleted_session_clause, is_session_deleted
 from mato_loop_backend.tools.process_output import redact_process_output
 
 MAX_RUNTIMES = 64
@@ -60,6 +61,7 @@ async def validate_terminal_access(
         if (
             session is None or session.user_id != user_id
             or session.session_type != "chat" or session.parent_session_id is not None
+            or await is_session_deleted(db, session)
         ):
             raise ExecutionClientError("session.notFound")
         if session.preferred_execution_agent_id != agent_id:
@@ -159,6 +161,7 @@ async def shell_history(user_id: UUID, session_id: UUID, agent_id: UUID) -> list
         rows = (await db.scalars(
             select(Message).join(ChatSession, ChatSession.id == Message.session_id).where(
                 ChatSession.user_id == user_id, Message.session_id == session_id, Message.role == "tool",
+                ~deleted_session_clause(),
                 Message.provider_data["_matoloop"]["toolName"].astext == "shell_run",
                 Message.provider_data["_matoloop"]["executionAgentId"].astext == str(agent_id),
             ).order_by(Message.created_at.desc(), Message.id.desc()).limit(50)

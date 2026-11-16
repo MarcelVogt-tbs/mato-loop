@@ -181,7 +181,9 @@ async def _application_lifespan(_app: FastAPI):
             await EpisodeIndexService.reconcile(db, retry_failed=True)
     except Exception:
         logger.exception("Failed to clean up stale runs and interactions during startup")
-    BackgroundProcessing.start()
+    from mato_loop_backend.api.trash_retention import purge_expired
+
+    BackgroundProcessing.start((("trash", purge_expired, 3600),))
     MemoryIndexScheduler.start()
     EpisodeIndexScheduler.start()
     CodingScheduler.start()

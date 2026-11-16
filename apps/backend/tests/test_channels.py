@@ -778,8 +778,9 @@ async def test_telegram_forwards_voice_attachment_and_unchanged_text(monkeypatch
         db.get.side_effect = [inbox, endpoint, None]
         db.scalar.side_effect = [user, endpoint, user, endpoint, inbox]
     else:
-        db.get.side_effect = [inbox, endpoint, None, None if binding == "missing" else session, inbox, endpoint]
-        db.scalar.side_effect = [user, endpoint, None, user, endpoint, inbox]
+        db.get.side_effect = [inbox, endpoint, None, inbox, endpoint]
+        db.scalar.side_effect = [user, endpoint, None, None if binding == "missing" else session,
+                                 *([] if binding == "missing" else [False]), user, endpoint, inbox]
 
     start = AsyncMock(return_value=run)
     if binding == "archived":

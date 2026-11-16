@@ -1,10 +1,31 @@
 <template>
-  <AppPage title="Archiv" subtitle="Archivierte Gespräche bleiben erhalten. Zum Weiterarbeiten wiederherstellen.">
+  <AppPage :title="isTrash ? 'Papierkorb' : 'Archiv'" :subtitle="isTrash ? 'Gelöschte Projekte und Sessions bis zur angezeigten Frist wiederherstellen oder endgültig löschen.' : 'Archivierte Gespräche bleiben erhalten. Zum Weiterarbeiten wiederherstellen.'">
     <q-banner v-if="archive.failed" rounded class="app-surface-tonal q-mb-md">
-      Das Archiv konnte nicht geladen werden.
-      <template #action><q-btn flat no-caps label="Erneut laden" @click="archive.load" /></template>
+      {{ isTrash ? 'Der Papierkorb' : 'Das Archiv' }} konnte nicht geladen werden.
+      <template #action><q-btn flat no-caps label="Erneut laden" @click="load" /></template>
     </q-banner>
-    <q-spinner v-if="archive.loading" color="primary" size="24px" aria-label="Archiv wird geladen" />
+    <q-spinner v-if="archive.loading" color="primary" size="24px" :aria-label="isTrash ? 'Papierkorb wird geladen' : 'Archiv wird geladen'" />
+    <template v-else-if="isTrash">
+      <section v-for="kind in ['projects', 'sessions']" :key="kind" class="q-mb-lg">
+        <h2 class="text-subtitle1">{{ kind === 'projects' ? 'Projekte' : 'Einzeln gelöschte Sessions' }}</h2>
+        <q-list v-if="archive.trash[kind].length" bordered separator class="rounded-borders">
+          <q-item v-for="item in archive.trash[kind]" :key="item.id">
+            <q-item-section class="text-break">
+              <q-item-label>{{ item.name || item.title }}</q-item-label>
+              <q-item-label v-if="item.projectName" caption>{{ item.projectName }}</q-item-label>
+              <q-item-label caption>{{ expired(item) ? 'Frist abgelaufen' : 'Wiederherstellbar bis' }}: {{ deadline(item.deleteAt) }}</q-item-label>
+            </q-item-section>
+            <q-item-section side>
+              <div class="row">
+                <q-btn flat round icon="restore_from_trash" :loading="restoring === item.id" :disable="expired(item) || Boolean(busy)" :aria-label="kind === 'projects' ? 'Projekt wiederherstellen' : 'Session wiederherstellen'" @click="restoreTrash(kind, item)" />
+                <q-btn flat round color="negative" icon="delete_forever" :loading="deleting === item.id" :disable="Boolean(busy)" :aria-label="kind === 'projects' ? 'Projekt endgültig löschen' : 'Session endgültig löschen'" @click="deleteTrash(kind, item)" />
+              </div>
+            </q-item-section>
+          </q-item>
+        </q-list>
+        <p v-else class="app-muted">{{ kind === 'projects' ? 'Keine gelöschten Projekte.' : 'Keine einzeln gelöschten Sessions.' }}</p>
+      </section>
+    </template>
     <template v-else>
       <h2 class="text-subtitle1"><q-icon name="folder_open" class="q-mr-sm" />Projekte</h2>
       <q-list bordered separator class="rounded-borders q-mb-lg" v-if="archive.projects.length">
@@ -36,7 +57,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import AppPage from 'src/shared/ui/AppPage.vue'
 import { useArchiveStore } from './store'
@@ -44,13 +65,42 @@ import { useChatStore } from 'src/features/chat/store'
 import { useProjectStore } from 'stores/projects'
 import { useAutomationStore } from 'stores/automations'
 
+const props = defineProps({ mode: { type: String, default: 'archive' } })
+const isTrash = computed(() => props.mode === 'trash')
+const deleteActions = inject('deleteActions', null)
 const archive = useArchiveStore()
 const chat = useChatStore()
 const projects = useProjectStore()
 const automations = useAutomationStore()
 const $q = useQuasar()
 const restoring = ref(null)
+const deleting = ref(null)
+const busy = computed(() => restoring.value || deleting.value)
+const now = ref(Date.now())
+const clock = window.setInterval(() => { now.value = Date.now() }, 1000)
+onBeforeUnmount(() => window.clearInterval(clock))
+const expired = (item) => Date.parse(item.deleteAt) <= now.value
+const deadline = (value) => new Date(value).toLocaleString('de-DE')
 const sessionRoute = (session) => ({ name: 'chat', query: { session: session.id, ...(session.projectId ? { project: session.projectId } : {}) } })
+const load = () => archive.load(props.mode)
+
+async function restoreTrash(kind, item) {
+  if (busy.value || expired(item)) return
+  restoring.value = item.id
+  try {
+    await archive.restoreTrash(kind, item.id)
+    await Promise.all([load(), projects.fetchAll(), chat.refreshSessions(null, kind === 'sessions' ? item.projectId || null : item.id), automations.fetchAutomations()])
+    $q.notify({ type: 'positive', message: kind === 'projects' ? 'Projekt wiederhergestellt.' : 'Session wiederhergestellt.' })
+  } catch { /* Axios displays errors. */ } finally { restoring.value = null }
+}
+
+async function deleteTrash(kind, item) {
+  if (busy.value) return
+  deleting.value = item.id
+  try {
+    if (await deleteActions[kind](item)) await load()
+  } catch { /* Axios displays errors. */ } finally { deleting.value = null }
+}
 
 async function loadSessions(id, more = false) {
   try { await archive.loadSessions(id, more) } catch { /* Axios displays errors. */ }
@@ -76,5 +126,5 @@ async function restoreProject(project) {
     $q.notify({ type: 'positive', message: 'Projekt wiederhergestellt' })
   } catch { /* Axios displays errors. */ } finally { restoring.value = null }
 }
-onMounted(() => archive.load())
+watch(() => props.mode, load, { immediate: true })
 </script>

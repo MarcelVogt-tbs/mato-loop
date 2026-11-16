@@ -270,7 +270,9 @@ def test_episode_ranking_deduplicates_sessions_with_session_trust_filter() -> No
     for sql in (public_sql, private_sql):
         assert "chat_sessions.user_id" in sql
         assert "chat_sessions.id !=" in sql
-        assert "chat_sessions.project_id" not in sql
+        # Project membership participates in trash filtering, not retrieval scoping.
+        assert "chat_sessions.project_id =" not in sql
+        assert "projects.delete_at IS NOT NULL" in sql
 
     global_sql = " ".join(
         str(item)
@@ -282,7 +284,8 @@ def test_episode_ranking_deduplicates_sessions_with_session_trust_filter() -> No
     )
     assert "chat_sessions.user_id" in global_sql
     assert "chat_sessions.id !=" not in global_sql
-    assert "chat_sessions.project_id" not in global_sql
+    assert "chat_sessions.project_id =" not in global_sql
+    assert "projects.delete_at IS NOT NULL" in global_sql
     assert "chat_sessions.memory_mode" not in global_sql
 
     automatic_sql = " ".join(
@@ -295,4 +298,5 @@ def test_episode_ranking_deduplicates_sessions_with_session_trust_filter() -> No
         )
     )
     assert "chat_sessions.memory_mode" in automatic_sql
-    assert "chat_sessions.project_id" not in automatic_sql
+    assert "chat_sessions.project_id =" not in automatic_sql
+    assert "projects.delete_at IS NOT NULL" in automatic_sql

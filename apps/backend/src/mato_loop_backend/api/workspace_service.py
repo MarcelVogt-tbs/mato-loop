@@ -24,6 +24,7 @@ from mato_loop_backend.models import (
     UserAccount,
 )
 from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
+from mato_loop_backend.sessions.state import deleted_session_clause
 from mato_loop_backend.settings import InstanceLimits, SettingsStore
 
 logger = logging.getLogger(__name__)
@@ -137,7 +138,9 @@ async def _file_context(
             except SessionServiceError as exc:
                 raise ApiError(exc.status_code, exc.code) from exc
         else:
-            candidate = await db.get(ChatSession, session_id)
+            candidate = await db.scalar(select(ChatSession).where(
+                ChatSession.id == session_id, ~deleted_session_clause(),
+            ))
         if candidate is None or candidate.user_id != user.id:
             raise ApiError(404, "session.notFound")
         session = candidate
@@ -154,6 +157,7 @@ async def _file_context(
                 raise ApiError(404, "file.fileNotFound")
             statement = select(ChatSession).where(
                 ChatSession.id == root_session_id,
+                ~deleted_session_clause(),
                 ChatSession.user_id == user.id,
                 ChatSession.project_id == session.project_id,
                 ChatSession.session_type == "chat",

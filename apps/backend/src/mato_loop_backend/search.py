@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mato_loop_backend.memory.episode_retrieval import EpisodeRetrievalService
 from mato_loop_backend.memory.retrieval import MemoryRetrievalStrategy
 from mato_loop_backend.models import ChatSession, Project
+from mato_loop_backend.sessions.state import deleted_session_clause
 from mato_loop_backend.sessions.trust import session_visibility_filters
 from mato_loop_backend.settings import TrustLevel
 
@@ -56,6 +57,7 @@ class GlobalSearchService:
     ) -> list[tuple[ChatSession, str | None]]:
         filters = [
             ChatSession.user_id == owner_id,
+            ~deleted_session_clause(),
             ChatSession.session_type == "chat",
             ChatSession.parent_session_id.is_(None),
             ChatSession.title.icontains(query.strip(), autoescape=True),
@@ -93,10 +95,12 @@ class GlobalSearchService:
                     ChatSession,
                     (ChatSession.project_id == Project.id)
                     & (ChatSession.user_id == Project.user_id)
+                    & ~deleted_session_clause()
                     & ChatSession.parent_session_id.is_(None),
                 )
                 .where(
                     Project.user_id == owner_id,
+                    Project.delete_at.is_(None),
                     Project.name.icontains(cleaned_query, autoescape=True),
                 )
                 .group_by(Project.id)
@@ -135,6 +139,7 @@ class GlobalSearchService:
                     await db.execute(
                         select(Project.id, Project.name).where(
                             Project.user_id == owner_id,
+                            Project.delete_at.is_(None),
                             Project.id.in_(project_ids),
                         )
                     )

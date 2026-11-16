@@ -41,12 +41,14 @@ from mato_loop_backend.api.routes.skills import router as skills_router
 from mato_loop_backend.api.routes.tbs_desk import router as tbs_desk_router
 from mato_loop_backend.api.routes.terminals import router as terminals_router
 from mato_loop_backend.api.routes.tool_settings import router as tool_settings_router
+from mato_loop_backend.api.routes.trash import router as trash_router
 from mato_loop_backend.api.routes.user_profile import router as user_profile_router
 from mato_loop_backend.api.routes.users import router as users_router
 from mato_loop_backend.api.routes.voice import router as voice_router
 from mato_loop_backend.api.routes.workspace import router as workspace_router
 
 api_router = APIRouter()
+api_router.include_router(trash_router, tags=["trash"])
 api_router.include_router(health_router, tags=["health"])
 api_router.include_router(events_router, tags=["events"])
 api_router.include_router(auth_router, tags=["auth"])

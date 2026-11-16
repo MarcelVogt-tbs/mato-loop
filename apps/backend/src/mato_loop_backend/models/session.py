@@ -125,6 +125,7 @@ class ChatSession(Base):
     )
     is_pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    delete_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     control_center: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,

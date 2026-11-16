@@ -23,6 +23,7 @@ from mato_loop_backend.models import (
 from mato_loop_backend.sessions import service
 from mato_loop_backend.sessions.contracts import ActiveFileRequest
 from mato_loop_backend.sessions.serialization import message_payload
+from mato_loop_backend.sessions.state import session_work_blocked
 from mato_loop_backend.settings import apply_session_ai, effective_model_trust, load_effective_ai
 
 ACTIVE = ("queued", "running", "waiting_approval", "waiting_input")
@@ -93,6 +94,8 @@ async def perform(
     operation_id = operation.id
     task = None
     if arguments.action == "delegate":
+        if blocked := await session_work_blocked(db, source):
+            raise service.SessionServiceError(409, blocked)
         if not arguments.instruction or not arguments.instruction.strip():
             return await _finish(db, operation_id, {"error": {"code": "validation.required"}})
         task = await db.scalar(select(VoiceDelegation).where(

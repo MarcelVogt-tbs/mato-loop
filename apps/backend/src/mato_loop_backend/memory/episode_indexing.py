@@ -19,6 +19,7 @@ from mato_loop_backend.memory.embeddings import (
     embedding_client,
 )
 from mato_loop_backend.models import ChatSession, MemoryEmbeddingStatus, Message, MessageSearchChunk
+from mato_loop_backend.sessions.state import deleted_session_clause
 
 logger = logging.getLogger(__name__)
 TARGET_CHUNK_CHARACTERS = 1_200
@@ -72,7 +73,9 @@ def chunk_message_content(content: str) -> list[str]:
 
 def _eligible_filters() -> list[object]:
     return [
-        Message.chat_session.has(ChatSession.parent_session_id.is_(None)),
+        Message.chat_session.has(
+            ChatSession.parent_session_id.is_(None) & ~deleted_session_clause()
+        ),
         Message.role.in_(("user", "assistant")),
         Message.generation_status == "completed",
         Message.error_code.is_(None),
@@ -126,9 +129,11 @@ class EpisodeIndexService:
         )
         if not _eligible(message):
             return 0
-        if await db.scalar(
-            select(ChatSession.parent_session_id).where(ChatSession.id == message.session_id)
-        ) is not None:
+        if await db.scalar(select(ChatSession.id).where(
+            ChatSession.id == message.session_id,
+            ChatSession.parent_session_id.is_(None),
+            ~deleted_session_clause(),
+        )) is None:
             return 0
         chunks = message_search_chunks(message)
         db.add_all(chunks)
@@ -262,7 +267,9 @@ class EpisodeIndexService:
         for snapshot, vector in zip(snapshots, vectors, strict=True):
             chunk_id, message_id, chunk_index, content_hash, profile = snapshot
             row = await db.get(MessageSearchChunk, chunk_id, with_for_update=True)
-            message = await db.get(Message, message_id)
+            message = await db.scalar(select(Message).where(
+                Message.id == message_id, *_eligible_filters(),
+            ))
             expected = chunk_message_content(message.content) if message and _eligible(message) else []
             if (
                 row is None

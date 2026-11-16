@@ -13,6 +13,7 @@ from sqlalchemy import select, tuple_
 import mato_loop_backend.tools.access as tools_access
 from mato_loop_backend.models import ChatSession, Message
 from mato_loop_backend.permissions.policy import PermissionDecision, session_permission
+from mato_loop_backend.sessions.state import deleted_session_clause
 from mato_loop_backend.settings import TrustLevel
 from mato_loop_backend.tools.actions import _SESSION_READ, _SESSION_STATE_WRITE
 from mato_loop_backend.tools.argument_errors import invalid_argument
@@ -51,6 +52,7 @@ class MessageMetadataArguments(ToolArguments):
 def _messages(context):
     return select(Message).join(ChatSession, ChatSession.id == Message.session_id).where(
         Message.session_id == context.session.id, ChatSession.user_id == context.session.user_id,
+        ~deleted_session_clause(),
     ).execution_options(populate_existing=True)
 
 

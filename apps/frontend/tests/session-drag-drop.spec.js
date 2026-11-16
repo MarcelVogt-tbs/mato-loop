@@ -56,7 +56,7 @@ const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, te
     quasar: { dark: { isActive: false }, screen: { lt: { sm: false, md: false, lg: false } }, platform: { is: {} }, notify: vi.fn() }
   }
 })
-vi.mock('quasar', () => ({ useQuasar: () => quasar }))
+vi.mock('quasar', async () => ({ ...await import('quasar/dist/quasar.client.js'), useQuasar: () => quasar }))
 vi.mock('vue-router', async (importOriginal) => {
   const actual = await importOriginal()
   const { reactive } = await import('vue')

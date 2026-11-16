@@ -219,7 +219,8 @@ def test_status_and_list_summary_are_compact_and_batch_active_statuses(automatio
     db.scalars.assert_awaited_once()
     query = db.scalars.await_args.args[0].compile()
     assert user.id in query.params.values()
-    assert "chat_sessions.archived_at IS NULL" in str(query)
+    assert "chat_sessions.archived_at IS NOT NULL" in str(query) and "NOT (" in str(query)
+    assert "chat_sessions.delete_at IS NOT NULL" in str(query)
     active_query = db.execute.await_args_list[0].args[0].compile()
     assert [item.id for item in items] in active_query.params.values()
     assert "definition_snapshot" not in str(active_query)
@@ -797,7 +798,7 @@ async def test_start_failure_is_visible_in_the_session(busy) -> None:
     )
     db = AsyncMock(spec=AsyncSession)
     db.get.side_effect = [run, Automation(id=run.automation_id, execution_session_id=uuid4(), task="Task")]
-    db.scalar.return_value = uuid4() if busy else None
+    db.scalar.side_effect = [ChatSession(id=uuid4()), False, uuid4() if busy else None, None, None]
 
     await AutomationService._fail_start(db, run.id, "automation.snapshotInvalid")
 

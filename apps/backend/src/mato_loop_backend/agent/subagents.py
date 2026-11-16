@@ -16,6 +16,7 @@ from mato_loop_backend.error_contract import error_payload
 from mato_loop_backend.events import run_events
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.models import AgentRun, ChatSession, Message, WebSearchPolicy
+from mato_loop_backend.sessions.state import is_session_deleted
 from mato_loop_backend.settings import (
     AgentProfileUnavailable,
     IntegrationSettings,
@@ -303,6 +304,8 @@ async def run_tasks(
             snapshot = intersect_snapshots(snapshot, offered_snapshot)
             # Serialize admission for the whole main session, including resumed children.
             await child_db.execute(select(ChatSession.id).where(ChatSession.id == session.id).with_for_update())
+            if await is_session_deleted(child_db, session):
+                return ToolResult.error("session.inTrash")
             targets = []
             for task in arguments.tasks:
                 child_session = previous = None
@@ -311,6 +314,8 @@ async def run_tasks(
                     if (child_session is None or child_session.user_id != session.user_id
                             or child_session.parent_session_id != session.id):
                         return ToolResult.error("session.notFound")
+                    if await is_session_deleted(child_db, child_session):
+                        return ToolResult.error("session.inTrash")
                     previous = await child_db.scalar(select(AgentRun).where(
                         AgentRun.session_id == child_session.id,
                         AgentRun.parent_run_id.is_(None),

@@ -72,6 +72,7 @@ from mato_loop_backend.models import (
 from mato_loop_backend.privacy import shared_protection_cache
 from mato_loop_backend.providers.base import ProviderImageInput, ProviderTurnState, ToolCall
 from mato_loop_backend.providers.reasoning import reasoning_profile
+from mato_loop_backend.sessions.state import is_session_deleted
 from mato_loop_backend.settings import (
     AgentProfileUnavailable,
     AgentRuntimeSettings,
@@ -663,6 +664,8 @@ async def execute_loop_body(
             or openscad_render_pending
         )
         model_request = model_requests + 1
+        if await is_session_deleted(db, chat_session):
+            raise AgentRunError("session.inTrash")
         model_turn = await complete_model_turn(
             cls, db, run, chat_session, visible_response,
             projection=projection,

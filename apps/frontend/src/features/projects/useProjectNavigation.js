@@ -1,5 +1,6 @@
 import { reactive, ref } from 'vue'
 import { notifyError } from 'src/utils/notifications'
+import { chooseDeletion } from 'src/features/archive/deletion-choice'
 
 export function useProjectNavigation({
   projects, chat, controlCenter, workspace, automations,
@@ -39,59 +40,60 @@ export function useProjectNavigation({
     else if (openProjectActionMenuId.value === id) openProjectActionMenuId.value = null
   }
 
-  async function deleteProject(project) {
-    if (!project) return
+  async function deleteProject(project, { permanent = false } = {}) {
+    if (!project) return false
+    try {
+      permanent = await chooseDeletion($q, 'Projekt', project.name, permanent)
+    } catch { return false }
+    if (permanent === null) return false
     let impact
     try {
       impact = await projects.deleteImpact(project.id, { suppressErrorToast: true })
     } catch (error) {
       notifyError(error)
-      return
+      return false
     }
-    if (impact.fileReferenceCount) {
+    if (permanent && impact.fileReferenceCount) {
       $q.notify({
         type: 'negative',
         message: `${impact.fileReferenceCount} Dateireferenz${impact.fileReferenceCount === 1 ? '' : 'en'} ${impact.fileReferenceCount === 1 ? 'verhindert' : 'verhindern'} das Löschen dieses Projekts.`
       })
-      return
+      return false
     }
-    const accepted = await confirm(
-      `Projekt „${project.name}“ mit ${impact.sessionCount} ${impact.sessionCount === 1 ? 'Session' : 'Sessions'} sowie allen zugehörigen Dateien und Versionen dauerhaft löschen?`,
-      'Projekt löschen?',
-      { okLabel: 'Löschen', okColor: 'negative' }
-    )
-    if (!accepted) return
+    if (permanent && !await confirm(
+      `Projekt „${project.name}“ mit ${impact.sessionCount} ${impact.sessionCount === 1 ? 'Session' : 'Sessions'} sowie allen zugehörigen Dateien und Versionen unwiderruflich löschen? Eine Wiederherstellung ist nicht möglich.`,
+      'Projekt endgültig löschen?',
+      { okLabel: 'Endgültig löschen', okColor: 'negative' }
+    )) return false
     let automationMode = null
-    if (impact.requiredAutomationCount) {
+    if (permanent && impact.requiredAutomationCount) {
       const count = impact.automationCount
       const automationsAccepted = await confirm(
         `Beim Fortfahren werden ${count} verknüpfte Automation${count === 1 ? '' : 'en'} samt Historie dauerhaft gelöscht.`,
         'Abhängige Automationen löschen?',
         { okLabel: 'Alles löschen' }
       )
-      if (!automationsAccepted) return
+      if (!automationsAccepted) return false
       automationMode = 'deleteAutomations'
     }
     const affectedTabs = controlCenter.fileTabs.filter((tab) => (
       tab.fileTarget.scope === 'session' && impact.sessionIds.includes(tab.fileTarget.rootIdentity)
     ))
     const dirtyAffectedTabs = affectedTabs.filter((tab) => workspace.fileTabDirty(tab.tabId))
-    if (dirtyAffectedTabs.length && !await confirmDiscardedEdit({ discard: false })) return
+    if (dirtyAffectedTabs.length && !await confirmDiscardedEdit({ discard: false })) return false
     let outboxDeletion
     try {
       outboxDeletion = await chat.prepareProjectOutboxDeletion(project.id, impact.sessionIds)
     } catch {
-      return
+      return false
     }
     try {
-      await projects.remove(project.id, {
-        automationMode,
-        automationImpact: impact.automationImpact
-      })
+      await projects.remove(project.id, permanent
+        ? { permanent, automationMode, automationImpact: impact.automationImpact } : { permanent })
     } catch {
       // The central API interceptor displays the error.
       await chat.restoreProjectOutboxDeletion(outboxDeletion)
-      return
+      return false
     }
     affectedTabs.forEach((tab) => workspace.discardFileTab(tab.tabId))
     delete expandedProjects[project.id]
@@ -103,18 +105,14 @@ export function useProjectNavigation({
       }
     }
     await chat.removeProjectScope(project.id, impact.sessionIds, outboxDeletion)
+    if (!permanent) void automations.fetchAutomations({ suppressErrorToast: true }).catch(() => {})
     if (automationMode) {
-      void automations.fetchAutomations({
-        suppressErrorToast: true
-      }).catch(() => {})
-      if (automationMode === 'deleteAutomations') {
-        void notifications.fetchLatest({ suppressErrorToast: true }).catch(() => {})
-      }
+      void automations.fetchAutomations({ suppressErrorToast: true }).catch(() => {})
+      void notifications.fetchLatest({ suppressErrorToast: true }).catch(() => {})
     }
-    $q.notify({ type: 'positive', message: 'Projekt gelöscht.' })
-    if (selectedProjectId.value === project.id) {
-      await router.push({ name: 'chat' })
-    }
+    $q.notify({ type: 'positive', message: permanent ? 'Projekt endgültig gelöscht.' : 'Projekt in den Papierkorb verschoben.' })
+    if (selectedProjectId.value === project.id) await router.push({ name: 'chat' })
+    return true
   }
 
   return {

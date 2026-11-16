@@ -6,7 +6,7 @@ import binascii
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID, uuid4, uuid5
 
@@ -335,22 +335,20 @@ async def owned_session(
     user_id: UUID,
     *,
     for_update: bool = False,
+    include_deleted: bool = False,
 ) -> ChatSession | None:
-    if not for_update:
-        item = await db.get(ChatSession, session_id)
-        return (
-            item
-            if item is not None
-            and item.user_id == user_id
-            and item.session_type != "automation"
-            else None
-        )
     statement = select(ChatSession).where(
         ChatSession.id == session_id,
         ChatSession.user_id == user_id,
         ChatSession.session_type == "chat",
     )
-    return await db.scalar(statement.with_for_update())
+    if not include_deleted:
+        from mato_loop_backend.sessions.state import deleted_session_clause
+
+        statement = statement.where(~deleted_session_clause())
+    if for_update:
+        statement = statement.with_for_update().execution_options(populate_existing=True)
+    return await db.scalar(statement)
 
 
 async def get_owned_session(
@@ -360,9 +358,15 @@ async def get_owned_session(
     *,
     for_update: bool = False,
 ) -> ChatSession | None:
-    item = await owned_session(db, session_id, user_id, for_update=for_update)
+    from mato_loop_backend.sessions.state import require_session_available
+
+    item = await owned_session(
+        db, session_id, user_id, for_update=for_update, include_deleted=True
+    )
     if item is not None and item.parent_session_id is not None:
         raise SessionServiceError(403, "session.readOnly")
+    if item is not None:
+        await require_session_available(db, item)
     return item
 
 
@@ -901,11 +905,15 @@ async def list_sessions(
     sort: Literal["pinned", "recent"] = "pinned",
 ) -> dict[str, Any]:
     from mato_loop_backend.sessions.archive import active_session_clause
+    from mato_loop_backend.sessions.state import deleted_session_clause
+
     if project_id is not None and standalone:
         raise SessionServiceError(400, "validation.invalid", field="projectId")
     if project_id is not None:
         owned_project = await db.scalar(
-            select(Project.id).where(Project.id == project_id, Project.user_id == user_id)
+            select(Project.id).where(
+                Project.id == project_id, Project.user_id == user_id, Project.delete_at.is_(None)
+            )
         )
         if owned_project is None:
             raise SessionServiceError(404, "project.notFound", field="projectId")
@@ -1007,6 +1015,7 @@ async def list_sessions(
             ChatSession.user_id == user_id,
             ChatSession.session_type == "chat",
             ChatSession.parent_session_id.is_(None),
+            ~deleted_session_clause(),
             ~select(SettingRecord.id).where(
                 SettingRecord.user_id == user_id,
                 SettingRecord.key == "assistant",
@@ -1110,6 +1119,8 @@ async def create_session(
         )
         if project is None:
             raise SessionServiceError(404, "project.notFound", field="projectId")
+        if project.delete_at is not None:
+            raise SessionServiceError(409, "project.inTrash")
         if project.archived_at is not None:
             raise SessionServiceError(409, "project.archived")
         if payload.run_id is not None:
@@ -1648,7 +1659,12 @@ async def update_session(
     if target_project_id is not None and target_project_id != source_project_id:
         project = await db.scalar(
             select(Project.id)
-            .where(Project.id == target_project_id, Project.user_id == user.id, Project.archived_at.is_(None))
+            .where(
+                Project.id == target_project_id,
+                Project.user_id == user.id,
+                Project.archived_at.is_(None),
+                Project.delete_at.is_(None),
+            )
             .with_for_update()
         )
         if project is None:
@@ -2019,6 +2035,7 @@ async def delete_session(
     storage_factory,
     owned_session_query,
     worktree_impact: str | None = None,
+    expired_only: bool = False,
 ) -> None:
     item = await db.scalar(
         select(ChatSession).where(
@@ -2032,6 +2049,9 @@ async def delete_session(
     if item.parent_session_id is not None:
         raise SessionServiceError(403, "session.readOnly")
     from mato_loop_backend.voice.admission import active_connection
+
+    if expired_only and (item.delete_at is None or item.delete_at > datetime.now(UTC)):
+        return
 
     if await active_connection(db, session_id):
         raise SessionServiceError(409, "voice.busy")
@@ -2106,6 +2126,8 @@ async def delete_session(
     item = await owned_session_query(db, session_id, user_id, for_update=True)
     if item is None:
         raise SessionServiceError(404, "session.notFound")
+    if expired_only and (item.delete_at is None or item.delete_at > datetime.now(UTC)):
+        return
     if await active_connection(db, session_id):
         raise SessionServiceError(409, "voice.busy")
     linked_automations = list(
@@ -2162,6 +2184,7 @@ async def delete_session(
                 storage_factory=storage_factory,
                 owned_session_query=owned_session_query,
                 worktree_impact=worktree_impact,
+                expired_only=expired_only,
             )
     session_storage = storage_factory()
     storage_sessions = [

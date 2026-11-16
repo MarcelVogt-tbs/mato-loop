@@ -52,6 +52,7 @@ from mato_loop_backend.providers.base import ProviderError, ProviderResult, Tool
 from mato_loop_backend.providers.output_budget import output_token_limit, raw_input_budget
 from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.providers.service import ProviderService
+from mato_loop_backend.sessions.state import deleted_session_clause, is_session_deleted
 from mato_loop_backend.sessions.trust import effective_session_trust
 from mato_loop_backend.settings import (
     AgentRuntimeSettings,
@@ -955,7 +956,9 @@ class DreamingService:
         active = await db.scalar(
             select(UserAccount.is_active).where(UserAccount.id == user_id)
         )
-        if active is not False and active is not None:
+        session = await db.get(ChatSession, run.session_id)
+        source_deleted = session is None or await is_session_deleted(db, session)
+        if active is not False and active is not None and not source_deleted:
             return False
         await db.rollback()
         current = await db.get(MemoryDreamRun, run.id)
@@ -964,7 +967,7 @@ class DreamingService:
             MemoryDreamStatus.RUNNING.value,
         }:
             current.status = MemoryDreamStatus.CANCELLED.value
-            current.error = "auth.accountDisabled"
+            current.error = "memory.invalidSource" if source_deleted else "auth.accountDisabled"
             current.completed_at = datetime.now(UTC)
             current.next_attempt_at = None
             await db.commit()
@@ -1014,6 +1017,7 @@ class DreamingService:
                 ChatSession.memory_mode == MemoryMode.FULL.value,
                 ChatSession.session_type == "chat",
                 ChatSession.parent_session_id.is_(None),
+                ~deleted_session_clause(),
                 UserAccount.is_active.is_(True),
             )
         )
@@ -1169,6 +1173,7 @@ class DreamingService:
     ) -> list[Message]:
         filters = [
             Message.session_id == session_id,
+            Message.chat_session.has(~deleted_session_clause()),
             Message.role.in_(["user", "assistant"]),
             Message.content != "",
             Message.error_code.is_(None),
@@ -1210,6 +1215,7 @@ class DreamingService:
                         ChatSession.memory_mode == MemoryMode.FULL.value,
                         ChatSession.session_type == "chat",
                         ChatSession.parent_session_id.is_(None),
+                        ~deleted_session_clause(),
                         UserAccount.is_active.is_(True),
                     )
                 )
@@ -1260,6 +1266,7 @@ class DreamingService:
             .where(
                 MemoryDreamRun.status == MemoryDreamStatus.QUEUED.value,
                 UserAccount.is_active.is_(True),
+                ~deleted_session_clause(),
                 or_(
                     MemoryDreamRun.next_attempt_at.is_(None),
                     MemoryDreamRun.next_attempt_at <= now,

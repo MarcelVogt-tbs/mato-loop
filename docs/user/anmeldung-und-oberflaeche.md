@@ -10,7 +10,7 @@ Administratorrechte erlauben gemeinsame Konfiguration und Kontoverwaltung, keine
 
 ## Navigation
 
-Die Seitenleiste enthält **Home**, **Chat**, **Automationen**, **Projekte** und **Sessions** in dieser Reihenfolge sowie Suche, **Variablen & Secrets**, **Archiv** und das Benutzermenü. **Chat** öffnet deinen dauerhaften persönlichen Gesprächsfaden; **Home** und das Anwendungslogo führen zur Startübersicht. Statussymbole zeigen aktive Arbeit, offene Anfragen und ungelesene Antworten. Projekt-Sessions werden beim Aufklappen geladen; **Mehr anzeigen** lädt weitere Einträge. Listenfehler können direkt erneut versucht werden.
+Die Seitenleiste enthält **Home**, **Chat**, **Automationen**, **Projekte** und **Sessions** in dieser Reihenfolge sowie Suche, **Variablen & Secrets**, **Archiv**, direkt darunter **Papierkorb** und das Benutzermenü. **Chat** öffnet deinen dauerhaften persönlichen Gesprächsfaden; **Home** und das Anwendungslogo führen zur Startübersicht. Statussymbole zeigen aktive Arbeit, offene Anfragen und ungelesene Antworten. Projekt-Sessions werden beim Aufklappen geladen; **Mehr anzeigen** lädt weitere Einträge. Listenfehler können direkt erneut versucht werden.
 
 Der persönliche Chat erscheint nicht zusätzlich unter **Sessions**. Home zeigt zuletzt aktive Unterhaltungen, offene Anfragen, kommende Automationen und Computerstatus. Manche Übersichtselemente sind auf kleinen Bildschirmen ausgeblendet; der Chat bleibt nutzbar. Eine ausdrückliche neue Unterhaltung öffnet einen leeren Entwurf.
 
@@ -27,6 +27,15 @@ Die Suche findet eigene Projekte, Sessions und Nachrichten ab zwei Zeichen. **St
 ### Archiv
 
 Über das Menü einer Session oder eines Projekts archivierst du Unterhaltungen. **Archiv** ermöglicht Lesen und Wiederherstellen. Ein archiviertes Projekt archiviert seine Sessions wirksam mit; einzeln archivierte Sessions bleiben nach der Projektwiederherstellung archiviert. Neue Aufträge benötigen die Wiederherstellung, bestehende Arbeit darf noch enden. Mehr zu Zeitplänen unter [Automationen](automationen.md).
+
+### Papierkorb
+
+Aktiviere unter **Einstellungen > Grundeinstellungen** bei Bedarf **Papierkorb verwenden** und lege die **Aufbewahrung in Tagen** fest (1–3650, Vorgabe 30). Standardmäßig ist der Papierkorb aus. Änderungen gelten nur für künftige Löschvorgänge; Deaktivieren leert ihn nicht und ändert keine bestehenden Fristen.
+
+Beim Löschen wählst du dann zwischen Verschieben in den Papierkorb und **Sofort endgültig löschen**. Im Papierkorb sind Unterhaltungen nicht lesbar und neue Aufträge gesperrt; Dateien, Worktrees und Automationen bleiben beim Verschieben erhalten. Unter **Papierkorb** siehst du Projekte und unabhängig gelöschte Sessions mit ihrer festen Wiederherstellungsfrist. Sessions innerhalb gelöschter Projekte erscheinen nicht zusätzlich. Stelle zuerst ihr Projekt wieder her. Zuvor einzeln gelöschte Sessions behalten ihre eigene Frist; der Archivstatus bleibt unverändert.
+
+!!! warning "Endgültiges Löschen ist unwiderruflich"
+    Ohne aktivierten Papierkorb oder mit **Sofort endgültig löschen** werden Inhalte dauerhaft gelöscht. Beachte dabei die zusätzlichen Hinweise zu abhängigen Automationen und einer optionalen Worktree-Entfernung. Nach Ablauf der angezeigten Frist ist keine Wiederherstellung mehr möglich; endgültiges Löschen bleibt verfügbar. Auch bei ausgeschaltetem Papierkorb erreichst du vorhandene Einträge weiterhin über die Seitenleiste.
 
 ## Verwaltungslisten
 

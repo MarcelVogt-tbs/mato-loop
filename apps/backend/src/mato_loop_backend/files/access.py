@@ -42,6 +42,7 @@ from mato_loop_backend.permissions.policy import (
     path_permission,
     project_session_path_permission,
 )
+from mato_loop_backend.sessions.state import deleted_session_clause
 from mato_loop_backend.tools.arguments import SessionFileReadArguments
 from mato_loop_backend.tools.context import ToolContext as ToolContext
 from mato_loop_backend.tools.contracts import ToolFileAction as ToolFileAction
@@ -259,6 +260,7 @@ async def project_read_files(
     target = await context.db.scalar(
         select(ChatSession).where(
             ChatSession.id == target_id,
+            ~deleted_session_clause(),
             ChatSession.user_id == context.session.user_id,
             ChatSession.project_id == context.session.project_id,
             ChatSession.session_type == "chat",

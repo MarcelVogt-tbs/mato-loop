@@ -222,6 +222,7 @@
       <div class="drawer-user-area q-pa-xs">
         <SidebarNavItem icon="key" icon-color="primary" label="Variablen &amp; Secrets" :to="{ name: 'personal-variables' }" class="q-mb-xs" @click="closeDrawerOnMobile" />
         <SidebarNavItem icon="archive" icon-color="primary" label="Archiv" :to="{ name: 'archive' }" class="q-mb-xs" @click="closeDrawerOnMobile" />
+        <SidebarNavItem icon="delete_outline" icon-color="primary" label="Papierkorb" :to="{ name: 'trash' }" class="q-mb-xs" @click="closeDrawerOnMobile" />
         <SidebarNavItem
           id="user-menu-trigger" :label="auth.username || 'Benutzer'"
           :aria-label="userMenuLabel" aria-haspopup="menu" role="button"
@@ -380,6 +381,7 @@ const {
   notifications, router, $q, confirm, selectedProjectId,
   confirmDiscardedEdit: props.confirmDiscardedEdit, openNewSession
 })
+defineExpose({ removeSession, deleteProject })
 const userInitials = computed(() => {
   const localPart = (auth.username || '').trim().split('@')[0]
   const parts = localPart.split(/[\s._-]+/).filter(Boolean)

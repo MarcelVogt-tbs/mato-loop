@@ -45,6 +45,7 @@ from mato_loop_backend.providers.base import (
     ProviderImageInput,
     ToolCall,
 )
+from mato_loop_backend.sessions.state import is_session_deleted
 from mato_loop_backend.settings import (
     AgentRuntimeSettings,
     AiSettings,
@@ -540,6 +541,8 @@ async def execute_tool_batch(
             )
             tool_context.ask_handler = partial(ask, tool_context, authorize)
             assert toolset is not None
+            if await is_session_deleted(db, session):
+                raise AgentRunError("session.inTrash")
             started_at = time.monotonic()
             if diagnostics_active:
                 schedule_diagnostic_event(

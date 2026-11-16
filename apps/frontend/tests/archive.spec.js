@@ -6,10 +6,10 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { Quasar, QBanner, QBtn, QExpansionItem, QIcon, QItem, QItemLabel, QItemSection, QLayout, QList, QPage, QPageContainer, QSpinner, Ripple } from 'quasar'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
-const mocks = vi.hoisted(() => ({ get: vi.fn(), restore: vi.fn(), refresh: vi.fn() }))
-vi.mock('src/boot/axios', () => ({ api: { get: mocks.get } }))
-vi.mock('src/features/chat/store', () => ({ useChatStore: () => ({ setArchived: mocks.restore }) }))
-vi.mock('stores/projects', () => ({ useProjectStore: () => ({}) }))
+const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), restore: vi.fn(), refresh: vi.fn() }))
+vi.mock('src/boot/axios', () => ({ api: { get: mocks.get, post: mocks.post } }))
+vi.mock('src/features/chat/store', () => ({ useChatStore: () => ({ setArchived: mocks.restore, refreshSessions: mocks.refresh }) }))
+vi.mock('stores/projects', () => ({ useProjectStore: () => ({ fetchAll: mocks.refresh }) }))
 vi.mock('stores/automations', () => ({ useAutomationStore: () => ({ fetchAutomations: mocks.refresh }) }))
 import ArchivePage from '../src/features/archive/ArchivePage.vue'
 
@@ -36,4 +36,30 @@ it('opens archived conversations and restores a session using its archive action
   await vi.waitFor(() => expect(root.textContent).toContain('Keine einzeln archivierten Sessions.'))
   expect(mocks.restore).toHaveBeenCalledWith('session', false)
   expect(router.currentRoute.value.name).toBe('archive')
+})
+
+it('keeps trash closed to previews, disables expired restore and reuses permanent deletion', async () => {
+  const active = { id: 'active', title: 'Gelöscht', projectId: null, deleteAt: '2999-01-01T00:00:00Z' }
+  const expired = { id: 'expired', title: 'Abgelaufen', deleteAt: '2000-01-01T00:00:00Z' }
+  let items = [active, expired]
+  mocks.get.mockImplementation(async () => ({ data: { projects: [], sessions: items } }))
+  mocks.post.mockImplementation(async () => { items = [expired] })
+  const remove = vi.fn().mockImplementation(async () => { items = []; return true })
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: ArchivePage, props: { mode: 'trash' } }] })
+  await router.push('/')
+  root = document.createElement('div'); document.body.append(root)
+  app = createApp({ render: () => h(QLayout, null, () => h(QPageContainer, null, () => h(RouterView))) })
+  app.provide('deleteActions', { sessions: remove })
+  app.use(createPinia()).use(router).use(Quasar, { components: { QBanner, QBtn, QItem, QItemLabel, QItemSection, QList, QPage, QSpinner }, directives: { Ripple } })
+  app.config.globalProperties.$q.notify = vi.fn()
+  app.mount(root)
+  await vi.waitFor(() => expect(root.textContent).toContain('Abgelaufen'))
+  expect(root.querySelector('a, .q-expansion-item')).toBeNull()
+  expect(root.querySelectorAll('[aria-label="Session wiederherstellen"]')[1].disabled).toBe(true)
+  root.querySelector('[aria-label="Session wiederherstellen"]').click()
+  await vi.waitFor(() => expect(mocks.post).toHaveBeenCalledWith('/trash/sessions/active/restore'))
+  await vi.waitFor(() => expect(root.querySelectorAll('[aria-label="Session endgültig löschen"]')).toHaveLength(1))
+  root.querySelector('[aria-label="Session endgültig löschen"]').click()
+  await vi.waitFor(() => expect(root.textContent).toContain('Keine einzeln gelöschten Sessions.'))
+  expect(remove).toHaveBeenCalledWith(expired)
 })

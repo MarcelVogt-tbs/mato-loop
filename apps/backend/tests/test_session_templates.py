@@ -344,7 +344,7 @@ async def test_run_start_rejects_agent_outside_session_selection(monkeypatch):
 
     session = ChatSession(id=uuid4(), user_id=uuid4(), agent_profile_id=PLAN_PROFILE_ID, session_profile={"agent_ids": [str(PLAN_PROFILE_ID)]})
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None]
+    db.scalar.side_effect = [session, False, None]
     monkeypatch.setattr("mato_loop_backend.sessions.archive.is_session_archived", AsyncMock(return_value=False))
     monkeypatch.setattr(AgentRuntime, "_ensure_user_active", AsyncMock())
     with pytest.raises(AgentRunError, match="agentProfile.selectedUnavailable"):

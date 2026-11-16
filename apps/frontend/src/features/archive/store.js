@@ -2,17 +2,25 @@ import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 
 export const useArchiveStore = defineStore('archive', {
-  state: () => ({ projects: [], sessionLists: {}, loading: false, failed: false }),
+  state: () => ({ projects: [], sessionLists: {}, trash: { projects: [], sessions: [] }, loading: false, failed: false }),
   actions: {
-    async load() {
+    async load(mode = 'archive') {
       this.loading = true
       this.failed = false
       try {
+        if (mode === 'trash') {
+          const { data } = await api.get('/trash')
+          this.trash = data
+          return
+        }
         const [{ data }] = await Promise.all([api.get('/projects', { params: { archived: true } }), this.loadSessions()])
         this.projects = data.items
       } catch {
         this.failed = true
       } finally { this.loading = false }
+    },
+    async restoreTrash(kind, id) {
+      await api.post(`/trash/${kind}/${id}/restore`)
     },
     async loadSessions(projectId = null, more = false) {
       const key = projectId || 'sessions'

@@ -20,6 +20,7 @@ from mato_loop_backend.models import (
     QueuedMessage,
     UserAccount,
 )
+from mato_loop_backend.sessions.state import deleted_session_clause, session_work_blocked
 
 logger = logging.getLogger(__name__)
 ACTIVE = ("queued", "running", "waiting_approval", "waiting_input")
@@ -31,12 +32,11 @@ def workspace_binding(session):
 
 
 async def enqueue(db, session, request_id, payload, attachments=(), *, after_run_id=None):
-    from mato_loop_backend.sessions.archive import is_session_archived
     from mato_loop_backend.sessions.commands import parse_command, prepare_command
     from mato_loop_backend.sessions.service import SessionServiceError
 
-    if await is_session_archived(db, session):
-        raise SessionServiceError(409, "session.archived")
+    if blocked := await session_work_blocked(db, session):
+        raise SessionServiceError(409, blocked)
     existing = await db.get(QueuedMessage, request_id)
     run = await db.get(AgentRun, request_id)
     if existing is not None or run is not None:
@@ -91,7 +91,7 @@ def entry_payload(entry, session):
 
 async def list_entries(db, user_id):
     rows = (await db.execute(select(QueuedMessage, ChatSession).join(ChatSession).where(
-        ChatSession.user_id == user_id,
+        ChatSession.user_id == user_id, ~deleted_session_clause(),
     ).options(selectinload(QueuedMessage.attachments).defer(QueuedAttachment.data)).order_by(QueuedMessage.position))).all()
     return [entry_payload(entry, session) for entry, session in rows]
 
@@ -125,6 +125,8 @@ async def deliver_next(session_id):
             return
         entry_id = entry.id
         try:
+            if blocked := await session_work_blocked(db, session):
+                raise SessionServiceError(409, blocked)
             if entry.after_run_id:
                 previous = await db.get(AgentRun, entry.after_run_id)
                 if previous is None or previous.session_id != session_id or previous.status != "completed":

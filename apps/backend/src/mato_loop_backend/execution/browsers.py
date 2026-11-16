@@ -59,6 +59,7 @@ from mato_loop_backend.permissions.policy import (
     integration_operation_permission,
 )
 from mato_loop_backend.providers.base import ToolCall
+from mato_loop_backend.sessions.state import is_session_deleted
 from mato_loop_backend.settings.effective import (
     AgentProfileUnavailable,
     integration_profile_available,
@@ -175,7 +176,7 @@ async def validate_browser_access(
         if session_id is not None:
             session = await db.get(ChatSession, session_id)
             if (session is None or session.user_id != owner_id or session.session_type != "chat"
-                    or session.parent_session_id is not None):
+                    or session.parent_session_id is not None or await is_session_deleted(db, session)):
                 raise ExecutionClientError("session.notFound")
             if run_id is not None:
                 from mato_loop_backend.agent.session_settings import apply_run_session_settings

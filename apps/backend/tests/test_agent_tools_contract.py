@@ -4104,7 +4104,9 @@ async def test_session_discovery_returns_private_anchor_for_direct_read(
     statement = context.db.execute.await_args.args[0]
     assert "chat_sessions.user_id" in str(statement)
     assert "chat_sessions.id !=" in str(statement)
-    assert "chat_sessions.project_id" not in str(statement.whereclause)
+    # Project membership participates in trash filtering, not discovery scoping.
+    assert "chat_sessions.project_id =" not in str(statement.whereclause)
+    assert "projects.delete_at IS NOT NULL" in str(statement.whereclause)
 
 
 async def test_session_browse_shows_public_derived_titles_to_public_models(

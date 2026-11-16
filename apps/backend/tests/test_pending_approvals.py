@@ -111,7 +111,7 @@ async def test_delete_session_secret_is_owner_and_session_bound(monkeypatch, tar
     other = store.put(other_id, {"TOKEN": "other token"})
     monkeypatch.setattr("mato_loop_backend.api.routes.approvals.session_secrets", store)
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    db.scalar.side_effect = [None] if target == "foreign_session" else [session, False]
     reference = (other if target == "foreign_secret" else own)["TOKEN"]
     secret_id = UUID(reference.removeprefix("session-secret:"))
 
@@ -283,7 +283,7 @@ async def test_revoke_permissions_deletes_only_session_wide_grants_for_owned_ses
     user = UserAccount(id=uuid4(), username="test", password_hash="hash")
     session = ChatSession(id=uuid4(), user_id=user.id, title="Projekt Aurora")
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    db.scalar.side_effect = [session, False]
 
     await revoke_permissions(session.id, user, db)
 
@@ -299,7 +299,7 @@ async def test_revoke_permissions_rejects_foreign_session() -> None:
     user = UserAccount(id=uuid4(), username="test", password_hash="hash")
     session = ChatSession(id=uuid4(), user_id=uuid4(), title="Fremde Session")
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    db.scalar.return_value = None
 
     with pytest.raises(ApiError) as exc_info:
         await revoke_permissions(session.id, user, db)

@@ -11,6 +11,7 @@ from mato_loop_backend.models import (
     ChatSession,
     Project,
 )
+from mato_loop_backend.sessions.state import archived_session_clause, deleted_session_clause
 
 
 class ArchiveRequest(BaseModel):
@@ -19,9 +20,7 @@ class ArchiveRequest(BaseModel):
 
 
 def active_session_clause():
-    return ChatSession.archived_at.is_(None) & ~select(Project.id).where(
-        Project.id == ChatSession.project_id, Project.archived_at.is_not(None),
-    ).exists()
+    return ~archived_session_clause() & ~deleted_session_clause()
 
 
 async def is_session_archived(db: AsyncSession, session: ChatSession) -> bool:

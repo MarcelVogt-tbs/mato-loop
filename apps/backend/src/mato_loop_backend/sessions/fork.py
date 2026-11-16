@@ -26,8 +26,8 @@ from mato_loop_backend.models import (
     TitleGenerationStatus,
     UserAccount,
 )
-from mato_loop_backend.sessions.archive import is_session_archived
 from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
+from mato_loop_backend.sessions.state import session_work_blocked
 from mato_loop_backend.settings import InstanceLimits, SettingsStore
 from mato_loop_backend.tools.references import is_tool_reference
 
@@ -70,8 +70,8 @@ async def _fork_session(db: AsyncSession, session_id: UUID, user_id: UUID) -> Ch
     source = await get_owned_session(db, session_id, user_id, for_update=True)
     if source is None:
         raise SessionServiceError(404, "session.notFound")
-    if await is_session_archived(db, source):
-        raise SessionServiceError(409, "session.archived")
+    if blocked := await session_work_blocked(db, source):
+        raise SessionServiceError(409, blocked)
     active_run = await ChatHistoryService._active_run(db, source.id)
     messages = await ChatHistoryService._messages(db, source.id)
     if active_run is not None:

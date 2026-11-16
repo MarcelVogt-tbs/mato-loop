@@ -78,7 +78,7 @@ async def test_session_filesystem_context_uses_selected_agent(monkeypatch) -> No
         current_directory="/home/user/project",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    db.scalar.return_value = session
     selected = _FileContext(agent_id=agent_id)
     resolve = AsyncMock(return_value=selected)
     monkeypatch.setattr("mato_loop_backend.api.workspace_service._agent_context", resolve)

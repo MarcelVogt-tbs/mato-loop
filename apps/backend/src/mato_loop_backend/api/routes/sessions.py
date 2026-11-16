@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from dataclasses import replace
+from functools import partial
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -98,6 +99,7 @@ from mato_loop_backend.sessions.serialization import (
 from mato_loop_backend.sessions.serialization import (
     session_payload as _serialize_session_payload,
 )
+from mato_loop_backend.sessions.state import deleted_session_clause
 from mato_loop_backend.sessions.templates import load_template
 from mato_loop_backend.settings import (
     InstanceLimits,
@@ -139,6 +141,23 @@ async def _mutable_session(
         )
     except session_service.SessionServiceError as exc:
         _raise_api_error(exc)
+
+
+async def _deletable_session(
+    db: AsyncSession, session_id: UUID, user_id: UUID, *,
+    for_update: bool = False, allow_deleted: bool = True,
+) -> ChatSession | None:
+    item = await _owned_session(
+        db, session_id, user_id, for_update=for_update, include_deleted=True
+    )
+    if item is not None and item.parent_session_id is not None:
+        raise session_service.SessionServiceError(403, "session.readOnly")
+    if item is not None and not allow_deleted:
+        from mato_loop_backend.sessions.state import is_session_deleted
+
+        if await is_session_deleted(db, item):
+            raise session_service.SessionServiceError(409, "session.inTrash")
+    return item
 
 
 class SessionUpdateRequest(BaseModel):
@@ -523,7 +542,11 @@ async def session_defaults(
     project = None
     if payload.project_id is not None:
         project = await db.scalar(
-            select(Project).where(Project.id == payload.project_id, Project.user_id == user.id)
+            select(Project).where(
+                Project.id == payload.project_id,
+                Project.user_id == user.id,
+                Project.delete_at.is_(None),
+            )
         )
         if project is None:
             raise ApiError(404, "project.notFound", field="projectId")
@@ -757,6 +780,7 @@ async def get_session_children(
             .where(
                 ChatSession.parent_session_id == session_id,
                 ChatSession.user_id == user.id,
+                ~deleted_session_clause(),
             )
             .order_by(ChatSession.created_at, ChatSession.spawn_index, ChatSession.id)
         )
@@ -867,7 +891,7 @@ async def session_delete_impact(
             session_id,
             user.id,
             db,
-            owned_session_query=_mutable_session,
+            owned_session_query=_deletable_session,
         )
     except session_service.SessionServiceError as exc:
         _raise_api_error(exc)
@@ -890,8 +914,22 @@ async def delete_session(
         str | None,
         Query(alias="worktreeImpact", min_length=64, max_length=64),
     ] = None,
+    permanent: bool | None = None,
 ) -> None:
     try:
+        if not permanent:
+            from mato_loop_backend.sessions.state import is_session_deleted
+            from mato_loop_backend.sessions.trash import move_to_trash
+
+            item = await _deletable_session(db, session_id, user.id)
+            if item is None:
+                raise session_service.SessionServiceError(404, "session.notFound")
+            preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id)
+            if permanent is False or preferences.trash_enabled:
+                await move_to_trash(db, item)
+                return
+            if await is_session_deleted(db, item):
+                raise session_service.SessionServiceError(409, "session.inTrash")
         await session_service.delete_session(
             session_id,
             user.id,
@@ -899,7 +937,7 @@ async def delete_session(
             automation_mode=automation_mode,
             automation_impact=automation_impact,
             storage_factory=SessionStorage,
-            owned_session_query=_mutable_session,
+            owned_session_query=partial(_deletable_session, allow_deleted=bool(permanent)),
             worktree_impact=worktree_impact,
         )
     except session_service.SessionServiceError as exc:

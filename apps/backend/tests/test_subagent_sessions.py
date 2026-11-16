@@ -60,8 +60,7 @@ def test_child_metadata_contract() -> None:
 async def test_child_owner_read_and_mutation_guard() -> None:
     child = _child(uuid4())
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = child
-    db.scalar.return_value = child
+    db.scalar.side_effect = [child, None, child, child]
     assert await service.owned_session(db, child.id, child.user_id) is child
     assert await service.owned_session(db, child.id, uuid4()) is None
     for locked in (False, True):
@@ -118,8 +117,7 @@ async def test_child_history_and_duplicate_submission_cannot_bypass_guard() -> N
     with pytest.raises(ChatHistoryError, match="session.readOnly"):
         await ChatHistoryService._owned_session(db, child.id, child.user_id)
     run = AgentRun(id=uuid4(), session_id=child.id, status="queued")
-    db.scalar.return_value = run
-    db.get.return_value = child
+    db.scalar.side_effect = [run, child]
     with pytest.raises(service.SessionServiceError, match="session.readOnly"):
         await service.duplicate_submission_response(
             db, run.id, child.user_id,
@@ -136,7 +134,7 @@ async def test_children_endpoint_returns_latest_normal_run_and_owner_bound_order
     second.spawn_index = 1
     run = AgentRun(id=uuid4(), session_id=child.id, status="running")
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = parent
+    db.scalar.return_value = parent
     db.execute.return_value = MagicMock(all=lambda: [(child, run), (second, None)])
     result = await routes.get_session_children(parent.id, user, db)
     assert result[0] == {
@@ -149,7 +147,7 @@ async def test_children_endpoint_returns_latest_normal_run_and_owner_bound_order
     assert user.id in query.params.values() and parent.id in query.params.values()
     assert "agent_runs.parent_run_id IS NULL" in str(query)
     assert "ORDER BY chat_sessions.created_at, chat_sessions.spawn_index, chat_sessions.id" in str(query)
-    db.get.return_value = None
+    db.scalar.return_value = None
     with pytest.raises(ApiError) as error:
         await routes.get_session_children(parent.id, user, db)
     assert error.value.status_code == 404
@@ -160,7 +158,8 @@ async def test_child_normal_run_get_and_sse_remain_readable() -> None:
     child = _child(user.id)
     run = AgentRun(id=uuid4(), session_id=child.id, status="completed")
     db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = [child, run, child, run]
+    db.scalar.return_value = child
+    db.get.side_effect = [run, run]
     assert (await routes.get_run(child.id, run.id, user, db))["id"] == str(run.id)
     response = await routes.stream_run_events(child.id, run.id, user, db)
     events = [event async for event in response.body_iterator]
@@ -180,7 +179,7 @@ async def test_children_excluded_from_list_retrieval_and_indexing() -> None:
         owner_id=uuid4(), current_session_id=None, readable_by=TrustLevel.PRIVATE,
     ))
     child = _child(uuid4())
-    db.scalar.return_value = child.parent_session_id
+    db.scalar.return_value = None
     message = Message(
         id=uuid4(), session_id=child.id, role="assistant", content="Do not index",
         generation_status="completed",
@@ -233,7 +232,7 @@ async def test_parent_delete_cancels_descendants_before_trashing_all_storage(tmp
     cancel = AsyncMock(side_effect=cancel_descendants)
     monkeypatch.setattr(AgentRuntime, "cancel_descendants", cancel, raising=False)
     monkeypatch.setattr(routes, "SessionStorage", lambda: storage)
-    await routes.delete_session(parent.id, user, db)
+    await routes.delete_session(parent.id, user, db, permanent=True)
     cancel.assert_awaited_once_with(parent.id)
     assert all(not path.exists() for path in paths)
     assert storage._owners == {}

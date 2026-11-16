@@ -1835,7 +1835,11 @@ async def test_edited_mixed_command_is_approved_once_through_runtime(tmp_path, m
     PermissionGrant.__table__.create(engine)
     try:
         with Session(engine) as stored:
-            context.db.scalar.side_effect = lambda statement: agent if statement.column_descriptions[0]["entity"] is ExecutionAgent else stored.scalar(statement)
+            context.db.scalar.side_effect = lambda statement: (
+                agent if statement.column_descriptions[0]["entity"] is ExecutionAgent
+                else False if "delete_at" in str(statement)
+                else stored.scalar(statement)
+            )
             context.db.scalars.side_effect = stored.scalars
             context.db.add = Mock(side_effect=stored.add)
             context.db.commit.side_effect = stored.commit

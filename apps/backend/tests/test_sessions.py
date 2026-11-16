@@ -252,7 +252,7 @@ def test_send_message_http_response_accepts_nested_message(monkeypatch) -> None:
         content="Nachricht",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, message.id, message]
+    db.scalar.side_effect = [session, False, None, message.id, message]
     monkeypatch.setattr(AgentRuntime, "start", AsyncMock(return_value=run))
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="agent")
@@ -610,7 +610,7 @@ async def test_mark_session_read_uses_owned_assistant_message_monotonically(has_
     message_id = uuid4()
     read_at = datetime(2026, 7, 24, 12, 0, tzinfo=UTC)
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, read_at] if has_message else [session]
+    db.scalar.side_effect = [session, False, read_at] if has_message else [session, False]
 
     result = await mark_session_read(
         session.id,
@@ -625,7 +625,7 @@ async def test_mark_session_read_uses_owned_assistant_message_monotonically(has_
     if not has_message:
         assert "UPDATE notifications" in str(db.execute.await_args.args[0])
         return
-    assert message_id in statements[1].compile().params.values()
+    assert message_id in statements[2].compile().params.values()
     update_statement = db.execute.await_args_list[0].args[0]
     sql = str(update_statement)
     assert "chat_sessions.last_read_at <" in sql
@@ -917,8 +917,7 @@ async def test_first_session_retry_returns_canonical_session_and_attachment() ->
         model_name="Test",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [run, message]
-    db.get.return_value = session
+    db.scalar.side_effect = [run, session, False, message]
 
     result = await create_session(
         SessionCreateRequest(content="ignored retry content", run_id=run_id), user, db
@@ -956,8 +955,7 @@ async def test_concurrent_first_session_retry_recovers_winning_run(monkeypatch, 
         status="queued",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [None, run, message]
-    db.get.return_value = winner
+    db.scalar.side_effect = [None, run, winner, False, message]
     monkeypatch.setattr(
         SettingsStore,
         "load",
@@ -1119,7 +1117,6 @@ async def test_session_detail_contains_active_run_and_aggregate_metrics(todo_sta
         created_at=created_at,
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
     anchors = MagicMock()
     anchors.all.return_value = []
     aggregate = MagicMock()
@@ -1139,7 +1136,7 @@ async def test_session_detail_contains_active_run_and_aggregate_metrics(todo_sta
         created_at,
     )
     db.execute.side_effect = [anchors, aggregate]
-    db.scalar.return_value = run
+    db.scalar.side_effect = [session, run, run]
     todo_messages = AsyncMock()
     snapshot = Message(
         session_id=session_id,
@@ -1298,11 +1295,11 @@ async def test_session_payload_marks_latest_restart_error_retryable() -> None:
     no_automation_links = MagicMock()
     no_automation_links.all.return_value = []
     db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = [session, failed_run]
+    db.get.return_value = failed_run
     todo_messages = MagicMock()
     todo_messages.all.return_value = []
     db.scalars.side_effect = [messages, summaries, todo_messages]
-    db.scalar.return_value = None
+    db.scalar.side_effect = [session, None, None]
     db.execute.side_effect = [anchors, direct_links, no_automation_links, aggregate]
 
     result = await get_session(session.id, user, db)
@@ -1363,7 +1360,7 @@ async def test_session_owner_cannot_read_another_users_session() -> None:
     other = _user()
     session = ChatSession(id=uuid4(), user_id=owner.id, title="Privat")
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    db.scalar.return_value = None
 
     with pytest.raises(ApiError) as exc_info:
         await get_session(session.id, other, db)
@@ -1380,7 +1377,8 @@ async def test_active_run_cancellation_is_requested_without_waiting(monkeypatch,
     run = AgentRun(id=uuid4(), session_id=session_id, status="running")
     cancel = MagicMock(return_value=True)
     db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = [session, run]
+    db.scalar.side_effect = [session, False]
+    db.get.return_value = run
     monkeypatch.setattr(AgentRuntime, "cancel", cancel)
 
     result = await cancel_run(session_id, run.id, user, db, redirect=redirect)
@@ -1397,7 +1395,8 @@ async def test_terminal_run_cancel_is_idempotent(monkeypatch) -> None:
     run = AgentRun(id=uuid4(), session_id=session_id, status="completed")
     cancel = MagicMock()
     db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = [session, run]
+    db.scalar.side_effect = [session, False]
+    db.get.return_value = run
     monkeypatch.setattr(AgentRuntime, "cancel", cancel)
 
     result = await cancel_run(session_id, run.id, user, db)
@@ -1412,7 +1411,8 @@ async def test_run_cancel_checks_session_hierarchy() -> None:
     session_id = uuid4()
     session = ChatSession(id=session_id, user_id=user.id, title="Test")
     db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = [session, run]
+    db.scalar.side_effect = [session, False]
+    db.get.return_value = run
 
     with pytest.raises(ApiError) as exc_info:
         await cancel_run(session_id, run.id, user, db)
@@ -1435,7 +1435,8 @@ async def test_internal_child_run_is_not_publicly_accessible(route) -> None:
         internal_transcript=[],
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = [session, child]
+    db.scalar.side_effect = [session, False]
+    db.get.return_value = child
 
     with pytest.raises(ApiError) as exc_info:
         await route(session_id, child.id, user, db)
@@ -2259,8 +2260,8 @@ async def test_terminal_failure_is_serialized_before_sse_transaction_ends(
     )
     error_message.attachments = []
     db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = [session, run]
-    db.scalar.return_value = error_message
+    db.get.return_value = run
+    db.scalar.side_effect = [session, error_message]
     original_message_payload = message_payload
 
     def serialize_before_rollback(message, **kwargs):
@@ -2485,7 +2486,7 @@ async def test_session_delete_trashes_commits_and_purges_tree(
 
             client.request.side_effect = ExecutionClientError("git.worktreePermissionDenied", {"path": "/missing/worktree/cache"})
             with pytest.raises(ApiError) as error:
-                await delete_session(session_id, user, db, worktree_impact=token)
+                await delete_session(session_id, user, db, worktree_impact=token, permanent=True)
             assert (error.value.code, error.value.params, session_path.exists(), db.delete.await_count) == (
                 "git.worktreePermissionDenied", {"path": "/missing/worktree/cache"}, True, 0,
             )
@@ -2494,11 +2495,11 @@ async def test_session_delete_trashes_commits_and_purges_tree(
             session.current_directory = "/another/worktree"
         if worktree in {"changed", "blocked", "joined"}:
             with pytest.raises(ApiError, match="git.worktreeInUse" if worktree == "blocked" else "git.worktreeChanged"):
-                await delete_session(session_id, user, db, worktree_impact=token)
+                await delete_session(session_id, user, db, worktree_impact=token, permanent=True)
             assert (session_path.exists(), db.delete.await_count, client.request.await_count) == (True, 0, 0)
             return
 
-    await delete_session(session_id, user, db, worktree_impact=token)
+    await delete_session(session_id, user, db, worktree_impact=token, permanent=True)
 
     if worktree:
         assert client.request.await_args.args[1]["force"] is True
@@ -2526,7 +2527,7 @@ async def test_session_delete_rejects_files_referenced_by_another_session(
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: sessions)
 
     with pytest.raises(ApiError) as exc_info:
-        await delete_session(session_id, user, db)
+        await delete_session(session_id, user, db, permanent=True)
 
     assert exc_info.value.code == "session.filesReferenced"
     assert exc_info.value.params == {"referenceCount": 1}
@@ -2561,7 +2562,7 @@ async def test_session_delete_restores_tree_when_database_commit_fails(
     monkeypatch.setattr(sessions_route, "SessionStorage", lambda: sessions)
 
     with pytest.raises(RuntimeError, match="commit failed"):
-        await delete_session(session_id, user, db)
+        await delete_session(session_id, user, db, permanent=True)
 
     assert stored_file.read_text(encoding="utf-8") == "Inhalt"
     assert sessions._owners == {session_id: user.id}
@@ -2644,7 +2645,7 @@ async def test_required_search_unavailability_does_not_reject_user_message(monke
         id=uuid4(), session_id=session.id, role="user", content="Aktuelle Frage"
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, None, user_message]
+    db.scalar.side_effect = [session, False, None, None, user_message]
     start = AsyncMock(return_value=run)
     monkeypatch.setattr(AgentRuntime, "start", start)
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
@@ -2703,8 +2704,7 @@ async def test_existing_session_retry_reschedules_queued_run(monkeypatch) -> Non
         model_name="Test",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, run, message]
-    db.get.return_value = session
+    db.scalar.side_effect = [session, False, run, session, False, message]
     schedule = MagicMock()
     monkeypatch.setattr(AgentRuntime, "_schedule_run", schedule)
 
@@ -2717,7 +2717,7 @@ async def test_existing_session_retry_reschedules_queued_run(monkeypatch) -> Non
 
     assert result["runId"] == str(run.id)
     assert result["message"]["content"] == "Original"
-    assert len(db.scalar.await_args_list) == 3
+    assert len(db.scalar.await_args_list) == 6
     schedule.assert_called_once_with(run)
 
 
@@ -2730,7 +2730,7 @@ async def test_existing_session_message_passes_profile_to_next_run(monkeypatch) 
     run = AgentRun(id=uuid4(), session_id=session.id, agent_profile_id=selected_profile)
     message = Message(id=uuid4(), session_id=session.id, role="user", content="Next")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, None, message]
+    db.scalar.side_effect = [session, False, None, None, message]
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
     model = ModelConfig(provider_id=provider.id, model_id="model")
     ai = AiSettings(providers=[provider], models=[model], default_model_id=model.id)
@@ -2806,8 +2806,9 @@ async def test_existing_session_retry_rejects_owned_run_from_another_session() -
     user = _user()
     requested = ChatSession(id=uuid4(), user_id=user.id, title="Requested")
     run = AgentRun(id=uuid4(), session_id=uuid4(), status="completed")
+    original = ChatSession(id=run.session_id, user_id=user.id)
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [requested, run]
+    db.scalar.side_effect = [requested, False, run, original, False]
 
     with pytest.raises(ApiError) as exc_info:
         await send_message(
@@ -2819,7 +2820,7 @@ async def test_existing_session_retry_rejects_owned_run_from_another_session() -
 
     assert exc_info.value.status_code == 409
     assert exc_info.value.code == "http.conflict"
-    ownership_statement = db.scalar.await_args_list[1].args[0]
+    ownership_statement = db.scalar.await_args_list[2].args[0]
     assert user.id in ownership_statement.compile().params.values()
 
 
@@ -2831,7 +2832,7 @@ async def test_run_id_collision_with_another_owner_is_a_controlled_conflict(monk
     model = ModelConfig(provider_id=provider.id, model_id="agent")
     session.model_config_id = model.id
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, None, None, None]
+    db.scalar.side_effect = [session, False, None, None, None, None]
     monkeypatch.setattr(
         SettingsStore,
         "load",
@@ -2868,7 +2869,7 @@ async def test_attachment_only_message_starts_run(monkeypatch) -> None:
     run = AgentRun(id=uuid4(), session_id=session.id, status="queued")
     user_message = Message(id=uuid4(), session_id=session.id, role="user", content="")
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [session, None, None, user_message]
+    db.scalar.side_effect = [session, False, None, None, user_message]
     start = AsyncMock(return_value=run)
     monkeypatch.setattr(AgentRuntime, "start", start)
     provider = LlmProviderConfig(name="Local", adapter_type="openai-compatible")
@@ -2922,8 +2923,7 @@ async def test_session_can_switch_to_public_model(monkeypatch) -> None:
         AsyncMock(return_value=settings),
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
-    db.scalar.return_value = None
+    db.scalar.side_effect = [session.id, session, False, None]
     db.scalars.return_value = MagicMock(all=lambda: [])
 
     await update_session(
@@ -2945,8 +2945,7 @@ async def test_session_can_override_reasoning_effort() -> None:
         memory_mode="disabled",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
-    db.scalar.return_value = None
+    db.scalar.side_effect = [session.id, session, False, None]
     db.scalars.return_value = MagicMock(all=lambda: [])
 
     result = await update_session(
@@ -2973,8 +2972,7 @@ async def test_template_switch_replaces_session_overrides(monkeypatch) -> None:
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, kind, **_: ai if kind is AiProviderSettings else kind()))
     session = ChatSession(id=uuid4(), user_id=user.id, title="Test", model_config_id=uuid4(), reasoning_effort="high", memory_mode="disabled", session_profile={"agent_models": {str(uuid4()): {"model_id": str(uuid4())}}}, web_search_policy="disabled", workspace_mode="worktree")
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
-    db.scalar.return_value = None
+    db.scalar.side_effect = [session.id, session, False, None]
     db.scalars.return_value = MagicMock(all=lambda: [])
 
     result = await update_session(session.id, SessionUpdateRequest(session_template_id=DEFAULT_TEMPLATE_ID), user, db)
@@ -3015,8 +3013,7 @@ async def test_session_changes_preserve_grants_for_model_and_message_size(monkey
         }[field]})
         payload = SessionUpdateRequest(session_profile=profile)
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
-    db.scalar.return_value = None
+    db.scalar.side_effect = [session.id, session, False, None]
     db.scalars.return_value = MagicMock(all=lambda: [])
 
     await update_session(session.id, payload, user, db)
@@ -3045,8 +3042,7 @@ async def test_session_model_switch_ignores_stale_model_references(monkeypatch) 
     before = apply_session_ai(ai, session)
     profile.agent_models[PLAN_PROFILE_ID] = ChatModelOverride(model_id=replacement.id)
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
-    db.scalar.return_value = None
+    db.scalar.side_effect = [session.id, session, False, None]
     db.scalars.return_value = MagicMock(all=lambda: [])
 
     await update_session(session.id, SessionUpdateRequest(session_profile=profile), user, db)
@@ -3065,7 +3061,7 @@ async def test_manual_title_change_skips_automatic_generation(monkeypatch) -> No
         web_search_policy="available",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    db.scalar.side_effect = [session, False]
     monkeypatch.setattr(
         SettingsStore,
         "load",
@@ -3098,7 +3094,7 @@ async def test_session_can_be_pinned_during_active_run() -> None:
         web_search_policy="available",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    db.scalar.side_effect = [session, False]
 
     result = await update_session(
         session_id,
@@ -3109,7 +3105,7 @@ async def test_session_can_be_pinned_during_active_run() -> None:
 
     assert session.is_pinned is True
     assert result["pinned"] is True
-    db.scalar.assert_not_awaited()
+    assert db.scalar.await_count == 2
 
 
 async def test_control_center_state_can_be_replaced() -> None:
@@ -3126,7 +3122,7 @@ async def test_control_center_state_can_be_replaced() -> None:
         },
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    db.scalar.side_effect = [session.id, session, False]
     state = {
         "tabs": [
             {"app_id": "files", "pinned": True},
@@ -3189,15 +3185,15 @@ async def test_todo_collapse_state_round_trips_and_survives_layout_updates() -> 
         control_center={"tabs": [{"app_id": "files", "pinned": False}], "active_app_id": "files"},
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    db.scalar.side_effect = [session.id, session, False] * 3
     assert session_payload(session)["todosCollapsed"] is False
 
     result = await update_session(session.id, SessionUpdateRequest(todos_collapsed=True), user, db)
     assert result["todosCollapsed"] is True
     assert result["controlCenter"]["activeAppId"] == "files"
     assert session.control_center["todos_collapsed"] is True
-    db.scalar.assert_awaited_once()  # UI changes only lock the session, even during a run.
-    assert "FOR UPDATE" in str(db.scalar.await_args.args[0])
+    assert db.scalar.await_count == 3  # Lock, ownership and trash availability.
+    assert "FOR UPDATE" in str(db.scalar.await_args_list[0].args[0])
 
     result = await update_session(
         session.id, SessionUpdateRequest(control_center={"tabs": [], "active_app_id": None}), user, db,
@@ -3220,8 +3216,7 @@ async def test_changing_computer_preserves_terminal_preference(monkeypatch) -> N
                         "active_app_id": "terminal"},
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
-    db.scalar.return_value = None
+    db.scalar.side_effect = [session.id, session, False, None]
     db.scalars.return_value = MagicMock(all=lambda: [])
     monkeypatch.setattr(service, "load_effective_ai", AsyncMock(return_value=AiSettings()))
     monkeypatch.setattr(service, "validate_execution_preferences", AsyncMock(return_value=(None, None)))
@@ -3245,7 +3240,7 @@ async def test_control_center_layout_discards_legacy_terminal_preference(prefere
         },
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    db.scalar.side_effect = [session.id, session, False] * 2
     assert session_payload(session)["controlCenter"]["activeAppId"] == "terminal"
     result = await update_session(
         session.id, SessionUpdateRequest(control_center={
@@ -3255,7 +3250,7 @@ async def test_control_center_layout_discards_legacy_terminal_preference(prefere
     )
     assert "terminal_auto_attach" not in session.control_center
     assert result["controlCenter"]["activeAppId"] == "terminal"
-    assert "FOR UPDATE" in str(db.scalar.await_args.args[0])
+    assert "FOR UPDATE" in str(db.scalar.await_args_list[0].args[0])
 
     await update_session(
         session.id, SessionUpdateRequest(control_center={"tabs": [], "active_app_id": None}), user, db,
@@ -3436,7 +3431,7 @@ async def test_control_center_state_keeps_the_fixed_session_tab() -> None:
         memory_mode="disabled",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    db.scalar.side_effect = [session.id, session, False]
 
     result = await update_session(
         session.id,
@@ -3470,7 +3465,7 @@ async def test_control_center_state_can_change_during_active_run() -> None:
         memory_mode="disabled",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    db.scalar.side_effect = [session.id, session, False]
 
     await update_session(
         session.id,
@@ -3485,8 +3480,8 @@ async def test_control_center_state_can_change_during_active_run() -> None:
     )
 
     assert session.control_center["tabs"][1]["pinned"] is True
-    db.scalar.assert_awaited_once()
-    assert "FOR UPDATE" in str(db.scalar.await_args.args[0])
+    assert db.scalar.await_count == 3
+    assert "FOR UPDATE" in str(db.scalar.await_args_list[0].args[0])
 
 
 async def test_control_center_update_is_owner_scoped() -> None:
@@ -3494,7 +3489,7 @@ async def test_control_center_update_is_owner_scoped() -> None:
     other = _user()
     session = ChatSession(id=uuid4(), user_id=owner.id, title="Privat")
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    db.scalar.side_effect = [None, None]
 
     with pytest.raises(ApiError) as exc_info:
         await update_session(
@@ -3519,7 +3514,7 @@ async def test_project_cannot_change_during_active_run() -> None:
         web_search_policy="available",
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    db.scalar.side_effect = [session.id, session, False]
     db.scalars.return_value = MagicMock(all=lambda: [uuid4()])
 
     with pytest.raises(ApiError) as exc_info:
@@ -3552,7 +3547,7 @@ async def test_model_change_preserves_active_run_settings(monkeypatch) -> None:
     run = AgentRun(id=uuid4(), session_id=session_id, status="running")
     waiting = AgentRun(id=uuid4(), session_id=session_id, status="waiting_approval")
     db = AsyncMock(spec=AsyncSession)
-    db.get.return_value = session
+    db.scalar.side_effect = [session.id, session, False] * 2
     db.scalars.return_value = MagicMock(all=lambda: [run.id, waiting.id])
     monkeypatch.setattr(AgentRuntime, "_session_settings", {})
     monkeypatch.setattr(AgentRuntime, "_tasks", {key: SimpleNamespace(done=lambda: False) for key in (run.id, waiting.id)})

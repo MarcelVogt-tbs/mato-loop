@@ -160,7 +160,7 @@ Sessions reservieren weder Arbeitsbereiche noch gemeinsame Git-Metadaten. Eine a
 
 ## Worktree entfernen
 
-Entferne einen Worktree im Arbeitsbereich-Dialog der Git-App oder aktiviere beim Löschen einer Projekt-Session **Worktree ebenfalls entfernen**. Die Option ist zunächst aus und erscheint nur, wenn der Worktree auf dem verbundenen Computer innerhalb von drei Sekunden geprüft werden kann. Ohne diese Auswahl und beim Archivieren bleibt er erhalten. Scheitert die Entfernung, wird die Session nicht gelöscht.
+Entferne einen Worktree im Arbeitsbereich-Dialog der Git-App oder aktiviere beim endgültigen Löschen einer Projekt-Session **Worktree ebenfalls entfernen**. Die Option ist zunächst aus und erscheint nur, wenn der Worktree auf dem verbundenen Computer innerhalb von drei Sekunden geprüft werden kann. Ohne diese Auswahl, beim Verschieben in den [Papierkorb](anmeldung-und-oberflaeche.md#papierkorb) und beim Archivieren bleibt er erhalten. Scheitert die Entfernung, wird die Session nicht gelöscht.
 
 Fehlen Löschrechte in einem Verzeichnis, ist **Worktree ebenfalls entfernen** im Löschdialog deaktiviert; der Grund nennt den betroffenen Pfad. Die Session kannst du ohne Worktree entfernen. Vor der tatsächlichen Entfernung werden die Rechte erneut geprüft. Prüfe Zugriffsrechte und Eigentümer; MatoLoop ändert keine Rechte automatisch. Gleichzeitige Dateiänderungen können trotz Vorprüfung zu einem späteren Fehler führen.
 

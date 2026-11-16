@@ -68,7 +68,7 @@ async def test_fork_copies_conversation_and_files_and_handles_transaction_failur
                               content=fallback_prefix + _summary_evidence(_model_order(messages)),
                               created_at=now, is_fallback=True)
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [source, *([None] if project else []), None]
+    db.scalar.side_effect = [source, False, False, *([None] if project else []), None]
     db.scalars.side_effect = [Mock(all=Mock(return_value=messages)), Mock(all=Mock(return_value=[summary, fallback]))]
     monkeypatch.setattr(fork, "SessionStorage", lambda: storage)
     limits = InstanceLimits(user_quota_mib=1 if failure == "quota" else None)
@@ -130,7 +130,7 @@ async def test_fork_during_run_copies_only_completed_history_and_file_revisions(
     messages = [Message(id=uuid4(), role=role, content=content, attachments=[], created_at=datetime.now(UTC))
                 for role, content in [("user", "Earlier"), ("assistant", "Done"), ("user", "Continue"), ("assistant", "Working")]]
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [ChatSession(id=session_id, user_id=user_id, title="Source"),
+    db.scalar.side_effect = [ChatSession(id=session_id, user_id=user_id, title="Source"), False, False,
                              AgentRun(id=run_id, input_message_id=messages[2].id)]
     db.scalars.side_effect = [Mock(all=Mock(return_value=messages)), Mock(all=Mock(return_value=[]))]
     monkeypatch.setattr(fork, "SessionStorage", lambda: storage)
@@ -160,7 +160,7 @@ async def test_fork_remaps_stored_resource_references(tmp_path, monkeypatch):
                 }]}),
     ]
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [ChatSession(id=session_id, user_id=user_id, title="Mail"), None]
+    db.scalar.side_effect = [ChatSession(id=session_id, user_id=user_id, title="Mail"), False, False, None]
     db.scalars.side_effect = [Mock(all=Mock(return_value=messages)), Mock(all=Mock(return_value=[]))]
     monkeypatch.setattr(fork, "SessionStorage", lambda: storage)
     monkeypatch.setattr(fork.SettingsStore, "load", AsyncMock(return_value=InstanceLimits()))
@@ -208,7 +208,7 @@ async def test_fork_imports_foreign_attachment_and_companion_without_sharing_sto
         for revision in revisions
     ]}})
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [ChatSession(id=source_id, user_id=user_id, project_id=project_id, title="Source"), None, None]
+    db.scalar.side_effect = [ChatSession(id=source_id, user_id=user_id, project_id=project_id, title="Source"), False, False, None, None]
     db.scalars.side_effect = [Mock(all=Mock(return_value=[message])), Mock(all=Mock(return_value=[]))]
     monkeypatch.setattr(fork, "SessionStorage", lambda: storage)
     monkeypatch.setattr(fork.SettingsStore, "load", AsyncMock(return_value=InstanceLimits()))
@@ -260,7 +260,7 @@ async def test_fork_rejects_unavailable_sources_without_creating_data(state, cod
                          parent_session_id=uuid4() if state == "child" else None,
                          archived_at=datetime.now(UTC) if state == "archived" else None)
     db = AsyncMock(spec=AsyncSession)
-    db.scalar.side_effect = [None if state == "missing" else source, None]
+    db.scalar.side_effect = [None if state == "missing" else source, False, False]
     with pytest.raises(SessionServiceError) as error:
         await fork.fork_session(db, session_id, user_id)
     assert (error.value.code, db.add.call_count) == (code, 0)

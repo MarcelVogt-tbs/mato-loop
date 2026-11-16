@@ -17,6 +17,7 @@ const routes = [
       { path: 'dashboard', redirect: (to) => ({ name: 'chat', query: to.query, hash: to.hash }) },
       { path: 'personal-variables', name: 'personal-variables', component: () => import('src/features/personal-variables/PersonalVariablesPage.vue') },
       { path: 'archive', name: 'archive', component: () => import('src/features/archive/ArchivePage.vue') },
+      { path: 'trash', name: 'trash', component: () => import('src/features/archive/ArchivePage.vue'), props: { mode: 'trash' } },
       {
         path: 'settings',
         name: 'settings',

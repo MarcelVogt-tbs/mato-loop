@@ -24,6 +24,7 @@ from mato_loop_backend.sessions.context_state import (
     replace_session_context,
     session_context_state,
 )
+from mato_loop_backend.sessions.state import is_session_deleted
 from mato_loop_backend.settings import TrustLevel
 from mato_loop_backend.tools.actions import (
     _SESSION_READ,
@@ -59,7 +60,10 @@ class SessionStateArguments(ToolArguments):
 
 
 async def session_read_permission(context, target_id):
-    return await context_session_permission(context.db, context.session, target_id, context.model_trust_level)
+    target, permission = await context_session_permission(context.db, context.session, target_id, context.model_trust_level)
+    if target is not None and await is_session_deleted(context.db, target):
+        target = None
+    return target, permission
 
 
 async def session_state_permissions(arguments, context):

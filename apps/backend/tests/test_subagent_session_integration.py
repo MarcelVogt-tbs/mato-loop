@@ -22,7 +22,7 @@ import mato_loop_backend.execution.terminals as execution_terminals
 from mato_loop_backend.agent.runtime import AgentRuntime
 from mato_loop_backend.api import workspace_service
 from mato_loop_backend.api.errors import register_error_handlers
-from mato_loop_backend.api.routes import approvals, projects, sessions, workspace
+from mato_loop_backend.api.routes import approvals, projects, sessions, trash, workspace
 from mato_loop_backend.automations import AutomationError, AutomationService
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import get_db_session
@@ -41,9 +41,11 @@ from mato_loop_backend.models import (
     QueuedAttachment,
     QueuedMessage,
     UserAccount,
+    VoiceConnection,
 )
 from mato_loop_backend.security import require_user
 from mato_loop_backend.sessions import cleanup
+from mato_loop_backend.settings import SettingsStore, UserPreferences
 from mato_loop_backend.settings.models import (
     PLAN_PROFILE_ID,
     AiSettings,
@@ -204,7 +206,7 @@ async def test_database_spawn_constraints_and_message_relationships(tree):
 @pytest.fixture
 async def client(tree):
     app = FastAPI()
-    for module in (sessions, workspace, approvals):
+    for module in (sessions, workspace, approvals, projects, trash):
         app.include_router(module.router, prefix="/api")
     register_error_handlers(app)
     app.dependency_overrides[require_user] = lambda: tree.user
@@ -361,8 +363,13 @@ async def test_session_delete_with_persistent_user_after_rollback(tree, client, 
         project_id = parent.project_id = project.id
         storage.remove_session(parent.id)
         storage.provision(parent.id, project_id)
-        RootFileService(parent.id, project_id=project_id, session_storage=storage).write_file(
-            FileRoot.SESSION, "shared.txt", "preserve"
+        survivor = ChatSession(user_id=tree.user.id, project_id=project_id, title="Preserved session")
+        db.add(survivor)
+        await db.flush()
+        survivor_id = survivor.id
+        storage.provision(survivor_id, project_id)
+        RootFileService(survivor_id, project_id=project_id, session_storage=storage).write_file(
+            FileRoot.SESSION, "retained.txt", "preserve"
         )
         await db.commit()
 
@@ -375,7 +382,8 @@ async def test_session_delete_with_persistent_user_after_rollback(tree, client, 
     assert list(storage.trash_dir.iterdir()) == []
     if in_project:
         assert await db.get(Project, project_id) is not None
-        assert (storage.logical_root_path(ids[0], project_id) / "files" / "shared.txt").read_text() == "preserve"
+        assert await db.get(ChatSession, survivor_id) is not None
+        assert (storage.logical_root_path(survivor_id, project_id) / "files" / "retained.txt").read_text() == "preserve"
 
 
 async def test_project_delete_cleans_cross_project_descendants_and_preserves_other_project(tree):
@@ -391,19 +399,25 @@ async def test_project_delete_cleans_cross_project_descendants_and_preserves_oth
     await db.flush()
     assert await projects._session_count(db, project) == 1
     child.project_id = other.id
-    for session in (parent, child):
+    survivor = ChatSession(user_id=user_id, project_id=other.id, title="Preserved session")
+    db.add(survivor)
+    await db.flush()
+    survivor_id = survivor.id
+    for session in (parent, child, survivor):
         storage.remove_session(session.id)
         storage.provision(session.id, session.project_id)
     other_project_id = other.id
-    other_root = storage.logical_root_path(child.id, other.id)
-    RootFileService(child.id, project_id=other.id, session_storage=storage).write_file(FileRoot.SESSION, "shared.txt", "preserve")
+    other_root = storage.logical_root_path(survivor_id, other.id)
+    RootFileService(survivor_id, project_id=other.id, session_storage=storage).write_file(FileRoot.SESSION, "retained.txt", "preserve")
     await db.commit()
     impact = await projects.project_delete_impact(project.id, tree.user, db)
     assert impact["sessionCount"] == 1
     await projects.delete_project(project.id, tree.user, db, automation_impact=impact["automationImpact"])
     assert not (await db.scalars(select(ChatSession.id).where(ChatSession.id.in_(ids)))).all()
     assert await db.get(Project, other_project_id) is not None
-    assert (other_root / "files" / "shared.txt").read_text() == "preserve"
+    assert await db.get(ChatSession, survivor_id) is not None
+    assert (other_root / "files" / "retained.txt").read_text() == "preserve"
+    assert not storage.session_path(ids[0], project_id=project.id).exists()
     assert not storage.session_path(ids[1], project_id=other_project_id).exists()
     assert not storage.session_path(ids[2]).exists()
     assert list(storage.trash_dir.iterdir()) == []
@@ -551,6 +565,154 @@ async def test_archive_restoration_keeps_individual_session_state_and_drops_queu
     assert not await is_session_archived(db, session)
     assert automation.enabled and session.project_id == project.id
     assert await AutomationService.enqueue_due(db) == 0
+
+
+@pytest.fixture
+async def trash_tree(tree, monkeypatch):
+    await SettingsStore.save(tree.db, UserPreferences(trash_enabled=True, trash_retention_days=7), user_id=tree.user.id)
+    await tree.db.commit()
+    # All fixture runs are completed; cancellation otherwise opens an unrelated transaction.
+    monkeypatch.setattr(AgentRuntime, "cancel_descendants", AsyncMock())
+    return tree
+
+
+async def test_trash_session_preserves_history_files_and_fixed_deadline(trash_tree, client):
+    tree = trash_tree
+    db = tree.db
+    parent, child, _ = [row[0] for row in tree.records]
+    ids = [row[0].id for row in tree.records]
+    history = set(await db.execute(select(Message.id, Message.content).where(Message.session_id.in_(ids))))
+    voice = VoiceConnection(session_id=child.id, user_id=tree.user.id, provider_id=uuid4(), model_id=uuid4(),
+                            status="active", lease_until=datetime.now(UTC) + timedelta(minutes=5))
+    db.add(voice)
+    await db.commit()
+    blocked = await client.delete(f"/api/sessions/{parent.id}")
+    assert (blocked.status_code, blocked.json()["error"]["code"]) == (409, "voice.busy")
+    await db.refresh(parent)
+    assert parent.delete_at is None
+    voice.status = "ended"
+    await db.commit()
+    before = datetime.now(UTC)
+    response = await client.delete(f"/api/sessions/{parent.id}")
+    assert response.status_code == 204, response.text
+    await db.refresh(parent)
+    deadline = parent.delete_at
+    assert before + timedelta(days=7) <= deadline <= datetime.now(UTC) + timedelta(days=7)
+    await SettingsStore.save(db, UserPreferences(trash_enabled=False, trash_retention_days=1), user_id=tree.user.id)
+    await db.commit()
+    listing = (await client.get("/api/trash")).json()
+    assert [(item["id"], datetime.fromisoformat(item["deleteAt"])) for item in listing["sessions"]] == [(str(parent.id), deadline)]
+    for session_id in ids:
+        assert (await client.get(f"/api/sessions/{session_id}")).status_code == 404
+        assert (tree.storage.logical_root_path(session_id, None) / "files" / "note.txt").read_text() == "original"
+    assert set(await db.execute(select(Message.id, Message.content).where(Message.session_id.in_(ids)))) == history
+    assert set(await db.scalars(select(AgentRun.id).where(AgentRun.session_id.in_(ids)))) == {row[1].id for row in tree.records}
+    assert (await client.post(f"/api/trash/sessions/{parent.id}/restore")).status_code == 204
+    assert (await client.get(f"/api/sessions/{child.id}")).status_code == 200
+
+
+async def test_trash_project_restore_preserves_archive_and_individual_trash(trash_tree, client):
+    tree = trash_tree
+    db = tree.db
+    parent = tree.records[0][0]
+    archived_at = datetime.now(UTC) - timedelta(days=1)
+    project = Project(user_id=tree.user.id, name="Recoverable project", archived_at=archived_at)
+    db.add(project)
+    await db.flush()
+    parent.project_id = project.id
+    parent.archived_at = archived_at
+    independent = ChatSession(user_id=tree.user.id, project_id=project.id, title="Individually deleted")
+    db.add(independent)
+    await db.commit()
+    assert (await client.delete(f"/api/sessions/{independent.id}")).status_code == 204
+    deadline = independent.delete_at
+    assert (await client.delete(f"/api/projects/{project.id}")).status_code == 204
+    listing = (await client.get("/api/trash")).json()
+    assert [item["id"] for item in listing["projects"]] == [str(project.id)]
+    assert listing["sessions"] == []
+    blocked = await client.post(f"/api/trash/sessions/{independent.id}/restore")
+    assert (blocked.status_code, blocked.json()["error"]["code"]) == (409, "trash.parentDeleted")
+    assert (await client.post(f"/api/trash/projects/{project.id}/restore")).status_code == 204
+    await db.refresh(project)
+    await db.refresh(parent)
+    await db.refresh(independent)
+    assert (project.delete_at, project.archived_at, parent.archived_at, independent.delete_at) == (
+        None, archived_at, archived_at, deadline,
+    )
+    assert [item["id"] for item in (await client.get("/api/trash")).json()["sessions"]] == [str(independent.id)]
+
+
+async def test_trash_restore_rejects_expired_and_foreign_entries(trash_tree, client):
+    tree = trash_tree
+    session = tree.records[0][0]
+    session.delete_at = datetime.now(UTC) - timedelta(seconds=1)
+    deadline = session.delete_at
+    foreign = Project(user_id=tree.foreign.id, name="Private trash", delete_at=datetime.now(UTC) + timedelta(days=1))
+    foreign_session = ChatSession(user_id=tree.foreign.id, title="Private session", delete_at=foreign.delete_at)
+    tree.db.add_all([foreign, foreign_session])
+    await tree.db.commit()
+    expired = await client.post(f"/api/trash/sessions/{session.id}/restore")
+    assert (expired.status_code, expired.json()["error"]["code"]) == (409, "trash.expired")
+    for kind, item in (("projects", foreign), ("sessions", foreign_session)):
+        response = await client.post(f"/api/trash/{kind}/{item.id}/restore")
+        assert (response.status_code, response.json()["error"]["code"]) == (404, "trash.notFound")
+    listing = (await client.get("/api/trash")).json()
+    assert listing["projects"] == []
+    assert [item["id"] for item in listing["sessions"]] == [str(session.id)]
+    await tree.db.refresh(session)
+    assert session.delete_at == deadline
+
+
+async def test_trash_automatic_purge_only_due_and_rechecks_after_cancellation(trash_tree, monkeypatch):
+    from mato_loop_backend.api import trash_retention
+
+    tree = trash_tree
+    db = tree.db
+    ids = [row[0].id for row in tree.records]
+    past = datetime.now(UTC) - timedelta(days=1)
+    tree.records[0][0].delete_at = past
+    rescued = ChatSession(user_id=tree.user.id, title="Restored during purge", delete_at=past)
+    future = ChatSession(user_id=tree.user.id, title="Not due", delete_at=datetime.now(UTC) + timedelta(days=1))
+    db.add_all([rescued, future])
+    await db.commit()
+    rescued_id, future_id = rescued.id, future.id
+    for session_id in (rescued_id, future_id):
+        tree.storage.provision(session_id)
+
+    async def restore_before_final_lock(session_id):
+        if session_id == rescued_id:
+            item = await db.get(ChatSession, rescued_id)
+            item.delete_at = None
+            await db.commit()
+
+    monkeypatch.setattr(AgentRuntime, "cancel_descendants", restore_before_final_lock)
+    monkeypatch.setattr(trash_retention, "AsyncSessionFactory", lambda: nullcontext(db))
+    monkeypatch.setattr(trash_retention, "SessionStorage", lambda: tree.storage)
+    await trash_retention.purge_expired()
+    assert not list(await db.scalars(select(ChatSession.id).where(ChatSession.id.in_(ids))))
+    assert all(not tree.storage.session_path(session_id).exists() for session_id in ids)
+    assert set(await db.scalars(select(ChatSession.id).where(ChatSession.id.in_((rescued_id, future_id))))) == {rescued_id, future_id}
+    assert all(tree.storage.session_path(session_id).exists() for session_id in (rescued_id, future_id))
+
+
+async def test_trash_pauses_automations_and_restore_skips_missed_schedules(trash_tree, client):
+    tree = trash_tree
+    db = tree.db
+    session = tree.records[0][0]
+    past = datetime.now(UTC) - timedelta(days=1)
+    automation = await AutomationService.create(db, user_id=tree.user.id, session_id=session.id,
+        name="Report", task="Report", enabled=True, schedules=[{"run_at": past, "enabled": True}], now=past - timedelta(seconds=1))
+    queued = await AutomationService.enqueue_manual(db, automation.id, tree.user.id)
+    assert (await client.delete(f"/api/sessions/{session.id}")).status_code == 204
+    await db.refresh(queued)
+    assert queued.status == "cancelled"
+    with pytest.raises(AutomationError, match="session.inTrash"):
+        await AutomationService.enqueue_manual(db, automation.id, tree.user.id)
+    assert await AutomationService.enqueue_due(db) == 0
+    assert (await client.post(f"/api/trash/sessions/{session.id}/restore")).status_code == 204
+    assert automation.enabled
+    assert await AutomationService.enqueue_due(db) == 0
+    assert list(await db.scalars(select(AutomationRun.id).where(AutomationRun.automation_id == automation.id))) == [queued.id]
 
 
 @pytest.mark.parametrize("trigger", ["agent_response", "agent_error"])
