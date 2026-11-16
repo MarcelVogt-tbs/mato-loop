@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
@@ -80,6 +80,9 @@ class PasswordChangeRequest(BaseModel):
 class UserPreferencesRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    sessions_position: Literal["aboveProjects", "belowProjects"] = Field(
+        default="belowProjects", alias="sessionsPosition",
+    )
     preferred_language: str | None = Field(
         default=None, alias="preferredLanguage", min_length=2, max_length=35,
         pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$",
@@ -92,7 +95,10 @@ async def get_user_preferences(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
     settings = await SettingsStore.load(db, UserPreferences, user_id=user.id)
-    return {"preferredLanguage": settings.preferred_language}
+    return {
+        "preferredLanguage": settings.preferred_language,
+        "sessionsPosition": settings.sessions_position,
+    }
 
 
 @router.put("/me/preferences")
@@ -102,10 +108,14 @@ async def update_user_preferences(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
     settings = await SettingsStore.load(db, UserPreferences, user_id=user.id, for_update=True)
-    settings.preferred_language = payload.preferred_language
+    for field in payload.model_fields_set:
+        setattr(settings, field, getattr(payload, field))
     await SettingsStore.save(db, settings, user_id=user.id)
     await db.commit()
-    return {"preferredLanguage": settings.preferred_language}
+    return {
+        "preferredLanguage": settings.preferred_language,
+        "sessionsPosition": settings.sessions_position,
+    }
 
 
 def _payload(user: UserAccount) -> dict[str, str | bool]:

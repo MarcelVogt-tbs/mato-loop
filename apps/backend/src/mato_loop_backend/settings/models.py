@@ -1813,6 +1813,7 @@ class UserPreferences(SettingsDocument):
 
     dark_mode: bool = False
     session_drawer_open: bool = True
+    sessions_position: Literal["aboveProjects", "belowProjects"] = "belowProjects"
     project_order: list[UUID] = Field(default_factory=list)
     default_execution_agent_id: UUID | None = None
     preferred_language: str | None = Field(

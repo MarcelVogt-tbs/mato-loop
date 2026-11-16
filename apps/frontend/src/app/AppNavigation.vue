@@ -76,7 +76,8 @@
               <q-item v-if="automations.loaded && !automations.items.length" dense class="q-px-sm"><q-item-section><q-item-label caption>Noch keine Automationen</q-item-label></q-item-section></q-item>
             </q-list>
           </section>
-          <section aria-labelledby="projects-heading" class="q-mx-xs">
+          <div v-for="section in sidebarSections" :key="section">
+          <section v-if="section === 'projects'" aria-labelledby="projects-heading" class="q-mx-xs">
             <SidebarNavItem
               :icon="mdiFolderOutline" icon-color="primary" label="Projekte" label-id="projects-heading" :expanded="projectsSectionOpen"
               aria-controls="project-list" :aria-expanded="projectsSectionOpen"
@@ -119,7 +120,7 @@
               >
                 <template #header>
                   <q-item-section side class="q-pr-sm">
-                    <q-icon :name="expandedProjects[project.id] ? mdiFolderOpenOutline : mdiFolderOutline" :color="$q.dark.isActive ? 'white' : 'dark'" size="22px" />
+                    <q-icon :name="expandedProjects[project.id] ? mdiFolderOpenOutline : mdiFolderOutline" :color="$q.dark.isActive ? 'white' : 'dark'" size="var(--sidebar-icon-size, 22px)" />
                   </q-item-section>
                   <q-item-section>
                     <q-item-label lines="1" class="text-body2" :class="{ 'text-weight-medium': project.hasUnreadMessages }">
@@ -174,8 +175,8 @@
               </q-item>
             </q-list>
           </section>
-
           <section
+            v-else
             class="q-mx-xs q-mt-xs"
             :class="{ 'app-surface-tonal': sessionDropTarget === null }"
             aria-labelledby="sessions-heading"
@@ -214,6 +215,7 @@
               @retry="loadStandaloneSessions(true)"
             />
           </section>
+          </div>
         </q-scroll-area>
       </div>
 
@@ -227,7 +229,7 @@
           <template #icon>
             <q-item-section side class="q-pr-sm"><q-avatar color="primary" text-color="white" size="24px">{{ userInitials }}</q-avatar></q-item-section>
           </template>
-          <template #actions><q-icon name="keyboard_arrow_up" size="22px" /></template>
+          <template #actions><q-icon name="keyboard_arrow_up" size="var(--sidebar-icon-size, 22px)" /></template>
 
           <AppMenu anchor="top right" self="bottom right" class="app-user-popup">
             <q-list padding>
@@ -286,6 +288,7 @@
 
 <script setup>
 import { useAppearanceStore } from 'src/features/settings/appearance-store'
+import { useUserPreferencesStore } from 'src/features/settings/user-preferences-store'
 
 import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -326,6 +329,9 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const appearance = useAppearanceStore()
+const preferences = useUserPreferencesStore()
+const sidebarSections = computed(() => preferences.sessionsPosition === 'aboveProjects'
+  ? ['sessions', 'projects'] : ['projects', 'sessions'])
 const chat = useChatStore()
 const controlCenter = useControlCenterStore()
 const workspace = useWorkspaceStore()
@@ -485,7 +491,7 @@ onMounted(async () => {
   clockTimer = window.setInterval(() => {
     if (document.visibilityState === 'visible') sidebarNow.value = Date.now()
   }, 60_000)
-  await Promise.allSettled([chat.fetchPersonalChatBinding(), loadProjects(), loadStandaloneSessions()])
+  await Promise.allSettled([preferences.fetchSettings(), chat.fetchPersonalChatBinding(), loadProjects(), loadStandaloneSessions()])
 })
 onBeforeUnmount(() => window.clearInterval(clockTimer))
 </script>

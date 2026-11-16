@@ -218,8 +218,8 @@ body.body--dark .app-floating-control--flat {
 
 .session-list-item__status-slot {
   position: relative;
-  width: 22px;
-  height: 22px;
+  width: var(--sidebar-icon-size, 22px);
+  height: var(--sidebar-icon-size, 22px);
 }
 
 .session-list-item__status-slot .q-badge--floating {
@@ -300,6 +300,31 @@ body.body--dark .app-floating-control--flat {
   .session-list-item__actions > .session-list-item__pin-button--pinned {
     opacity: 1;
     pointer-events: auto;
+  }
+}
+
+@media (min-width: 1024px) and (hover: hover) and (pointer: fine) and (not (any-pointer: coarse)) {
+  .app-drawer {
+    --sidebar-icon-size: 18px;
+
+    .drawer-toolbar {
+      min-height: 44px;
+    }
+
+    .sidebar-row {
+      min-height: 30px;
+      padding-block: 1px;
+    }
+
+    .sidebar-session-group-label {
+      padding-left: calc(8px + 18px + 8px);
+      padding-top: 6px;
+      padding-bottom: 2px;
+    }
+
+    .drawer-navigation section {
+      margin-bottom: 2px;
+    }
   }
 }
 

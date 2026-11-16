@@ -11,6 +11,7 @@ import { useAutomationStore } from 'stores/automations'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useHomeStore } from 'src/features/home/store'
 import { useRoute } from 'vue-router'
+import { useUserPreferencesStore } from '../src/features/settings/user-preferences-store'
 
 const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, terminal, workspace } = vi.hoisted(() => {
   const sessions = [
@@ -210,6 +211,13 @@ beforeEach(async () => {
   await nextTick()
 })
 afterEach(() => { app?.unmount(); vi.useRealTimers(); vi.unstubAllGlobals() })
+
+it('moves the sessions section before projects in DOM order', async () => {
+  useUserPreferencesStore().sessionsPosition = 'aboveProjects'
+  await nextTick()
+  expect([...root.querySelectorAll('section[aria-labelledby]')].map(section => section.getAttribute('aria-labelledby')))
+    .toEqual(['automations-heading', 'sessions-heading', 'projects-heading'])
+})
 
 it('badges unread notifications received in the background until read', async () => {
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')

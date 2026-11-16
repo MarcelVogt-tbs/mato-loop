@@ -484,7 +484,7 @@
 
 .chat-quote-typography {
   font-size: var(--chat-message-font-size, 14px);
-  line-height: var(--chat-message-line-height, 1.65);
+  line-height: var(--chat-message-line-height, 1.5);
 }
 
 @media not (any-pointer: coarse) {
@@ -620,10 +620,10 @@
 
 .chat-messages--small {
   --chat-message-font-size: 12px;
-  --chat-message-gap: 24px;
+  --chat-message-gap: 16px;
   --chat-message-padding: 6px 10px;
   --chat-message-line-height: 1.5;
-  --chat-paragraph-gap: 0.7em;
+  --chat-paragraph-gap: 0.5em;
   --chat-heading-gap: 0.8em;
 
   .chat-message__content,
@@ -639,11 +639,11 @@
 
 .chat-transcript__item--sending {
   // Reserve the activity row (24px + 4px padding) and its gap until the answer section exists.
-  padding-bottom: calc(28px + var(--chat-message-gap, 32px));
+  padding-bottom: calc(28px + var(--chat-message-gap, 20px));
 }
 
 .chat-message {
-  margin-bottom: var(--chat-message-gap, 32px);
+  margin-bottom: var(--chat-message-gap, 20px);
 }
 
 .chat-message--turn-continues {
@@ -654,7 +654,7 @@
   width: fit-content;
   max-width: min(720px, 88%);
   margin-left: auto;
-  padding: var(--chat-message-padding, 10px 14px);
+  padding: var(--chat-message-padding, 6px 14px);
   border-radius: 16px 16px 4px 16px;
   background: var(--app-active);
 }
@@ -729,7 +729,7 @@
   font-size: var(--chat-message-font-size, inherit);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  line-height: var(--chat-message-line-height, 1.6);
+  line-height: var(--chat-message-line-height, 1.5);
 }
 
 .chat-markdown {
@@ -737,7 +737,7 @@
   min-width: 0;
   white-space: normal;
   overflow-wrap: anywhere;
-  line-height: var(--chat-message-line-height, 1.65);
+  line-height: var(--chat-message-line-height, 1.5);
 }
 
 .chat-markdown > :first-child {
@@ -754,7 +754,7 @@
 .chat-markdown blockquote,
 .chat-markdown table,
 .chat-markdown pre {
-  margin: 0 0 var(--chat-paragraph-gap, 0.9em);
+  margin: 0 0 var(--chat-paragraph-gap, 0.6em);
 }
 
 .chat-markdown h1,
@@ -763,7 +763,7 @@
 .chat-markdown h4,
 .chat-markdown h5,
 .chat-markdown h6 {
-  margin: var(--chat-heading-gap, 1.25em) 0 0.5em;
+  margin: var(--chat-heading-gap, 0.9em) 0 0.5em;
   color: var(--app-text);
   font-weight: 650;
   line-height: 1.3;
@@ -814,11 +814,11 @@
 }
 
 .chat-markdown li + li {
-  margin-top: 0.3em;
+  margin-top: 0.15em;
 }
 
 .chat-markdown li > p {
-  margin: 0.35em 0;
+  margin: 0.2em 0;
 }
 
 .chat-markdown .contains-task-list {
@@ -872,7 +872,7 @@
 .chat-markdown th,
 .chat-markdown td {
   min-width: 9ch;
-  padding: 8px 11px;
+  padding: 5px 11px;
   border-right: 1px solid var(--app-surface-border);
   border-bottom: 1px solid var(--app-surface-border);
   text-align: left;

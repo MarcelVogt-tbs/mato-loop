@@ -42,8 +42,28 @@ async def test_language_preference_is_owner_bound_and_preserves_other_preference
     db = AsyncMock(spec=AsyncSession)
     result = await user_routes.update_user_preferences(user_routes.UserPreferencesRequest(preferredLanguage="de-DE"), user, db)
     assert (result, settings.dark_mode, load.await_args.kwargs, save.await_args.kwargs) == (
-        {"preferredLanguage": "de-DE"}, True, {"user_id": user.id, "for_update": True}, {"user_id": user.id},
+        {"preferredLanguage": "de-DE", "sessionsPosition": "belowProjects"}, True,
+        {"user_id": user.id, "for_update": True}, {"user_id": user.id},
     )
+
+
+@pytest.mark.parametrize("position", ["aboveProjects", "belowProjects"])
+async def test_sessions_position_round_trip_preserves_language(monkeypatch, position):
+    settings = UserPreferences(preferred_language="de-DE")
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    user, db = _user(), AsyncMock(spec=AsyncSession)
+    await user_routes.update_user_preferences(
+        user_routes.UserPreferencesRequest(sessionsPosition=position), user, db,
+    )
+    assert await user_routes.get_user_preferences(user, db) == {
+        "preferredLanguage": "de-DE", "sessionsPosition": position,
+    }
+
+
+def test_sessions_position_rejects_unknown_values():
+    with pytest.raises(ValidationError):
+        user_routes.UserPreferencesRequest(sessionsPosition="top")
 
 
 @pytest.mark.parametrize("value", ["", "de_DE", "de\r\nX: 1", "x" * 36])

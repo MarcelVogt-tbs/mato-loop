@@ -2,6 +2,10 @@
 
 Eine Session ist eine gespeicherte Unterhaltung mit eigenen Einstellungen, Dateien und Verlauf. Projekte gruppieren Sessions, teilen aber nicht deren Dateiablage.
 
+Chatnachrichten verwenden kompakte Zeilen-, Absatz- und Nachrichtenabstände. Auf dem Desktop mit Maus ist auch die Seitenleiste dichter; auf Touch-Geräten bleiben ihre größeren Bedienflächen erhalten. Die Einstellung **Nachrichtengröße > Klein** reduziert zusätzlich die Schriftgröße und die Nachrichtenabstände.
+
+Unter **Einstellungen > Grundeinstellungen > Position der Sessions** wählst du, ob der Bereich **Sessions** über oder unter den Projekten erscheint. Standard ist **Unter den Projekten**. Speichere die Auswahl; sie gilt für dein Konto auf allen Geräten. Sessions innerhalb eines Projekts bleiben beim jeweiligen Projekt.
+
 ## Eine Session starten und organisieren
 
 **Chat** öffnet deinen festen persönlichen Gesprächsfaden. Er ist eine normale Session mit denselben Modellvorgaben, Freigaben, Kontextlimits und derselben Kompaktierung wie andere Sessions. Das erste Öffnen legt ihn an, startet aber weder einen Modelllauf noch die proaktive Assistenz. Dreaming-Vorschläge erscheinen hier als Freigabekarten; ihre Belegquellen bleiben getrennt erhalten.

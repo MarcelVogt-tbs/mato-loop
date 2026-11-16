@@ -3,6 +3,7 @@ import { api } from 'src/boot/axios'
 import { useAgentIdentityStore } from 'src/stores/agent-identity'
 import { useChatStore } from 'src/features/chat/store'
 import { useInAppNotificationStore } from 'src/stores/in-app-notifications'
+import { useUserPreferencesStore } from 'src/features/settings/user-preferences-store'
 import { notifyError } from 'src/utils/notifications'
 
 function identityFrom(data, authenticated = data.authenticated) {
@@ -40,6 +41,7 @@ export const useAuthStore = defineStore('auth', {
   }),
   actions: {
     async clearIdentityState() {
+      useUserPreferencesStore().$reset()
       await endVoice({ localOnly: true })
       const chat = useChatStore()
       try {

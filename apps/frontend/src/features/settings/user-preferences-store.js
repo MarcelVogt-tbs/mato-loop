@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 
 export const useUserPreferencesStore = defineStore('user-preferences', {
-  state: () => ({ preferredLanguage: null, loading: false, loaded: false, loadFailed: false, saving: false }),
+  state: () => ({ preferredLanguage: null, sessionsPosition: 'belowProjects', loading: false, loaded: false, loadFailed: false, saving: false }),
   actions: {
     async fetchSettings() {
       this.loading = true
@@ -10,6 +10,7 @@ export const useUserPreferencesStore = defineStore('user-preferences', {
       try {
         const { data } = await api.get('/users/me/preferences')
         this.preferredLanguage = data.preferredLanguage
+        this.sessionsPosition = data.sessionsPosition ?? 'belowProjects'
         this.loaded = true
         return data
       } catch (error) {
@@ -17,11 +18,12 @@ export const useUserPreferencesStore = defineStore('user-preferences', {
         throw error
       } finally { this.loading = false }
     },
-    async saveSettings(preferredLanguage) {
+    async saveSettings({ preferredLanguage, sessionsPosition }) {
       this.saving = true
       try {
-        const { data } = await api.put('/users/me/preferences', { preferredLanguage })
+        const { data } = await api.put('/users/me/preferences', { preferredLanguage, sessionsPosition })
         this.preferredLanguage = data.preferredLanguage
+        this.sessionsPosition = data.sessionsPosition ?? 'belowProjects'
         return data
       } finally { this.saving = false }
     }

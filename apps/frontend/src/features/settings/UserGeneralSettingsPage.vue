@@ -3,7 +3,7 @@
     <header class="settings-section-header">
       <div>
         <h2 class="text-h6 text-weight-bold q-my-none">Grundeinstellungen</h2>
-        <p class="text-body2 app-muted q-mb-none q-mt-xs">Persönliche Vorgaben für sprachabhängige Funktionen.</p>
+        <p class="text-body2 app-muted q-mb-none q-mt-xs">Persönliche Vorgaben für Sprache und Seitenleiste.</p>
       </div>
       <q-btn color="primary" unelevated no-caps icon="save" label="Speichern" :loading="settings.saving" :disable="settings.loading || !settings.loaded || settings.loadFailed || !dirty" @click="save" />
     </header>
@@ -16,6 +16,12 @@
         <AppSelect v-model="language" outlined emit-value map-options use-input label="Bevorzugte Sprache" :options="languageOptions" :disable="settings.loading || settings.saving || !settings.loaded || settings.loadFailed" @new-value="addLanguage" />
         <p class="text-body2 app-muted q-mb-none q-mt-md">Vorgabe für Chatantworten, Transkriptionen und die Browser-Sprache von Jina Reader. Eine ausdrücklich angegebene Sprache hat Vorrang. Bei „Automatisch“ folgt der Chat deinem persönlichen Sprachprofil, sonst deiner Anfrage; Dienste verwenden ihre Erkennung oder Vorgabe. Keine Übersetzung abgerufener Inhalte oder Änderung der Oberflächensprache.</p>
         <p class="text-caption app-muted q-mb-none">Weitere Sprachen können als BCP-47-Kürzel eingegeben werden, zum Beispiel de-CH. Die Unterstützung hängt vom Dienst ab.</p>
+      </q-card-section>
+    </q-card>
+    <q-card flat class="app-surface q-mt-md">
+      <q-card-section>
+        <AppSelect v-model="sessionsPosition" outlined emit-value map-options label="Position der Sessions" :options="sessionsPositionOptions" :disable="settings.loading || settings.saving || !settings.loaded || settings.loadFailed" />
+        <p class="text-body2 app-muted q-mb-none q-mt-md">Zeige den Bereich Sessions über oder unter den Projekten in der Seitenleiste. Sessions innerhalb eines Projekts bleiben beim jeweiligen Projekt.</p>
       </q-card-section>
     </q-card>
   </section>
@@ -33,7 +39,14 @@ const settings = useUserPreferencesStore()
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const language = ref(null)
-const dirty = computed(() => settings.loaded && language.value !== settings.preferredLanguage)
+const sessionsPosition = ref('belowProjects')
+const sessionsPositionOptions = [
+  { label: 'Unter den Projekten', value: 'belowProjects' },
+  { label: 'Über den Projekten', value: 'aboveProjects' }
+]
+const dirty = computed(() => settings.loaded && (
+  language.value !== settings.preferredLanguage || sessionsPosition.value !== settings.sessionsPosition
+))
 const languagePattern = /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/
 const languageOptions = computed(() => {
   const options = [{ label: 'Automatisch', value: null }, { label: 'Deutsch', value: 'de-DE' }, { label: 'Englisch', value: 'en-US' }]
@@ -49,13 +62,19 @@ function addLanguage(value, done) {
   }
 }
 async function load() {
-  try { language.value = (await settings.fetchSettings()).preferredLanguage }
+  try {
+    await settings.fetchSettings()
+    language.value = settings.preferredLanguage
+    sessionsPosition.value = settings.sessionsPosition
+  }
   catch { /* Central API toast. */ }
 }
 async function save() {
   if (settings.loading || settings.saving || !settings.loaded || settings.loadFailed || !dirty.value) return
   try {
-    language.value = (await settings.saveSettings(language.value)).preferredLanguage
+    await settings.saveSettings({ preferredLanguage: language.value, sessionsPosition: sessionsPosition.value })
+    language.value = settings.preferredLanguage
+    sessionsPosition.value = settings.sessionsPosition
     $q.notify({ type: 'positive', message: 'Grundeinstellungen gespeichert.' })
   } catch { /* Central API toast. */ }
 }
