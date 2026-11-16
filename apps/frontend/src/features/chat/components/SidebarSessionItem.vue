@@ -11,7 +11,7 @@
   >
     <q-item-section side class="q-pr-sm">
       <span class="session-list-item__status-slot row items-center justify-center">
-        <span v-if="indicator" role="status" :aria-label="indicator.label">
+        <span v-if="indicator" class="row items-center justify-center" role="status" :aria-label="indicator.label">
           <template v-if="indicator.kind === 'approval'">
             <q-icon name="pending_actions" color="warning" size="16px" />
             <q-badge v-if="indicator.count > 1" floating rounded color="warning" text-color="dark" :label="indicator.count" />
