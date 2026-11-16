@@ -2413,6 +2413,9 @@ async def test_session_delete_impact_discovers_the_worktree_without_waiting_for_
     session = ChatSession(id=uuid4(), user_id=uuid4(), project_id=uuid4(),
         preferred_execution_agent_id=uuid4(), current_directory="/worktree/src", workspace_mode="local")
     other = ChatSession(id=uuid4(), title="Other work", current_directory="/worktree")
+    child = ChatSession(id=uuid4(), parent_session_id=session.id, current_directory="/worktree")
+    grandchild = ChatSession(id=uuid4(), parent_session_id=child.id, current_directory="/worktree")
+    affected = [session, child, grandchild, other]
     info = coding.RepositoryResult(repository="/worktree", commonDirectory="/project/.git", remotes=[],
         defaultRemote=None, defaultBranch="main", branch="task", removalChecked=True,
         removalError={"code": "git.worktreePermissionDenied", "params": {"path": "/worktree/cache"}} if computer == "permission" else None,
@@ -2428,14 +2431,14 @@ async def test_session_delete_impact_discovers_the_worktree_without_waiting_for_
     timeout = asyncio.timeout
     monkeypatch.setattr(asyncio, "timeout", lambda seconds: timeout(0.01))
     db = AsyncMock(spec=AsyncSession)
-    db.scalars.side_effect = [MagicMock(all=lambda: []), [other]]
+    db.scalars.side_effect = [MagicMock(all=lambda: []), affected]
     db.scalar.return_value = 0
-    db.execute.return_value = MagicMock(all=lambda: [])
+    db.execute.return_value = MagicMock(all=lambda: [(child.id, session.project_id), (grandchild.id, session.project_id)])
     result = await asyncio.wait_for(session_delete_impact(
         session.id, session.user_id, db, owned_session_query=AsyncMock(return_value=session),
     ), timeout=0.5)
     assert result["worktree"] == (None if computer not in {"online", "permission"} else {
-        "path": "/worktree", "impact": coding.worktree_removal_token(session, info, [other]),
+        "path": "/worktree", "impact": coding.worktree_removal_token(session, info, affected),
         "removalError": info.removal_error,
         "sessions": [{"id": str(other.id), "title": other.title}],
     })

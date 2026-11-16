@@ -1950,6 +1950,10 @@ async def session_delete_impact(
             )
         ).all()
     )
+    deleted_session_ids = [
+        session_id,
+        *(child_id for child_id, _ in await descendant_sessions(db, [session_id])),
+    ]
     impact = {
         "automationCount": len(linked),
         "requiredAutomationCount": len(linked),
@@ -1957,11 +1961,7 @@ async def session_delete_impact(
         "hasWorktree": (item.coding_workspace or {}).get("mode") == "worktree",
         "worktree": None,
         "fileReferenceCount": await _external_file_reference_count_for_roots(
-            db,
-            [
-                session_id,
-                *(child_id for child_id, _ in await descendant_sessions(db, [session_id])),
-            ],
+            db, deleted_session_ids,
         ),
     }
     try:
@@ -1971,7 +1971,7 @@ async def session_delete_impact(
                 affected = await sessions_in_worktree(db, user_id, item.preferred_execution_agent_id, info.repository)
                 impact["worktree"] = {"path": info.repository, "impact": worktree_removal_token(item, info, affected),
                                      "removalError": info.removal_error if info.removal_checked else {"code": "executionAgent.updateRequired"},
-                                     "sessions": [{"id": str(other.id), "title": other.title} for other in affected if other.id != item.id]}
+                                     "sessions": [{"id": str(other.id), "title": other.title} for other in affected if other.id not in deleted_session_ids]}
     except (SessionServiceError, TimeoutError):
         # Session-only deletion must not depend on optional computer discovery.
         pass
