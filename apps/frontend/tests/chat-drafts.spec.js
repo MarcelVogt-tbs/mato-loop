@@ -20,6 +20,7 @@ import { normalizedNewSessionDraft, sanitizedSessionOptions, sessionCreatePayloa
 import { useControlCenterStore } from '../src/stores/control-center'
 import { controlCenterIntegrationIds } from 'src/app/control-center/manifest'
 import { useQuestionStore } from '../src/stores/questions'
+import { useApprovalStore } from '../src/stores/approvals'
 import { useWorkspaceStore } from '../src/stores/workspace'
 import {
   clearChatOutbox,
@@ -1857,7 +1858,8 @@ describe('chat drafts', () => {
     })
     expect(chat.activity).toMatchObject({ activeDurationMs: 2_500, activeDurationUpdatedAt: null })
 
-    source.emit('approval.resolved', {})
+    source.emit('approval.resolved', { approvalId: 'approval-1' })
+    expect(useApprovalStore().pending).toEqual([])
     expect(chat.sessions[0].activeRunStatus).toBe('running')
     source.emit('run.timing', {
       activeDurationMs: 2_500,

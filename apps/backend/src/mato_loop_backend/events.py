@@ -145,7 +145,9 @@ class RunEventBroker:
     def _replay(self, run_id: UUID) -> list[dict[str, Any]]:
         history = self._history.get(run_id, [])
         return [
-            *(event for event in history if event.get("type") not in TERMINAL_EVENTS),
+            # Request state is restored by the snapshot, not historical transitions.
+            *(event for event in history if event.get("type") not in TERMINAL_EVENTS
+              and not event.get("type", "").startswith(("approval.", "question."))),
             self._snapshot(run_id),
             *(event for event in history if event.get("type") in TERMINAL_EVENTS),
         ]

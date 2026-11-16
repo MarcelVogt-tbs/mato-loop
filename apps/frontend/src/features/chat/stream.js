@@ -384,7 +384,9 @@ export const streamActions = {
       })
       source.addEventListener('approval.resolved', (event) => {
         if (this.eventSource !== source) return
-        if (JSON.parse(event.data).subagentSessionId) {
+        const payload = JSON.parse(event.data)
+        useApprovalStore().remove(payload.approvalId)
+        if (payload.subagentSessionId) {
           void useApprovalStore().fetchPending().catch(() => {})
           return
         }
@@ -397,7 +399,9 @@ export const streamActions = {
       })
       source.addEventListener('approval.expired', (event) => {
         if (this.eventSource !== source) return
-        if (JSON.parse(event.data).subagentSessionId) {
+        const payload = JSON.parse(event.data)
+        useApprovalStore().remove(payload.approvalId)
+        if (payload.subagentSessionId) {
           void useApprovalStore().fetchPending().catch(() => {})
           return
         }

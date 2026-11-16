@@ -376,8 +376,11 @@ export const useSubagentStore = defineStore('subagents', () => {
       })
     }
     for (const name of ['approval.resolved', 'approval.expired', 'question.answered', 'question.rejected', 'question.expired']) {
-      on(name, () => {
-        if (name.startsWith('approval.')) void useApprovalStore().fetchPending().catch(() => {})
+      on(name, (payload) => {
+        if (name.startsWith('approval.')) {
+          useApprovalStore().remove(payload.approvalId)
+          void useApprovalStore().fetchPending().catch(() => {})
+        }
         void refresh(parent)
       })
     }

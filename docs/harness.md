@@ -8,7 +8,7 @@ The backend runs **one worker** with one process-local run/approval coordinator.
 
 - On backend restart, active/waiting runs end as interrupted or failed and pending agent-action approvals expire. An approval without a live waiter returns `approval.runInactive` and creates no grant.
 - Fully persisted session grants survive restart. Independent `memory_change` approvals survive and resolve transactionally without a live run.
-- Approvals and questions have no inactivity timeout. Browser/SSE disconnect does not decide them or cancel the run.
+- Approvals and questions have no inactivity timeout. Browser/SSE disconnect does not decide them or cancel the run. Reconnect snapshots restore current request state without replaying historical request transitions. Approval resolution and expiration remove the matching frontend request immediately; pending-list reconciliation remains authoritative.
 - Explicit cancellation interrupts providers, child work and dispatched operations best effort, persists visible partial text and terminal tool results, and expires pending run interactions. Repeated cancellation must not interrupt cleanup again.
 - Completed effects remain; late file/process effects may still finish. Neither restart nor uncertain dispatch permits automatic replay.
 

@@ -147,3 +147,17 @@ async def test_pending_child_approval_survives_history_eviction_without_changing
     assert broker._snapshot(run_id)["events"] == [phase, approval]
     await broker.publish(run_id, {"type": "approval.resolved", "approvalId": "approval", "subagentSessionId": "child"})
     assert broker._snapshot(run_id)["events"] == [phase]
+
+
+async def test_reconnect_restores_only_pending_requests_without_replaying_resolved_requests():
+    broker = RunEventBroker()
+    run_id = uuid4()
+    pending = {"type": "approval.created", "approval": {"id": "pending"}}
+    await broker.publish(run_id, {"type": "approval.created", "approval": {"id": "decided"}})
+    await broker.publish(run_id, {"type": "approval.resolved", "approvalId": "decided"})
+    await broker.publish(run_id, pending)
+
+    assert broker._replay(run_id) == [{
+        "type": "run.snapshot", "runId": str(run_id), "content": "",
+        "events": [pending], "researchSources": [],
+    }]

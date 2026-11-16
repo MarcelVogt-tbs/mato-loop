@@ -79,6 +79,12 @@ export const useApprovalStore = defineStore('approvals', {
       this.loaded = true
       this.loadFailed = false
     },
+    remove(id) {
+      if (!id) return
+      this.revision += 1
+      this.pending = this.pending.filter((item) => item.id !== id)
+      this.loading = false
+    },
     async decide(id, decision, expectedRevision, memoryEdit, argumentEdit, grantOption) {
       this.submittingId = id
       try {
@@ -96,9 +102,7 @@ export const useApprovalStore = defineStore('approvals', {
               }
             : {})
         })
-        this.revision += 1
-        this.pending = this.pending.filter((item) => item.id !== id)
-        this.loading = false
+        this.remove(id)
       } catch (error) {
         if (TERMINAL_DECISION_ERRORS.has(errorDescriptor(error)?.code)) {
           await this.fetchPending()
