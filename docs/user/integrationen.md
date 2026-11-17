@@ -31,6 +31,7 @@ Zugangsdaten werden verschlüsselt gespeichert und nicht wieder im Klartext ange
 | OpenSCAD | Eigener verbundener Linux-Computer | Geprüfter Binary-Pfad über **Erkennen** |
 | Browser | Eigener verbundener Linux-, Windows- oder Apple-Silicon-Mac | [Browser einrichten](browser.md#browser-einrichten) |
 | SearXNG | Globale Serveradresse mit aktivierter JSON-Schnittstelle | Je nach Server |
+| Microsoft Web IQ | Je eine globale Verbindung unter **Websuche** und **Webabruf**, feste Microsoft-API | Je Verbindung ein API-Schlüssel einer freigeschalteten Web-IQ-App; [Einrichtung und Kosten](webrecherche-und-quellen.md#microsoft-web-iq-einrichten) |
 | Jina Reader | Globale Reader-Basis-URL | Optionaler API-Schlüssel; [Webabrufe konfigurieren](webrecherche-und-quellen.md#webabrufe-konfigurieren) |
 
 ## Rechte und Profilverfügbarkeit

@@ -4,7 +4,7 @@ Webfetch uses `curl_cffi` with Chrome transport impersonation for HTTP and HTTPS
 This is the built-in provider and remains the default. Administrators can instead
 select one provider under **Administration > Tools > Einstellungen
 > Webabrufe und Downloads**. Configure Jina's base URL (including self-hosted Reader
-instances) and optional API key through the normal integration editor. Personal Jina
+instances) and optional API key, or a Microsoft Web IQ API key, through the normal integration editor. Personal
 connections and personal provider selections are not supported. Keys are encrypted
 in credentials, never stored in integration configuration or sent to target sites.
 
@@ -80,6 +80,36 @@ downloads, transcripts, and integration file imports remain on the direct pipeli
 Explicit `pdf_pages` requests also retain direct PDF extraction and page-image
 rendering, rather than replacing page images with Reader text. Reader image extraction
 returns its textual representation; it does not import image links as attachments.
+
+## Microsoft Web IQ
+
+Create a global **Webabruf** connection with **Microsoft Web IQ** as provider.
+Web IQ search is a separate **Websuche** connection, not a combined integration.
+Each connection uses its own encrypted API key against the
+fixed Microsoft API origin, with no custom endpoint or API redirect following.
+Search and Browse incur Microsoft charges. Each connection test performs only
+its own operation.
+
+Web IQ extends `webfetch` with a relevance `query` (required except with
+`pdf_pages`) and accepts `format=text` only. Browse requests passage content with
+`maxLength=3000` and `liveCrawl=fallback`: Microsoft may crawl an unindexed page,
+but HTTP 202 is a controlled `webfetch.crawlPending` error, not usable content.
+There is no polling, automatic retry or provider fallback. Full-document formats,
+cookies, Jina rendering options and interactive browsing are not supported.
+Image-search results are discovery data; use `download_file` for original images.
+
+The default request deadline is 30 seconds; explicit fetch timeouts override it.
+Responses are bounded to the smaller of the configured web limit and 1 MiB,
+validated and converted to the existing text/source envelope. Raw error bodies
+are never forwarded. HTTP 401 maps to authentication failure, 429 to rate limiting,
+and 403 remains a controlled upstream rejection (including publisher restrictions).
+
+The existing `network.search` and `network.fetch` policies, post-approval binding
+checks and delegation limits apply. Microsoft receives queries and requested URLs
+and performs target fetching and redirects itself; local DNS pinning and
+public-address filtering do not constrain Microsoft's target requests. Original
+downloads and explicit PDF-page rendering retain the direct pipeline and its
+network checks.
 
 ## Built-in fetching
 

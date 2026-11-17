@@ -52,7 +52,7 @@ function mount(render, pinia, router) {
   app.mount(root)
 }
 
-async function mountEditor(scope, create = false, type = 'calendar') {
+async function mountEditor(scope, create = false, type = 'calendar', provider) {
   const pinia = createPinia()
   useAuthStore(pinia).isAdmin = true
   const prefix = scope === 'instance' ? 'admin' : 'settings'
@@ -62,7 +62,7 @@ async function mountEditor(scope, create = false, type = 'calendar') {
     { path: '/admin/tools', name: 'admin-tools', component: { render: () => null } },
     { path: '/integrations/:integrationId/edit', name: `${prefix}-integration-edit`, component: Editor }
   ] })
-  await router.push(create ? { name: `${prefix}-integration-create`, query: { type, name: 'Neu' } } : `/integrations/${account.id}/edit`)
+  await router.push(create ? { name: `${prefix}-integration-create`, query: { type, provider, name: 'Neu' } } : `/integrations/${account.id}/edit`)
   let page
   mount(() => h(RouterView, null, { default: ({ Component }) => Component && h(Component, { ref: (value) => { page = value?.$?.setupState } }) }), pinia, router)
   await vi.waitUntil(() => root.querySelector('form'))
@@ -90,7 +90,7 @@ it('collects only basics without creating a connection', async () => {
   mount(() => h(Dialog, { modelValue: true, scope: 'personal', onContinue: proceed }), pinia)
   await vi.waitUntil(() => document.querySelector('.integration-dialog'))
   button('Weiter').click()
-  await vi.waitFor(() => expect(proceed).toHaveBeenCalledWith({ type: 'calendar', name: 'CalDAV' }))
+  await vi.waitFor(() => expect(proceed).toHaveBeenCalledWith({ type: 'calendar', provider: 'caldav', name: 'CalDAV' }))
   expect(api.post).not.toHaveBeenCalled()
 })
 
@@ -219,6 +219,46 @@ it('creates a personal Paperless-ngx document connection', async () => {
     integration_type: 'documents', provider_type: 'paperless', name: 'Neu',
     base_url: 'http://paperless.test', token: 'test-token', enabled: true
   }, { params: { scope: 'personal' } }))
+})
+
+it.each([['search', 'webiq_search'], ['webfetch', 'webiq']])('creates a separate Web IQ %s connection under its existing type', async (type, provider) => {
+  const originalGet = api.get.getMockImplementation()
+  const providers = []
+  api.get.mockImplementation(async (url) => url === '/integrations/catalog'
+    ? { data: { adapters: [...adapters, { integrationType: type, adapterType: provider, executionLocation: 'backend', availability: 'instance_only', instanceOnly: true }] } }
+    : url === `/integrations/${type}` ? { data: { providers } } : originalGet(url))
+  api.post.mockImplementation(async (_url, payload) => {
+    providers.push({ id: 'webiq', name: payload.name, integrationType: type, providerType: provider, hasCredential: true, enabled: true, config: { timeoutSeconds: payload.timeout_seconds } })
+    return { data: {} }
+  })
+  const { router } = await mountEditor('instance', true, type, provider)
+  expect(root.textContent).toContain('Microsoft Web IQ ist kostenpflichtig')
+  expect(root.textContent).not.toContain('Cookies')
+  await fill('API-Schlüssel', 'test-key')
+  button('Speichern').click()
+  await vi.waitFor(() => expect(router.currentRoute.value.params.integrationId).toBe('webiq'))
+  expect(api.post).toHaveBeenCalledWith('/integrations/webiq/providers', {
+    integration_type: type, name: 'Neu', api_key: 'test-key', enabled: true, timeout_seconds: 30
+  })
+})
+
+it.each([['search', 'searxng', 'webiq_search'], ['webfetch', 'jina', 'webiq']])('offers Web IQ alongside the existing %s provider', async (type, original, provider) => {
+  const pinia = createPinia()
+  const store = useIntegrationStore(pinia)
+  store.catalog = [original, provider].map(adapterType => ({
+    integrationType: type, adapterType, executionLocation: 'backend',
+    availability: 'instance_only', instanceOnly: true
+  }))
+  const proceed = vi.fn()
+  mount(() => h(Dialog, { modelValue: true, scope: 'instance', onContinue: proceed }), pinia)
+  await vi.waitUntil(() => document.querySelector('.integration-dialog'))
+  const field = [...document.querySelectorAll('.q-field')].find(item => item.querySelector('.q-field__label')?.textContent === 'Anbieter')
+  field.querySelector('input').click()
+  await vi.waitUntil(() => [...document.querySelectorAll('.q-menu .q-item')].some(item => item.textContent.includes('Microsoft Web IQ')))
+  ;[...document.querySelectorAll('.q-menu .q-item')].find(item => item.textContent.includes('Microsoft Web IQ')).click()
+  await nextTick()
+  button('Weiter').click()
+  await vi.waitFor(() => expect(proceed).toHaveBeenCalledWith({ type, provider, name: 'Microsoft Web IQ' }))
 })
 
 it('creates an instance-wide Jina connection without requiring an API key', async () => {

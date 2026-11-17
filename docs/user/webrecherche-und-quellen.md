@@ -16,7 +16,35 @@ Ohne weitere Einrichtung verwendet MatoLoop eine eingebaute Suche ohne API-Schl�
 
 Bei Fehlern gibt es keinen automatischen Anbieterwechsel.
 
-Für Jina und SearXNG steuerst du Verfügbarkeit und Berechtigungen über die normalen Tools **Webseite abrufen** und **Im Web suchen**. Die Integrationskonfiguration verweist darauf; die allgemeine Profilvorgabe für Integrationen und deren Tool-Ladeverhalten schalten diese Anbieter nicht zusätzlich aus. Die Verbindung selbst muss weiterhin aktiviert sein.
+Für Jina, SearXNG und Microsoft Web IQ steuerst du Verfügbarkeit und Berechtigungen über die normalen Tools **Webseite abrufen** und **Im Web suchen**. Die Integrationskonfiguration verweist darauf; die allgemeine Profilvorgabe für Integrationen und deren Tool-Ladeverhalten schalten diese Anbieter nicht zusätzlich aus. Die Verbindung selbst muss weiterhin aktiviert sein.
+
+### Microsoft Web IQ einrichten
+
+Web IQ wählst du als Anbieter der bestehenden Typen **Websuche** und **Webabruf**.
+Lege dafür zwei getrennte globale Verbindungen an. Du benötigst eine freigeschaltete
+[Microsoft-Web-IQ-App mit API-Schlüssel](https://learn.microsoft.com/web-iq/get-started/authentication)
+und die zugehörige kostenpflichtige Azure-Abrechnung.
+
+!!! warning "Kosten und Datenübertragung"
+    Suchanfragen, Seitenadressen und Relevanzabfragen werden an Microsoft
+    übertragen. Auch **Verbindung testen** löst eine kostenpflichtige Anfrage
+    für den jeweiligen Integrationstyp aus.
+
+1. Öffne **Administration > Integrationen > Verwaltung > Integration hinzufügen**.
+2. Wähle **Websuche**, **Microsoft Web IQ** und einen Namen, dann **Weiter**.
+3. Hinterlege den API-Schlüssel und wähle **Speichern**, danach **Verbindung testen**.
+4. Wiederhole die Einrichtung mit dem Typ **Webabruf** und Anbieter **Microsoft Web IQ**.
+   Du kannst denselben oder einen anderen API-Schlüssel verwenden; die Zugangsdaten
+   werden je Verbindung getrennt gespeichert.
+5. Wähle unter **Administration > Tools > Einstellungen** die jeweilige Verbindung
+   für **Websuche** und **Webabrufe und Downloads**.
+
+Seitenabrufe liefern zur Relevanzabfrage passende Textauszüge mit höchstens
+3000 Zeichen, keine vollständigen Seiten. Die Suche unterstützt auch Bilder;
+Originalbilder und andere Originaldateien werden weiterhin direkt heruntergeladen.
+Jina-Cookies und Jina-Abrufmodi gelten für Web IQ nicht.
+Meldet Web IQ einen noch laufenden Seitenabruf, steht noch kein zitierfähiger
+Inhalt bereit. Es gibt weder automatische Warteschleifen noch einen Anbieterwechsel.
 
 ## Webseiten abrufen
 
@@ -47,12 +75,12 @@ Link- und Bildübersichten sind keine bereits abgerufenen Bilder oder geprüften
 
 ## Webabrufe konfigurieren
 
-Als Administrator wählst du unter **Administration > Tools > Einstellungen > Webabrufe und Downloads** **Eingebaut** oder eine globale Jina-Verbindung. Jina richtest du zuvor unter **Administration > Integrationen** als **Webabruf** ein: Reader-Basis-URL, beispielsweise `https://r.jina.ai`, und bei Bedarf ein API-Schlüssel. Persönliche Anbieterwahl gibt es nicht. Die Tool-Verfügbarkeit steuerst du unter **Tool-Einstellungen**.
+Als Administrator wählst du unter **Administration > Tools > Einstellungen > Webabrufe und Downloads** **Eingebaut**, eine globale Jina-Verbindung oder [Microsoft Web IQ](#microsoft-web-iq-einrichten). Jina richtest du zuvor unter **Administration > Integrationen** als **Webabruf** ein: Reader-Basis-URL, beispielsweise `https://r.jina.ai`, und bei Bedarf ein API-Schlüssel. Persönliche Anbieterwahl gibt es nicht. Die Tool-Verfügbarkeit steuerst du unter **Tool-Einstellungen**.
 
 Gemeinsame Einstellungen sind **Nur öffentliche Zieladressen zulassen**, **User-Agent** und **Maximale Antwortgröße**. Vorgaben sind öffentliche Zieladressen, `MatoLoop/1.0` und 64 MiB. Direkte Abrufe haben standardmäßig 30 Sekunden Gesamtzeit, Jina 90 Sekunden einschließlich Übertragung und Verarbeitung; ausdrücklich angegebene Tool-Zeitgrenzen gehen vor. Jina darf antworten, sobald sein Inhalt bereitsteht, ohne auf vollständige Netzwerkruhe zu warten. Für benötigte nachgeladene Inhalte kann der Agent gezielt Warte-Selektoren verwenden.
 
 !!! warning "Netzwerkgrenzen unterscheiden sich"
-    Abschalten der öffentlichen Adressbeschränkung erlaubt direkte Abrufe auch zu privaten, vom Backend erreichbaren Zielen. Bei direkten Anfragen wird jede Weiterleitung neu geprüft; eine Freigabe überstimmt die aktive Beschränkung nicht. Jina erhält dagegen die vollständige URL und führt Abruf, Weiterleitungen und JavaScript selbst aus: MatoLoops lokale Adressprüfung und DNS-Bindung schützen Jinas Zielanfragen nicht. Vertraue der Reader-Instanz entsprechend.
+    Abschalten der öffentlichen Adressbeschränkung erlaubt direkte Abrufe auch zu privaten, vom Backend erreichbaren Zielen. Bei direkten Anfragen wird jede Weiterleitung neu geprüft; eine Freigabe überstimmt die aktive Beschränkung nicht. Jina und Microsoft Web IQ erhalten dagegen die vollständige URL und führen den Zielabruf und Weiterleitungen selbst aus: MatoLoops lokale Adressprüfung und DNS-Bindung schützen deren Zielanfragen nicht. Vertraue dem ausgewählten Dienst entsprechend.
 
 Originaldownloads, Untertitel, URL-Dateiimports und ausdrücklich angeforderte PDF-Seitenbilder verwenden weiterhin den direkten Abrufweg. Dessen gemeinsame Grenzen gelten beispielsweise auch für BookStack-Anhänge. Shell, Computer-Browser, Suchdienste und andere Integrationen haben eigene Zugriffsregeln. Jinas Bildauswertung liefert Reader-Inhalt, nicht automatisch Originalbilder als Anhänge.
 

@@ -298,6 +298,8 @@ function openCreateDialog() {
 
 function providerLabel(providerType) {
   return {
+    webiq: 'Microsoft Web IQ',
+    webiq_search: 'Microsoft Web IQ',
     jina: 'Jina Reader', searxng: 'SearXNG', caldav: 'CalDAV', imap_smtp: 'IMAP/SMTP', microsoft_graph: 'Microsoft Graph', 'tbs-desk': 'tbs.Desk', bookstack: 'BookStack', mealie: 'Mealie', paperless: 'Paperless-ngx', arcane: 'Arcane', sonobin: 'SonoBin', openscad: 'OpenSCAD', opencode: 'OpenCode', browser: 'Chromium'
   }[providerType] || providerType
 }
@@ -357,7 +359,8 @@ async function removeIntegration(integration) {
   integrations.selectScope(integration.scope)
   removingId.value = integration.id
   try {
-    if (integration.integrationType === 'calendar') await integrations.removeCalendar(integration.id)
+    if (['webiq', 'webiq_search'].includes(integration.providerType)) await integrations.removeWebIq(integration.id)
+    else if (integration.integrationType === 'calendar') await integrations.removeCalendar(integration.id)
     else if (integration.integrationType === 'webfetch') await integrations.removeWebfetch(integration.id)
     else if (integration.integrationType === 'mail') await integrations.removeMail(integration.id)
     else if (integration.integrationType === 'microsoft365') await integrations.removeMicrosoft365(integration.id)

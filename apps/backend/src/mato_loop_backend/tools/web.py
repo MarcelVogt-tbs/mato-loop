@@ -32,6 +32,7 @@ from mato_loop_backend.tools.arguments import (
     FetchTranscriptArguments,
     JinaWebFetchArguments,
     WebFetchArguments,
+    WebIqWebFetchArguments,
     WebSearchArguments,
 )
 from mato_loop_backend.tools.context import ToolContext as ToolContext
@@ -83,6 +84,7 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
         arguments.query,
         search_type=arguments.search_type,
         provider=primary_provider,
+        db=context.db,
     )
     try:
         items = json.loads(content)
@@ -120,13 +122,13 @@ async def _web_search(arguments: WebSearchArguments, context: ToolContext) -> To
 async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolResult:
     from mato_loop_backend.integrations.jina import client as jina_client
     from mato_loop_backend.integrations.jina import service as jina_service
-    from mato_loop_backend.integrations.jina.adapter import (
-        JinaConfig,
+    from mato_loop_backend.integrations.jina.adapter import JinaConfig
+    from mato_loop_backend.integrations.service import IntegrationSettingsError
+    from mato_loop_backend.web.providers import (
         provider_available,
         provider_key,
         selected_provider,
     )
-    from mato_loop_backend.integrations.service import IntegrationSettingsError
 
     await web_access.ensure_webfetch_binding_is_current(context)
     access = context.tool_settings.web_access.model_copy(deep=True)
@@ -153,18 +155,35 @@ async def _webfetch(arguments: WebFetchArguments, context: ToolContext) -> ToolR
     if provider is not None:
         url = canonicalize_url(arguments.url, preserve_fragment=True)
         await authorize_url(url)
-        try:
-            secrets = await jina_service.credentials(context.db, provider)
-        except IntegrationSettingsError as exc:
-            raise WebFetchError(exc.code) from exc
-        options = arguments.model_dump(exclude=WebFetchArguments.model_fields.keys()) if isinstance(arguments, JinaWebFetchArguments) else {}
-        result = await jina_client.fetch(
-            JinaConfig.model_validate(provider.config), url, api_key=secrets.api_key,
-            cookies=secrets.cookies, locale=await preferred_language(context.db, context.session.user_id),
-            format=arguments.format, timeout=arguments.timeout,
-            max_response_bytes=access.max_response_mib * 1024 * 1024,
-            user_agent=access.user_agent, **options,
-        )
+        if provider.adapter_type == "webiq":
+            from mato_loop_backend.integrations.webiq import client as webiq_client
+            from mato_loop_backend.integrations.webiq import service as webiq_service
+            from mato_loop_backend.integrations.webiq.adapter import WebIqConfig
+
+            if not isinstance(arguments, WebIqWebFetchArguments) or arguments.query is None:
+                raise WebFetchError("validation.invalid", params={"field": "query"})
+            try:
+                secrets = await webiq_service.credentials(context.db, provider)
+            except IntegrationSettingsError as exc:
+                raise WebFetchError(exc.code) from exc
+            result = await webiq_client.fetch(
+                WebIqConfig.model_validate(provider.config), url, query=arguments.query,
+                api_key=secrets.api_key, timeout=arguments.timeout,
+                max_response_bytes=access.max_response_mib * 1024 * 1024,
+            )
+        else:
+            try:
+                secrets = await jina_service.credentials(context.db, provider)
+            except IntegrationSettingsError as exc:
+                raise WebFetchError(exc.code) from exc
+            options = arguments.model_dump(exclude=WebFetchArguments.model_fields.keys()) if isinstance(arguments, JinaWebFetchArguments) else {}
+            result = await jina_client.fetch(
+                JinaConfig.model_validate(provider.config), url, api_key=secrets.api_key,
+                cookies=secrets.cookies, locale=await preferred_language(context.db, context.session.user_id),
+                format=arguments.format, timeout=arguments.timeout,
+                max_response_bytes=access.max_response_mib * 1024 * 1024,
+                user_agent=access.user_agent, **options,
+            )
     else:
         result = await fetch_web(
             arguments.url,

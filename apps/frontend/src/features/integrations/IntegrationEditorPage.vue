@@ -5,7 +5,7 @@
         <q-avatar color="primary" text-color="white" :icon="dialogIcon" />
         <div class="col q-px-sm">
           <div class="text-h6 text-weight-bold">{{ integration?.name || 'Integration hinzufügen' }}</div>
-          <div class="text-body2 app-muted">{{ providerDefaults[form.integration_type]?.label }} · {{ scope === 'instance' ? 'Globale Verbindung' : 'Persönliche Verbindung' }}</div>
+          <div class="text-body2 app-muted">{{ selectedProvider?.label }} · {{ scope === 'instance' ? 'Globale Verbindung' : 'Persönliche Verbindung' }}</div>
         </div>
         <q-btn unelevated no-caps color="primary" icon="save" label="Speichern" :loading="saving || accessRef?.saving" :disable="blocked || loading || loadFailed || testing || microsoftLoginBusy || (section === 'permissions' ? !accessRef?.canSave : !dirty)" @click="section === 'permissions' ? accessRef?.save() : save()" />
       </q-toolbar>
@@ -24,7 +24,7 @@
         <q-card flat class="app-surface">
         <q-card-section class="q-gutter-md">
             <q-banner v-if="['search', 'webfetch'].includes(form.integration_type)" rounded class="app-surface-tonal">
-              Der Anbieter wird in den allgemeinen Tool-Einstellungen festgelegt.
+              Die Anbieter für Websuche und Webabrufe werden unabhängig voneinander in den allgemeinen Tool-Einstellungen festgelegt.
               <template #action><q-btn flat no-caps color="primary" label="Tool-Einstellungen öffnen" :to="{ name: 'admin-tools' }" /></template>
             </q-banner>
             <q-input dense
@@ -36,7 +36,7 @@
               :rules="[requiredRule]"
             />
             <q-input dense
-              v-if="!['openscad', 'mail', 'browser', 'microsoft365'].includes(form.integration_type)"
+              v-if="!isWebIq && !['openscad', 'mail', 'browser', 'microsoft365'].includes(form.integration_type)"
               v-model="form.base_url"
               outlined
               :label="baseUrlLabel"
@@ -44,6 +44,12 @@
               lazy-rules
               :rules="[requiredRule, urlRule]"
             />
+            <q-banner v-if="isWebIq" rounded class="app-surface-tonal">
+              Microsoft Web IQ ist kostenpflichtig. Suchanfragen, Seitenadressen und Relevanzabfragen werden an Microsoft übertragen.
+              Auch der Verbindungstest sendet eine Anfrage für diesen Integrationstyp.
+              <span v-if="form.integration_type === 'webfetch'">Seitenabrufe liefern relevante Textauszüge mit bis zu 3000 Zeichen, keine Volltexte.</span>
+              <template #action><q-btn flat no-caps color="primary" label="Web-IQ-Einrichtung" href="https://learn.microsoft.com/web-iq/get-started/authentication" target="_blank" rel="noopener noreferrer" /></template>
+            </q-banner>
             <template v-if="form.integration_type === 'microsoft365'">
               <div class="row items-center no-wrap">
                 <div class="text-subtitle2 col">Microsoft 365</div>
@@ -241,18 +247,19 @@
               :rules="isEditing ? [] : [requiredRule]"
             />
             <q-input dense
-              v-if="['infrastructure', 'webfetch'].includes(form.integration_type)"
+              v-if="form.integration_type === 'infrastructure' || isJina || isWebIq"
               v-model="form.apiKey"
               outlined
               type="password"
               :label="hasApiKey ? 'Neuer API-Schlüssel (optional)' : 'API-Schlüssel'"
-              :hint="form.integration_type === 'webfetch' ? (hasApiKey ? 'Leer lassen, um den gespeicherten Schlüssel beizubehalten.' : 'Optional, beispielsweise für höhere Jina-Kontingente.') : 'Unter Arcane → Einstellungen → API Keys erstellen. Für die gewünschten Umgebungen Docker-Rechte vergeben.'"
-              :disable="form.integration_type === 'webfetch' && form.removeApiKey"
+              :hint="isWebIq ? (hasApiKey ? 'Leer lassen, um den gespeicherten Schlüssel beizubehalten.' : 'API-Schlüssel deiner Microsoft-Web-IQ-App.') : isJina ? (hasApiKey ? 'Leer lassen, um den gespeicherten Schlüssel beizubehalten.' : 'Optional, beispielsweise für höhere Jina-Kontingente.') : 'Unter Arcane → Einstellungen → API Keys erstellen. Für die gewünschten Umgebungen Docker-Rechte vergeben.'"
+              :disable="isJina && form.removeApiKey"
               lazy-rules
-              :rules="isEditing || form.integration_type === 'webfetch' ? [] : [requiredRule]"
+              :rules="isEditing || isJina ? [] : [requiredRule]"
             />
-            <q-toggle v-if="form.integration_type === 'webfetch' && hasApiKey" v-model="form.removeApiKey" color="negative" label="Gespeicherten API-Schlüssel entfernen" />
-            <template v-if="form.integration_type === 'webfetch'">
+            <q-toggle v-if="isJina && hasApiKey" v-model="form.removeApiKey" color="negative" label="Gespeicherten API-Schlüssel entfernen" />
+            <q-input v-if="isWebIq" v-model.number="form.readerTimeout" outlined type="number" min="1" max="120" label="Standardzeitlimit" suffix="Sekunden" :rules="[value => Number.isInteger(value) && value >= 1 && value <= 120 || '1 bis 120 Sekunden eingeben.']" />
+            <template v-if="isJina">
               <q-input v-model.number="form.readerTimeout" outlined type="number" min="1" max="120" label="Standardzeitlimit" suffix="Sekunden" :rules="[value => Number.isInteger(value) && value >= 1 && value <= 120 || '1 bis 120 Sekunden eingeben.']" />
               <q-toggle v-model="form.removeOverlay" color="primary" label="Overlays standardmäßig entfernen" />
               <div class="text-caption app-muted">Entfernt überlagernde Elemente, erteilt aber keine Zustimmung. Sprache: persönliche Grundeinstellungen; Abrufmodus: automatisch, vom Agenten je Abruf änderbar.</div>
@@ -354,7 +361,7 @@ import IntegrationAccessPage from './IntegrationAccessPage.vue'
 import Microsoft365Login from './Microsoft365Login.vue'
 import MailSignatureEditor from 'src/features/mail/MailSignatureEditor.vue'
 import { agentDisplayName } from 'src/features/computers/display'
-import { providerDefaults, integrationTypes as allIntegrationTypes } from './configuration'
+import { providersForType, integrationTypes as allIntegrationTypes } from './configuration'
 
 defineOptions({ name: 'IntegrationEditorPage' })
 
@@ -394,10 +401,10 @@ const microsoftAuthFlows = [
 ]
 const microsoftCallbackUrl = `${window.location.origin}/api/integrations/microsoft365/oauth/callback`
 const baseUrlLabel = computed(
-  () => `${providerDefaults[form.integration_type]?.label}-Basis-URL`
+  () => `${selectedProvider.value?.label}-Basis-URL`
 )
 const baseUrlPlaceholder = computed(
-  () => providerDefaults[form.integration_type]?.placeholder
+  () => selectedProvider.value?.placeholder
 )
 const requiresHttps = computed(() => !['search', 'recipes', 'documents', 'coding', 'support', 'infrastructure', 'webfetch'].includes(form.integration_type))
 const dialogIcon = computed(() => ({ documents: 'description', coding: 'code', mail: 'mail', microsoft365: 'mail', support: 'confirmation_number', music: 'library_music', infrastructure: 'dns', openscad: 'view_in_ar', browser: 'web' })[form.integration_type] || 'extension')
@@ -413,7 +420,10 @@ const executionAgentOptions = computed(() => {
   return options
 })
 const form = reactive(defaultForm())
-const hasApiKey = computed(() => form.integration_type === 'webfetch' ? integration.value?.hasApiKey ?? integration.value?.hasCredential : integration.value?.hasCredential)
+const selectedProvider = computed(() => providersForType(form.integration_type).find(item => item.provider === form.provider_type))
+const isWebIq = computed(() => ['webiq', 'webiq_search'].includes(form.provider_type))
+const isJina = computed(() => form.provider_type === 'jina')
+const hasApiKey = computed(() => isJina.value ? integration.value?.hasApiKey ?? integration.value?.hasCredential : integration.value?.hasCredential)
 const discovering = ref(false)
 const discovery = ref(null)
 let discoveryVersion = 0
@@ -532,7 +542,7 @@ function tokenPairRule() {
 }
 
 function urlRule(value) {
-  const label = providerDefaults[form.integration_type].label
+  const label = selectedProvider.value.label
   try {
     const protocol = new URL(value).protocol
     const allowed = requiresHttps.value
@@ -634,6 +644,14 @@ async function save() {
       }
       if (integration.value) await integrations.updateSonoBin(integration.value.id, payload)
       else await integrations.createSonoBin(payload)
+    } else if (isWebIq.value) {
+      const payload = {
+        integration_type: form.integration_type,
+        name: form.name.trim(), api_key: form.apiKey || null,
+        enabled: form.enabled, timeout_seconds: form.readerTimeout
+      }
+      if (integration.value) await integrations.updateWebIq(integration.value.id, payload)
+      else await integrations.createWebIq(payload)
     } else if (form.integration_type === 'webfetch') {
       if (integration.value?.hasCookies && (form.removeCookies || form.cookies.length) && !await confirm('Die gespeicherten Cookies werden durch diese Angaben ersetzt. Fortfahren?', 'Cookies ersetzen?', { okLabel: 'Ersetzen', okColor: 'negative' })) return
       const payload = {
@@ -737,7 +755,7 @@ function assignForm(value = null) {
     token: '',
     apiKey: '',
     bearerToken: '',
-    readerTimeout: value.config?.timeoutSeconds ?? 90,
+    readerTimeout: value.config?.timeoutSeconds ?? (value.providerType === 'jina' ? 90 : 30),
     removeOverlay: value.config?.removeOverlay ?? false,
     executionAgentId: value.executionAgentId
       || value.config?.executionAgentId
@@ -748,10 +766,12 @@ function assignForm(value = null) {
   if (!value) {
     const type = allIntegrationTypes.find((item) => item.value === route.query.type)?.value
     form.integration_type = type || ''
-    form.provider_type = providerDefaults[type]?.provider || ''
-    form.name = typeof route.query.name === 'string' ? route.query.name : providerDefaults[type]?.label || ''
+    const provider = providersForType(type).find(item => item.provider === route.query.provider) || providersForType(type)[0]
+    form.provider_type = provider?.provider || ''
+    form.name = typeof route.query.name === 'string' ? route.query.name : provider?.label || ''
     if (type === 'coding') form.username = 'opencode'
-    if (type === 'webfetch') form.base_url = 'https://r.jina.ai'
+    if (form.provider_type === 'jina') form.base_url = 'https://r.jina.ai'
+    if (isWebIq.value) form.readerTimeout = 30
   }
   saved.value = JSON.stringify(form)
   if (['openscad', 'browser'].includes(form.integration_type)) void fetchComputers()
