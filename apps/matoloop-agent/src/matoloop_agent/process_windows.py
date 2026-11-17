@@ -374,22 +374,15 @@ class WindowsProcess:
             asyncio.create_task(drain(name, reader))
             for name, reader in (("stdout", process.stdout), ("stderr", process.stderr))
         ]
-        output = asyncio.gather(*tasks)
         try:
             async with asyncio.timeout(timeout):
                 # wait() also waits for inherited pipes, even after the shell has exited.
                 while process.returncode is None:
                     await asyncio.sleep(0.05)
-                _done, pending = await asyncio.wait(tasks, timeout=1)
-                if pending:
-                    for channel, task in zip(("stdout", "stderr"), tasks, strict=True):
-                        if task in pending:
-                            truncated[channel] = True
-                    for descriptor in (1, 2):
-                        pipe = process._transport.get_pipe_transport(descriptor)
-                        if pipe is not None:
-                            pipe.close()
-                await asyncio.shield(output)
+            await ProcessRunner._finish_drains(process, tasks)
+            for task in tasks:
+                if not task.cancelled():
+                    task.result()
         except (TimeoutError, asyncio.CancelledError) as exc:
             timed_out = isinstance(exc, TimeoutError)
             if process.returncode is None:
@@ -404,18 +397,17 @@ class WindowsProcess:
                 )
                 await killer.wait()
             await ProcessRunner._finish_drains(process, tasks)
-            for channel, task in zip(("stdout", "stderr"), tasks, strict=True):
-                if task.cancelled():
-                    truncated[channel] = True
             process._transport.close()
             await process.wait()
             if not timed_out:
                 raise
         finally:
             process._transport.close()
-            for task in tasks:
+            for channel, task in zip(("stdout", "stderr"), tasks, strict=True):
+                if not task.done() or task.cancelled():
+                    truncated[channel] = True
                 task.cancel()
-            await asyncio.gather(output, return_exceptions=True)
+            await asyncio.gather(*tasks, return_exceptions=True)
         return {
             "exitCode": process.returncode,
             "timedOut": timed_out,
