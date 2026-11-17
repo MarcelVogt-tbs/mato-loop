@@ -326,6 +326,7 @@ class WindowsProcess:
                 "HOMEPATH",
                 "PROGRAMFILES",
                 "PROGRAMFILES(X86)",
+                "PSMODULEANALYSISCACHEPATH",
             }
         }
         env.update(environment or {})

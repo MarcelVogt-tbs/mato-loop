@@ -165,62 +165,20 @@ class WindowsRuntimeTests(unittest.TestCase):
 
         async def execute():
             chunks = []
-            execution_environment = None
-            create_process = asyncio.create_subprocess_exec
-
-            async def capture_environment(*args, **kwargs):
-                nonlocal execution_environment
-                if "env" in kwargs:
-                    execution_environment = kwargs["env"]
-                return await create_process(*args, **kwargs)
 
             async def stream(channel, text):
                 chunks.append((channel, text))
 
-            with patch("asyncio.create_subprocess_exec", side_effect=capture_environment):
-                result = await self.process.exec(
-                    current_directory=self.wire,
-                    command=(
-                        "Write-Output 'Windows ready'; "
-                        "[Console]::WriteLine(('{0}|{1}|{2}' -f "
-                        "$env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:HOST_SECRET))"
-                    ),
-                    timeout=10,
-                    stream=stream,
-                )
-            if result["timedOut"]:
-                for cache_mode in ("host-cache", "disabled-cache"):
-                    command = "Write-Output 'cmdlet probe'"
-                    try:
-                        probe = subprocess.run(
-                            [
-                                self.process.shell,
-                                "-NoProfile",
-                                "-NonInteractive",
-                                "-Command",
-                                command,
-                            ],
-                            capture_output=True,
-                            text=True,
-                            timeout=20,
-                            env={
-                                **execution_environment,
-                                "PSModuleAnalysisCachePath": (
-                                    os.environ.get("PSModuleAnalysisCachePath", "nul")
-                                    if cache_mode == "host-cache"
-                                    else "nul"
-                                ),
-                            },
-                            stdin=subprocess.DEVNULL,
-                        )
-                        chunks.append(
-                            (
-                                "probe",
-                                repr((probe.returncode, probe.stdout, probe.stderr)),
-                            )
-                        )
-                    except subprocess.TimeoutExpired:
-                        chunks.append(("probe", command + " timed out"))
+            result = await self.process.exec(
+                current_directory=self.wire,
+                command=(
+                    "Write-Output 'Windows ready'; "
+                    "[Console]::WriteLine(('{0}|{1}|{2}' -f "
+                    "$env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:HOST_SECRET))"
+                ),
+                timeout=10,
+                stream=stream,
+            )
             self.assertEqual(result["exitCode"], 0, chunks)
             self.assertIn("Windows ready", "".join(text for _, text in chunks))
             self.assertIn(
