@@ -2101,6 +2101,19 @@ async def _ensure_session_move_has_no_external_file_references(
         )
 
 
+async def remove_session_worktree(
+    db: AsyncSession, item: ChatSession, worktree_impact: str
+) -> None:
+    from mato_loop_backend.sessions.coding import remove_worktree, session_worktree
+
+    info = await session_worktree(db, item)
+    if info is None:
+        raise SessionServiceError(409, "git.worktreeChanged")
+    await remove_worktree(
+        db, item, info, info.repository, force=True, expected_impact=worktree_impact
+    )
+
+
 async def delete_session(
     session_id: UUID,
     user_id: UUID,
@@ -2343,15 +2356,7 @@ async def delete_session(
     commit_task: asyncio.Task[None] | None = None
     try:
         if worktree_impact is not None:
-            from mato_loop_backend.sessions.coding import (
-                remove_worktree,
-                session_worktree,
-            )
-
-            info = await session_worktree(db, item)
-            if info is None:
-                raise SessionServiceError(409, "git.worktreeChanged")
-            await remove_worktree(db, item, info, info.repository, force=True, expected_impact=worktree_impact)
+            await remove_session_worktree(db, item, worktree_impact)
         for automation in linked_automations:
             if automation_mode == "deleteAutomations":
                 await db.delete(automation)

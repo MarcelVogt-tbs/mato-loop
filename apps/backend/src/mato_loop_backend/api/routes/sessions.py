@@ -989,7 +989,7 @@ async def delete_session(
                 raise session_service.SessionServiceError(404, "session.notFound")
             preferences = await SettingsStore.load(db, UserPreferences, user_id=user.id)
             if permanent is False or preferences.trash_enabled:
-                await move_to_trash(db, item)
+                await move_to_trash(db, item, worktree_impact=worktree_impact)
                 return
             if await is_session_deleted(db, item):
                 raise session_service.SessionServiceError(409, "session.inTrash")

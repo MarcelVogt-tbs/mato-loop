@@ -2574,7 +2574,7 @@ async def test_session_delete_impact_discovers_the_worktree_without_waiting_for_
     })
 
 
-@pytest.mark.parametrize("worktree", [None, "remove", "changed", "blocked", "joined", "permission"])
+@pytest.mark.parametrize("worktree", [None, "remove", "changed", "blocked", "joined", "permission", "trash"])
 async def test_session_delete_trashes_commits_and_purges_tree(
     tmp_path: Path, monkeypatch, worktree
 ) -> None:
@@ -2631,6 +2631,16 @@ async def test_session_delete_trashes_commits_and_purges_tree(
                 await delete_session(session_id, user, db, worktree_impact=token, permanent=True)
             assert (session_path.exists(), db.delete.await_count, client.request.await_count) == (True, 0, 0)
             return
+
+    if worktree == "trash":
+        monkeypatch.setattr(sessions_route, "_deletable_session", AsyncMock(return_value=session))
+        monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=UserPreferences(trash_enabled=True)))
+        db.scalar.side_effect = lambda statement: session if str(statement).startswith("SELECT chat_sessions.id,") else None
+        db.get.return_value = session
+        db.scalars.return_value = []
+        await delete_session(session_id, user, db, worktree_impact=token, permanent=False)
+        assert (session.delete_at is not None, client.request.await_count, session_path.exists(), db.delete.await_count) == (True, 1, True, 0)
+        return
 
     await delete_session(session_id, user, db, worktree_impact=token, permanent=True)
 

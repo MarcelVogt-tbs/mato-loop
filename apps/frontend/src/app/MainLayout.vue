@@ -90,8 +90,8 @@ const $q = useQuasar()
 const drawerOpen = ref(!$q.screen.lt.md)
 const navigation = ref(null)
 provide('deleteActions', {
-  sessions: (session) => navigation.value?.removeSession(session, { permanent: true }),
-  projects: (project) => navigation.value?.deleteProject(project, { permanent: true })
+  sessions: (session, options = { permanent: true }) => navigation.value?.removeSession(session, options),
+  projects: (project, options = { permanent: true }) => navigation.value?.deleteProject(project, options)
 })
 const route = useRoute()
 const chat = useChatStore()

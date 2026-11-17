@@ -630,6 +630,8 @@ async def test_trash_project_restore_preserves_archive_and_individual_trash(tras
     listing = (await client.get("/api/trash")).json()
     assert [item["id"] for item in listing["projects"]] == [str(project.id)]
     assert listing["sessions"] == []
+    contents = (await client.get(f"/api/trash/projects/{project.id}/sessions")).json()["items"]
+    assert {item["id"] for item in contents} == {str(parent.id), str(independent.id)}
     blocked = await client.post(f"/api/trash/sessions/{independent.id}/restore")
     assert (blocked.status_code, blocked.json()["error"]["code"]) == (409, "trash.parentDeleted")
     assert (await client.post(f"/api/trash/projects/{project.id}/restore")).status_code == 204
@@ -651,6 +653,7 @@ async def test_trash_restore_rejects_expired_and_foreign_entries(trash_tree, cli
     foreign_session = ChatSession(user_id=tree.foreign.id, title="Private session", delete_at=foreign.delete_at)
     tree.db.add_all([foreign, foreign_session])
     await tree.db.commit()
+    assert (await client.get(f"/api/trash/projects/{foreign.id}/sessions")).status_code == 404
     expired = await client.post(f"/api/trash/sessions/{session.id}/restore")
     assert (expired.status_code, expired.json()["error"]["code"]) == (409, "trash.expired")
     for kind, item in (("projects", foreign), ("sessions", foreign_session)):

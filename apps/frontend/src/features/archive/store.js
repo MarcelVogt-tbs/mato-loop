@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 
 export const useArchiveStore = defineStore('archive', {
-  state: () => ({ projects: [], sessionLists: {}, trash: { projects: [], sessions: [] }, loading: false, failed: false }),
+  state: () => ({ projects: [], sessionLists: {}, trashSessionLists: {}, trash: { projects: [], sessions: [] }, loading: false, failed: false }),
   actions: {
     async load(mode = 'archive') {
       this.loading = true
@@ -11,6 +11,7 @@ export const useArchiveStore = defineStore('archive', {
         if (mode === 'trash') {
           const { data } = await api.get('/trash')
           this.trash = data
+          this.trashSessionLists = {}
           return
         }
         const [{ data }] = await Promise.all([api.get('/projects', { params: { archived: true } }), this.loadSessions()])
@@ -21,6 +22,13 @@ export const useArchiveStore = defineStore('archive', {
     },
     async restoreTrash(kind, id) {
       await api.post(`/trash/${kind}/${id}/restore`)
+    },
+    async loadTrashSessions(projectId, more = false) {
+      const list = this.trashSessionLists[projectId]
+      const { data } = await api.get(`/trash/projects/${projectId}/sessions`, { params: {
+        ...(more && list?.nextCursor ? { cursor: list.nextCursor } : {})
+      } })
+      this.trashSessionLists[projectId] = { ...data, items: more ? [...(list?.items || []), ...data.items] : data.items }
     },
     async loadSessions(projectId = null, more = false) {
       const key = projectId || 'sessions'

@@ -37,6 +37,29 @@ async def list_trash(user: Annotated[UserAccount, Depends(require_user)],
             "sessions": [{**_payload(item), "projectName": name} for item, name in sessions]}
 
 
+@router.get("/projects/{project_id}/sessions")
+async def project_sessions(project_id: UUID,
+                           user: Annotated[UserAccount, Depends(require_user)],
+                           db: Annotated[AsyncSession, Depends(get_db_session)],
+                           cursor: UUID | None = None):
+    project = await db.scalar(select(Project).where(
+        Project.id == project_id, Project.user_id == user.id, Project.delete_at.is_not(None),
+    ))
+    if project is None:
+        raise ApiError(404, "trash.notFound")
+    query = select(ChatSession).where(
+        ChatSession.project_id == project.id, ChatSession.user_id == user.id,
+        ChatSession.parent_session_id.is_(None),
+    )
+    if cursor:
+        query = query.where(ChatSession.id > cursor)
+    items = list(await db.scalars(query.order_by(ChatSession.id).limit(21)))
+    return {"items": [{"id": str(item.id), "title": item.title,
+                       "deleteAt": item.delete_at.isoformat() if item.delete_at else None}
+                      for item in items[:20]],
+            "nextCursor": str(items[19].id) if len(items) > 20 else None}
+
+
 @router.post("/{kind}/{item_id}/restore", status_code=status.HTTP_204_NO_CONTENT)
 async def restore(kind: Literal["sessions", "projects"], item_id: UUID,
                   user: Annotated[UserAccount, Depends(require_user)],
