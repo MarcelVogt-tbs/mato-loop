@@ -114,7 +114,7 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   await latest
   await vi.waitFor(() => expect(root.textContent).toContain('Ein Gespräch fortsetzen'))
   expect(root.querySelector('.home-activity-row [role="status"]').getAttribute('aria-label')).toBe('Agent arbeitet')
-  expect(root.textContent).toContain('Ungelesene Antwort')
+  expect(root.textContent).not.toContain('Ungelesene Antwort')
   expect(root.querySelector('h1').textContent).toBe('Willkommen zurück, Ada')
   useUserProfileStore().assignProfile({ fullName: { both: 'Ada Lovelace' } })
   await vi.waitFor(() => expect(root.querySelector('h1').textContent).toBe('Willkommen zurück, Ada Lovelace'))

@@ -31,10 +31,9 @@
               </span>
             </q-item-section>
             <q-item-section>
-              <q-item-label lines="1" :class="{ 'text-weight-medium': session.hasUnreadMessages }">
+              <q-item-label lines="1">
                 {{ session.title }}
               </q-item-label>
-              <q-item-label v-if="session.hasUnreadMessages && session.status?.kind !== 'unread'" caption class="text-primary">Ungelesene Antwort</q-item-label>
               <q-item-label caption>{{ projectName(session.projectId) }} · {{ formatRelativeDateTime(session.activityAt || session.lastUserMessageAt || session.createdAt) }}</q-item-label>
             </q-item-section>
             <q-item-section side class="q-pl-sm" @click.stop @keydown.stop @keyup.stop>
