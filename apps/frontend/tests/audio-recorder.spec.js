@@ -43,6 +43,7 @@ function audioMocks(sampleRate = 16_000) {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 describe('PCM-WAV encoder', () => {
@@ -116,6 +117,9 @@ describe('audio recorder lifecycle', () => {
 
   it('stops automatically at the duration limit and releases all resources', async () => {
     vi.useFakeTimers()
+    const lock = Object.assign(new EventTarget(), { released: false, release: vi.fn().mockResolvedValue() })
+    const request = vi.fn().mockResolvedValue(lock)
+    vi.stubGlobal('navigator', { wakeLock: { request } })
     let now = 0
     const mocks = audioMocks(16_000)
     const recorder = createAudioRecorder({
@@ -125,6 +129,7 @@ describe('audio recorder lifecycle', () => {
       maxDurationMs: 1000
     })
     await recorder.startRecording()
+    expect(request).toHaveBeenCalledWith('screen')
     mocks.processor.onaudioprocess({
       inputBuffer: {
         numberOfChannels: 1,
@@ -141,12 +146,14 @@ describe('audio recorder lifecycle', () => {
     expect(recorder.recording.value).toBe(false)
     expect(mocks.track.stop).toHaveBeenCalled()
     expect(mocks.context.close).toHaveBeenCalled()
+    expect(lock.release).toHaveBeenCalledOnce()
     expect(mocks.processor.disconnect).toHaveBeenCalled()
     expect(recorder.autoStoppedFile.value.type).toBe('audio/wav')
     expect(recorder.autoStoppedFile.value.name).toMatch(/^sprachnachricht-.*\.wav$/)
   })
 
   it('keeps finalization busy while closing audio resources and retains the stopped file after cancellation', async () => {
+    vi.stubGlobal('navigator', { wakeLock: { request: vi.fn().mockRejectedValue(new Error('Denied')) } })
     const mocks = audioMocks()
     const closing = deferred()
     mocks.context.close.mockReturnValue(closing.promise)
@@ -165,5 +172,21 @@ describe('audio recorder lifecycle', () => {
     closing.resolve()
     expect((await stopped).type).toBe('audio/wav')
     expect(recorder.finalizing.value).toBe(false)
+  })
+
+  it('releases a screen wake lock granted after cancellation', async () => {
+    const pendingLock = deferred()
+    const lock = Object.assign(new EventTarget(), { released: false, release: vi.fn().mockResolvedValue() })
+    vi.stubGlobal('navigator', { wakeLock: { request: () => pendingLock.promise } })
+    const mocks = audioMocks()
+    const recorder = createAudioRecorder({
+      mediaDevices: { getUserMedia: vi.fn().mockResolvedValue(mocks.stream) },
+      AudioContextClass: mocks.AudioContextClass
+    })
+    await recorder.startRecording()
+    await recorder.cancelRecording()
+    pendingLock.resolve(lock)
+    await pendingLock.promise
+    expect(lock.release).toHaveBeenCalledOnce()
   })
 })

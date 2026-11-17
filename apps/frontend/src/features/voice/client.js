@@ -1,6 +1,8 @@
+import { createScreenWakeLock } from 'src/shared/screen-wake-lock'
+
 export function createVoiceClient({ negotiate, onPhase, onControl, onError, onClose, onWakeLock = () => {} }) {
   let peer = null, stream = null, channel = null, control = null, timer = null, startup = null
-  let wakeLock = null
+  const wakeLock = createScreenWakeLock(onWakeLock)
   let closed = false, ready = false, muted = false, connected = false
   const abort = new AbortController()
   const audio = new Audio()
@@ -19,31 +21,13 @@ export function createVoiceClient({ negotiate, onPhase, onControl, onError, onCl
     if (document.hidden) { close(); onClose() }
   }
   function pagehide() { close(); onClose() }
-  function releaseWakeLock(lock) {
-    void lock.release().catch(() => console.warn('Screen wake lock could not be released.'))
-  }
-  async function keepScreenAwake() {
-    if (!navigator.wakeLock?.request) { onWakeLock(false); return }
-    try {
-      const lock = await navigator.wakeLock.request('screen')
-      if (closed) { releaseWakeLock(lock); return }
-      wakeLock = lock
-      lock.addEventListener('release', () => {
-        wakeLock = null
-        if (!closed) onWakeLock(false)
-      })
-      onWakeLock(!lock.released)
-    } catch {
-      if (!closed) onWakeLock(false)
-    }
-  }
   function close() {
     if (closed) return
     closed = true
     abort.abort()
     clearInterval(timer)
     clearTimeout(startup)
-    if (wakeLock) { releaseWakeLock(wakeLock); wakeLock = null }
+    wakeLock.release()
     for (const track of stream?.getTracks() || []) track.stop()
     audio.pause()
     audio.srcObject = null
@@ -70,7 +54,7 @@ export function createVoiceClient({ negotiate, onPhase, onControl, onError, onCl
         stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false })
         if (closed) { for (const track of stream.getTracks()) track.stop(); return }
         for (const track of stream.getAudioTracks()) track.enabled = false
-        void keepScreenAwake()
+        void wakeLock.request()
         peer = new RTCPeerConnection()
         peer.ontrack = (event) => {
           if (closed) return
