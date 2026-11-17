@@ -372,6 +372,9 @@ invalidate older prefixes. The general factuality contract retains verification 
 without a blanket instruction to enumerate evidence gaps; this wording change intentionally
 invalidates older system prefixes. The shared open-request continuation contract also intentionally
 changes this stable prefix; subsequent rounds keep the same contract and retained turns.
+Direct-message reminders append to their originating user turns, not the system prefix or
+earlier ordinary turns. Their addition changes historical direct-message projections once;
+subsequent tool rounds and persisted follow-ups retain the same reminder and serialized prefix.
 The shell-progress rule keeps useful progress, errors and final
 summaries visible when long-running commands also save logs, preserving command failure status
 through pipelines; this intentionally changes the stable host prefix when `shell_run` is offered

@@ -25,6 +25,19 @@ from mato_loop_backend.tools.snapshots import SNAPSHOT_CONTRACT
 _LOCAL_TIMEZONE = ZoneInfo("Europe/Berlin")
 
 
+DIRECT_MESSAGE_CONTEXT = (
+    "[Host context: this message continues an active run, not necessarily a new task.]\n"
+    "Reconcile it with the unfinished requests above. Corrections to source, method, format, or "
+    "parameters change only those parts; keep the remaining goal and required verification. "
+    "A side question does not complete the earlier task. Respect explicit stops, replacements, "
+    "and switches to information, planning, or review; do not resume paused execution without a request. "
+    "Skipped tool calls did not run and do not cancel their underlying goals. Reassess which steps "
+    "are still needed under the latest instruction and current permissions; do not replay actions "
+    "automatically. Successful results remain evidence, not authorization for new actions. "
+    "Before finishing, address the still-relevant requests or state what is paused or blocked."
+)
+
+
 WEEKDAY_NAMES = (
     "Monday",
     "Tuesday",

@@ -985,6 +985,10 @@ async def test_recorded_computers_preserve_provider_request_prefix(serialize, hi
         "m365_calendar": ("events", "eventToken", "event"),
     }.get(large_result)
     for index in range(2):
+        if index == 0:
+            direct = _message(session.id, "user", "Use only the requested source.")
+            direct.provider_data = {"_matoloop": {"continuationRunId": str(uuid4())}}
+            records.append(direct)
         call = _message(session.id, "assistant", "")
         call.tool_calls = [{"id": str(index), "name": large_result if collection else "browser" if large_result == "browser" else "shell_run",
                             "arguments": {"command": "pwd"}}]
@@ -3388,6 +3392,16 @@ def test_message_dict_contains_only_internal_attachment_reference() -> None:
     assert "data:" not in str(projected)
 
 
+def test_direct_upload_preserves_attachment_and_continuation_guidance() -> None:
+    message = _message(uuid4(), "user", "")
+    message.provider_data = {"_matoloop": {"continuationRunId": str(uuid4())}}
+    _attach_image(message)
+
+    content = message_dict(message)["content"]
+
+    assert "Inspect their contents" in content and "Reconcile it with the unfinished requests" in content
+
+
 def test_message_dict_marks_interrupted_assistant_content_for_the_model() -> None:
     message = _message(uuid4(), "assistant", "Unvollständige Antwort")
     message.generation_status = "interrupted"
@@ -4183,8 +4197,9 @@ async def test_direct_messages_during_tool_batch_keep_same_run_results_available
     ]
     assert results == [json.loads(result_one.content), json.loads(result_two.content)]
     assert [item["content"] for item in projection.messages if item["role"] == "user"] == [
-        request.content, first.content, second.content,
+        message_dict(item)["content"] for item in (request, first, second)
     ]
+    assert "Skipped tool calls did not run and do not cancel their underlying goals" in message_dict(first)["content"]
     _assert_whole_tool_pairs(projection.messages)
 
 
