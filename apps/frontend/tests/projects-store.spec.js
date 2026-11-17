@@ -57,6 +57,71 @@ describe('projects store', () => {
     expect(store.loading).toBe(false)
   })
 
+  it('refreshes only requested summaries in bounded chunks without reordering other projects', async () => {
+    const ids = Array.from({ length: 101 }, (_, index) => `target-${index}`)
+    const updated = { ...project, id: ids[0], sessionCount: 4, hasUnreadMessages: true }
+    api.get.mockResolvedValueOnce({ data: { items: [updated] } }).mockResolvedValueOnce({ data: { items: [] } })
+    const store = useProjectStore()
+    store.items = [project, { ...project, id: ids[0] }, { ...project, id: ids[100] }]
+    store.loaded = true
+
+    await store.refreshSummaries([...ids, ids[0]], { suppressErrorToast: true })
+
+    expect(api.get.mock.calls.map(([url, config]) => [url, config.params.getAll('projectIds'), config.suppressErrorToast]))
+      .toEqual([['/projects', ids.slice(0, 100), true], ['/projects', ids.slice(100), true]])
+    expect(store.items).toEqual([project, updated])
+  })
+
+  it('retains every targeted ID when queued refreshes supersede each other', async () => {
+    let resolveFirst
+    const second = { ...project, id: 'project-2' }
+    const third = { ...project, id: 'project-3' }
+    api.get.mockReturnValueOnce(new Promise(resolve => { resolveFirst = resolve }))
+      .mockResolvedValueOnce({ data: { items: [project, second, third] } })
+    const store = useProjectStore()
+    store.loaded = true
+    const first = store.refreshSummaries([project.id])
+    const next = store.refreshSummaries([second.id])
+    const latest = store.refreshSummaries([third.id])
+    resolveFirst({ data: { items: [] } })
+    await Promise.all([first, next, latest])
+
+    expect(api.get.mock.calls[1][1].params.getAll('projectIds')).toEqual([project.id, second.id, third.id])
+    expect(store.items).toEqual([project, second, third])
+  })
+
+  it.each(['mutation', 'full refresh', 'targeted refresh'])('does not let stale reads overwrite a newer %s', async (change) => {
+    let resolveFirst
+    const updated = { ...project, name: 'Current' }
+    api.get.mockReturnValueOnce(new Promise(resolve => { resolveFirst = resolve }))
+    if (change !== 'mutation') api.get.mockResolvedValueOnce({ data: { items: [updated] } })
+    api.patch.mockResolvedValue({ data: updated })
+    const store = useProjectStore()
+    store.items = [project]
+    store.loaded = true
+    const first = change === 'targeted refresh' ? store.fetchAll() : store.refreshSummaries([project.id])
+    const next = change === 'mutation'
+      ? store.update(project.id, updated.name)
+      : change === 'full refresh' ? store.fetchAll() : store.refreshSummaries([project.id])
+    resolveFirst({ data: { items: [] } })
+    await Promise.all([first, next])
+
+    expect(store.items).toEqual([updated])
+  })
+
+  it('keeps the project list complete when a summary hint arrives during initial load', async () => {
+    let resolveInitial
+    const other = { ...project, id: 'project-2' }
+    api.get.mockReturnValueOnce(new Promise(resolve => { resolveInitial = resolve }))
+      .mockImplementationOnce((url, config) => Promise.resolve({ data: { items: config.params ? [project] : [project, other] } }))
+    const store = useProjectStore()
+    const initial = store.fetchAll()
+    const hint = store.refreshSummaries([project.id])
+    resolveInitial({ data: { items: [project, other] } })
+    await Promise.all([initial, hint])
+    expect([store.loaded, store.items]).toEqual([true, [project, other]])
+  })
+
   it('creates, updates, and deletes projects after successful requests', async () => {
     const renamed = { ...project, name: 'Mato Loop', instructions: 'Be concise.', updatedAt: '2026-08-18T10:00:00Z' }
     api.post.mockResolvedValue({ data: project })

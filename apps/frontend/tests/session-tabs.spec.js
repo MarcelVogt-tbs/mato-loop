@@ -120,6 +120,19 @@ it('loads summaries for restored project sessions without loading sidebar scopes
   expect(tabs.summaries.b.activeRunStatus).toBe('running')
 })
 
+it('preserves targeted updates while an in-flight refresh loads other tab summaries', async () => {
+  const { tabs } = await mount()
+  tabs.$patch({ owner: 'owner', loaded: true, items: [{ key: 'a', sessionId: 'a' }, { key: 'b', sessionId: 'b' }] })
+  let resolve
+  api.get.mockReturnValueOnce(new Promise(done => { resolve = done }))
+  const refreshing = tabs.refreshSummaries()
+  const newA = { ...a, title: 'Updated Alpha' }
+  tabs.applySummaryUpdates(['a'], { a: newA })
+  resolve({ data: { items: [a, b] } })
+  await refreshing
+  expect(tabs.summaries).toEqual({ a: newA, b })
+})
+
 it('removes project draft tabs before saving the remaining tabs', async () => {
   const { tabs, chat } = await mount()
   tabs.visit({ projectId: 'deleted-project' }, { keep: true })

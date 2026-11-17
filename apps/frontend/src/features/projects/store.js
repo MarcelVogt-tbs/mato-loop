@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { queueRefresh } from 'src/utils/queued-refresh'
 
+const pendingSummaryIds = new WeakMap()
+
 export const useProjectStore = defineStore('projects', {
   state: () => ({
     items: [],
@@ -36,12 +38,42 @@ export const useProjectStore = defineStore('projects', {
           if (revision !== this.revision) return
           this.items = data.items
           this.loaded = true
+          pendingSummaryIds.get(this)?.clear()
         } catch (error) {
           if (revision === this.revision) this.loadFailed = true
           throw error
         } finally {
           if (revision === this.revision) this.loading = false
         }
+      })
+    },
+    async refreshSummaries(ids, config = {}) {
+      const requested = [...new Set(ids.filter(Boolean))]
+      if (!requested.length) return
+      if (!this.loaded) return this.fetchAll(config)
+      if (!pendingSummaryIds.has(this)) pendingSummaryIds.set(this, new Set())
+      const pending = pendingSummaryIds.get(this)
+      requested.forEach(id => pending.add(id))
+      this.loading = false
+      return queueRefresh(this, { ...config, targeted: true }, async (revision) => {
+        // Keep superseded requests' IDs until a current read has applied them.
+        const projectIds = [...pending]
+        const summaries = new Map()
+        for (let offset = 0; offset < projectIds.length; offset += 100) {
+          const params = new URLSearchParams(config.params)
+          params.delete('projectIds')
+          projectIds.slice(offset, offset + 100).forEach(id => params.append('projectIds', id))
+          const { data } = await api.get('/projects', { timeout: 30_000, ...config, params })
+          if (revision !== this.revision) return
+          data.items.forEach(item => summaries.set(item.id, item))
+        }
+        const targets = new Set(projectIds)
+        const existing = new Set(this.items.map(item => item.id))
+        this.items = this.items
+          .filter(item => !targets.has(item.id) || summaries.has(item.id))
+          .map(item => targets.has(item.id) ? summaries.get(item.id) : item)
+        this.items.push(...[...summaries.values()].filter(item => targets.has(item.id) && !existing.has(item.id)))
+        projectIds.forEach(id => pending.delete(id))
       })
     },
     async create(name, instructions = '', defaults = {}) {

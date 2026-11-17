@@ -73,6 +73,7 @@
 import { computed } from 'vue'
 import { formatAbsoluteDateTime, formatCompactAge } from 'src/utils/date-time'
 import { sessionSidebarStatus } from '../session-groups'
+import { useChatStore } from '../store'
 import SidebarIconButton from 'src/shared/ui/SidebarIconButton.vue'
 import SessionMenuItems from './SessionMenuItems.vue'
 import SidebarActionMenu from './SidebarActionMenu.vue'
@@ -91,10 +92,13 @@ const props = defineProps({
   draggable: { type: Boolean, default: true }
 })
 const menuOpen = defineModel('menuOpen', { type: Boolean, default: false })
+const chat = useChatStore()
 const { openKeptSession } = useSessionTabNavigation()
 const emit = defineEmits(['open', 'rename', 'move', 'archive', 'delete', 'toggle-pin', 'drag-start', 'drag-end'])
 const timestamp = computed(() => props.session.lastUserMessageAt || props.session.createdAt)
-const indicator = computed(() => props.status || sessionSidebarStatus(props.session)
+const indicator = computed(() => props.status || sessionSidebarStatus(
+  props.session, 0, 0, chat.sessionHasPendingSend(props.session.id, props.session.projectId)
+)
   || (props.session.hasUnreadMessages ? { kind: 'unread', label: 'Ungelesene Antwort' } : null))
 
 function prepareTitleScroll(event) {

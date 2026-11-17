@@ -489,7 +489,7 @@ export const streamActions = {
               this.cancelQueueDrain()
               this.scheduleQueueDrain(0)
             })
-          void this.refreshSessions().catch(() => {})
+          void this.syncSessionSummaries([sessionId]).catch(() => {})
         } else {
           this.scheduleQueueDrain(0)
         }
@@ -539,7 +539,7 @@ export const streamActions = {
           void this.refreshSession(sessionId).then((session) => {
             if (terminal) return refreshChangedFiles(session)
           }).catch(() => {})
-          this.refreshSessions()
+          void this.syncSessionSummaries([sessionId]).catch(() => {})
           useApprovalStore().fetchPending()
           void useQuestionStore().fetchPending().catch(() => {})
         }

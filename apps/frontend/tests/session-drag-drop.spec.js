@@ -4,6 +4,7 @@ import { createPinia } from 'pinia'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import MainLayout from '../src/app/MainLayout.vue'
 import { useChatStore } from 'src/features/chat/store'
+import { useSessionTabsStore } from 'src/features/chat/session-tabs-store'
 import { useBrowserStore } from 'stores/browser'
 import { useControlCenterStore } from 'stores/control-center'
 import { useIntegrationStore } from 'stores/integrations'
@@ -37,7 +38,8 @@ const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, te
     routeUpdate: { callback: null },
     chat: {
       cachedSessions: sessions, sessionLists,
-      sessionHasPendingSend: () => false,
+      pendingSendId: null,
+      sessionHasPendingSend(id) { return this.pendingSendId === id },
       sessionList(id) { return this.sessionLists[id ?? 'standalone'] },
       ensureSessionList(id) { return this.sessionLists[id ?? 'standalone'] },
       setSessionScope: vi.fn().mockResolvedValue(),
@@ -50,14 +52,24 @@ const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, te
       refreshSession: vi.fn().mockResolvedValue(),
       refreshServerQueue: vi.fn().mockResolvedValue(),
       refreshSessions: vi.fn().mockResolvedValue(),
+      reconcileSessionList: vi.fn().mockResolvedValue(),
+      invalidateSessionLists: vi.fn().mockResolvedValue(),
+      syncSessionSummaries: vi.fn().mockResolvedValue(),
+      updateCachedSessions: vi.fn(),
       markSessionRead: vi.fn().mockResolvedValue()
     },
-    projects: { loaded: true, items: [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }], fetchAll: vi.fn().mockResolvedValue() },
+    projects: { loaded: true, items: [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }], fetchAll: vi.fn().mockResolvedValue(), refreshSummaries: vi.fn().mockResolvedValue() },
     pending: { pending: [], forSession: () => [], fetchPending: vi.fn().mockResolvedValue(), fetchGrants: vi.fn().mockResolvedValue() },
     quasar: { dark: { isActive: false }, screen: { lt: { sm: false, md: false, lg: false } }, platform: { is: {} }, notify: vi.fn() }
   }
 })
-vi.mock('quasar', async () => ({ ...await import('quasar/dist/quasar.client.js'), useQuasar: () => quasar }))
+vi.mock('quasar', async () => ({
+  ...await import('quasar/dist/quasar.client.js'), useQuasar: () => quasar,
+  QVirtualScroll: {
+    props: ['itemsSize', 'itemsFn'],
+    render() { return h('div', this.itemsFn(0, this.itemsSize).map((item, index) => this.$slots.default({ item, index }))) }
+  }
+}))
 vi.mock('vue-router', async (importOriginal) => {
   const actual = await importOriginal()
   const { reactive } = await import('vue')
@@ -269,21 +281,78 @@ it.each([false, true])('refreshes displayed Home and only invalidates hidden Hom
 })
 
 it.each([
-  ['known', { resource: 'sessions', sessionId: 'standalone' }, [null]],
-  ['new', { resource: 'sessions', sessionId: 'new-session' }, [null, 'a', 'b']],
-  ['unscoped', { resource: 'sessions' }, [null, 'a', 'b']],
-  ['deleted', { resource: 'all' }, [null, 'a', 'b']],
-  ['moved', { resource: 'sessions', sessionId: 'standalone' }, [null, null, 'a', 'b']]
-])('scopes list refreshes safely for a %s session hint', async (kind, change, scopes) => {
+  ['known', { resource: 'sessions', sessionId: 'standalone' }],
+  ['new', { resource: 'sessions', sessionId: 'new-session' }],
+  ['unscoped', { resource: 'sessions' }],
+  ['deleted', { resource: 'all' }],
+  ['moved', { resource: 'sessions', sessionId: 'project-session' }],
+  ['message', { resource: 'messages', sessionId: 'standalone' }]
+])('targets summaries or invalidates lists for a %s session hint', async (kind, change) => {
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
-  const list = useChatStore().sessionLists.standalone
-  const originalItems = list.items
-  if (kind === 'moved') chat.refreshSessions.mockImplementationOnce(async () => { list.items = [] })
+  const summaries = vi.spyOn(useSessionTabsStore(), 'refreshSummaries').mockResolvedValue()
+  projects.fetchAll.mockClear()
   try {
     EventSource.instances[0].emit([change])
     await vi.advanceTimersByTimeAsync(100)
-    expect(chat.refreshSessions.mock.calls.map(([, scope]) => scope)).toEqual(scopes)
-  } finally { list.items = originalItems; visibility.mockRestore() }
+    const config = { suppressErrorToast: true }
+    expect({
+      targeted: chat.syncSessionSummaries.mock.calls,
+      invalidated: chat.invalidateSessionLists.mock.calls,
+      refreshedLists: chat.refreshSessions.mock.calls,
+      tabRefreshes: summaries.mock.calls.length,
+      projectRefreshes: projects.fetchAll.mock.calls.length
+    }).toEqual({
+      targeted: change.sessionId ? [[[change.sessionId], config]] : [],
+      invalidated: change.sessionId ? [] : [[config]],
+      refreshedLists: [],
+      tabRefreshes: change.sessionId ? 0 : 1,
+      projectRefreshes: change.sessionId ? 0 : 1
+    })
+  } finally { summaries.mockRestore(); visibility.mockRestore() }
+})
+
+it('coalesces targeted summary updates and retains their IDs when retrying', async () => {
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  chat.syncSessionSummaries.mockRejectedValueOnce(new Error('offline'))
+  try {
+    const source = EventSource.instances[0]
+    source.emit([{ resource: 'sessions', sessionId: 'standalone' }])
+    source.emit([{ resource: 'messages', sessionId: 'standalone' }, { resource: 'sessions', sessionId: 'new-session' }])
+    await vi.advanceTimersByTimeAsync(1050)
+    expect(chat.syncSessionSummaries.mock.calls).toEqual([
+      [['standalone', 'new-session'], { suppressErrorToast: true }],
+      [['standalone', 'new-session'], { suppressErrorToast: true }]
+    ])
+  } finally { visibility.mockRestore() }
+})
+
+it('merges only changed tab summaries into the session cache', async () => {
+  const tabs = useSessionTabsStore()
+  tabs.summaries = { standalone: { id: 'standalone', activeRunStatus: null } }
+  await nextTick()
+  chat.updateCachedSessions.mockClear()
+
+  const changed = { id: 'project-session', activeRunStatus: 'running' }
+  tabs.applySummaryUpdates([changed.id], { [changed.id]: changed })
+  await nextTick()
+
+  expect(chat.updateCachedSessions.mock.calls).toEqual([[[changed]]])
+})
+
+it('refreshes every affected project summary without reloading the project list', async () => {
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+  projects.fetchAll.mockClear()
+  projects.refreshSummaries.mockClear()
+  try {
+    EventSource.instances[0].emit([
+      { resource: 'project_summaries', projectId: 'a' },
+      { resource: 'project_summaries', projectId: 'b' }
+    ])
+    await vi.advanceTimersByTimeAsync(50)
+    expect([projects.refreshSummaries.mock.calls, projects.fetchAll.mock.calls]).toEqual([
+      [[['a', 'b'], { suppressErrorToast: true }]], []
+    ])
+  } finally { visibility.mockRestore() }
 })
 
 it('retries a failed notification reload without polling unrelated resources', async () => {
@@ -460,6 +529,9 @@ it('shows compact activity times and prioritizes approval over the unread dot', 
   await nextTick()
   const row = source('standalone').closest('.session-list-item')
   expect([row.querySelector('time').textContent, row.querySelector('[role="status"]').getAttribute('aria-label')]).toEqual(['2m', 'Ungelesene Antwort'])
+  useChatStore().pendingSendId = 'standalone'
+  await nextTick()
+  expect(row.querySelector('[role="status"]').getAttribute('aria-label')).toBe('Verarbeite Anfrage')
   session.activeRunStatus = 'waiting_approval'
   await nextTick()
   expect(row.querySelector('[role="status"]').getAttribute('aria-label')).toBe('Freigabe erforderlich')
@@ -469,6 +541,7 @@ it('shows compact activity times and prioritizes approval over the unread dot', 
   root.querySelector('button[aria-label="Standalone nicht mehr anheften"]').click()
   await nextTick()
   expect(chat.setSessionPinned).toHaveBeenCalledWith('standalone', false)
+  useChatStore().pendingSendId = null
   Object.assign(session, { pinned: false, hasUnreadMessages: false, lastUserMessageAt: null, lastMessageAt: null, activeRunStatus: null })
 })
 

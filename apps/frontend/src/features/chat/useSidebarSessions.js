@@ -22,15 +22,14 @@ export function useSidebarSessions({
     ...projects.items.map((project) => ({ label: project.name, value: project.id }))
   ])
   const standaloneSessionList = computed(() => projectSessionList(null))
-  const sessionStatuses = computed(() => new Map(chat.cachedSessions.map((session) => [
-    session.id,
-    sessionSidebarStatus(
-      session,
-      approvals.forSession(session.id).length,
-      questions.forSession(session.id).length,
-      chat.sessionHasPendingSend(session.id)
-    )
-  ])))
+  const sessionStatuses = computed(() => {
+    const counts = new Map()
+    for (const request of [...approvals.pending, ...questions.pending]) {
+      counts.set(request.sessionId, (counts.get(request.sessionId) || 0) + 1)
+    }
+    // Each rendered row computes its own run, delivery and unread indicators.
+    return new Map([...counts].map(([id, count]) => [id, sessionSidebarStatus(null, count)]))
+  })
   const renameDialogOpen = ref(false)
   const renameSessionId = ref(null)
   const renameTitle = ref('')
@@ -65,9 +64,10 @@ export function useSidebarSessions({
 
   async function loadProjectSessions(projectId, force = false) {
     const list = chat.ensureSessionList(projectId)
-    if (!force && (list.loaded || list.loading)) return
+    if (!force && ((list.loaded && !list.stale) || list.loading)) return
     try {
-      await chat.fetchSessions(null, projectId)
+      if (list.loaded && list.stale && !force) await chat.reconcileSessionList(projectId)
+      else await chat.fetchSessions(null, projectId)
     } catch {
       // The central API interceptor displays the error and the folder exposes a retry action.
     }
@@ -75,9 +75,10 @@ export function useSidebarSessions({
 
   async function loadStandaloneSessions(force = false) {
     const list = chat.ensureSessionList(null)
-    if (!force && (list.loaded || list.loading)) return
+    if (!force && ((list.loaded && !list.stale) || list.loading)) return
     try {
-      await chat.fetchSessions(null, null)
+      if (list.loaded && list.stale && !force) await chat.reconcileSessionList(null)
+      else await chat.fetchSessions(null, null)
     } catch {
       // The central API interceptor displays the error and the list exposes a retry action.
     }

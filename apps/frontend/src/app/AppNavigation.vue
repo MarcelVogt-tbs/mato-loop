@@ -493,6 +493,16 @@ watch(selectedProjectId, (projectId, previousProjectId) => {
     .catch(() => {})
 }, { immediate: true })
 
+watch(() => drawerOpen.value ? [
+  ...(sessionsSectionOpen.value ? ['standalone'] : []),
+  ...(projectsSectionOpen.value ? projects.items.filter((project) => expandedProjects[project.id]).map((project) => project.id) : [])
+] : [], (scopes) => {
+  chat.visibleSessionScopes = scopes
+  for (const scope of scopes) {
+    void chat.reconcileSessionList(scope === 'standalone' ? null : scope).catch(() => {})
+  }
+}, { immediate: true })
+
 onMounted(async () => {
   clockTimer = window.setInterval(() => {
     if (document.visibilityState === 'visible') sidebarNow.value = Date.now()

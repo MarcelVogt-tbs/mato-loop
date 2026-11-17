@@ -122,8 +122,9 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   watch(() => sessionTabs.items.map(tab => tab.sessionId).filter(Boolean).join(','), () => {
     void sessionTabs.refreshSummaries().catch(() => {})
   })
-  watch(() => sessionTabs.summaries, summaries => {
-    for (const summary of Object.values(summaries)) chat.updateCachedSession(summary.id, item => ({ ...item, ...summary }))
+  watch(() => sessionTabs.summaries, (summaries, previous) => {
+    const changed = Object.values(summaries).filter(summary => summary !== previous[summary.id])
+    if (changed.length) chat.updateCachedSessions(changed)
   })
   watch(() => $q.screen.lt.md, mobile => {
     if (mobile) controlCenter.mobileOpen = false
@@ -149,7 +150,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
         ? [{ resource: 'notifications' }] : []
     }
     if (!changes.length) return
-    for (const change of changes) pendingChanges.set(`${change.resource}:${change.sessionId || ''}`, change)
+    for (const change of changes) pendingChanges.set(`${change.resource}:${change.sessionId || change.projectId || ''}`, change)
     if (retryWaiting) {
       window.clearTimeout(refreshTimer)
       refreshTimer = null
@@ -170,18 +171,23 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     const sessionsChanged = all || resources.has('sessions') || resources.has('messages')
     const sessionIds = new Set(changes.map((change) => change.sessionId).filter(Boolean))
     const listChanges = changes.filter((change) => ['sessions', 'messages'].includes(change.resource))
-    const refreshAllLists = all || listChanges.some((change) => !change.sessionId
-      || !Object.values(chat.sessionLists).some((list) => list.items.some((session) => session.id === change.sessionId)))
+    const refreshAllLists = all || listChanges.some((change) => !change.sessionId)
+    const changedSessionIds = [...new Set(listChanges.map((change) => change.sessionId).filter(Boolean))]
     const config = { suppressErrorToast: true }
+    const projectIds = [...new Set(changes.filter((change) => change.resource === 'project_summaries').map((change) => change.projectId).filter(Boolean))]
     const requests = []
     const reload = (resource, request, sessionId = null) => requests.push({ resource, sessionId, request })
     if (all || resources.has('message_queue')) reload('message_queue', chat.refreshServerQueue())
     if (all || resources.has('automations')) reload('automations', automations.fetchAutomations(config))
-    if (all || sessionsChanged || resources.has('projects')) reload('projects', projects.fetchAll(config))
+    if (refreshAllLists || resources.has('projects')) reload('projects', projects.fetchAll(config))
+    else if (projectIds.length) {
+      const request = projects.refreshSummaries(projectIds, config)
+      projectIds.forEach((projectId) => requests.push({ resource: 'project_summaries', projectId, request }))
+    }
     if (all || resources.has('approvals')) reload('approvals', approvals.fetchPending(config))
     if (all || resources.has('questions')) reload('questions', questions.fetchPending(config))
     if (all || resources.has('notifications')) reload('notifications', notifications.fetchLatest(config))
-    if (sessionsChanged || resources.has('projects')) reload('sessions', sessionTabs.refreshSummaries())
+    if (refreshAllLists || resources.has('projects')) reload('sessions', sessionTabs.refreshSummaries())
     if ((sessionsChanged || resources.has('home') || resources.has('projects') || resources.has('approvals') || resources.has('questions'))
       && (home.loaded || home.loadRequest)) {
       if (home.displayed) reload('home', home.load(config))
@@ -193,18 +199,10 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
         && (all || !sessionIds.size || sessionIds.has(routeSessionId.value))) {
         reload('messages', chat.refreshSession(routeSessionId.value, config), routeSessionId.value)
       }
-      for (const [scope, list] of Object.entries(chat.sessionLists)) {
-        const affectedIds = listChanges.filter((change) => list.items.some((session) => session.id === change.sessionId))
-          .map((change) => change.sessionId)
-        if ((list.loaded || list.loadRequest) && (refreshAllLists || affectedIds.length)) {
-          const request = chat.refreshSessions(config, scope === 'standalone' ? null : scope).then(() => {
-            // A disappeared item may have moved into another already-loaded project.
-            if (!refreshAllLists && affectedIds.some((id) => !chat.sessionLists[scope]?.items.some((session) => session.id === id))) {
-              queueChanges([{ resource: 'sessions' }])
-            }
-          })
-          reload('sessions', request)
-        }
+      if (refreshAllLists) reload('sessions', chat.invalidateSessionLists(config))
+      else {
+        const request = chat.syncSessionSummaries(changedSessionIds, config)
+        for (const id of changedSessionIds) reload('sessions', request, id)
       }
     }
     if ((all || resources.has('permissions')) && controlCenterVisible.value && controlCenter.activeContentId === 'session'
@@ -221,8 +219,8 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
       if (result.status !== 'rejected') return
       const status = result.reason?.response?.status
       if (status == null || status === 408 || status === 429 || status >= 500) {
-        const { resource, sessionId } = requests[index]
-        pendingChanges.set(`${resource}:${sessionId || ''}`, { resource, sessionId })
+        const { resource, sessionId, projectId } = requests[index]
+        pendingChanges.set(`${resource}:${sessionId || projectId || ''}`, { resource, sessionId, projectId })
         retry = true
       }
     })
