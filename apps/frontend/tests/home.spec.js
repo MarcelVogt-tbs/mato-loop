@@ -7,7 +7,7 @@ import { Quasar, QBadge, QBanner, QBtn, QCard, QCardActions, QCardSection, QDial
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 const mocks = vi.hoisted(() => ({ get: vi.fn() }))
-vi.mock('src/boot/axios', () => ({ api: { get: mocks.get } }))
+vi.mock('src/boot/axios', () => ({ api: { get: mocks.get, post: mocks.get } }))
 import HomeContent from '../src/features/home/HomeContent.vue'
 import ComputerChoiceStrip from '../src/features/chat/components/ComputerChoiceStrip.vue'
 import { useExecutionAgentStore } from '../src/features/computers/store'
@@ -41,6 +41,27 @@ it('reloads after a change received during the initial Home request', async () =
   expect(displayed).toEqual([['new']])
 })
 
+it.each([false, true])('keeps positions after recovery=%s until the next Home visit', async (recover) => {
+  setActivePinia(createPinia())
+  const home = useHomeStore()
+  if (recover) {
+    mocks.get.mockRejectedValueOnce(new Error('unavailable'))
+    await home.beginVisit().catch(() => {})
+  }
+  mocks.get.mockResolvedValueOnce({ data: { items: [{ id: 'one' }, { id: 'two' }] } })
+    .mockResolvedValue({ data: { items: [{ id: 'three' }, { id: 'two' }, { id: 'one', activeRunStatus: 'running' }] } })
+  if (recover) await home.load()
+  else await home.beginVisit()
+  await home.load()
+  const duringVisit = home.sessions.map(({ id, activeRunStatus }) => [id, activeRunStatus])
+  home.endVisit()
+  await home.beginVisit()
+  expect({ duringVisit, nextVisit: home.sessions.map(({ id }) => id) }).toEqual({
+    duringVisit: [['one', 'running'], ['two', undefined], ['three', undefined]],
+    nextVisit: ['three', 'two', 'one']
+  })
+})
+
 it('shows effective status, opens a session and lets failed or empty data be refreshed', async () => {
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -48,17 +69,24 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   const automations = [{ id: 'automation-1', name: 'Bericht', enabled: true, scheduleCount: 1, effectiveState: { enabled: false, nextRunAt: null } }]
   useProjectStore().$patch({ items: projects, loaded: true })
   useAutomationStore().$patch({ items: automations, loaded: true })
-  useApprovalStore().$patch({ pending: [{ id: 'approval-1' }], loaded: true })
+  useApprovalStore().$patch({ pending: [{ id: 'approval-1', sessionId: 'session-1' }], loaded: true })
   useQuestionStore().$patch({ loaded: true })
   useInAppNotificationStore().$patch({ loaded: true, unreadCount: 2 })
   const computers = [{ id: 'computer-1', alias: 'Notebook', connected: true, homeDirectory: '/home/user' }, { id: 'computer-2', alias: 'Server', connected: false }]
   useExecutionAgentStore().$patch({ loaded: true, items: computers })
-  let sessions = [{ id: 'session-1', title: 'Ein Gespräch fortsetzen', projectId: 'project-1', createdAt: '2026-10-03T12:00:00Z', hasUnreadMessages: true, activeRunStatus: 'running' }]
+  let sessions = [{ id: 'session-1', title: 'Ein Gespräch fortsetzen', projectId: 'project-1', createdAt: '2026-10-03T12:00:00Z', hasUnreadMessages: true, activeRunStatus: 'waiting_approval' }]
+  useHomeStore().$patch({ sessions: [{ id: 'cached', title: 'Veraltete Liste' }], loaded: true })
+  let finishApprovals
+  const pendingApprovals = new Promise((resolve) => { finishApprovals = resolve })
+  let finishLatestApprovals
+  const latestApprovals = new Promise((resolve) => { finishLatestApprovals = resolve })
+  let approvalReads = 0
   let failed = false
   mocks.get.mockImplementation(async (path) => {
-    if (path === '/sessions' && failed) throw new Error('unavailable')
+    if (path === '/sessions/home' && failed) throw new Error('unavailable')
+    if (path === '/approvals/pending') return ++approvalReads === 1 ? pendingApprovals : latestApprovals
     return { data: {
-      '/sessions': { items: sessions }, '/projects': { items: projects },
+      '/sessions/home': { items: sessions }, '/projects': { items: projects },
       '/automations': { items: automations }, '/execution-agents': { items: computers },
       '/approvals/pending': [{ id: 'approval-1' }], '/questions/pending': [],
       '/notifications': { items: [], unreadCount: 2 },
@@ -76,13 +104,23 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   app.use(pinia).use(router).use(Quasar, { components: { QBadge, QBanner, QBtn, QCard, QCardActions, QCardSection, QDialog, QForm, QIcon, QInput, QItem, QItemLabel, QItemSection, QList, QMenu, QSeparator, QSkeleton, QSpinnerGrid, QTooltip }, directives: { ClosePopup, Ripple } })
   app.mount(root)
 
+  await nextTick()
+  expect(root.querySelector('.home-activity-row')).toBeNull()
+  const latest = useApprovalStore().fetchPending()
+  finishApprovals({ data: [] })
+  await vi.waitFor(() => expect(approvalReads).toBe(2))
+  expect(root.querySelector('.home-activity-row')).toBeNull()
+  finishLatestApprovals({ data: [] })
+  await latest
   await vi.waitFor(() => expect(root.textContent).toContain('Ein Gespräch fortsetzen'))
+  expect(root.querySelector('.home-activity-row [role="status"]').getAttribute('aria-label')).toBe('Agent arbeitet')
+  expect(root.textContent).toContain('Ungelesene Antwort')
   expect(root.querySelector('h1').textContent).toBe('Willkommen zurück, Ada')
   useUserProfileStore().assignProfile({ fullName: { both: 'Ada Lovelace' } })
   await vi.waitFor(() => expect(root.querySelector('h1').textContent).toBe('Willkommen zurück, Ada Lovelace'))
   useUserProfileStore().assignProfile({})
   await vi.waitFor(() => expect(root.querySelector('h1').textContent).toBe('Willkommen zurück'))
-  expect(mocks.get).toHaveBeenCalledWith('/sessions', { params: { pageSize: 6, sort: 'recent' } })
+  expect(mocks.get).toHaveBeenCalledWith('/sessions/home', { retainedIds: [] }, {})
   expect(root.textContent).not.toContain('Neue Antwort')
   expect(root.querySelector('.home-activity-row [role="status"]').getAttribute('aria-label')).toBe('Agent arbeitet')
   app.config.globalProperties.$q.screen.gt.xs = false
@@ -118,14 +156,10 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   })
   root.querySelector('.home-activity-row').click()
   await vi.waitFor(() => expect(router.currentRoute.value.query).toEqual({ session: 'session-1', project: 'project-1' }))
-  const sessionRequests = mocks.get.mock.calls.filter(([path]) => path === '/sessions').length
+  const sessionRequests = mocks.get.mock.calls.filter(([path]) => path === '/sessions/home').length
   await router.push('/home')
   await vi.waitFor(() => expect(root.textContent).toContain('Ein Gespräch fortsetzen'))
-  expect(mocks.get.mock.calls.filter(([path]) => path === '/sessions')).toHaveLength(sessionRequests)
-  await router.push({ name: 'chat' })
-  useHomeStore().invalidate()
-  await router.push('/home')
-  await vi.waitFor(() => expect(mocks.get.mock.calls.filter(([path]) => path === '/sessions')).toHaveLength(sessionRequests + 1))
+  expect(mocks.get.mock.calls.filter(([path]) => path === '/sessions/home')).toHaveLength(sessionRequests + 1)
   failed = true
   await useHomeStore().load().catch(() => {})
   await vi.waitFor(() => expect(root.textContent).toContain('Sessions konnten nicht geladen werden.'))
@@ -133,6 +167,7 @@ it('shows effective status, opens a session and lets failed or empty data be ref
   sessions = []
   root.querySelector('button').click()
   await vi.waitFor(() => expect(root.textContent).toContain('Deine letzten Gespräche erscheinen hier.'))
+  expect(mocks.get).toHaveBeenCalledWith('/sessions/home', { retainedIds: ['session-1'] }, {})
 })
 
 it('selects, switches and clears a computer while keeping offline computers last', async () => {

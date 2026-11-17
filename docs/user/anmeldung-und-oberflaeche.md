@@ -14,11 +14,11 @@ Die Seitenleiste enthält **Home**, **Chat**, **Automationen**, **Projekte** und
 
 Der persönliche Chat erscheint nicht zusätzlich unter **Sessions**. Home zeigt zuletzt aktive Unterhaltungen, offene Anfragen, kommende Automationen und Computerstatus. Manche Übersichtselemente sind auf kleinen Bildschirmen ausgeblendet; der Chat bleibt nutzbar. Eine ausdrückliche neue Unterhaltung öffnet einen leeren Entwurf.
 
-Unter **Zuletzt aktiv** auf Home rücken Sessions bei einer neuen Nutzernachricht, Rückfrage, Freigabeanfrage oder fertigen Agent-Antwort nach oben. Es zählt das neueste dieser Ereignisse; Rückfragen erhalten keinen dauerhaften Vorrang. Streaming, Tools und Zwischenmeldungen ändern die Position nicht. Auch das Lesen einer Antwort oder Erledigen einer Anfrage verschiebt die Session nicht zurück. Stumme Antworten mit `silence` rücken die Session nicht nach oben; Fehler bleiben sichtbar.
+Unter **Zuletzt aktiv** auf Home findest du die sechs zuletzt aktiven Sessions und zusätzlich alle laufenden Sessions, Sessions mit offenen Freigaben oder Rückfragen sowie Sessions mit ungelesenen Antworten. Beim Öffnen zählt die neueste Nutzernachricht, Rückfrage, Freigabeanfrage oder fertige Agent-Antwort für die Reihenfolge. Danach bleiben bestehende Positionen während des Home-Besuchs stabil; neu relevante Sessions kommen unten hinzu. Status und Ungelesen-Markierungen aktualisieren sich weiter. Gelesene Antworten und erledigte Anfragen lassen einen Eintrag nicht sofort verschwinden. Archivierte oder gelöschte Sessions werden entfernt. Stumme Antworten mit `silence` zählen nicht als neue Antwort; Fehler bleiben sichtbar.
 
 Die Seitenleiste bleibt nach deiner letzten Nachricht sortiert, neueste zuerst; angepinnte Sessions stehen oben. Bei leeren Sessions zählt der Erstellungszeitpunkt. Status und Ungelesen-Markierungen bleiben überall aktuell.
 
-Eine bereits geladene Home-Übersicht wird auch während eines Chats im Hintergrund aktualisiert. Beim Zurückkehren bleibt sie erhalten, statt allein durch den Seitenwechsel erneut geladen zu werden.
+Beim Zurückkehren zu Home wird die Auswahl neu geladen und einmal sortiert angezeigt. Bis die Session- und Anfragestatus geladen sind, erscheint eine Ladeanzeige statt einer alten Liste, die anschließend umspringt.
 
 ### Session-Tabs
 

@@ -12,7 +12,7 @@
       </q-banner>
       <section aria-labelledby="home-sessions">
         <h2 id="home-sessions" class="text-weight-medium q-mt-none q-mb-xs" :class="$q.screen.lt.sm ? 'text-subtitle2' : 'text-subtitle1'">Zuletzt aktiv</h2>
-        <div v-if="home.loading && !home.loaded" aria-label="Sessions werden geladen">
+        <div v-if="!visitReady && !home.loadFailed" aria-label="Sessions werden geladen">
           <q-skeleton v-for="index in 3" :key="index" type="text" class="q-my-md" />
         </div>
         <p v-else-if="home.loadFailed" class="app-muted">Sessions konnten nicht geladen werden.</p>
@@ -31,9 +31,10 @@
               </span>
             </q-item-section>
             <q-item-section>
-              <q-item-label lines="1" :class="{ 'text-weight-medium': session.status?.kind === 'unread' }">
+              <q-item-label lines="1" :class="{ 'text-weight-medium': session.hasUnreadMessages }">
                 {{ session.title }}
               </q-item-label>
+              <q-item-label v-if="session.hasUnreadMessages && session.status?.kind !== 'unread'" caption class="text-primary">Ungelesene Antwort</q-item-label>
               <q-item-label caption>{{ projectName(session.projectId) }} · {{ formatRelativeDateTime(session.activityAt || session.lastUserMessageAt || session.createdAt) }}</q-item-label>
             </q-item-section>
             <q-item-section side class="q-pl-sm" @click.stop @keydown.stop @keyup.stop>
@@ -95,6 +96,7 @@ import { useQuestionStore } from 'stores/questions'
 import { useUserProfileStore } from 'stores/user-profile'
 import { formatAbsoluteDateTime, formatRelativeDateTime } from 'src/utils/date-time'
 import { sessionSidebarStatus } from 'src/features/chat/session-groups'
+import { waitForRefresh } from 'src/utils/queued-refresh'
 import { useHomeStore } from './store'
 
 const home = useHomeStore()
@@ -125,6 +127,7 @@ const {
 })
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Pflichtfeld'
 const refreshing = ref(false)
+const visitReady = ref(false)
 const ready = (store) => store.loaded && !store.loadFailed
 const greeting = computed(() => {
   const name = ready(profile) && [profile.preferredName, profile.fullName]
@@ -138,8 +141,12 @@ const failedSources = computed(() => [
 ].filter(([, store]) => store.loadFailed).map(([label]) => label))
 const recentSessions = computed(() => home.sessions.map((session) => ({
   ...session,
-  status: sessionSidebarStatus(session, approvals.forSession(session.id).length, questions.forSession(session.id).length,
-    chat.sessionHasPendingSend(session.id))
+  status: sessionSidebarStatus({
+    ...session,
+    activeRunStatus: (session.activeRunStatus === 'waiting_approval' && ready(approvals))
+      || (session.activeRunStatus === 'waiting_input' && ready(questions)) ? 'running' : session.activeRunStatus
+  }, approvals.forSession(session.id).length, questions.forSession(session.id).length,
+  chat.sessionHasPendingSend(session.id))
     || (session.hasUnreadMessages ? { kind: 'unread', label: 'Ungelesene Antwort' } : null)
 })))
 const upcoming = computed(() => automations.items
@@ -152,21 +159,25 @@ const sessionRoute = (session) => ({ name: 'chat', query: { session: session.id,
 async function refresh() {
   if (refreshing.value) return
   refreshing.value = true
+  visitReady.value = false
   try {
     await Promise.allSettled([
       home.load(), projects.fetchAll(), automations.fetchAutomations(),
       computers.fetchAll(), approvals.fetchPending(), questions.fetchPending(), notifications.fetchLatest(), profile.fetchProfile()
     ])
   } finally {
+    await Promise.allSettled([waitForRefresh(approvals), waitForRefresh(questions), waitForRefresh(home)])
+    visitReady.value = true
     refreshing.value = false
   }
 }
 
-onMounted(() => {
-  home.displayed = true
-  void Promise.allSettled([home.ensureLoaded(), profile.fetchProfile()])
+onMounted(async () => {
+  await Promise.allSettled([home.beginVisit(), approvals.fetchPending(), questions.fetchPending(), profile.fetchProfile()])
+  await Promise.allSettled([waitForRefresh(approvals), waitForRefresh(questions), waitForRefresh(home)])
+  visitReady.value = true
 })
-onBeforeUnmount(() => { home.displayed = false })
+onBeforeUnmount(() => home.endVisit())
 </script>
 
 <style scoped>

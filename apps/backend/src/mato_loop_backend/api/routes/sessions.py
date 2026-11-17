@@ -508,6 +508,24 @@ async def list_sessions(
         _raise_api_error(exc)
 
 
+class HomeSessionsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    retained_ids: list[UUID] = Field(default_factory=list, alias="retainedIds")
+
+
+@router.post("/home")
+async def home_sessions(
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    payload: HomeSessionsRequest,
+) -> dict[str, Any]:
+    return await session_service.list_sessions(
+        db, user.id, page_size=6, cursor=None, project_id=None, standalone=False,
+        session_serializer_factory=_session_list_serializer, sort="recent", home_session_ids=payload.retained_ids,
+    )
+
+
 @router.post("/{session_id}/archive")
 async def archive_session(
     session_id: UUID,
