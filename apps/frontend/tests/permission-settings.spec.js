@@ -83,10 +83,10 @@ it('saves a personal language without changing instance settings', async () => {
   german.click()
   await vi.waitUntil(() => !root.querySelector('button').disabled)
   root.querySelector('button').click()
-  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/users/me/preferences', { preferredLanguage: 'de-DE', sessionsPosition: 'belowProjects', sessionTabsEnabled: false, trashEnabled: false, trashRetentionDays: 30 }))
+  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/users/me/preferences', { preferredLanguage: 'de-DE', sessionsPosition: 'belowProjects', sessionsPageSize: 10, sessionTabsEnabled: false, trashEnabled: false, trashRetentionDays: 30 }))
 })
 
-it('saves the sessions position through personal settings', async () => {
+it('saves the sessions position and page size through personal settings', async () => {
   api.get.mockResolvedValue({ data: { preferredLanguage: 'de-DE', sessionsPosition: 'belowProjects' } })
   api.put.mockResolvedValue({ data: { preferredLanguage: 'de-DE', sessionsPosition: 'aboveProjects' } })
   await mount(UserGeneralPage, {}, '/tools', 'settings-tools')
@@ -94,9 +94,12 @@ it('saves the sessions position through personal settings', async () => {
   control.click()
   const above = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find(item => item.textContent.includes('Über den Projekten')))
   above.click()
+  const size = [...root.querySelectorAll('.q-field')].find(field => field.querySelector('.q-field__label')?.textContent === 'Sessions pro Ladeschritt').querySelector('input')
+  size.value = '35'
+  size.dispatchEvent(new Event('input', { bubbles: true }))
   await vi.waitUntil(() => !root.querySelector('button').disabled)
   root.querySelector('button').click()
-  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/users/me/preferences', { preferredLanguage: 'de-DE', sessionsPosition: 'aboveProjects', sessionTabsEnabled: false, trashEnabled: false, trashRetentionDays: 30 }))
+  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/users/me/preferences', { preferredLanguage: 'de-DE', sessionsPosition: 'aboveProjects', sessionsPageSize: 35, sessionTabsEnabled: false, trashEnabled: false, trashRetentionDays: 30 }))
 })
 
 it.each([true, false])('saves the base behavior while retaining visible global overrides (model distinction: %s)', async (modelTrustEnabled) => {

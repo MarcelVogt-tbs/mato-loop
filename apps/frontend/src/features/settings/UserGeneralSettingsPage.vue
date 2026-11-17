@@ -5,7 +5,7 @@
         <h2 class="text-h6 text-weight-bold q-my-none">Grundeinstellungen</h2>
         <p class="text-body2 app-muted q-mb-none q-mt-xs">Persönliche Vorgaben für Sprache, Navigation und Papierkorb.</p>
       </div>
-      <q-btn color="primary" unelevated no-caps icon="save" label="Speichern" :loading="settings.saving" :disable="settings.loading || !settings.loaded || settings.loadFailed || !dirty || !validRetention" @click="save" />
+      <q-btn color="primary" unelevated no-caps icon="save" label="Speichern" :loading="settings.saving" :disable="settings.loading || !settings.loaded || settings.loadFailed || !dirty || !validRetention || !validSessionsPageSize" @click="save" />
     </header>
     <q-banner v-if="settings.loadFailed" rounded class="bg-negative text-white q-mb-md">
       Die Grundeinstellungen konnten nicht geladen werden.
@@ -31,6 +31,11 @@
       </q-card-section>
       <q-separator />
       <q-card-section>
+        <q-input v-model.number="sessionsPageSize" outlined type="number" min="1" max="100" step="1" label="Sessions pro Ladeschritt" :rules="[() => validSessionsPageSize || 'Bitte eine ganze Zahl von 1 bis 100 eingeben.']" :disable="settings.loading || settings.saving || !settings.loaded || settings.loadFailed" />
+        <p class="text-body2 app-muted q-mb-none">Anzahl beim ersten Laden und bei „Mehr anzeigen“ in der Seitenleiste, auch innerhalb von Projekten. Standard: 10. Änderungen gelten ab dem nächsten Laden; bereits geladene Sessions bleiben sichtbar.</p>
+      </q-card-section>
+      <q-separator />
+      <q-card-section>
         <q-toggle v-model="sessionTabsEnabled" label="Session-Tab-Leiste anzeigen" :disable="settings.loading || settings.saving || !settings.loaded || settings.loadFailed" />
         <p class="text-body2 app-muted q-mb-none q-mt-sm">Optional auf Desktop und Tablet, auf dem Handy ausgeblendet. Ein Klick öffnet eine Vorschau; Doppelklick, „In neuem Tab öffnen“ oder die erste Eingabe behalten den Tab. Das Schließen eines Tabs löscht weder Session noch Entwurf.</p>
       </q-card-section>
@@ -51,6 +56,7 @@ const $q = useQuasar()
 const { confirm } = useConfirm()
 const language = ref(null)
 const sessionsPosition = ref('belowProjects')
+const sessionsPageSize = ref(10)
 const sessionTabsEnabled = ref(false)
 const sessionsPositionOptions = [
   { label: 'Unter den Projekten', value: 'belowProjects' },
@@ -59,7 +65,8 @@ const sessionsPositionOptions = [
 const trashEnabled = ref(false)
 const trashRetentionDays = ref(30)
 const validRetention = computed(() => Number.isInteger(trashRetentionDays.value) && trashRetentionDays.value >= 1 && trashRetentionDays.value <= 3650)
-const dirty = computed(() => settings.loaded && (language.value !== settings.preferredLanguage || sessionsPosition.value !== settings.sessionsPosition || sessionTabsEnabled.value !== settings.sessionTabsEnabled || trashEnabled.value !== settings.trashEnabled || trashRetentionDays.value !== settings.trashRetentionDays))
+const validSessionsPageSize = computed(() => Number.isInteger(sessionsPageSize.value) && sessionsPageSize.value >= 1 && sessionsPageSize.value <= 100)
+const dirty = computed(() => settings.loaded && (language.value !== settings.preferredLanguage || sessionsPosition.value !== settings.sessionsPosition || sessionsPageSize.value !== settings.sessionsPageSize || sessionTabsEnabled.value !== settings.sessionTabsEnabled || trashEnabled.value !== settings.trashEnabled || trashRetentionDays.value !== settings.trashRetentionDays))
 const languagePattern = /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/
 const languageOptions = computed(() => {
   const options = [{ label: 'Automatisch', value: null }, { label: 'Deutsch', value: 'de-DE' }, { label: 'Englisch', value: 'en-US' }]
@@ -79,9 +86,9 @@ async function load() {
   catch { /* Central API toast. */ }
 }
 async function save() {
-  if (settings.loading || settings.saving || !settings.loaded || settings.loadFailed || !dirty.value || !validRetention.value) return
+  if (settings.loading || settings.saving || !settings.loaded || settings.loadFailed || !dirty.value || !validRetention.value || !validSessionsPageSize.value) return
   try {
-    await settings.saveSettings({ preferredLanguage: language.value, sessionsPosition: sessionsPosition.value, sessionTabsEnabled: sessionTabsEnabled.value, trashEnabled: trashEnabled.value, trashRetentionDays: trashRetentionDays.value })
+    await settings.saveSettings({ preferredLanguage: language.value, sessionsPosition: sessionsPosition.value, sessionsPageSize: sessionsPageSize.value, sessionTabsEnabled: sessionTabsEnabled.value, trashEnabled: trashEnabled.value, trashRetentionDays: trashRetentionDays.value })
     reset()
     $q.notify({ type: 'positive', message: 'Grundeinstellungen gespeichert.' })
   } catch { /* Central API toast. */ }
@@ -89,6 +96,7 @@ async function save() {
 function reset() {
   language.value = settings.preferredLanguage
   sessionsPosition.value = settings.sessionsPosition
+  sessionsPageSize.value = settings.sessionsPageSize
   sessionTabsEnabled.value = settings.sessionTabsEnabled
   trashEnabled.value = settings.trashEnabled
   trashRetentionDays.value = settings.trashRetentionDays

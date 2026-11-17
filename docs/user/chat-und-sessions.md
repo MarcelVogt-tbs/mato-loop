@@ -8,6 +8,8 @@ Chatnachrichten verwenden kompakte Zeilen-, Absatz- und Nachrichtenabstände. Au
 
 Unter **Einstellungen > Grundeinstellungen > Position der Sessions** wählst du, ob der Bereich **Sessions** über oder unter den Projekten erscheint. Standard ist **Unter den Projekten**. Speichere die Auswahl; sie gilt für dein Konto auf allen Geräten. Sessions innerhalb eines Projekts bleiben beim jeweiligen Projekt.
 
+Mit **Sessions pro Ladeschritt** legst du fest, wie viele Sessions die Seitenleiste zuerst und bei **Mehr anzeigen** lädt (1–100, Standard 10). Der Wert gilt für dein Konto auch innerhalb von Projekten. Änderungen wirken beim nächsten Laden; bereits nachgeladene Sessions bleiben bei Aktualisierungen sichtbar. Die Anzahl geladener Chatnachrichten ändert sich nicht.
+
 ## Eine Session starten und organisieren
 
 **Chat** öffnet deinen festen persönlichen Gesprächsfaden. Er ist eine normale Session mit denselben Modellvorgaben, Freigaben, Kontextlimits und derselben Kompaktierung wie andere Sessions. Das erste Öffnen legt ihn an, startet aber weder einen Modelllauf noch die proaktive Assistenz. Dreaming-Vorschläge erscheinen hier als Freigabekarten; ihre Belegquellen bleiben getrennt erhalten.

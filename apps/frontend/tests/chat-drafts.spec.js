@@ -15,6 +15,7 @@ vi.mock('src/boot/axios', () => ({ api }))
 vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 
 import { useChatStore } from '../src/features/chat/store'
+import { useUserPreferencesStore } from '../src/features/settings/user-preferences-store'
 import { buildAttachmentFormData, MAX_ATTACHMENT_DRAFT_BYTES } from '../src/features/chat/attachments'
 import { normalizedNewSessionDraft, sanitizedSessionOptions, sessionCreatePayload } from '../src/features/chat/state'
 import { useControlCenterStore } from '../src/stores/control-center'
@@ -79,6 +80,7 @@ describe('chat drafts', () => {
     global.window = { localStorage: createStorage() }
     controlCenterIntegrationIds.add('calendar')
     setActivePinia(createPinia())
+    useUserPreferencesStore().loaded = true
     const chat = useChatStore()
     chat.setDraftOwner('user-1')
     await chat.outboxLoadPromise
@@ -2380,8 +2382,27 @@ describe('chat drafts', () => {
     expect(chat.sessions[1].title).toBe('Aktualisiert')
     expect(chat.activeSessionList.nextCursor).toBeNull()
     expect(api.get).toHaveBeenNthCalledWith(2, '/sessions', {
-      params: { standalone: true, pageSize: 20, cursor: 'cursor-1' }
+      params: { standalone: true, pageSize: 10, cursor: 'cursor-1' }
     })
+  })
+
+  it('loads the saved page size before listing sessions and uses it for pagination and refresh', async () => {
+    useUserPreferencesStore().loaded = false
+    api.get.mockResolvedValueOnce({ data: { sessionsPageSize: 35 } })
+      .mockResolvedValueOnce(sessionPage([{ id: 'session-1' }], 'next'))
+      .mockResolvedValue(sessionPage([]))
+    const chat = useChatStore()
+    await chat.fetchSessions()
+    await chat.fetchMoreSessions()
+    await chat.fetchSessions(null, 'project-1')
+    await chat.refreshSessions()
+    expect(api.get.mock.calls).toEqual([
+      ['/users/me/preferences'],
+      ['/sessions', { params: { standalone: true, pageSize: 35 } }],
+      ['/sessions', { params: { standalone: true, pageSize: 35, cursor: 'next' } }],
+      ['/sessions', { params: { projectId: 'project-1', pageSize: 35 } }],
+      ['/sessions', { params: { standalone: true, pageSize: 35, cursor: undefined } }]
+    ])
   })
 
   it('preserves an in-flight list page when a new session is created', async () => {
@@ -2418,10 +2439,10 @@ describe('chat drafts', () => {
     await chat.setSessionScope('project-1')
     expect(chat.activeDraft).toBe('Projektentwurf')
     expect(api.get).toHaveBeenNthCalledWith(1, '/sessions', {
-      params: { projectId: 'project-1', pageSize: 20 }
+      params: { projectId: 'project-1', pageSize: 10 }
     })
     expect(api.get).toHaveBeenNthCalledWith(2, '/sessions', {
-      params: { standalone: true, pageSize: 20 }
+      params: { standalone: true, pageSize: 10 }
     })
   })
 
@@ -2619,7 +2640,7 @@ describe('chat drafts', () => {
     expect(chat.current.title).toBe('Standardmodelle konfigurieren')
     expect(chat.current.titleGenerationStatus).toBe('completed')
     expect(api.get).toHaveBeenCalledWith('/sessions', {
-      params: { standalone: true, pageSize: 20 }
+      params: { standalone: true, pageSize: 10 }
     })
   })
 

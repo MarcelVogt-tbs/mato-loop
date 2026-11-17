@@ -43,7 +43,7 @@ async def test_language_preference_is_owner_bound_and_preserves_other_preference
     db = AsyncMock(spec=AsyncSession)
     result = await user_routes.update_user_preferences(user_routes.UserPreferencesRequest(preferredLanguage="de-DE"), user, db)
     assert (result, settings.dark_mode, load.await_args.kwargs, save.await_args.kwargs) == (
-        {"preferredLanguage": "de-DE", "sessionsPosition": "belowProjects", "sessionTabsEnabled": True, "trashEnabled": False, "trashRetentionDays": 30}, True,
+        {"preferredLanguage": "de-DE", "sessionsPosition": "belowProjects", "sessionsPageSize": 10, "sessionTabsEnabled": True, "trashEnabled": False, "trashRetentionDays": 30}, True,
         {"user_id": user.id, "for_update": True}, {"user_id": user.id},
     )
 
@@ -59,6 +59,7 @@ async def test_sessions_position_round_trip_preserves_language(monkeypatch, posi
     )
     assert await user_routes.get_user_preferences(user, db) == {
         "preferredLanguage": "de-DE", "sessionsPosition": position,
+        "sessionsPageSize": 10,
         "sessionTabsEnabled": False,
         "trashEnabled": False, "trashRetentionDays": 30,
     }
@@ -75,6 +76,23 @@ async def test_session_tabs_preference_round_trip(monkeypatch, enabled):
     )
     loaded = await user_routes.get_user_preferences(user, db)
     assert (updated["sessionTabsEnabled"], loaded["sessionTabsEnabled"]) == (enabled, enabled)
+
+
+async def test_sessions_page_size_round_trip(monkeypatch):
+    settings = UserPreferences()
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    user, db = _user(), AsyncMock(spec=AsyncSession)
+    await user_routes.update_user_preferences(
+        user_routes.UserPreferencesRequest(sessionsPageSize=35), user, db,
+    )
+    assert (await user_routes.get_user_preferences(user, db))["sessionsPageSize"] == 35
+
+
+@pytest.mark.parametrize("value", [0, 101, 1.5, True, "10"])
+def test_sessions_page_size_rejects_invalid_values(value):
+    with pytest.raises(ValidationError):
+        user_routes.UserPreferencesRequest(sessionsPageSize=value)
 
 
 async def test_workspace_state_persists_order_preview_and_partial_fields():

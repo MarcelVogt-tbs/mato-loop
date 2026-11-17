@@ -11,6 +11,7 @@ import { deleteChatOutboxEntries, saveChatOutboxEntries } from 'src/features/cha
 import { notifyError } from 'src/utils/notifications'
 import { SESSION_PAGE_SIZE, ACTIVE_TITLE_GENERATION_STATUSES, mergeMessages, sessionStateAfterMutation } from 'src/features/chat/model'
 import { useSessionTabsStore } from './session-tabs-store'
+import { useUserPreferencesStore } from 'src/features/settings/user-preferences-store'
 
 export const sessionsActions = {
     async forkSession() {
@@ -135,12 +136,15 @@ export const sessionsActions = {
       list.loading = true
       list.loadFailed = false
       const request = (async () => {
+        const preferences = useUserPreferencesStore()
+        if (!preferences.loaded && !preferences.loadFailed) await preferences.fetchSettings().catch(() => {})
+        if (version !== list.version) return
         const response = await api.get('/sessions', {
           ...(config || {}),
           params: {
             ...(config?.params || {}),
             ...sessionScopeParams(projectId),
-            pageSize: SESSION_PAGE_SIZE
+            pageSize: preferences.sessionsPageSize
           }
         })
         if (version !== list.version) return
@@ -173,7 +177,7 @@ export const sessionsActions = {
       const request = (list.refreshRequest || Promise.resolve()).catch(() => {}).then(async () => {
         if (list.refreshQueued === queued) list.refreshQueued = null
         if (version !== list.version) return
-        const targetCount = Math.max(SESSION_PAGE_SIZE, list.items.length)
+        const targetCount = Math.max(useUserPreferencesStore().sessionsPageSize, list.items.length)
         const sessions = []
         let cursor = null
         do {
@@ -223,7 +227,7 @@ export const sessionsActions = {
           params: {
             ...(config?.params || {}),
             ...sessionScopeParams(projectId),
-            pageSize: SESSION_PAGE_SIZE,
+            pageSize: useUserPreferencesStore().sessionsPageSize,
             cursor
           }
         })
