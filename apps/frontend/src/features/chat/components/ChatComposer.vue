@@ -355,7 +355,10 @@ watch([attachmentsDisabled, () => props.session?.id, () => chat.sessionsProjectI
 const draftHasContent = computed(() => Boolean(props.draft.trim() || props.attachments.length))
 const inputPlaceholder = computed(() => `Eine Nachricht an ${identity.displayName} senden`)
 const voiceActivity = computed(() => starting.value || recording.value || finalizing.value || sendingRecording.value)
-const showVoiceStart = computed(() => !draftHasContent.value && !voiceActivity.value)
+const showVoiceStart = computed(() => !providers.loading && providers.lastLoadComplete
+  && providers.capabilityOptions('realtime_audio').some((option) => (
+    !providers.modelDefaults.realtimeModelId || option.value === providers.modelDefaults.realtimeModelId
+  )) && !draftHasContent.value && !voiceActivity.value)
 const voiceSendLabel = computed(() => queueSend.value ? 'Aufnahme beenden und vormerken' : 'Aufnahme beenden und senden')
 const canFinishAndSend = computed(() => (
   recording.value && !inputDisabled.value && !starting.value && !finalizing.value && !sendingRecording.value

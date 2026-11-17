@@ -84,7 +84,13 @@ beforeEach(async () => {
   composer = ref(null)
   const providers = useProviderStore()
   providers.audioTranscriptionModelId = 'audio'
-  vi.spyOn(providers, 'capabilityOptions', 'get').mockReturnValue(() => [{ value: 'audio' }])
+  providers.lastLoadComplete = true
+  providers.providers = [{ id: 'realtime-provider', enabled: true, adapterType: 'openai-realtime', hasCredential: true }]
+  providers.models = [{ id: 'realtime', providerId: 'realtime-provider', enabled: true, capabilities: ['realtime_audio'], executableCapabilities: ['realtime_audio'] }]
+  const capabilityOptions = providers.capabilityOptions
+  vi.spyOn(providers, 'capabilityOptions', 'get').mockReturnValue((capability) => (
+    capability === 'realtime_audio' ? capabilityOptions(capability) : [{ value: 'audio' }]
+  ))
   useToolSettingsStore().loaded = true
   mocks.recorder = {
     starting: ref(false), recording: ref(false), finalizing: ref(false),
@@ -189,10 +195,16 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
-  it('replaces the send action with the headset only while the composer is empty', async () => {
+  it('replaces the send action with the headset only while voice is available and the composer is empty', async () => {
     const icons = []
+    const providers = useProviderStore()
+    chat.current = null
     for (const update of [
-      () => {},
+      () => { providers.loading = true },
+      () => { providers.loading = false; providers.models[0].enabled = false },
+      () => { providers.models[0].enabled = true; providers.modelDefaults.realtimeModelId = 'missing' },
+      () => { providers.modelDefaults.realtimeModelId = 'realtime' },
+      () => { providers.modelDefaults.realtimeModelId = null },
       () => chat.setDraft('Hallo'),
       () => chat.setDraft('  '),
       () => chat.addAttachmentFiles([file()]),
@@ -204,7 +216,7 @@ describe('voice attachment composer', () => {
       icons.push([...root.querySelectorAll('button[data-icon="headset_mic"], button[data-icon="arrow_upward"]')]
         .map(button => button.dataset.icon))
     }
-    expect(icons).toEqual([['headset_mic'], ['arrow_upward'], ['headset_mic'], ['arrow_upward'], ['arrow_upward'], ['arrow_upward']])
+    expect(icons).toEqual([['arrow_upward'], ['arrow_upward'], ['arrow_upward'], ['headset_mic'], ['headset_mic'], ['arrow_upward'], ['headset_mic'], ['arrow_upward'], ['arrow_upward'], ['arrow_upward']])
   })
 
   it('focuses the message input when pressing the card padding', () => {
