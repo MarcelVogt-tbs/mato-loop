@@ -5,7 +5,7 @@ export function groupSessionsByRecency(sessions) {
   ].filter((group) => group.sessions.length)
 }
 
-export function sessionSidebarStatus(session, approvalCount = 0, questionCount = 0) {
+export function sessionSidebarStatus(session, approvalCount = 0, questionCount = 0, submitting = false) {
   const count = approvalCount + questionCount
   if (count > 0) {
     return {
@@ -23,5 +23,6 @@ export function sessionSidebarStatus(session, approvalCount = 0, questionCount =
   if (session?.activeRunStatus === 'waiting_input') {
     return { kind: 'approval', count: 0, label: 'Antwort erforderlich' }
   }
+  if (submitting) return { kind: 'active', count: 0, label: 'Verarbeite Anfrage' }
   return null
 }

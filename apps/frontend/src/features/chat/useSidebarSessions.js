@@ -27,7 +27,8 @@ export function useSidebarSessions({
     sessionSidebarStatus(
       session,
       approvals.forSession(session.id).length,
-      questions.forSession(session.id).length
+      questions.forSession(session.id).length,
+      chat.sessionHasPendingSend(session.id)
     )
   ])))
   const renameDialogOpen = ref(false)

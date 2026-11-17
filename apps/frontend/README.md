@@ -38,6 +38,8 @@ Persistent agent failures appear as canonical MatoLoop chat messages. SSE `run.f
 
 Stores own server state and effective runtime policy. Components present it and coordinate interaction. Failed mutations must not leave optimistic state behind. Approvals/questions are loaded independently of SSE, survive UI reconnects, and stay pending when their UI is dismissed. See [questions](../../docs/questions.md) and [run continuations](../../docs/run-continuations.md).
 
+Session indicators in the sidebar, session tabs, and Home include pending message delivery before a server run is available. Paused delivery does not count as active; pending approvals and questions retain priority.
+
 ## UI Rules
 
 - Write visible application text in German; support desktop/mobile and light/dark mode.

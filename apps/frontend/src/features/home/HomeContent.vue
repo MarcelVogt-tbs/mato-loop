@@ -98,6 +98,7 @@ import { sessionSidebarStatus } from 'src/features/chat/session-groups'
 import { useHomeStore } from './store'
 
 const home = useHomeStore()
+const chat = useChatStore()
 const projects = useProjectStore()
 const automations = useAutomationStore()
 const computers = useExecutionAgentStore()
@@ -118,7 +119,7 @@ const {
   openRenameDialog, openMoveDialog, moveSession, renameSession, toggleSessionPinned,
   removeSession, archiveSession
 } = useSidebarSessions({
-  chat: useChatStore(), projects, approvals, questions, workspace: useWorkspaceStore(),
+  chat, projects, approvals, questions, workspace: useWorkspaceStore(),
   controlCenter: useControlCenterStore(), automations, route, router, $q, confirm,
   drawerOpen: ref(false), selectedProjectId: computed(() => route.query.project || null), confirmDiscardedEdit
 })
@@ -137,7 +138,8 @@ const failedSources = computed(() => [
 ].filter(([, store]) => store.loadFailed).map(([label]) => label))
 const recentSessions = computed(() => home.sessions.map((session) => ({
   ...session,
-  status: sessionSidebarStatus(session, approvals.forSession(session.id).length, questions.forSession(session.id).length)
+  status: sessionSidebarStatus(session, approvals.forSession(session.id).length, questions.forSession(session.id).length,
+    chat.sessionHasPendingSend(session.id))
     || (session.hasUnreadMessages ? { kind: 'unread', label: 'Ungelesene Antwort' } : null)
 })))
 const upcoming = computed(() => automations.items

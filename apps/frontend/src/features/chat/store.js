@@ -113,6 +113,12 @@ export const useChatStore = defineStore('chat', {
       ? state.attachmentDrafts.sessionMessages[state.current.id] || []
       : state.attachmentDrafts.newSession,
     activeQueueKey: (state) => state.current?.id || newSessionQueueKey(state.sessionsProjectId),
+    sessionHasPendingSend: (state) => (sessionId, projectId = null) => {
+      const key = sessionId || newSessionQueueKey(projectId)
+      const pending = state.pendingOutboxEntry
+      const first = state.queuedMessages[key]?.[0]
+      return Boolean((pending && queueKeyForEntry(pending) === key) || (first && !first.paused))
+    },
     activePendingMessage() {
       return this.pendingOutboxEntry && queueKeyForEntry(this.pendingOutboxEntry) === this.activeQueueKey
         ? this.pendingOutboxEntry : null

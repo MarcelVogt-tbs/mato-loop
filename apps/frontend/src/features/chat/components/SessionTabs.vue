@@ -49,10 +49,11 @@ const displayTabs = computed(() => props.tabs.items.map(tab => {
   const session = current || summary
   const title = session?.title || tab.title
   const projectName = projects.items.find(project => project.id === (session?.projectId ?? tab.projectId))?.name || ''
-  const status = tab.sessionId ? sessionSidebarStatus(
+  const status = sessionSidebarStatus(
     summary || { activeRunStatus: current?.activeRun?.status },
-    approvals.forSession(tab.sessionId).length, questions.forSession(tab.sessionId).length
-  ) || ((summary || current)?.hasUnreadMessages ? { kind: 'unread', label: 'Ungelesene Antwort' } : null) : null
+    approvals.forSession(tab.sessionId).length, questions.forSession(tab.sessionId).length,
+    chat.sessionHasPendingSend(tab.sessionId, tab.projectId)
+  ) || ((summary || current)?.hasUnreadMessages ? { kind: 'unread', label: 'Ungelesene Antwort' } : null)
   return { ...tab, title, projectName, label: projectName ? `${title} · ${projectName}` : title, status }
 }))
 function prepareTitleScroll(event) {

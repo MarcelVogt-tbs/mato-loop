@@ -37,6 +37,7 @@ const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, te
     routeUpdate: { callback: null },
     chat: {
       cachedSessions: sessions, sessionLists,
+      sessionHasPendingSend: () => false,
       sessionList(id) { return this.sessionLists[id ?? 'standalone'] },
       ensureSessionList(id) { return this.sessionLists[id ?? 'standalone'] },
       setSessionScope: vi.fn().mockResolvedValue(),
