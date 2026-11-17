@@ -115,9 +115,9 @@ The integration uses the shared resolver, categories, presets and persistent app
 
 Returning control is automatic and has no configurable permission capability.
 
-Browser use defaults to AUTO for Build and profiles based on Build, except in `ask_all`.
+Browser use and browser Python default to AUTO for Build and profiles based on Build, except in `ask_all`.
 Allgemein, Plan, Sysadmin, and other profiles default to ASK, independently of model trust and
-the other preset categories. Browser Python defaults to ASK in every profile and preset.
+the other preset categories. `ask_all` asks for both capabilities in every profile.
 Explicit connection/profile rules and matching grants retain their existing precedence.
 Browser use deliberately includes website JavaScript, authenticated content, and private-network
 targets made accessible in the chat; it is not the public-network-only contract of `webfetch`.

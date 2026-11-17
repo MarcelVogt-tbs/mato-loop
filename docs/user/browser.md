@@ -45,7 +45,7 @@ Die URL muss vom ausgewählten Computer aus erreichbar sein. `localhost` bezeich
 
 **Browser verwenden** umfasst Lesen, Navigation, Bedienung und JavaScript innerhalb der Webseite. Build und darauf basierende Profile erlauben dies standardmäßig automatisch, außer bei **Alles bestätigen**. Allgemein, Plan und Sysadmin fragen standardmäßig nach. Eigene Verbindungs- und Profilregeln gehen vor.
 
-**Browser-Python ausführen** benötigt zusätzlich ein eigenes Recht und fragt standardmäßig in jedem Preset nach. Eine gewöhnliche Browserfreigabe erlaubt kein Python. Dateien und Secrets behalten ihre eigenen Rechte.
+**Browser-Python ausführen** benötigt zusätzlich ein eigenes Recht. Build und darauf basierende Profile erlauben auch Python standardmäßig automatisch, außer bei **Alles bestätigen**. Andere Profile fragen nach; eigene Verbindungs- und Profilregeln gehen vor. Eine gewöhnliche Browserfreigabe erlaubt kein Python. Datei- und Secret-Tools behalten ihre eigenen Rechte; Browser-Python ist jedoch keine Sandbox und kann mit den Rechten des Browserprozesses direkt auf Betriebssystemressourcen zugreifen.
 
 !!! warning "Website-Aktionen können Daten ändern"
     Ein automatisch erlaubter Klick oder JavaScript kann absenden, kaufen oder löschen. **Automatisch außer Löschen** verhindert das nicht. Freigegebenes Python kann außerdem Dateien, Prozesse, Netzwerk und andere Browserdaten mit den Rechten des Browserprozesses erreichen. Getrennte Chat-Browser sind keine Betriebssystem-Sandbox.

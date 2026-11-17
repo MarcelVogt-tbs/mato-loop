@@ -150,7 +150,7 @@ async def test_browser_permission_page_displays_the_selected_profile_defaults(mo
     monkeypatch.setattr("mato_loop_backend.api.integration_resources._integration_resources", AsyncMock(return_value=()))
     response = await get_integration_permissions(integration.id, user, db, "personal", profile_id)
     assert [(action["label"], action["policy"]) for action in response["inherited"]["public"]["actions"] if action["capability"].startswith("browser.")] == [
-        ("Browser verwenden", expected), ("Browser-Python ausführen", "ask"),
+        ("Browser verwenden", expected), ("Browser-Python ausführen", expected),
     ]
 
 

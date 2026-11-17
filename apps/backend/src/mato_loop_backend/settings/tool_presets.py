@@ -45,13 +45,13 @@ AUTOMATIC_CAPABILITIES = frozenset(capability for group in AUTOMATIC_ACTION_GROU
 CONFIRMATION_ACTION_GROUPS = {
     "Variablen und Secrets verwenden": ("secrets.access",),
     "Browser verwenden (außer im Build-Profil)": ("browser.use",),
-    "Browser-Python ausführen": ("browser.code",),
+    "Browser-Python ausführen (außer im Build-Profil)": ("browser.code",),
 }
 CONFIRMATION_CAPABILITIES = frozenset(capability for group in CONFIRMATION_ACTION_GROUPS.values() for capability in group)
 
 
 def preset_policy(preset: ToolPermissionPreset, category: ToolActionCategory, capability: str | None = None, *, profile: AgentProfile | None = None) -> ToolExecutionPolicy:
-    if capability == "browser.use":
+    if capability in {"browser.use", "browser.code"}:
         build = profile is not None and (profile.base_profile_id or profile.id) == BUILD_PROFILE_ID
         return ToolExecutionPolicy.AUTO if build and preset != "ask_all" else ToolExecutionPolicy.ASK
     if capability in CONFIRMATION_CAPABILITIES:
