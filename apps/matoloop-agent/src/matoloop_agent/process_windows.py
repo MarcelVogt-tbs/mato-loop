@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable
 from .config import AgentConfig
 from .errors import AgentError
 from .filesystem_windows import WindowsFilesystem
-from .process import _command_categories
+from .process import ProcessRunner, _command_categories
 from .windows_paths import absolute, native
 
 # Parse with the same installed PowerShell engine that executes the command.
@@ -326,6 +326,7 @@ class WindowsProcess:
                 "HOMEPATH",
                 "PROGRAMFILES",
                 "PROGRAMFILES(X86)",
+                "PSMODULEANALYSISCACHEPATH",
             }
         }
         env.update(environment or {})
@@ -376,24 +377,38 @@ class WindowsProcess:
         ]
         try:
             async with asyncio.timeout(timeout):
-                await process.wait()
-                await asyncio.gather(*tasks)
+                # wait() also waits for inherited pipes, even after the shell has exited.
+                while process.returncode is None:
+                    await asyncio.sleep(0.05)
+            await ProcessRunner._finish_drains(process, tasks)
+            for task in tasks:
+                if not task.cancelled():
+                    task.result()
         except (TimeoutError, asyncio.CancelledError) as exc:
             timed_out = isinstance(exc, TimeoutError)
-            killer = await asyncio.create_subprocess_exec(
-                "taskkill",
-                "/PID",
-                str(process.pid),
-                "/T",
-                "/F",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await killer.wait()
+            if process.returncode is None:
+                killer = await asyncio.create_subprocess_exec(
+                    "taskkill",
+                    "/PID",
+                    str(process.pid),
+                    "/T",
+                    "/F",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await killer.wait()
+            await ProcessRunner._finish_drains(process, tasks)
+            process._transport.close()
             await process.wait()
-            await asyncio.gather(*tasks, return_exceptions=True)
             if not timed_out:
                 raise
+        finally:
+            process._transport.close()
+            for channel, task in zip(("stdout", "stderr"), tasks, strict=True):
+                if not task.done() or task.cancelled():
+                    truncated[channel] = True
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         return {
             "exitCode": process.returncode,
             "timedOut": timed_out,
