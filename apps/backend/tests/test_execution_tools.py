@@ -510,7 +510,8 @@ async def test_repository_prefetch_preserves_authorization_errors() -> None:
         await repository_instructions_prompt(client, [], authorize)
 
 
-async def test_repository_prefetch_overlaps_authorized_instruction_stats() -> None:
+@pytest.mark.parametrize("suffix,expected", [("AGENTS.md", 3), (("/rules", "/instructions"), 7)])
+async def test_repository_prefetch_overlaps_authorized_instruction_stats(suffix, expected) -> None:
     def stat(arguments):
         path = arguments["path"]
         if path.endswith(("AGENTS.md", "CLAUDE.md", "GEMINI.md", ".cursorrules", "copilot-instructions.md", "/rules", "/instructions")):
@@ -523,7 +524,7 @@ async def test_repository_prefetch_overlaps_authorized_instruction_stats() -> No
 
     async def request(operation, arguments, result_model):
         nonlocal active, maximum
-        if arguments["path"].endswith("AGENTS.md"):
+        if arguments["path"].endswith(suffix):
             active += 1
             maximum = max(maximum, active)
             await asyncio.sleep(0)
@@ -535,7 +536,7 @@ async def test_repository_prefetch_overlaps_authorized_instruction_stats() -> No
         client, [], AsyncMock(return_value=PermissionDecision.ALLOW),
         target_paths=("/work/a/main.py", "/work/b/main.py"),
     )
-    assert maximum == 3
+    assert maximum == expected
 
 
 async def test_repository_prefetch_does_not_defer_unchanged_aggregate_size_omissions() -> None:

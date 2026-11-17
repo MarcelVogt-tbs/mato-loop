@@ -81,6 +81,18 @@ async def repository_instructions_prompt(
         status = await stat_permission(path)
         return await request_stat(path) if status == "allowed" else (None, status)
 
+    async def stat_many(paths: list[str]) -> list[tuple[WorkspaceStatResult | None, str]]:
+        # Authorization uses a shared database session; only Agent requests may overlap.
+        permissions = [await stat_permission(path) for path in paths]
+        observations = []
+        async with asyncio.TaskGroup() as group:
+            for path, status in zip(paths, permissions, strict=True):
+                observations.append(group.create_task(request_stat(path)) if status == "allowed" else (None, status))
+        return [
+            observation.result() if isinstance(observation, asyncio.Task) else observation
+            for observation in observations
+        ]
+
     # Find a Git boundary only through already authorized paths. Without one, stay at cwd.
     ancestors = []
     directory = cwd
@@ -166,10 +178,15 @@ async def repository_instructions_prompt(
     entries = []
     incomplete = len(ordered) > MAX_DIRECTORIES
     scanned = 0
+    scan_observations = []
     while scans and scanned < MAX_DIRECTORIES:
+        if not scan_observations:
+            scan_observations = await stat_many([
+                path for path, _directory, _format in scans[:MAX_DIRECTORIES - scanned]
+            ])
         path, directory, rule_format = scans.pop(0)
         scanned += 1
-        info, status = await stat(path)
+        info, status = scan_observations.pop(0)
         entry = {"path": path, "directory": directory, "status": status}
         entries.append(entry)
         if info is None:
@@ -213,15 +230,10 @@ async def repository_instructions_prompt(
     incomplete |= bool(scans) or len(candidates) > MAX_INSTRUCTION_FILES
     candidates = candidates[:MAX_INSTRUCTION_FILES]
 
-    # Keep authorization errors unwrapped and database access sequential.
-    permissions = [await stat_permission(path) for path, _directory, _format in candidates]
-    observations = []
-    async with asyncio.TaskGroup() as group:
-        for (path, _directory, _format), status in zip(candidates, permissions, strict=True):
-            observations.append(group.create_task(request_stat(path)) if status == "allowed" else (None, status))
+    observations = await stat_many([path for path, _directory, _format in candidates])
     used_bytes = 0
     for (path, directory, rule_format), observation in zip(candidates, observations, strict=True):
-        info, status = observation.result() if isinstance(observation, asyncio.Task) else observation
+        info, status = observation
         entry = {"path": path, "directory": directory, "status": status}
         if info is not None:
             try:
