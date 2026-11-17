@@ -37,7 +37,6 @@ beforeEach(async () => {
   integrations.catalog = [{ adapterType: 'browser', availability: 'full', personalOnly: true }]
   integrations.browser = { instances: [{ id: 'browser-1', name: 'Browser', enabled: true, executionAgentId: 'agent-1' }] }
   useControlCenterStore().syncSession({ id: 'session-1', controlCenter: { tabs: [{ appId: 'browser' }], activeAppId: 'browser', open: true } })
-  await useControlCenterStore().setOpen(true)
 })
 afterEach(() => { app?.unmount(); root?.remove(); browser.release(); HTMLElement.prototype.scrollIntoView = originalScrollIntoView; vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -51,6 +50,7 @@ async function mount(width = 1400, dark = false) {
     QItemSection, QLinearProgress, QList, QMenu, QSelect, QSeparator, QSpace, QTab, QTabs, QToolbar, QTooltip }, directives: { ClosePopup, Ripple }, plugins: { Dialog } })
   app.config.globalProperties.$q.screen.lt.sm = width < 600
   app.config.globalProperties.$q.dark.set(dark)
+  await useControlCenterStore().setOpen(true)
   app.mount(root)
   browser.$patch({ sessionId: 'session-1', displayedSessionId: 'session-1', integrationId: 'browser-1', agentId: 'agent-1',
     browserId: 'runtime-1', viewId: 'view-1', status: 'open', viewStatus: 'open', viewVisible: true,
@@ -63,6 +63,7 @@ async function mount(width = 1400, dark = false) {
 it.each([[1400, false], [390, true]])('keeps website navigation available in the unified viewer (%s)', async (width, dark) => {
   await mount(width, dark)
   expect(root.querySelector('[aria-label="Webadresse"]').value).toBe('https://example.test/')
+  expect(browser.activate).toHaveBeenCalledWith(expect.any(String), expect.any(Object), true)
   expect(root.textContent).not.toContain('Browser läuft im Hintergrund')
   expect(root.textContent).not.toContain('Browseroberfläche anzeigen')
 })
