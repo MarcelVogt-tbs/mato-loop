@@ -3,12 +3,12 @@ import { markRaw } from 'vue'
 import { api } from 'src/boot/axios'
 
 export const useUserPreferencesStore = defineStore('user-preferences', {
-  state: () => ({ preferredLanguage: null, sessionsPosition: 'belowProjects', sessionsPageSize: 10, sessionTabsEnabled: false, trashEnabled: false, trashRetentionDays: 30, loading: false, loaded: false, loadFailed: false, saving: false, loadRequest: null }),
+  state: () => ({ preferredLanguage: null, sessionsPosition: 'belowProjects', sessionsPageSize: 8, sessionTabsEnabled: false, trashEnabled: false, trashRetentionDays: 30, loading: false, loaded: false, loadFailed: false, saving: false, loadRequest: null }),
   actions: {
     applySettings(data) {
       this.preferredLanguage = data.preferredLanguage
       this.sessionsPosition = data.sessionsPosition ?? 'belowProjects'
-      this.sessionsPageSize = data.sessionsPageSize ?? 10
+      this.sessionsPageSize = data.sessionsPageSize ?? 8
       this.sessionTabsEnabled = data.sessionTabsEnabled ?? false
       this.trashEnabled = data.trashEnabled ?? false
       this.trashRetentionDays = data.trashRetentionDays ?? 30

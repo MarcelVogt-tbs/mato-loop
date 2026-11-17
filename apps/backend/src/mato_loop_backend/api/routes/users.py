@@ -86,7 +86,7 @@ class UserPreferencesRequest(BaseModel):
         default="belowProjects", alias="sessionsPosition",
     )
     session_tabs_enabled: bool = Field(default=False, alias="sessionTabsEnabled")
-    sessions_page_size: int = Field(default=10, alias="sessionsPageSize", ge=1, le=100, strict=True)
+    sessions_page_size: int = Field(default=8, alias="sessionsPageSize", ge=1, le=100, strict=True)
     trash_enabled: bool = Field(default=False, alias="trashEnabled")
     trash_retention_days: int = Field(default=30, alias="trashRetentionDays", ge=1, le=3650)
     preferred_language: str | None = Field(

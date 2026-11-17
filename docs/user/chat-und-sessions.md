@@ -8,7 +8,7 @@ Chatnachrichten verwenden kompakte Zeilen-, Absatz- und Nachrichtenabstände. Au
 
 Unter **Einstellungen > Grundeinstellungen > Position der Sessions** wählst du, ob der Bereich **Sessions** über oder unter den Projekten erscheint. Standard ist **Unter den Projekten**. Speichere die Auswahl; sie gilt für dein Konto auf allen Geräten. Sessions innerhalb eines Projekts bleiben beim jeweiligen Projekt.
 
-Mit **Sessions pro Ladeschritt** legst du fest, wie viele Sessions die Seitenleiste zuerst und bei **Mehr anzeigen** lädt (1–100, Standard 10). Der Wert gilt für dein Konto auch innerhalb von Projekten. Änderungen wirken beim nächsten Laden; bereits nachgeladene Sessions bleiben bei Aktualisierungen sichtbar. Die Anzahl geladener Chatnachrichten ändert sich nicht.
+Mit **Einstellungen > Grundeinstellungen > Sessions pro Ladeschritt** legst du fest, wie viele Sessions die Seitenleiste zuerst und bei **Mehr anzeigen** lädt (1–100, Standard 8). Der Wert gilt für dein Konto auch innerhalb von Projekten. Änderungen wirken beim nächsten Laden; bereits nachgeladene Sessions bleiben bei Aktualisierungen sichtbar. Die Anzahl geladener Chatnachrichten ändert sich nicht.
 
 ## Eine Session starten und organisieren
 

@@ -2382,7 +2382,7 @@ describe('chat drafts', () => {
     expect(chat.sessions[1].title).toBe('Aktualisiert')
     expect(chat.activeSessionList.nextCursor).toBeNull()
     expect(api.get).toHaveBeenNthCalledWith(2, '/sessions', {
-      params: { standalone: true, pageSize: 10, cursor: 'cursor-1' }
+      params: { standalone: true, pageSize: 8, cursor: 'cursor-1' }
     })
   })
 
@@ -2439,10 +2439,10 @@ describe('chat drafts', () => {
     await chat.setSessionScope('project-1')
     expect(chat.activeDraft).toBe('Projektentwurf')
     expect(api.get).toHaveBeenNthCalledWith(1, '/sessions', {
-      params: { projectId: 'project-1', pageSize: 10 }
+      params: { projectId: 'project-1', pageSize: 8 }
     })
     expect(api.get).toHaveBeenNthCalledWith(2, '/sessions', {
-      params: { standalone: true, pageSize: 10 }
+      params: { standalone: true, pageSize: 8 }
     })
   })
 
@@ -2640,7 +2640,7 @@ describe('chat drafts', () => {
     expect(chat.current.title).toBe('Standardmodelle konfigurieren')
     expect(chat.current.titleGenerationStatus).toBe('completed')
     expect(api.get).toHaveBeenCalledWith('/sessions', {
-      params: { standalone: true, pageSize: 10 }
+      params: { standalone: true, pageSize: 8 }
     })
   })
 
