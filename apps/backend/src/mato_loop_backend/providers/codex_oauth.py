@@ -365,7 +365,9 @@ async def discover_models(
             else set(model.additional_speed_tiers)
         )
         # The account catalog can omit Ultrafast for these supported models.
-        if model.slug in {"gpt-6-astra", "gpt-6.1-sol"}:
+        if model.slug in {
+            "gpt-6-astra", "gpt-6.1-sol", "gpt-6.2-astra", "gpt-6.2-sol",
+        }:
             tiers.add("ultrafast")
         for suffix, service_tier, label in (
             ("fast", "priority", "Fast"),
