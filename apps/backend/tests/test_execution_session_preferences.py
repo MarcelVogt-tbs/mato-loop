@@ -39,6 +39,7 @@ from mato_loop_backend.settings.models import (
     ModelConfig,
     build_profile,
     general_profile,
+    interactive_profile,
     plan_profile,
 )
 
@@ -64,7 +65,7 @@ def _agent(user_id=None, **values):
     )
 
 
-@pytest.mark.parametrize("profile", [plan_profile(), build_profile(), plan_profile().model_copy(update={"id": uuid4(), "base_profile_id": plan_profile().id})])
+@pytest.mark.parametrize("profile", [plan_profile(), build_profile(), interactive_profile(), plan_profile().model_copy(update={"id": uuid4(), "base_profile_id": plan_profile().id})])
 @pytest.mark.parametrize("problem,code", [
     ("missing", "session.computerRequired"), ("offline", "session.computerOffline"),
     ("operations", "session.computerOperationsMissing"), ("directory", "session.directoryRequired"),
@@ -91,7 +92,7 @@ async def test_coding_preflight_requires_usable_owned_computer(monkeypatch, prof
         await AgentRuntime._prepare_run(db, run)
 
 
-@pytest.mark.parametrize("profile", [general_profile(), plan_profile(), build_profile()])
+@pytest.mark.parametrize("profile", [general_profile(), plan_profile(), build_profile(), interactive_profile()])
 async def test_preflight_allows_general_without_computer_and_coding_with_computer(monkeypatch, profile):
     session = ChatSession(id=uuid4(), user_id=uuid4(), agent_profile_id=profile.id)
     agent = _agent(session.user_id)

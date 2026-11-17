@@ -38,6 +38,7 @@ from mato_loop_backend.permissions.resolution import tool_execution_policy
 from mato_loop_backend.settings import (
     BUILD_PROFILE_ID,
     GENERAL_PROFILE_ID,
+    INTERACTIVE_PROFILE_ID,
     PLAN_PROFILE_ID,
     AgentProfilesSettings,
     CustomAgentProfile,
@@ -142,7 +143,7 @@ async def test_integration_permission_page_lists_configured_rights_and_resources
                {resource["key"] for resource in response["inherited"]["private"]["resources"]}) == ({"calendar.read": "ask"}, {"calendar:work"})
 
 
-@pytest.mark.parametrize("profile_id,expected", [(None, "ask"), (GENERAL_PROFILE_ID, "ask"), (PLAN_PROFILE_ID, "ask"), (BUILD_PROFILE_ID, "auto")])
+@pytest.mark.parametrize("profile_id,expected", [(None, "ask"), (GENERAL_PROFILE_ID, "ask"), (PLAN_PROFILE_ID, "ask"), (BUILD_PROFILE_ID, "auto"), (INTERACTIVE_PROFILE_ID, "auto")])
 async def test_browser_permission_page_displays_the_selected_profile_defaults(monkeypatch, profile_id, expected):
     user = UserAccount(id=uuid4(), is_admin=False)
     integration = IntegrationInstance(name="Browser", integration_type="browser", adapter_type="browser", execution_agent_id=uuid4())

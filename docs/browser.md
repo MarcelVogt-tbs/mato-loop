@@ -115,7 +115,7 @@ The integration uses the shared resolver, categories, presets and persistent app
 
 Returning control is automatic and has no configurable permission capability.
 
-Browser use and browser Python default to AUTO for Build and profiles based on Build, except in `ask_all`.
+Browser use and browser Python default to AUTO for Build, Interactive and profiles based on either, except in `ask_all`.
 Allgemein, Plan, Sysadmin, and other profiles default to ASK, independently of model trust and
 the other preset categories. `ask_all` asks for both capabilities in every profile.
 Explicit connection/profile rules and matching grants retain their existing precedence.

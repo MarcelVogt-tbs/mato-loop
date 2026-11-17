@@ -110,11 +110,13 @@ DEFAULT_PERSONA_ID = UUID("00000000-0000-4000-8000-000000000002")
 PLAN_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000003")
 BUILD_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000004")
 SYSADMIN_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000005")
+INTERACTIVE_PROFILE_ID = UUID("00000000-0000-4000-8000-000000000006")
 CORE_PROFILE_NAMES = {
     GENERAL_PROFILE_ID: "Allgemein",
     PLAN_PROFILE_ID: "Plan",
     BUILD_PROFILE_ID: "Build",
     SYSADMIN_PROFILE_ID: "Sysadmin",
+    INTERACTIVE_PROFILE_ID: "Interactive",
 }
 CORE_PROFILE_IDS = frozenset(CORE_PROFILE_NAMES)
 WEATHER_SKILL_ID = UUID("00000000-0000-4000-8000-000000000101")
@@ -568,6 +570,34 @@ def build_profile() -> AgentProfile:
     )
 
 
+def interactive_profile() -> AgentProfile:
+    profile = build_profile()
+    return profile.model_copy(update={
+        "id": INTERACTIVE_PROFILE_ID,
+        "name": CORE_PROFILE_NAMES[INTERACTIVE_PROFILE_ID],
+        "description": (
+            "Analysiert und plant standardmäßig. Setzt Änderungen erst nach ausdrücklichem Auftrag um "
+            "und kehrt danach zur Analyse zurück. Hat dieselben Tool-Rechte wie Build, auch mit "
+            "öffentlichen Modellen; gelesene Inhalte werden an das Modell übermittelt. "
+            "Die Zurückhaltung ist eine Prompt-Regel, keine technische Schreibsperre."
+        ),
+        "runtime_instructions": (
+            "Analyze and discuss by default. Read relevant code, investigate causes, and propose solutions "
+            "without changing project files or external state. For conceptual questions, answer directly "
+            "when supplied facts suffice; use tools only for evidence needed for the current deliverable. "
+            "For planning requests, return a short actionable plan and resolve material user choices before "
+            "finalizing it. Do not implement merely because the user agrees with a proposal. "
+            "Only an explicit implementation request authorizes changes, including a clear instruction to "
+            "carry out the previously discussed plan. Tool approval and profile selection alone do not. "
+            "Authorization covers only that task and its necessary verification, not unrelated improvements. "
+            "Complete and verify the authorized task across tool rounds without asking for repeated permission. "
+            "If the user switches to discussion, planning, or review, pause implementation until explicitly "
+            "asked to resume. After completing the task, return to analysis by default; prior authorization "
+            "does not authorize later changes. Apply these workflow limits to delegated work as well. "
+        ) + profile.runtime_instructions,
+    })
+
+
 def sysadmin_profile() -> AgentProfile:
     policies = {
         "filesystem.read": ToolExecutionPolicy.AUTO,
@@ -607,7 +637,7 @@ def sysadmin_profile() -> AgentProfile:
 
 
 def core_profiles() -> list[AgentProfile]:
-    return [general_profile(), plan_profile(), build_profile(), sysadmin_profile()]
+    return [general_profile(), plan_profile(), build_profile(), sysadmin_profile(), interactive_profile()]
 
 
 def cap_agent_profile_policy(

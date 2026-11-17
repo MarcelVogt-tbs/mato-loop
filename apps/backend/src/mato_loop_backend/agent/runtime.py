@@ -105,6 +105,7 @@ from mato_loop_backend.settings import (
 from mato_loop_backend.settings.effective import filter_agent_profile_integrations
 from mato_loop_backend.settings.models import (
     BUILD_PROFILE_ID,
+    INTERACTIVE_PROFILE_ID,
     PLAN_PROFILE_ID,
     ModelConfig,
     TrustLevel,
@@ -970,14 +971,14 @@ class AgentRuntime:
         agent = await db.get(ExecutionAgent, run.execution_agent_id) if run.execution_agent_id is not None else None
         if run.execution_agent_id is not None and (agent is None or agent.user_id != session.user_id or agent.revoked_at is not None):
             raise AgentRunError("executionAgent.unavailable")
-        if (profile.base_profile_id or profile.id) in {PLAN_PROFILE_ID, BUILD_PROFILE_ID}:
+        if (profile.base_profile_id or profile.id) in {PLAN_PROFILE_ID, BUILD_PROFILE_ID, INTERACTIVE_PROFILE_ID}:
             if run.execution_agent_id is None:
                 raise AgentRunError("session.computerRequired")
             snapshot = execution_agent_connections.snapshot(agent.id)
             if snapshot is None:
                 raise AgentRunError("session.computerOffline")
             required = {"filesystem.resolve", "filesystem.read", "filesystem.glob", "filesystem.grep"}
-            if (profile.base_profile_id or profile.id) == BUILD_PROFILE_ID:
+            if (profile.base_profile_id or profile.id) in {BUILD_PROFILE_ID, INTERACTIVE_PROFILE_ID}:
                 required.add("filesystem.write")
             if not required.issubset(snapshot):
                 raise AgentRunError("session.computerOperationsMissing")

@@ -7,6 +7,7 @@ from mato_loop_backend.settings import (
     CustomAgentProfile,
     build_profile,
     general_profile,
+    interactive_profile,
     plan_profile,
     resolve_agent_profile,
 )
@@ -33,6 +34,8 @@ def test_base_model_and_named_variants_share_one_instruction(model_id):
     [
         (build_profile(), False, True),
         (build_profile(), True, False),
+        (interactive_profile(), False, True),
+        (interactive_profile(), True, False),
         (plan_profile(), False, False),
         (general_profile(), False, False),
         (None, False, False),
@@ -48,14 +51,14 @@ def test_prompt_scope_and_model_switch(profile, delegated, expected):
     assert (build_model_instructions("Qwen3.8-27B") in prompt) is expected
 
 
-@pytest.mark.parametrize("profile", [plan_profile(), build_profile()])
+@pytest.mark.parametrize("profile", [plan_profile(), build_profile(), interactive_profile()])
 def test_coding_profiles_share_batching_guidance(profile):
     prompt = agent_profile_runtime_instructions(profile)
     assert "batch independent read, glob, and grep calls" in prompt
     assert "group coherent changes to the same file into one patch" in prompt
 
 
-@pytest.mark.parametrize("profile", [plan_profile(), build_profile()])
+@pytest.mark.parametrize("profile", [plan_profile(), build_profile(), interactive_profile()])
 def test_coding_memory_restriction_reaches_delegated_agents(profile):
     prompt = agent_profile_runtime_instructions(profile, delegated=True)
     assert all(rule in prompt for rule in (
@@ -63,6 +66,8 @@ def test_coding_memory_restriction_reaches_delegated_agents(profile):
         "context_search with scope=sessions and all_projects=false",
         "Do not use scope=all for project context",
     ))
+    if profile.id == interactive_profile().id:
+        assert "Only an explicit implementation request authorizes changes" in prompt
 
 
 def test_custom_profile_inherits_build_model_instructions():

@@ -1,3 +1,5 @@
+import importlib.util
+from pathlib import Path
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -19,6 +21,7 @@ from mato_loop_backend.settings.effective import apply_session_ai, session_agent
 from mato_loop_backend.settings.models import (
     BUILD_PROFILE_ID,
     GENERAL_PROFILE_ID,
+    INTERACTIVE_PROFILE_ID,
     PLAN_PROFILE_ID,
     SYSADMIN_PROFILE_ID,
     AiProviderSettings,
@@ -279,7 +282,7 @@ def test_default_templates_and_invalid_agent_selection():
     default, coding = SessionTemplatesSettings().templates
     assert [(item.name, item.agent_ids, item.start_agent_id, item.memory_mode, item.message_size, item.snapshot().worktrees_enabled) for item in (default, coding)] == [
         ("Default", [GENERAL_PROFILE_ID, SYSADMIN_PROFILE_ID], GENERAL_PROFILE_ID, "full", "standard", False),
-        ("Coding", [PLAN_PROFILE_ID, BUILD_PROFILE_ID], PLAN_PROFILE_ID, "full", "small", True),
+        ("Coding", [PLAN_PROFILE_ID, BUILD_PROFILE_ID, INTERACTIVE_PROFILE_ID], PLAN_PROFILE_ID, "full", "small", True),
     ]
     with pytest.raises(ValidationError):
         SessionTemplate(name="Invalid", agent_ids=[PLAN_PROFILE_ID], start_agent_id=BUILD_PROFILE_ID)
@@ -293,6 +296,33 @@ def test_stored_coding_template_defaults_worktrees_without_overriding_explicit_c
     else:
         data["worktrees_enabled"] = enabled
     assert SessionTemplate.model_validate(data).worktrees_enabled is (enabled is not False)
+
+
+def test_interactive_migration_preserves_customized_agent_selection():
+    path = Path(__file__).parents[1] / "alembic/versions/9c2944bb95db_interactive_profile.py"
+    spec = importlib.util.spec_from_file_location("interactive_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    original = {"id": str(CODING_TEMPLATE_ID), "agent_ids": [str(PLAN_PROFILE_ID), str(BUILD_PROFILE_ID)], "start_agent_id": str(PLAN_PROFILE_ID)}
+    customized = {**original, "agent_ids": [str(BUILD_PROFILE_ID)]}
+    data = {"templates": [original.copy(), customized.copy()]}
+    migration._update_templates(data)
+    assert [item["agent_ids"] for item in data["templates"]] == [
+        [str(PLAN_PROFILE_ID), str(BUILD_PROFILE_ID), str(INTERACTIVE_PROFILE_ID)], customized["agent_ids"],
+    ]
+
+
+@pytest.mark.parametrize("by_alias", [False, True])
+def test_interactive_downgrade_removes_unselected_model_override(by_alias):
+    path = Path(__file__).parents[1] / "alembic/versions/9c2944bb95db_interactive_profile.py"
+    spec = importlib.util.spec_from_file_location("interactive_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    template = SessionTemplatesSettings().templates[1]
+    template.agent_models[INTERACTIVE_PROFILE_ID] = ChatModelOverride(reasoning_effort="high")
+    data = {"templates": [template.model_dump(mode="json", by_alias=by_alias)]}
+    migration._update_templates(data, downgrade=True)
+    assert SessionTemplate.model_validate(data["templates"][0]).agent_models == {}
 
 
 def test_session_message_size_rejects_unknown_values():

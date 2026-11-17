@@ -33,10 +33,12 @@ from mato_loop_backend.settings import (
 )
 from mato_loop_backend.settings.models import (
     BUILD_PROFILE_ID,
+    INTERACTIVE_PROFILE_ID,
     AgentProfilePermissions,
     CustomAgentProfile,
     build_profile,
     general_profile,
+    interactive_profile,
     plan_profile,
     resolve_agent_profile,
     sysadmin_profile,
@@ -167,7 +169,7 @@ def browser_script_case(browser_policy_case):
     ("ask_changes", "auto", "ask"), ("ask_delete", "auto", "auto"), ("auto_all", "auto", "auto"),
 ])
 @pytest.mark.parametrize("profile", [
-    general_profile(), plan_profile(), build_profile(), sysadmin_profile(),
+    general_profile(), plan_profile(), build_profile(), interactive_profile(), sysadmin_profile(),
     resolve_agent_profile(CustomAgentProfile(name="Custom Build", description="", baseProfileId=BUILD_PROFILE_ID, overrides={}), build_profile(), None),
 ])
 def test_browser_catalog_uses_the_profile_and_selected_base_preset(browser_policy_case, preset, read, write, profile):
@@ -182,7 +184,7 @@ def test_browser_catalog_uses_the_profile_and_selected_base_preset(browser_polic
     }
     for action in actions:
         for integration_id in (None, case.instance.id):
-            resolved_default = (("auto" if (profile.base_profile_id or profile.id) == BUILD_PROFILE_ID and preset != "ask_all" else "ask") if action.capability in {"browser.use", "browser.code"} else
+            resolved_default = (("auto" if (profile.base_profile_id or profile.id) in {BUILD_PROFILE_ID, INTERACTIVE_PROFILE_ID} and preset != "ask_all" else "ask") if action.capability in {"browser.use", "browser.code"} else
                                   "auto" if action.capability == "session.files.read" and preset != "ask_all" else
                                  read if action.category == "read" else write)
             resolution = mock_permissions_resolution.resolve_tool_execution_policy(

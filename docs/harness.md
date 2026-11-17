@@ -212,6 +212,7 @@ the authority for admission and FIFO order.
 | Plan | Unlimited | No |
 | Build | Unlimited | No |
 | Sysadmin | Unlimited | No |
+| Interactive | Unlimited | No |
 
 Every attempted call counts, including failed, invalid, denied and research calls. A batch exceeding the remaining budget is rejected in full before handlers execute. Exhaustion retains the previous still-available schemas in order, uses `tool_choice=auto` for transport compatibility, and permits one tool-free final response. The host independently rejects execution despite that transport option. A valid partial result records `agent.toolCallLimitReached` and unfinished work; simulated executable-call envelopes are not accepted as successful final text.
 
@@ -223,7 +224,7 @@ Unchanged failed calls are keyed by tool, canonical arguments and relevant compu
 
 The host prompt defaults to direct work. Delegation is reserved for clearly scoped, independent tasks where parallel execution or isolating substantial context clearly outweighs handoff, context setup and result integration. Small, coupled or sequential work stays with the parent; merely passing its next steps to children does not justify delegation. This is model guidance, not a runtime restriction.
 
-Plan and Build expose `task` with one to four scoped assignments per call. At most four children may be active per main session, including queued work and approval/input waits. Completed, failed and cancelled runs free their slots; there is no lifetime spawn limit. A batch needing more free slots is rejected before any task starts or receives a correction, with the available slot count. A child cannot delegate. Failure of one child does not discard successful siblings.
+Plan, Build and Interactive expose `task` with one to four scoped assignments per call. At most four children may be active per main session, including queued work and approval/input waits. Completed, failed and cancelled runs free their slots; there is no lifetime spawn limit. A batch needing more free slots is rejected before any task starts or receives a correction, with the available slot count. A child cannot delegate. Failure of one child does not discard successful siblings.
 
 Children are ordinary persisted, owner-bound sessions with immutable parent/run/call provenance. Child numbers increase within each parent run, including when a provider reuses a tool-call ID. They inherit project, model, effective trust, reasoning, computer and directory. They do not copy the conversation or automatic Memory/history retrieval. Task instructions define their deliverable; the parent's main-specific workflow is not injected. Each child owns its database session.
 
@@ -267,9 +268,11 @@ Core profiles have protected IDs/names and workflow definitions. Administrators 
 
 Plan asks for recognized file, shell and session-file writes/deletes, but its instructions still forbid implementation. Its analysis temp directory is not permission to change a project. Build implements only an actual user request, not merely a profile switch or approval. Sysadmin inspects state and requests authorization for changes. All three automatically allow ordinary computer reads, even for public models. Plan/Build ask for file access outside the workspace; Sysadmin allows that area. Shell is workspace-independent.
 
-Plan and Build offer `secret_input`, `variable_read` and `variable_write` by default for [protected credential input](questions.md) and personal variable access. Durable storage requires an explicit user request. Explicit tool restrictions and permission checks still apply; input grants no action rights.
+Interactive uses Build's tool availability, access defaults and implementation guidance, but its prompt defaults to analysis and discussion. Only an explicit implementation request authorizes task-scoped changes and necessary verification; agreeing with a proposal does not. It completes that task across tool rounds, pauses when the user returns to discussion, and returns to analysis after completion. These are model instructions, including for delegation, not a host state machine or a technical write lock. Existing tool authorization remains independent. Interactive requires the same computer/directory prerequisites as Build and inherits the shared coding response/context guidance and conditional model-family implementation instructions.
 
-Plan and Build share a provider-neutral response contract: answer or outcome first, short answers to questions, normally 3-7 plan steps, and implementation summaries limited to results, relevant checks and blockers. Settled decisions, work narration and code already written to files are not repeated unless requested. Explicit requests for detail and necessary risk, failure or verification information take precedence over length targets; execution and verification remain unchanged. Derived profiles inherit this guidance unless they replace `instructions`.
+Plan, Build and Interactive offer `secret_input`, `variable_read` and `variable_write` by default for [protected credential input](questions.md) and personal variable access. Durable storage requires an explicit user request. Explicit tool restrictions and permission checks still apply; input grants no action rights.
+
+Plan, Build and Interactive share a provider-neutral response contract: answer or outcome first, short answers to questions, normally 3-7 plan steps, and implementation summaries limited to results, relevant checks and blockers. Settled decisions, work narration and code already written to files are not repeated unless requested. Explicit requests for detail and necessary risk, failure or verification information take precedence over length targets; execution and verification remain unchanged. Derived profiles inherit this guidance unless they replace `instructions`.
 
 The global host contract instructs user-facing replies, including template headings and
 status labels, to follow an explicit language request for the current task, then the
@@ -280,13 +283,13 @@ contract. Code, commands, paths, branch names, hashes and verbatim quotations re
 unchanged; repository language rules still govern written code, docs and commit messages.
 Internal delegated responses remain English.
 
-`delegationEnabled`, `sessionWritePaths`, repository instruction loading and temporary-file access are inherited workflow fields. Shipped Plan/Build enable delegation; all shipped profiles have no additional managed write-path restriction (`sessionWritePaths=null`). A custom non-null list restricts managed writes to those normalized relative paths; `[]` denies them. Models and reasoning are separately resolved through [defaults/templates](session-templates.md).
+`delegationEnabled`, `sessionWritePaths`, repository instruction loading and temporary-file access are inherited workflow fields. Shipped Plan/Build/Interactive enable delegation; all shipped profiles have no additional managed write-path restriction (`sessionWritePaths=null`). A custom non-null list restricts managed writes to those normalized relative paths; `[]` denies them. Models and reasoning are separately resolved through [defaults/templates](session-templates.md).
 
 The optional checklist is message-backed reported progress, not authority or independent verification. Successful snapshots replace earlier state chronologically. Compaction seeds only the covered checklist checkpoint; later results supersede it, and current checklist output is not silently shortened.
 
 ### Repository instructions
 
-Plan/Build enable automatic repository instruction discovery. It reads only authorized regular files on the selected owner-bound computer, within the current-directory/verified Git boundary and relevant read/change targets. It never follows symlinks or creates speculative approvals. Navigation, shell or write grants do not authorize instruction reads or rule-directory listings.
+Plan/Build/Interactive enable automatic repository instruction discovery. It reads only authorized regular files on the selected owner-bound computer, within the current-directory/verified Git boundary and relevant read/change targets. It never follows symlinks or creates speculative approvals. Navigation, shell or write grants do not authorize instruction reads or rule-directory listings.
 
 | Files | Scope and activation |
 | --- | --- |

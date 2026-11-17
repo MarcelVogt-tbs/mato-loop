@@ -11,6 +11,7 @@ import SessionSettingsFields from '../src/features/chat/components/SessionSettin
 import { useProviderStore } from '../src/stores/providers'
 import { useExecutionAgentStore } from '../src/stores/execution-agents'
 import { useAuthStore } from '../src/stores/auth'
+import { useAgentProfileStore } from '../src/stores/agent-profiles'
 import { useSessionTemplateStore } from '../src/features/settings/session-templates-store'
 import { api } from 'src/boot/axios'
 import { quasarOptions } from './quasar-options'
@@ -34,6 +35,31 @@ it('allows all templates in an existing worktree session', async () => {
   await vi.waitFor(() => expect([...document.querySelectorAll('[role="option"]')].map(item => [
     item.querySelector('.q-item__label').textContent, item.getAttribute('aria-disabled') === 'true'
   ])).toEqual([['Allgemein', false], ['Coding', false]]))
+})
+
+it('selects Interactive and warns when its required computer is missing', async () => {
+  const pinia = createPinia()
+  const id = '00000000-0000-4000-8000-000000000006'
+  useAgentProfileStore(pinia).agents = [{ id, name: 'Interactive', enabled: true }]
+  const session = ref({ agentProfileId: null, sessionProfile: { agentIds: [id] } })
+  const update = vi.fn()
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp({ render: () => h(SessionSettingsFields, {
+    session: session.value,
+    fields: ['agent'], showWarning: true, onUpdate: (patch) => {
+      update(patch)
+      session.value.agentProfileId = patch.agent_profile_id
+    }
+  }) }).use(pinia).use(Quasar, quasarOptions)
+  app.mount(root)
+  root.querySelector('[role="combobox"]').click()
+  const option = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find(item => item.textContent.includes('Interactive')))
+  option.click()
+  await nextTick()
+  expect([update.mock.calls[0]?.[0], root.textContent.includes('Plan, Build und Interactive benötigen einen Computer und ein Arbeitsverzeichnis.')]).toEqual([
+    { agent_profile_id: id }, true
+  ])
 })
 
 it.each([true, false])('edits session trust only with model distinction enabled (%s)', async (enabled) => {

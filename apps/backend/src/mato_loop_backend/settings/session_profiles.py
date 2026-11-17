@@ -7,6 +7,7 @@ from mato_loop_backend.sessions.context_state import SessionContextState
 from mato_loop_backend.settings.models import (
     BUILD_PROFILE_ID,
     GENERAL_PROFILE_ID,
+    INTERACTIVE_PROFILE_ID,
     PLAN_PROFILE_ID,
     SYSADMIN_PROFILE_ID,
     ChatModelOverride,
@@ -63,7 +64,7 @@ class SessionTemplatesSettings(SettingsDocument):
     personal_settings_enabled: bool = True
     templates: list[SessionTemplate] = Field(default_factory=lambda: [
         SessionTemplate(id=DEFAULT_TEMPLATE_ID, name="Default", agent_ids=[GENERAL_PROFILE_ID, SYSADMIN_PROFILE_ID], start_agent_id=GENERAL_PROFILE_ID),
-        SessionTemplate(id=CODING_TEMPLATE_ID, name="Coding", agent_ids=[PLAN_PROFILE_ID, BUILD_PROFILE_ID], start_agent_id=PLAN_PROFILE_ID, message_size="small", worktrees_enabled=True),
+        SessionTemplate(id=CODING_TEMPLATE_ID, name="Coding", agent_ids=[PLAN_PROFILE_ID, BUILD_PROFILE_ID, INTERACTIVE_PROFILE_ID], start_agent_id=PLAN_PROFILE_ID, message_size="small", worktrees_enabled=True),
     ])
 
 
