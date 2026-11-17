@@ -29,6 +29,7 @@
         <q-scroll-area
           ref="sidebarScrollArea"
           class="col session-scroll-area"
+          :visible="$q.platform.is.ios ? false : null"
           :content-style="{ width: '100%' }"
           :content-active-style="{ width: '100%' }"
           tabindex="0"
