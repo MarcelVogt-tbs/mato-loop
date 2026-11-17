@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable
 from .config import AgentConfig
 from .errors import AgentError
 from .filesystem_windows import WindowsFilesystem
-from .process import _command_categories
+from .process import ProcessRunner, _command_categories
 from .windows_paths import absolute, native
 
 # Parse with the same installed PowerShell engine that executes the command.
@@ -374,26 +374,45 @@ class WindowsProcess:
             asyncio.create_task(drain(name, reader))
             for name, reader in (("stdout", process.stdout), ("stderr", process.stderr))
         ]
+        output = asyncio.gather(*tasks)
         try:
             async with asyncio.timeout(timeout):
-                await process.wait()
-                await asyncio.gather(*tasks)
+                # wait() also waits for inherited pipes, even after the shell has exited.
+                while process.returncode is None:
+                    await asyncio.sleep(0.05)
+                _done, pending = await asyncio.wait(tasks, timeout=1)
+                if pending:
+                    for channel, task in zip(("stdout", "stderr"), tasks, strict=True):
+                        if task in pending:
+                            truncated[channel] = True
+                    for descriptor in (1, 2):
+                        pipe = process._transport.get_pipe_transport(descriptor)
+                        if pipe is not None:
+                            pipe.close()
+                await asyncio.shield(output)
         except (TimeoutError, asyncio.CancelledError) as exc:
             timed_out = isinstance(exc, TimeoutError)
-            killer = await asyncio.create_subprocess_exec(
-                "taskkill",
-                "/PID",
-                str(process.pid),
-                "/T",
-                "/F",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await killer.wait()
+            if process.returncode is None:
+                killer = await asyncio.create_subprocess_exec(
+                    "taskkill",
+                    "/PID",
+                    str(process.pid),
+                    "/T",
+                    "/F",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await killer.wait()
+            await ProcessRunner._finish_drains(process, tasks)
+            process._transport.close()
             await process.wait()
-            await asyncio.gather(*tasks, return_exceptions=True)
             if not timed_out:
                 raise
+        finally:
+            process._transport.close()
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(output, return_exceptions=True)
         return {
             "exitCode": process.returncode,
             "timedOut": timed_out,

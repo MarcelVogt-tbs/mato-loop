@@ -196,6 +196,25 @@ class WindowsRuntimeTests(unittest.TestCase):
         ):
             asyncio.run(execute())
 
+    def test_detached_child_does_not_hold_shell_output_open(self) -> None:
+        async def execute():
+            started = time.monotonic()
+            try:
+                result = await self.process.exec(
+                    current_directory=self.wire,
+                    command=(
+                        f'cmd.exe /c \'start "" /min "{sys.executable}" '
+                        '-c "import time; time.sleep(4)" 1>NUL 2>NUL\''
+                    ),
+                    timeout=2,
+                    stream=AsyncMock(),
+                )
+                self.assertEqual((result["exitCode"], result["timedOut"]), (0, False))
+            finally:
+                await asyncio.sleep(max(0, 5 - (time.monotonic() - started)))
+
+        asyncio.run(execute())
+
     def test_pairing_state_is_protected_by_windows_dpapi(self) -> None:
         from pydantic import SecretStr
 
