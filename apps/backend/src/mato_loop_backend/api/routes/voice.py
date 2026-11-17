@@ -99,6 +99,8 @@ async def control(websocket: WebSocket, session_id: UUID, connection_id: UUID) -
     live.browser_attached = True
     await websocket.accept()
     error_code = None
+    incoming = asyncio.create_task(websocket.receive_text())
+    initialized = asyncio.create_task(live.initialized.wait())
     try:
         while live.phase not in {"ended", "closing"}:
             current_login = await _browser_login(websocket)
@@ -108,21 +110,23 @@ async def control(websocket: WebSocket, session_id: UUID, connection_id: UUID) -
                 await voice_coordinator.validate(db, live)
                 session = await owned_chat(db, session_id, login.user.id)
                 tasks = await tasks_for(db, session)
-            await websocket.send_json({"phase": live.phase, "errorCode": live.error_code, "tasks": tasks})
-            try:
-                async with asyncio.timeout(2):
-                    raw = await websocket.receive_text()
-                if len(raw) > 1024:
-                    raise SessionServiceError(422, "validation.invalid")
-                if raw not in {"heartbeat", "interrupt", "end"}:
-                    raise SessionServiceError(422, "validation.invalid")
-                live.heartbeat = asyncio.get_running_loop().time()
-                if raw == "interrupt":
-                    await voice_coordinator.interrupt(live)
-                elif raw == "end":
-                    break
-            except TimeoutError:
-                pass
+            phase = live.phase
+            await websocket.send_json({"phase": phase, "errorCode": live.error_code, "tasks": tasks})
+            waiters = (incoming, initialized) if phase == "starting" else (incoming,)
+            done, _ = await asyncio.wait(waiters, timeout=2, return_when=asyncio.FIRST_COMPLETED)
+            if incoming not in done:
+                continue
+            raw = incoming.result()
+            if len(raw) > 1024:
+                raise SessionServiceError(422, "validation.invalid")
+            if raw not in {"heartbeat", "interrupt", "end"}:
+                raise SessionServiceError(422, "validation.invalid")
+            live.heartbeat = asyncio.get_running_loop().time()
+            if raw == "interrupt":
+                await voice_coordinator.interrupt(live)
+            elif raw == "end":
+                break
+            incoming = asyncio.create_task(websocket.receive_text())
         if live.error_code:
             await websocket.send_json({"phase": "ended", "errorCode": live.error_code})
     except WebSocketDisconnect:
@@ -131,6 +135,9 @@ async def control(websocket: WebSocket, session_id: UUID, connection_id: UUID) -
         error_code = exc.public_code if isinstance(exc, ProviderError) else exc.code
         await websocket.send_json({"phase": "ended", "errorCode": error_code})
     finally:
+        incoming.cancel()
+        initialized.cancel()
+        await asyncio.gather(incoming, initialized, return_exceptions=True)
         await voice_coordinator.stop(connection_id, error_code=error_code)
         try:
             await websocket.close()

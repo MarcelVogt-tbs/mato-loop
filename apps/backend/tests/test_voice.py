@@ -4,10 +4,11 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import aiohttp
 import pytest
+from fastapi import WebSocketDisconnect
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -15,6 +16,7 @@ from sqlalchemy.schema import CreateSchema, DropSchema
 
 from mato_loop_backend.agent.run_contracts import AgentRunError
 from mato_loop_backend.agent.runtime import AgentRuntime
+from mato_loop_backend.api.routes import voice as voice_api
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.base import Base
 from mato_loop_backend.models import (
@@ -27,6 +29,7 @@ from mato_loop_backend.models import (
     VoiceDelegation,
 )
 from mato_loop_backend.providers.realtime import transport
+from mato_loop_backend.providers.realtime.settings import realtime_model_available
 from mato_loop_backend.security import store_credential
 from mato_loop_backend.sessions.service import SessionServiceError
 from mato_loop_backend.settings import SettingsStore
@@ -41,6 +44,20 @@ from mato_loop_backend.settings.models import (
 )
 from mato_loop_backend.voice import delegation
 from mato_loop_backend.voice import service as voice
+
+
+def test_non_realtime_models_skip_inventory_comparisons(monkeypatch):
+    provider = LlmProviderConfig(
+        name="Voice", adapter_type="openai-realtime", credential_id=uuid4(),
+    )
+    settings = AiProviderSettings(providers=[provider], models=[
+        ModelConfig(provider_id=provider.id, model_id=f"chat-{index}") for index in range(3)
+    ])
+    comparisons = Mock(return_value=False)
+    monkeypatch.setattr(ModelConfig, "__eq__", comparisons)
+    for model in settings.models:
+        realtime_model_available(settings, model, settings.providers[0])
+    comparisons.assert_not_called()
 
 
 @pytest.fixture
@@ -146,6 +163,33 @@ async def test_voice_admission_transcript_deduplication_and_barge_in(voice_db):
     await tree.coordinator.interrupt(live)
     async with tree.factory() as db:
         assert await db.scalar(select(Message.generation_status).where(Message.session_id == tree.session.id, Message.content == "Heard reply")) == "completed"
+
+
+async def test_voice_initialization_wakes_browser_without_waiting_for_poll(voice_db, monkeypatch):
+    tree = voice_db
+    async with tree.factory() as db:
+        result = await tree.coordinator.start(db, tree.session.id, tree.user.id, "v=0\r\n", tree.model.id)
+    login = SimpleNamespace(user=tree.user, login_id=uuid4(), expires_at=datetime.now(UTC) + timedelta(minutes=1))
+    monkeypatch.setattr(voice_api, "_origin_allowed", lambda *_: True)
+    monkeypatch.setattr(voice_api, "_browser_login", AsyncMock(return_value=login))
+    monkeypatch.setattr(voice_api, "AsyncSessionFactory", tree.factory)
+    monkeypatch.setattr(voice_api, "voice_coordinator", tree.coordinator)
+
+    async def send(state):
+        if state["phase"] == "listening":
+            raise WebSocketDisconnect()
+        tree.queue.put_nowait(SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=json.dumps({
+            "type": "session.updated", "session": {"audio": {"input": {"turn_detection": {"type": "server_vad"}}},
+                                                "output_modalities": ["text"], "tools": [delegation.TASK_TOOL]},
+        })))
+
+    socket = SimpleNamespace(
+        accept=AsyncMock(), close=AsyncMock(), send_json=AsyncMock(side_effect=send),
+        receive_text=asyncio.Event().wait,
+    )
+    async with asyncio.timeout(1.5):
+        await voice_api.control(socket, tree.session.id, UUID(result["connectionId"]))
+    assert socket.send_json.call_args_list[-1].args[0]["phase"] == "listening"
 
 
 async def test_voice_tasks_stay_in_chat_are_idempotent_and_do_not_accept_spoken_approval(voice_db):

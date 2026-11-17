@@ -2,6 +2,7 @@ export function createVoiceClient({ negotiate, onPhase, onControl, onError, onCl
   let peer = null, stream = null, channel = null, control = null, timer = null, startup = null
   let wakeLock = null
   let closed = false, ready = false, muted = false, connected = false
+  let phase = 'starting'
   const abort = new AbortController()
   const audio = new Audio()
   audio.autoplay = true
@@ -81,7 +82,10 @@ export function createVoiceClient({ negotiate, onPhase, onControl, onError, onCl
           if (closed) return
           connected = peer.connectionState === 'connected'
           updateMicrophone()
-          if (connected && ready) clearTimeout(startup)
+          if (connected && ready) {
+            clearTimeout(startup)
+            onPhase(phase)
+          }
           if (['failed', 'disconnected', 'closed'].includes(peer.connectionState)) fail('voice.connectionLost')
         }
         for (const track of stream.getAudioTracks()) {
@@ -112,10 +116,11 @@ export function createVoiceClient({ negotiate, onPhase, onControl, onError, onCl
           onControl(state)
           if (state.errorCode) { fail(state.errorCode); return }
           if (state.phase === 'ended' || state.phase === 'closing') { close(); onClose(); return }
-          ready = state.phase !== 'starting'
+          phase = state.phase
+          ready = phase !== 'starting'
           updateMicrophone()
           if (ready && connected) clearTimeout(startup)
-          onPhase(ready && connected ? state.phase : 'starting')
+          onPhase(ready && connected ? phase : 'starting')
         }
         control.onerror = () => fail('voice.connectionLost')
         control.onclose = () => { if (!closed) fail('voice.connectionLost') }
