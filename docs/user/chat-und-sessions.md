@@ -2,7 +2,7 @@
 
 Eine Session ist eine gespeicherte Unterhaltung mit eigenen Einstellungen, Dateien und Verlauf. Projekte gruppieren Sessions, teilen aber nicht deren Dateiablage.
 
-Beim Öffnen erscheint zuerst der jüngste Verlauf. Scrolle nach oben, um ältere Nachrichten nachzuladen; deine Leseposition bleibt dabei erhalten. Große Tool-Ausgaben und Aufrufargumente werden erst beim Aufklappen ihrer Details vollständig geladen. Bei einem Ladefehler wähle **Erneut laden**. Der gespeicherte Verlauf und der Modellkontext werden dadurch nicht gekürzt.
+Beim Öffnen erscheint zuerst der jüngste Verlauf. Scrolle nach oben oder wähle **Ältere Nachrichten laden**, um ältere Nachrichten nachzuladen; deine Leseposition bleibt dabei erhalten. Füllt der Verlauf den Chatbereich nicht aus, werden automatisch höchstens zwei weitere Seiten geladen. Große Tool-Ausgaben und Aufrufargumente werden erst beim Aufklappen ihrer Details vollständig geladen. Bei einem Fehler beim Nachladen wähle **Erneut versuchen**. Der gespeicherte Verlauf und der Modellkontext werden dadurch nicht gekürzt.
 
 Chatnachrichten verwenden kompakte Zeilen-, Absatz- und Nachrichtenabstände. Auf dem Desktop mit Maus ist auch die Seitenleiste dichter; auf Touch-Geräten bleiben ihre größeren Bedienflächen erhalten. Die Einstellung **Nachrichtengröße > Klein** reduziert zusätzlich die Schriftgröße und die Nachrichtenabstände.
 

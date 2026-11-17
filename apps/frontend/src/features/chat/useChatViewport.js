@@ -24,6 +24,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
   let userScrolling = false
   let touching = false
   let lastScrollTop = 0
+  let automaticHistoryPages = 0
   let positionSessionId = chat.current?.id || null
 
   function savePosition() {
@@ -95,7 +96,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
         entry.message?.id === messageId || entry.batchId === messageId
       ))
       let searchIndex = messageId ? displayMessages.value.findIndex(matches) : -1
-      while (!messageId && request.anchor && !displayMessages.value.some(message => (message.renderId || message.id) === request.anchor.id)
+      while (!messageId && transcriptPreparing.value && request.anchor && !displayMessages.value.some(message => (message.renderId || message.id) === request.anchor.id)
         && chat.current?.nextMessageCursor) {
         const cursor = chat.current.nextMessageCursor
         try { await chat.loadOlderMessages(chat.current.id) } catch { break /* Central API toast. */ }
@@ -159,6 +160,19 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
       }
       if (revealMessageId === messageId) revealMessageId = null
       if (!followingBottom.value) readingAnchor = captureAnchor() || request.anchor
+      // Tool rounds can collapse an entire page into one non-scrollable reply.
+      // Bound this fallback across layout/resize events, not just within one pass.
+      if (!messageId && followingBottom.value && target?.clientHeight > 0
+        && target.scrollHeight <= target.clientHeight + 1
+        && chat.current?.nextMessageCursor && !chat.olderMessagesLoading
+        && !chat.olderMessagesLoadFailed && automaticHistoryPages < 2) {
+        automaticHistoryPages += 1
+        const cursor = chat.current.nextMessageCursor
+        await loadOlderHistory()
+        if (!isCurrent(request)) return
+        if (chat.current?.nextMessageCursor === cursor) automaticHistoryPages = 2
+        scheduleTranscriptLayout()
+      }
     } finally {
       if (isCurrent(request)) {
         operation = null
@@ -169,6 +183,10 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
 
   async function loadOlderHistory() {
     if (!chat.current?.nextMessageCursor || chat.olderMessagesLoading) return
+    if (!operation) {
+      followingBottom.value = false
+      readingAnchor = captureAnchor()
+    }
     try { await chat.loadOlderMessages() } catch { /* The store exposes the retry state. */ }
   }
 
@@ -253,6 +271,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     if (sessionId !== previous[0]) {
       const saved = sessionId ? tabs.readingPositions[sessionId] : null
       positionSessionId = sessionId || null
+      automaticHistoryPages = 0
       clearTimeout(userScrollTimer)
       window.removeEventListener('mouseup', scheduleUserScrollEnd)
       touching = userScrolling = false

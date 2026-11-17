@@ -109,6 +109,9 @@
                 <q-btn flat dense no-caps color="primary" label="Erneut versuchen" @click="loadOlderHistory" />
               </template>
             </q-banner>
+            <div v-else-if="chat.current?.nextMessageCursor" class="row justify-center q-py-sm">
+              <q-btn flat dense no-caps color="primary" label="Ältere Nachrichten laden" @click="loadOlderHistory" />
+            </div>
           </template>
           <template #default="{ item: message }">
             <div

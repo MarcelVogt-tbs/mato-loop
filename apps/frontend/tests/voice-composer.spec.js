@@ -170,7 +170,7 @@ beforeEach(async () => {
     props: ['items'],
     emits: ['virtual-scroll'],
     methods: { reset: mocks.resetMessageSizes, refresh() { this.$emit('virtual-scroll', { from: 0, direction: 'decrease' }) }, scrollTo() {} },
-    render() { return h('div', this.items.map((item) => this.$slots.default?.({ item }))) }
+    render() { return h('div', [this.$slots.before?.(), ...this.items.map((item) => this.$slots.default?.({ item }))]) }
   })
   app.component('QSkeleton', { render: () => null })
   app.component('QResizeObserver', { render: () => null })
@@ -336,6 +336,37 @@ describe('voice attachment composer', () => {
     await vi.advanceTimersByTimeAsync(250)
 
     expect(target.scrollTop).toBe(300)
+  })
+
+  it('bounds automatic history loading for collapsed replies and leaves a manual way to continue', async () => {
+    const target = document.createElement('div')
+    Object.defineProperties(target, {
+      clientHeight: { value: 400 },
+      scrollHeight: { value: 400 }
+    })
+    mocks.scrollTarget = target
+    let pages = 0
+    const messages = page => Array.from({ length: 20 }, (_, index) => ({
+      id: `reply-${page}-${index}`, role: 'assistant', content: 'Reply',
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, 100 - page * 20 + index)).toISOString()
+    }))
+    mocks.api.get.mockImplementation(async url => ({ data: url === '/sessions/session-1'
+      ? { id: 'session-1', messages: messages(0), nextMessageCursor: 'cursor-0' }
+      : url === '/sessions/session-1/messages'
+        ? { items: messages(++pages), nextCursor: `cursor-${pages}` }
+        : { items: [] } }))
+    vi.useFakeTimers()
+    showPage.value = true
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(1000)
+    const automaticPages = pages
+    target.getBoundingClientRect = () => ({ top: 0, bottom: 400 })
+    root.querySelector('[data-message-id]').getBoundingClientRect = () => ({ top: 0, bottom: 60 })
+    await click('Ältere Nachrichten laden')
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect([automaticPages, pages, Boolean(root.querySelector('.chat-transcript:not(.invisible)'))])
+      .toEqual([2, 3, true])
   })
 
   it('reveals a search result merged into the final assistant message', async () => {
