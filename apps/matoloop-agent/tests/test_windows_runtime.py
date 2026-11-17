@@ -205,7 +205,10 @@ class WindowsRuntimeTests(unittest.TestCase):
                             capture_output=True,
                             text=True,
                             timeout=20,
-                            env=execution_environment,
+                            env={
+                                **execution_environment,
+                                "PSModulePath": str(Path(self.process.shell).parent / "Modules"),
+                            },
                             stdin=subprocess.DEVNULL,
                         )
                         chunks.append(
