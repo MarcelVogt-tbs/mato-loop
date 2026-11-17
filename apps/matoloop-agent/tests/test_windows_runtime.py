@@ -215,6 +215,21 @@ class WindowsRuntimeTests(unittest.TestCase):
 
         asyncio.run(execute())
 
+    def test_timeout_marks_cancelled_output_as_truncated(self) -> None:
+        async def execute():
+            async def stream(channel, text):
+                await asyncio.Event().wait()
+
+            result = await self.process.exec(
+                current_directory=self.wire,
+                command="Write-Output 'pending output'; Start-Sleep -Seconds 5",
+                timeout=1,
+                stream=stream,
+            )
+            self.assertTrue(result["stdoutTruncated"])
+
+        asyncio.run(execute())
+
     def test_pairing_state_is_protected_by_windows_dpapi(self) -> None:
         from pydantic import SecretStr
 

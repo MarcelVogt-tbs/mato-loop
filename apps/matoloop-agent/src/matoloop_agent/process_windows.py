@@ -404,6 +404,9 @@ class WindowsProcess:
                 )
                 await killer.wait()
             await ProcessRunner._finish_drains(process, tasks)
+            for channel, task in zip(("stdout", "stderr"), tasks, strict=True):
+                if task.cancelled():
+                    truncated[channel] = True
             process._transport.close()
             await process.wait()
             if not timed_out:
