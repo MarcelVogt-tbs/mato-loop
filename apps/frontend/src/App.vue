@@ -14,6 +14,7 @@
     />
   </div>
   <router-view v-else />
+  <ChangelogDialog v-if="auth.authenticated && changelog.open" />
 
   <q-banner
     v-if="updateAvailable"
@@ -22,22 +23,27 @@
     class="pwa-update-banner app-surface shadow-2"
     role="status"
   >
-    Eine neue Version ist verfügbar.
+    Eine neue Version der Weboberfläche ist bereit.
+    <div>
+      <q-checkbox v-model="showChanges" dense class="q-mt-sm" label="Neuerungen nach dem Neuladen anzeigen" />
+    </div>
     <template #action>
       <q-btn flat dense no-caps color="primary" label="Später" @click="snoozeUpdate" />
-      <q-btn flat dense no-caps color="primary" label="Jetzt aktualisieren" :loading="restarting" @click="applyUpdate" />
+      <q-btn flat dense no-caps color="primary" label="Jetzt neu laden" :loading="restarting" @click="applyUpdate" />
     </template>
   </q-banner>
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useChangelogStore } from 'src/features/changelog/store'
 import AppLogo from 'src/shared/ui/AppLogo.vue'
 import { useAppearanceStore } from 'src/features/settings/appearance-store'
 import { useAuthStore } from 'stores/auth'
 import { notifyError } from 'src/utils/notifications'
 import {
   PWA_UPDATE_EVENT,
+  consumePwaChangelog,
   pwaUpdateSnoozeRemaining,
   requestPwaUpdate,
   snoozePwaUpdate
@@ -47,6 +53,9 @@ defineOptions({ name: 'App' })
 
 const auth = useAuthStore()
 const appearance = useAppearanceStore()
+const changelog = useChangelogStore()
+const ChangelogDialog = defineAsyncComponent(() => import('src/features/changelog/ChangelogDialog.vue'))
+const showChanges = ref(true)
 const startupSlow = ref(false)
 const updateAvailable = ref(false)
 const restarting = ref(false)
@@ -87,7 +96,7 @@ async function applyUpdate() {
   if (restarting.value) return
   restarting.value = true
   try {
-    if (!await requestPwaUpdate()) await detectWaitingUpdate()
+    if (!await requestPwaUpdate({ showChanges: showChanges.value, userId: auth.userId })) await detectWaitingUpdate()
   } catch (error) {
     notifyError(error, 'Die Aktualisierung konnte nicht abgeschlossen werden. Versuche es erneut.')
     await detectWaitingUpdate()
@@ -95,6 +104,12 @@ async function applyUpdate() {
     restarting.value = false
   }
 }
+
+watch(() => auth.authenticated && auth.userId, (userId) => {
+  if (!userId) return
+  const comparison = consumePwaChangelog(userId)
+  if (comparison) void changelog.show(comparison)
+}, { immediate: true })
 
 onMounted(() => {
   startupTimer = window.setTimeout(() => { startupSlow.value = true }, 3000)

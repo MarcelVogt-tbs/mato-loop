@@ -14,7 +14,11 @@ export default configure(() => ({
       browser: ['es2022', 'firefox115', 'chrome115', 'safari14'],
       node: 'node22'
     },
-    vueRouterMode: 'history'
+    vueRouterMode: 'history',
+    env: {
+      MATOLOOP_WEB_REVISION: /^[0-9a-f]{40}$/.test(process.env.BUILD_REVISION || '')
+        ? process.env.BUILD_REVISION : ''
+    }
   },
   devServer: {
     open: false,

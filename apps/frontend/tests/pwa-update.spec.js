@@ -14,6 +14,13 @@ let updates
 
 beforeEach(async () => {
   vi.resetModules()
+  vi.stubEnv('MATOLOOP_WEB_REVISION', 'a'.repeat(40))
+  const values = new Map()
+  vi.stubGlobal('sessionStorage', {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: key => values.delete(key)
+  })
   updates = await import('../src/app/pwa-update')
 })
 
@@ -21,6 +28,7 @@ afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: originalNavigator })
   Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, value: originalSessionStorage })
   Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
@@ -73,6 +81,41 @@ describe('PWA updates', () => {
     expect(reload).not.toHaveBeenCalled()
   })
 
+  it('shows the requested exact changelog once after the chosen update', async () => {
+    const { serviceWorker, worker } = updateEnvironment()
+    const pending = updates.requestPwaUpdate({ showChanges: true, userId: 'owner' })
+    await Promise.resolve()
+    serviceWorker.controller = worker
+    serviceWorker.dispatchEvent(new Event('controllerchange'))
+    await pending
+    vi.stubEnv('MATOLOOP_WEB_REVISION', 'b'.repeat(40))
+    vi.resetModules()
+    const next = await import('../src/app/pwa-update')
+    expect([next.consumePwaChangelog('owner'), next.consumePwaChangelog('owner')]).toEqual([
+      { base: 'a'.repeat(40), target: 'b'.repeat(40) }, null
+    ])
+  })
+
+  it.each([
+    { showChanges: false, target: 'b', owner: 'owner', waiting: true },
+    { showChanges: true, target: 'a', owner: 'owner', waiting: true },
+    { showChanges: true, target: 'b', owner: 'other', waiting: true },
+    { showChanges: true, target: 'b', owner: 'owner', waiting: false }
+  ])('skips unchecked, unchanged, other-account or missing updates: %j', async ({ showChanges, target, owner, waiting }) => {
+    const { serviceWorker, worker } = updateEnvironment({ waiting })
+    const pending = updates.requestPwaUpdate({ showChanges, userId: 'owner' })
+    await Promise.resolve()
+    if (waiting) {
+      serviceWorker.controller = worker
+      serviceWorker.dispatchEvent(new Event('controllerchange'))
+    }
+    await pending
+    vi.stubEnv('MATOLOOP_WEB_REVISION', target.repeat(40))
+    vi.resetModules()
+    const next = await import('../src/app/pwa-update')
+    expect(next.consumePwaChangelog(owner)).toBeNull()
+  })
+
   it('answers the old page window count request on the waiting worker', async () => {
     const matchAll = vi.fn().mockResolvedValue([{}])
     const worker = { __WB_MANIFEST: [], clients: { matchAll }, addEventListener: vi.fn() }
@@ -123,7 +166,7 @@ describe('PWA updates', () => {
   it('recovers from a stalled activation and reloads on a late takeover', async () => {
     vi.useFakeTimers()
     const { reload, serviceWorker, worker } = updateEnvironment()
-    const update = updates.requestPwaUpdate()
+    const update = updates.requestPwaUpdate({ showChanges: true, userId: 'owner' })
     const failure = expect(update).rejects.toThrow('timed out')
     await vi.advanceTimersByTimeAsync(15_000)
 
@@ -132,6 +175,10 @@ describe('PWA updates', () => {
     serviceWorker.controller = worker
     serviceWorker.dispatchEvent(new Event('controllerchange'))
     expect(reload).toHaveBeenCalledOnce()
+    vi.stubEnv('MATOLOOP_WEB_REVISION', 'b'.repeat(40))
+    vi.resetModules()
+    const next = await import('../src/app/pwa-update')
+    expect(next.consumePwaChangelog('owner')).toEqual({ base: 'a'.repeat(40), target: 'b'.repeat(40) })
   })
 
   it('allows retry after a failed message', async () => {
