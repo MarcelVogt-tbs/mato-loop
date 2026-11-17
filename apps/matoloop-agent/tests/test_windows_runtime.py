@@ -165,20 +165,29 @@ class WindowsRuntimeTests(unittest.TestCase):
 
         async def execute():
             chunks = []
+            execution_environment = None
+            create_process = asyncio.create_subprocess_exec
+
+            async def capture_environment(*args, **kwargs):
+                nonlocal execution_environment
+                if "env" in kwargs:
+                    execution_environment = kwargs["env"]
+                return await create_process(*args, **kwargs)
 
             async def stream(channel, text):
                 chunks.append((channel, text))
 
-            result = await self.process.exec(
-                current_directory=self.wire,
-                command=(
-                    "Write-Output 'Windows ready'; "
-                    "[Console]::WriteLine(('{0}|{1}|{2}' -f "
-                    "$env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:HOST_SECRET))"
-                ),
-                timeout=10,
-                stream=stream,
-            )
+            with patch("asyncio.create_subprocess_exec", side_effect=capture_environment):
+                result = await self.process.exec(
+                    current_directory=self.wire,
+                    command=(
+                        "Write-Output 'Windows ready'; "
+                        "[Console]::WriteLine(('{0}|{1}|{2}' -f "
+                        "$env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:HOST_SECRET))"
+                    ),
+                    timeout=10,
+                    stream=stream,
+                )
             if result["timedOut"]:
                 for command in (
                     "[Console]::WriteLine('console probe')",
@@ -196,6 +205,8 @@ class WindowsRuntimeTests(unittest.TestCase):
                             capture_output=True,
                             text=True,
                             timeout=20,
+                            env=execution_environment,
+                            stdin=subprocess.DEVNULL,
                         )
                         chunks.append(
                             (
