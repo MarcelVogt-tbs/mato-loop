@@ -188,6 +188,9 @@ class ProcessExecutionTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(result["timedOut"])
                     self.assertIn("evidence", output)
                     self.assertLess(result["durationMs"], 4000)
+        self.runner.default_timeout = self.config.default_timeout_seconds
+        self.runner.max_timeout = self.config.max_timeout_seconds
+        for pty in (False, True):
             result, output = await self.execute(
                 pty,
                 "python3 -c 'print(\"x\" * 4000); raise SystemExit(7)'",
