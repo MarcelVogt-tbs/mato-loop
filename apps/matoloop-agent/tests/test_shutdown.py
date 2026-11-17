@@ -66,7 +66,7 @@ with patch('matoloop_agent.__main__.resolve_credential', credential):
     else:
         with patch.object(MatoLoopAgent, '_connect_once', disconnected), \\
              patch.object(BrowserManager, 'close', close), \\
-             patch('matoloop_agent.platform_linux.threading.Timer', shutdown_timer):
+             patch('matoloop_agent.platform_posix.threading.Timer', shutdown_timer):
             main()
 """
 

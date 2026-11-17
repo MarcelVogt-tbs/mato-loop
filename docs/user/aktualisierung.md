@@ -33,6 +33,8 @@ Alternativ verwendest du bei Docker `docker compose exec matoloop-agent matoloop
 
 Native Linux-Wartung kann eine geschützte sudo-Eingabe benötigen. Optional hinterlegst du unter **Computer > Verwalten > Einstellungen > sudo-Passwort** ein eigenes Secret aus **Variablen & Secrets**. Die Zuordnung gewährt weder sudo-Rechte noch Aktionsfreigaben; das Konto benötigt diese Rechte bereits. Entfernen der Zuordnung oder Entkoppeln löscht das Secret nicht. Windows verwendet den installierten Wartungstask; Docker und passwortloses sudo benötigen kein hinterlegtes Passwort.
 
+macOS verwendet die verwaltete Benutzerinstallation ohne sudo-Passwort. Der Agent ist nur während der Benutzeranmeldung verfügbar; beachte die [macOS-Einrichtung](computer-und-terminal.md#unter-macos-mit-apple-silicon-installieren).
+
 Wartungsergebnisse werden lokal gespeichert und bei vorübergehender Nichterreichbarkeit später gemeldet. Ohne bestätigten Abschluss bleibt das Ergebnis unbekannt. Prüfe Wartungsstatus und gemeldete Version, statt aus einer Verbindungstrennung auf Erfolg zu schließen.
 
 ### Automatische Agent-Updates

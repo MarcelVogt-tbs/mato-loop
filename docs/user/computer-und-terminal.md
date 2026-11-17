@@ -40,6 +40,23 @@ Die Installation verwaltet private Werkzeuge unter `~/.local/share/matoloop-agen
 
 `matoloop-agent status` prüft den Dienst. `matoloop-agent pair` wiederholt eine fehlgeschlagene Kopplung, ohne neu zu installieren. `uninstall` erhält die Zugangsdaten; `uninstall --purge` entfernt die verwaltete Installation einschließlich Zugang. Workspaces bleiben in beiden Fällen erhalten.
 
+### Unter macOS mit Apple Silicon installieren
+
+1. Wähle **macOS (Apple Silicon)** in den Computereinstellungen und kopiere den Installationsbefehl.
+2. Falls Git fehlt, installiere zuerst Apples Command Line Tools mit `xcode-select --install`.
+3. Führe den Befehl im Terminal als normalen Benutzer aus, ohne sudo. Der Installer erkennt macOS automatisch; Intel-Macs und Rosetta werden nicht unterstützt. Homebrew ist nicht erforderlich.
+4. Schließe die Kopplung mit Computer-ID und Token ab.
+
+Die Installation verwaltet eigene Werkzeuge unter `~/Library/Application Support/MatoLoop Agent`, ohne Shellprofile zu ändern. Verwende `~/.local/bin/matoloop-agent`, falls der Befehl nicht im `PATH` liegt. `status`, `pair`, `update`, `install`, `uninstall` und `uninstall --purge` verwenden dieselbe CLI wie unter Linux. Updates folgen dem exakten Commit des laufenden Backends. Die Deinstallation erhält Workspaces; ohne `--purge` bleiben auch Zugangsdaten erhalten.
+
+!!! warning "Nur während deiner Anmeldung aktiv"
+    Der Benutzer-LaunchAgent startet bei der Anmeldung und endet bei der Abmeldung. Er ist kein Systemdienst für den Betrieb ohne angemeldeten Benutzer. Eine eigene App oder ein Tray-Symbol ist nicht erforderlich.
+
+Dateien, Bash-Shell (`/bin/bash`) und interaktive Terminals verwenden POSIX-Pfade. Der Installer richtet die benötigte arm64-Version von ripgrep für die Dateisuche automatisch unter `~/Library/Application Support/MatoLoop Agent/tools/bin/rg` ein und prüft ihre feste SHA-256-Prüfsumme. Homebrew ist dafür nicht nötig. Browser-Unterstützung ist [optional einzurichten](browser.md#browser-einrichten). Administratorausführung und OpenSCAD werden nicht angeboten.
+
+!!! warning "macOS-Datenschutz bleibt wirksam"
+    TCC kann den Zugriff auf Schreibtisch, Dokumente, Downloads und andere geschützte Ordner verweigern. Eine MatoLoop-Freigabe ersetzt keine macOS-Berechtigung; der LaunchAgent kann andere Rechte haben als dein Terminal. Wähle einen zugänglichen Arbeitsordner oder prüfe die passenden Datenschutzrechte in den macOS-Systemeinstellungen. Umgehe die Schutzregeln nicht.
+
 ### Unter Windows installieren
 
 1. Öffne eine normale Windows PowerShell unter dem Konto, das den Agenten besitzen soll.
@@ -71,7 +88,7 @@ Löschen und fremde Sessionordner benötigen normale Dateirechte. Computersperre
 | Ansicht | Zweck |
 | --- | --- |
 | Agent-Ausgabe | Befehle des Agenten und gefilterte Liveausgabe sowie jüngste gespeicherte Ergebnisse |
-| Terminal | Persönliche interaktive Shell im Home eines unterstützten Linux-Agents |
+| Terminal | Persönliche interaktive Shell im Home eines unterstützten Linux- oder macOS-Agents |
 
 Klappe einen Shell-Aufruf im Chat auf, um dessen Befehl und gefilterte Liveausgabe direkt als schreibgeschützten Terminalblock zu sehen. Nach Abschluss bleibt das gespeicherte Ergebnis sichtbar. Neue Ausgabe scrollt mit, solange du nicht nach oben gescrollt hast. Beim erneuten Öffnen erscheinen die gespeicherten Standard- und Fehlerausgaben nacheinander, nicht zwingend in ihrer ursprünglichen zeitlichen Reihenfolge.
 

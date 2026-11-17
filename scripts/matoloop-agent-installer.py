@@ -4,16 +4,21 @@ from __future__ import annotations
 import argparse
 import atexit
 import fcntl
+import hashlib
 import json
 import os
+import platform
+import plistlib
 import pwd
 import re
 import secrets
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from contextlib import contextmanager, nullcontext
@@ -24,6 +29,15 @@ from uuid import UUID
 
 SOURCE_URL = "https://github.com/devmato/mato-loop.git"
 SYSTEM_SERVICE_PATH = Path("/etc/systemd/system/matoloop-agent.service")
+MACOS_SERVICE_LABEL = "com.matoloop.agent"
+MACOS_RIPGREP_VERSION = "15.2.0"
+MACOS_RIPGREP_ARCHIVE = f"ripgrep-{MACOS_RIPGREP_VERSION}-aarch64-apple-darwin"
+MACOS_RIPGREP_URL = (
+    "https://github.com/BurntSushi/ripgrep/releases/download/"
+    f"{MACOS_RIPGREP_VERSION}/{MACOS_RIPGREP_ARCHIVE}.tar.gz"
+)
+MACOS_RIPGREP_SHA256 = "3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4"
+MACOS_RIPGREP_BINARY_SHA256 = "a326a1fb48074202e9ad41e4cd1e389eeea372c8c6f7d7e80da81176d5d9430e"
 SYSTEM_PACKAGES = (
     "bash",
     "ripgrep",
@@ -39,13 +53,13 @@ class _NoRedirect(HTTPRedirectHandler):
 
 def paths() -> dict[str, Path]:
     home = Path.home()
+    default_root = (
+        home / "Library/Application Support/MatoLoop Agent"
+        if sys.platform == "darwin"
+        else Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")) / "matoloop-agent"
+    )
     requested_root = (
-        Path(
-            os.environ.get("MATOLOOP_AGENT_INSTALL_ROOT")
-            or Path(os.environ.get("XDG_DATA_HOME", home / ".local/share")) / "matoloop-agent"
-        )
-        .expanduser()
-        .absolute()
+        Path(os.environ.get("MATOLOOP_AGENT_INSTALL_ROOT") or default_root).expanduser().absolute()
     )
     root = requested_root.resolve(strict=False)
     state_path = root / "install.json"
@@ -72,7 +86,9 @@ def paths() -> dict[str, Path]:
             or os.environ.get("MATOLOOP_AGENT_WRAPPER_PATH")
             or Path(os.environ.get("XDG_BIN_HOME", home / ".local/bin")) / "matoloop-agent"
         ),
-        "service": SYSTEM_SERVICE_PATH,
+        "service": home / "Library/LaunchAgents/com.matoloop.agent.plist"
+        if sys.platform == "darwin"
+        else SYSTEM_SERVICE_PATH,
         "legacy_service": Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
         / "systemd/user/matoloop-agent.service",
     }
@@ -284,6 +300,16 @@ def fetch_source(repository: str, revision: str, destination: Path) -> None:
 
 
 def check_linux() -> None:
+    # Keep one native lifecycle, with platform-specific service management only.
+    if sys.platform == "darwin":
+        if os.getuid() == 0:
+            fail("the native Agent must be installed as a regular user")
+        if platform.machine() != "arm64":
+            fail("native macOS installation requires Apple Silicon (arm64), without Rosetta")
+        if shutil.which("launchctl") is None:
+            fail("launchctl is required for the macOS user LaunchAgent")
+        run("launchctl", "print", f"gui/{os.getuid()}", stdout=subprocess.DEVNULL)
+        return
     if not sys.platform.startswith("linux"):
         fail(f"native installation is not supported on {sys.platform} yet")
     if os.getuid() == 0:
@@ -293,7 +319,75 @@ def check_linux() -> None:
             fail(f"{command} is required for the Linux system service")
 
 
+def install_macos_ripgrep(layout: dict[str, Path]) -> None:
+    executable = layout["root"] / "tools/bin/rg"
+    if any(path.is_symlink() for path in (executable, *executable.parents)):
+        fail("private ripgrep paths must not contain symlinks")
+    if executable.is_file() and hashlib.sha256(executable.read_bytes()).hexdigest() == (
+        MACOS_RIPGREP_BINARY_SHA256
+    ):
+        run(executable, "--version", stdout=subprocess.DEVNULL)
+        return
+    print(f"Installing private ripgrep {MACOS_RIPGREP_VERSION} for Apple Silicon...", flush=True)
+    with tempfile.TemporaryDirectory(prefix=".ripgrep-", dir=layout["root"]) as temporary:
+        archive = Path(temporary) / "ripgrep.tar.gz"
+        run(
+            "curl",
+            "--fail",
+            "--location",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "120",
+            "--max-filesize",
+            str(20 * 1024 * 1024),
+            "--output",
+            archive,
+            MACOS_RIPGREP_URL,
+        )
+        if hashlib.sha256(archive.read_bytes()).hexdigest() != MACOS_RIPGREP_SHA256:
+            fail("the private ripgrep archive checksum does not match")
+        with tarfile.open(archive, "r:gz") as bundle:
+            # Read only exact regular members; never extract archive paths or links.
+            for name in ("rg", "COPYING", "LICENSE-MIT", "UNLICENSE"):
+                member = bundle.getmember(f"{MACOS_RIPGREP_ARCHIVE}/{name}")
+                if not member.isfile() or member.size > 20 * 1024 * 1024:
+                    fail("the private ripgrep archive has an invalid member")
+                with bundle.extractfile(member) as stream:
+                    content = stream.read()
+                if name == "rg":
+                    if hashlib.sha256(content).hexdigest() != MACOS_RIPGREP_BINARY_SHA256:
+                        fail("the private ripgrep executable checksum does not match")
+                    candidate = Path(temporary) / "rg"
+                    write_file(candidate, content, 0o700)
+                    run(candidate, "--version", stdout=subprocess.DEVNULL)
+                else:
+                    write_file(layout["root"] / "tools/ripgrep" / name, content, 0o600)
+        write_file(executable, candidate.read_bytes(), 0o700)
+
+
 def install_system_dependencies(layout: dict[str, Path]) -> None:
+    if sys.platform == "darwin":
+        # Git is supplied by Apple's CLT; never start a GUI installer from maintenance.
+        if (
+            shutil.which("git") is None
+            or run(
+                "xcode-select",
+                "-p",
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ).returncode
+            != 0
+        ):
+            fail("Git is required; install Apple's Command Line Tools with xcode-select --install")
+        run("git", "--version", stdout=subprocess.DEVNULL)
+        install_macos_ripgrep(layout)
+        return
     if layout["packages"].is_symlink():
         fail("invalid system package tracking file")
     if shutil.which("apt-get") is None or shutil.which("dpkg-query") is None:
@@ -419,6 +513,25 @@ def stamp_source(source: Path, destination: Path) -> None:
 
 
 def service_text(layout: dict[str, Path]) -> str:
+    if sys.platform == "darwin":
+        return plistlib.dumps(
+            {
+                "Label": MACOS_SERVICE_LABEL,
+                "ProgramArguments": [str(layout["wrapper"]), "run"],
+                "RunAtLoad": True,
+                "KeepAlive": True,
+                "ThrottleInterval": 5,
+                "Umask": 0o077,
+                "EnvironmentVariables": {
+                    "PATH": native_path(layout),
+                    "MATOLOOP_AGENT_INSTALL_ROOT": str(layout["root"]),
+                    "MATOLOOP_AGENT_CONFIG": str(layout["data"] / "config.json"),
+                },
+                "StandardOutPath": str(layout["data"] / "agent.log"),
+                "StandardErrorPath": str(layout["data"] / "agent-error.log"),
+            },
+            sort_keys=True,
+        ).decode()
     executable = (
         os.fspath(layout["wrapper"]).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
     )
@@ -440,6 +553,9 @@ WantedBy=multi-user.target
 
 
 def install_service(layout: dict[str, Path], content: bytes) -> None:
+    if sys.platform == "darwin":
+        write_file(layout["service"], content, 0o600)
+        return
     descriptor, temporary = tempfile.mkstemp(prefix=".matoloop-agent.", dir=layout["root"])
     try:
         with os.fdopen(descriptor, "wb") as handle:
@@ -450,7 +566,124 @@ def install_service(layout: dict[str, Path], content: bytes) -> None:
 
 
 def remove_service(layout: dict[str, Path]) -> None:
+    if sys.platform == "darwin":
+        layout["service"].unlink(missing_ok=True)
+        return
     run("sudo", "rm", "-f", layout["service"])
+
+
+def native_path(layout: dict[str, Path]) -> str:
+    return ":".join(
+        (
+            str(layout["root"] / "tools/bin"),
+            str(Path.home() / ".local/bin"),
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        )
+    )
+
+
+def service_target() -> str:
+    return f"gui/{os.getuid()}/{MACOS_SERVICE_LABEL}"
+
+
+def service_loaded() -> bool:
+    return (
+        run(
+            "launchctl",
+            "print",
+            service_target(),
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+        == 0
+    )
+
+
+def macos_service_pid() -> int | None:
+    result = run(
+        "launchctl",
+        "kickstart",
+        "-p",
+        service_target(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    # -p documents a PID result, unlike the explicitly unstable print output.
+    if result.returncode == 0 and result.stdout.strip().isdecimal():
+        pid = int(result.stdout.strip())
+        if pid > 1:
+            return pid
+    return None
+
+
+def service_active(*, check: bool = False, expected_pid: int | None = None) -> bool:
+    if sys.platform == "darwin":
+        pid = macos_service_pid()
+        active = pid is not None and (expected_pid is None or pid == expected_pid)
+        if active:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                active = False
+        if check and not active:
+            fail("the macOS LaunchAgent failed its startup check")
+        return active
+    return (
+        run("systemctl", "is-active", "--quiet", "matoloop-agent.service", check=check).returncode
+        == 0
+    )
+
+
+def service_enabled() -> bool:
+    if sys.platform == "darwin":
+        result = run(
+            "launchctl", "print-disabled", f"gui/{os.getuid()}", capture_output=True, text=True
+        )
+        return re.search(rf'"{re.escape(MACOS_SERVICE_LABEL)}"\s*=>\s*true', result.stdout) is None
+    return (
+        run("systemctl", "is-enabled", "--quiet", "matoloop-agent.service", check=False).returncode
+        == 0
+    )
+
+
+def service_stop(*, check: bool = True) -> None:
+    if sys.platform == "darwin":
+        if service_loaded():
+            run("launchctl", "bootout", service_target(), check=check)
+        return
+    run("sudo", "systemctl", "stop", "matoloop-agent.service", check=check)
+
+
+def service_reload() -> None:
+    if sys.platform != "darwin":
+        run("sudo", "systemctl", "daemon-reload")
+
+
+def service_enable(enabled: bool, *, check: bool = True) -> None:
+    if sys.platform == "darwin":
+        run("launchctl", "enable" if enabled else "disable", service_target(), check=check)
+    else:
+        run(
+            "sudo",
+            "systemctl",
+            "enable" if enabled else "disable",
+            "matoloop-agent.service",
+            check=check,
+        )
+
+
+def service_start(layout: dict[str, Path], *, check: bool = True) -> None:
+    if sys.platform == "darwin":
+        run("launchctl", "bootstrap", f"gui/{os.getuid()}", layout["service"], check=check)
+    else:
+        run("sudo", "systemctl", "start", "matoloop-agent.service", check=check)
 
 
 def write_manager(layout: dict[str, Path], source: Path) -> None:
@@ -474,6 +707,10 @@ def install(arguments: argparse.Namespace) -> None:
     check_linux()
     layout = paths()
     check_safe_root(layout)
+    if sys.platform == "darwin":
+        os.environ["PATH"] = native_path(layout) + ":" + os.environ.get("PATH", "")
+        if any(path.is_symlink() for path in layout["service"].parents):
+            fail("LaunchAgent directories must not contain symlinks")
     legacy = Path.home() / "mato-loop-agent"
     if (
         not layout["state"].exists()
@@ -524,9 +761,21 @@ def install(arguments: argparse.Namespace) -> None:
     layout["marker"].touch(mode=0o600, exist_ok=True)
     if not state:
         write_manager(layout, source)
+    config_path = layout["data"] / "config.json"
+    if config_path.is_symlink():
+        fail(f"invalid Agent configuration: {config_path}")
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        config = {}
+    except (OSError, ValueError):
+        fail(f"invalid Agent configuration: {config_path}")
+    if not isinstance(config, dict):
+        fail(f"invalid Agent configuration: {config_path}")
     home = Path(
         arguments.home
         or state.get("homeDirectory")
+        or (config.get("homeDirectory") if sys.platform == "darwin" else None)
         or prompt("Agent home directory", os.fspath(Path.home() / "mato-loop-agent/workspace"))
     ).expanduser()
     home.mkdir(parents=True, exist_ok=True)
@@ -574,7 +823,7 @@ def install(arguments: argparse.Namespace) -> None:
     run(new_venv / "bin/matoloop-agent", "--help", stdout=subprocess.DEVNULL)
     if browser:
         with tempfile.TemporaryDirectory(prefix="matoloop-browser-check-") as temporary:
-            probe = Path(temporary)
+            probe = Path(temporary).resolve()
             probe.chmod(0o755)
             run(
                 new_venv / "bin/python",
@@ -586,20 +835,13 @@ def install(arguments: argparse.Namespace) -> None:
                     "MATOLOOP_BROWSER_DATA_DIR": str(layout["data"]),
                     "MATOLOOP_BROWSER_ROOT": str(probe),
                     "MATOLOOP_BROWSER_INSTALLATION": str(browser_installation),
+                    # Keep the previous environment's Chromium available for rollback.
+                    "PLAYWRIGHT_SKIP_BROWSER_GC": "1",
                 },
             )
     if not managed:
         shutil.rmtree(active_source)
 
-    config_path = layout["data"] / "config.json"
-    if config_path.is_symlink():
-        fail(f"invalid Agent configuration: {config_path}")
-    try:
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        config = {}
-    except (OSError, ValueError):
-        fail(f"invalid Agent configuration: {config_path}")
     config.update({"homeDirectory": os.fspath(home), "allowInsecure": insecure})
     shell = shutil.which("bash")
     openscad = shutil.which("openscad")
@@ -612,14 +854,9 @@ def install(arguments: argparse.Namespace) -> None:
     else:
         config.pop("openscadExecutable", None)
 
-    active = (
-        run("systemctl", "is-active", "--quiet", "matoloop-agent.service", check=False).returncode
-        == 0
-    )
-    enabled = (
-        run("systemctl", "is-enabled", "--quiet", "matoloop-agent.service", check=False).returncode
-        == 0
-    )
+    active = service_loaded() if sys.platform == "darwin" else service_active()
+    loaded = service_loaded() if sys.platform == "darwin" else active
+    enabled = service_enabled()
     old_source = layout["root"] / ".source-old"
     old_venv = layout["venv"].resolve() if layout["venv"].is_symlink() else None
     shutil.rmtree(old_source, ignore_errors=True)
@@ -643,14 +880,17 @@ def install(arguments: argparse.Namespace) -> None:
         "instanceUrl": instance.rstrip("/"),
         "wrapperPath": os.fspath(layout["wrapper"]),
     }
-    run("sudo", "-v")
+    if sys.platform != "darwin":
+        run("sudo", "-v")
+    source_replaced = False
     try:
-        if active:
-            run("sudo", "systemctl", "stop", "matoloop-agent.service")
+        if loaded:
+            service_stop()
         if managed and layout["source"].exists():
             layout["source"].replace(old_source)
         if managed:
             active_source.replace(layout["source"])
+            source_replaced = True
             source = layout["source"]
         temporary_link = layout["root"] / ".venv-link"
         temporary_link.unlink(missing_ok=True)
@@ -660,13 +900,20 @@ def install(arguments: argparse.Namespace) -> None:
         write_manager(layout, source)
         write_json(layout["state"], new_state)
         install_service(layout, service_text(layout).encode())
-        run("sudo", "systemctl", "daemon-reload")
-        run("sudo", "systemctl", "enable", "--now", "matoloop-agent.service")
+        service_reload()
+        if sys.platform == "darwin":
+            service_enable(True)
+            service_start(layout)
+        else:
+            run("sudo", "systemctl", "enable", "--now", "matoloop-agent.service")
+        startup_pid = macos_service_pid() if sys.platform == "darwin" else None
+        if sys.platform == "darwin" and startup_pid is None:
+            fail("the macOS LaunchAgent did not start")
         for _ in range(2):
             time.sleep(1)
-            run("systemctl", "is-active", "--quiet", "matoloop-agent.service")
+            service_active(check=True, expected_pid=startup_pid)
     except BaseException:
-        run("sudo", "systemctl", "stop", "matoloop-agent.service", check=False)
+        service_stop(check=False)
         if old_venv is None:
             layout["venv"].unlink(missing_ok=True)
         else:
@@ -676,7 +923,8 @@ def install(arguments: argparse.Namespace) -> None:
             os.replace(temporary_link, layout["venv"])
         shutil.rmtree(new_venv, ignore_errors=True)
         if managed and state:
-            shutil.rmtree(layout["source"], ignore_errors=True)
+            if source_replaced:
+                shutil.rmtree(layout["source"], ignore_errors=True)
             if old_source.exists():
                 old_source.replace(layout["source"])
                 source = layout["source"]
@@ -691,17 +939,11 @@ def install(arguments: argparse.Namespace) -> None:
             install_service(layout, service_snapshot)
         if not state:
             write_json(layout["state"], new_state)
-        run(
-            "sudo",
-            "systemctl",
-            "enable" if enabled else "disable",
-            "matoloop-agent.service",
-            check=False,
-        )
+        service_enable(enabled, check=False)
         if layout["venv"].exists():
-            run("sudo", "systemctl", "daemon-reload", check=False)
-            if active:
-                run("sudo", "systemctl", "start", "matoloop-agent.service", check=False)
+            service_reload()
+            if loaded:
+                service_start(layout, check=False)
         raise
     shutil.rmtree(old_source, ignore_errors=True)
     if old_venv is not None and old_venv != new_venv and layout["venvs"] in old_venv.parents:
@@ -713,6 +955,35 @@ def install(arguments: argparse.Namespace) -> None:
         print("Create a computer under Einstellungen > Computer, then enter its values.")
         run(layout["wrapper"], "pair", "--backend-url", websocket)
     print(f"MatoLoop Agent installed. Status: {layout['wrapper']} status")
+
+
+def run_maintenance_installer(*command: str | Path, **kwargs) -> None:
+    # subprocess.run kills its child when a signal handler raises. Defer the
+    # worker interruption instead, so the target installer can finish rollback.
+    child = None
+    interrupted = False
+
+    def interrupt(_signal, _frame):
+        nonlocal interrupted
+        interrupted = True
+        if child is not None:
+            try:
+                child.terminate()
+            except ProcessLookupError:
+                pass
+
+    previous = signal.signal(signal.SIGTERM, interrupt)
+    try:
+        with subprocess.Popen([os.fspath(item) for item in command], **kwargs) as child:
+            if interrupted:
+                child.terminate()
+            returncode = child.wait()
+        if interrupted:
+            raise SystemExit("Maintenance interrupted after target installer rollback")
+        if returncode:
+            raise subprocess.CalledProcessError(returncode, command)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def update(*, in_process: bool = False, revision: str | None = None) -> None:
@@ -738,7 +1009,12 @@ def update(*, in_process: bool = False, revision: str | None = None) -> None:
                 )
             )
         else:
-            run(
+            execute = (
+                run_maintenance_installer
+                if sys.platform == "darwin" and os.environ.get("MATOLOOP_AGENT_MAINTENANCE") == "1"
+                else run
+            )
+            execute(
                 sys.executable,
                 source / "scripts/matoloop-agent-installer.py",
                 "install",
@@ -763,6 +1039,235 @@ def update(*, in_process: bool = False, revision: str | None = None) -> None:
             )
 
 
+def maintenance_start(action: str, job_id: str, root: str, revision: str | None = None) -> None:
+    if sys.platform != "darwin":
+        fail("maintenance launch requires macOS")
+    if str(UUID(job_id)) != job_id or action not in {"update", "uninstall"}:
+        fail("invalid maintenance request")
+    if action == "update":
+        validate_revision(revision)
+    elif revision is not None:
+        fail("uninstall must not specify a revision")
+    check_linux()
+    os.environ["MATOLOOP_AGENT_INSTALL_ROOT"] = root
+    layout = paths()
+    check_safe_root(layout)
+    if layout["data"].is_symlink():
+        fail("invalid maintenance data directory")
+    for name in ("maintenance.log", "maintenance-error.log"):
+        descriptor = os.open(
+            layout["data"] / name, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600
+        )
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid():
+                fail("invalid maintenance log ownership")
+            os.fchmod(descriptor, 0o600)
+        finally:
+            os.close(descriptor)
+    label = f"{MACOS_SERVICE_LABEL}.maintenance.{job_id}"
+    # Darwin's sockaddr_un limit requires a short path, not the user's TMPDIR.
+    with tempfile.TemporaryDirectory(prefix="ml-maint-", dir="/private/tmp") as directory:
+        socket_path = str(Path(directory) / "handoff.sock")
+        with socket.socket(socket.AF_UNIX) as listener:
+            listener.bind(socket_path)
+            listener.listen(1)
+            listener.settimeout(15)
+            plist = Path(directory) / "worker.plist"
+            write_file(
+                plist,
+                plistlib.dumps(
+                    {
+                        "Label": label,
+                        "ProgramArguments": [
+                            str(layout["python"]),
+                            str(layout["installer"]),
+                            "maintenance-supervise",
+                            action,
+                            job_id,
+                            socket_path,
+                            str(layout["root"]),
+                            *(["--revision", revision] if revision else []),
+                        ],
+                        "RunAtLoad": True,
+                        "KeepAlive": False,
+                        "LaunchOnlyOnce": True,
+                        "ProcessType": "Background",
+                        "Umask": 0o077,
+                        "EnvironmentVariables": {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+                        "WorkingDirectory": str(layout["root"]),
+                        "StandardOutPath": str(layout["data"] / "maintenance.log"),
+                        "StandardErrorPath": str(layout["data"] / "maintenance-error.log"),
+                    }
+                ),
+                0o600,
+            )
+            handed_off = False
+            launch_options = {
+                "timeout": 15,
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+            }
+            try:
+                run("/bin/launchctl", "bootstrap", f"gui/{os.getuid()}", plist, **launch_options)
+                channel, _ = listener.accept()
+                with channel:
+                    channel.shutdown(socket.SHUT_WR)
+                    handed_off = True
+            finally:
+                if not handed_off:
+                    try:
+                        run(
+                            "/bin/launchctl",
+                            "bootout",
+                            f"gui/{os.getuid()}/{label}",
+                            check=False,
+                            **launch_options,
+                        )
+                    except (OSError, subprocess.SubprocessError):
+                        pass
+
+
+def maintenance_supervise(
+    action: str, job_id: str, socket_path: str, root: str, revision: str | None = None
+) -> None:
+    if sys.platform != "darwin":
+        fail("maintenance supervision requires macOS")
+    job_id = str(UUID(job_id))
+    os.environ["MATOLOOP_AGENT_INSTALL_ROOT"] = root
+    layout = paths()
+    check_safe_root(layout)
+    credential = None
+    process = None
+    completed = False
+    received, sent = os.pipe()
+
+    def interrupt(_signal, _frame):
+        raise SystemExit("Maintenance supervisor interrupted; requesting rollback")
+
+    signal.signal(signal.SIGTERM, interrupt)
+    try:
+        # Keep a bounded, owner-checked credential snapshot for forced-stop reporting.
+        if any(path.is_symlink() for path in (layout["data"], layout["data"] / "agent-state")):
+            fail("invalid maintenance credential directory")
+        descriptor = os.open(
+            layout["data"] / "agent-state/credential.json", os.O_RDONLY | os.O_NOFOLLOW
+        )
+        with os.fdopen(descriptor, "rb") as handle:
+            metadata = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_size > 65536
+            ):
+                fail("invalid maintenance credential ownership")
+            credential = json.loads(handle.read(65537))
+        if not isinstance(credential, dict) or not all(
+            isinstance(credential.get(key), str) and credential[key]
+            for key in ("backendUrl", "agentId", "accessKey")
+        ):
+            fail("invalid maintenance credentials")
+        command = [
+            sys.executable,
+            str(layout["installer"]),
+            "maintenance-run",
+            action,
+            job_id,
+            socket_path,
+            str(layout["root"]),
+            *(["--revision", validate_revision(revision)] if revision else []),
+        ]
+        try:
+            process = subprocess.Popen(
+                command,
+                start_new_session=True,
+                pass_fds=(sent,),
+                env={**os.environ, "MATOLOOP_AGENT_MAINTENANCE_RESULT_FD": str(sent)},
+            )
+        except OSError:
+            report_maintenance(credential, job_id, "failed", layout["data"])
+            raise
+        os.close(sent)
+        sent = -1
+        try:
+            process.wait(timeout=3600)
+            completed = True
+        except subprocess.TimeoutExpired:
+            print("Maintenance deadline exceeded; requesting rollback.", flush=True)
+    finally:
+        # Repeated cancellation must not interrupt rollback, reporting or child reaping.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        try:
+            if process is not None:
+                finish_maintenance_worker(
+                    process,
+                    completed,
+                    received,
+                    credential,
+                    job_id,
+                    layout,
+                    retry_completion=action == "uninstall",
+                )
+                if action == "uninstall":
+                    cleanup_maintenance_tools(layout)
+        finally:
+            os.close(received)
+            if sent != -1:
+                os.close(sent)
+            # Restore default handling immediately before the final self-unload effect.
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            run(
+                "/bin/launchctl",
+                "bootout",
+                f"gui/{os.getuid()}/{MACOS_SERVICE_LABEL}.maintenance.{job_id}",
+                check=False,
+                timeout=10,
+            )
+
+
+def finish_maintenance_worker(
+    process, completed, received, credential, job_id, layout, *, retry_completion=False
+) -> None:
+    if not completed:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            pass
+    # Reap leftover commands before checking the outcome, on every exit path.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait()
+    os.set_blocking(received, False)
+    try:
+        outcome = os.read(received, 32)
+    except BlockingIOError:
+        outcome = b""
+    pending = layout["data"] / "agent-state" / f"maintenance-{job_id}.json"
+    retained = False
+    if not pending.is_symlink():
+        try:
+            record = json.loads(pending.read_text())
+            retained = (
+                record.get("jobId") == job_id
+                and record.get("agentId") == credential["agentId"]
+                and record.get("backendUrl") == credential["backendUrl"]
+                and record.get("status") in {"succeeded", "failed"}
+            )
+        except (OSError, ValueError, AttributeError):
+            pass
+    if retained and retry_completion:
+        # Uninstall leaves no running Agent to replay a merely retained outcome.
+        report_maintenance(credential, job_id, record["status"], layout["data"])
+    elif outcome not in {b"succeeded", b"failed"} and not retained:
+        report_maintenance(credential, job_id, "failed", layout["data"])
+
+
 def maintenance_run(
     action: str, job_id: str, socket_path: str, root: str, revision: str | None = None
 ) -> None:
@@ -770,9 +1275,14 @@ def maintenance_run(
     os.environ["MATOLOOP_AGENT_INSTALL_ROOT"] = root
     layout = paths()
     check_safe_root(layout)
+    UUID(job_id)
+    if sys.platform == "darwin":
+        check_linux()
+        os.environ["PATH"] = native_path(layout)
     if not layout["marker"].is_file() or not read_state(layout):
         fail("MatoLoop Agent is not installed")
-    # The live Agent hands the password over a private socket before it can be stopped.
+    # main() holds the installation lock before this handoff. On macOS the empty
+    # payload acknowledges readiness; the independent launchd job needs no password.
     with socket.socket(socket.AF_UNIX) as channel:
         channel.settimeout(10)
         channel.connect(socket_path)
@@ -782,20 +1292,37 @@ def maintenance_run(
         fail("invalid maintenance authorization")
     _maintenance_password = password.decode("utf-8") or None
     password.clear()
+    if sys.platform == "darwin" and _maintenance_password is not None:
+        fail("macOS user maintenance must not receive an administrator password")
     os.environ["MATOLOOP_AGENT_MAINTENANCE"] = "1"
     credential = json.loads((layout["data"] / "agent-state/credential.json").read_text())
+    supervised = "MATOLOOP_AGENT_MAINTENANCE_RESULT_FD" in os.environ
     result = "succeeded"
     try:
         if action == "update":
             os.environ["GIT_TERMINAL_PROMPT"] = "0"
-            update(in_process=True, revision=validate_revision(revision))
+            update(in_process=sys.platform != "darwin", revision=validate_revision(revision))
         else:
-            uninstall(purge=False, yes=True)
+            uninstall(purge=False, yes=True, defer_tools=True)
     except BaseException:
         result = "failed"
         raise
     finally:
         report_maintenance(credential, job_id, result, layout["data"])
+        if action == "uninstall" and result == "succeeded" and not supervised:
+            cleanup_maintenance_tools(layout)
+
+
+def cleanup_maintenance_tools(layout: dict[str, Path]) -> None:
+    # The worker and its supervisor can both lazily import from private Python.
+    # Keep it until reporting finishes, and never remove a still-installed runtime.
+    if layout["state"].exists():
+        return
+    tools = layout["root"] / "tools"
+    if tools.is_dir() and not tools.is_symlink():
+        shutil.rmtree(tools)
+    elif tools.exists() or tools.is_symlink():
+        fail(f"invalid managed installation path: {tools}")
 
 
 def report_maintenance(credential: dict, job_id: str, result: str, data: Path) -> None:
@@ -811,6 +1338,7 @@ def report_maintenance(credential: dict, job_id: str, result: str, data: Path) -
                 "status": result,
             },
         )
+        acknowledge_maintenance(result)
     except OSError:
         print("Maintenance outcome could not be retained; attempting direct delivery.", flush=True)
     address = urlsplit(credential["backendUrl"])
@@ -839,11 +1367,23 @@ def report_maintenance(credential: dict, job_id: str, result: str, data: Path) -
                 timeout=10,
             ) as response:
                 response.read()
+            acknowledge_maintenance(result)
             pending.unlink(missing_ok=True)
             break
         except OSError:
             if attempt < 2:
                 time.sleep(2)
+
+
+def acknowledge_maintenance(result: str) -> None:
+    # Only the supervisor supplies this private inherited descriptor. A durable
+    # record or successful delivery must exist before it suppresses fallback.
+    descriptor = os.environ.pop("MATOLOOP_AGENT_MAINTENANCE_RESULT_FD", None)
+    if sys.platform == "darwin" and descriptor is not None:
+        try:
+            os.write(int(descriptor), result.encode("ascii"))
+        except (OSError, ValueError):
+            pass
 
 
 def container_root() -> Path:
@@ -1098,10 +1638,14 @@ def status() -> None:
     print(f"Source: {state['source']} ({state['sourceType']})")
     print(f"Data:   {layout['data']}")
     print(f"Home:   {state['homeDirectory']}")
-    run("systemctl", "status", "--no-pager", "matoloop-agent.service", check=False)
+    if sys.platform == "darwin":
+        print(f"Service: {layout['service']} (starts at user login)")
+        run("launchctl", "print", service_target(), check=False)
+    else:
+        run("systemctl", "status", "--no-pager", "matoloop-agent.service", check=False)
 
 
-def uninstall(purge: bool, yes: bool) -> None:
+def uninstall(purge: bool, yes: bool, *, defer_tools: bool = False) -> None:
     layout = paths()
     check_safe_root(layout)
     state = read_state(layout)
@@ -1130,11 +1674,8 @@ def uninstall(purge: bool, yes: bool) -> None:
             return
     elif not yes:
         fail("unattended uninstall requires --yes")
-    run("sudo", "systemctl", "stop", "matoloop-agent.service", check=False)
-    if (
-        run("systemctl", "is-active", "--quiet", "matoloop-agent.service", check=False).returncode
-        == 0
-    ):
+    service_stop(check=False)
+    if service_loaded() if sys.platform == "darwin" else service_active():
         fail("the MatoLoop Agent service is still running; no files were removed")
     packages = []
     if layout["packages"].is_symlink():
@@ -1155,9 +1696,9 @@ def uninstall(purge: bool, yes: bool) -> None:
             fail("sudo and apt-get are required to remove system dependencies")
         run("sudo", "apt-get", "remove", "-y", "--", *packages)
     if layout["service"].exists():
-        run("sudo", "systemctl", "disable", "matoloop-agent.service")
+        service_enable(False)
     remove_service(layout)
-    run("sudo", "systemctl", "daemon-reload")
+    service_reload()
     layout["wrapper"].unlink(missing_ok=True)
     if purge:
         shutil.rmtree(layout["root"])
@@ -1169,12 +1710,15 @@ def uninstall(purge: bool, yes: bool) -> None:
         for name in ("source", "venvs", "tools", "cache", "bin"):
             target = layout["root"] / name
             if target.is_dir() and not target.is_symlink():
-                shutil.rmtree(target)
+                if name != "tools" or not defer_tools:
+                    shutil.rmtree(target)
             elif target.exists() or target.is_symlink():
                 fail(f"invalid managed installation path: {target}")
         if layout["data"].is_dir():
             for child in layout["data"].iterdir():
-                if child.name == "agent-state":
+                if child.name == "agent-state" or (
+                    sys.platform == "darwin" and child.name == "config.json"
+                ):
                     continue
                 if child.is_dir() and not child.is_symlink():
                     shutil.rmtree(child)
@@ -1209,17 +1753,36 @@ def main() -> None:
     uninstall_parser = subparsers.add_parser("uninstall")
     uninstall_parser.add_argument("--purge", action="store_true")
     uninstall_parser.add_argument("--yes", action="store_true")
-    maintenance_parser = subparsers.add_parser("maintenance-run", help=argparse.SUPPRESS)
-    maintenance_parser.add_argument("action", choices=("update", "uninstall"))
-    maintenance_parser.add_argument("job_id")
-    maintenance_parser.add_argument("socket_path")
-    maintenance_parser.add_argument("root")
-    maintenance_parser.add_argument("--revision")
+    for command in ("maintenance-start", "maintenance-run", "maintenance-supervise"):
+        maintenance_parser = subparsers.add_parser(command, help=argparse.SUPPRESS)
+        maintenance_parser.add_argument("action", choices=("update", "uninstall"))
+        maintenance_parser.add_argument("job_id")
+        if command != "maintenance-start":
+            maintenance_parser.add_argument("socket_path")
+        maintenance_parser.add_argument("root")
+        maintenance_parser.add_argument("--revision")
     arguments = parser.parse_args()
+    previous_sigterm = None
     try:
-        if arguments.command == "maintenance-run":
+        if arguments.command in {"maintenance-start", "maintenance-run", "maintenance-supervise"}:
             os.environ["MATOLOOP_AGENT_INSTALL_ROOT"] = arguments.root
+        if sys.platform == "darwin" and (
+            arguments.command in {"maintenance-start", "maintenance-run"}
+            or (
+                arguments.command == "install"
+                and os.environ.get("MATOLOOP_AGENT_MAINTENANCE") == "1"
+            )
+        ):
+
+            def interrupt(_signal, _frame):
+                # Allow rollback and durable reporting to complete during the grace period.
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                raise SystemExit("Maintenance interrupted; restoring the previous installation")
+
+            previous_sigterm = signal.signal(signal.SIGTERM, interrupt)
         mutating = arguments.command in {"install", "update", "uninstall", "maintenance-run"}
+        if mutating and sys.platform == "darwin":
+            check_linux()
         with installation_lock() if mutating else nullcontext():
             if arguments.command == "container-init":
                 container_init(arguments.repository)
@@ -1235,6 +1798,18 @@ def main() -> None:
                 status()
             elif arguments.command == "uninstall":
                 uninstall(arguments.purge, arguments.yes)
+            elif arguments.command == "maintenance-start":
+                maintenance_start(
+                    arguments.action, arguments.job_id, arguments.root, arguments.revision
+                )
+            elif arguments.command == "maintenance-supervise":
+                maintenance_supervise(
+                    arguments.action,
+                    arguments.job_id,
+                    arguments.socket_path,
+                    arguments.root,
+                    arguments.revision,
+                )
             else:
                 maintenance_run(
                     arguments.action,
@@ -1243,8 +1818,11 @@ def main() -> None:
                     arguments.root,
                     arguments.revision,
                 )
-    except (OSError, ValueError, subprocess.CalledProcessError):
+    except (OSError, ValueError, subprocess.SubprocessError):
         fail("the installation command failed")
+    finally:
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 if __name__ == "__main__":

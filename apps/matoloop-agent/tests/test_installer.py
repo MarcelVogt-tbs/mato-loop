@@ -3,15 +3,18 @@ import importlib.util
 import io
 import json
 import os
+import plistlib
 import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import httpx
 
@@ -752,6 +755,10 @@ class InstallerTests(unittest.TestCase):
                 )
             )
             installer.write_json(root / "install.json", {"source": "checkout"})
+            (root / "venv").mkdir()
+            private_module = root / "tools/python/encodings/idna.py"
+            private_module.parent.mkdir(parents=True)
+            shutil.copyfile(importlib.util.find_spec("encodings.idna").origin, private_module)
             socket_path = str(Path(temporary) / "handoff.sock")
             listener = socket.socket(socket.AF_UNIX)
             listener.bind(socket_path)
@@ -767,26 +774,32 @@ class InstallerTests(unittest.TestCase):
             thread.start()
             calls = []
 
-            def remove(*, purge, yes):
-                assert not purge and yes
-                assert os.environ["MATOLOOP_AGENT_INSTALL_ROOT"] == str(root)
-                calls.append("uninstall")
-                (root / "install.json").unlink()
-
             def report(request, **_kwargs):
+                spec = importlib.util.spec_from_file_location("private_idna", private_module)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
                 calls.append(
                     (
                         request.full_url,
                         json.loads(request.data),
                         request.get_header("Authorization"),
+                        module.ToASCII("münchen"),
+                        (root / "install.json").exists(),
                     )
                 )
                 return io.BytesIO()
 
             try:
                 with (
-                    patch.dict(os.environ, {"MATOLOOP_AGENT_INSTALL_ROOT": str(root)}),
-                    patch.object(installer, "uninstall", side_effect=remove),
+                    patch.dict(
+                        os.environ,
+                        {
+                            "MATOLOOP_AGENT_INSTALL_ROOT": str(root),
+                            "MATOLOOP_AGENT_WRAPPER_PATH": str(Path(temporary) / "bin/agent"),
+                        },
+                    ),
+                    patch.object(installer, "SYSTEM_SERVICE_PATH", root / "service"),
+                    patch.object(installer, "run", return_value=subprocess.CompletedProcess([], 3)),
                     patch.object(installer, "build_opener") as opener,
                 ):
                     opener.return_value.open.side_effect = report
@@ -797,15 +810,24 @@ class InstallerTests(unittest.TestCase):
                 installer._maintenance_password = None
                 thread.join(timeout=5)
             self.assertEqual(
-                calls,
-                [
-                    "uninstall",
-                    (
-                        "https://mato.test/api/execution-agents/agent-id/maintenance/2ea504cc-e3c6-4e0d-aa05-080328100fe8/complete",
-                        {"status": "succeeded"},
-                        "Bearer private-token",
-                    ),
-                ],
+                (
+                    calls,
+                    (root / "tools").exists(),
+                    (root / "data/agent-state/credential.json").exists(),
+                ),
+                (
+                    [
+                        (
+                            "https://mato.test/api/execution-agents/agent-id/maintenance/2ea504cc-e3c6-4e0d-aa05-080328100fe8/complete",
+                            {"status": "succeeded"},
+                            "Bearer private-token",
+                            b"xn--mnchen-3ya",
+                            False,
+                        ),
+                    ],
+                    False,
+                    True,
+                ),
             )
 
     def test_maintenance_starts_separate_user_service_without_exposing_password(self) -> None:
@@ -887,6 +909,423 @@ class InstallerTests(unittest.TestCase):
                 self.assertNotIn("secret", str(calls[0][:-1]) + str(calls[1][:-1]))
 
         asyncio.run(check())
+
+
+class MacOSInstallerTests(unittest.TestCase):
+    def test_private_ripgrep_verifies_archive_before_replacing_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = b"verified executable"
+            archive = io.BytesIO()
+            with tarfile.open(fileobj=archive, mode="w:gz") as bundle:
+                for name in ("rg", "COPYING", "LICENSE-MIT", "UNLICENSE"):
+                    content = binary if name == "rg" else b"license"
+                    member = tarfile.TarInfo(f"{installer.MACOS_RIPGREP_ARCHIVE}/{name}")
+                    member.size = len(content)
+                    bundle.addfile(member, io.BytesIO(content))
+            payload = archive.getvalue()
+            executable = root / "tools/bin/rg"
+            installer.write_file(executable, b"old executable", 0o700)
+
+            def download(*command, **_kwargs):
+                if command[0] == "curl":
+                    Path(command[command.index("--output") + 1]).write_bytes(payload)
+                return subprocess.CompletedProcess(command, 0)
+
+            with patch.object(installer, "run", side_effect=download):
+                with self.assertRaises(SystemExit):
+                    installer.install_macos_ripgrep({"root": root})
+                self.assertEqual(executable.read_bytes(), b"old executable")
+                with (
+                    patch.object(
+                        installer,
+                        "MACOS_RIPGREP_SHA256",
+                        installer.hashlib.sha256(payload).hexdigest(),
+                    ),
+                    patch.object(
+                        installer,
+                        "MACOS_RIPGREP_BINARY_SHA256",
+                        installer.hashlib.sha256(binary).hexdigest(),
+                    ),
+                ):
+                    installer.install_macos_ripgrep({"root": root})
+            self.assertEqual(executable.read_bytes(), binary)
+
+    def test_macos_startup_rejects_a_crashing_job_even_if_launchd_restarts_it(self) -> None:
+        with (
+            patch.object(installer.sys, "platform", "darwin"),
+            patch.object(
+                installer,
+                "run",
+                return_value=subprocess.CompletedProcess(
+                    [],
+                    0,
+                    stdout="1235\n",
+                ),
+            ),
+        ):
+            with self.assertRaises(SystemExit):
+                installer.service_active(check=True, expected_pid=1234)
+
+    def test_launchagent_uses_login_domain_and_private_paths_with_spaces(self) -> None:
+        with (
+            patch.object(installer.sys, "platform", "darwin"),
+            patch.object(installer.Path, "home", return_value=Path("/Users/test")),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            layout = installer.paths()
+            job = plistlib.loads(installer.service_text(layout).encode())
+        self.assertEqual(
+            layout["root"], Path("/Users/test/Library/Application Support/MatoLoop Agent")
+        )
+        self.assertEqual(job["ProgramArguments"], [str(layout["wrapper"]), "run"])
+        self.assertTrue(job["RunAtLoad"])
+        self.assertNotIn("UserName", job)
+        self.assertIn(str(layout["root"] / "tools/bin"), job["EnvironmentVariables"]["PATH"])
+
+    def test_macos_install_rollback_browser_probe_and_uninstall_preserve_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            source = base / "checkout"
+            root = base / "Library/Application Support/MatoLoop Agent"
+            workspace = base / "workspace"
+            (source / "apps/matoloop-agent").mkdir(parents=True)
+            (source / "apps/matoloop-agent/pyproject.toml").touch()
+            (source / "scripts").mkdir()
+            for name in ("matoloop-agent-installer.py", "install-matoloop-agent.sh"):
+                shutil.copy2(INSTALLER_PATH.with_name(name), source / "scripts" / name)
+            (root / "tools/bin").mkdir(parents=True)
+            (root / "tools/bin/uv").touch()
+            (root / ".managed-by-matoloop-agent").touch()
+            environment = {
+                "MATOLOOP_AGENT_INSTALL_ROOT": str(root),
+                "XDG_BIN_HOME": str(base / "bin"),
+            }
+            loaded = False
+            fail_bootstrap = False
+            commands = []
+            browser_modes = []
+
+            def fake_sync(_layout, _source, destination, *, browser=False):
+                browser_modes.append(browser)
+                executable = destination / "bin/matoloop-agent"
+                executable.parent.mkdir(parents=True)
+                executable.touch()
+
+            def fake_run(*command, **kwargs):
+                nonlocal loaded, fail_bootstrap
+                commands.append(command)
+                if command[:2] == ("launchctl", "bootstrap"):
+                    if fail_bootstrap:
+                        fail_bootstrap = False
+                        raise subprocess.CalledProcessError(1, command)
+                    loaded = True
+                elif command[:2] == ("launchctl", "bootout"):
+                    loaded = False
+                elif command[:2] == ("launchctl", "print") and "/" in command[2]:
+                    if command[2].count("/") == 2:
+                        return subprocess.CompletedProcess(
+                            command,
+                            0 if loaded else 113,
+                            stdout="state = running\n" if loaded else "",
+                        )
+                elif command[:2] == ("launchctl", "kickstart"):
+                    return subprocess.CompletedProcess(command, 0, stdout=str(os.getpid()))
+                if "browser-install" in command:
+                    self.assertEqual(kwargs["env"]["PLAYWRIGHT_SKIP_BROWSER_GC"], "1")
+                    (root / "tools/browser").mkdir(exist_ok=True)
+                return subprocess.CompletedProcess(command, 0, stdout="")
+
+            arguments = installer.argparse.Namespace(
+                source=str(source),
+                managed=True,
+                home=str(workspace),
+                instance_url="https://mato.test",
+            )
+            with (
+                patch.dict(os.environ, environment),
+                patch.object(installer.sys, "platform", "darwin"),
+                patch.object(installer.platform, "machine", return_value="arm64"),
+                patch.object(installer.os, "getuid", return_value=501),
+                patch.object(installer.Path, "home", return_value=base),
+                patch.object(
+                    installer.shutil, "which", side_effect=lambda name: f"/usr/bin/{name}"
+                ),
+                patch.object(installer, "sync_environment", side_effect=fake_sync),
+                patch.object(installer, "install_macos_ripgrep"),
+                patch.object(installer, "run", side_effect=fake_run),
+                patch.object(installer.time, "sleep"),
+                patch.object(installer.sys.stdin, "isatty", return_value=False),
+            ):
+                installer.install(arguments)
+                self.assertFalse(any("browser-install" in command for command in commands))
+                layout = installer.paths()
+                previous = layout["venv"].resolve()
+                old_state = layout["state"].read_bytes()
+                old_service = layout["service"].read_bytes()
+                credential = layout["data"] / "agent-state/credential.json"
+                credential.parent.mkdir()
+                credential.write_text(
+                    json.dumps({"backendUrl": "wss://mato.test/api/execution-agents/connect"})
+                )
+                (workspace / "user-file").touch()
+                # Browser Integration setup is optional; only subsequent installs retain it.
+                (root / "tools/browser").mkdir()
+                fail_bootstrap = True
+                with self.assertRaises(subprocess.CalledProcessError):
+                    installer.install(arguments)
+                self.assertEqual(layout["venv"].resolve(), previous)
+                self.assertEqual(layout["state"].read_bytes(), old_state)
+                self.assertEqual(layout["service"].read_bytes(), old_service)
+                self.assertTrue(loaded)
+                installer.uninstall(purge=False, yes=True)
+                self.assertTrue(credential.is_file())
+                self.assertEqual(
+                    json.loads((layout["data"] / "config.json").read_text())["homeDirectory"],
+                    str(workspace),
+                )
+                self.assertTrue((workspace / "user-file").exists())
+                self.assertFalse(layout["service"].exists())
+                self.assertFalse(loaded)
+            self.assertEqual(browser_modes, [False, True])
+            self.assertFalse(
+                any("sudo" in command or "systemctl" in command for command in commands)
+            )
+
+    def test_macos_maintenance_launcher_hands_off_or_unloads_only_its_job(self) -> None:
+        job_id = "2ea504cc-e3c6-4e0d-aa05-080328100fe8"
+        temporary_directory = tempfile.TemporaryDirectory
+        for failed in (False, True):
+            with self.subTest(failed=failed), temporary_directory() as temporary:
+                root = Path(temporary) / "agent root"
+                (root / "data").mkdir(parents=True)
+                commands, observed, threads = [], [], []
+
+                def bootstrap(
+                    *command,
+                    failed=failed,
+                    commands=commands,
+                    observed=observed,
+                    threads=threads,
+                    **_kwargs,
+                ):
+                    commands.append(command)
+                    if command[1] != "bootstrap":
+                        return
+                    if failed:
+                        raise subprocess.TimeoutExpired(command, 15)
+                    arguments = plistlib.loads(Path(command[3]).read_bytes())["ProgramArguments"]
+
+                    def worker():
+                        with socket.socket(socket.AF_UNIX) as channel:
+                            channel.settimeout(5)
+                            channel.connect(arguments[5])
+                            observed.append(channel.recv(1))
+
+                    thread = threading.Thread(target=worker)
+                    threads.append(thread)
+                    thread.start()
+
+                with (
+                    patch.dict(os.environ),
+                    patch.object(installer.sys, "platform", "darwin"),
+                    patch.object(installer, "check_linux"),
+                    patch.object(installer, "run", side_effect=bootstrap),
+                    patch.object(
+                        installer.tempfile,
+                        "TemporaryDirectory",
+                        side_effect=lambda **kwargs: temporary_directory(prefix=kwargs["prefix"]),
+                    ),
+                ):
+                    with self.assertRaises(subprocess.TimeoutExpired) if failed else nullcontext():
+                        installer.maintenance_start("update", job_id, str(root), "a" * 40)
+                    for thread in threads:
+                        thread.join(timeout=6)
+                self.assertEqual(
+                    (observed, [command[1:] for command in commands[1:]]),
+                    (
+                        [],
+                        [("bootout", f"gui/{os.getuid()}/com.matoloop.agent.maintenance.{job_id}")],
+                    )
+                    if failed
+                    else ([b""], []),
+                )
+
+    def test_macos_maintenance_handoff_holds_lock_without_password(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "agent root"
+            (root / "data/agent-state").mkdir(parents=True)
+            (root / ".managed-by-matoloop-agent").touch()
+            installer.write_json(root / "install.json", {"source": "checkout"})
+            installer.write_json(root / "data/agent-state/credential.json", {"agentId": "test"})
+            # Keep the UNIX socket path below the macOS sun_path limit.
+            with tempfile.TemporaryDirectory(prefix="handoff-") as handoff_directory:
+                address = str(Path(handoff_directory) / "sock")
+                listener = socket.socket(socket.AF_UNIX)
+                listener.bind(address)
+                listener.listen(1)
+                observed = []
+
+                def handoff():
+                    with listener:
+                        listener.settimeout(5)
+                        channel, _ = listener.accept()
+                        with channel:
+                            observed.append(installer._installation_lock_fd is not None)
+                            channel.shutdown(socket.SHUT_WR)
+
+                thread = threading.Thread(target=handoff)
+                thread.start()
+                try:
+                    with (
+                        patch.dict(os.environ, {"MATOLOOP_AGENT_INSTALL_ROOT": str(root)}),
+                        patch.object(installer.sys, "platform", "darwin"),
+                        patch.object(installer, "check_linux"),
+                        patch.object(installer, "update") as update,
+                        patch.object(installer, "report_maintenance") as report,
+                        patch.object(
+                            installer.sys,
+                            "argv",
+                            [
+                                "installer.py",
+                                "maintenance-run",
+                                "update",
+                                "2ea504cc-e3c6-4e0d-aa05-080328100fe8",
+                                address,
+                                str(root),
+                                "--revision",
+                                "a" * 40,
+                            ],
+                        ),
+                    ):
+                        installer.main()
+                    update.assert_called_once_with(in_process=False, revision="a" * 40)
+                    self.assertEqual(report.call_args.args[2], "succeeded")
+                    self.assertEqual(observed, [True])
+                    self.assertIsNone(installer._maintenance_password)
+                finally:
+                    thread.join(timeout=6)
+
+    def test_macos_target_installer_finishes_before_worker_interrupts(self) -> None:
+        events = []
+        child = Mock()
+        child.__enter__ = Mock(return_value=child)
+        child.__exit__ = Mock(return_value=False)
+        child.terminate.side_effect = lambda: events.append("terminate")
+
+        def wait():
+            installer.signal.getsignal(installer.signal.SIGTERM)(installer.signal.SIGTERM, None)
+            events.append("rollback finished")
+            return 1
+
+        child.wait.side_effect = wait
+        with patch.object(installer.subprocess, "Popen", return_value=child):
+            with self.assertRaises(SystemExit):
+                installer.run_maintenance_installer("python", "target-installer.py")
+        self.assertEqual(events, ["terminate", "rollback finished"])
+
+    def test_macos_supervisor_reaps_deadline_and_preserves_reported_success(self) -> None:
+        for action, outcome, installed in (
+            ("update", b"", True),
+            ("update", b"succeeded", True),
+            ("uninstall", b"", True),
+            ("uninstall", b"", False),
+            ("uninstall", b"succeeded", False),
+            ("uninstall", b"retained", False),
+        ):
+            with (
+                self.subTest(action=action, outcome=outcome, installed=installed),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                (root / "tools/python").mkdir(parents=True)
+                if installed:
+                    installer.write_json(root / "install.json", {"source": "checkout"})
+                credential = {
+                    "backendUrl": "wss://mato.test/api/execution-agents/connect",
+                    "agentId": "test",
+                    "accessKey": "test-key",
+                }
+                installer.write_json(root / "data/agent-state/credential.json", credential)
+                child = Mock(pid=12345)
+                child.wait.side_effect = [
+                    subprocess.TimeoutExpired("worker", 3600),
+                    subprocess.TimeoutExpired("worker", 30),
+                    -9,
+                    -9,
+                ]
+                events = []
+                job_id = "2ea504cc-e3c6-4e0d-aa05-080328100fe8"
+                if outcome == b"retained":
+                    installer.write_json(
+                        root / "data/agent-state" / f"maintenance-{job_id}.json",
+                        {
+                            "backendUrl": credential["backendUrl"],
+                            "agentId": credential["agentId"],
+                            "jobId": job_id,
+                            "status": "succeeded",
+                        },
+                    )
+
+                def report(*_args, root=root, events=events):
+                    self.assertTrue((root / "tools/python").is_dir())
+                    events.append(_args[2])
+
+                def spawn(_command, outcome=outcome, child=child, **kwargs):
+                    self.assertTrue(kwargs["start_new_session"])
+                    if outcome == b"retained":
+                        outcome = b"succeeded"
+                    os.write(kwargs["pass_fds"][0], outcome)
+                    return child
+
+                with (
+                    patch.dict(os.environ, {"MATOLOOP_AGENT_INSTALL_ROOT": str(root)}),
+                    patch.object(installer.sys, "platform", "darwin"),
+                    patch.object(installer.subprocess, "Popen", side_effect=spawn),
+                    patch.object(installer.os, "killpg") as kill,
+                    patch.object(
+                        installer,
+                        "report_maintenance",
+                        side_effect=report,
+                    ),
+                    patch.object(
+                        installer,
+                        "run",
+                        side_effect=lambda *_args, events=events, **_kwargs: events.append(
+                            "bootout"
+                        ),
+                    ),
+                ):
+                    installer.maintenance_supervise(
+                        action,
+                        job_id,
+                        "/unused",
+                        str(root),
+                        "a" * 40 if action == "update" else None,
+                    )
+                self.assertEqual(
+                    events,
+                    ["succeeded", "bootout"]
+                    if outcome == b"retained"
+                    else ["bootout"]
+                    if outcome
+                    else ["failed", "bootout"],
+                )
+                self.assertEqual(kill.call_args_list[0].args, (12345, installer.signal.SIGTERM))
+                self.assertEqual((root / "tools").exists(), installed)
+
+    def test_macos_rejects_root_and_intel_before_launching_services(self) -> None:
+        for uid, machine in ((0, "arm64"), (501, "x86_64")):
+            with (
+                self.subTest(uid=uid, machine=machine),
+                patch.object(installer.sys, "platform", "darwin"),
+                patch.object(installer.os, "getuid", return_value=uid),
+                patch.object(installer.platform, "machine", return_value=machine),
+                patch.object(installer, "run") as commands,
+            ):
+                with self.assertRaises(SystemExit):
+                    installer.check_linux()
+                commands.assert_not_called()
 
 
 if __name__ == "__main__":

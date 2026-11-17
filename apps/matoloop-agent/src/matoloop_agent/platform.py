@@ -139,4 +139,8 @@ def current_platform() -> PlatformAdapter:
         from .platform_windows import WindowsPlatform
 
         return WindowsPlatform()
+    if sys.platform == "darwin":
+        from .platform_macos import MacOSPlatform
+
+        return MacOSPlatform()
     raise RuntimeError(f"MatoLoop Agent does not support {sys.platform}")

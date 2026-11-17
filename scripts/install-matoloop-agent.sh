@@ -2,8 +2,31 @@
 set -eu
 
 UV_VERSION=0.10.9
-INSTALL_ROOT=${MATOLOOP_AGENT_INSTALL_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/matoloop-agent}
-RESOLVED_SCRIPT=$(readlink -f "$0" 2>/dev/null || true)
+PLATFORM=$(uname -s)
+DEFAULT_ROOT=${XDG_DATA_HOME:-$HOME/.local/share}/matoloop-agent
+if [ "$PLATFORM" = Darwin ]; then
+    DEFAULT_ROOT="$HOME/Library/Application Support/MatoLoop Agent"
+fi
+INSTALL_ROOT=${MATOLOOP_AGENT_INSTALL_ROOT:-$DEFAULT_ROOT}
+# BSD readlink has neither -f nor -m. Resolve the command without GNU utilities.
+RESOLVED_SCRIPT=$0
+case "$RESOLVED_SCRIPT" in
+    */*) ;;
+    *) RESOLVED_SCRIPT=$(command -v "$RESOLVED_SCRIPT" 2>/dev/null || true) ;;
+esac
+LINK_COUNT=0
+while [ -L "$RESOLVED_SCRIPT" ] && [ "$LINK_COUNT" -lt 40 ]; do
+    SCRIPT_DIRECTORY=$(CDPATH= cd -P -- "$(dirname -- "$RESOLVED_SCRIPT")" && pwd)
+    RESOLVED_SCRIPT=$(readlink "$RESOLVED_SCRIPT")
+    case "$RESOLVED_SCRIPT" in
+        /*) ;;
+        *) RESOLVED_SCRIPT="$SCRIPT_DIRECTORY/$RESOLVED_SCRIPT" ;;
+    esac
+    LINK_COUNT=$((LINK_COUNT + 1))
+done
+if [ -f "$RESOLVED_SCRIPT" ]; then
+    RESOLVED_SCRIPT="$(CDPATH= cd -P -- "$(dirname -- "$RESOLVED_SCRIPT")" && pwd)/$(basename -- "$RESOLVED_SCRIPT")"
+fi
 INSTALLED=false
 case "$RESOLVED_SCRIPT" in
     */bin/matoloop-agent)
@@ -12,7 +35,17 @@ case "$RESOLVED_SCRIPT" in
         export MATOLOOP_AGENT_WRAPPER_PATH="$0"
         ;;
 esac
-INSTALL_ROOT=$(readlink -m "$INSTALL_ROOT")
+case "$INSTALL_ROOT" in
+    /*) ;;
+    *) INSTALL_ROOT="$PWD/$INSTALL_ROOT" ;;
+esac
+INSTALL_ROOT=$(printf '%s\n' "$INSTALL_ROOT" | awk -F / '{
+    n=0; for (i=1; i<=NF; i++) {
+        if ($i=="" || $i==".") continue;
+        if ($i=="..") {if (n>0) n--; continue}; a[++n]=$i
+    }
+    if (n==0) printf "/"; else for (i=1; i<=n; i++) printf "/%s", a[i]; printf "\n"
+}')
 export MATOLOOP_AGENT_INSTALL_ROOT="$INSTALL_ROOT"
 TOOLS_DIR="$INSTALL_ROOT/tools"
 UV="$TOOLS_DIR/bin/uv"
@@ -21,6 +54,12 @@ MANAGER="$INSTALL_ROOT/installer.py"
 WRAPPER=${XDG_BIN_HOME:-$HOME/.local/bin}/matoloop-agent
 SERVICE=/etc/systemd/system/matoloop-agent.service
 LEGACY_SERVICE=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/matoloop-agent.service
+if [ "$PLATFORM" = Darwin ]; then
+    SERVICE="$HOME/Library/LaunchAgents/com.matoloop.agent.plist"
+    LEGACY_SERVICE="$SERVICE"
+    # launchd does not load interactive shell startup files.
+    export PATH="$TOOLS_DIR/bin:$HOME/.local/bin:$PATH:/usr/bin:/bin:/usr/sbin:/sbin"
+fi
 ROOT=
 if [ -f "$RESOLVED_SCRIPT" ]; then
     ROOT=$(CDPATH= cd -- "$(dirname -- "$RESOLVED_SCRIPT")/.." && pwd)
@@ -77,7 +116,11 @@ case "${1:-install}" in
     *) fail "unknown command: $1" ;;
 esac
 
-[ "$(uname -s)" = Linux ] || fail "Native installation is not supported on this platform yet."
+case "$PLATFORM" in
+    Linux) ;;
+    Darwin) [ "$(uname -m)" = arm64 ] || fail "Native macOS installation requires Apple Silicon (arm64), without Rosetta." ;;
+    *) fail "Native installation is not supported on this platform yet." ;;
+esac
 [ "$(id -u)" -ne 0 ] || fail "The native Agent must be installed as a regular user."
 [ "$INSTALL_ROOT" != / ] && [ "$INSTALL_ROOT" != "$HOME" ] && [ ! -L "$INSTALL_ROOT" ] ||
     fail "Unsafe managed installation root."
@@ -85,6 +128,11 @@ case "$HOME/" in
     "$INSTALL_ROOT/"*) fail "Unsafe managed installation root." ;;
 esac
 [ ! -e "$INSTALL_ROOT" ] || [ -d "$INSTALL_ROOT" ] || fail "The installation root is not a directory."
+PARENT=$INSTALL_ROOT
+while [ "$PARENT" != / ]; do
+    [ ! -L "$PARENT" ] || fail "Managed installation paths must not contain symlinks."
+    PARENT=$(dirname "$PARENT")
+done
 if [ ! -f "$INSTALL_ROOT/.managed-by-matoloop-agent" ] &&
     { [ -e "$WRAPPER" ] || [ -L "$WRAPPER" ] || [ -e "$SERVICE" ] || [ -L "$SERVICE" ] ||
       [ -e "$LEGACY_SERVICE" ] || [ -L "$LEGACY_SERVICE" ]; }; then
@@ -101,10 +149,16 @@ chmod 600 "$INSTALL_ROOT/.managed-by-matoloop-agent"
 
 MISSING_PACKAGES=
 command -v curl >/dev/null 2>&1 || MISSING_PACKAGES=curl
+if [ "$PLATFORM" = Darwin ]; then
+    # /usr/bin/git is an installer shim until Apple's Command Line Tools exist.
+    xcode-select -p >/dev/null 2>&1 && git --version >/dev/null 2>&1 ||
+        fail "Git requires Apple's Command Line Tools. Run xcode-select --install, complete setup, then retry. Homebrew is not required."
+fi
 if ! command -v git >/dev/null 2>&1; then
     MISSING_PACKAGES="${MISSING_PACKAGES:+$MISSING_PACKAGES }git"
 fi
 if [ -n "$MISSING_PACKAGES" ]; then
+    [ "$PLATFORM" != Darwin ] || fail "Required tools are missing: $MISSING_PACKAGES. Install them on PATH, then retry. Homebrew is not required."
     printf 'Missing system packages: %s\n' "$MISSING_PACKAGES"
     answer=n
     if [ -n "$INPUT" ]; then
@@ -187,7 +241,7 @@ STAGE=$(mktemp -d "${TMPDIR:-/tmp}/matoloop-agent-source.XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT HUP INT TERM
 git init --quiet "$STAGE/source"
 git -C "$STAGE/source" remote add -- origin "${MATOLOOP_AGENT_SOURCE_URL:-https://github.com/devmato/mato-loop.git}"
-git -C "$STAGE/source" fetch --depth=1 --no-tags origin "$REVISION"
+GIT_TERMINAL_PROMPT=0 git -C "$STAGE/source" fetch --depth=1 --no-tags origin "$REVISION"
 [ "$(git -C "$STAGE/source" rev-parse 'FETCH_HEAD^{commit}')" = "$REVISION" ] || fail "Source does not match the backend commit."
 git -C "$STAGE/source" checkout --detach "$REVISION"
 [ -f "$STAGE/source/libs/python/version/src/matoloop_version/__init__.py" ] || fail "The target commit does not support versioned Agent installations."

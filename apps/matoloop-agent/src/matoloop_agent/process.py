@@ -12,6 +12,7 @@ import shlex
 import shutil
 import signal
 import stat
+import sys
 import time
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
@@ -22,11 +23,14 @@ from tree_sitter import Language, Node, Parser
 from .config import AgentConfig
 from .errors import AgentError
 from .filesystem import Filesystem, _parts, _path
+from .posix_process import descriptor_argv, descriptor_cwd
 
 StreamCallback = Callable[[str, str], Awaitable[None]]
 
 _BASH_LANGUAGE = Language(tree_sitter_bash.language())
 EXECUTION_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+if sys.platform == "darwin":
+    EXECUTION_PATH = "/opt/homebrew/bin:" + EXECUTION_PATH
 _ALWAYS_WRITES = {
     "chgrp",
     "chmod",
@@ -1385,12 +1389,7 @@ class ProcessRunner:
         self.filesystem.resolve_directory(current_directory)
         with self.filesystem._root_fd() as root_fd:
             directory_fd = self.filesystem._open_dir(root_fd, _parts(current_directory))
-            try:
-                # Linux procfs gives subprocess a stable path without following user symlinks.
-                return f"/proc/self/fd/{directory_fd}", directory_fd
-            except BaseException:
-                os.close(directory_fd)
-                raise
+        return descriptor_cwd(directory_fd), directory_fd
 
     def inspect_shell(
         self, command: str, current_directory: str, *, resolve_paths: bool = True
@@ -1499,7 +1498,8 @@ class ProcessRunner:
                 retain({"path": path}, "discard")
                 return
             target = self.filesystem.resolve_path_target(path, current, must_exist=True)
-            if not stat.S_ISCHR(target["mode"]) or target["rdev"] != os.makedev(1, 3):
+            null_device = os.makedev(3, 2) if sys.platform == "darwin" else os.makedev(1, 3)
+            if not stat.S_ISCHR(target["mode"]) or target["rdev"] != null_device:
                 raise AgentError("path.unsupportedType", "Discard target is not the null device")
             retain(target, "discard")
 
@@ -1827,7 +1827,9 @@ class ProcessRunner:
                 if metadata_paths:
                     retain(
                         self.filesystem.resolve_path_target(
-                            "/usr/bin/ls", current, must_exist=True
+                            installed_ls if sys.platform == "darwin" else "/usr/bin/ls",
+                            current,
+                            must_exist=True,
                         ),
                         "toolchain_metadata",
                     )
@@ -2012,7 +2014,7 @@ class ProcessRunner:
         cwd, cwd_fd = self._cwd(current_directory)
         started = time.monotonic()
         try:
-            # Procfs is only for descriptor-bound startup, never a logical HOME or PWD.
+            # Descriptor-bound startup never supplies the logical HOME or PWD.
             process_environment = self.execution_environment(
                 current_directory, inspection, environment
             )
@@ -2024,7 +2026,7 @@ class ProcessRunner:
                 )
             self.validate_executable(argv[0])
             process = await asyncio.create_subprocess_exec(
-                *argv,
+                *descriptor_argv(argv, cwd_fd),
                 cwd=cwd,
                 env=process_environment,
                 stdin=asyncio.subprocess.DEVNULL,

@@ -199,7 +199,7 @@ import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { copyToClipboard, useQuasar } from 'quasar'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import ExecutionAgentConfigDialog from 'src/features/computers/ExecutionAgentConfigDialog.vue'
-import { agentDisplayName } from 'src/features/computers/display'
+import { agentDisplayName, agentPlatformLabel } from 'src/features/computers/display'
 import { agentVersionLabel } from 'src/features/computers/version'
 import { useConfirm } from 'src/composables/confirm'
 import { formatAbsoluteDateTime } from 'src/utils/date-time'
@@ -239,7 +239,7 @@ const maintenanceDisabled = computed(() => (
 const updateCandidates = computed(() => agents.items.filter(needsUpdate))
 const columns = [
   { name: 'name', label: 'Name', field: agentDisplayName, align: 'left', sortable: true },
-  { name: 'platform', label: 'Betriebssystem', field: 'platform', format: value => value || 'Unbekannt', align: 'left' },
+  { name: 'platform', label: 'Betriebssystem', field: 'platform', format: agentPlatformLabel, align: 'left' },
   { name: 'version', label: 'Agent-Version', field: 'agentVersion', align: 'left' },
   { name: 'status', label: 'Status', field: statusLabel, align: 'left' },
   { name: 'actions', label: 'Aktionen', field: 'id', align: 'right' }
@@ -247,7 +247,7 @@ const columns = [
 const computerDetails = computed(() => managedAgent.value ? [
   { label: 'Computer-ID', value: managedAgent.value.id },
   { label: 'Computername', value: managedAgent.value.computerName || 'Noch nicht gemeldet' },
-  { label: 'Betriebssystem', value: managedAgent.value.platform || 'Unbekannt' },
+  { label: 'Betriebssystem', value: agentPlatformLabel(managedAgent.value.platform) },
   { label: 'Status', value: statusLabel(managedAgent.value) },
   { label: 'Home-Verzeichnis', value: managedAgent.value.homeDirectory || 'Noch nicht gemeldet' },
   { label: 'Zuletzt gesehen', value: managedAgent.value.lastSeenAt ? formatAbsoluteDateTime(managedAgent.value.lastSeenAt) : 'Noch keine Verbindung' },

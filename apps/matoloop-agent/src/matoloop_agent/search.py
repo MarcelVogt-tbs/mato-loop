@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 
 from .errors import AgentError
 from .filesystem import Filesystem, _parts, _path
+from .posix_process import descriptor_argv, descriptor_cwd
 from .process import ProcessRunner
 
 MAX_RESULTS = 100
@@ -24,13 +25,16 @@ SEARCH_TIMEOUT_SECONDS = 10
 class FilesystemSearch:
     def __init__(self, filesystem: Filesystem) -> None:
         self.filesystem = filesystem
-        self.executable = self._find_ripgrep()
+        managed = (
+            filesystem.data_directory.parent / "tools/bin/rg" if sys.platform == "darwin" else None
+        )
+        self.executable = self._find_ripgrep(managed)
 
     @staticmethod
-    def _find_ripgrep() -> Path | None:
+    def _find_ripgrep(managed: Path | None = None) -> Path | None:
         sidecar = Path(sys.executable).absolute().parent / "rg"
         system = shutil.which("rg")
-        for candidate in (sidecar, Path(system) if system else None):
+        for candidate in (managed, sidecar, Path(system) if system else None):
             if candidate is None:
                 continue
             try:
@@ -46,7 +50,7 @@ class FilesystemSearch:
         parts = _parts(path)
         with self.filesystem._root_fd() as root_fd:
             directory_fd = self.filesystem._open_dir(root_fd, parts)
-        return f"/proc/self/fd/{directory_fd}", directory_fd
+        return descriptor_cwd(directory_fd), directory_fd
 
     @staticmethod
     def _path(value: str) -> str | None:
@@ -254,8 +258,7 @@ class FilesystemSearch:
         cwd, cwd_fd = self._cwd(path)
         try:
             process = await asyncio.create_subprocess_exec(
-                os.fspath(self.executable),
-                *arguments,
+                *descriptor_argv([os.fspath(self.executable), *arguments], cwd_fd),
                 cwd=cwd,
                 env={"LANG": os.environ.get("LANG", "C.UTF-8")},
                 stdin=input_fd if input_fd is not None else asyncio.subprocess.DEVNULL,

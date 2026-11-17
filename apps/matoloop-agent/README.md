@@ -10,12 +10,12 @@ Windows shell commands inherit only an allowlisted environment, including
 `ProgramFiles` and `ProgramFiles(x86)` for tools such as NuGet. Other host variables,
 including Agent credentials, are not inherited automatically.
 
-Standalone agent with a portable connection and dispatch core. Linux provides bounded filesystem, process, POSIX terminal, transfer, OpenSCAD, browser, credential-storage, and session-cache operations. The Windows adapter advertises its native filesystem, PowerShell, search, transfer, browser, and cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
+Standalone agent with a portable connection and dispatch core. Linux provides bounded filesystem, process, POSIX terminal, transfer, OpenSCAD, browser, credential-storage, and session-cache operations. Native macOS on Apple Silicon provides POSIX files, Bash shell, PTYs, search, transfer, optional browser, and cache operations without administrator execution. The Windows adapter advertises its native filesystem, PowerShell, search, transfer, browser, and cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
 
-Platform adapters compose host operations behind the common core. Linux uses normalized absolute POSIX paths; Windows uses forward-slash drive-letter paths such as `C:/Users/Ada/workspace` on the wire. Native Windows paths are converted at the Windows adapter boundary. Unsupported capabilities are not advertised.
+Platform adapters compose host operations behind the common core. Linux and macOS use normalized absolute POSIX paths; Windows uses forward-slash drive-letter paths such as `C:/Users/Ada/workspace` on the wire. Native Windows paths are converted at the Windows adapter boundary. macOS reports `platform: darwin`; the protocol, database, and existing Computer UI are shared. Unsupported capabilities are not advertised.
 
 The [browser runtime](BROWSER.md) provides disposable per-chat Chromium profiles,
-isolated per-chat headless automation and graphical viewing on native/container agents, interactive prerequisite setup, and bounded browser actions.
+isolated per-chat headless automation and graphical viewing on native/container agents, explicit prerequisite setup, and bounded browser actions.
 
 ## Configuration
 
@@ -26,7 +26,7 @@ isolated per-chat headless automation and graphical viewing on native/container 
 }
 ```
 
-`homeDirectory` is mandatory and canonicalized at startup. The configuration file's parent directory is the agent data directory for credentials, transfers, and cache data. Native lifecycle installations read `${XDG_DATA_HOME:-~/.local/share}/matoloop-agent/data/config.json` by default. `MATOLOOP_AGENT_CONFIG` or `--config` selects another file, including `/data/config.json`.
+`homeDirectory` is mandatory and canonicalized at startup. The configuration file's parent directory is the agent data directory for credentials, transfers, and cache data. Native Linux lifecycle installations read `${XDG_DATA_HOME:-~/.local/share}/matoloop-agent/data/config.json` by default; macOS uses `~/Library/Application Support/MatoLoop Agent/data/config.json`. `MATOLOOP_AGENT_CONFIG` or `--config` selects another file, including `/data/config.json`.
 
 Personal terminal.open and terminal.run require POSIX PTYs and a configured
 `shellExecutable`. Unsupported operations are omitted from the advertisement.
@@ -90,6 +90,51 @@ offer to remove only the system packages recorded as newly installed by MatoLoop
 home directories and workspaces are always preserved. The first platform implementation targets
 Linux system services with systemd. Browser and personal terminal capabilities remain unavailable
 when their host prerequisites are declined or unsupported.
+
+## Native macOS installation (Apple Silicon)
+
+In **Einstellungen > Computer**, select **macOS (Apple Silicon)** and run the displayed
+command in Terminal as the user who will own the Agent. The existing `install.sh`
+endpoint selects the OS automatically. Intel Macs and Rosetta are not supported.
+Install Apple's Command Line Tools first if Git is missing (`xcode-select --install`).
+No Homebrew, root account, or sudo is required. The installer keeps its pinned private
+`uv` and Python under `~/Library/Application Support/MatoLoop Agent`; it does not
+modify shell profiles. Use `~/.local/bin/matoloop-agent` if that directory is not on
+your `PATH`. Pair with the Computer ID and one-time token from the UI.
+
+The user LaunchAgent at `~/Library/LaunchAgents/com.matoloop.agent.plist` starts at
+login, not before login, and stops at logout. There is no tray app or system daemon.
+The existing CLI provides `pair`, `install`, `update`, `status`, `uninstall`, and
+`uninstall --purge`. CLI and WebUI updates use the running backend's exact commit,
+not a branch or Homebrew package. Uninstall preserves credentials unless purged;
+workspaces are never removed.
+
+The configured shell is `/bin/bash`, using the existing shell inspector. POSIX files
+and interactive PTYs are available. The installer supplies pinned, checksum-verified
+arm64 ripgrep privately at `tools/bin/rg` for file search; no Homebrew setup is needed.
+OpenSCAD and administrator execution are not advertised. The Linux administrator
+implementation relies on `/proc` and is not a macOS elevation mechanism.
+
+macOS privacy controls (TCC) still govern Desktop, Documents, Downloads, and other
+protected folders. A shell or MatoLoop approval does not grant OS access. If access
+is denied, use an accessible workspace or review the relevant permissions in macOS
+System Settings; do not bypass TCC. A LaunchAgent may have a different access context
+from Terminal.
+
+Browser support is optional. Use **Browser einrichten** in the existing Browser
+integration to install pinned packages and matching Chromium privately without
+administrator rights or interactive input. Setup output is read-only and replayable,
+as on Windows; opening a browser never installs it automatically.
+
+### Native macOS acceptance
+
+Linux/container checks do not verify launchd, TCC, or native Chromium on Apple Silicon.
+Before declaring native acceptance, check on an arm64 Mac: fresh install and pairing,
+login/logout autostart, CLI status and backend-pinned update/rollback, WebUI maintenance,
+POSIX file mutations/search, Bash and PTY interaction, protected-folder denial, optional
+Browser setup/replay and sandboxed readiness, automation/viewer/file staging and chat
+isolation, and uninstall with workspace preservation. Native acceptance is not implied
+by the implementation or by passing Linux suites.
 
 ## Native Windows installation
 

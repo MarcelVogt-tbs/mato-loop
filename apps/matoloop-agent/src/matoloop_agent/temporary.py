@@ -2,6 +2,7 @@
 
 import logging
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -12,6 +13,10 @@ logger = logging.getLogger(__name__)
 
 def temporary_directory() -> str:
     base = Path(tempfile.gettempdir()) if os.name == "nt" else Path("/tmp")
+    if sys.platform == "darwin":
+        # TMPDIR is normally a per-user /var/folders path; canonicalize trusted
+        # scratch configuration, not arbitrary user filesystem operation paths.
+        base = Path(tempfile.gettempdir()).resolve()
     return (base / "mato-loop").as_posix()
 
 

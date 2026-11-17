@@ -8,7 +8,7 @@
       <q-card-section class="q-pt-none">
         <div role="status" aria-live="polite">{{ browserStatusLabel(setup.status) }}</div>
         <div v-if="interactive" class="text-caption app-muted">Die Einrichtung verwendet ein eigenes Terminal, unabhängig vom Chat. Ein angefordertes sudo-Passwort hier eingeben. Schließen beendet die Einrichtung nicht.</div>
-        <div v-else class="text-caption app-muted">Die Windows-Einrichtung läuft ohne Eingaben und ohne Administratorrechte. Hier siehst du den Fortschritt. Schließen beendet die Einrichtung nicht.</div>
+        <div v-else class="text-caption app-muted">Die Einrichtung läuft ohne Eingaben und ohne Administratorrechte im Konto des Agents. Hier siehst du den Fortschritt. Schließen beendet die Einrichtung nicht.</div>
         <div v-if="setup.status?.browserVersion" class="text-caption">Chromium: {{ setup.status.browserVersion }}</div>
         <div v-if="setup.status?.playwrightVersion" class="text-caption">Playwright: {{ setup.status.playwrightVersion }}</div>
         <div v-if="setup.status?.missing?.length" class="text-caption">Fehlende Komponenten: {{ setup.status.missing.join(', ') }}</div>
@@ -73,7 +73,7 @@ async function start() {
   const generation = setup.generation
   const message = props.interactive
     ? 'Die Browser-Komponenten werden auf diesem Computer installiert. Dafür können Administratorrechte erforderlich sein.'
-    : 'Die Browser-Komponenten werden ohne Administratorrechte im Konto des Windows-Agents installiert.'
+    : 'Die Browser-Komponenten werden ohne Administratorrechte im Konto des Agents installiert.'
   if (await confirm(message, 'Browser einrichten?', { okLabel: 'Einrichten' })
     && generation === setup.generation && props.modelValue) setup.start()
 }

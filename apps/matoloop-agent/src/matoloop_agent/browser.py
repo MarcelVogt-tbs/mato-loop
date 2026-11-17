@@ -11,6 +11,7 @@ import shutil
 import signal
 import stat
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic
 from uuid import uuid4
@@ -677,6 +678,86 @@ class BrowserRuntime:
         except Exception:
             logger.error("Browser operation failed")
             raise AgentError("browser.actionFailed", "Browser operation failed") from None
+
+
+@dataclass
+class _Setup:
+    terminal_id: str
+    process: asyncio.subprocess.Process
+    buffer: bytearray = field(default_factory=bytearray)
+    condition: asyncio.Condition = field(default_factory=asyncio.Condition)
+    eof: bool = False
+
+    @property
+    def exit_code(self) -> int | None:
+        return self.process.returncode
+
+
+class NativeBrowserRuntime(BrowserRuntime):
+    """Non-interactive setup and authenticated loopback views on macOS and Windows."""
+
+    async def stop_installation(self) -> None:
+        await self.stop_worker(self.setup.process)
+
+    async def setup_output(self, entry) -> None:
+        try:
+            while chunk := await entry.process.stdout.read(65_536):
+                async with entry.condition:
+                    entry.buffer.extend(chunk)
+                    self.setup_offset += len(chunk)
+                    del entry.buffer[:-MAX_BUFFER_BYTES]
+                    entry.condition.notify_all()
+            await entry.process.wait()
+        finally:
+            entry.eof = True
+            async with entry.condition:
+                entry.condition.notify_all()
+
+    async def launch_setup(self, root: Path, environment: dict[str, str]) -> dict:
+        environment.update(
+            MATOLOOP_BROWSER_DATA_DIR=str(self.config.data_dir),
+            MATOLOOP_BROWSER_ROOT=str(root),
+            MATOLOOP_BROWSER_INSTALLATION=str(self.installation),
+        )
+        process = await asyncio.create_subprocess_exec(
+            *browser_command("browser-setup"),
+            **self.worker_options(),
+            env=environment,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        self.setup_offset = 0
+        self.setup = _Setup(str(uuid4()), process)
+        self.setup_task = asyncio.create_task(self.setup_output(self.setup))
+        return await self.status()
+
+    async def setup_io(self, action: str, args) -> dict:
+        if self.setup is None or self.setup.terminal_id != args.setup_id:
+            raise AgentError("browser.invalidTarget", "Setup identifier is unavailable")
+        if action == "setupwrite":
+            raise AgentError("browser.invalidTarget", "Native browser setup is non-interactive")
+        if action == "setupresize":
+            return {"ok": True}
+        return await super().setup_io(action, args)
+
+    async def view_connection(self, endpoint):
+        port, token = endpoint["port"], bytes.fromhex(endpoint["token"])
+        if type(port) is not int or not 1 <= port <= 65535 or len(token) != 32:
+            raise AgentError("browser.notConnected", "Invalid local browser endpoint")
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        try:
+            async with asyncio.timeout(5):
+                writer.write(token)
+                await writer.drain()
+                if await reader.readexactly(1) != b"\x01":
+                    raise AgentError("browser.notConnected", "Browser authentication failed")
+        except BaseException:
+            writer.close()
+            with contextlib.suppress(ConnectionError):
+                await writer.wait_closed()
+            raise
+        return reader, writer
 
 
 class BrowserManager(BrowserRuntime):

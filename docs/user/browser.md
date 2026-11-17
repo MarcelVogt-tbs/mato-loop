@@ -1,11 +1,11 @@
 # Browser verwenden
 
-Mit der Browser-Integration bedienst du gemeinsam mit dem Agenten Webseiten im selben Chat-Browser. Sie benötigt einen eigenen verbundenen Linux- oder Windows-Computer. Native Agents und Linux-Docker-Agents bieten dieselbe Bedienung.
+Mit der Browser-Integration bedienst du gemeinsam mit dem Agenten Webseiten im selben Chat-Browser. Sie benötigt einen eigenen verbundenen Linux-, Windows- oder Apple-Silicon-Mac. Native Agents und Linux-Docker-Agents bieten dieselbe Bedienung.
 
 ## Browser einrichten
 
 1. Lege unter **Einstellungen > Integrationen** eine persönliche Browserverbindung an und wähle den Computer.
-2. Docker-Agents enthalten die Laufzeit bereits. Bei nativen Agents starte bei Bedarf **Browser einrichten**. Unter Linux bestätige benötigte Systempakete ausdrücklich. Unter Windows läuft die Einrichtung ohne weitere Eingaben und ohne Administratorrechte im Konto des Agents.
+2. Docker-Agents enthalten die Laufzeit bereits. Bei nativen Agents starte bei Bedarf **Browser einrichten**. Unter Linux bestätige benötigte Systempakete ausdrücklich. Unter Windows und macOS läuft die Einrichtung ohne weitere Eingaben und ohne Administratorrechte im Konto des Agents. Die schreibgeschützte Fortschrittsausgabe lässt sich nach dem Schließen erneut öffnen. macOS benötigt dafür kein Homebrew.
 3. Wähle denselben Computer in der Session und erlaube die Verbindung für das gewünschte Profil. Plan, Build und Sysadmin schließen Integrationen standardmäßig aus.
 4. Öffne **Control Center > Browser** oder bitte den Agenten, eine Webseite aufzurufen.
 

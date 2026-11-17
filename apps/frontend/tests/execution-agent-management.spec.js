@@ -158,6 +158,8 @@ it('shares settings with creation, preserves tab drafts and copies the selected 
   expect(document.querySelector('input[aria-label="Alias (optional)"]').value).toBe('Neuer Computer')
   document.querySelector('button[aria-label="Installationsbefehl kopieren"]').click()
   await vi.waitFor(() => expect(copyToClipboard).toHaveBeenLastCalledWith(command()))
+  click('macOS (Apple Silicon)')
+  await vi.waitFor(() => expect(command()).toContain('/api/execution-agents/install.sh'))
   newAlias.value = ''
   newAlias.dispatchEvent(new Event('input', { bubbles: true }))
   const created = { id: '12345678-0000-4000-8000-000000000000', alias: '', displayName: 'Computer 12345678', pairingState: 'pending' }

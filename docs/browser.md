@@ -1,7 +1,7 @@
 # Browser Architecture and Operations
 
 The optional personal Browser integration runs Playwright-managed Chromium on the
-selected owner-bound MatoLoop Agent. Native Linux, native Windows, and Linux container agents use the same
+selected owner-bound MatoLoop Agent. Native Linux, native Windows, Apple Silicon macOS, and Linux container agents use the same
 headless runtime, private viewer relay, and manual controls. No VNC or desktop server
 is used. Website traffic originates on the Agent, not the backend or the user's browser.
 
@@ -12,13 +12,13 @@ is used. Website traffic originates on the Agent, not the backend or the user's 
 - Setup is explicit. Native setup installs the pinned Playwright/Pillow packages and matching
   Chromium; missing Debian/Ubuntu host packages require interactive consent. Container images
   and managed updates share `container-browser-setup.sh`. Opening a browser never installs software.
-  Windows setup is non-interactive, installs into the private Agent directories, and needs no elevation.
+  Windows and macOS setup are non-interactive, install into the private Agent directories, and need no elevation.
 - Readiness performs a disposable sandboxed launch and renderer screenshot. Chromium's renderer
   sandbox remains mandatory; there is no `--no-sandbox` fallback. Prepared Compose stacks retain
   their existing user-namespace/security settings. No debugging or viewer TCP port is published.
 - The independent setup terminal retains its bounded replay buffer across viewer reconnects,
   but not an Agent process restart. Do not restart an Agent during package installation.
-  Windows exposes the same replay buffer as read-only setup output rather than a terminal.
+  Windows and macOS expose the same replay buffer as read-only setup output rather than a terminal.
 - Native updates retain browser support when the managed Chromium installation exists, including
   installations whose Python packages were lost by an earlier update. The staged environment includes
   the release's browser dependency group and installs and probes matching Chromium before activation.
@@ -46,6 +46,8 @@ not end the runtime. The WebUI confirms explicit browser close because it remove
 unsaved website input for every view. Explicit close, invalidated session/integration access, or Agent
 disconnect ends it. The existing worker limits bound retained runtimes. Worker cleanup remains
 bounded and runs before Agent shutdown completes.
+On macOS, workers use the installing account and private POSIX storage; TCC restrictions
+still apply. macOS uses the same authenticated loopback viewer transport as Windows.
 On Windows, workers use the Agent account and the managed installation's restricted ACLs;
 storage and staging reject reparse-point traversal. The local viewer transport uses a
 per-worker secret on an ephemeral loopback listener instead of Linux's private Unix socket.

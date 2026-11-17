@@ -15,6 +15,7 @@ import hmac
 import inspect
 import json
 import os
+import platform
 import signal
 import struct
 import subprocess
@@ -149,9 +150,10 @@ class BrowserWorker:
                 pass
         except OSError:
             raise fail("notReady") from None
-        # Keep the Unix socket path below Linux's 108-byte sockaddr_un limit.
+        # Linux needs a short Unix socket path; native platforms use authenticated TCP.
         self.temporary = tempfile.TemporaryDirectory(
-            prefix="matoloop-browser-", dir=self.root if sys.platform == "win32" else None
+            prefix="matoloop-browser-",
+            dir=self.root if sys.platform in {"win32", "darwin"} else None,
         )
         live = Path(self.temporary.name)
         self.live = live
@@ -184,7 +186,7 @@ class BrowserWorker:
         launch["viewport"] = self.geometry
         launch["channel"] = "chromium"
         try:
-            if sys.platform != "win32":
+            if sys.platform == "linux":
                 browser_major = (
                     subprocess.check_output(
                         [executable, "--version"],
@@ -226,7 +228,7 @@ class BrowserWorker:
         await self.context.pages[0].bring_to_front()
         await self.page_sessions[self.context.pages[0]]
         await self.context.pages[0].screenshot(type="png", timeout=8000)
-        if sys.platform == "win32":
+        if sys.platform in {"win32", "darwin"}:
             self.server = await asyncio.start_server(self.authenticated_view, "127.0.0.1", 0)
             self.view_endpoint = {
                 "port": self.server.sockets[0].getsockname()[1],
@@ -1900,10 +1902,16 @@ class BrowserWorker:
 
 
 async def serve(root: Path) -> None:
-    if sys.platform not in {"linux", "win32"} or (sys.platform == "linux" and os.getuid() == 0):
-        raise RuntimeError("Browser worker requires Linux or Windows and must not run as root")
+    if (
+        sys.platform not in {"linux", "win32", "darwin"}
+        or (sys.platform != "win32" and os.getuid() == 0)
+        or (sys.platform == "darwin" and platform.machine() != "arm64")
+    ):
+        raise RuntimeError(
+            "Browser worker requires a supported native platform and a non-root user"
+        )
     os.umask(0o077)
-    if sys.platform == "linux":
+    if sys.platform in {"linux", "darwin"}:
         import resource
 
         # Bound in-progress downloads as well as completed files on POSIX.

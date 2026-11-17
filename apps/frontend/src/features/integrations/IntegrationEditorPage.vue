@@ -336,7 +336,7 @@
           </q-card-section>
         </q-card>
       </q-dialog>
-  <BrowserSetupDialog v-if="setupOpen && integration?.id" v-model="setupOpen" :integration-id="integration.id" :interactive="executionAgents.byId(integration.executionAgentId || integration.config?.executionAgentId)?.platform !== 'win32'" />
+  <BrowserSetupDialog v-if="setupOpen && integration?.id" v-model="setupOpen" :integration-id="integration.id" :interactive="!['win32', 'darwin'].includes(executionAgents.byId(integration.executionAgentId || integration.config?.executionAgentId)?.platform)" />
   </section>
 </template>
 

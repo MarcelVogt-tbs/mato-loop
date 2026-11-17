@@ -1,6 +1,6 @@
 # Browser Runtime
 
-Native Linux, native Windows, and Linux container Agents expose the same
+Native Linux, native Windows, Apple Silicon macOS, and Linux container Agents expose the same
 `integration.browser.*` operations. Chromium
 runs headless with its renderer sandbox enabled. There is no X11 desktop, VNC process or
 public debugging listener. The backend owns authorization and chat bindings; the Agent
@@ -20,10 +20,10 @@ to a single owner/chat/computer. Eight concurrent workers are allowed per Agent.
 
 The protected backend/Agent/owner namespace remains under `<data>/tools/browser`.
 Root Linux Agents launch workers as `matoloop-browser` without supplementary groups;
-non-root Linux and Windows Agents use their own account. Windows profiles and staging
+non-root Linux, macOS, and Windows Agents use their own account. Windows profiles and staging
 stay beneath that namespace, inheriting the managed installation's account-restricted
 ACL. Storage traversal refuses reparse points through the existing Windows file handles;
-Linux also verifies numeric ownership. Worker environments are allowlisted and contain no Agent
+Linux and macOS also verify numeric ownership. Worker environments are allowlisted and contain no Agent
 credentials. Existing
 old `browser/profile` directories are not loaded or deleted automatically.
 
@@ -36,14 +36,14 @@ guarantee cleanup. Completed downloads stream to backend session files with SHA-
 verification; worker staging is deleted only after successful backend storage. Existing
 computer downloads are not moved or removed. Transfers support 1 GiB per file and 2 GiB
 aggregate staging, while observations retain their separate 64 MiB limit.
-Linux additionally caps in-progress download files through `RLIMIT_FSIZE`; Windows
+Linux and macOS additionally cap in-progress download files through `RLIMIT_FSIZE`; Windows
 checks completed downloads before retaining them but has no corresponding hard
 in-progress file-size limit. Allow disk headroom for unfinished downloads on Windows.
 
 ## Viewer Protocol
 
 `integration.browser.view` opens the existing outbound authenticated binary relay from
-the runtime's private Unix `view` socket on Linux. Windows uses an ephemeral
+the runtime's private Unix `view` socket on Linux. Windows and macOS use an ephemeral
 `127.0.0.1` listener authenticated with a per-worker 256-bit secret passed only through
 the private worker pipe. Authentication must finish within five seconds before any
 frames or input are accepted. This is the typed viewer stream, not a CDP endpoint.
@@ -100,13 +100,17 @@ not take whole-page approval snapshots. Unknown effects are not automatically re
 ## Setup and Verification
 
 Both images and managed container updates call `container-browser-setup.sh` for the
-pinned Playwright Chromium and host libraries. Native installation remains explicit,
-with interactive consent for host package installation. Readiness performs a real
+pinned Playwright Chromium and host libraries. Native installation remains explicit;
+Linux host package installation requires interactive consent. Readiness performs a real
 sandboxed headless launch and screenshot. Missing sandbox support fails closed.
 
 Windows setup runs non-interactively under the Agent account and uses the managed
 `uv.exe` to install the pinned Python packages and matching Chromium without elevation.
 Its setup output uses the same bounded replay API; there is no interactive setup terminal.
+macOS setup uses the same non-interactive, read-only replay flow with private `uv`,
+pinned Python packages and matching arm64 Chromium. It needs neither sudo nor Homebrew.
+macOS workers run as the installing user; TCC protected-folder restrictions still apply.
+Browser support is optional and uses the existing integration, not a separate desktop app.
 Setup inherits only explicit proxy, certificate and Playwright download-host settings
 from the Agent environment; browser workers do not inherit those installation settings.
 Managed Windows updates include the browser dependency group and probe matching Chromium
@@ -120,3 +124,5 @@ frontend tests cover framing, stale images, input gating and Quasar website dial
 The Windows CI job runs `test_windows_browser.py` with native sandboxed Chromium,
 including worker pipes, authenticated streaming, Python/JavaScript automation, file
 staging and profile isolation. Scheduled Task acceptance remains a separate native check.
+Native macOS acceptance also requires an Apple Silicon host; Linux suites do not verify
+launchd, TCC, or the native browser. See [the macOS acceptance checklist](README.md#native-macos-acceptance).

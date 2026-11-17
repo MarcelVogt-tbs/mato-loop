@@ -22,6 +22,7 @@ from .file_text import apply_hunks, decode_text, edited_text, parse_patch, read_
 
 _RENAME_NOREPLACE = 1
 _RENAME_EXCHANGE = 2
+_RENAME_EXCL = 4  # Darwin <sys/stdio.h>: RENAME_EXCL; RENAME_SWAP is 2.
 _MAX_EXECUTABLE_LINKS = 40
 _renameat2 = (
     getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
@@ -37,6 +38,21 @@ if _renameat2 is not None:
         ctypes.c_uint,
     ]
     _renameat2.restype = ctypes.c_int
+
+_renameatx_np = (
+    getattr(ctypes.CDLL(None, use_errno=True), "renameatx_np", None)
+    if sys.platform == "darwin"
+    else None
+)
+if _renameatx_np is not None:
+    _renameatx_np.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    _renameatx_np.restype = ctypes.c_int
 
 
 def _parts(value: str) -> tuple[str, ...]:
@@ -91,14 +107,15 @@ def _fsync(fd: int) -> None:
 
 
 def _rename_no_replace(source_fd: int, source: str, destination_fd: int, destination: str) -> None:
-    if _renameat2 is None:
-        raise AgentError("agent.unsupported", "Atomic rename is unavailable on this Linux host")
-    result = _renameat2(
+    rename = _renameatx_np if sys.platform == "darwin" else _renameat2
+    if rename is None:
+        raise AgentError("agent.unsupported", "Atomic rename is unavailable on this host")
+    result = rename(
         source_fd,
         os.fsencode(source),
         destination_fd,
         os.fsencode(destination),
-        _RENAME_NOREPLACE,
+        _RENAME_EXCL if sys.platform == "darwin" else _RENAME_NOREPLACE,
     )
     if result == 0:
         return
@@ -111,9 +128,10 @@ def _rename_no_replace(source_fd: int, source: str, destination_fd: int, destina
 
 
 def _rename_exchange(source_fd: int, source: str, destination_fd: int, destination: str) -> None:
-    if _renameat2 is None:
-        raise AgentError("agent.unsupported", "Atomic rename is unavailable on this Linux host")
-    result = _renameat2(
+    rename = _renameatx_np if sys.platform == "darwin" else _renameat2
+    if rename is None:
+        raise AgentError("agent.unsupported", "Atomic rename is unavailable on this host")
+    result = rename(
         source_fd,
         os.fsencode(source),
         destination_fd,
@@ -130,6 +148,7 @@ def _rename_exchange(source_fd: int, source: str, destination_fd: int, destinati
 
 class Filesystem:
     def __init__(self, config: AgentConfig) -> None:
+        self.data_directory = config.data_dir
         self.max_file_bytes = config.max_file_bytes
         self.max_transfer_bytes = config.max_transfer_bytes
         self.max_entries = config.max_operation_entries
@@ -396,10 +415,10 @@ class Filesystem:
     @staticmethod
     def _open_dir(root_fd: int, parts: tuple[str, ...], *, path_only: bool = False) -> int:
         fd = os.dup(root_fd)
-        # Inspection needs search permission, not directory enumeration; content operations
-        # retain readable descriptors for listing and durability (fsync).
+        # Linux inspection needs search permission, not directory enumeration. Darwin
+        # has no O_PATH; readable no-follow descriptors preserve the same link boundary.
         flags = (
-            (os.O_PATH if path_only else os.O_RDONLY)
+            (getattr(os, "O_PATH", os.O_RDONLY) if path_only else os.O_RDONLY)
             | os.O_DIRECTORY
             | os.O_NOFOLLOW
             | os.O_CLOEXEC
@@ -1253,6 +1272,18 @@ class Filesystem:
             source_parent = self._open_dir(source_root, source_parts[:-1])
             destination_parent = self._open_dir(destination_root, destination_parts[:-1])
             try:
+                source_metadata = self._metadata(source_parent, source_parts[-1])
+                try:
+                    destination_metadata = os.stat(
+                        destination_parts[-1], dir_fd=destination_parent, follow_symlinks=False
+                    )
+                except FileNotFoundError:
+                    destination_metadata = None
+                if destination_metadata is not None and (
+                    source_metadata.st_dev,
+                    source_metadata.st_ino,
+                ) == (destination_metadata.st_dev, destination_metadata.st_ino):
+                    raise AgentError("path.invalidDestination", "Destination is the source")
                 forbidden = {
                     (os.fstat(destination_root).st_dev, os.fstat(destination_root).st_ino),
                     (os.fstat(destination_parent).st_dev, os.fstat(destination_parent).st_ino),

@@ -69,6 +69,8 @@
                 <div class="text-body2 app-muted">
                   {{ installationPlatform === 'windows'
                     ? 'PowerShell als Administrator unter dem späteren Task-Benutzer öffnen. Für den Start beim Hochfahren wird dessen Passwort einmalig abgefragt.'
+                    : installationPlatform === 'darwin'
+                    ? 'Auf einem Mac mit Apple Silicon als normaler Benutzer ausführen. Der Agent startet bei der Anmeldung und läuft nach der Abmeldung nicht weiter.'
                     : 'Auf dem Zielcomputer als normaler Benutzer ausführen.' }}
                 </div>
                 <q-input :model-value="installationCommand" readonly outlined dense type="textarea" autogrow label="Installationsbefehl">
@@ -132,6 +134,7 @@
                 label="Automatische Agent-Updates" :options="autoUpdateOptions"
               />
               <AppSelect
+                v-if="(agent?.platform || installationPlatform) !== 'darwin'"
                 v-model="sudoCredentialId" dense outlined emit-value map-options stack-label
                 label="sudo-Passwort" :options="sudoOptions" :loading="variables.loading"
                 :disable="blocked || variables.loading || variables.loadFailed"
@@ -169,7 +172,7 @@
 </template>
 
 <script setup>
-import { fabLinux, fabWindows } from '@quasar/extras/fontawesome-v6'
+import { fabApple, fabLinux, fabWindows } from '@quasar/extras/fontawesome-v6'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
 import { agentDisplayName } from 'src/features/computers/display'
 import { computed, reactive, ref, watch } from 'vue'
@@ -196,7 +199,8 @@ const tab = ref('settings')
 const installationPlatform = ref('linux')
 const installationPlatforms = [
   { label: 'Linux', value: 'linux', icon: fabLinux },
-  { label: 'Windows', value: 'windows', icon: fabWindows }
+  { label: 'Windows', value: 'windows', icon: fabWindows },
+  { label: 'macOS (Apple Silicon)', value: 'darwin', icon: fabApple }
 ]
 const installationCommand = computed(() => installationPlatform.value === 'windows'
   ? `$installer = Join-Path $env:TEMP 'install-matoloop-agent.ps1'; Invoke-WebRequest -UseBasicParsing -Uri '${window.location.origin}/api/execution-agents/install.ps1' -OutFile $installer; powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -InstanceUrl '${window.location.origin}'`

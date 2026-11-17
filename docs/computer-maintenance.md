@@ -13,7 +13,7 @@ revocation. Settings drafts survive tab changes. Removing a computer is also
 available directly in the table and uses the same confirmation. Small screens show
 name, status, and actions; operating system and version remain in the dialog.
 Adding uses the same settings form and
-starts with separate Linux/Windows icon chips and the selected installation command and
+starts with separate Linux/Windows/macOS (Apple Silicon) icon chips and the selected installation command and
 instructions, followed by the optional alias and access settings. Installation
 commands are not part of the overview.
 Open management dialogs resolve the computer by ID from the existing polled store.
@@ -61,7 +61,7 @@ and unknown-result window protect both manual and automatic starts.
 as a secret. The API exposes the reference, never its value. Clearing the assignment,
 unpairing or revoking a computer does not delete the personal secret. Deleting the
 secret clears the foreign key. Native Linux updates use its current value; an explicit
-one-time password takes precedence. Saved passwords are not sent to Windows or
+one-time password takes precedence. Saved passwords are not sent to macOS, Windows or
 managed container updates. Elevated model tools use the same reference as a fallback
 after explicit and temporary references, through the existing secret-access checks
 and independent administrator action permissions. The model never receives the value.
@@ -125,6 +125,14 @@ maintenance capability. Portal maintenance requires no Windows password request.
 Local and portal updates resolve Git through the same installer: system Git first,
 then private MinGit under the installation's `tools\git` directory, downloading the
 pinned, checksum-verified archive only when neither is available.
+
+Native Apple Silicon macOS uses the same installer lifecycle below
+`~/Library/Application Support/MatoLoop Agent`, with a user LaunchAgent instead of
+systemd. The Agent runs only while that user is logged in. An independent launchd
+maintenance job survives stopping the Agent and uses the existing authenticated
+completion endpoint. CLI and WebUI maintenance need no sudo or Homebrew; macOS
+does not advertise administrator execution. See the [installation and native acceptance
+checklist](../apps/matoloop-agent/README.md#native-macos-installation-apple-silicon).
 
 The Windows installer's `-Home` option is an alias for `-HomeDirectory`; it never
 assigns to PowerShell's read-only `$HOME` automatic variable.
@@ -194,7 +202,7 @@ pairing and is not cached. The backend refuses missing, dirty, or inconsistent
 build metadata with `maintenance.targetUnavailable`; there is no fallback branch.
 Production images stamp the full revision together with the display version.
 
-Standalone Linux and Windows setup asks for the instance URL, retrieves this target
+Standalone Linux, macOS and Windows setup asks for the instance URL, retrieves this target
 once, and fetches and verifies exactly that commit before installing. Local CLI
 updates query the paired instance (or installation URL before pairing); WebUI jobs
 receive the same target directly from the backend. Each operation retains its SHA

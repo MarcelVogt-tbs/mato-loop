@@ -1,44 +1,31 @@
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import os
 import pwd
 import shlex
 import shutil
-import signal
-import socket
 import sys
 import tempfile
-import threading
-from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from .browser import BrowserManager
-from .browser_contracts import BROWSER_ARGUMENT_MODELS
-from .cache import SessionCache
 from .config import AgentConfig
-from .credentials_linux import LinuxCredentialStore
 from .errors import AgentError
-from .filesystem import Filesystem
 from .openscad import OpenScadRunner
 from .platform import FilesystemAdapter, RuntimeServices
-from .process import ProcessRunner
+from .platform_posix import PosixPlatform
 from .protocol import ARGUMENT_MODELS
-from .search import FilesystemSearch
-from .terminal import TerminalManager
 from .transfer import TransferClient
 
 
-class LinuxPlatform:
+class LinuxPlatform(PosixPlatform):
     @property
     def platform_id(self) -> str:
         return sys.platform
-
-    def computer_name(self) -> str:
-        return socket.gethostname()
 
     def default_config_path(self, environ: Mapping[str, str]) -> Path:
         configured = environ.get("MATOLOOP_AGENT_CONFIG")
@@ -46,12 +33,6 @@ class LinuxPlatform:
             return Path(configured)
         data_home = Path(environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
         return data_home / "matoloop-agent" / "config.json"
-
-    def credential_store(self, data_dir: Path) -> LinuxCredentialStore:
-        return LinuxCredentialStore(data_dir)
-
-    def clear_cache(self, config: AgentConfig) -> int:
-        return SessionCache(config.data_dir, config.max_session_cache_bytes).clear()
 
     def run_auxiliary(self, command: str, arguments: list[str]) -> bool:
         if command == "browser-install":
@@ -80,28 +61,11 @@ class LinuxPlatform:
         *,
         transfer_client: TransferClient | None = None,
     ) -> RuntimeServices:
-        filesystem = Filesystem(config)
-        cache = SessionCache(config.data_dir, config.max_session_cache_bytes)
-        process = ProcessRunner(config, filesystem)
-        terminal = TerminalManager(config, process)
-        search = FilesystemSearch(filesystem)
-        transfer = transfer_client or TransferClient(
-            max_bytes=config.max_transfer_bytes,
-            backend_url=config.backend_url,
-            access_key=access_key,
-        )
-        openscad = OpenScadRunner(config, filesystem, cache, transfer)
-        operations = set(ARGUMENT_MODELS) | set(BROWSER_ARGUMENT_MODELS)
-        if shutil.which("git") is None:
-            operations.difference_update(
-                {
-                    "git.changes",
-                    "git.repository",
-                    "git.branch",
-                    "git.worktree",
-                    "git.worktree.remove",
-                }
-            )
+        runtime = super().build_runtime(config, access_key, transfer_client=transfer_client)
+        openscad = OpenScadRunner(config, runtime.filesystem, runtime.cache, runtime.transfer)
+        operations = set(runtime.operations) | {
+            op for op in ARGUMENT_MODELS if op.startswith("integration.openscad.")
+        }
         managed_container = os.environ.get("MATOLOOP_AGENT_INSTALL_ROOT")
         if not (
             os.environ.get("MATOLOOP_AGENT_CONTAINER") == "1"
@@ -121,52 +85,17 @@ class LinuxPlatform:
             operations.discard("maintenance.start")
         if not {"maintenance.start", "maintenance.update"}.intersection(operations):
             operations.discard("maintenance.update.interrupt")
-        if process.shell is None:
-            operations.remove("shell.run")
         if shutil.which("sudo") is None or os.geteuid() == 0:
             operations.discard("administrator.run")
-        if not terminal.available:
-            operations -= {
-                "terminal.open",
-                "terminal.read",
-                "terminal.write",
-                "terminal.resize",
-                "terminal.close",
-                "terminal.run",
-            }
-        if search.executable is None:
-            operations -= {"filesystem.glob", "filesystem.grep"}
         if not openscad.render_available:
             operations -= {"integration.openscad.render", "integration.openscad.render6"}
-        return RuntimeServices(
-            platform=self,
-            filesystem=filesystem,
-            cache=cache,
-            process=process,
-            terminal=terminal,
-            search=search,
-            browser=BrowserManager(config, terminal, filesystem),
-            openscad=openscad,
-            transfer=transfer,
-            operations=tuple(sorted(operations)),
-        )
+        return replace(runtime, openscad=openscad, operations=tuple(sorted(operations)))
 
     def maintenance_running(self, config: AgentConfig) -> bool:
         if os.environ.get("MATOLOOP_AGENT_CONTAINER") == "1":
             root = os.environ.get("MATOLOOP_AGENT_INSTALL_ROOT")
             return bool(root and (Path(root) / "update-request.json").exists())
-        root = config.data_dir.parent
-        if not (root / ".managed-by-matoloop-agent").is_file():
-            return False
-        try:
-            descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
-                return False
-            finally:
-                os.close(descriptor)
-        except OSError:
-            return True
+        return super().maintenance_running(config)
 
     async def start_maintenance(
         self,
@@ -380,36 +309,3 @@ class LinuxPlatform:
                 **directory,
             }
         return result
-
-    def run(self, coroutine: Coroutine[Any, Any, None]) -> None:
-        stopping = False
-        previous = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT)}
-        deadline = threading.Timer(25, os._exit, args=(1,))
-        deadline.daemon = True
-
-        async def run() -> None:
-            nonlocal stopping
-            task = asyncio.current_task()
-
-            def stop() -> None:
-                nonlocal stopping
-                if not stopping:
-                    stopping = True
-                    deadline.start()
-                    task.cancel()
-
-            loop = asyncio.get_running_loop()
-            for signum in (signal.SIGTERM, signal.SIGINT):
-                loop.add_signal_handler(signum, stop)
-            try:
-                await coroutine
-            except asyncio.CancelledError:
-                if not stopping:
-                    raise
-
-        try:
-            asyncio.run(run())
-        finally:
-            deadline.cancel()
-            for signum, handler in previous.items():
-                signal.signal(signum, handler)
