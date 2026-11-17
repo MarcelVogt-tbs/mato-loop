@@ -258,7 +258,7 @@
               :rules="isEditing || isJina ? [] : [requiredRule]"
             />
             <q-toggle v-if="isJina && hasApiKey" v-model="form.removeApiKey" color="negative" label="Gespeicherten API-Schlüssel entfernen" />
-            <q-input v-if="isWebIq" v-model.number="form.readerTimeout" outlined type="number" min="1" max="120" label="Standardzeitlimit" suffix="Sekunden" :rules="[value => Number.isInteger(value) && value >= 1 && value <= 120 || '1 bis 120 Sekunden eingeben.']" />
+            <q-input v-if="isWebIq" v-model.number="form.readerTimeout" outlined type="number" min="1" :max="webIqTimeoutMax" label="Standardzeitlimit" suffix="Sekunden" :rules="[value => Number.isInteger(value) && value >= 1 && value <= webIqTimeoutMax || `1 bis ${webIqTimeoutMax} Sekunden eingeben.`]" />
             <template v-if="isJina">
               <q-input v-model.number="form.readerTimeout" outlined type="number" min="1" max="120" label="Standardzeitlimit" suffix="Sekunden" :rules="[value => Number.isInteger(value) && value >= 1 && value <= 120 || '1 bis 120 Sekunden eingeben.']" />
               <q-toggle v-model="form.removeOverlay" color="primary" label="Overlays standardmäßig entfernen" />
@@ -422,6 +422,7 @@ const executionAgentOptions = computed(() => {
 const form = reactive(defaultForm())
 const selectedProvider = computed(() => providersForType(form.integration_type).find(item => item.provider === form.provider_type))
 const isWebIq = computed(() => ['webiq', 'webiq_search'].includes(form.provider_type))
+const webIqTimeoutMax = computed(() => form.provider_type === 'webiq_search' ? 35 : 120)
 const isJina = computed(() => form.provider_type === 'jina')
 const hasApiKey = computed(() => isJina.value ? integration.value?.hasApiKey ?? integration.value?.hasCredential : integration.value?.hasCredential)
 const discovering = ref(false)

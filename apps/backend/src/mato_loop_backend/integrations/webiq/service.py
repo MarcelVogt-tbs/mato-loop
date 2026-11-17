@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.integrations.search import SEARCH_DEADLINE_SECONDS
 from mato_loop_backend.integrations.service import (
     IntegrationSettingsError,
     _load_integrations,
@@ -58,6 +59,8 @@ class WebIqIntegrationService:
         timeout_seconds: int = 30,
     ) -> IntegrationSettings:
         config = WebIqConfig(timeout_seconds=timeout_seconds)
+        if integration_type == "search" and config.timeout_seconds > SEARCH_DEADLINE_SECONDS:
+            raise IntegrationSettingsError("validation.invalid", field="timeout_seconds")
         if api_key is not None:
             try:
                 WebIqCredentials(api_key=api_key)

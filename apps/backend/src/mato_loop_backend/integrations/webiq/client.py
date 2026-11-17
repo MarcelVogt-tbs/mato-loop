@@ -8,6 +8,7 @@ from typing import Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from mato_loop_backend.integrations.search import SEARCH_DEADLINE_SECONDS
 from mato_loop_backend.integrations.webiq.adapter import WEBIQ_PASSAGE_LENGTH, WebIqConfig
 from mato_loop_backend.web.fetch import WebFetchError, WebFetchResult, canonicalize_url
 
@@ -105,7 +106,10 @@ async def search(
     payload: dict[str, object] = {"query": _query(query), "maxResults": 8}
     if search_type == "web":
         payload.update(contentFormat="passage", maxLength=WEBIQ_PASSAGE_LENGTH)
-    data = await _request(config, f"search/{search_type}", payload, api_key=api_key)
+    data = await _request(
+        config, f"search/{search_type}", payload, api_key=api_key,
+        timeout=min(config.timeout_seconds, SEARCH_DEADLINE_SECONDS),
+    )
     try:
         if search_type == "images":
             return [

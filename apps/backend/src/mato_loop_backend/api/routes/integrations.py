@@ -93,7 +93,7 @@ from mato_loop_backend.integrations.registry import (
     integration_adapters,
     validate_integration,
 )
-from mato_loop_backend.integrations.search import SearchIntegrationError
+from mato_loop_backend.integrations.search import SEARCH_DEADLINE_SECONDS, SearchIntegrationError
 from mato_loop_backend.integrations.searxng.client import search_with_provider
 from mato_loop_backend.integrations.searxng.service import SearchIntegrationService
 from mato_loop_backend.integrations.service import (
@@ -477,7 +477,10 @@ def _provider_payload(provider: IntegrationInstance) -> dict:
                     "removeOverlay": provider.config.get("remove_overlay", False),
                     "cookieDomains": provider.config.get("cookie_domains", []),
                 } if provider.adapter_type == "jina" else {}),
-                **({"timeoutSeconds": provider.config.get("timeout_seconds", 30)}
+                **({"timeoutSeconds": (
+                    min(provider.config.get("timeout_seconds", 30), SEARCH_DEADLINE_SECONDS)
+                    if provider.adapter_type == "webiq_search" else provider.config.get("timeout_seconds", 30)
+                )}
                    if provider.adapter_type in {"webiq", "webiq_search"} else {}),
                 **(
                     {"username": provider.config.get("username")}

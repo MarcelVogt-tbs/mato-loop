@@ -234,6 +234,7 @@ it.each([['search', 'webiq_search'], ['webfetch', 'webiq']])('creates a separate
   const { router } = await mountEditor('instance', true, type, provider)
   expect(root.textContent).toContain('Microsoft Web IQ ist kostenpflichtig')
   expect(root.textContent).not.toContain('Cookies')
+  expect(root.querySelector('input[type="number"]').max).toBe(type === 'search' ? '35' : '120')
   await fill('API-Schlüssel', 'test-key')
   button('Speichern').click()
   await vi.waitFor(() => expect(router.currentRoute.value.params.integrationId).toBe('webiq'))

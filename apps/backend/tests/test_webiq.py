@@ -38,6 +38,7 @@ async def test_requests_use_fixed_authenticated_endpoints_and_normalize_content(
 
     def respond(request):
         body = json.loads(request.content)
+        assert request.extensions["timeout"]["read"] == (30 if operation == "browse" else 35)
         assert (str(request.url), request.headers["x-apikey"], body["query"]) == (
             f"https://api.microsoft.ai/v3/{'browse' if operation == 'browse' else f'search/{operation}'}",
             "test-key", "information",
@@ -56,7 +57,7 @@ async def test_requests_use_fixed_authenticated_endpoints_and_normalize_content(
         assert (result.content, result.output_format) == ("Relevant passage", "text")
     else:
         results = json.loads(_compact_results(
-            await client.search(WebIqConfig(), "information", api_key="test-key", search_type=operation),
+            await client.search(WebIqConfig(timeout_seconds=120), "information", api_key="test-key", search_type=operation),
             search_type=operation,
         ))
         assert results[0]["url"] == "https://target.test/page"
@@ -141,13 +142,21 @@ async def test_connection_test_uses_only_its_own_capability(monkeypatch, integra
     assert (search.await_count, fetch.await_count) == ((1, 0) if integration_type == "search" else (0, 1))
 
 
+async def test_search_connection_rejects_timeout_above_search_deadline():
+    with pytest.raises(IntegrationSettingsError, match="validation.invalid"):
+        await service.WebIqIntegrationService.save(
+            AsyncMock(), None, name="Web IQ", enabled=True, api_key="test-key",
+            integration_type="search", timeout_seconds=36,
+        )
+
+
 @pytest.mark.parametrize("tool_name", ["web_search", "webfetch"])
 @pytest.mark.parametrize("state", ["allowed", "denied", "changed", "excluded", "disabled"])
 async def test_both_native_tools_recheck_binding_and_permissions(tmp_path, monkeypatch, tool_name, state):
     from mato_loop_backend.integrations.search import search_provider_options
     from mato_loop_backend.web.providers import provider_options
 
-    call = ToolCall("web", tool_name, {"query": "information", **({"url": "https://target.test/page"} if tool_name == "webfetch" else {})})
+    call = ToolCall("web", tool_name, {"query": "information", **({"url": "https://target.test/page", "timeout": 5} if tool_name == "webfetch" else {})})
     context = _context(tmp_path, call, web_fetch_policy=ToolExecutionPolicy.ASK)
     context.tool_settings.private_permissions.policies["network.search"] = ToolExecutionPolicy.ASK
     instance = IntegrationInstance(
@@ -178,6 +187,7 @@ async def test_both_native_tools_recheck_binding_and_permissions(tmp_path, monke
 
     def respond(request):
         requests()
+        assert request.extensions["timeout"]["read"] == (5 if tool_name == "webfetch" else 30)
         page = {"url": "https://target.test/page", "content": "Relevant passage"}
         return httpx.Response(200, stream=httpx.ByteStream(json.dumps(
             {"webResults": [page]} if tool_name == "web_search" else page,

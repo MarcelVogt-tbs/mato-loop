@@ -99,6 +99,7 @@ cookies, Jina rendering options and interactive browsing are not supported.
 Image-search results are discovery data; use `download_file` for original images.
 
 The default request deadline is 30 seconds; explicit fetch timeouts override it.
+Web IQ search and its connection test use at most 35 seconds per provider request.
 Responses are bounded to the smaller of the configured web limit and 1 MiB,
 validated and converted to the existing text/source envelope. Raw error bodies
 are never forwarded. HTTP 401 maps to authentication failure, 429 to rate limiting,
