@@ -171,7 +171,7 @@ async def test_children_excluded_from_list_retrieval_and_indexing() -> None:
     db.execute.return_value = MagicMock(all=lambda: [])
     await service.list_sessions(
         db, uuid4(), page_size=20, cursor=None, project_id=None,
-        standalone=False, session_serializer=AsyncMock(),
+        standalone=False, session_serializer_factory=AsyncMock(),
     )
     assert "chat_sessions.parent_session_id IS NULL" in str(db.execute.await_args.args[0])
     assert any("parent_session_id IS NULL" in str(item) for item in _eligible_filters())
