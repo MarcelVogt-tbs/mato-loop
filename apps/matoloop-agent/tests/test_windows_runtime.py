@@ -189,10 +189,8 @@ class WindowsRuntimeTests(unittest.TestCase):
                     stream=stream,
                 )
             if result["timedOut"]:
-                for command in (
-                    "[Console]::WriteLine('console probe')",
-                    "Write-Output 'cmdlet probe'",
-                ):
+                for cache_mode in ("host-cache", "disabled-cache"):
+                    command = "Write-Output 'cmdlet probe'"
                     try:
                         probe = subprocess.run(
                             [
@@ -207,7 +205,11 @@ class WindowsRuntimeTests(unittest.TestCase):
                             timeout=20,
                             env={
                                 **execution_environment,
-                                "PSModulePath": str(Path(self.process.shell).parent / "Modules"),
+                                "PSModuleAnalysisCachePath": (
+                                    os.environ.get("PSModuleAnalysisCachePath", "nul")
+                                    if cache_mode == "host-cache"
+                                    else "nul"
+                                ),
                             },
                             stdin=subprocess.DEVNULL,
                         )
