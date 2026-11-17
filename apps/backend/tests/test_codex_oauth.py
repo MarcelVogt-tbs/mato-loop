@@ -93,11 +93,12 @@ async def test_codex_model_discovery_filters_and_normalizes_models(
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert request.url.path == "/backend-api/codex/models"
-        assert request.url.params["client_version"] == "0.159.0"
+        client_version = request.url.params["client_version"]
+        supports_gpt_62 = tuple(map(int, client_version.split("."))) >= (0, 166, 0)
         assert request.headers["Authorization"] == "Bearer access"
         assert request.headers["ChatGPT-Account-ID"] == "account"
         assert request.headers["originator"] == "mato-loop"
-        assert request.headers["version"] == "0.159.0"
+        assert request.headers["version"] == client_version
         return httpx.Response(
             200,
             json={
@@ -124,8 +125,10 @@ async def test_codex_model_discovery_filters_and_normalizes_models(
                     {"slug": "gpt-6-sol", "visibility": "list"},
                     {"slug": "gpt-6-luna", "visibility": "list"},
                     {"slug": "gpt-6.1-sol", "visibility": "list"},
-                    {"slug": "gpt-6.2-astra", "visibility": "list"},
-                    {"slug": "gpt-6.2-sol", "visibility": "list"},
+                    *([
+                        {"slug": "gpt-6.2-astra", "visibility": "list"},
+                        {"slug": "gpt-6.2-sol", "visibility": "list"},
+                    ] if supports_gpt_62 else []),
                     {"slug": "hidden", "visibility": "hide"},
                 ]
             },
