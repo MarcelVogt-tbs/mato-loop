@@ -71,6 +71,9 @@ browser enables its microphone track only after both that readiness barrier and
 the media connection succeed. The browser data channel cannot authorize host
 tools. Its separate cookie-authenticated control WebSocket accepts only
 heartbeat, interrupt and end, with origin, ownership and live login checks.
+Persisted controller initialization wakes the control channel immediately.
+The browser reports readiness as soon as both barriers are met, without waiting
+for a periodic status refresh.
 Loss of control, playback permission, tab visibility, navigation or logout stops
 local media; no microphone reconnection occurs automatically. Heartbeat loss
 expires the backend call. Provider hangup is best effort, with unconfirmed hangup
