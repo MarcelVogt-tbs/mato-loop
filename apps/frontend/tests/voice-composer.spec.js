@@ -189,6 +189,24 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
+  it('replaces the send action with the headset only while the composer is empty', async () => {
+    const icons = []
+    for (const update of [
+      () => {},
+      () => chat.setDraft('Hallo'),
+      () => chat.setDraft('  '),
+      () => chat.addAttachmentFiles([file()]),
+      () => { chat.clearAllAttachmentDrafts(); chat.setDraft(quotedMessage([{ type: 'quote', text: 'Antwort' }])) },
+      () => { chat.setDraft(''); mocks.recorder.recording.value = true }
+    ]) {
+      update()
+      await nextTick()
+      icons.push([...root.querySelectorAll('button[data-icon="headset_mic"], button[data-icon="arrow_upward"]')]
+        .map(button => button.dataset.icon))
+    }
+    expect(icons).toEqual([['headset_mic'], ['arrow_upward'], ['headset_mic'], ['arrow_upward'], ['arrow_upward'], ['arrow_upward']])
+  })
+
   it('focuses the message input when pressing the card padding', () => {
     root.querySelector('.chat-composer__card').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
     expect(document.activeElement).toBe(root.querySelector('.chat-composer__input'))
