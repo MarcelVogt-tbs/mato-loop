@@ -1838,6 +1838,7 @@ class UserPreferences(SettingsDocument):
     sessions_position: Literal["aboveProjects", "belowProjects"] = "belowProjects"
     sessions_page_size: int = Field(default=10, ge=1, le=100, strict=True)
     session_tabs_enabled: bool = False
+    session_tabs_position: Literal["top", "bottom"] = "bottom"
     session_tabs: SessionTabs = Field(default_factory=list)
     control_center_open: StrictBool = False
     trash_enabled: bool = False

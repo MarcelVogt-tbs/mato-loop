@@ -83,7 +83,7 @@ it('saves a personal language without changing instance settings', async () => {
   german.click()
   await vi.waitUntil(() => !root.querySelector('button').disabled)
   root.querySelector('button').click()
-  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/users/me/preferences', { preferredLanguage: 'de-DE', sessionsPosition: 'belowProjects', sessionsPageSize: 10, sessionTabsEnabled: false, trashEnabled: false, trashRetentionDays: 30 }))
+  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/users/me/preferences', { preferredLanguage: 'de-DE', sessionsPosition: 'belowProjects', sessionsPageSize: 10, sessionTabsEnabled: false, sessionTabsPosition: 'bottom', trashEnabled: false, trashRetentionDays: 30 }))
 })
 
 it('saves the sessions position and page size through personal settings', async () => {
@@ -99,7 +99,7 @@ it('saves the sessions position and page size through personal settings', async 
   size.dispatchEvent(new Event('input', { bubbles: true }))
   await vi.waitUntil(() => !root.querySelector('button').disabled)
   root.querySelector('button').click()
-  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/users/me/preferences', { preferredLanguage: 'de-DE', sessionsPosition: 'aboveProjects', sessionsPageSize: 35, sessionTabsEnabled: false, trashEnabled: false, trashRetentionDays: 30 }))
+  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/users/me/preferences', { preferredLanguage: 'de-DE', sessionsPosition: 'aboveProjects', sessionsPageSize: 35, sessionTabsEnabled: false, sessionTabsPosition: 'bottom', trashEnabled: false, trashRetentionDays: 30 }))
 })
 
 it.each([true, false])('saves the base behavior while retaining visible global overrides (model distinction: %s)', async (modelTrustEnabled) => {

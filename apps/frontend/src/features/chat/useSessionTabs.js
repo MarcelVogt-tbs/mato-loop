@@ -19,7 +19,8 @@ export function useSessionTabNavigation() {
     if (generation !== tabs.generation) return
     if (!failure || router.currentRoute.value.query.session === session.id) tabs.visit(session, { keep: true })
   }
-  return { enabled, tabs, openKeptSession }
+  const position = computed(() => preferences.sessionTabsPosition)
+  return { enabled, tabs, position, openKeptSession }
 }
 
 export function useSessionTabs({ chat, route }) {

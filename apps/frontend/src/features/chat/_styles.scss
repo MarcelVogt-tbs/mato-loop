@@ -72,10 +72,6 @@
   display: inline-flex;
 }
 
-.control-center__tab-scroll {
-  overflow-x: auto;
-}
-
 .control-center__tab-strip.q-tabs--scrollable .control-center__tab-scroll {
   mask-image: linear-gradient(to right, transparent, #000 8px, #000 calc(100% - 8px), transparent);
 }

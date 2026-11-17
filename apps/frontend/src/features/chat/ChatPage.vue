@@ -314,7 +314,7 @@
         </aside>
       </template>
     </q-splitter>
-    <SessionTabs v-if="sessionTabsEnabled" enabled :tabs="sessionTabs" :active-key="activeSessionTabKey" />
+    <SessionTabs v-if="sessionTabsEnabled" enabled :tabs="sessionTabs" :active-key="activeSessionTabKey" :position="sessionTabsPosition" />
     <SkillDraftPreview ref="skillDraftPreview" />
     <ProjectDialog v-if="draftProjectDialogOpen" v-model="draftProjectDialogOpen" @created="selectCreatedDraftProject" />
   </q-page>
@@ -381,7 +381,7 @@ const router = useRouter()
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const chat = useChatStore()
-const { enabled: sessionTabsEnabled, tabs: sessionTabs, activeKey: activeSessionTabKey } = useSessionTabs({ chat, route })
+const { enabled: sessionTabsEnabled, tabs: sessionTabs, position: sessionTabsPosition, activeKey: activeSessionTabKey } = useSessionTabs({ chat, route })
 const subagents = useSubagentStore()
 const agentProfiles = useAgentProfileStore()
 const approvals = useApprovalStore()

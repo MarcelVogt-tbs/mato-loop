@@ -84,14 +84,14 @@ it('retains the active tab when navigation is cancelled', async () => {
   await vi.waitFor(() => expect(tabs.items.map(tab => tab.key)).toEqual(['a']))
 })
 
-it('labels project sessions with their full project prefix', async () => {
+it('labels project sessions with their full project suffix', async () => {
   const { tabs, settings } = await mount()
   useProjectStore().items = [{ id: 'project', name: 'MatoLoop' }]
   settings.sessionTabsEnabled = true
   tabs.visit(b, { keep: true })
   await nextTick()
   expect([...root.querySelectorAll('[role="tab"]')].map(tab => tab.getAttribute('aria-label')))
-    .toEqual(['[MatoLoop] Beta', 'Alpha, Vorschau'])
+    .toEqual(['Beta · MatoLoop', 'Alpha, Vorschau'])
 })
 
 it('shows active-run status from summaries instead of session details', async () => {

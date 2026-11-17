@@ -22,7 +22,7 @@ Eine bereits geladene Home-Übersicht wird auch während eines Chats im Hintergr
 
 ### Session-Tabs
 
-Aktiviere **Einstellungen > Grundeinstellungen > Session-Tab-Leiste anzeigen**, wenn du mehrere Unterhaltungen als Tabs offen halten möchtest. Die Leiste erscheint unter Chat und Control Center ab Tabletbreite (600 Pixel); auf dem Handy bleibt sie ausgeblendet. Standardmäßig ist sie ausgeschaltet.
+Aktiviere **Einstellungen > Grundeinstellungen > Session-Tab-Leiste anzeigen**, wenn du mehrere Unterhaltungen als Tabs offen halten möchtest. Unter **Position der Session-Tab-Leiste** wählst du **Oben** oder **Unten** am gemeinsamen Chat-/Control-Center-Bereich; die Auswahl wird für dein Konto gespeichert, Vorgabe ist **Unten**. Die Leiste erscheint ab Tabletbreite (600 Pixel); auf dem Handy bleibt sie ausgeblendet. Standardmäßig ist sie ausgeschaltet.
 
 Ein einfacher Klick auf eine Session öffnet einen kursiven Vorschau-Tab und ersetzt die vorherige Vorschau. Mit Doppelklick auf die Session oder den Tab, über **In neuem Tab öffnen** im Sessionmenü oder ab der ersten Texteingabe bzw. einem Anhang bleibt der Tab erhalten. Bereits geöffnete Sessions werden nicht doppelt angelegt. Inhalt und Reihenfolge der Leiste einschließlich der Vorschau werden für dein Konto geräteübergreifend gespeichert und beim Öffnen bzw. Zurückkehren ins Fenster geladen. Bei gleichzeitigen Änderungen gilt die zuletzt gespeicherte Liste. Entwurfstexte und Anhänge werden dabei nicht übertragen.
 
@@ -30,7 +30,7 @@ Ziehe Tabs an die gewünschte Position; eine Markierung zeigt die Einfügestelle
 
 Das Schließen eines Tabs beendet keinen Lauf und löscht weder Session noch Entwurf. Textentwürfe werden pro Benutzer und Session browserlokal gespeichert; ungesendete Anhänge bleiben beim Wechsel oder Tab-Schließen im Arbeitsspeicher, nicht über ein Neuladen hinweg.
 
-Projekt-Sessions zeigen `[Projektname]` vor dem Titel. Lange Namen werden in der einheitlichen Tabbreite gekürzt. Mit Maus oder Tastaturfokus scrollen überlange Projekt- und Sessionnamen wie in der Seitenleiste, ohne Tooltip. Bei reduzierten Animationen bleiben sie gekürzt.
+Projekt-Sessions zeigen `Sessiontitel · Projektname`. Der Projektname bleibt am rechten Ende sichtbar; nur besonders lange Projektnamen werden gekürzt. Der Sessiontitel nutzt den übrigen Platz und scrollt bei Maus- oder Tastaturfokus, ohne Tooltip. Bei reduzierten Animationen bleibt er gekürzt. Der aktive Tab ist durch seine Hintergrundfläche, einen kräftigeren Titel und die Akzentlinie zum Inhalt hin markiert.
 
 ### Suche
 

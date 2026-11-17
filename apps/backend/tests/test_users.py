@@ -43,7 +43,7 @@ async def test_language_preference_is_owner_bound_and_preserves_other_preference
     db = AsyncMock(spec=AsyncSession)
     result = await user_routes.update_user_preferences(user_routes.UserPreferencesRequest(preferredLanguage="de-DE"), user, db)
     assert (result, settings.dark_mode, load.await_args.kwargs, save.await_args.kwargs) == (
-        {"preferredLanguage": "de-DE", "sessionsPosition": "belowProjects", "sessionsPageSize": 10, "sessionTabsEnabled": True, "trashEnabled": False, "trashRetentionDays": 30}, True,
+        {"preferredLanguage": "de-DE", "sessionsPosition": "belowProjects", "sessionsPageSize": 10, "sessionTabsEnabled": True, "sessionTabsPosition": "bottom", "trashEnabled": False, "trashRetentionDays": 30}, True,
         {"user_id": user.id, "for_update": True}, {"user_id": user.id},
     )
 
@@ -61,21 +61,22 @@ async def test_sessions_position_round_trip_preserves_language(monkeypatch, posi
         "preferredLanguage": "de-DE", "sessionsPosition": position,
         "sessionsPageSize": 10,
         "sessionTabsEnabled": False,
+        "sessionTabsPosition": "bottom",
         "trashEnabled": False, "trashRetentionDays": 30,
     }
 
 
-@pytest.mark.parametrize("enabled", [True, False])
-async def test_session_tabs_preference_round_trip(monkeypatch, enabled):
+@pytest.mark.parametrize("enabled,position", [(True, "top"), (False, "bottom")])
+async def test_session_tabs_preference_round_trip(monkeypatch, enabled, position):
     settings = UserPreferences(session_tabs_enabled=not enabled)
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
     user, db = _user(), AsyncMock(spec=AsyncSession)
     updated = await user_routes.update_user_preferences(
-        user_routes.UserPreferencesRequest(sessionTabsEnabled=enabled), user, db,
+        user_routes.UserPreferencesRequest(sessionTabsEnabled=enabled, sessionTabsPosition=position), user, db,
     )
     loaded = await user_routes.get_user_preferences(user, db)
-    assert (updated["sessionTabsEnabled"], loaded["sessionTabsEnabled"]) == (enabled, enabled)
+    assert (updated["sessionTabsEnabled"], loaded["sessionTabsEnabled"], loaded["sessionTabsPosition"]) == (enabled, enabled, position)
 
 
 async def test_sessions_page_size_round_trip(monkeypatch):

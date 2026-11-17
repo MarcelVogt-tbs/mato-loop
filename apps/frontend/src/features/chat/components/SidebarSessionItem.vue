@@ -12,15 +12,9 @@
   >
     <q-item-section side class="q-pr-sm">
       <span class="session-list-item__status-slot row items-center justify-center">
-        <span v-if="indicator" class="row items-center justify-center" role="status" :aria-label="indicator.label">
-          <template v-if="indicator.kind === 'approval'">
-            <q-icon name="pending_actions" color="warning" size="16px" />
-            <q-badge v-if="indicator.count > 1" floating rounded color="warning" text-color="dark" :label="indicator.count" />
-          </template>
-          <q-spinner-grid v-else-if="indicator.kind === 'active'" color="primary" size="16px" />
-          <q-icon v-else name="fiber_manual_record" color="primary" size="12px" />
+        <SessionStatusIndicator v-if="indicator" :status="indicator">
           <q-tooltip v-if="$q.platform.is.mobile !== true">{{ indicator.label }}</q-tooltip>
-        </span>
+        </SessionStatusIndicator>
       </span>
     </q-item-section>
     <q-item-section
@@ -82,6 +76,7 @@ import { sessionSidebarStatus } from '../session-groups'
 import SidebarIconButton from 'src/shared/ui/SidebarIconButton.vue'
 import SessionMenuItems from './SessionMenuItems.vue'
 import SidebarActionMenu from './SidebarActionMenu.vue'
+import SessionStatusIndicator from './SessionStatusIndicator.vue'
 import { useSessionTabNavigation } from '../useSessionTabs'
 
 const props = defineProps({
