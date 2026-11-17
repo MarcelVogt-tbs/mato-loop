@@ -189,6 +189,8 @@ Kalender und Aufgaben bedienst du bisher über den Chat; eigene Control-Center-A
 
 Token werden verschlüsselt gespeichert und automatisch erneuert. Bei abgelehnter Erneuerung melde dich erneut an. Nach Backend-Neustarts musst du nur laufende Anmeldeversuche neu starten. Bei Gerätecode-Konfigurationsfehlern prüfe zuerst **Öffentliche Clientflows zulassen**.
 
+Auch ohne gespeicherte Zugangsdaten bleibt die Verbindung unter **Einstellungen > Integrationen > Verwaltung** sichtbar. Öffne sie zum Bearbeiten und wähle **Bei Microsoft anmelden**. Fehlt bei der Browser-Anmeldung auch das Client-Secret, trage es vorher erneut ein und speichere.
+
 Änderungen an App-Daten, Anmeldeverfahren, Secret oder Zusatzoptionen erfordern eine neue Anmeldung. Diese setzt Zugriffsfreigaben zurück; bei reinen Optionsänderungen bleibt das Browser-Secret erhalten. **Verbindung trennen** entfernt MatoLoops Token, nicht die App-Konfiguration oder Microsofts Einwilligung. Widerrufe die Einwilligung bei Bedarf zusätzlich in Entra beziehungsweise deinen Microsoft-App-Berechtigungen.
 
 ## Rezepte und Einkaufsliste mit Mealie
