@@ -179,6 +179,32 @@ class WindowsRuntimeTests(unittest.TestCase):
                 timeout=10,
                 stream=stream,
             )
+            if result["timedOut"]:
+                for command in (
+                    "[Console]::WriteLine('console probe')",
+                    "Write-Output 'cmdlet probe'",
+                ):
+                    try:
+                        probe = subprocess.run(
+                            [
+                                self.process.shell,
+                                "-NoProfile",
+                                "-NonInteractive",
+                                "-Command",
+                                command,
+                            ],
+                            capture_output=True,
+                            text=True,
+                            timeout=20,
+                        )
+                        chunks.append(
+                            (
+                                "probe",
+                                repr((probe.returncode, probe.stdout, probe.stderr)),
+                            )
+                        )
+                    except subprocess.TimeoutExpired:
+                        chunks.append(("probe", command + " timed out"))
             self.assertEqual(result["exitCode"], 0, chunks)
             self.assertIn("Windows ready", "".join(text for _, text in chunks))
             self.assertIn(
@@ -538,7 +564,10 @@ class WindowsRuntimeTests(unittest.TestCase):
                 "function Fail($message) { throw $message }; "
                 "$uv={ $global:LASTEXITCODE=1 }; "
                 "try { & ([ScriptBlock]::Create("
-                "$ast.Extent.Text.Substring($start, $end-$start))) } catch {}",
+                "$ast.Extent.Text.Substring($start, $end-$start))) } "
+                "catch { if ($_.Exception.Message -ne 'Could not find private Python.') "
+                "{ throw } }; "
+                "exit 0",
             ],
             check=False,
             capture_output=True,
