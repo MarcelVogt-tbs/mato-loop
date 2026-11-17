@@ -50,7 +50,9 @@ class OAuthCredential(BaseModel):
 
 
 def credential_payload(record: Credential | None, config: Microsoft365Config) -> OAuthCredential:
-    if record is None or record.kind != CREDENTIAL_KIND:
+    if record is None:
+        return OAuthCredential(config=config)
+    if record.kind != CREDENTIAL_KIND:
         raise Microsoft365Error("microsoft365.authorizationRequired")
     try:
         payload = OAuthCredential.model_validate(read_credential(record))
