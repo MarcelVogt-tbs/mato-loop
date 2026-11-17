@@ -356,14 +356,14 @@ describe('voice attachment composer', () => {
     expect(target.scrollTop).toBe(300)
   })
 
-  it('bounds automatic history loading for collapsed replies and leaves a manual way to continue', async () => {
+  it('automatically loads collapsed history beyond two pages until the viewport fills', async () => {
+    let pages = 0
     const target = document.createElement('div')
     Object.defineProperties(target, {
       clientHeight: { value: 400 },
-      scrollHeight: { value: 400 }
+      scrollHeight: { get: () => pages >= 3 ? 1000 : 400 }
     })
     mocks.scrollTarget = target
-    let pages = 0
     const messages = page => Array.from({ length: 20 }, (_, index) => ({
       id: `reply-${page}-${index}`, role: 'assistant', content: 'Reply',
       createdAt: new Date(Date.UTC(2026, 0, 1, 0, 100 - page * 20 + index)).toISOString()
@@ -377,14 +377,7 @@ describe('voice attachment composer', () => {
     showPage.value = true
     await nextTick()
     await vi.advanceTimersByTimeAsync(1000)
-    const automaticPages = pages
-    target.getBoundingClientRect = () => ({ top: 0, bottom: 400 })
-    root.querySelector('[data-message-id]').getBoundingClientRect = () => ({ top: 0, bottom: 60 })
-    await click('Ältere Nachrichten laden')
-    await vi.advanceTimersByTimeAsync(500)
-
-    expect([automaticPages, pages, Boolean(root.querySelector('.chat-transcript:not(.invisible)'))])
-      .toEqual([2, 3, true])
+    expect(pages).toBe(3)
   })
 
   it('reveals a search result merged into the final assistant message', async () => {
