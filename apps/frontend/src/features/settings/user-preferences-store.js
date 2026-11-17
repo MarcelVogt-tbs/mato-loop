@@ -2,11 +2,12 @@ import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 
 export const useUserPreferencesStore = defineStore('user-preferences', {
-  state: () => ({ preferredLanguage: null, sessionsPosition: 'belowProjects', trashEnabled: false, trashRetentionDays: 30, loading: false, loaded: false, loadFailed: false, saving: false }),
+  state: () => ({ preferredLanguage: null, sessionsPosition: 'belowProjects', sessionTabsEnabled: false, trashEnabled: false, trashRetentionDays: 30, loading: false, loaded: false, loadFailed: false, saving: false }),
   actions: {
     applySettings(data) {
       this.preferredLanguage = data.preferredLanguage
       this.sessionsPosition = data.sessionsPosition ?? 'belowProjects'
+      this.sessionTabsEnabled = data.sessionTabsEnabled ?? false
       this.trashEnabled = data.trashEnabled ?? false
       this.trashRetentionDays = data.trashRetentionDays ?? 30
     },

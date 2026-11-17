@@ -1,5 +1,6 @@
 <template>
   <template v-if="session.title != null">
+    <SidebarNavItem v-if="tabsEnabled" icon="tab" label="In neuem Tab öffnen" v-close-popup @click="openKeptSession(session)" />
     <SidebarNavItem
       v-if="showPin" icon="push_pin"
       :label="session.pinned ? 'Nicht mehr anheften' : 'Anheften'"
@@ -16,6 +17,9 @@
 
 <script setup>
 import SidebarNavItem from 'src/shared/ui/SidebarNavItem.vue'
+import { useSessionTabNavigation } from '../useSessionTabs'
+
+const { enabled: tabsEnabled, openKeptSession } = useSessionTabNavigation()
 
 defineProps({
   session: { type: Object, required: true },

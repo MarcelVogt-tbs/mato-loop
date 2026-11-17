@@ -6,6 +6,7 @@ import { useApprovalStore } from 'stores/approvals'
 import { useAutomationStore } from 'stores/automations'
 import { useBrowserStore } from 'stores/browser'
 import { useChatStore } from 'src/features/chat/store'
+import { useSessionTabsStore } from 'src/features/chat/session-tabs-store'
 import { useVoiceStore } from 'src/features/voice/store'
 import { useControlCenterStore } from 'stores/control-center'
 import { useExecutionAgentStore } from 'stores/execution-agents'
@@ -34,6 +35,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
   const automations = useAutomationStore()
   const browser = useBrowserStore()
   const chat = useChatStore()
+  const sessionTabs = useSessionTabsStore()
   const voice = useVoiceStore()
   const home = useHomeStore()
   const controlCenter = useControlCenterStore()
@@ -111,6 +113,24 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     refreshAppPresence()
     if (document.visibilityState !== 'visible') return
     queueChanges([{ resource: 'all' }])
+    void sessionTabs.fetchWorkspace().catch(() => {})
+  }
+
+  watch(() => chat.draftOwnerUserId, owner => {
+    void sessionTabs.setOwner(owner).catch(() => {})
+  }, { immediate: true })
+  watch(() => sessionTabs.items.map(tab => tab.sessionId).filter(Boolean).join(','), () => {
+    void sessionTabs.refreshSummaries().catch(() => {})
+  })
+  watch(() => sessionTabs.summaries, summaries => {
+    for (const summary of Object.values(summaries)) chat.updateCachedSession(summary.id, item => ({ ...item, ...summary }))
+  })
+  watch(() => $q.screen.lt.md, mobile => {
+    if (mobile) controlCenter.mobileOpen = false
+  }, { flush: 'sync' })
+
+  function refreshWorkspaceOnFocus() {
+    if (document.visibilityState === 'visible') void sessionTabs.fetchWorkspace().catch(() => {})
   }
 
   function refreshPushState() {
@@ -161,6 +181,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     if (all || resources.has('approvals')) reload('approvals', approvals.fetchPending(config))
     if (all || resources.has('questions')) reload('questions', questions.fetchPending(config))
     if (all || resources.has('notifications')) reload('notifications', notifications.fetchLatest(config))
+    if (sessionsChanged || resources.has('projects')) reload('sessions', sessionTabs.refreshSummaries())
     if ((sessionsChanged || resources.has('home') || resources.has('projects') || resources.has('approvals') || resources.has('questions'))
       && (home.loaded || home.loadRequest)) {
       if (home.displayed) reload('home', home.load(config))
@@ -300,6 +321,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     window.addEventListener('resize', updateVisualViewport)
     window.addEventListener('keydown', handleSearchShortcut)
     window.addEventListener('focus', refreshAppPresence)
+    window.addEventListener('focus', refreshWorkspaceOnFocus)
     window.addEventListener('blur', refreshAppPresence)
     window.addEventListener('beforeunload', preventDiscardOnUnload)
     document.addEventListener('visibilitychange', refreshSessionsWhenVisible)
@@ -327,6 +349,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     window.removeEventListener('resize', updateVisualViewport)
     window.removeEventListener('keydown', handleSearchShortcut)
     window.removeEventListener('focus', refreshAppPresence)
+    window.removeEventListener('focus', refreshWorkspaceOnFocus)
     window.removeEventListener('blur', refreshAppPresence)
     presenceRequest = presenceRequest.catch(() => {}).then(() => notifications.markPresent({
       clientId: presenceClientId, sessionId: null, active: false

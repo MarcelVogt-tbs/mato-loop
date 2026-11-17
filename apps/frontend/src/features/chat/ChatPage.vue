@@ -314,6 +314,7 @@
         </aside>
       </template>
     </q-splitter>
+    <SessionTabs v-if="sessionTabsEnabled" enabled :tabs="sessionTabs" :active-key="activeSessionTabKey" />
     <SkillDraftPreview ref="skillDraftPreview" />
     <ProjectDialog v-if="draftProjectDialogOpen" v-model="draftProjectDialogOpen" @created="selectCreatedDraftProject" />
   </q-page>
@@ -335,6 +336,8 @@ import ChatComposer from 'src/features/chat/components/ChatComposer.vue'
 import { parseQuotedMessage } from './quote-drafts'
 import { useChatViewport } from './useChatViewport'
 import { useChatNavigation } from './useChatNavigation'
+import { useSessionTabs } from './useSessionTabs'
+import SessionTabs from './components/SessionTabs.vue'
 import SessionTodoStrip from 'src/features/chat/components/SessionTodoStrip.vue'
 import SessionSettingsFields from 'src/features/chat/components/SessionSettingsFields.vue'
 import WorkspaceField from 'src/features/coding/WorkspaceField.vue'
@@ -378,6 +381,7 @@ const router = useRouter()
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const chat = useChatStore()
+const { enabled: sessionTabsEnabled, tabs: sessionTabs, activeKey: activeSessionTabKey } = useSessionTabs({ chat, route })
 const subagents = useSubagentStore()
 const agentProfiles = useAgentProfileStore()
 const approvals = useApprovalStore()

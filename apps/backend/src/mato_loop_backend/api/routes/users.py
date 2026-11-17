@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +36,9 @@ from mato_loop_backend.security import (
     revoke_login_sessions,
     verify_password,
 )
+from mato_loop_backend.sessions.state import deleted_session_clause
 from mato_loop_backend.settings import SettingsStore, UserPreferences
+from mato_loop_backend.settings.models import SessionTabs
 
 router = APIRouter(prefix="/users")
 logger = logging.getLogger(__name__)
@@ -83,6 +85,7 @@ class UserPreferencesRequest(BaseModel):
     sessions_position: Literal["aboveProjects", "belowProjects"] = Field(
         default="belowProjects", alias="sessionsPosition",
     )
+    session_tabs_enabled: bool = Field(default=False, alias="sessionTabsEnabled")
     trash_enabled: bool = Field(default=False, alias="trashEnabled")
     trash_retention_days: int = Field(default=30, alias="trashRetentionDays", ge=1, le=3650)
     preferred_language: str | None = Field(
@@ -100,6 +103,7 @@ async def get_user_preferences(
     return {
         "preferredLanguage": settings.preferred_language,
         "sessionsPosition": settings.sessions_position,
+        "sessionTabsEnabled": settings.session_tabs_enabled,
         "trashEnabled": settings.trash_enabled,
         "trashRetentionDays": settings.trash_retention_days,
     }
@@ -119,8 +123,77 @@ async def update_user_preferences(
     return {
         "preferredLanguage": settings.preferred_language,
         "sessionsPosition": settings.sessions_position,
+        "sessionTabsEnabled": settings.session_tabs_enabled,
         "trashEnabled": settings.trash_enabled,
         "trashRetentionDays": settings.trash_retention_days,
+    }
+
+
+class WorkspaceStateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_tabs: SessionTabs = Field(default_factory=list, alias="sessionTabs")
+    control_center_open: StrictBool = Field(default=False, alias="controlCenterOpen")
+
+
+async def _workspace_tabs(
+    db: AsyncSession, user_id: UUID, tabs: SessionTabs,
+) -> SessionTabs:
+    session_ids = {tab.session_id for tab in tabs if tab.session_id is not None}
+    project_ids = {tab.project_id for tab in tabs if tab.session_id is None and tab.project_id is not None}
+    sessions = {item.id: item for item in (await db.scalars(select(ChatSession).where(
+        ChatSession.id.in_(session_ids), ChatSession.user_id == user_id,
+        ChatSession.parent_session_id.is_(None), ~deleted_session_clause(),
+    ))).all()} if session_ids else {}
+    projects = set((await db.scalars(select(Project.id).where(
+        Project.id.in_(project_ids), Project.user_id == user_id,
+        Project.archived_at.is_(None), Project.delete_at.is_(None),
+    ))).all()) if project_ids else set()
+    result = []
+    for tab in tabs:
+        if tab.session_id is not None:
+            session = sessions.get(tab.session_id)
+            if session is None:
+                continue
+            tab = tab.model_copy(update={"title": session.title, "project_id": session.project_id})
+        elif tab.project_id is not None and tab.project_id not in projects:
+            continue
+        result.append(tab)
+    return result
+
+
+@router.get("/me/workspace-state")
+async def get_workspace_state(
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    settings = await SettingsStore.load(db, UserPreferences, user_id=user.id)
+    tabs = await _workspace_tabs(db, user.id, settings.session_tabs)
+    return {
+        "sessionTabs": [tab.model_dump(mode="json", by_alias=True) for tab in tabs],
+        "controlCenterOpen": settings.control_center_open,
+    }
+
+
+@router.put("/me/workspace-state")
+async def update_workspace_state(
+    payload: WorkspaceStateRequest,
+    user: Annotated[UserAccount, Depends(require_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict:
+    settings = await SettingsStore.load(db, UserPreferences, user_id=user.id, for_update=True)
+    if "session_tabs" in payload.model_fields_set:
+        settings.session_tabs = await _workspace_tabs(db, user.id, payload.session_tabs)
+        tabs = settings.session_tabs
+    else:
+        tabs = await _workspace_tabs(db, user.id, settings.session_tabs)
+    if "control_center_open" in payload.model_fields_set:
+        settings.control_center_open = payload.control_center_open
+    await SettingsStore.save(db, settings, user_id=user.id)
+    await db.commit()
+    return {
+        "sessionTabs": [tab.model_dump(mode="json", by_alias=True) for tab in tabs],
+        "controlCenterOpen": settings.control_center_open,
     }
 
 

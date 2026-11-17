@@ -20,6 +20,18 @@ Die Seitenleiste bleibt nach deiner letzten Nachricht sortiert, neueste zuerst; 
 
 Eine bereits geladene Home-Übersicht wird auch während eines Chats im Hintergrund aktualisiert. Beim Zurückkehren bleibt sie erhalten, statt allein durch den Seitenwechsel erneut geladen zu werden.
 
+### Session-Tabs
+
+Aktiviere **Einstellungen > Grundeinstellungen > Session-Tab-Leiste anzeigen**, wenn du mehrere Unterhaltungen als Tabs offen halten möchtest. Die Leiste erscheint unter Chat und Control Center ab Tabletbreite (600 Pixel); auf dem Handy bleibt sie ausgeblendet. Standardmäßig ist sie ausgeschaltet.
+
+Ein einfacher Klick auf eine Session öffnet einen kursiven Vorschau-Tab und ersetzt die vorherige Vorschau. Mit Doppelklick auf die Session oder den Tab, über **In neuem Tab öffnen** im Sessionmenü oder ab der ersten Texteingabe bzw. einem Anhang bleibt der Tab erhalten. Bereits geöffnete Sessions werden nicht doppelt angelegt. Inhalt und Reihenfolge der Leiste einschließlich der Vorschau werden für dein Konto geräteübergreifend gespeichert und beim Öffnen bzw. Zurückkehren ins Fenster geladen. Bei gleichzeitigen Änderungen gilt die zuletzt gespeicherte Liste. Entwurfstexte und Anhänge werden dabei nicht übertragen.
+
+Ziehe Tabs an die gewünschte Position; eine Markierung zeigt die Einfügestelle. Alternativ verwende **Alt+Pfeil links/rechts** oder **Nach links verschieben** bzw. **Nach rechts verschieben** im Kontextmenü (Rechtsklick oder langes Drücken). Eine verschobene Vorschau bleibt als eigener Tab erhalten. Mit × entfernte Tabs bleiben auch nach Neuladen geschlossen. Die Leiste unterstützt bis zu 100 Tabs.
+
+Das Schließen eines Tabs beendet keinen Lauf und löscht weder Session noch Entwurf. Textentwürfe werden pro Benutzer und Session browserlokal gespeichert; ungesendete Anhänge bleiben beim Wechsel oder Tab-Schließen im Arbeitsspeicher, nicht über ein Neuladen hinweg.
+
+Projekt-Sessions zeigen `[Projektname]` vor dem Titel. Lange Namen werden in der einheitlichen Tabbreite gekürzt. Mit Maus oder Tastaturfokus scrollen überlange Projekt- und Sessionnamen wie in der Seitenleiste, ohne Tooltip. Bei reduzierten Animationen bleiben sie gekürzt.
+
 ### Suche
 
 Die Suche findet eigene Projekte, Sessions und Nachrichten ab zwei Zeichen. **Strg+F** bzw. **Cmd+F** öffnet die Anwendungssuche; ist sie bereits offen, bleibt die Browsersuche verfügbar. Ohne Embedding-Dienst funktioniert die lexikalische Suche weiter. Suchergebnisse öffnen den passenden Gesprächskontext.
@@ -47,7 +59,7 @@ Die schwebende Schaltfläche öffnet das Control Center. **Session** ist der fes
 
 Apps lassen sich umordnen und schließen. Das Schließen eines App-Tabs löscht seine Daten oder Konfiguration nicht; eine Automation läuft beispielsweise weiter. Das Zuklappen des Panels erhält Tabs und Dateientwürfe. Nur beim Schließen einer Datei mit ungespeicherten Änderungen ist eine Entscheidung erforderlich. Der feste Sessionbereich kann nicht entfernt werden.
 
-Reihenfolge, Dateiziele und Ansichten werden je Session gespeichert, Editorentwürfe bleiben im Browser-Arbeitsspeicher. Ab 1024 Pixeln stellt MatoLoop die gespeicherte Panel-Sichtbarkeit im geteilten Layout wieder her. Der mobile Vollbilddialog startet geschlossen und muss ausdrücklich geöffnet werden.
+Reihenfolge, Dateiziele und Ansichten werden je Session gespeichert, Editorentwürfe bleiben im Browser-Arbeitsspeicher. Der Öffnungszustand gilt dagegen gemeinsam für alle Sessions und wird für dein Konto geräteübergreifend gespeichert. Ab 1024 Pixeln stellt MatoLoop diese Sichtbarkeit im geteilten Layout wieder her. Der Vollbilddialog auf kleineren Bildschirmen startet geschlossen und muss ausdrücklich geöffnet werden; sein Öffnen und Schließen verändert die gespeicherte Sichtbarkeit nicht.
 
 ### Benachrichtigungen
 

@@ -9,6 +9,7 @@ from unicodedata import category as unicode_category
 from uuid import UUID, uuid4
 
 from pydantic import (
+    AfterValidator,
     AliasChoices,
     BaseModel,
     ConfigDict,
@@ -1807,6 +1808,27 @@ class SkillsSettings(SettingsDocument):
         return self
 
 
+class SessionTab(BaseModel):
+    model_config = ConfigDict(alias_generator=_camel_case, populate_by_name=True, extra="forbid")
+
+    session_id: UUID | None = None
+    project_id: UUID | None = None
+    title: str = Field(default="", max_length=240)
+    preview: StrictBool = False
+
+
+def validate_session_tabs(tabs: list[SessionTab]) -> list[SessionTab]:
+    identities = [("session", tab.session_id) if tab.session_id else ("draft", tab.project_id) for tab in tabs]
+    if len(set(identities)) != len(identities):
+        raise ValueError("session tab identities must be unique")
+    if sum(tab.preview for tab in tabs) > 1:
+        raise ValueError("at most one preview tab is allowed")
+    return tabs
+
+
+SessionTabs = Annotated[list[SessionTab], Field(max_length=100), AfterValidator(validate_session_tabs)]
+
+
 class UserPreferences(SettingsDocument):
     settings_key = "user-preferences"
     settings_scope = SettingsScope.USER
@@ -1814,6 +1836,9 @@ class UserPreferences(SettingsDocument):
     dark_mode: bool = False
     session_drawer_open: bool = True
     sessions_position: Literal["aboveProjects", "belowProjects"] = "belowProjects"
+    session_tabs_enabled: bool = False
+    session_tabs: SessionTabs = Field(default_factory=list)
+    control_center_open: StrictBool = False
     trash_enabled: bool = False
     trash_retention_days: int = Field(default=30, ge=1, le=3650)
     project_order: list[UUID] = Field(default_factory=list)

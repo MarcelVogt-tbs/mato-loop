@@ -25,12 +25,13 @@ const { confirm } = vi.hoisted(() => ({ confirm: vi.fn() }))
 const createdAt = '2026-09-06T10:00:00Z'
 let app, root, pinia, responses
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetAllMocks()
   confirm.mockResolvedValue(true)
   pinia = createPinia()
   setActivePinia(pinia)
-  Object.assign(useControlCenterStore(), { open: true, activeGlobalSectionId: null, activeAppId: 'session' })
+  Object.assign(useControlCenterStore(), { activeGlobalSectionId: null, activeAppId: 'session' })
+  await useControlCenterStore().setOpen(true)
   responses = {
     '/approvals/pending': [{
       id: 'approval', sessionId: 'parent', title: 'Datei lesen', createdAt,
@@ -234,20 +235,20 @@ describe('approval card', () => {
 
   it('loads grants on opening the session app but not while it is hidden', async () => {
     const center = useControlCenterStore()
-    center.open = false
+    await center.setOpen(false)
     useChatStore().current = { id: 'session-1', preferredExecutionAgentId: 'old' }
     responses['/approvals/sessions/session-1/permissions'] = []
     await mountView(() => h(SessionApp))
     const count = () => api.get.mock.calls.filter(([url]) => url.endsWith('/permissions')).length
     const counts = [count()]
-    center.open = true
+    await center.setOpen(true)
     await vi.waitFor(() => expect(count()).toBe(1))
     counts.push(count())
-    center.open = false
+    await center.setOpen(false)
     useChatStore().current.preferredExecutionAgentId = 'new'
     await nextTick()
     counts.push(count())
-    center.open = true
+    await center.setOpen(true)
     await vi.waitFor(() => expect(count()).toBe(2))
     expect([...counts, count()]).toEqual([0, 1, 1, 2])
   })

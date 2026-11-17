@@ -97,8 +97,13 @@ vi.mock('stores/in-app-notifications', async () => {
 vi.mock('stores/control-center', async () => {
   const { reactive } = await import('vue')
   const store = reactive({
-    sessionId: null, ready: true, open: false, restoredOpen: false, tabs: [], fileTabs: [], confirmedState: { tabs: [] },
-    openApp: vi.fn(async function () { this.open = true; this.restoredOpen = false }),
+    sessionId: null, ready: true, mobileOpen: false, desktopOpen: false, tabs: [], fileTabs: [], confirmedState: { tabs: [] },
+    get open() { return quasar.screen.lt.md ? this.mobileOpen : this.desktopOpen },
+    setOpen: vi.fn(async function (open) {
+      if (quasar.screen.lt.md) this.mobileOpen = open
+      else this.desktopOpen = open
+    }),
+    openApp: vi.fn(async function () { await this.setOpen(true) }),
     ensureApp: vi.fn().mockResolvedValue(),
     removeFileTabs: vi.fn().mockResolvedValue()
   })
@@ -146,7 +151,7 @@ beforeEach(async () => {
   useRoute().name = 'chat'
   useRoute().query = {}
   Object.assign(useBrowserStore(), { sessionId: null, agentId: null, integrationId: null })
-  Object.assign(useControlCenterStore(), { sessionId: null, ready: true, open: false, restoredOpen: false, tabs: [], fileTabs: [], confirmedState: { tabs: [] } })
+  Object.assign(useControlCenterStore(), { sessionId: null, ready: true, mobileOpen: false, desktopOpen: false, tabs: [], fileTabs: [], confirmedState: { tabs: [] } })
   useIntegrationStore().browser.instances = []
   Object.assign(useIntegrationStore(), { browserLoaded: true, catalogLoaded: true, catalogLoadFailed: false })
   useIntegrationStore().adapterAvailable.mockReturnValue(true)
@@ -318,7 +323,8 @@ it('reconciles an external run hint and reloads on reconnect', async () => {
 it.each([true, false])('refreshes changed grants only when the session app is visible (%s)', async (open) => {
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
   useChatStore().current = { id: 'standalone', messages: [] }
-  Object.assign(useControlCenterStore(), { open, activeContentId: 'session' })
+  await useControlCenterStore().setOpen(open)
+  useControlCenterStore().activeContentId = 'session'
   EventSource.instances[0].emit([{ resource: 'permissions', sessionId: 'standalone' }])
   await vi.advanceTimersByTimeAsync(50)
   expect(pending.fetchGrants.mock.calls).toEqual(open ? [[{ suppressErrorToast: true }, 'standalone']] : [])
@@ -334,7 +340,7 @@ it('opens notifications from the Control Center badge and otherwise restores the
   root.querySelector('#control-center-toggle').click()
   await nextTick()
   expect(center.openApp).toHaveBeenLastCalledWith('notifications')
-  center.open = false
+  await center.setOpen(false)
   store.unreadCount = 0
   await nextTick()
   root.querySelector('#control-center-toggle').click()
@@ -348,8 +354,7 @@ it.each([
 ])('restores the panel beside chat but not the fullscreen dialog (phone=%s, dark=%s)', async (phone, dark) => {
   quasar.dark.isActive = dark
   const center = useControlCenterStore()
-  center.open = true
-  center.restoredOpen = true
+  await center.setOpen(true)
   await nextTick()
   expect(root.querySelector('#control-center-toggle')).toBeNull()
 

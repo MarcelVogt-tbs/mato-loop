@@ -8,6 +8,7 @@
     @mouseenter="prepareTitleScroll"
     @focusin="prepareTitleScroll"
     @click="emit('open', session)"
+    @dblclick="openKeptSession(session)"
   >
     <q-item-section side class="q-pr-sm">
       <span class="session-list-item__status-slot row items-center justify-center">
@@ -81,6 +82,7 @@ import { sessionSidebarStatus } from '../session-groups'
 import SidebarIconButton from 'src/shared/ui/SidebarIconButton.vue'
 import SessionMenuItems from './SessionMenuItems.vue'
 import SidebarActionMenu from './SidebarActionMenu.vue'
+import { useSessionTabNavigation } from '../useSessionTabs'
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -94,6 +96,7 @@ const props = defineProps({
   draggable: { type: Boolean, default: true }
 })
 const menuOpen = defineModel('menuOpen', { type: Boolean, default: false })
+const { openKeptSession } = useSessionTabNavigation()
 const emit = defineEmits(['open', 'rename', 'move', 'archive', 'delete', 'toggle-pin', 'drag-start', 'drag-end'])
 const timestamp = computed(() => props.session.lastUserMessageAt || props.session.createdAt)
 const indicator = computed(() => props.status || sessionSidebarStatus(props.session)

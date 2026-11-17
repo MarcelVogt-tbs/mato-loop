@@ -1,7 +1,8 @@
 import { createPinia, setActivePinia } from 'pinia'
+import { Screen } from 'quasar'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { api } = vi.hoisted(() => ({ api: { patch: vi.fn() } }))
+const { api } = vi.hoisted(() => ({ api: { patch: vi.fn(), put: vi.fn(), get: vi.fn() } }))
 vi.mock('src/boot/axios', () => ({ api }))
 
 import {
@@ -16,8 +17,10 @@ import {
   controlCenterIntegrationIds
 } from 'src/app/control-center/manifest'
 import { useChatStore } from 'src/features/chat/store'
+import { useSessionTabsStore } from 'src/features/chat/session-tabs-store'
 
 const originalLocalStorage = globalThis.localStorage
+const originalMobile = Screen.lt.md
 const testIntegrationIds = ['calendar', 'test-app']
 
 function storage(initialValue = null) {
@@ -47,11 +50,10 @@ function response(tabs, activeAppId) {
   }
 }
 
-function requestState(appIds, activeAppId, open, fileView = null, fileViews = { session: null, filesystem: null }) {
+function requestState(appIds, activeAppId, fileView = null, fileViews = { session: null, filesystem: null }) {
   return {
     tabs: appIds.map(requestTab),
     active_app_id: activeAppId,
-    open,
     file_view: fileView,
     file_views: fileViews
   }
@@ -73,9 +75,11 @@ describe('control center store', () => {
     testIntegrationIds.forEach((id) => controlCenterIntegrationIds.add(id))
     setActivePinia(createPinia())
     vi.resetAllMocks()
+    Screen.lt.md = false
   })
 
   afterEach(() => {
+    Screen.lt.md = originalMobile
     testIntegrationIds.forEach((id) => controlCenterIntegrationIds.delete(id))
     if (originalLocalStorage) globalThis.localStorage = originalLocalStorage
     else delete globalThis.localStorage
@@ -133,41 +137,76 @@ describe('control center store', () => {
     expect(useControlCenterStore().splitRatio).toBe(DEFAULT_CONTROL_CENTER_SPLIT_RATIO)
   })
 
-  it('keeps restored visibility separate from explicit opening and unrelated saves', async () => {
+  it('keeps global visibility across session binding, synchronization and draft resets', async () => {
     const store = useControlCenterStore()
+    const workspace = useSessionTabsStore()
+    workspace.$patch({ owner: 'user-1', loaded: true })
+    api.put.mockResolvedValue({ data: { sessionTabs: [], controlCenterOpen: true } })
     const session = { id: 'session-1', controlCenter: { tabs: [tab('files')], activeAppId: 'files', open: true } }
     store.bindSession(session)
     store.syncSession(session)
-    expect(store.open).toBe(true)
-    expect(store.restoredOpen).toBe(true)
+    expect(store.open).toBe(false)
 
-    api.patch.mockResolvedValue({ data: { controlCenter: session.controlCenter } })
-    await store.setFileView(sessionFileView)
-    expect(store.restoredOpen).toBe(true)
-    expect(api.patch.mock.calls[0][1].control_center.open).toBe(true)
-
-    await store.openApp('files')
+    await store.setOpen(true)
+    expect(api.put).toHaveBeenCalledWith('/users/me/workspace-state', { controlCenterOpen: true })
+    const nextSession = { id: 'session-2', controlCenter: { tabs: [tab('calendar')], activeAppId: 'calendar', open: false } }
+    store.bindSession(nextSession)
     expect(store.open).toBe(true)
-    expect(store.restoredOpen).toBe(false)
+    store.syncSession(nextSession)
+    expect(store.open).toBe(true)
+    store.resetDraft()
+    expect(store.open).toBe(true)
+
+    api.put.mockResolvedValue({ data: { sessionTabs: [], controlCenterOpen: false } })
+    await store.setOpen(false)
+    store.bindSession(session)
     store.syncSession(session)
-    expect(store.restoredOpen).toBe(true)
-
-    api.patch.mockRejectedValueOnce(new Error('request failed'))
-    await expect(store.setOpen(true)).rejects.toThrow('request failed')
-    expect(store.restoredOpen).toBe(true)
+    store.resetDraft()
+    expect(store.open).toBe(false)
+    expect(workspace.controlCenterOpen).toBe(false)
+    expect(api.patch).not.toHaveBeenCalled()
   })
 
-  it.each(['notifications', 'approvals'])('opens %s as notifications while persisting the panel state', async (appId) => {
-    api.patch.mockResolvedValue({
-      data: {
-        controlCenter: {
-          tabs: [tab('files')],
-          activeAppId: 'files',
-          open: true,
-          fileView: null
-        }
-      }
-    })
+  it('restores visibility after a failed workspace save', async () => {
+    const store = useControlCenterStore()
+    const workspace = useSessionTabsStore()
+    workspace.$patch({ owner: 'user-1', loaded: true })
+    api.put.mockRejectedValueOnce(new Error('request failed'))
+
+    await expect(store.setOpen(true)).rejects.toThrow('request failed')
+
+    expect(store.open).toBe(false)
+    expect(workspace.controlCenterOpen).toBe(false)
+  })
+
+  it('changes mobile visibility without writing the desktop preference', async () => {
+    Screen.lt.md = true
+    const store = useControlCenterStore()
+    const workspace = useSessionTabsStore()
+    workspace.$patch({ owner: 'user-1', loaded: true })
+
+    await store.setOpen(true)
+
+    expect(store.open).toBe(true)
+    expect(workspace.controlCenterOpen).toBe(false)
+    expect(api.put).not.toHaveBeenCalled()
+    expect(api.patch).not.toHaveBeenCalled()
+  })
+
+  it('does not reopen after an explicit close while app state is saving', async () => {
+    const store = useControlCenterStore()
+    store.syncSession({ id: 'session-1', controlCenter: { tabs: [tab('files')], activeAppId: 'files' } })
+    await store.setOpen(true)
+    let resolve
+    api.patch.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    const opening = store.openApp('session')
+    await store.setOpen(false)
+    resolve(response([tab('files')], 'session'))
+    await opening
+    expect(store.open).toBe(false)
+  })
+
+  it.each(['notifications', 'approvals'])('opens %s as notifications without saving session state', async (appId) => {
     const store = useControlCenterStore()
     store.syncSession({ id: 'session-1', controlCenter: { tabs: [tab('files')], activeAppId: 'files' } })
 
@@ -176,7 +215,7 @@ describe('control center store', () => {
     expect(store.activeGlobalSectionId).toBe('notifications')
     expect(store.activeContentId).toBe('notifications')
     expect(store.tabs).toEqual([tab('session'), tab('files')])
-    expect(api.patch).toHaveBeenCalledOnce()
+    expect(api.patch).not.toHaveBeenCalled()
 
     store.syncSession({ id: 'session-2', controlCenter: { tabs: [tab('calendar')], activeAppId: 'calendar' } })
     expect(store.activeContentId).toBe('calendar')
@@ -213,13 +252,14 @@ describe('control center store', () => {
     await store.openApp('calendar')
 
     expect(store.activeContentId).toBe('calendar')
+    expect(store.open).toBe(true)
     expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
-      control_center: requestState(['session', 'files', 'calendar'], 'calendar', true)
+      control_center: requestState(['session', 'files', 'calendar'], 'calendar')
     })
   })
 
   it('adds a background integration without opening or activating the panel', async () => {
-    api.patch.mockResolvedValue(response([tab('files'), tab('browser')], 'files', false))
+    api.patch.mockResolvedValue(response([tab('files'), tab('browser')], 'files'))
     const store = useControlCenterStore()
     store.syncSession({ id: 'session-1', controlCenter: { tabs: [tab('files')], activeAppId: 'files' } })
 
@@ -230,7 +270,7 @@ describe('control center store', () => {
     expect(store.activeAppId).toBe('files')
     expect(api.patch).toHaveBeenCalledOnce()
     expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
-      control_center: requestState(['session', 'files', 'browser'], 'files', false)
+      control_center: requestState(['session', 'files', 'browser'], 'files')
     })
   })
 
@@ -261,6 +301,7 @@ describe('control center store', () => {
 
     expect(store.tabs).toEqual([tab('session'), tab('files')])
     expect(store.activeAppId).toBe('files')
+    expect(store.open).toBe(false)
   })
 
   it('unlocks persistence when the session changes during a save', async () => {
@@ -312,7 +353,7 @@ describe('control center store', () => {
     })
 
     expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
-      control_center: requestState(['session', 'files', 'calendar'], 'calendar', true)
+      control_center: requestState(['session', 'files', 'calendar'], 'calendar')
     })
     expect(state.activeAppId).toBe('calendar')
   })
@@ -339,7 +380,7 @@ describe('control center store', () => {
       }
     })
 
-    await store.setOpen(false)
+    await store.setFileView(sessionFileView)
 
     expect(store.open).toBe(false)
     expect(store.fileView).toEqual(sessionFileView)
@@ -347,7 +388,6 @@ describe('control center store', () => {
       control_center: requestState(
         ['session', 'files'],
         'files',
-        false,
         {
           scope: 'session',
           selected_path: sessionFileView.selectedPath,
@@ -412,7 +452,7 @@ describe('control center store', () => {
     expect(store.activeAppId).toBe('files')
   })
 
-  it('reveals a legacy read-only computer tab as an editable file from a restored panel', async () => {
+  it('reveals a legacy read-only computer tab as an editable file from session state', async () => {
     const store = useControlCenterStore()
     const tabId = 'file-550e8400-e29b-41d4-a716-446655440000'
     const fileTarget = {
@@ -421,12 +461,11 @@ describe('control center store', () => {
     }
     const state = { tabs: [{ tabId, kind: 'file', fileTarget }], activeAppId: tabId, open: true }
     store.syncSession({ id: 'session-1', controlCenter: state })
-    api.patch.mockResolvedValue({ data: { controlCenter: state } })
 
     await expect(store.openFile({ ...fileTarget, readOnly: false })).resolves.toBe(tabId)
     expect(store.activeTab.fileTarget.readOnly).toBe(false)
-    expect(store.restoredOpen).toBe(false)
-    expect(api.patch).toHaveBeenCalledOnce()
+    expect(store.open).toBe(true)
+    expect(api.patch).not.toHaveBeenCalled()
   })
 
   it.each(['removeFileTabs', 'rebindFileTargets'])('sets comparison mode before activation and clears it through %s', async (removal) => {
@@ -513,7 +552,7 @@ describe('control center store', () => {
     expect(api.patch).not.toHaveBeenCalled()
   })
 
-  it.each(['notifications', 'approvals'])('opens %s immediately and defers persistence until session state is loaded', async (appId) => {
+  it.each(['notifications', 'approvals'])('keeps %s open when authoritative session state is loaded', async (appId) => {
     const store = useControlCenterStore()
     store.bindSession({
       id: 'session-1',
@@ -527,20 +566,14 @@ describe('control center store', () => {
     expect(store.requestedAppId).toBe('notifications')
     expect(api.patch).not.toHaveBeenCalled()
 
-    api.patch.mockResolvedValue({
-      data: { controlCenter: { tabs: [tab('files')], activeAppId: 'files', open: true } }
-    })
     store.syncSession({
       id: 'session-1',
       controlCenter: { tabs: [tab('files')], activeAppId: 'files', open: false }
     })
-    await vi.waitFor(() => expect(api.patch).toHaveBeenCalledOnce())
 
     expect(store.activeContentId).toBe('notifications')
     expect(store.open).toBe(true)
     expect(store.requestedAppId).toBeNull()
-    expect(api.patch).toHaveBeenCalledWith('/sessions/session-1', {
-      control_center: requestState(['session', 'files'], 'files', true)
-    })
+    expect(api.patch).not.toHaveBeenCalled()
   })
 })

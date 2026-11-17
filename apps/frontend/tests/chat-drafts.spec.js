@@ -294,7 +294,7 @@ describe('chat drafts', () => {
     expect(api.post.mock.calls.filter(([url]) => url === '/sessions')).toHaveLength(1)
     expect(api.post.mock.calls[0][1]).toMatchObject({
       content: null,
-      control_center: { active_app_id: 'browser', open: true }
+      control_center: { active_app_id: 'browser' }
     })
     expect(chat.current.id).toBe('session-browser')
     expect(center.sessionId).toBe('session-browser')

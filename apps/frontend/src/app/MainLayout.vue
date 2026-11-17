@@ -98,9 +98,7 @@ const { confirm } = useConfirm()
 const automations = useAutomationStore()
 const notifications = useInAppNotificationStore()
 const showFloatingNavigation = computed(() => !drawerOpen.value)
-const controlCenterVisible = computed(() => (
-  controlCenter.open && (!$q.screen.lt.md || !controlCenter.restoredOpen)
-))
+const controlCenterVisible = computed(() => controlCenter.open)
 const showFloatingControlCenter = computed(() => route.name === 'chat' && !controlCenterVisible.value)
 const showFloatingControls = computed(() => (
   showFloatingNavigation.value || showFloatingControlCenter.value

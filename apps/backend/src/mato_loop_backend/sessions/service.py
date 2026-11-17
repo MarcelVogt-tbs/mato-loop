@@ -967,6 +967,7 @@ async def list_sessions(
     archived: bool = False,
     include_archived: bool = False,
     sort: Literal["pinned", "recent"] = "pinned",
+    session_ids: list[UUID] | None = None,
 ) -> dict[str, Any]:
     from mato_loop_backend.sessions.archive import active_session_clause
     from mato_loop_backend.sessions.state import deleted_session_clause
@@ -985,6 +986,8 @@ async def list_sessions(
     if archived or include_archived:
         scope += ":archived" if archived else ":including-archived"
     scope += f":{sort}:" + ("relevant-activity" if sort == "recent" else "user-message")
+    if session_ids is not None:
+        scope += ":ids:" + ",".join(sorted({str(item) for item in session_ids}))
     active_run_status = (
         select(AgentRun.status)
         .where(
@@ -1002,12 +1005,15 @@ async def list_sessions(
         ChatSession.session_type == "chat",
         ChatSession.parent_session_id.is_(None),
         ~deleted_session_clause(),
-        ~select(SettingRecord.id).where(
+    ]
+    if session_ids is not None:
+        session_filters.append(ChatSession.id.in_(session_ids))
+    else:
+        session_filters.append(~select(SettingRecord.id).where(
             SettingRecord.user_id == user_id,
             SettingRecord.key == "assistant",
             SettingRecord.data["session_id"].astext == ChatSession.id.cast(String),
-        ).correlate(ChatSession).exists(),
-    ]
+        ).correlate(ChatSession).exists())
     if project_id is not None:
         session_filters.append(ChatSession.project_id == project_id)
     elif standalone:
@@ -1035,8 +1041,10 @@ async def list_sessions(
             Message.role.in_(VISIBLE_MESSAGE_ROLES),
         )
         .group_by(Message.session_id)
-        .subquery()
     )
+    if session_ids is not None:
+        latest_messages = latest_messages.where(ChatSession.id.in_(session_ids))
+    latest_messages = latest_messages.subquery()
     activity_at = func.coalesce(latest_messages.c.last_user_message_at, ChatSession.created_at)
     if sort == "recent":
         legacy_response = aliased(Message)

@@ -131,8 +131,7 @@ const grantContext = computed(() => JSON.stringify([
   chat.current?.preferredExecutionAgentId, chat.current?.currentDirectory
 ]))
 const loadedGrantContext = ref(null)
-const visible = computed(() => controlCenter.open && controlCenter.activeContentId === 'session'
-  && (!$q.screen.lt.md || !controlCenter.restoredOpen))
+const visible = computed(() => controlCenter.open && controlCenter.activeContentId === 'session')
 const grantDisplay = (grant) => permissionGrantDisplay(grant, chat.cachedSessions)
 
 async function loadGrants() {

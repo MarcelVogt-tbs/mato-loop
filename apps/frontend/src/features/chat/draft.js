@@ -6,6 +6,7 @@ import { clearPersistedDrafts, defaultSessionOptions, emptyActivity, emptyDrafts
 import { mergeAgentActivity } from 'src/features/chat/agent-activity'
 import { clearChatOutbox, loadChatOutbox, saveChatOutboxEntries } from 'src/features/chat/outbox-storage'
 import { gitFinishEntry } from 'src/features/coding/git-actions-store'
+import { useSessionTabsStore } from './session-tabs-store'
 
 export const draftActions = {
     setActivity(phase, details = {}) {
@@ -29,6 +30,7 @@ export const draftActions = {
     setDraftOwner(userId) {
       const ownerUserId = typeof userId === 'string' && userId ? userId : null
       if (ownerUserId === this.draftOwnerUserId) return
+      void useSessionTabsStore().setOwner(null)
       this.sessionRequestController?.abort()
       this.sessionRequestController = null
       this.sessionLoadVersion += 1

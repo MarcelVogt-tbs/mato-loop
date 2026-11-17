@@ -360,7 +360,8 @@ it('adopts a draft remote without changing an unrelated project workspace', asyn
   Object.assign(chat.drafts.newSession.options, { preferredExecutionAgentId: 'agent', currentDirectory: '/repo' })
   projects.items = [{ id: 'project', name: 'Projekt', defaultExecutionAgentId: 'agent', defaultCurrentDirectory: '/other' }]
   useExecutionAgentStore().items = [{ id: 'agent', connected: true, operations: ['git.repository'] }]
-  useControlCenterStore().$patch({ open: true, activeAppId: 'git' })
+  useControlCenterStore().$patch({ activeAppId: 'git' })
+  await useControlCenterStore().setOpen(true)
   vi.spyOn(useCommandStore(), 'load').mockResolvedValue()
   const session = { id: 'session', projectId: 'project', preferredExecutionAgentId: 'agent', currentDirectory: '/repo' }
   vi.spyOn(chat, 'createEmptySession').mockImplementation(async () => { chat.current = session; return session })
@@ -497,7 +498,8 @@ it('creates a branch from the workspace panel using the standard prompt', async 
   useWorkspaceStore().editorDirty = true
   useProjectStore().items = [{ id: 'project', defaultExecutionAgentId: 'agent', defaultCurrentDirectory: '/repo' }]
   useExecutionAgentStore().items = [{ id: 'agent', connected: true, operations: ['git.repository', 'git.branch'] }]
-  useControlCenterStore().$patch({ open: true, activeAppId: 'git' })
+  useControlCenterStore().$patch({ activeAppId: 'git' })
+  await useControlCenterStore().setOpen(true)
   vi.spyOn(useCommandStore(), 'load').mockResolvedValue()
   vi.spyOn(chat, 'refreshSession').mockResolvedValue()
   api.post.mockResolvedValue({ data: { repository: '/repo', branch: 'main', localBranches: ['main'],
@@ -665,7 +667,8 @@ it('opens a deleted session-workspace file from Git even when the editor inspect
   const chat = useChatStore(), git = useGitChangesStore()
   chat.current = { id: 'session', preferredExecutionAgentId: 'agent', currentDirectory: '/repo' }
   useExecutionAgentStore().items = [{ id: 'agent', connected: true, operations: ['git.repository', 'git.changes'] }]
-  useControlCenterStore().$patch({ open: true, activeAppId: 'git' })
+  useControlCenterStore().$patch({ activeAppId: 'git' })
+  await useControlCenterStore().setOpen(true)
   const open = vi.spyOn(useControlCenterStore(), 'openFile').mockResolvedValue('file')
   vi.spyOn(useCommandStore(), 'load').mockResolvedValue()
   api.post.mockResolvedValue({ data: { repository: '/repo', remotes: [], defaultRemote: null, defaultBranch: 'main' } })

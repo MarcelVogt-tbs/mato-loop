@@ -21,7 +21,7 @@ vi.mock('stores/execution-agents', () => ({ useExecutionAgentStore: () => ({ byI
 vi.mock('src/utils/notifications', () => ({ notifyError: vi.fn() }))
 let app, root, browser, pinia
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks()
   pinia = createPinia()
   setActivePinia(pinia)
@@ -37,6 +37,7 @@ beforeEach(() => {
   integrations.catalog = [{ adapterType: 'browser', availability: 'full', personalOnly: true }]
   integrations.browser = { instances: [{ id: 'browser-1', name: 'Browser', enabled: true, executionAgentId: 'agent-1' }] }
   useControlCenterStore().syncSession({ id: 'session-1', controlCenter: { tabs: [{ appId: 'browser' }], activeAppId: 'browser', open: true } })
+  await useControlCenterStore().setOpen(true)
 })
 afterEach(() => { app?.unmount(); root?.remove(); browser.release(); HTMLElement.prototype.scrollIntoView = originalScrollIntoView; vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -127,7 +128,7 @@ it('keeps browser shortcuts out of unrelated fields, toolbar controls, hidden vi
   address.focus()
   for (const blocked of ['busy', 'hidden']) {
     browser.busy = blocked === 'busy'
-    useControlCenterStore().open = blocked !== 'hidden'
+    await useControlCenterStore().setOpen(blocked !== 'hidden')
     await nextTick()
     for (const letter of ['t', 'w']) expect(key(address, letter).defaultPrevented).toBe(false)
   }

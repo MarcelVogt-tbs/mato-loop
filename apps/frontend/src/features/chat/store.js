@@ -11,6 +11,7 @@ import { draftActions } from 'src/features/chat/draft'
 import { sessionsActions } from 'src/features/chat/sessions'
 import { outboxActions } from 'src/features/chat/outbox'
 import { streamActions } from 'src/features/chat/stream'
+import { useSessionTabsStore } from './session-tabs-store'
 
 export const useChatStore = defineStore('chat', {
   state: () => ({
@@ -198,7 +199,8 @@ export const useChatStore = defineStore('chat', {
       }
       this.persistDrafts()
     },
-    removeCachedSession(id) {
+    removeCachedSession(id, { preserveTab = false } = {}) {
+      if (!preserveTab) useSessionTabsStore().close(id)
       if (this.personalChatSessionId === id) this.personalChatSessionId = null
       this.sessionDetails = this.sessionDetails.filter((session) => session.id !== id)
       for (const list of Object.values(this.sessionLists)) {
@@ -304,8 +306,9 @@ export const useChatStore = defineStore('chat', {
         || sessionIds.has(this.selectedSessionId)
         || sessionIds.has(this.runSessionId)
       if (activeSessionAffected) await this.loadSession(null)
+      useSessionTabsStore().removeProject(projectId, [...sessionIds])
       for (const id of sessionIds) {
-        this.removeCachedSession(id)
+        this.removeCachedSession(id, { preserveTab: true })
         delete this.drafts.sessionMessages[id]
         delete this.drafts.sessionAgentProfiles[id]
         this.clearAttachmentDraft(id)

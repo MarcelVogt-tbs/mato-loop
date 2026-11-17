@@ -1,4 +1,5 @@
 import { computed, nextTick, onBeforeUnmount, watch } from 'vue'
+import { useSessionTabsStore } from './session-tabs-store'
 
 export function useChatNavigation({ chat, route, router, composer, controlCenter, subagents, projects }) {
   const queryId = key => computed(() => typeof route.query[key] === 'string' ? route.query[key] : null)
@@ -74,6 +75,7 @@ export function useChatNavigation({ chat, route, router, composer, controlCenter
   watch(routeSessionId, id => { void subagents.loadChildren(id) }, { immediate: true })
   watch(() => chat.createdSessionResult, async result => {
     if (!result) return
+    if (!routeSessionId.value) useSessionTabsStore().attachDraft(result.sessionId, result.projectId || routeProjectId.value)
     chat.createdSessionResult = null
     if (routeProjectId.value) void projects.fetchAll().catch(() => {})
     await router.replace({ name: 'chat', query: {

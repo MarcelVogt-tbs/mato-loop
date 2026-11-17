@@ -10,6 +10,7 @@ import { defaultSessionOptions, lastAssistantMessage, sanitizedSessionOptions, s
 import { deleteChatOutboxEntries, saveChatOutboxEntries } from 'src/features/chat/outbox-storage'
 import { notifyError } from 'src/utils/notifications'
 import { SESSION_PAGE_SIZE, ACTIVE_TITLE_GENERATION_STATUSES, mergeMessages, sessionStateAfterMutation } from 'src/features/chat/model'
+import { useSessionTabsStore } from './session-tabs-store'
 
 export const sessionsActions = {
     async forkSession() {
@@ -647,7 +648,9 @@ export const sessionsActions = {
           notifyError({}, 'Die vorgemerkten Nachrichten konnten lokal nicht aktualisiert werden.')
         }
       }
-      this.removeCachedSession(id)
+      this.removeCachedSession(id, { preserveTab: true })
+      const tab = useSessionTabsStore().items.find(tab => tab.sessionId === id)
+      if (tab) Object.assign(tab, { projectId: projectId || null, title: data.title || tab.title })
       const targetList = this.sessionLists[sessionScopeKey(projectId)]
       if (targetList?.loadRequest) {
         try {

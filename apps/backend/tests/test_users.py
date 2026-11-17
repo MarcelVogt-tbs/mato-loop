@@ -6,12 +6,13 @@ from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes import users as user_routes
-from mato_loop_backend.models import Project, UserAccount
+from mato_loop_backend.models import ChatSession, Project, SettingRecord, UserAccount
 from mato_loop_backend.settings import SettingsStore, UserPreferences
 
 
@@ -34,7 +35,7 @@ def test_update_requires_an_actual_value() -> None:
 
 async def test_language_preference_is_owner_bound_and_preserves_other_preferences(monkeypatch):
     user = _user()
-    settings = UserPreferences(dark_mode=True)
+    settings = UserPreferences(dark_mode=True, session_tabs_enabled=True)
     load = AsyncMock(return_value=settings)
     save = AsyncMock()
     monkeypatch.setattr(SettingsStore, "load", load)
@@ -42,7 +43,7 @@ async def test_language_preference_is_owner_bound_and_preserves_other_preference
     db = AsyncMock(spec=AsyncSession)
     result = await user_routes.update_user_preferences(user_routes.UserPreferencesRequest(preferredLanguage="de-DE"), user, db)
     assert (result, settings.dark_mode, load.await_args.kwargs, save.await_args.kwargs) == (
-        {"preferredLanguage": "de-DE", "sessionsPosition": "belowProjects", "trashEnabled": False, "trashRetentionDays": 30}, True,
+        {"preferredLanguage": "de-DE", "sessionsPosition": "belowProjects", "sessionTabsEnabled": True, "trashEnabled": False, "trashRetentionDays": 30}, True,
         {"user_id": user.id, "for_update": True}, {"user_id": user.id},
     )
 
@@ -58,8 +59,116 @@ async def test_sessions_position_round_trip_preserves_language(monkeypatch, posi
     )
     assert await user_routes.get_user_preferences(user, db) == {
         "preferredLanguage": "de-DE", "sessionsPosition": position,
+        "sessionTabsEnabled": False,
         "trashEnabled": False, "trashRetentionDays": 30,
     }
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_session_tabs_preference_round_trip(monkeypatch, enabled):
+    settings = UserPreferences(session_tabs_enabled=not enabled)
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=settings))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    user, db = _user(), AsyncMock(spec=AsyncSession)
+    updated = await user_routes.update_user_preferences(
+        user_routes.UserPreferencesRequest(sessionTabsEnabled=enabled), user, db,
+    )
+    loaded = await user_routes.get_user_preferences(user, db)
+    assert (updated["sessionTabsEnabled"], loaded["sessionTabsEnabled"]) == (enabled, enabled)
+
+
+async def test_workspace_state_persists_order_preview_and_partial_fields():
+    user, db = _user(), AsyncMock(spec=AsyncSession)
+    project_id = uuid4()
+    session = ChatSession(id=uuid4(), user_id=user.id, project_id=project_id, title="Current title")
+    record = SettingRecord(key=UserPreferences.settings_key, user_id=user.id, data={"dark_mode": True})
+    db.scalar.return_value = record
+    db.scalars.return_value = MagicMock(all=MagicMock(return_value=[session]))
+    tabs = [
+        {"sessionId": None, "projectId": None, "title": "New draft", "preview": False},
+        {"sessionId": str(session.id), "projectId": None, "title": "Stale title", "preview": True},
+    ]
+    await user_routes.update_workspace_state(user_routes.WorkspaceStateRequest(sessionTabs=tabs), user, db)
+    updated = await user_routes.update_workspace_state(user_routes.WorkspaceStateRequest(controlCenterOpen=True), user, db)
+    session.title = "Renamed elsewhere"
+    loaded = await user_routes.get_workspace_state(user, db)
+    assert (updated, loaded, record.data["dark_mode"], record.data["control_center_open"]) == (
+        {"sessionTabs": [tabs[0], {**tabs[1], "projectId": str(project_id), "title": "Current title"}], "controlCenterOpen": True},
+        {"sessionTabs": [tabs[0], {**tabs[1], "projectId": str(project_id), "title": "Renamed elsewhere"}], "controlCenterOpen": True},
+        True, True,
+    )
+    await user_routes.update_workspace_state(user_routes.WorkspaceStateRequest(sessionTabs=[]), user, db)
+    assert record.data["session_tabs"] == [] and record.data["control_center_open"] is True
+
+
+async def test_workspace_state_defaults(monkeypatch):
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=UserPreferences()))
+    assert await user_routes.get_workspace_state(_user(), AsyncMock(spec=AsyncSession)) == {
+        "sessionTabs": [], "controlCenterOpen": False,
+    }
+
+
+@pytest.mark.parametrize("reference", ["sessionId", "projectId"])
+async def test_workspace_state_prunes_invalid_references_and_filters_stale_tabs(monkeypatch, reference):
+    user, db = _user(), AsyncMock(spec=AsyncSession)
+    tab = {reference: str(uuid4())}
+    settings = UserPreferences(session_tabs=[tab])
+    load, save = AsyncMock(return_value=settings), AsyncMock()
+    monkeypatch.setattr(SettingsStore, "load", load)
+    monkeypatch.setattr(SettingsStore, "save", save)
+    db.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
+    assert await user_routes.get_workspace_state(user, db) == {"sessionTabs": [], "controlCenterOpen": False}
+    result = await user_routes.update_workspace_state(user_routes.WorkspaceStateRequest(sessionTabs=[tab, {}]), user, db)
+    assert result["sessionTabs"] == [{"sessionId": None, "projectId": None, "title": "", "preview": False}]
+    save.assert_awaited_once_with(db, settings, user_id=user.id)
+    load.assert_awaited_with(db, UserPreferences, user_id=user.id, for_update=True)
+    sql = str(db.scalars.await_args.args[0].compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert str(user.id) in sql and "user_id =" in sql
+    if reference == "sessionId":
+        assert "parent_session_id IS NULL" in sql and "NOT IN" in sql
+        assert "chat_sessions.delete_at IS NOT NULL" in sql and "projects.delete_at IS NOT NULL" in sql
+    else:
+        assert "projects.archived_at IS NULL" in sql and "projects.delete_at IS NULL" in sql
+    assert await user_routes.get_workspace_state(user, db) == result
+
+
+async def test_workspace_state_canonicalizes_mismatched_session_project(monkeypatch):
+    user, db = _user(), AsyncMock(spec=AsyncSession)
+    session = ChatSession(id=uuid4(), user_id=user.id, project_id=None, title="Owned")
+    monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=UserPreferences()))
+    monkeypatch.setattr(SettingsStore, "save", AsyncMock())
+    db.scalars.return_value = MagicMock(all=MagicMock(return_value=[session]))
+    result = await user_routes.update_workspace_state(user_routes.WorkspaceStateRequest(sessionTabs=[
+        {"sessionId": session.id, "projectId": uuid4()},
+    ]), user, db)
+    assert result["sessionTabs"] == [
+        {"sessionId": str(session.id), "projectId": None, "title": "Owned", "preview": False},
+    ]
+
+
+@pytest.mark.parametrize("tabs", [
+    [{}, {}],
+    [{"projectId": "00000000-0000-4000-8000-000000000001"}] * 2,
+    [{"sessionId": "00000000-0000-4000-8000-000000000001"}] * 2,
+    [{"preview": True}, {"sessionId": "00000000-0000-4000-8000-000000000001", "preview": True}],
+    [{"sessionId": str(uuid4())} for _ in range(101)],
+    [{"title": "x" * 241}],
+    [{"preview": "true"}],
+    [{"content": "Draft text must not be stored"}],
+    [{"attachments": []}],
+    None,
+])
+def test_workspace_tabs_reject_invalid_payloads(tabs):
+    with pytest.raises(ValidationError):
+        user_routes.WorkspaceStateRequest(sessionTabs=tabs)
+    with pytest.raises(ValidationError):
+        UserPreferences(session_tabs=tabs)
+
+
+@pytest.mark.parametrize("value", [None, "false", 1])
+def test_workspace_control_center_requires_boolean(value):
+    with pytest.raises(ValidationError):
+        user_routes.WorkspaceStateRequest(controlCenterOpen=value)
 
 
 def test_sessions_position_rejects_unknown_values():

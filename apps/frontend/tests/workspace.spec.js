@@ -873,10 +873,10 @@ describe('workspace store', () => {
     expect(workspace.fileChangeVersions['notes.md']).toBe(1)
   })
 
-  it('snapshots only a live active file with the server root identity', () => {
+  it('snapshots only a live active file with the server root identity', async () => {
     const controlCenter = useControlCenterStore()
     controlCenter.sessionId = 'session-a'
-    controlCenter.open = true
+    await controlCenter.setOpen(true)
     controlCenter.tabs = [{ appId: 'files', pinned: false }]
     controlCenter.activeAppId = 'files'
     const workspace = useWorkspaceStore()
@@ -911,10 +911,10 @@ describe('workspace store', () => {
     })
   })
 
-  it('does not snapshot a sibling session file for the current chat', () => {
+  it('does not snapshot a sibling session file for the current chat', async () => {
     const controlCenter = useControlCenterStore()
     controlCenter.sessionId = 'session-a'
-    controlCenter.open = true
+    await controlCenter.setOpen(true)
     controlCenter.tabs = [{ appId: 'files', pinned: false }]
     controlCenter.activeAppId = 'files'
     const workspace = useWorkspaceStore()
@@ -925,7 +925,7 @@ describe('workspace store', () => {
     expect(workspace.activeFileSnapshot()).toBeNull()
   })
 
-  it('does not attach a computer file from a different selected computer', () => {
+  it('does not attach a computer file from a different selected computer', async () => {
     const workspace = useWorkspaceStore()
     const controlCenter = useControlCenterStore()
     workspace.configure({
@@ -940,7 +940,7 @@ describe('workspace store', () => {
     })
     workspace.openEntry({ kind: 'file', name: 'plan.md', path: '/work/plan.md' })
     workspace.filePreviews['/work/plan.md'] = { revision: 'a'.repeat(64) }
-    controlCenter.open = true
+    await controlCenter.setOpen(true)
     controlCenter.activeAppId = 'files'
 
     expect(workspace.activeFileSnapshot('agent-new')).toBeNull()

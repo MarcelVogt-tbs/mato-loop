@@ -302,7 +302,8 @@ def test_send_message_http_response_accepts_nested_message(monkeypatch) -> None:
     }
 
 
-async def test_session_list_first_page_has_cursor_and_payload_metadata() -> None:
+@pytest.mark.parametrize("lookup_ids", [False, True])
+async def test_session_list_first_page_has_cursor_and_payload_metadata(lookup_ids) -> None:
     user = _user()
     session = ChatSession(
         id=uuid4(),
@@ -330,7 +331,11 @@ async def test_session_list_first_page_has_cursor_and_payload_metadata() -> None
     db = AsyncMock(spec=AsyncSession)
     db.execute.return_value = execution_result
 
-    result = await list_sessions(user, db, page_size=1)
+    result = await list_sessions(
+        user, db, page_size=1,
+        session_ids=[session.id, next_session.id] if lookup_ids else None,
+        include_archived=lookup_ids,
+    )
 
     assert set(result) == {"items", "nextCursor"}
     assert len(result["items"]) == 1
@@ -352,6 +357,30 @@ async def test_session_list_first_page_has_cursor_and_payload_metadata() -> None
     assert "coalesce(anon_1.last_user_message_at, chat_sessions.created_at) DESC" in sql
     assert "chat_sessions.updated_at DESC" not in sql
     assert 2 in statement.compile().params.values()
+    assert user.id in statement.compile().params.values()
+    assert "chat_sessions.parent_session_id IS NULL" in sql
+    assert "chat_sessions.delete_at IS NOT NULL" in sql
+    assert "projects.delete_at IS NOT NULL" in sql
+    assert ("settings.key" in sql) is not lookup_ids
+    if lookup_ids:
+        assert [session.id, next_session.id] in statement.compile().params.values()
+        assert "chat_sessions.id IN" in sql
+        assert "chat_sessions.archived_at IS NULL" not in sql
+
+
+@pytest.mark.parametrize("session_ids", [[str(uuid4())] * 101, ["invalid-uuid"]])
+def test_session_list_rejects_invalid_session_ids(session_ids):
+    from mato_loop_backend.api.routes import sessions as sessions_route
+
+    db = AsyncMock(spec=AsyncSession)
+    app = FastAPI()
+    app.include_router(sessions_route.router, prefix="/api")
+    app.dependency_overrides[get_db_session] = lambda: db
+    app.dependency_overrides[require_user] = _user
+    with TestClient(app) as client:
+        response = client.get("/api/sessions", params=[("sessionIds", item) for item in session_ids])
+    assert response.status_code == 422
+    db.execute.assert_not_awaited()
 
 
 @pytest.mark.parametrize("sort", ["pinned", "recent"])

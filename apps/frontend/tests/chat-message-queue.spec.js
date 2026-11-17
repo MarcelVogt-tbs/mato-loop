@@ -434,7 +434,7 @@ describe('chat message queue', () => {
     chat.running = true
     const controlCenter = useControlCenterStore()
     controlCenter.sessionId = 'session-1'
-    controlCenter.open = true
+    await controlCenter.setOpen(true)
     controlCenter.tabs = [{ appId: 'files', pinned: false }]
     controlCenter.activeAppId = 'files'
     const workspace = useWorkspaceStore()
@@ -473,7 +473,7 @@ describe('chat message queue', () => {
     chat.running = true
     const controlCenter = useControlCenterStore()
     controlCenter.sessionId = 'session-1'
-    controlCenter.open = true
+    await controlCenter.setOpen(true)
     controlCenter.tabs = [{ appId: 'files', pinned: false }]
     controlCenter.activeAppId = 'files'
     const workspace = useWorkspaceStore()

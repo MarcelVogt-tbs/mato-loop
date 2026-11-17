@@ -1,4 +1,7 @@
 import { defineStore } from 'pinia'
+import { Screen } from 'quasar'
+import { useSessionTabsStore } from 'src/features/chat/session-tabs-store'
+import { reorderedTabs } from 'src/shared/ui/useTabReorder'
 import { api } from 'src/boot/axios'
 import { useChatStore } from 'src/features/chat/store'
 import {
@@ -18,7 +21,6 @@ function defaultState() {
   return {
     tabs: [appTab('session'), appTab('files')],
     activeAppId: 'session',
-    open: false,
     fileView: null,
     fileViews: { session: null, filesystem: null }
   }
@@ -31,7 +33,6 @@ function copyState(state) {
       ...(tab.fileTarget ? { fileTarget: { ...tab.fileTarget } } : {})
     })),
     activeAppId: state.activeAppId,
-    open: state.open === true,
     fileView: state.fileView ? { ...state.fileView } : null,
     fileViews: {
       session: state.fileViews?.session ? { ...state.fileViews.session } : null,
@@ -167,7 +168,7 @@ function normalizeState(value) {
   if (legacyFileView && !fileViews[legacyFileView.scope]) {
     fileViews[legacyFileView.scope] = legacyFileView
   }
-  return { tabs, activeAppId, open: value?.open === true, fileView: legacyFileView, fileViews }
+  return { tabs, activeAppId, fileView: legacyFileView, fileViews }
 }
 
 function normalizeFileView(value) {
@@ -232,7 +233,6 @@ export function controlCenterRequestState(state) {
         : {})
     })),
     active_app_id: state.activeAppId,
-    open: state.open === true,
     file_view: serializedFileView(state.fileView),
     file_views: {
       session: serializedFileView(state.fileViews?.session),
@@ -251,13 +251,15 @@ export const useControlCenterStore = defineStore('control-center', {
     saving: false,
     requestGeneration: 0,
     pendingState: null,
+    pendingReveal: false,
+    mobileOpen: false,
     confirmedState: defaultState(),
     requestedAppId: null,
     gitAutoAdded: true,
-    fileDiffModes: {},
-    restoredOpen: false
+    fileDiffModes: {}
   }),
   getters: {
+    open: (state) => Screen.lt.md ? state.mobileOpen : useSessionTabsStore().controlCenterOpen,
     activeContentId: (state) => state.activeGlobalSectionId || state.activeAppId,
     activeTab: (state) => state.tabs.find((tab) => tab.tabId === state.activeAppId) || null,
     fileTabs: (state) => state.tabs.filter((tab) => tab.kind === 'file'),
@@ -274,7 +276,6 @@ export const useControlCenterStore = defineStore('control-center', {
       const state = normalizeState(value)
       this.tabs = state.tabs
       this.activeAppId = state.activeAppId
-      this.open = state.open
       this.fileView = state.fileView
       this.fileViews = state.fileViews
     },
@@ -289,9 +290,9 @@ export const useControlCenterStore = defineStore('control-center', {
       this.pendingState = null
       this.requestedAppId = null
       this.sessionId = sessionId
+      this.pendingReveal = false
       this.confirmedState = normalizeState(session?.controlCenter || defaultState())
       this.applyState(this.confirmedState)
-      this.restoredOpen = true
       if (requestedAppId) void this.openApp(requestedAppId).catch(() => {})
     },
     bindSession(session) {
@@ -301,6 +302,7 @@ export const useControlCenterStore = defineStore('control-center', {
       this.ready = false
       this.saving = false
       this.pendingState = null
+      this.pendingReveal = false
       if (this.sessionId !== sessionId) {
         this.fileDiffModes = {}
         this.requestedAppId = null
@@ -309,7 +311,6 @@ export const useControlCenterStore = defineStore('control-center', {
       this.sessionId = sessionId
       this.confirmedState = normalizeState(session?.controlCenter || defaultState())
       this.applyState(this.confirmedState)
-      this.restoredOpen = true
     },
     resetDraft() {
       this.gitAutoAdded = false
@@ -320,9 +321,9 @@ export const useControlCenterStore = defineStore('control-center', {
       this.pendingState = null
       this.requestedAppId = null
       this.sessionId = null
+      this.pendingReveal = false
       this.confirmedState = defaultState()
       this.applyState(this.confirmedState)
-      this.restoredOpen = false
     },
     async attachCreatedSession(sessionId, serverState) {
       const latest = copyState(this)
@@ -345,14 +346,14 @@ export const useControlCenterStore = defineStore('control-center', {
         fileViews: value.fileViews || this.fileViews
       })
       if (!this.ready) return null
-      const restoredOpen = this.restoredOpen
-      if (reveal) this.restoredOpen = false
       this.applyState(next)
       if (!this.sessionId) {
         this.confirmedState = copyState(next)
+        if (reveal) await this.setOpen(true)
         return copyState(next)
       }
       this.pendingState = copyState(next)
+      this.pendingReveal ||= reveal
       if (this.saving) return copyState(next)
       const sessionId = this.sessionId
       const generation = this.requestGeneration
@@ -372,12 +373,11 @@ export const useControlCenterStore = defineStore('control-center', {
           this.confirmedState = normalizeState(data.controlCenter)
           if (!this.pendingState) this.applyState(this.confirmedState)
         }
-        return copyState(this.confirmedState)
       } catch (error) {
         if (this.sessionId === sessionId && this.requestGeneration === generation) {
           this.pendingState = null
+          this.pendingReveal = false
           this.applyState(this.confirmedState)
-          this.restoredOpen = restoredOpen
         }
         throw error
       } finally {
@@ -385,6 +385,11 @@ export const useControlCenterStore = defineStore('control-center', {
           this.saving = false
         }
       }
+      if (this.sessionId !== sessionId || this.requestGeneration !== generation) return null
+      const revealPending = this.pendingReveal
+      this.pendingReveal = false
+      if (revealPending) await this.setOpen(true)
+      return copyState(this.confirmedState)
     },
     async autoAddGit(repository) {
       if (!repository || this.gitAutoAdded || !this.ready) return
@@ -397,9 +402,8 @@ export const useControlCenterStore = defineStore('control-center', {
       if (controlCenterGlobalSectionIds.has(appId)) {
         this.activeGlobalSectionId = appId
         if (!this.ready) {
-          this.open = true
+          await this.setOpen(true)
           this.requestedAppId = appId
-          this.restoredOpen = false
           return null
         }
         this.requestedAppId = null
@@ -409,31 +413,28 @@ export const useControlCenterStore = defineStore('control-center', {
         const session = await useChatStore().createEmptySession({
           tabs: this.tabs.some((tab) => tab.appId === appId) ? this.tabs : [...this.tabs, appTab(appId)],
           activeAppId: appId,
-          open: true,
           fileView: this.fileView,
           fileViews: this.fileViews
         })
         if (!session) return null
         if (this.sessionId !== session.id) return null
-        if (this.activeAppId === appId && this.open) return copyState(this)
+        if (this.activeAppId === appId) { await this.setOpen(true); return copyState(this) }
       }
       if (this.tabs.some((tab) => tab.tabId === appId)) {
         this.activeGlobalSectionId = null
-        return this.save({ tabs: this.tabs, activeAppId: appId, open: true, fileView: this.fileView }, { reveal: true })
+        return this.save({ tabs: this.tabs, activeAppId: appId, fileView: this.fileView }, { reveal: true })
       }
       if (!controlCenterIntegrationIds.has(appId)) return
       this.activeGlobalSectionId = null
       if (!this.ready) {
-        this.open = true
+        await this.setOpen(true)
         this.requestedAppId = appId
-        this.restoredOpen = false
         return null
       }
       const exists = this.tabs.some((tab) => tab.appId === appId)
       return this.save({
         tabs: exists ? this.tabs : [...this.tabs, appTab(appId)],
         activeAppId: appId,
-        open: true,
         fileView: this.fileView
       }, { reveal: true })
     },
@@ -442,17 +443,13 @@ export const useControlCenterStore = defineStore('control-center', {
       return this.save({
         tabs: [...this.tabs, appTab(appId)],
         activeAppId: this.activeAppId,
-        open: this.open,
         fileView: this.fileView
       })
     },
     setOpen(open) {
-      return this.save({
-        tabs: this.tabs,
-        activeAppId: this.activeAppId,
-        open,
-        fileView: this.fileView
-      }, { reveal: open })
+      if (!open) this.pendingReveal = false
+      if (Screen.lt.md) { this.mobileOpen = open; return Promise.resolve() }
+      return useSessionTabsStore().setControlCenterOpen(open)
     },
     setFileView(fileView) {
       const normalized = normalizeFileView(fileView)
@@ -463,7 +460,6 @@ export const useControlCenterStore = defineStore('control-center', {
       return this.save({
         tabs: this.tabs,
         activeAppId: this.activeAppId,
-        open: this.open,
         fileView: normalized,
         fileViews
       })
@@ -473,7 +469,7 @@ export const useControlCenterStore = defineStore('control-center', {
       if (!this.sessionId && appId !== 'session') return this.openApp(appId)
       this.activeGlobalSectionId = null
       if (appId === this.activeAppId) return
-      return this.save({ tabs: this.tabs, activeAppId: appId, open: this.open, fileView: this.fileView })
+      return this.save({ tabs: this.tabs, activeAppId: appId, fileView: this.fileView })
     },
     async removeIntegration(appId) {
       if (controlCenterFixedAppIds.has(appId)) return
@@ -483,18 +479,13 @@ export const useControlCenterStore = defineStore('control-center', {
       const activeAppId = this.activeAppId === appId
         ? this.tabs[index + 1]?.tabId || this.tabs[index - 1]?.tabId || null
         : this.activeAppId
-      return this.save({ tabs, activeAppId, open: this.open, fileView: this.fileView })
+      return this.save({ tabs, activeAppId, fileView: this.fileView })
     },
     async reorderIntegration(appId, targetAppId, after = false) {
       if (appId === targetAppId || controlCenterFixedAppIds.has(appId)) return
-      const moved = this.tabs.find((tab) => tab.tabId === appId)
-      const remaining = this.tabs.filter((tab) => tab.tabId !== appId)
-      const targetIndex = remaining.findIndex((tab) => tab.tabId === targetAppId)
-      if (!moved || targetIndex < 0) return
-      const tabs = [...remaining]
-      tabs.splice(targetIndex + (after ? 1 : 0), 0, moved)
-      if (tabs.every((tab, index) => tab.tabId === this.tabs[index]?.tabId)) return
-      return this.save({ tabs, activeAppId: this.activeAppId, open: this.open, fileView: this.fileView })
+      const tabs = reorderedTabs(this.tabs, appId, targetAppId, after, tab => tab.tabId)
+      if (tabs === this.tabs) return
+      return this.save({ tabs, activeAppId: this.activeAppId, fileView: this.fileView })
     },
     async moveIntegration(appId, offset) {
       if (controlCenterFixedAppIds.has(appId)) return
@@ -527,11 +518,11 @@ export const useControlCenterStore = defineStore('control-center', {
       try {
         if (existing) {
           await this.activate(tabId)
-          if (!this.open || this.restoredOpen) await this.setOpen(true)
+          if (!this.open) await this.setOpen(true)
         } else {
           await this.save({
             tabs: [...this.tabs, { tabId, kind: 'file', appId: 'file-viewer', pinned: false, fileTarget: target }],
-            activeAppId: tabId, open: true, fileView: this.fileView
+            activeAppId: tabId, fileView: this.fileView
           }, { reveal: true })
         }
         return tabId
@@ -547,7 +538,7 @@ export const useControlCenterStore = defineStore('control-center', {
       const activeAppId = this.activeAppId === tabId
         ? this.tabs[index - 1]?.tabId || this.tabs[index + 1]?.tabId || 'files'
         : this.activeAppId
-      await this.save({ tabs, activeAppId, open: this.open, fileView: this.fileView })
+      await this.save({ tabs, activeAppId, fileView: this.fileView })
       delete this.fileDiffModes[tabId]
     },
     async removeFileTabs(tabIds) {
@@ -557,7 +548,7 @@ export const useControlCenterStore = defineStore('control-center', {
       const activeAppId = tabs.some((tab) => tab.tabId === this.activeAppId)
         ? this.activeAppId
         : tabs.find((tab) => tab.appId === 'files')?.tabId || 'session'
-      const result = await this.save({ tabs, activeAppId, open: this.open, fileView: this.fileView })
+      const result = await this.save({ tabs, activeAppId, fileView: this.fileView })
       for (const tabId of removed) delete this.fileDiffModes[tabId]
       return result
     },
@@ -593,7 +584,7 @@ export const useControlCenterStore = defineStore('control-center', {
       const activeAppId = tabs.some((tab) => tab.tabId === this.activeAppId)
         ? this.activeAppId
         : tabs.find((tab) => tab.appId === 'files')?.tabId || 'session'
-      await this.save({ tabs, activeAppId, open: this.open, fileView: this.fileView })
+      await this.save({ tabs, activeAppId, fileView: this.fileView })
       if (destinationTarget === null) {
         for (const tabId of affectedIds) delete this.fileDiffModes[tabId]
       }

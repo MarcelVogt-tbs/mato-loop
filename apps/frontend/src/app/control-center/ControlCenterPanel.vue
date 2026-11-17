@@ -27,13 +27,13 @@
           class="control-center__tab-shell"
           :class="{
             'control-center__tab--dragging': draggedIntegrationId === tab.tabId,
-            'control-center__tab--drop-before': dropTarget?.appId === tab.tabId && !dropTarget.after,
-            'control-center__tab--drop-after': dropTarget?.appId === tab.tabId && dropTarget.after
+            'control-center__tab--drop-before': dropTarget?.id === tab.tabId && !dropTarget.after,
+            'control-center__tab--drop-after': dropTarget?.id === tab.tabId && dropTarget.after
           }"
           :draggable="controlCenter.ready && !controlCenter.saving"
           @dragstart="startDrag($event, tab.tabId)"
-          @dragover.prevent="updateDropTarget($event, tab.tabId)"
-          @drop.prevent="dropIntegration"
+          @dragover="updateDropTarget($event, tab.tabId)"
+          @drop="dropIntegration"
           @dragend="endDrag"
           @close="closeTab(tab)"
         />
@@ -234,7 +234,8 @@
 <script setup>
 import AppMenu from 'src/shared/ui/AppMenu.vue'
 import { agentDisplayName } from 'src/features/computers/display'
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick } from 'vue'
+import { useTabReorder } from 'src/shared/ui/useTabReorder'
 import AppClosableTab from 'src/shared/ui/AppClosableTab.vue'
 import AppStateMessage from 'src/shared/ui/AppStateMessage.vue'
 import { useControlCenterStore } from 'stores/control-center'
@@ -275,8 +276,9 @@ const projects = useProjectStore()
 const executionAgents = useExecutionAgentStore()
 const integrations = useIntegrationStore()
 const workspace = useWorkspaceStore()
-const draggedIntegrationId = ref(null)
-const dropTarget = ref(null)
+const { draggedId: draggedIntegrationId, dropTarget, startDrag, updateDropTarget, drop: dropIntegration, endDrag } = useTabReorder(
+  (source, target, after) => controlCenter.reorderIntegration(source, target, after)
+)
 const flexibleTabs = computed(() => controlCenter.tabs.filter((tab) => tab.appId !== 'session'))
 const activeFlexibleTabId = computed(() => (
   controlCenter.activeGlobalSectionId || controlCenter.activeAppId === 'session'
@@ -384,36 +386,4 @@ async function openContent(contentId) {
   }
 }
 
-function startDrag(event, appId) {
-  draggedIntegrationId.value = appId
-  event.dataTransfer.effectAllowed = 'move'
-  event.dataTransfer.setData('text/plain', appId)
-}
-
-function updateDropTarget(event, appId) {
-  if (!draggedIntegrationId.value || draggedIntegrationId.value === appId) {
-    dropTarget.value = null
-    return
-  }
-  const bounds = event.currentTarget.getBoundingClientRect()
-  dropTarget.value = { appId, after: event.clientX > bounds.left + bounds.width / 2 }
-  event.dataTransfer.dropEffect = 'move'
-}
-
-async function dropIntegration() {
-  const dragged = draggedIntegrationId.value
-  const target = dropTarget.value
-  endDrag()
-  if (!dragged || !target) return
-  try {
-    await controlCenter.reorderIntegration(dragged, target.appId, target.after)
-  } catch {
-    // The central API interceptor displays the error and the store restores server state.
-  }
-}
-
-function endDrag() {
-  draggedIntegrationId.value = null
-  dropTarget.value = null
-}
 </script>

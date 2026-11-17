@@ -488,6 +488,7 @@ async def list_sessions(
     archived: bool = False,
     include_archived: Annotated[bool, Query(alias="includeArchived")] = False,
     sort: Literal["pinned", "recent"] = "pinned",
+    session_ids: Annotated[list[UUID] | None, Query(alias="sessionIds", max_length=100)] = None,
 ) -> dict[str, Any]:
     try:
         return await session_service.list_sessions(
@@ -501,6 +502,7 @@ async def list_sessions(
             archived=archived,
             include_archived=include_archived,
             sort=sort,
+            session_ids=session_ids,
         )
     except session_service.SessionServiceError as exc:
         _raise_api_error(exc)

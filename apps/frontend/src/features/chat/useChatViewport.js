@@ -1,4 +1,5 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useSessionTabsStore } from './session-tabs-store'
 import {
   chatBottomDistance,
   chatReadingAnchor,
@@ -8,6 +9,7 @@ import {
 } from './scroll'
 
 export function useChatViewport({ chat, route, scrollArea, scrollContent, virtualScroll, displayMessages, setWorkHistoryExpanded }) {
+  const tabs = useSessionTabsStore()
   const routeSessionId = computed(() => typeof route.query.session === 'string' ? route.query.session : null)
   const routeMessageId = computed(() => typeof route.query.message === 'string' ? route.query.message : null)
   const followingBottom = ref(true)
@@ -22,6 +24,17 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
   let userScrolling = false
   let touching = false
   let lastScrollTop = 0
+  let positionSessionId = chat.current?.id || null
+
+  function savePosition() {
+    if (tabs.items.some(tab => tab.key === positionSessionId) && !transcriptPreparing.value) {
+      tabs.readingPositions[positionSessionId] = {
+        following: followingBottom.value,
+        anchor: followingBottom.value ? null : captureAnchor() || readingAnchor
+      }
+    }
+  }
+  watch(routeSessionId, savePosition, { flush: 'sync' })
 
   const elements = () => [...(scrollContent.value?.querySelectorAll('[data-message-id]') || [])]
   const findElement = id => elements().find(element => element.dataset.messageId === id || element.dataset.renderId === id)
@@ -82,6 +95,13 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
         entry.message?.id === messageId || entry.batchId === messageId
       ))
       let searchIndex = messageId ? displayMessages.value.findIndex(matches) : -1
+      while (!messageId && request.anchor && !displayMessages.value.some(message => (message.renderId || message.id) === request.anchor.id)
+        && chat.current?.nextMessageCursor) {
+        const cursor = chat.current.nextMessageCursor
+        try { await chat.loadOlderMessages(chat.current.id) } catch { break /* Central API toast. */ }
+        if (!isCurrent(request)) return
+        if (chat.current?.nextMessageCursor === cursor) break
+      }
       while (messageId && searchIndex < 0 && chat.current?.nextMessageCursor) {
         const cursor = chat.current.nextMessageCursor
         try { await chat.loadOlderMessages(chat.current.id) } catch { break /* The API interceptor reports failures. */ }
@@ -231,11 +251,13 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     cancelLayout()
     revealMessageId = routeMessageId.value
     if (sessionId !== previous[0]) {
+      const saved = sessionId ? tabs.readingPositions[sessionId] : null
+      positionSessionId = sessionId || null
       clearTimeout(userScrollTimer)
       window.removeEventListener('mouseup', scheduleUserScrollEnd)
       touching = userScrolling = false
-      readingAnchor = null
-      followingBottom.value = true
+      readingAnchor = saved?.anchor || null
+      followingBottom.value = saved?.following ?? true
       transcriptPreparing.value = Boolean(sessionId)
       resetSizes = true
     }
@@ -268,6 +290,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     scheduleTranscriptLayout()
   })
   onBeforeUnmount(() => {
+    savePosition()
     disposed = true
     cancelLayout()
     observer?.disconnect()
