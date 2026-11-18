@@ -1866,7 +1866,7 @@ class UserPreferences(SettingsDocument):
     dark_mode: bool = False
     session_drawer_open: bool = True
     sessions_position: Literal["aboveProjects", "belowProjects"] = "belowProjects"
-    sessions_page_size: int = Field(default=10, ge=1, le=100, strict=True)
+    sessions_page_size: int = Field(default=8, ge=1, le=100, strict=True)
     session_tabs_enabled: bool = False
     session_tabs_position: Literal["top", "bottom"] = "bottom"
     session_tabs: SessionTabs = Field(default_factory=list)

@@ -83,7 +83,7 @@ it('saves a personal language without changing instance settings', async () => {
   german.click()
   await vi.waitUntil(() => !root.querySelector('button').disabled)
   root.querySelector('button').click()
-  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/users/me/preferences', { preferredLanguage: 'de-DE', sessionsPosition: 'belowProjects', sessionsPageSize: 10, sessionTabsEnabled: false, sessionTabsPosition: 'bottom', trashEnabled: false, trashRetentionDays: 30 }))
+  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/users/me/preferences', { preferredLanguage: 'de-DE', sessionsPosition: 'belowProjects', sessionsPageSize: 8, sessionTabsEnabled: false, sessionTabsPosition: 'bottom', trashEnabled: false, trashRetentionDays: 30 }))
 })
 
 it('saves the sessions position and page size through personal settings', async () => {

@@ -32,7 +32,7 @@
       <q-separator />
       <q-card-section>
         <q-input v-model.number="sessionsPageSize" outlined type="number" min="1" max="100" step="1" label="Sessions pro Ladeschritt" :rules="[() => validSessionsPageSize || 'Bitte eine ganze Zahl von 1 bis 100 eingeben.']" :disable="settings.loading || settings.saving || !settings.loaded || settings.loadFailed" />
-        <p class="text-body2 app-muted q-mb-none">Anzahl beim ersten Laden und bei „Mehr anzeigen“ in der Seitenleiste, auch innerhalb von Projekten. Standard: 10. Änderungen gelten ab dem nächsten Laden; bereits geladene Sessions bleiben sichtbar.</p>
+        <p class="text-body2 app-muted q-mb-none">Anzahl beim ersten Laden und bei „Mehr anzeigen“ in der Seitenleiste, auch innerhalb von Projekten. Standard: 8. Änderungen gelten ab dem nächsten Laden; bereits geladene Sessions bleiben sichtbar.</p>
       </q-card-section>
       <q-separator />
       <q-card-section>
@@ -57,7 +57,7 @@ const $q = useQuasar()
 const { confirm } = useConfirm()
 const language = ref(null)
 const sessionsPosition = ref('belowProjects')
-const sessionsPageSize = ref(10)
+const sessionsPageSize = ref(8)
 const sessionTabsEnabled = ref(false)
 const sessionTabsPosition = ref('bottom')
 const sessionsPositionOptions = [
