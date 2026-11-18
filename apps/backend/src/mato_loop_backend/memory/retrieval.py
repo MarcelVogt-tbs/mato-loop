@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from functools import reduce
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -34,6 +35,20 @@ from mato_loop_backend.settings import TrustLevel
 logger = logging.getLogger(__name__)
 RRF_K = 60
 MAX_CANDIDATES = 100
+
+
+def exact_name_tsquery(names: tuple[str, ...]):
+    return reduce(
+        lambda left, right: left.op("||")(right),
+        (func.phraseto_tsquery("simple", name) for name in names),
+    )
+
+
+def lexical_overlap_tsquery(query: str):
+    # Quoting the tokenized terms keeps websearch operators out of the input.
+    return func.websearch_to_tsquery(
+        "simple", " OR ".join(f'"{term}"' for term in memory_lexical_terms(query)),
+    )
 
 
 class MemoryRetrieveMode(StrEnum):
@@ -99,6 +114,7 @@ class MemoryRetrievalService:
         cursor_updated_at: datetime | None = None,
         cursor_id: UUID | None = None,
         excluded_content_hashes: frozenset[str] | set[str] = frozenset(),
+        exact_names: tuple[str, ...] = (),
     ) -> MemoryRetrieval:
         if (cursor_updated_at is None) != (cursor_id is None):
             raise ValueError("both cursor fields are required together")
@@ -229,6 +245,20 @@ class MemoryRetrievalService:
             ),
             reverse=True,
         )
+        if exact_names:
+            named = await db.scalar(
+                select(MemoryRecord)
+                .options(*memory_reference_options(owner_id))
+                .where(MemoryRecord.search_vector.op("@@")(exact_name_tsquery(exact_names)), *filters)
+                .order_by(
+                    func.ts_rank_cd(MemoryRecord.search_vector, lexical_overlap_tsquery(cleaned_query)).desc(),
+                    MemoryRecord.updated_at.desc(),
+                    MemoryRecord.id.desc(),
+                )
+                .limit(1)
+            )
+            if named is not None:
+                ranked = [named, *(item for item in ranked if item.id != named.id)]
         return MemoryRetrieval(
             items=ranked[:limit],
             mode=mode,

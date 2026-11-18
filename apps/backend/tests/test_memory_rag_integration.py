@@ -377,6 +377,43 @@ async def test_episode_retrieval_respects_project_scope_before_ranking(
         await db.rollback()
 
 
+async def test_automatic_name_lookup_recovers_relevant_passage_within_scope() -> None:
+    async with AsyncSessionFactory() as db:
+        owner = UserAccount(username=f"named-{uuid4().hex}", password_hash="!disabled-test-account")
+        db.add(owner)
+        await db.flush()
+        project, other = Project(user_id=owner.id, name="Audio"), Project(user_id=owner.id, name="Other")
+        db.add_all([project, other])
+        await db.flush()
+        query = "Kann ich Navigation und LumenJukebox verwenden?"
+        sources = [
+            (project.id, "public", "LumenJukebox Docker image tag and deploy notes."),
+            (project.id, "public", "LumenJukebox spielt Musik neben der Navigation ab."),
+            (other.id, "public", query),
+            (project.id, "private", query),
+        ]
+        messages = []
+        for project_id, trust, content in sources:
+            session = ChatSession(user_id=owner.id, project_id=project_id, trust_level=trust)
+            db.add(session)
+            await db.flush()
+            message = Message(session_id=session.id, role="user", content=content, trust_level=trust)
+            db.add(message)
+            await db.flush()
+            await EpisodeIndexService.enqueue(db, message)
+            messages.append(message)
+        args = dict(
+            owner_id=owner.id, current_session_id=None, readable_by=TrustLevel.PUBLIC,
+            query=query, limit=1, semantic_enabled=False, anchor_only=True,
+            full_sessions_only=True, project_id=project.id,
+        )
+        before = await EpisodeRetrievalService.retrieve(db, **args)
+        after = await EpisodeRetrievalService.retrieve(db, exact_names=("lumenjukebox",), **args)
+        assert ([ref.anchor_message_id for ref in before.references],
+                [ref.anchor_message_id for ref in after.references]) == ([], [messages[1].id])
+        await db.rollback()
+
+
 async def test_local_rag_falls_back_to_postgres_fts(monkeypatch) -> None:
     content = f"Fallbackkennung {uuid4().hex}"
     query = content.split()[-1]

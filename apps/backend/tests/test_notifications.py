@@ -626,9 +626,12 @@ async def test_response_notification_uses_persisted_current_run_tool_outcome(req
                 async def serialize(_db, item, **kwargs):
                     return {"id": str(item.id), "unread": kwargs["has_unread_messages"]}
 
+                async def serializer_factory(_db, _sessions):
+                    return serialize
+
                 summaries = await list_sessions(
                     db, user.id, page_size=10, cursor=None, project_id=project.id,
-                    standalone=False, session_serializer=serialize, sort="recent",
+                    standalone=False, session_serializer_factory=serializer_factory, sort="recent",
                 )
                 project_unread = await db.scalar(
                     select(_unread_project_sessions()).select_from(Project).where(Project.id == project.id)

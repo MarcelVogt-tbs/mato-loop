@@ -46,7 +46,33 @@ from mato_loop_backend.settings import (
 
 _MAX_LEXICAL_TERMS = 20
 _MAX_LEXICAL_TERM_CHARACTERS = 256
+_MAX_SOURCE_EVIDENCE = 10
 _MEMORY_APPROVAL_SCHEMA_VERSION = 3
+
+
+def _user_managed(item: MemoryRecord) -> bool:
+    # Unsaved records have not received SQLAlchemy's column default yet.
+    return bool(getattr(item, "user_managed", False)) or getattr(item, "source_type", None) in {
+        MemorySourceType.MANUAL.value, MemorySourceType.TOOL_CALL.value,
+    }
+
+
+def dreaming_change_policy(
+    settings: MemorySettings,
+    targets: Iterable[MemoryRecord],
+    action: Literal["update", "merge", "remove"],
+) -> ToolExecutionPolicy:
+    """Combine explicit restrictions with persistent owner-management protection."""
+    policies = (
+        {settings.dreaming_update_policy, settings.dreaming_remove_policy}
+        if action == "merge"
+        else {settings.dreaming_remove_policy if action == "remove" else settings.dreaming_update_policy}
+    )
+    if ToolExecutionPolicy.DISABLED in policies:
+        return ToolExecutionPolicy.DISABLED
+    if ToolExecutionPolicy.ASK in policies or any(_user_managed(item) for item in targets):
+        return ToolExecutionPolicy.ASK
+    return ToolExecutionPolicy.AUTO
 
 
 class MemoryApprovalTarget(BaseModel):
@@ -214,20 +240,44 @@ def memory_reference_options(owner_id: UUID) -> tuple[Load, Load, Load]:
             MemoryRecord.source_messages.and_(
                 MemorySourceMessage.message_id.in_(owned_message_ids)
             )
-        ),
+        ).selectinload(
+            MemorySourceMessage.message.and_(Message.id.in_(owned_message_ids))
+        ).load_only(Message.created_at, raiseload=True),
     )
 
 
-def memory_reference_timestamps(item: MemoryRecord) -> dict[str, str | None]:
-    return {
+def memory_reference_timestamps(item: MemoryRecord) -> dict[str, object]:
+    # Projection must never trigger implicit database IO for unloaded references.
+    source_message = item.__dict__.get("source_message")
+    evidence: dict[UUID, datetime] = {}
+    for link in item.__dict__.get("source_messages", []):
+        message = link.__dict__.get("message")
+        if message is not None and message.__dict__.get("created_at") is not None:
+            evidence[link.message_id] = message.created_at
+    if source_message is not None:
+        message_id = source_message.__dict__.get("id")
+        observed_at = source_message.__dict__.get("created_at")
+        if message_id is not None and observed_at is not None:
+            evidence.setdefault(message_id, observed_at)
+    result: dict[str, object] = {
         "sourceMessageAt": (
-            item.source_message.created_at.isoformat()
-            if item.source_message and item.source_message.created_at
+            source_message.created_at.isoformat()
+            if source_message and source_message.__dict__.get("created_at")
             else None
         ),
         "memoryCreatedAt": item.created_at.isoformat() if item.created_at else None,
         "memoryUpdatedAt": item.updated_at.isoformat() if item.updated_at else None,
     }
+    if evidence:
+        # These date individual source messages, not every clause in merged content.
+        ordered = sorted(evidence, key=lambda key: (evidence[key], str(key)), reverse=True)
+        result["sourceEvidence"] = [
+            {"messageId": str(key), "observedAt": evidence[key].isoformat()}
+            for key in ordered[:_MAX_SOURCE_EVIDENCE]
+        ]
+        if len(ordered) > _MAX_SOURCE_EVIDENCE:
+            result["sourceEvidenceHasMore"] = True
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -302,6 +352,10 @@ class MemoryService:
         run_id: UUID,
         tool_call_id: str,
     ) -> MemoryMutation:
+        await MemoryService._validate_source_references(
+            db, owner_id=owner_id, session_id=session_id, message_id=message_id,
+            run_id=run_id, dream_run_id=None,
+        )
         existing = await db.scalar(
             select(MemoryRecord).where(
                 MemoryRecord.user_id == owner_id,
@@ -314,9 +368,13 @@ class MemoryService:
             return MemoryMutation(existing, created=True)
         _, content_hash = normalize_content(content)
         duplicate = await MemoryService._duplicate_by_hash(
-            db, owner_id=owner_id, content_hash=content_hash
+            db, owner_id=owner_id, content_hash=content_hash, for_update=True
         )
         if duplicate is not None:
+            if not duplicate.user_managed:
+                duplicate.user_managed = True
+                duplicate.revision = (duplicate.revision or 1) + 1
+                await db.flush()
             return MemoryMutation(duplicate, duplicate=True)
         try:
             async with db.begin_nested():
@@ -346,10 +404,14 @@ class MemoryService:
             if replay is not None:
                 return MemoryMutation(replay, created=True)
             duplicate = await MemoryService._duplicate_by_hash(
-                db, owner_id=owner_id, content_hash=content_hash
+                db, owner_id=owner_id, content_hash=content_hash, for_update=True
             )
             if duplicate is None:
                 raise
+            if not duplicate.user_managed:
+                duplicate.user_managed = True
+                duplicate.revision = (duplicate.revision or 1) + 1
+                await db.flush()
             return MemoryMutation(duplicate, duplicate=True)
 
     @staticmethod
@@ -442,7 +504,9 @@ class MemoryService:
                 owner_id=owner_id,
                 source_audience=merged_audience,
                 evidence_message_ids=source_evidence,
+                owner_edit=True,
             )
+            duplicate.user_managed = True
             duplicate.source_type = MemorySourceType.TOOL_CALL.value
             duplicate.source_session_id = session_id
             duplicate.source_message_id = evidence_message_id
@@ -526,6 +590,7 @@ class MemoryService:
         session_id: UUID,
         dream_run_id: UUID,
         evidence_message_ids: list[UUID],
+        approved: bool = False,
     ) -> MemoryMutation:
         item = await MemoryService._get_for_automatic_update(
             db, owner_id=owner_id, memory_id=memory_id, readable_by=trust_level
@@ -533,6 +598,10 @@ class MemoryService:
         if item is None:
             return MemoryMutation(None)
         if item.revision != expected_revision:
+            return MemoryMutation(item, conflict=True)
+        settings = await SettingsStore.load(db, MemorySettings, user_id=owner_id)
+        policy = dreaming_change_policy(settings, [item], "update")
+        if policy == ToolExecutionPolicy.DISABLED or (policy == ToolExecutionPolicy.ASK and not approved):
             return MemoryMutation(item, conflict=True)
         target_audience = memory_audience_intersection(
             [item.audience, memory_audience_for_source(trust_level)]
@@ -574,6 +643,7 @@ class MemoryService:
         session_id: UUID,
         dream_run_id: UUID,
         evidence_message_ids: list[UUID],
+        approved: bool = False,
     ) -> MemoryMutation:
         unique_ids = sorted(set(memory_ids), key=str)
         if len(unique_ids) < 2 or len(unique_ids) > 50:
@@ -598,6 +668,11 @@ class MemoryService:
             or not memory_visible_to(item.audience, readable_by)
             for item in items
         ):
+            return MemoryMutation(None, conflict=True)
+
+        settings = await SettingsStore.load(db, MemorySettings, user_id=owner_id)
+        policy = dreaming_change_policy(settings, items, "merge")
+        if policy == ToolExecutionPolicy.DISABLED or (policy == ToolExecutionPolicy.ASK and not approved):
             return MemoryMutation(None, conflict=True)
 
         cleaned = content.strip()
@@ -658,6 +733,7 @@ class MemoryService:
         survivor.category = category.value
         survivor.audience = resulting_audience.value
         survivor.pinned = any(item.pinned for item in items)
+        survivor.user_managed = any(_user_managed(item) for item in items)
         survivor.source_type = MemorySourceType.DREAMING.value
         survivor.source_session_id = session_id
         survivor.source_message_id = evidence_message_ids[0] if evidence_message_ids else None
@@ -745,6 +821,9 @@ class MemoryService:
             db, item, snapshot=snapshot, owner_id=owner_id
         ):
             return MemoryMutation(item, conflict=True)
+        settings = await SettingsStore.load(db, MemorySettings, user_id=owner_id)
+        if dreaming_change_policy(settings, [item], "remove") != ToolExecutionPolicy.AUTO:
+            return MemoryMutation(item, conflict=True)
         removed = {"id": str(item.id), "category": item.category, "revision": item.revision}
         await MemoryService.delete(db, item, owner_id=owner_id)
         record_change(db, dream_run_id, "remove", before=[removed])
@@ -759,9 +838,14 @@ class MemoryService:
         candidates: list[tuple[str, MemoryCategory]],
         readable_by: TrustLevel,
         excluded_content_hashes: frozenset[str] | set[str] = frozenset(),
-        max_items_per_candidate: int = 5,
+        max_items_per_candidate: int = 10,
         max_characters: int = 40_000,
     ) -> list[list[MemoryRecord]]:
+        from mato_loop_backend.memory.retrieval import (
+            MemoryRetrievalService,
+            MemoryRetrieveMode,
+        )
+
         trust_filters = [
             MemoryRecord.user_id == owner_id,
             memory_visibility_filter(readable_by),
@@ -780,9 +864,9 @@ class MemoryService:
                 ).options(*memory_reference_options(owner_id))
             )
             if exact is not None:
-                result.append([exact])
-                continue
+                selected[exact.id] = exact
 
+            lexical: list[MemoryRecord] = []
             terms = memory_lexical_terms(content)
             if terms:
                 tsquery = func.to_tsquery("simple", " | ".join(terms))
@@ -799,11 +883,25 @@ class MemoryService:
                                 func.ts_rank_cd(MemoryRecord.search_vector, tsquery).desc(),
                                 MemoryRecord.updated_at.desc(),
                             )
-                            .limit(5)
+                            .limit(10)
                         )
                     ).all()
                 )
-                selected.update((item.id, item) for item in lexical)
+            hybrid = await MemoryRetrievalService.retrieve(
+                db,
+                owner_id=owner_id,
+                mode=MemoryRetrieveMode.SEARCH,
+                query=content,
+                readable_by=readable_by,
+                limit=10,
+                max_semantic_distance=0.35,
+                excluded_content_hashes=excluded_content_hashes,
+            )
+            for rank in range(max(len(lexical), len(hybrid.items))):
+                for ranked in (lexical, hybrid.items):
+                    if rank < len(ranked):
+                        item = ranked[rank]
+                        selected.setdefault(item.id, item)
             local: list[MemoryRecord] = []
             for item in selected.values():
                 if len(local) >= max_items_per_candidate:
@@ -1146,24 +1244,7 @@ class MemoryService:
             settings.dreaming_update_policy == payload.update_policy
             and settings.dreaming_remove_policy == payload.remove_policy
         )
-        approval_still_required = (
-            action == "update"
-            and settings.dreaming_update_policy == ToolExecutionPolicy.ASK
-            or action == "remove"
-            and settings.dreaming_remove_policy == ToolExecutionPolicy.ASK
-            or action == "merge"
-            and ToolExecutionPolicy.DISABLED
-            not in {
-                settings.dreaming_update_policy,
-                settings.dreaming_remove_policy,
-            }
-            and ToolExecutionPolicy.ASK
-            in {
-                settings.dreaming_update_policy,
-                settings.dreaming_remove_policy,
-            }
-        )
-        if not policies_match or not approval_still_required:
+        if not policies_match:
             return "policy_changed"
 
         target_ids = sorted(
@@ -1181,9 +1262,7 @@ class MemoryService:
         snapshots = {item.id: item for item in payload.target_memories}
         if len(targets) != len(target_ids):
             return "target_changed"
-        if not settings.dreaming_include_manual_memories and any(
-            item.source_type == MemorySourceType.MANUAL.value for item in targets
-        ):
+        if dreaming_change_policy(settings, targets, action) != ToolExecutionPolicy.ASK:
             return "policy_changed"
         for item in targets:
             snapshot = snapshots[item.id]
@@ -1270,6 +1349,7 @@ class MemoryService:
                         session_id=session.id,
                         dream_run_id=dream_run.id,
                         evidence_message_ids=payload.evidence_message_ids,
+                        approved=True,
                     )
                 else:
                     mutation = await MemoryService.merge_dreaming(
@@ -1287,6 +1367,7 @@ class MemoryService:
                         session_id=session.id,
                         dream_run_id=dream_run.id,
                         evidence_message_ids=payload.evidence_message_ids,
+                        approved=True,
                     )
                 if mutation.item is None or mutation.conflict:
                     return "target_changed"
@@ -1295,6 +1376,7 @@ class MemoryService:
                     # Duplicate protection is owner-wide, independent of the final audience.
                     mutation.item.audience = memory_edit.audience.value
                     mutation.item.pinned = memory_edit.pinned
+                    mutation.item.user_managed = True
                 await db.flush()
         except IntegrityError:
             _, content_hash = normalize_content(after.content)
@@ -1347,6 +1429,7 @@ class MemoryService:
             source_dream_run_id=dream_run_id,
             source_tool_call_id=tool_call_id,
             source_type=source_type.value,
+            user_managed=source_type != MemorySourceType.DREAMING,
             pinned=False,
             audience=audience.value,
             category=category.value,
@@ -1519,13 +1602,30 @@ class MemoryService:
         source_audience: MemoryAudience,
         evidence_message_ids: list[UUID],
         include_manual: bool = True,
+        owner_edit: bool = False,
     ) -> None:
         if item.user_id != owner_id:
             raise ValueError("memory owner mismatch")
-        if not include_manual and item.source_type == MemorySourceType.MANUAL.value:
+        # Dreaming must not mutate protected metadata through duplicate/keep paths.
+        if _user_managed(item) and not owner_edit:
             return
+        if not owner_edit:
+            settings = await SettingsStore.load(db, MemorySettings, user_id=owner_id)
+            if dreaming_change_policy(settings, [item], "update") != ToolExecutionPolicy.AUTO:
+                return
         audience = memory_audience_intersection([item.audience, source_audience])
         if audience is None:
+            return
+        linked = set((await db.scalars(
+            select(MemorySourceMessage.message_id).where(
+                MemorySourceMessage.memory_id == item.id,
+                MemorySourceMessage.message_id.in_(evidence_message_ids),
+            )
+        )).all()) if evidence_message_ids else set()
+        new_evidence = list(dict.fromkeys(
+            message_id for message_id in evidence_message_ids if message_id not in linked
+        ))
+        if audience.value == item.audience and not new_evidence and not owner_edit:
             return
         item.audience = audience.value
         item.revision = (item.revision or 1) + 1
@@ -1533,7 +1633,7 @@ class MemoryService:
             db,
             owner_id=owner_id,
             memory_id=item.id,
-            message_ids=evidence_message_ids,
+            message_ids=new_evidence,
         )
         await db.flush()
 
@@ -1592,6 +1692,8 @@ class MemoryService:
                 item.content = cleaned
                 item.category = category.value
                 item.audience = audience.value
+                if source_type != MemorySourceType.DREAMING:
+                    item.user_managed = True
                 if pinned is not None:
                     item.pinned = pinned
                 item.normalized_content_hash = content_hash
@@ -1829,8 +1931,9 @@ class MemoryService:
     ) -> MemoryRecord:
         if item.user_id != owner_id:
             raise ValueError("memory owner mismatch")
-        if item.pinned != pinned:
+        if item.pinned != pinned or not item.user_managed:
             item.pinned = pinned
+            item.user_managed = True
             item.revision = (item.revision or 1) + 1
             await db.flush()
         return item

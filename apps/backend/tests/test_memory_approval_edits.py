@@ -1,4 +1,5 @@
 from copy import deepcopy
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -20,7 +21,12 @@ from mato_loop_backend.api.routes.approvals import (
 from mato_loop_backend.api.routes.notifications import list_notifications
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.memory.service import MemoryService, normalize_content
+from mato_loop_backend.memory.service import (
+    MemoryService,
+    dreaming_change_policy,
+    memory_reference_timestamps,
+    normalize_content,
+)
 from mato_loop_backend.models import (
     ApprovalRequest,
     ChatSession,
@@ -273,14 +279,14 @@ async def proposal(request):
 
 @pytest.mark.parametrize("proposal", ["merge"], indirect=True)
 @pytest.mark.parametrize("entry", ["approvals", "notifications"])
-@pytest.mark.parametrize("stale", ["revision", "manual_excluded"])
+@pytest.mark.parametrize("stale", ["revision", "policy_disabled"])
 async def test_stale_memory_proposal_and_notice_are_removed_before_display(proposal, entry, stale):
     p = proposal
     if stale == "revision":
         p.targets[0].revision += 1
     else:
         await SettingsStore.save(
-            p.db, MemorySettings(dreaming_update_policy="ask", dreaming_remove_policy="ask"), user_id=p.user.id
+            p.db, MemorySettings(dreaming_update_policy="disabled", dreaming_remove_policy="ask"), user_id=p.user.id
         )
     await p.db.commit()
     if entry == "approvals":
@@ -296,6 +302,10 @@ async def test_stale_memory_proposal_and_notice_are_removed_before_display(propo
 @pytest.mark.parametrize("audience,pinned", [("public_only", True), ("both", False), ("private_only", False)])
 async def test_edited_approval_persists_result_evidence_index_and_counters(proposal, audience, pinned):
     p = proposal
+    for target in p.targets:
+        target.user_managed = False
+        target.source_type = "dreaming"
+    await p.db.flush()
     original = deepcopy(p.approval.payload)
     owner_id = p.user.id
     target_ids = [item.id for item in p.targets]
@@ -327,6 +337,7 @@ async def test_edited_approval_persists_result_evidence_index_and_counters(propo
     await p.db.refresh(p.evidence)
     await p.db.refresh(p.old_evidence)
     assert memory.source_type == "dreaming"
+    assert memory.user_managed is True
     assert memory.source_dream_run_id == p.run.id
     linked = set((await p.db.scalars(
         select(MemorySourceMessage.message_id).where(MemorySourceMessage.memory_id == memory.id)
@@ -367,6 +378,7 @@ async def test_unedited_approval_preserves_defaults(proposal, decision, edit):
         assert memories[0].content == "Original proposal"
         assert memories[0].category == "preference"
         assert memories[0].audience == "private_only"
+        assert memories[0].user_managed is True
         assert memories[0].pinned == (len(target_ids) == 2)
 
 
@@ -467,3 +479,134 @@ async def test_edited_duplicates_are_rejected_across_final_audiences(
     assert p.approval.status == "expired"
     assert p.approval.payload == original
     assert p.run.updated_memory_count == p.run.removed_memory_count == 0
+
+
+@pytest.mark.parametrize("action", ["update", "merge", "remove"])
+@pytest.mark.parametrize("source", ["manual", "tool_call", "dreaming"])
+def test_dreaming_policy_protects_owner_memories_without_overriding_restrictions(action, source):
+    target = MemoryRecord(source_type=source)
+    settings = MemorySettings()
+    assert dreaming_change_policy(settings, [target], "remove") == ToolExecutionPolicy.ASK
+    settings.dreaming_remove_policy = ToolExecutionPolicy.AUTO
+    assert dreaming_change_policy(settings, [target], action) == (
+        ToolExecutionPolicy.AUTO if source == "dreaming" else ToolExecutionPolicy.ASK
+    )
+    target.user_managed = True
+    assert dreaming_change_policy(settings, [target], action) == ToolExecutionPolicy.ASK
+    settings.dreaming_update_policy = ToolExecutionPolicy.DISABLED
+    settings.dreaming_remove_policy = ToolExecutionPolicy.DISABLED
+    assert dreaming_change_policy(settings, [target], action) == ToolExecutionPolicy.DISABLED
+
+
+@pytest.mark.parametrize("proposal", ["update"], indirect=True)
+@pytest.mark.parametrize("edit", ["category", "audience", "pin"])
+async def test_owner_metadata_edits_protect_dreaming_records(proposal, edit):
+    p = proposal
+    target = (await MemoryService.create_dreaming(
+        p.db, owner_id=p.user.id, content="Automatically extracted memory",
+        category=MemoryCategory.FACT, trust_level=TrustLevel.PRIVATE,
+        session_id=p.session.id, run_id=p.run.id, evidence_message_ids=[p.evidence.id],
+    )).item
+    assert target.user_managed is False
+    if edit == "pin":
+        await MemoryService.set_pinned(p.db, target, owner_id=p.user.id, pinned=True)
+    else:
+        await MemoryService.update(
+            p.db, target, owner_id=p.user.id, content=target.content,
+            category=MemoryCategory.GOAL if edit == "category" else MemoryCategory.FACT,
+            audience=MemoryAudience.BOTH if edit == "audience" else MemoryAudience.PRIVATE_ONLY,
+        )
+    await p.db.refresh(target)
+    assert target.user_managed is True
+
+
+@pytest.mark.parametrize("proposal", ["update"], indirect=True)
+async def test_duplicate_dreaming_does_not_mutate_protected_metadata(proposal):
+    p = proposal
+    target = p.targets[0]
+    before = (target.revision, target.audience, target.user_managed)
+    await MemoryService.create_dreaming(
+        p.db, owner_id=p.user.id, content=target.content, category=MemoryCategory.GOAL,
+        trust_level=TrustLevel.PRIVATE, session_id=p.session.id, run_id=p.run.id,
+        evidence_message_ids=[p.evidence.id], include_manual=True,
+    )
+    await p.db.refresh(target)
+    linked = set((await p.db.scalars(select(MemorySourceMessage.message_id).where(
+        MemorySourceMessage.memory_id == target.id,
+    ))).all())
+    assert (target.revision, target.audience, target.user_managed, linked) == (
+        *before, {p.old_evidence.id},
+    )
+
+
+@pytest.mark.parametrize("proposal", ["update"], indirect=True)
+async def test_repeated_automatic_evidence_does_not_increment_revision(proposal):
+    p = proposal
+    await SettingsStore.save(p.db, MemorySettings(), user_id=p.user.id)
+    target = (await MemoryService.create_dreaming(
+        p.db, owner_id=p.user.id, content="Repeated automatic evidence",
+        category=MemoryCategory.FACT, trust_level=TrustLevel.PRIVATE,
+        session_id=p.session.id, run_id=p.run.id, evidence_message_ids=[p.evidence.id],
+    )).item
+    await MemoryService.keep_dreaming(
+        p.db, owner_id=p.user.id, memory_id=target.id, expected_revision=1,
+        trust_level=TrustLevel.PRIVATE, evidence_message_ids=[p.evidence.id],
+    )
+    await p.db.refresh(target)
+    assert target.revision == 1
+
+
+@pytest.mark.parametrize("proposal", ["merge"], indirect=True)
+async def test_kept_and_merged_evidence_retains_message_observation_times(proposal):
+    p = proposal
+    old_at = datetime(2024, 2, 3, tzinfo=UTC)
+    new_at = datetime(2024, 8, 9, tzinfo=UTC)
+    p.old_evidence.created_at = old_at
+    p.evidence.created_at = new_at
+    await SettingsStore.save(p.db, MemorySettings(), user_id=p.user.id)
+    target = (await MemoryService.create_dreaming(
+        p.db, owner_id=p.user.id, content="Evidence dates remain independent",
+        category=MemoryCategory.FACT, trust_level=TrustLevel.PRIVATE,
+        session_id=p.session.id, run_id=p.run.id, evidence_message_ids=[p.old_evidence.id],
+    )).item
+    await MemoryService.keep_dreaming(
+        p.db, owner_id=p.user.id, memory_id=target.id, expected_revision=1,
+        trust_level=TrustLevel.PRIVATE, evidence_message_ids=[p.evidence.id],
+    )
+    kept = memory_reference_timestamps(await MemoryService.get(
+        p.db, owner_id=p.user.id, memory_id=target.id,
+    ))
+    await SettingsStore.save(
+        p.db, MemorySettings(dreaming_update_policy="ask", dreaming_remove_policy="ask", dreaming_include_manual_memories=True),
+        user_id=p.user.id,
+    )
+    await decide_approval(
+        p.approval.id, ApprovalDecisionRequest(decision="approve"), p.user, p.db,
+    )
+    merged = memory_reference_timestamps(await MemoryService.get(
+        p.db, owner_id=p.user.id, memory_id=min((item.id for item in p.targets), key=str),
+    ))
+    expected = [
+        {"messageId": str(p.evidence.id), "observedAt": new_at.isoformat()},
+        {"messageId": str(p.old_evidence.id), "observedAt": old_at.isoformat()},
+    ]
+    assert (kept["sourceMessageAt"], kept["sourceEvidence"], merged["sourceEvidence"]) == (
+        old_at.isoformat(), expected, expected,
+    )
+
+
+@pytest.mark.parametrize("proposal", ["merge"], indirect=True)
+async def test_protected_approval_applies_with_auto_policies_and_legacy_flag_off(proposal):
+    p = proposal
+    await SettingsStore.save(
+        p.db, MemorySettings(dreaming_remove_policy="auto"), user_id=p.user.id,
+    )
+    p.approval.payload = {
+        **p.approval.payload, "updatePolicy": "auto", "removePolicy": "auto",
+    }
+    await p.db.commit()
+    await decide_approval(
+        p.approval.id, ApprovalDecisionRequest(decision="approve"), p.user, p.db,
+    )
+    survivor = await p.db.scalar(select(MemoryRecord).where(MemoryRecord.user_id == p.user.id))
+    assert survivor.user_managed is True

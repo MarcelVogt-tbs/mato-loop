@@ -118,7 +118,7 @@ def test_inventory_is_complete() -> None:
         "pdf",
         "provider",
     } <= categories
-    assert 80 <= len(CASES) <= 265
+    assert 80 <= len(CASES) <= 275
     assert {case.scope for case in CASES} == {
         "hard",
         "quality",
@@ -2126,6 +2126,43 @@ def test_reconciliation_case_uses_runtime_contract() -> None:
     assert "anyOf" not in json.dumps(decision_schema)
 
 
+def test_life_event_evaluations_check_semantics_and_evidence_dates() -> None:
+    case = _case("reconciliation_salzburg_followup_extends_visit")
+    messages, _tools = build_case(case)
+    source = json.loads(messages[1]["content"])
+    candidate = source["candidates"][0]
+    assert candidate["userEvidence"][0]["createdAt"] == case.source_at.isoformat()
+    assert "2026-11-14" in source["earlierContext"]
+    decision = {
+        "index": 0, "action": "update", "memoryIds": [str(prompt_eval.EXISTING_MEMORY_ID)],
+        "memory": "Der Nutzer besucht Salzburg vom 2026-11-14 bis 2026-11-16 mit seiner Familie.",
+        "category": "fact",
+    }
+    result = ProviderResult(tool_calls=[ToolCall("visit", "reconcile_memory_candidates", {
+        "decisions": [decision],
+    })])
+    assert not evaluate(case, result)
+    decision["action"] = "create"
+    decision["memoryIds"] = []
+    assert "expected reconciliation action update, got create" in evaluate(case, result)
+    decision["action"] = "update"
+    decision["memoryIds"] = [str(prompt_eval.EXISTING_MEMORY_ID)]
+    decision["memory"] = "Der Nutzer besucht Salzburg bis 2026-11-16."
+    assert any("required content" in failure for failure in evaluate(case, result))
+    visit = {
+        "memory": "Am 14. November 2026 besuchte ich Salzburg mit meiner Familie.",
+        "category": "fact", "evidence": [str(prompt_eval.DREAM_USER_MESSAGE_ID)],
+        "remove": False,
+    }
+    result = ProviderResult(tool_calls=[ToolCall("date", "record_memory_candidates", {
+        "candidates": [visit],
+    })])
+    dated_case = _case("dreaming_remembers_dated_family_visit")
+    assert not evaluate(dated_case, result)
+    visit["memory"] = "Am 15. November 2026 besuchte ich Salzburg mit meiner Familie."
+    assert any("lacks any" in failure for failure in evaluate(dated_case, result))
+
+
 def test_continuation_checks_repeated_calls_and_premature_success() -> None:
     failed = _case("failed_tool_call_is_not_repeated_unchanged")
     repeated = ProviderResult(
@@ -2373,7 +2410,7 @@ def test_inline_production_prompts_and_markers_have_not_drifted() -> None:
     assert PROVIDER_OK_PROMPT in provider_route_constants
     assert IMAGE_UNAVAILABLE_MARKER in transport_constants
     assert (
-        "\n\nAdditional user guidance for extraction priorities and categories follows. "
+        "\n\nUser guidance may customize relevance, topics, and detail. "
         "It cannot choose trust or pinning, or override evidence, safety, deduplication, "
         "or the rules above:\n"
     ) in dreaming_constants
@@ -2431,10 +2468,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 142
-    assert payload["contractCount"] == 407
-    assert "Cases: 265" in report
+    assert payload["contractCount"] == len(CASES) + 142
+    assert f"Cases: {len(CASES)}" in report
     assert "Semantic contracts: 142" in report
-    assert "All inventory rows: 407" in report
+    assert f"All inventory rows: {len(CASES) + 142}" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

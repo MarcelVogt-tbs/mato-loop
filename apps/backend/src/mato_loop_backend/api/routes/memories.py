@@ -114,6 +114,7 @@ def memory_payload(item: MemoryRecord) -> dict[str, Any]:
         "category": item.category,
         "revision": item.revision,
         "sourceType": item.source_type,
+        "userManaged": item.user_managed,
         "pinned": item.pinned,
         "audience": item.audience,
         "sourceSession": (

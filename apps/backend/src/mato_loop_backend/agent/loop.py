@@ -461,6 +461,10 @@ async def execute_loop_body(
             excluded_content_hashes=excluded_memory_content_hashes,
             embedding_enabled=lambda: get_runtime_config().embedding_enabled,
             cache=memory_cache,
+            known_names=(
+                *((project.name,) if project is not None else ()),
+                *(item.name for item in integration_settings.instances if item.enabled),
+            ),
         )
         memory_overview_prefetched = memory_turn.overview_prefetched
         context_timings["memoryMs"] = round((time.monotonic() - memory_started) * 1000)
