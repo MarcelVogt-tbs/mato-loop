@@ -14,14 +14,22 @@ let changelogIntent = null
 export function consumePwaChangelog(userId) {
   try {
     const raw = sessionStorage.getItem(PWA_CHANGELOG_KEY)
-    sessionStorage.removeItem(PWA_CHANGELOG_KEY)
     if (!raw) return null
-    const intent = JSON.parse(raw)
-    if (intent.userId !== userId || !REVISION_PATTERN.test(intent.base)
-      || !REVISION_PATTERN.test(WEB_REVISION) || intent.base === WEB_REVISION
-      || !Number.isFinite(intent.createdAt) || Date.now() - intent.createdAt > 10 * 60 * 1000
-      || intent.createdAt > Date.now()) return null
-    return { base: intent.base, target: WEB_REVISION }
+    let intent
+    try {
+      intent = JSON.parse(raw)
+    } catch {
+      sessionStorage.removeItem(PWA_CHANGELOG_KEY)
+      return null
+    }
+    const now = Date.now()
+    const validIntent = intent && intent.userId === userId && REVISION_PATTERN.test(intent.base)
+      && Number.isFinite(intent.createdAt) && now - intent.createdAt <= 10 * 60 * 1000
+      && intent.createdAt <= now
+    // A reload may still load the previous bundle. Consume only for a known, different revision.
+    if (validIntent && (!REVISION_PATTERN.test(WEB_REVISION) || intent.base === WEB_REVISION)) return null
+    sessionStorage.removeItem(PWA_CHANGELOG_KEY)
+    return validIntent ? { base: intent.base, target: WEB_REVISION } : null
   } catch {
     // Changelog display is optional when tab storage is unavailable.
     return null
@@ -70,6 +78,12 @@ export async function requestPwaUpdate({ showChanges = false, userId = null } = 
   updating = true
   changelogIntent = showChanges && userId && REVISION_PATTERN.test(WEB_REVISION)
     ? { worker: waiting, userId } : null
+  try {
+    // This choice supersedes a changelog still pending from an earlier update.
+    sessionStorage.removeItem(PWA_CHANGELOG_KEY)
+  } catch {
+    // Updating must still work without storage.
+  }
   try {
     await new Promise((resolve, reject) => {
       const finish = (error, keepIntent = false) => {

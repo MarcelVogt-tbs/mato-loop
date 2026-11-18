@@ -81,13 +81,16 @@ describe('PWA updates', () => {
     expect(reload).not.toHaveBeenCalled()
   })
 
-  it('shows the requested exact changelog once after the chosen update', async () => {
+  it('shows the requested exact changelog once even after a reload of the previous revision', async () => {
     const { serviceWorker, worker } = updateEnvironment()
     const pending = updates.requestPwaUpdate({ showChanges: true, userId: 'owner' })
     await Promise.resolve()
     serviceWorker.controller = worker
     serviceWorker.dispatchEvent(new Event('controllerchange'))
     await pending
+    vi.resetModules()
+    const previous = await import('../src/app/pwa-update')
+    expect(previous.consumePwaChangelog('owner')).toBeNull()
     vi.stubEnv('MATOLOOP_WEB_REVISION', 'b'.repeat(40))
     vi.resetModules()
     const next = await import('../src/app/pwa-update')

@@ -36,6 +36,7 @@
 
 <script setup>
 import { defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useChangelogStore } from 'src/features/changelog/store'
 import AppLogo from 'src/shared/ui/AppLogo.vue'
 import { useAppearanceStore } from 'src/features/settings/appearance-store'
@@ -54,6 +55,7 @@ defineOptions({ name: 'App' })
 const auth = useAuthStore()
 const appearance = useAppearanceStore()
 const changelog = useChangelogStore()
+const route = useRoute()
 const ChangelogDialog = defineAsyncComponent(() => import('src/features/changelog/ChangelogDialog.vue'))
 const showChanges = ref(true)
 const startupSlow = ref(false)
@@ -105,7 +107,8 @@ async function applyUpdate() {
   }
 }
 
-watch(() => auth.authenticated && auth.userId, (userId) => {
+// Quasar dismisses open dialogs on navigation, including the initial route.
+watch(() => route.matched.length > 0 && auth.authenticated && auth.userId, (userId) => {
   if (!userId) return
   const comparison = consumePwaChangelog(userId)
   if (comparison) void changelog.show(comparison)
