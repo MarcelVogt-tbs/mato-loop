@@ -410,11 +410,15 @@ async def process_inbox(
     inbox_id: UUID, settings: TeamsChannelSettings, client: TeamsRelayClient
 ) -> None:
     async with AsyncSessionFactory() as db:
-        inbox = await db.get(MessagingInbox, inbox_id, with_for_update=True)
+        inbox = await db.get(MessagingInbox, inbox_id)
         if inbox is None or inbox.status != "processing":
             return
+        endpoint_id = inbox.endpoint_id
         try:
-            endpoint = await available_endpoint(db, inbox.endpoint_id, settings)
+            endpoint = await available_endpoint(db, endpoint_id, settings)
+            inbox = await db.get(MessagingInbox, inbox_id, with_for_update=True, populate_existing=True)
+            if inbox is None or inbox.status != "processing":
+                return
             event = Event.model_validate(inbox.payload["envelope"])
             if inbox.payload.get("bindingId") != endpoint.channel_state.get("bindingId"):
                 raise TeamsServiceError("channel.pairingChanged")
@@ -502,11 +506,11 @@ async def process_inbox(
             logger.warning(
                 "Teams inbox processing failed: %s", getattr(exc, "code", "channel.invalidResponse")
             )
-            inbox = await db.get(MessagingInbox, inbox_id, with_for_update=True)
-            if inbox is not None:
+            endpoint = await db.get(MessagingEndpoint, endpoint_id, with_for_update=True)
+            inbox = await db.get(MessagingInbox, inbox_id, with_for_update=True, populate_existing=True)
+            if inbox is not None and inbox.status == "processing":
                 inbox.status, inbox.processing_at = "failed", None
                 inbox.error_code = getattr(exc, "code", "channel.invalidResponse")
-                endpoint = await db.get(MessagingEndpoint, inbox.endpoint_id)
                 if endpoint is not None:
                     enqueue_text(
                         db,
@@ -560,15 +564,17 @@ async def deliver_outbox(
     item_id: UUID, settings: TeamsChannelSettings, client: TeamsRelayClient
 ) -> None:
     async with AsyncSessionFactory() as db:
-        item = await db.get(MessagingOutbox, item_id, with_for_update=True)
+        item = await db.get(MessagingOutbox, item_id)
         if item is None or item.status not in {"pending", "processing"}:
             return
+        endpoint_id = item.endpoint_id
         try:
+            endpoint = await available_endpoint(db, endpoint_id, settings, require_bound=False)
+            item = await db.get(MessagingOutbox, item_id, with_for_update=True, populate_existing=True)
+            if item is None or item.status not in {"pending", "processing"}:
+                return
             origin = await db.get(MessagingInbox, item.inbox_id) if item.inbox_id else None
             unpaired = item.payload.get("allowUnpaired") is True
-            endpoint = await available_endpoint(
-                db, item.endpoint_id, settings, require_bound=not unpaired
-            )
             if unpaired:
                 event = Event.model_validate(origin.payload["envelope"]) if origin else None
                 if (
@@ -723,10 +729,10 @@ async def deliver_outbox(
             code = getattr(exc, "code", "channel.invalidResponse")
             await db.rollback()
             logger.warning("Teams delivery failed: %s", code)
-            item = await db.get(MessagingOutbox, item_id, with_for_update=True)
-            if item:
+            endpoint = await db.get(MessagingEndpoint, endpoint_id, with_for_update=True)
+            item = await db.get(MessagingOutbox, item_id, with_for_update=True, populate_existing=True)
+            if item is not None and item.status in {"pending", "processing"}:
                 item.status, item.processing_at, item.error_code = "failed", None, code
-                endpoint = await db.get(MessagingEndpoint, item.endpoint_id)
                 if endpoint and item.payload.get("kind") != "teamsPairingConfirmed":
                     endpoint.last_error_code = code
                     if item.deduplication_key.startswith("run:") and code not in {

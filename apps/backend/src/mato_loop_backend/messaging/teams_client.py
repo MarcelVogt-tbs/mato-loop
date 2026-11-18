@@ -132,6 +132,6 @@ class TeamsRelayClient:
             raise TeamsServiceError("channel.deliveryUnknown")
         if result.status == "failed":
             raise TeamsServiceError()
-        if result.status == "declined":
+        if result.status == "declined" and value.kind != "file":
             raise TeamsServiceError("channel.fileDeclined")
         return result

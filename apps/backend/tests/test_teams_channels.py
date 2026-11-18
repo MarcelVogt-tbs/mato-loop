@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
+from uuid import uuid4, uuid5
 from zipfile import ZipFile
 
 import httpx
@@ -119,7 +119,7 @@ async def test_teams_pairing_card_delivery_is_scoped_and_best_effort(monkeypatch
         status="processing", attempts=1, payload={"kind": "teamsPairingConfirmed", "bindingId": "paired"},
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = [item, item, endpoint]
+    db.get.side_effect = [item, item, endpoint, item]
     monkeypatch.setattr(teams, "AsyncSessionFactory", lambda: nullcontext(db))
     monkeypatch.setattr(teams, "available_endpoint", AsyncMock(return_value=endpoint))
     monkeypatch.setattr(teams, "bound_identity", lambda *_: who)
@@ -298,7 +298,7 @@ async def test_failed_teams_answer_creates_a_notice_in_matoloop(monkeypatch):
         attempts=1, payload={"text": "Antwort"},
     )
     db = AsyncMock(spec=AsyncSession)
-    db.get.side_effect = [item, inbox, item, endpoint, inbox]
+    db.get.side_effect = [item, item, inbox, endpoint, item, inbox]
     db.scalar.return_value = inbox.session_id
     monkeypatch.setattr(teams, "AsyncSessionFactory", lambda: nullcontext(db))
     monkeypatch.setattr(teams, "available_endpoint", AsyncMock(return_value=endpoint))
@@ -314,6 +314,45 @@ async def test_failed_teams_answer_creates_a_notice_in_matoloop(monkeypatch):
     assert (item.status, item.error_code, notice.user_id, notice.session_id) == (
         "failed", "channel.deliveryUnknown", endpoint.user_id, inbox.session_id,
     )
+
+
+async def test_declining_one_teams_file_does_not_block_another(monkeypatch, tmp_path):
+    who = identity()
+    endpoint = MessagingEndpoint(id=uuid4(), channel_state={"bindingId": "paired"})
+    inbox = MessagingInbox(
+        id=uuid4(), status="completed", payload={"bindingId": "paired", "chatId": who.conversation_id},
+    )
+    item = MessagingOutbox(
+        id=uuid4(), endpoint_id=endpoint.id, inbox_id=inbox.id, status="processing",
+        destination=who.conversation_id, attempts=2, source_message_id=uuid4(),
+        payload={"includeAttachments": True},
+    )
+    attachments = [
+        SimpleNamespace(id=uuid4(), filename=f"{i}.txt", mime_type="text/plain") for i in range(2)
+    ]
+    first, second = [str(uuid5(item.id, f"file:{attachment.id}")) for attachment in attachments]
+    path = tmp_path / "fixture.txt"
+    path.write_text("fixture")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = [item, item, inbox]
+    db.scalar.return_value = SimpleNamespace(attachments=attachments, session_id=uuid4())
+    monkeypatch.setattr(teams, "AsyncSessionFactory", lambda: nullcontext(db))
+    monkeypatch.setattr(teams, "available_endpoint", AsyncMock(return_value=endpoint))
+    monkeypatch.setattr(teams, "bound_identity", lambda *_: who)
+    monkeypatch.setattr(teams.AttachmentService, "verified_path", AsyncMock(return_value=path))
+    accepted = []
+
+    def handle(request):
+        if request.method == "POST":
+            accepted.append(request.url.path)
+            return httpx.Response(200, json={"id": second, "status": "sent"})
+        file_id = request.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(200, json={"id": file_id, "status": {first: "declined", second: "pending"}[file_id]})
+
+    async with httpx.AsyncClient(base_url="https://relay.example", transport=httpx.MockTransport(handle)) as http:
+        await teams.deliver_outbox(item.id, TeamsChannelSettings(), TeamsRelayClient(http))
+
+    assert (item.status, accepted) == ("delivered", [f"/relay/v1/deliveries/{second}/accept"])
 
 
 async def test_disabling_streaming_keeps_existing_pairings(monkeypatch):

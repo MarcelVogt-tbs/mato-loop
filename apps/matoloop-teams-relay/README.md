@@ -83,7 +83,8 @@ Sending is recorded before the Microsoft effect. A timeout or crash leaves an
 unknown outcome; neither side blindly resends it. File offers remain pending
 until decline, expiry, or upload completion. Consent does not itself authorize
 an upload: the backend rechecks the owner, active configuration and pairing
-before calling `/accept`. Sending/uploading after a crash becomes unknown.
+before calling `/accept`. Declining one file offer does not cancel other offers
+from the same reply. Sending/uploading after a crash becomes unknown.
 Teams delivery is not exactly-once.
 
 ## Limits, privacy, and recovery

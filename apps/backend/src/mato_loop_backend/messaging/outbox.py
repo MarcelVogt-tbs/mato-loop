@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import String, cast, exists, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.db.session import AsyncSessionFactory
@@ -54,6 +54,13 @@ async def reconcile_runs(provider: str = "telegram") -> int:
                         MessagingEndpoint.provider == provider,
                         AgentRun.status.in_(("completed", "failed", "cancelled")),
                         UserAccount.is_active.is_(True),
+                        ~exists(
+                            select(MessagingOutbox.id).where(
+                                MessagingOutbox.endpoint_id == MessagingEndpoint.id,
+                                MessagingOutbox.deduplication_key
+                                == literal("run:") + cast(AgentRun.id, String),
+                            )
+                        ),
                     )
                     .with_for_update(of=MessagingInbox, skip_locked=True)
                 )
@@ -61,6 +68,7 @@ async def reconcile_runs(provider: str = "telegram") -> int:
         )
         count = 0
         for inbox, endpoint, run in rows:
+            # A concurrent reconciler may have committed between the query snapshot and row lock.
             if await db.scalar(
                 select(MessagingOutbox.id).where(
                     MessagingOutbox.endpoint_id == endpoint.id,
