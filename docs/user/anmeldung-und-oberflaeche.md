@@ -30,7 +30,7 @@ Ziehe Tabs an die gewünschte Position; eine Markierung zeigt die Einfügestelle
 
 Das Schließen eines Tabs beendet keinen Lauf und löscht weder Session noch Entwurf. Textentwürfe werden pro Benutzer und Session browserlokal gespeichert; ungesendete Anhänge bleiben beim Wechsel oder Tab-Schließen im Arbeitsspeicher, nicht über ein Neuladen hinweg.
 
-Projekt-Sessions zeigen `Sessiontitel · Projektname`. Der Projektname bleibt am rechten Ende sichtbar; nur besonders lange Projektnamen werden gekürzt. Der Sessiontitel nutzt den übrigen Platz und scrollt bei Maus- oder Tastaturfokus, ohne Tooltip. Bei reduzierten Animationen bleibt er gekürzt. Der aktive Tab ist durch seine Hintergrundfläche, einen kräftigeren Titel und die Akzentlinie zum Inhalt hin markiert.
+Projekt-Sessions zeigen `Sessiontitel · Projektname`. Kurze Tabs brauchen weniger Platz. Zu lange Texte blenden am Rand aus; lange Sessiontitel scrollen nach kurzem Verweilen mit der Maus oder bei Tastaturfokus einmal bis zum Ende, ohne Tooltip. Bei reduzierter Bewegung bleibt der Text statisch. Hintergrund und Akzentlinie markieren den aktiven Tab, ohne seine Breite zu ändern.
 
 ### Suche
 
