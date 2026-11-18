@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 import mato_loop_backend.agent.projection as agent_projection
-from mato_loop_backend.agent.interaction_context import tool_batches
+from mato_loop_backend.agent.interaction_context import projection_copy, tool_batches
 from mato_loop_backend.agent.projection import (
     _SHORTENED_TOOL_OUTPUT,
     _SUMMARY_EVIDENCE_MARKER,
@@ -18,7 +20,7 @@ from mato_loop_backend.agent.projection import (
     SummaryResult,
 )
 from mato_loop_backend.media.attachments import AttachmentService
-from mato_loop_backend.models import ChatSession, ContextSummary, Message
+from mato_loop_backend.models import ChatSession, ContextSummary, Message, MessageAttachment
 from mato_loop_backend.providers.output_budget import generation_reserve, raw_input_budget
 from mato_loop_backend.settings.models import AgentRuntimeSettings, ModelConfig, TrustLevel
 from mato_loop_backend.tools.snapshots import SNAPSHOT_MARKER
@@ -27,6 +29,25 @@ SummaryCallback = Callable[[str, int], Awaitable[SummaryResult]]
 
 
 EstimateCallback = Callable[[list[dict[str, Any]]], Awaitable[int]]
+
+
+async def load_missing_attachments(db: AsyncSession, records: list[Message]) -> None:
+    # A partial reload of a Memory evidence message can unload its attachments
+    # on the same ORM instance that is already in the conversation history.
+    missing_ids = [state.identity[0] for item in records if isinstance(item, Message)
+                   and (state := inspect(item)).persistent and "attachments" in state.unloaded]
+    if missing_ids:
+        await db.scalars(select(Message).where(Message.id.in_(missing_ids)).options(selectinload(Message.attachments)))
+
+
+def _projection_record(item: Message) -> SimpleNamespace:
+    snapshot = projection_copy(item) if isinstance(item, Message) else SimpleNamespace(**vars(item))
+    snapshot.attachments = [
+        SimpleNamespace(**{column.key: getattr(attachment, column.key) for column in MessageAttachment.__table__.columns})
+        if isinstance(attachment, MessageAttachment) else attachment
+        for attachment in snapshot.attachments
+    ]
+    return snapshot
 
 
 def _model_order(records: list[Message]) -> list[Message]:
@@ -120,6 +141,10 @@ class ContextManager:
         characters_per_token = model.characters_per_token
         omitted_tool_result_ids: set[UUID] = set()
         pending_summary: ContextSummary | None = None
+        await load_missing_attachments(db, records)
+        # Only the projection view crosses the thread boundary; originals stay
+        # attached to this session for updating omissions and compaction state.
+        projection_records = {item.id: _projection_record(item) for item in records}
 
         async def persist_omissions() -> None:
             for item in active_records:
@@ -140,13 +165,16 @@ class ContextManager:
             current_user = next((item for item in reversed(records) if item.role == "user"), None)
             if current_user is not None and all(item.id != current_user.id for item in selected):
                 selected = [current_user, *selected]
+            selected_records = [projection_records[item.id] for item in selected]
+            projected_summary = (SimpleNamespace(content=summary.content,
+                                 covered_through_message_id=summary.covered_through_message_id) if summary else None)
             attachment_characters = agent_projection.MAX_ATTACHMENT_EXCERPT_CHARACTERS
             while True:
                 messages = await asyncio.to_thread(
                     agent_projection._projection_messages,
                     system_prompt,
-                    summary,
-                    selected,
+                    projected_summary,
+                    selected_records,
                     target_trust_level,
                     memory_context=memory_context,
                     memory_contexts=memory_contexts,
@@ -158,7 +186,7 @@ class ContextManager:
                     attachment_service=attachment_service,
                     pdf_context=pdf_context,
                     attachment_text_characters=attachment_characters,
-                    available_records=records,
+                    available_records=list(projection_records.values()),
                     characters_per_token=characters_per_token,
                     historical_tool_output_tokens=settings.historical_tool_output_tokens,
                     live_tool_calls=live_tool_calls,

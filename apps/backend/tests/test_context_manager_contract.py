@@ -7,7 +7,8 @@ from uuid import uuid4
 
 import pytest
 from context_helpers import _build_context, _request_estimator
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from mato_loop_backend.agent.context import ContextManager
 from mato_loop_backend.agent.memory_context import MemoryTurn
@@ -41,6 +42,7 @@ from mato_loop_backend.agent.repository_instructions import (
 )
 from mato_loop_backend.agent.run_support import _project_ephemeral_images
 from mato_loop_backend.agent.turn_context import build_turn_context
+from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.execution import (
     ExecutionClient,
     ExecutionClientError,
@@ -50,12 +52,16 @@ from mato_loop_backend.execution import (
 )
 from mato_loop_backend.execution.protocol import SystemInfo
 from mato_loop_backend.media.attachments import AttachmentService
+from mato_loop_backend.memory.service import MemoryService
 from mato_loop_backend.models import (
     AgentRun,
     ChatSession,
     ContextSummary,
+    MemoryRecord,
+    MemorySourceMessage,
     Message,
     MessageAttachment,
+    UserAccount,
     WebSearchPolicy,
 )
 from mato_loop_backend.permissions.policy import PermissionDecision, execution_directory_permission
@@ -150,6 +156,49 @@ def _attach_image(
     )
     message.attachments = [attachment]
     return attachment
+
+
+async def test_memory_evidence_attachments_survive_context_projection(request):
+    if not request.config.getoption("--memory-db"):
+        pytest.skip("requires the migrated development PostgreSQL database")
+    from mato_loop_backend.agent.runtime import AgentRuntime
+
+    engine = create_async_engine(get_runtime_config().database_url, poolclass=NullPool)
+    try:
+        async with AsyncSession(engine) as db:
+            user = UserAccount(username=f"memory-projection-{uuid4().hex}")
+            db.add(user)
+            await db.flush()
+            session = _session()
+            session.user_id = user.id
+            db.add(session)
+            await db.flush()
+            source = _message(session.id, "user", "Earlier upload")
+            current = _message(session.id, "user", "Continue the task")
+            source.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+            image = _attach_image(source)
+            image.file_root_id, image.file_id, image.file_revision = session.id, uuid4(), 1
+            memory = MemoryRecord(user_id=user.id, content="Evidence", category="fact",
+                                  normalized_content_hash="a" * 64, pinned=True)
+            db.add_all([source, current, memory])
+            await db.flush()
+            db.add(MemorySourceMessage(memory_id=memory.id, message_id=source.id))
+            await db.flush()
+            session_id, owner_id, image_id = session.id, user.id, image.id
+            db.expunge_all()
+
+            session = await db.get(ChatSession, session_id)
+            records = await AgentRuntime._records(db, session_id)
+            await MemoryService.pinned_context(db, owner_id=owner_id, input_trust_level=TrustLevel.PUBLIC)
+            projection = await _build_context(
+                db, chat_session=session, records=records, system_prompt="System", tool_schemas=[],
+                model=ModelConfig(provider_id=uuid4(), model_id="test"),
+                settings=AgentRuntimeSettings(), summarize=AsyncMock(),
+            )
+            assert any(image["id"] == str(image_id) for item in projection.messages
+                       for image in item.get("attachments", []))
+    finally:
+        await engine.dispose()
 
 
 def test_memory_image_references_do_not_displace_current_pdf_previews() -> None:
