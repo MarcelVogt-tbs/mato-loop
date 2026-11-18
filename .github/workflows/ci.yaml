@@ -156,6 +156,7 @@ jobs:
           exit $LASTEXITCODE
 
   macos-agent:
+    if: github.event_name != 'push' || github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
     runs-on: macos-15
     timeout-minutes: 15
     steps:

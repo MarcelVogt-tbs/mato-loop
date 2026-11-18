@@ -18,7 +18,7 @@ The tag policy deliberately limits mutable artifact storage:
 | Source | Checks | Image build | Publish |
 | --- | --- | --- | --- |
 | Pull request | Full checks and tests | Both images | Never |
-| Feature branch push | Checks and tests only | No | Never |
+| Feature branch push | Checks and tests except the GitHub macOS ARM64 job | No | Never |
 | `develop` push | Full checks and tests | Both images | Mutable `develop` and immutable date/SHA tag |
 | `main` push | Full checks and tests | No | Never; release tags only |
 | Date/SHA release tag | Full checks and tests | Both images | Immutable date/SHA tag and `latest` |
@@ -34,6 +34,8 @@ Pull requests run the complete test and production-image build path, but registr
 ## Runner Requirements
 
 GitHub workflows use GitHub-hosted `ubuntu-latest` runners, plus `windows-latest` for native browser verification. The Windows job installs pinned Playwright and matching Chromium and verifies setup, automation, authenticated streaming, file staging and chat isolation. It gates image builds and publication alongside the Linux jobs. Linux native test jobs keep the same pinned toolchains and system packages as the Forgejo jobs. The migration job publishes its PostgreSQL service port and connects through `localhost`; Forgejo job containers use the `db` hostname.
+
+The GitHub CI workflow uses `macos-15` for native ARM64 verification on pull requests, `develop` and `main` pushes, release tags, and manual CI runs. It gates image builds and publication in that workflow. Feature branch pushes skip this job to avoid requesting a second macOS runner for the same PR update.
 
 The GitHub Agent test step runs its installed virtual-environment Python as root, matching the development container and supporting device-node and ownership fixtures. Image builds and publication copy the caller's Docker `config.json` into a private temporary directory so existing runner authentication remains available; cleanup removes only the temporary copy. No personal Docker Hub token is required by these workflows, and Docker Hub transport or rate-limit failures can still occur.
 
