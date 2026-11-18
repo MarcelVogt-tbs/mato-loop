@@ -24,7 +24,7 @@ from mato_loop_backend.messaging.teams_client import (
     relay_url,
 )
 from mato_loop_backend.messaging.teams_package import teams_brand_icons
-from mato_loop_backend.models import MessagingEndpoint, UserAccount
+from mato_loop_backend.models import MessagingEndpoint, MessagingOutbox, UserAccount
 from mato_loop_backend.security import (
     load_credential,
     require_admin,
@@ -308,13 +308,20 @@ async def confirm_pairing(
     item.paired_chat_id, item.paired_user_id = identity.conversation_id, str(identity.user_id)
     item.paired_display_name = identity.display_name
     item.pairing_code_hash = item.pairing_expires_at = None
+    binding_id = str(uuid4())
     item.channel_state = {
         "identity": identity.model_dump(mode="json"),
         "revision": settings.revision,
-        "bindingId": str(uuid4()),
+        "bindingId": binding_id,
         "boundAt": datetime.now(UTC).isoformat(),
     }
     item.last_error_code = None
+    db.add(MessagingOutbox(
+        endpoint_id=item.id,
+        destination=identity.conversation_id,
+        deduplication_key=f"teams-pairing-confirmed:{binding_id}",
+        payload={"kind": "teamsPairingConfirmed", "bindingId": binding_id},
+    ))
     try:
         await db.commit()
     except IntegrityError:

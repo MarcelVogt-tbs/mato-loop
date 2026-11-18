@@ -181,8 +181,11 @@ Hostport frei. Verbinde nur vertrauenswürdige Container mit diesem Netz.
 3. Kehre zu MatoLoop zurück. Prüfe den vorgeschlagenen Anzeigenamen sowie die
    Entra-Benutzer- und Mandanten-ID. Bestätige nur dein eigenes Konto mit
    **Dieses Teams-Konto bestätigen**. Erst danach nimmt MatoLoop Chatnachrichten an.
-4. Sende eine kurze Nachricht. Ohne gewählte Session verwendet MatoLoop deinen
-   persönlichen **Chat**. Prüfe, dass Anfrage und Antwort auch dort erscheinen.
+4. Der Bot bestätigt die Kopplung im selben Teams-Chat und zeigt Beispiele
+   für eine erste Aufgabe. **Neuer Chat** legt einmalig einen leeren MatoLoop-Chat
+   an, ohne eine Nachricht zu senden; **Letzte Chats** öffnet die Chat-Auswahl.
+   Der Teams-Chat bleibt derselbe. Falls die Karte nicht ankommt, kannst du
+   nach erfolgreicher Bestätigung trotzdem eine Nachricht senden.
 
 Mit `/new`, `/sessions`, `/use <ID>`, `/current`, `/stop`, `/unlink` und `/help`
 steuerst du deine Sessions. `/sessions` zeigt die letzten acht verwendeten Chats

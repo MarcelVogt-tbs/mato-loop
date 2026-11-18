@@ -67,6 +67,7 @@ from mato_loop_backend.messaging.teams_cards import (
     card_revision,
     help_card,
     interaction_card,
+    pairing_confirmed_card,
     session_list_card,
 )
 from mato_loop_backend.messaging.teams_client import (
@@ -269,6 +270,22 @@ async def ingest_event(
         return True
 
 
+async def enqueue_session_picker(
+    db: AsyncSession, endpoint: MessagingEndpoint, inbox: MessagingInbox, event: Event,
+) -> None:
+    sessions = await recent_chat_sessions(db, endpoint, limit=8)
+    db.add(MessagingOutbox(
+        endpoint_id=endpoint.id,
+        inbox_id=inbox.id,
+        destination=event.identity.conversation_id,
+        deduplication_key=f"command:{inbox.id}",
+        payload={"kind": "teamsSessionPicker", "sessions": [
+            {"id": str(session.id), "title": " ".join(session.title.split()) or "Chat"}
+            for session in sessions
+        ]},
+    ))
+
+
 async def process_action(
     db: AsyncSession,
     endpoint: MessagingEndpoint,
@@ -286,6 +303,27 @@ async def process_action(
         or not hmac.compare_digest(action.revision, card_revision(item.payload))
     ):
         raise TeamsServiceError("channel.pairingChanged")
+    if item.payload.get("kind") == "teamsPairingConfirmed":
+        if item.payload.get("bindingId") != endpoint.channel_state.get("bindingId"):
+            raise TeamsServiceError("channel.pairingChanged")
+        if action.callback == "chat:list":
+            await enqueue_session_picker(db, endpoint, inbox, event)
+            return
+        if action.callback != "chat:new":
+            raise TeamsServiceError("channel.pairingChanged")
+        key = f"teams-pairing-new-chat:{item.id}"
+        if await db.scalar(select(MessagingOutbox.id).where(
+            MessagingOutbox.endpoint_id == endpoint.id,
+            MessagingOutbox.deduplication_key == key,
+        )):
+            return
+        await session_command(db, inbox, endpoint, "/new")
+        enqueue_text(
+            db, endpoint, destination=event.identity.conversation_id,
+            key=key, inbox_id=inbox.id,
+            text="Neuer MatoLoop-Chat bereit. Schreib deine erste Aufgabe hier in Teams.",
+        )
+        return
     session_picker = item.payload.get("kind") == "teamsSessionPicker"
     if session_picker:
         origin = await db.get(MessagingInbox, item.inbox_id) if item.inbox_id else None
@@ -392,17 +430,7 @@ async def process_inbox(
                     payload={"kind": "teamsHelp", "card": help_card()},
                 ))
             elif command_name == "/sessions":
-                sessions = await recent_chat_sessions(db, endpoint, limit=8)
-                db.add(MessagingOutbox(
-                    endpoint_id=endpoint.id,
-                    inbox_id=inbox.id,
-                    destination=event.identity.conversation_id,
-                    deduplication_key=f"command:{inbox.id}",
-                    payload={"kind": "teamsSessionPicker", "sessions": [
-                        {"id": str(session.id), "title": " ".join(session.title.split()) or "Chat"}
-                        for session in sessions
-                    ]},
-                ))
+                await enqueue_session_picker(db, endpoint, inbox, event)
             else:
                 command = await session_command(db, inbox, endpoint, event.text)
                 if command is not None:
@@ -589,6 +617,10 @@ async def deliver_outbox(
                 if origin is None or origin.status != "completed":
                     raise TeamsServiceError("channel.pairingChanged")
                 card = session_list_card(item)
+            elif payload.get("kind") == "teamsPairingConfirmed":
+                if payload.get("bindingId") != endpoint.channel_state.get("bindingId"):
+                    raise TeamsServiceError("channel.pairingChanged")
+                card = pairing_confirmed_card(item)
             elif payload.get("kind") in {"teamsHelp", "teamsSessions"}:
                 card = payload["card"]
             else:
@@ -684,7 +716,8 @@ async def deliver_outbox(
             item.delivered_at = None if awaiting else datetime.now(UTC)
             if question_item is not None:
                 question_item.external_message_ids = [*question_item.external_message_ids, *ids]
-            endpoint.last_error_code = None
+            if payload.get("kind") != "teamsPairingConfirmed":
+                endpoint.last_error_code = None
             await db.commit()
         except (TeamsServiceError, ValidationError, ValueError, AttachmentError, OSError) as exc:
             code = getattr(exc, "code", "channel.invalidResponse")
@@ -694,7 +727,7 @@ async def deliver_outbox(
             if item:
                 item.status, item.processing_at, item.error_code = "failed", None, code
                 endpoint = await db.get(MessagingEndpoint, item.endpoint_id)
-                if endpoint:
+                if endpoint and item.payload.get("kind") != "teamsPairingConfirmed":
                     endpoint.last_error_code = code
                     if item.deduplication_key.startswith("run:") and code not in {
                         "channel.fileDeclined", "channel.pairingChanged",

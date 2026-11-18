@@ -49,22 +49,34 @@ def help_card() -> dict:
     return adaptive_card(body, [])
 
 
+def session_button(item: MessagingOutbox, title: str, callback: str) -> dict:
+    return {
+        "type": "Action.Execute",
+        "title": title,
+        "verb": "matoloop",
+        "associatedInputs": "none",
+        "data": {"outboxId": str(item.id), "revision": card_revision(item.payload), "callback": callback},
+    }
+
+
+def pairing_confirmed_card(item: MessagingOutbox) -> dict:
+    return adaptive_card(
+        [
+            text_block("Teams-Konto verbunden", size="Medium", weight="Bolder"),
+            text_block("Schreib deine erste Aufgabe direkt hier."),
+            text_block("Fasse diese Notizen zusammen und liste offene Aufgaben.", size="Small"),
+            text_block("Entwirf eine freundliche Antwort auf diese E-Mail.", size="Small"),
+        ],
+        [session_button(item, "Neuer Chat", "chat:new"), session_button(item, "Letzte Chats", "chat:list")],
+    )
+
+
 def session_list_card(item: MessagingOutbox) -> dict:
     body = [text_block("Chat wechseln", size="Medium", weight="Bolder")]
-    revision = card_revision(item.payload)
     for session in item.payload["sessions"]:
         body.append({
             "type": "ActionSet",
-            "actions": [{
-                "type": "Action.Execute",
-                "title": session["title"],
-                "verb": "matoloop",
-                "associatedInputs": "none",
-                "data": {
-                    "outboxId": str(item.id), "revision": revision,
-                    "callback": f"session:{session['id']}",
-                },
-            }],
+            "actions": [session_button(item, session["title"], f"session:{session['id']}")],
         })
     if len(body) == 1:
         body.append(text_block("Noch keine Chats vorhanden."))
