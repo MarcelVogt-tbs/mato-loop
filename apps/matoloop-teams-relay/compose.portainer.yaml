@@ -8,6 +8,7 @@ services:
     environment:
       MATO_TEAMS_APP_ID: ${MATO_TEAMS_APP_ID:?Set the Microsoft app ID}
       MATO_TEAMS_TENANT_ID: ${MATO_TEAMS_TENANT_ID:?Set the Microsoft tenant ID}
+      MATO_TEAMS_MATOLOOP_URL: ${MATO_TEAMS_MATOLOOP_URL:-}
       MATO_TEAMS_CLIENT_SECRET_FILE: /run/secrets/teams/client-secret
       MATO_TEAMS_RELAY_TOKEN_FILE: /run/secrets/teams/relay-token
       MATO_TEAMS_SPOOL_DIR: /spool

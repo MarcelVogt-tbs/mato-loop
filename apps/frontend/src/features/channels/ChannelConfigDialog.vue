@@ -71,17 +71,17 @@
               </q-chip>
             </div>
             <template v-if="pairing.pairingCode">
-              <q-input dense :model-value="pairing.pairingCode" outlined readonly label="Kopplungscode">
+              <q-input dense :model-value="pairingInput" outlined readonly :label="pairingInputLabel">
                 <template #append>
-                  <q-btn flat round dense icon="content_copy" aria-label="Kopplungscode kopieren" @click="copyPairingCode" />
+                  <q-btn flat round dense icon="content_copy" :aria-label="`${pairingInputLabel} kopieren`" @click="copyPairingInput" />
                 </template>
               </q-input>
               <div v-if="pairing.pairingExpiresAt" class="text-caption q-mt-sm">
                 Gültig bis {{ formatAbsoluteDateTime(pairing.pairingExpiresAt) }}
               </div>
               <div v-if="form.provider === 'teams'" class="text-body2 q-mt-sm">
-                Sende <strong>/pair {{ pairing.pairingCode }}</strong> im persönlichen Teams-Chat an die MatoLoop-App.
-                Bestätige anschließend hier deine Teams-Identität.
+                Kopiere den Befehl und sende ihn im persönlichen Teams-Chat an die MatoLoop-App.
+                Bestätige anschließend hier dein Teams-Konto.
               </div>
               <q-btn
                 v-if="telegramLink"
@@ -138,7 +138,7 @@
             no-caps
             color="primary"
             type="submit"
-            :label="endpoint ? 'Änderungen speichern' : 'Kanal hinzufügen'"
+            :label="endpoint ? 'Änderungen speichern' : form.provider === 'teams' ? 'Kopplung starten' : 'Kanal hinzufügen'"
             :loading="saving"
           />
         </q-card-actions>
@@ -158,7 +158,8 @@ defineOptions({ name: 'ChannelConfigDialog' })
 
 const props = defineProps({
   modelValue: { type: Boolean, required: true },
-  endpoint: { type: Object, default: null }
+  endpoint: { type: Object, default: null },
+  initialProvider: { type: String, default: null }
 })
 const emit = defineEmits(['update:modelValue'])
 
@@ -177,6 +178,11 @@ const providerOptions = computed(() => channels.providers
   .map((provider) => ({ label: provider.label, value: provider.provider })))
 const dialogIcon = computed(() => form.provider === 'telegram' ? 'send' : 'forum')
 const endpointId = computed(() => props.endpoint?.id || createdEndpointId.value)
+const pairingInputLabel = computed(() => form.provider === 'teams' ? 'Kopplungsbefehl' : 'Kopplungscode')
+const pairingInput = computed(() => {
+  const code = pairing.value?.pairingCode
+  return code && form.provider === 'teams' ? `/pair ${code}` : code
+})
 const telegramLink = computed(() => {
   const username = pairing.value?.externalHandle
   return username && pairing.value?.pairingCode
@@ -284,13 +290,13 @@ async function startPairing() {
   }
 }
 
-async function copyPairingCode() {
-  if (!pairing.value?.pairingCode) return
+async function copyPairingInput() {
+  if (!pairingInput.value) return
   try {
-    await copyToClipboard(pairing.value.pairingCode)
-    $q.notify({ type: 'positive', message: 'Kopplungscode kopiert' })
+    await copyToClipboard(pairingInput.value)
+    $q.notify({ type: 'positive', message: `${pairingInputLabel.value} kopiert` })
   } catch {
-    $q.notify({ type: 'negative', message: 'Kopplungscode konnte nicht kopiert werden' })
+    $q.notify({ type: 'negative', message: `${pairingInputLabel.value} konnte nicht kopiert werden` })
   }
 }
 
@@ -313,17 +319,18 @@ function close() {
   emit('update:modelValue', false)
 }
 
-watch([() => props.modelValue, () => props.endpoint?.id], ([open]) => {
+watch([() => props.modelValue, () => props.endpoint?.id, () => props.initialProvider], ([open]) => {
   stopPolling()
   pairing.value = null
   createdEndpointId.value = null
   if (!open) return
   Object.assign(form, {
-    provider: props.endpoint?.provider || null,
+    provider: props.endpoint?.provider || props.initialProvider,
     name: props.endpoint?.name || '',
     token: '',
     enabled: props.endpoint?.enabled ?? true
   })
+  if (!props.endpoint && form.provider) selectProvider(form.provider)
   pairing.value = props.endpoint ? { ...props.endpoint } : null
   if (pairing.value?.pairingState === 'pending' && props.endpoint?.id) pollPairing(props.endpoint.id)
 })

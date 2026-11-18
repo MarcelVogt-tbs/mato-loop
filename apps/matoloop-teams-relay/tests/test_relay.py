@@ -7,6 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 from httpx2 import HTTPStatusError, Request, Response
 from matoloop_teams_protocol import MAX_BODY_BYTES, Blob, Delivery, Event, Identity, StreamPreview
+from microsoft_teams.api import InstalledActivity
+from microsoft_teams.apps import App
 
 from matoloop_teams_relay.app import create_app
 from matoloop_teams_relay.config import RelayConfig
@@ -77,6 +79,39 @@ def test_only_one_receiver_can_admit_work(spool):
     spool.lease(uuid4())
     with pytest.raises(SpoolError, match="receiverBusy"):
         spool.lease(uuid4())
+
+
+@pytest.mark.parametrize("scope, matching_tenant, send", [
+    ("personal", True, True), ("channel", True, False), ("personal", False, False),
+])
+async def test_install_welcome_is_personal_and_deduplicated(spool, tmp_path, scope, matching_tenant, send):
+    config = RelayConfig(
+        app_id=uuid4(), tenant_id=uuid4(),
+        client_secret_file=tmp_path / "secret", relay_token_file=tmp_path / "token",
+        matoloop_url="https://chat.example.org",
+    )
+    bot = MagicMock(spec=App)
+    bot.send = AsyncMock()
+    TeamsTransport(bot, spool, config)
+    activity = InstalledActivity.model_validate({
+        "type": "installationUpdate", "id": "install", "action": "add", "channelId": "msteams",
+        "conversation": {"id": "personal-chat", "conversationType": scope},
+        "serviceUrl": "https://smba.trafficmanager.net/teams/",
+        "channelData": {"tenant": {"id": str(config.tenant_id if matching_tenant else uuid4())}},
+        "from": {"id": "installer"}, "recipient": {"id": "bot"},
+    })
+    handler = bot.on_install_add.call_args.args[0]
+    await handler(SimpleNamespace(activity=activity))
+    await handler(SimpleNamespace(activity=activity))
+    if send:
+        bot.send.assert_awaited_once()
+        conversation, message = bot.send.await_args.args
+        assert conversation == "personal-chat"
+        assert message.attachments[0].content["actions"][0]["url"] == (
+            "https://chat.example.org/settings/channels?pair=teams"
+        )
+    else:
+        bot.send.assert_not_awaited()
 
 
 def test_oversized_action_cannot_block_the_poll_batch(spool):

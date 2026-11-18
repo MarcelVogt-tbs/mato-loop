@@ -13,11 +13,13 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 import httpx
 from httpx2 import HTTPStatusError
 from matoloop_teams_protocol import MAX_FILE_BYTES, Blob, Delivery, Event, Identity, StreamPreview
+from matoloop_teams_protocol.onboarding import pairing_card
 from microsoft_teams.api import (
     AdaptiveCardActionMessageResponse,
     AdaptiveCardInvokeActivity,
     Attachment,
     FileConsentInvokeActivity,
+    InstalledActivity,
     MessageActivity,
     MessageActivityInput,
     StreamInfoEntity,
@@ -90,6 +92,7 @@ class TeamsTransport:
         self.streams: dict[UUID, ReplyStream] = {}
         self.closed_streams: dict[tuple[UUID, str], float] = {}
         bot.on_message(self.on_message)
+        bot.on_install_add(self.on_install_add)
         bot.on_card_action_execute(self.on_card)
         bot.on_file_consent(self.on_file_consent)
 
@@ -121,6 +124,41 @@ class TeamsTransport:
                 "service_url": service_url,
             },
         )
+
+    async def on_install_add(self, ctx: ActivityContext[InstalledActivity]) -> None:
+        activity = ctx.activity
+        raw = activity.model_dump(mode="json", by_alias=True)
+        conversation = raw.get("conversation") or {}
+        tenant = ((raw.get("channelData") or {}).get("tenant") or {}).get("id")
+        if (
+            raw.get("channelId") != "msteams"
+            or raw.get("action") != "add"
+            or conversation.get("conversationType") != "personal"
+            or tenant != str(self.config.tenant_id)
+            or not conversation.get("id")
+            or not activity.id
+        ):
+            return
+        service_url = trusted_url(activity.service_url or "", SERVICE_HOSTS)
+        welcome_id = uuid5(
+            NAMESPACE_URL, f"welcome:{self.config.app_id}:{tenant}:{conversation['id']}:{activity.id}",
+        )
+        self.spool.cleanup()
+        if welcome_id in self.spool.records:
+            return
+        # Record the attempt before sending so Microsoft retries cannot duplicate a welcome.
+        self.spool.save(Record(
+            id=welcome_id, kind="welcome", status="attempted",
+            expires_at=datetime.now(UTC) + timedelta(hours=24),
+        ))
+        origin = str(self.config.matoloop_url).rstrip("/") if self.config.matoloop_url else None
+        message = MessageActivityInput(text="Willkommen!").add_attachments(
+            Attachment.model_validate({
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": pairing_card(origin),
+            })
+        )
+        await self.bot.send(conversation["id"], message, service_url=service_url)
 
     async def on_message(self, ctx: ActivityContext[MessageActivity]) -> None:
         identity = self.identity(ctx.activity)

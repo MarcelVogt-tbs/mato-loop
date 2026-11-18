@@ -16,7 +16,7 @@
         icon="add"
         label="Kanal hinzufügen"
         :disable="channels.loading || !canCreateChannel"
-        @click="openCreate"
+        @click="openCreate()"
       />
     </header>
 
@@ -144,7 +144,7 @@
         <q-inner-loading :showing="channels.loading" />
       </q-card>
 
-      <ChannelConfigDialog v-model="dialogOpen" :endpoint="selectedEndpoint" />
+      <ChannelConfigDialog v-model="dialogOpen" :endpoint="selectedEndpoint" :initial-provider="initialProvider" />
     </template>
   </section>
 </template>
@@ -152,6 +152,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
+import { useRoute } from 'vue-router'
 import ChannelConfigDialog from 'src/features/channels/ChannelConfigDialog.vue'
 import TeamsRelayDialog from 'src/features/channels/TeamsRelayDialog.vue'
 import { useConfirm } from 'src/composables/confirm'
@@ -161,12 +162,14 @@ import { apiErrorMessage } from 'src/utils/api-errors'
 defineOptions({ name: 'ChannelSettingsPage' })
 const { admin } = defineProps({ admin: { type: Boolean, default: false } })
 
+const route = useRoute()
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const channels = useChannelStore()
 const dialogOpen = ref(false)
 const teamsDialogOpen = ref(false)
 const selectedEndpoint = ref(null)
+const initialProvider = ref(null)
 const togglingProvider = ref(null)
 const savingSettings = ref(false)
 const section = ref('general')
@@ -204,12 +207,14 @@ function statusColor(endpoint) {
   return endpoint.connected === false ? 'grey-7' : 'positive'
 }
 
-function openCreate() {
+function openCreate(provider = null) {
+  initialProvider.value = provider
   selectedEndpoint.value = null
   dialogOpen.value = true
 }
 
 function openEdit(endpoint) {
+  initialProvider.value = null
   selectedEndpoint.value = endpoint
   dialogOpen.value = true
 }
@@ -291,9 +296,21 @@ async function removeEndpoint(endpoint) {
   }
 }
 
+function openTeamsFromLink() {
+  if (admin || route.query.pair !== 'teams' || !channels.loaded || channels.loading) return
+  if (!channels.enabled || !allowedProviderNames.value.has('teams')) {
+    $q.notify({ type: 'warning', message: 'Microsoft Teams ist in MatoLoop noch nicht freigegeben.' })
+    return
+  }
+  const existing = channels.endpoints.find((endpoint) => endpoint.provider === 'teams')
+  if (existing) openEdit(existing)
+  else openCreate('teams')
+}
+
 async function load() {
   try {
     await channels.fetchAll(undefined, !admin)
+    openTeamsFromLink()
   } catch {
     // The central Axios interceptor displays the error.
   }
@@ -301,4 +318,5 @@ async function load() {
 
 onMounted(() => void load())
 watch(() => admin, load)
+watch(() => route.query.pair, openTeamsFromLink)
 </script>

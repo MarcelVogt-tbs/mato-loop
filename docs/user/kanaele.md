@@ -63,6 +63,11 @@ Herkunft einer Nachricht. Übertrage keine Geheimnisse als Chattext.
    Hostbenutzer. Gib die Werte weder in Git noch in Supportprotokollen weiter.
 3. Setze auf dem Relay-Host `MATO_TEAMS_APP_ID`, `MATO_TEAMS_TENANT_ID` und
    `MATO_TEAMS_SECRET_DIRECTORY` auf die IDs und den absoluten Verzeichnispfad.
+   Setze `MATO_TEAMS_MATOLOOP_URL` auf die HTTPS-Adresse, unter der deine
+   Nutzer MatoLoop im Browser öffnen (ohne Pfad, nicht die Relay-Adresse).
+   Verwende dieselbe Adresse unter **Administration > Grundeinstellungen >
+   Öffentliche MatoLoop-URL (optional)**, damit auch der Kopplungshinweis
+   nach einer ungekoppelten Nachricht einen Button hat.
    Starte die separate Vorlage aus dem Repository:
 
    ```bash
@@ -168,9 +173,11 @@ Hostport frei. Verbinde nur vertrauenswürdige Container mit diesem Netz.
 
 ### Dein Teams-Konto koppeln und verwenden
 
-1. Öffne **Einstellungen > Kanäle > Kanal hinzufügen** und wähle **Microsoft Teams**.
-2. Sende den angezeigten Befehl `/pair KOPPLUNGSCODE` im persönlichen Chat an
-   die installierte MatoLoop-App. Der Code gilt 15 Minuten.
+1. Wähle **Kopplung starten** in der Willkommenskarte im persönlichen Teams-Chat.
+   Fehlt der Button, öffne **Einstellungen > Kanäle > Kanal hinzufügen** und
+   wähle **Microsoft Teams**. Starte die Kopplung in MatoLoop.
+2. Kopiere den angezeigten **Kopplungsbefehl** und sende ihn im persönlichen
+   Teams-Chat. Der Code im Befehl gilt 15 Minuten.
 3. Kehre zu MatoLoop zurück. Prüfe den vorgeschlagenen Anzeigenamen sowie die
    Entra-Benutzer- und Mandanten-ID. Bestätige nur dein eigenes Konto mit
    **Dieses Teams-Konto bestätigen**. Erst danach nimmt MatoLoop Chatnachrichten an.

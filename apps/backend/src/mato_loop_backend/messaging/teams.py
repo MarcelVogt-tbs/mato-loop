@@ -17,6 +17,7 @@ from matoloop_teams_protocol import (
     Receipt,
     StreamPreview,
 )
+from matoloop_teams_protocol.onboarding import pairing_card
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import exists, or_, select, update
@@ -28,6 +29,7 @@ from sqlalchemy.orm import aliased, selectinload
 from mato_loop_backend.agent.activity import run_activity_label
 from mato_loop_backend.agent.question_decisions import QuestionDecisionError
 from mato_loop_backend.agent.run_contracts import AgentRunError
+from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.events import run_events
 from mato_loop_backend.media.attachments import (
@@ -86,7 +88,8 @@ from mato_loop_backend.models import (
 from mato_loop_backend.notifications import NotificationDraft, NotificationService
 from mato_loop_backend.permissions.decisions import ApprovalDecisionError
 from mato_loop_backend.providers.base import ProviderError
-from mato_loop_backend.settings import InstanceLimits, SettingsStore
+from mato_loop_backend.public_url import normalize_public_base_url
+from mato_loop_backend.settings import GeneralSettings, InstanceLimits, SettingsStore
 from mato_loop_backend.settings.models import TeamsChannelSettings
 
 logger = logging.getLogger(__name__)
@@ -231,6 +234,8 @@ async def ingest_event(
             )
         )
         if endpoint is None:
+            if event.kind == "message" and event.expires_at > datetime.now(UTC):
+                raise TeamsServiceError("channel.pairingRequired")
             return False
         endpoint = await available_endpoint(db, endpoint.id, settings)
         if event.expires_at <= datetime.now(UTC):
@@ -755,6 +760,20 @@ async def claim_outbox() -> UUID | None:
         return item.id
 
 
+async def rejected_delivery(db: AsyncSession, event: Event, *, needs_pairing: bool) -> Delivery:
+    card = None
+    text = "Die Nachricht wurde nicht angenommen. Prüfe die Teams-Kopplung in MatoLoop; abgelaufene Nachrichten werden nicht nachträglich ausgeführt."
+    if needs_pairing:
+        general = await SettingsStore.load(db, GeneralSettings)
+        origin = normalize_public_base_url(general.public_base_url or get_runtime_config().public_base_url)
+        card = pairing_card(origin if origin and origin.startswith("https://") else None)
+        text = "Dein Teams-Konto ist noch nicht mit MatoLoop verbunden. Deine Nachricht wurde nicht ausgeführt."
+    return Delivery(
+        id=uuid5(event.id, "rejected"), identity=event.identity,
+        kind="message", text=text, card=card,
+    )
+
+
 class TeamsScheduler:
     _tasks: list[asyncio.Task] = []
     _receiver = uuid4()
@@ -811,10 +830,12 @@ class TeamsScheduler:
                         )
                         result = PollResult.model_validate_json(raw)
                         for event in result.events:
+                            needs_pairing = False
                             try:
                                 admitted = await ingest_event(event, result.generation, settings)
-                            except TeamsServiceError:
+                            except TeamsServiceError as exc:
                                 admitted = False
+                                needs_pairing = exc.code == "channel.pairingRequired"
                             await client.request(
                                 "POST",
                                 "receipts",
@@ -826,12 +847,7 @@ class TeamsScheduler:
                             )
                             if not admitted:
                                 await client.deliver(
-                                    Delivery(
-                                        id=uuid5(event.id, "rejected"),
-                                        identity=event.identity,
-                                        kind="message",
-                                        text="Die Nachricht wurde nicht angenommen. Prüfe die Teams-Kopplung in MatoLoop; abgelaufene Nachrichten werden nicht nachträglich ausgeführt.",
-                                    )
+                                    await rejected_delivery(db, event, needs_pairing=needs_pairing)
                                 )
                 else:
                     await asyncio.sleep(5)

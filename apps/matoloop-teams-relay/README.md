@@ -17,7 +17,11 @@ in front of it; no public endpoint or inbound connection to MatoLoop is needed.
 
 Set `MATO_TEAMS_APP_ID`, `MATO_TEAMS_TENANT_ID`,
 `MATO_TEAMS_SECRET_DIRECTORY` (absolute directory containing `client-secret` and
-`relay-token`), and optionally `MATO_TEAMS_HOST_PORT`. Secret files must be
+`relay-token`), and optionally `MATO_TEAMS_HOST_PORT`. Set
+`MATO_TEAMS_MATOLOOP_URL` to the browser-facing MatoLoop HTTPS origin to add a
+pairing button to the installation welcome card. Use the same origin as
+MatoLoop's configured base URL, which provides the link for unpaired-message
+replies. This does not require making MatoLoop publicly reachable. Secret files must be
 readable by container UID 10001 but not unrelated host users. Keep this
 directory outside the checkout. The relay token must have at least 43
 characters; generate at least 32 cryptographically random bytes.

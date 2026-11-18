@@ -40,7 +40,7 @@ from mato_loop_backend.models import (
     MessagingOutbox,
     UserAccount,
 )
-from mato_loop_backend.settings.models import AgentIdentitySettings, TeamsChannelSettings
+from mato_loop_backend.settings.models import AgentIdentitySettings, GeneralSettings, TeamsChannelSettings
 from mato_loop_backend.tools.arguments import QuestionItem, QuestionOption
 
 
@@ -136,6 +136,28 @@ async def test_expired_handoff_only_reconciles_previously_committed_admission(
     )
     assert result is admitted
     db.execute.assert_not_awaited()
+
+
+async def test_unpaired_message_gets_setup_card_without_admitting_chat(monkeypatch):
+    who = identity()
+    generation = uuid4()
+    event = Event(
+        id=uuid4(), identity=who, generation=generation, kind="message", message_id="hello",
+        received_at=datetime.now(UTC), expires_at=datetime.now(UTC) + timedelta(seconds=30),
+    )
+    settings = TeamsChannelSettings(app_id=who.app_id, tenant_id=who.tenant_id)
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = db.scalar.return_value = None
+    monkeypatch.setattr(teams, "AsyncSessionFactory", lambda: nullcontext(db))
+    monkeypatch.setattr(teams, "channel_provider_allowed", AsyncMock(return_value=True))
+    monkeypatch.setattr(teams.SettingsStore, "load", AsyncMock(side_effect=[
+        settings, GeneralSettings(publicBaseUrl="https://chat.example.org"),
+    ]))
+    with pytest.raises(TeamsServiceError, match="channel.pairingRequired"):
+        await teams.ingest_event(event, generation, settings)
+    db.commit.assert_not_awaited()
+    rejection = await teams.rejected_delivery(db, event, needs_pairing=True)
+    assert rejection.card["actions"][0]["url"] == "https://chat.example.org/settings/channels?pair=teams"
 
 
 async def test_lost_relay_receipt_never_blindly_resends_message():
