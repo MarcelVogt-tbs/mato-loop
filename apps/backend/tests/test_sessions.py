@@ -3156,8 +3156,8 @@ async def test_template_switch_replaces_session_overrides(monkeypatch) -> None:
     }
 
 
-@pytest.mark.parametrize("field,revokes", [("message_size", False), ("agent_ids", True), ("agent_models", False), ("model_id", False), ("assistant_context", False)])
-async def test_session_changes_preserve_grants_for_model_and_message_size(monkeypatch, field, revokes) -> None:
+@pytest.mark.parametrize("field,revokes", [("message_size", False), ("agent_ids", True), ("agent_models", False), ("model_id", False), ("assistant_context", False), ("keyboard_agent_ids", False)])
+async def test_session_changes_only_revoke_grants_for_policy_changes(monkeypatch, field, revokes) -> None:
     from mato_loop_backend.settings.session_profiles import (
         ChatModelOverride,
         SessionTemplatesSettings,
@@ -3176,13 +3176,16 @@ async def test_session_changes_preserve_grants_for_model_and_message_size(monkey
     if field == "model_id":
         session.model_config_id = None
     else:
-        profile = profile.model_copy(update={field: {
+        updates = {field: {
             "message_size": "standard",
             "agent_ids": [template.start_agent_id],
             "agent_models": {template.start_agent_id: ChatModelOverride(model_id=model.id)},
             "assistant_context": "disabled",
-        }[field]})
-        payload = SessionUpdateRequest(session_profile=profile)
+            "keyboard_agent_ids": [template.start_agent_id],
+        }[field]}
+        if field == "agent_ids":
+            updates["keyboard_agent_ids"] = [template.start_agent_id]
+        payload = SessionUpdateRequest(session_profile=profile.model_copy(update=updates))
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [session.id, session, False, None]
     db.scalars.return_value = MagicMock(all=lambda: [])

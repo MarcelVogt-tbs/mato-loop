@@ -22,6 +22,7 @@ CODING_TEMPLATE_ID = UUID("00000000-0000-4000-8000-000000000102")
 class SessionProfileConfig(BaseModel):
     model_config = ChatModelOverride.model_config
     agent_ids: list[UUID] | None = Field(default=None, min_length=1)
+    keyboard_agent_ids: list[UUID] | None = None
     agent_models: dict[UUID, ChatModelOverride] = Field(default_factory=dict)
     message_size: Literal["standard", "small"] = "standard"
     worktrees_enabled: bool = False
@@ -31,6 +32,10 @@ class SessionProfileConfig(BaseModel):
     def validate_agents(self):
         if self.agent_ids is not None and (len(set(self.agent_ids)) != len(self.agent_ids) or set(self.agent_models) - set(self.agent_ids)):
             raise ValueError("agent overrides must reference unique selected agents")
+        if self.keyboard_agent_ids is not None:
+            keyboard_agents = set(self.keyboard_agent_ids)
+            if len(keyboard_agents) != len(self.keyboard_agent_ids) or keyboard_agents - set(self.agent_ids or []):
+                raise ValueError("keyboard switching must reference unique selected agents")
         return self
 
 
@@ -47,15 +52,18 @@ class SessionTemplate(SessionProfileConfig, ChatModelOverride):
     memory_mode: Literal["full", "read_only", "disabled"] = "full"
 
     def snapshot(self) -> SessionProfileSnapshot:
-        return SessionProfileSnapshot(template_id=self.id, agent_ids=self.agent_ids, agent_models=self.agent_models, message_size=self.message_size, worktrees_enabled=self.worktrees_enabled, assistant_context=self.assistant_context).model_copy(deep=True)
+        return SessionProfileSnapshot(template_id=self.id, agent_ids=self.agent_ids, keyboard_agent_ids=self.keyboard_agent_ids, agent_models=self.agent_models, message_size=self.message_size, worktrees_enabled=self.worktrees_enabled, assistant_context=self.assistant_context).model_copy(deep=True)
 
     @model_validator(mode="after")
     def validate_start(self):
         if self.start_agent_id not in self.agent_ids:
             raise ValueError("the start agent must be selected")
-        # Older stored Coding templates must retain worktree support.
-        if self.id == CODING_TEMPLATE_ID and "worktrees_enabled" not in self.model_fields_set:
-            self.worktrees_enabled = True
+        if self.id == CODING_TEMPLATE_ID:
+            # Backfill missing defaults without overriding saved choices.
+            if "worktrees_enabled" not in self.model_fields_set:
+                self.worktrees_enabled = True
+            if "keyboard_agent_ids" not in self.model_fields_set and {PLAN_PROFILE_ID, BUILD_PROFILE_ID}.issubset(self.agent_ids):
+                self.keyboard_agent_ids = [PLAN_PROFILE_ID, BUILD_PROFILE_ID]
         return self
 
 

@@ -26,7 +26,8 @@
             <q-input v-model.trim="form.name" outlined dense label="Name" maxlength="80" :rules="[(value) => Boolean(value?.trim()) || 'Name eingeben.']" :disable="store.saving" />
             <div class="column q-gutter-y-md">
               <AppSelect :model-value="form.agentIds" outlined dense multiple use-chips emit-value map-options label="Verfügbare Agenten" :options="agentOptions" :disable="store.saving" :rules="[(value) => value?.length > 0 || 'Mindestens einen Agenten auswählen.']" @update:model-value="setAgents" />
-              <AppSelect v-model="form.startAgentId" outlined dense emit-value map-options label="Startagent" :options="agentOptions.filter((item) => form.agentIds?.includes(item.value))" :disable="store.saving" />
+              <AppSelect :model-value="form.keyboardAgentIds ?? form.agentIds" outlined dense multiple use-chips emit-value map-options label="Agenten für den Tastaturwechsel" :options="selectedAgentOptions" hint="Gilt nur für Strg/⌘ + . im Eingabefeld." persistent-hint :disable="store.saving" @update:model-value="setKeyboardAgents" />
+              <AppSelect v-model="form.startAgentId" outlined dense emit-value map-options label="Startagent" :options="selectedAgentOptions" :disable="store.saving" />
               <AppSelect v-model="form.memoryMode" outlined dense emit-value map-options label="Memory" :options="memoryOptions" :disable="store.saving" />
               <AppSelect v-model="form.assistantContext" outlined dense emit-value map-options label="Assistenzkontext" :options="assistantContextOptions" :disable="store.saving" />
               <AppSelect v-model="form.messageSize" outlined dense emit-value map-options label="Nachrichtengröße" :options="[{ label: 'Standard', value: 'standard' }, { label: 'Klein', value: 'small' }]" hint="Klein reduziert die Schriftgröße und die Abstände der Nachrichten sowie die Schriftgröße im Eingabefeld am Desktop." persistent-hint :disable="store.saving" />
@@ -76,11 +77,18 @@ const showManagement = computed(() => !admin || section.value === 'management')
 const personalBlocked = computed(() => !admin && !auth.isAdmin && !store.personalSettingsEnabled)
 const blocked = computed(() => !ready.value || failed.value || store.loading || store.saving || personalBlocked.value)
 const agentOptions = computed(() => agents.agents.filter((agent) => !admin || agent.scope === 'instance').map((agent) => ({ label: agent.name, value: agent.id })))
+const selectedAgentOptions = computed(() => agentOptions.value.filter((item) => form.value.agentIds?.includes(item.value)))
 const defaults = computed(() => ({ modelId: models.effective.defaultModelId, reasoningEffort: models.effective.reasoningEffort }))
 const memoryOptions = [{ label: 'Vollständig', value: 'full' }, { label: 'Nur lesen', value: 'read_only' }, { label: 'Deaktiviert', value: 'disabled' }]
 const assistantContextOptions = [{ label: 'Vom Agenten übernehmen', value: null }, { label: 'Automatisch', value: 'automatic' }, { label: 'Bei Nachfrage', value: 'on_demand' }, { label: 'Deaktiviert', value: 'disabled' }]
 function setAgents(agentIds) {
   Object.assign(form.value, { agentIds, agentModels: Object.fromEntries(Object.entries(form.value.agentModels || {}).filter(([id]) => agentIds.includes(id))), ...(!agentIds.includes(form.value.startAgentId) ? { startAgentId: agentIds[0] || null } : {}) })
+  if (form.value.keyboardAgentIds) {
+    form.value.keyboardAgentIds = form.value.keyboardAgentIds.filter((id) => agentIds.includes(id))
+  }
+}
+function setKeyboardAgents(ids) {
+  form.value.keyboardAgentIds = ids.length === form.value.agentIds.length ? null : ids
 }
 function setOverride(id, value) {
   const agentModels = form.value.agentModels ||= {}

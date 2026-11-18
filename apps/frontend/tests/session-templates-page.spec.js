@@ -16,15 +16,15 @@ import { api } from 'src/boot/axios'
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.clearAllMocks() })
 
-it('saves worktree support and reasoning choices for an inherited template model', async () => {
-  const template = { id: 'template', name: 'Coding', agentIds: ['plan'], startAgentId: 'plan', memoryMode: 'full', messageSize: 'small', worktreesEnabled: false, modelId: null, reasoningEffort: null, agentModels: {} }
+it('saves keyboard switching, worktree support and reasoning choices for a template', async () => {
+  const template = { id: 'template', name: 'Coding', agentIds: ['plan', 'build', 'interactive'], startAgentId: 'plan', memoryMode: 'full', messageSize: 'small', worktreesEnabled: false, modelId: null, reasoningEffort: null, agentModels: {} }
   const templates = { templates: [template], personalSettingsEnabled: true }
   const responses = {
     '/providers': {
       providers: [{ id: 'provider', name: 'Provider', enabled: true }],
       models: [{ id: 'standard', providerId: 'provider', modelId: 'standard', enabled: true, supportsTools: true, reasoningEfforts: [] }, { id: 'profile', providerId: 'provider', modelId: 'profile', enabled: true, supportsTools: true, reasoningEfforts: ['high'], reasoningEffort: 'high' }]
     },
-    '/agent-profiles': { effectiveAgents: [{ id: 'plan', name: 'Plan' }] },
+    '/agent-profiles': { effectiveAgents: [{ id: 'plan', name: 'Plan' }, { id: 'build', name: 'Build' }, { id: 'interactive', name: 'Interactive' }] },
     '/model-defaults': { effective: { defaultModelId: 'standard', profileModels: { plan: { modelId: 'profile' } } } },
     '/session-templates': templates
   }
@@ -41,6 +41,9 @@ it('saves worktree support and reasoning choices for an inherited template model
   await vi.waitFor(() => expect(root.querySelector('[aria-label="Coding bearbeiten"]')?.disabled).toBe(false))
   root.querySelector('[aria-label="Coding bearbeiten"]').click()
   await vi.waitFor(() => expect(document.querySelector('.q-expansion-item .q-item')).not.toBeNull())
+  const keyboardAgents = [...document.querySelectorAll('.q-dialog .q-field')].find(field => field.querySelector('.q-field__label')?.textContent === 'Agenten für den Tastaturwechsel')
+  const interactive = [...keyboardAgents.querySelectorAll('.q-chip')].find(chip => chip.querySelector('.q-chip__content')?.textContent.trim() === 'Interactive')
+  interactive.querySelector('.q-chip__icon--remove').click()
   const assistantContext = [...document.querySelectorAll('.q-dialog .q-field')].find(field => field.querySelector('.q-field__label')?.textContent === 'Assistenzkontext')
   assistantContext.querySelector('[role="combobox"]').click()
   const disabled = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find(item => item.querySelector('.q-item__label')?.textContent === 'Deaktiviert'))
@@ -53,5 +56,5 @@ it('saves worktree support and reasoning choices for an inherited template model
   const high = await vi.waitUntil(() => [...document.querySelectorAll('[role="option"]')].find((item) => item.querySelector('.q-item__label')?.textContent === 'Hoch'))
   high.click()
   document.querySelector('.q-dialog form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
-  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/session-templates/template', { ...template, assistantContext: 'disabled', worktreesEnabled: true, agentModels: { plan: { modelId: null, reasoningEffort: 'high' } } }, { params: { scope: 'personal' } }))
+  await vi.waitFor(() => expect(api.put).toHaveBeenCalledWith('/session-templates/template', { ...template, keyboardAgentIds: ['plan', 'build'], assistantContext: 'disabled', worktreesEnabled: true, agentModels: { plan: { modelId: null, reasoningEffort: 'high' } } }, { params: { scope: 'personal' } }))
 })
