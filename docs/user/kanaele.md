@@ -45,13 +45,16 @@ kompromittierter Relay kann auch Eingaben als Teams-Benutzer vortäuschen.
 MatoLoops Tool-Rechte gelten weiter, beweisen dann aber nicht die menschliche
 Herkunft einer Nachricht. Übertrage keine Geheimnisse als Chattext.
 
-1. Registriere eine einzelne Mandanten-App in Microsoft Entra und einen damit
-   verbundenen Azure Bot. Aktiviere dessen Microsoft-Teams-Kanal. Halte die
-   **Anwendungs-ID**, **Mandanten-ID** und den **Wert** eines Clientgeheimnisses
-   bereit; die Geheimnis-ID ersetzt den Wert nicht. Die
-   [Microsoft-Anleitung](https://learn.microsoft.com/en-us/azure/bot-service/channel-connect-teams)
-   beschreibt die Teams-Anbindung. Breite Graph-Dateiberechtigungen oder eine
-   Benutzer-OAuth-Anmeldung sind für diesen persönlichen Botchat nicht nötig.
+1. Öffne im [Microsoft Entra Admin Center](https://entra.microsoft.com)
+   **Entra ID > App-Registrierungen > Neue Registrierung**. Verwende eine
+   eigene Registrierung für den Teams-Bot, nicht die einer bestehenden
+   Microsoft-365-Integration. Wähle **Nur Konten in diesem Organisationsverzeichnis**
+   (Single Tenant) und lass die Umleitungs-URI leer. Kopiere aus der Übersicht die
+   **Anwendungs-ID (Client)** und die **Verzeichnis-ID (Mandant)**. Erstelle unter
+   **Zertifikate & Geheimnisse > Geheime Clientschlüssel** ein Clientgeheimnis.
+   Sichere sofort dessen **Wert** im Secret-Speicher; die Geheimnis-ID ist kein
+   Ersatz. Für den persönlichen Botchat brauchst du weder eine
+   Benutzer-OAuth-Anmeldung noch zusätzliche Microsoft-Graph-Berechtigungen.
 2. Lege auf dem Relay-Host außerhalb des Checkouts ein geschütztes Verzeichnis
    mit den Dateien `client-secret` und `relay-token` an. Die erste Datei enthält
    das Microsoft-Clientgeheimnis. Erzeuge für die zweite mindestens 32
@@ -71,35 +74,54 @@ Herkunft einer Nachricht. Übertrage keine Geheimnisse als Chattext.
    Requests und Zeitüberschreitungen über 40 Sekunden. Protokolliere weder
    Requestinhalte noch Authorization-Header. Der Relay benötigt sein eigenes
    persistentes Volume; starte nur eine Replik.
-4. Trage am Azure Bot `https://DEIN-RELAY/api/messages` als Messaging-Endpunkt
-   ein. `/health` am öffentlichen Relay muss erreichbar sein. Veröffentliche
-   keinen MatoLoop-Endpunkt und deaktiviere nicht die Microsoft-Authentifizierung.
-5. Erzeuge mit dem Entwicklungsskript ein Teams-App-Paket. Ersetze die
-   Beispieladressen durch tatsächlich erreichbare Betreiber-, Datenschutz- und
-   Nutzungsbedingungsseiten; die Paketdatei darf noch nicht existieren:
-
-   ```bash
-   ./scripts/dev.sh teams-package \
-     --app-id DEINE-APP-UUID \
-     --website https://example.org \
-     --privacy-url https://example.org/privacy \
-     --terms-url https://example.org/terms \
-     --output /workspace/matoloop-teams.zip
-   ```
-
-   Das Paket konfiguriert den persönlichen Bot-Chat mit Dateiunterstützung und
-   Befehlsmenü. Lade die ZIP-Datei
-   gemäß [Microsofts Installationsanleitung](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/deploy-and-publish/apps-upload)
-   als benutzerdefinierte App hoch. Für mehrere Benutzer veröffentliche sie über
-   die Teams-Administration deiner Organisation. Fehlende Upload- oder
-   Installationsrechte muss der Mandantenadministrator freigeben.
-6. Öffne in MatoLoop **Administration > Kanäle > Verwaltung >
+4. Erstelle im [Azure-Portal](https://portal.azure.com) eine
+   [**Azure Bot**-Ressource](https://learn.microsoft.com/en-us/azure/bot-service/bot-service-quickstart-registration).
+   Wähle beim Microsoft-App-Typ **Single Tenant** und **Vorhandene App-Registrierung
+   verwenden**. Gib die Client- und Mandanten-ID aus Schritt 1 an. Setze unter
+   **Konfiguration** den Messaging-Endpunkt auf `https://DEIN-RELAY/api/messages`
+   und aktiviere unter **Kanäle** den
+   [Microsoft-Teams-Kanal](https://learn.microsoft.com/en-us/azure/bot-service/channel-connect-teams)
+   für die kommerzielle Cloud. Prüfe, dass `https://DEIN-RELAY/health`
+   erreichbar ist. Veröffentliche keinen MatoLoop-Endpunkt und deaktiviere
+   nicht die Microsoft-Authentifizierung.
+5. Öffne in MatoLoop **Administration > Kanäle > Verwaltung >
    Teams-Relay konfigurieren**. Speichere Relay-URL, dieselben Microsoft-IDs und
    den separaten Relay-Token. MatoLoop speichert ihn verschlüsselt.
    **Gespeicherte Verbindung testen** prüft Relay und IDs. Aktiviere anschließend
    die globale Kanalfreigabe und den Anbieter **Microsoft Teams**.
    Nach kurzer Zeit soll der Verbindungstest auch einen verbundenen
    MatoLoop-Empfänger anzeigen.
+6. Exportiere das Teams-Paket wie unten beschrieben. Für einen Einzeltest
+   kannst du es gemäß [Microsofts Installationsanleitung](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/deploy-and-publish/apps-upload)
+   als benutzerdefinierte App hochladen.
+
+### Teams-App für die Organisation veröffentlichen
+
+Für einen internen Rollout brauchst du keinen öffentlichen Store-Eintrag.
+
+1. Öffne im gespeicherten Teams-Relay-Dialog **Teams-App-Paket exportieren**.
+   Gib die Paketversion, den Namen deiner Organisation als Herausgeber und
+   erreichbare HTTPS-Links zu Website, Datenschutz und Nutzungsbedingungen
+   an. Wähle **ZIP herunterladen**. Die ZIP übernimmt die gespeicherte
+   Microsoft-App-ID, den **globalen Agentennamen** und das Logo aus
+   **Darstellung**. Für das weiße Symbol in der Teams-App-Leiste eignet sich
+   ein Logo auf transparentem Grund. Ohne eigenes Logo verwendet der Export
+   die MatoLoop-Standardsymbole. Das Paket enthält **keine Zugangsdaten**.
+   Passe für den Namen und das Symbol am Bot separat das
+   [Botprofil in Azure](https://learn.microsoft.com/en-us/azure/bot-service/bot-service-manage-settings#bot-profile)
+   an. Branding gilt für diese Teams-App, nicht pro Benutzer oder Session.
+2. Öffne als Teams-Administrator im [Teams Admin Center](https://admin.teams.microsoft.com/policies/manage-apps)
+   **Teams-Apps > Apps verwalten > Neue App hochladen** und lade das Paket hoch.
+   Öffne danach die App und beschränke ihre
+   [Verfügbarkeit](https://learn.microsoft.com/en-us/microsoftteams/app-centric-management)
+   für den Pilot auf die vorgesehenen Benutzer oder Gruppen. Die Freigabe
+   ersetzt nicht die persönliche Kopplung in MatoLoop.
+3. Berechtigte Benutzer finden die App in Teams unter **Apps** im Bereich
+   **Für deine Organisation erstellt**. Die App kann erst nach einigen
+   Stunden erscheinen. Wenn sich Name oder Logo ändern, exportiere bei
+   unveränderter Microsoft-App-ID ein Paket mit höherer Version und lade es
+   auf der Detailseite der vorhandenen App hoch. Der Export allein ändert
+   keine bereits installierte Teams-App.
 
 ### Relay mit Portainer und Nginx Proxy Manager betreiben
 

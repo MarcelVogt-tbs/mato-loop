@@ -32,6 +32,12 @@
           <q-banner v-if="connection" rounded class="app-surface-tonal" role="status">
             Relay erreichbar. {{ connection.receiverOnline ? 'MatoLoop-Empfänger verbunden.' : 'Noch kein MatoLoop-Empfänger verbunden. Prüfe die globale Kanal- und Teams-Freigabe.' }}
           </q-banner>
+          <div>
+            <q-btn outline no-caps icon="download" label="Teams-App-Paket exportieren"
+              :disable="!saved?.appId || bindingChanged || loading || loadFailed || saving || testing"
+              @click="showPackage = true" />
+            <div class="text-caption app-muted q-mt-xs">Verwendet die gespeicherte Microsoft-App-ID.</div>
+          </div>
         </q-card-section>
         <q-separator />
         <q-card-actions class="q-pa-md">
@@ -44,6 +50,7 @@
       <q-inner-loading :showing="loading" />
     </q-card>
   </q-dialog>
+  <TeamsPackageDialog v-if="showPackage" @close="showPackage = false" />
 </template>
 
 <script setup>
@@ -51,6 +58,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useConfirm } from 'src/composables/confirm'
 import { useChannelStore } from 'stores/channels'
+import TeamsPackageDialog from './TeamsPackageDialog.vue'
 
 defineOptions({ name: 'TeamsRelayDialog' })
 const props = defineProps({ modelValue: { type: Boolean, required: true } })
@@ -66,6 +74,7 @@ const loading = ref(false)
 const loadFailed = ref(false)
 const saving = ref(false)
 const testing = ref(false)
+const showPackage = ref(false)
 const normalizedRelayUrl = computed(() => form.relayUrl.trim().replace(/\/+$/, ''))
 const bindingChanged = computed(() => saved.value?.hasCredential && (
   Boolean(form.token) || normalizedRelayUrl.value !== saved.value.relayUrl ||
@@ -135,6 +144,9 @@ async function test() {
 watch(() => props.modelValue, (open) => {
   connection.value = null
   if (open) void load()
-  else form.token = ''
+  else {
+    form.token = ''
+    showPackage.value = false
+  }
 })
 </script>

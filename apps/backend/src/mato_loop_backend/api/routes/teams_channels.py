@@ -4,14 +4,16 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 from matoloop_teams_protocol import Identity
-from pydantic import BaseModel, ConfigDict, Field
+from matoloop_teams_protocol.app_package import PACKAGE_VERSION_PATTERN, build_app_package
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
+from mato_loop_backend.appearance import AppearanceSettings
 from mato_loop_backend.db.session import get_db_session
 from mato_loop_backend.messaging.endpoints import endpoint_payload, new_pairing, stop_endpoint_work
 from mato_loop_backend.messaging.policy import channel_provider_allowed, lock_channel_provider
@@ -21,6 +23,7 @@ from mato_loop_backend.messaging.teams_client import (
     relay_client,
     relay_url,
 )
+from mato_loop_backend.messaging.teams_package import teams_brand_icons
 from mato_loop_backend.models import MessagingEndpoint, UserAccount
 from mato_loop_backend.security import (
     load_credential,
@@ -28,7 +31,7 @@ from mato_loop_backend.security import (
     require_user,
     store_credential,
 )
-from mato_loop_backend.settings import SettingsStore
+from mato_loop_backend.settings import AgentIdentitySettings, SettingsStore
 from mato_loop_backend.settings.models import TeamsChannelSettings
 
 router = APIRouter(prefix="/channels/teams", dependencies=[Depends(require_user)])
@@ -49,6 +52,16 @@ class TeamsEndpointRequest(BaseModel):
 
     name: str = Field(default="Microsoft Teams", min_length=1, max_length=160, pattern=r"\S")
     enabled: bool = True
+
+
+class TeamsPackageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    version: str = Field(pattern=PACKAGE_VERSION_PATTERN, max_length=32)
+    publisher: str = Field(min_length=1, max_length=32)
+    websiteUrl: HttpUrl
+    privacyUrl: HttpUrl
+    termsUrl: HttpUrl
 
 
 def configuration_payload(settings: TeamsChannelSettings) -> dict:
@@ -167,6 +180,41 @@ async def test_configuration(
     except TeamsServiceError as exc:
         raise ApiError(502, exc.code) from None
     return {"ok": True, "receiverOnline": result.online}
+
+
+@router.post("/configuration/app-package", response_class=Response)
+async def export_app_package(
+    payload: TeamsPackageRequest,
+    _admin: Annotated[UserAccount, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Response:
+    for field in ("websiteUrl", "privacyUrl", "termsUrl"):
+        url: HttpUrl = getattr(payload, field)
+        if url.scheme != "https" or url.username is not None or url.password is not None:
+            raise ApiError(422, "validation.invalidUrl", field=field)
+    settings = await SettingsStore.load(db, TeamsChannelSettings)
+    if not settings.app_id:
+        raise ApiError(409, "channel.relayUnconfigured")
+    identity = await SettingsStore.load(db, AgentIdentitySettings)
+    appearance = await SettingsStore.load(db, AppearanceSettings)
+    content = build_app_package(
+        settings.app_id,
+        website=str(payload.websiteUrl),
+        privacy_url=str(payload.privacyUrl),
+        terms_url=str(payload.termsUrl),
+        publisher=payload.publisher,
+        version=payload.version,
+        name=identity.display_name,
+        icons=teams_brand_icons(appearance.logo_png) if appearance.logo_png else None,
+    )
+    return Response(
+        content,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="matoloop-teams-{payload.version}.zip"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.post("/endpoints", status_code=status.HTTP_201_CREATED)

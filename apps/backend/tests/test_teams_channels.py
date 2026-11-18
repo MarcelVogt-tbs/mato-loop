@@ -1,16 +1,25 @@
 import asyncio
+import json
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
+from zipfile import ZipFile
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from matoloop_teams_protocol import Delivery, Event, Identity
+from matoloop_teams_protocol.app_package import icon
+from PIL import Image, ImageDraw
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mato_loop_backend.api.errors import register_error_handlers
 from mato_loop_backend.api.routes import teams_channels
+from mato_loop_backend.appearance import AppearanceSettings, normalize_logo
 from mato_loop_backend.messaging import teams
 from mato_loop_backend.messaging.formatting import render_channel_text
 from mato_loop_backend.messaging.questions import (
@@ -31,12 +40,76 @@ from mato_loop_backend.models import (
     MessagingOutbox,
     UserAccount,
 )
-from mato_loop_backend.settings.models import TeamsChannelSettings
+from mato_loop_backend.settings.models import AgentIdentitySettings, TeamsChannelSettings
 from mato_loop_backend.tools.arguments import QuestionItem, QuestionOption
 
 
 def identity():
     return Identity(tenant_id=uuid4(), app_id=uuid4(), user_id=uuid4(), conversation_id="personal")
+
+
+@pytest.mark.parametrize("custom_logo", [True, False])
+async def test_teams_package_uses_saved_instance_branding(monkeypatch, custom_logo):
+    who = identity()
+    branding = AppearanceSettings(app_name="Instance website name")
+    if custom_logo:
+        logo = Image.new("RGBA", (100, 100))
+        ImageDraw.Draw(logo).ellipse((20, 20, 80, 80), fill=(255, 0, 0, 255))
+        source = BytesIO()
+        logo.save(source, format="PNG")
+        branding.logo_png = normalize_logo(source.getvalue())
+
+    name = "MatoLoop Agent with a very long global name"
+    settings = {
+        TeamsChannelSettings: TeamsChannelSettings(
+            app_id=who.app_id, tenant_id=who.tenant_id, credential_id=uuid4(),
+            relay_url="https://relay.example",
+        ),
+        AppearanceSettings: branding,
+        AgentIdentitySettings: AgentIdentitySettings(display_name=name),
+    }
+    load = AsyncMock(side_effect=lambda _, model: settings[model])
+    monkeypatch.setattr(teams_channels.SettingsStore, "load", load)
+    app = FastAPI()
+    app.include_router(teams_channels.router)
+    register_error_handlers(app)
+    app.dependency_overrides[teams_channels.get_db_session] = lambda: AsyncMock(spec=AsyncSession)
+    payload = {
+        "version": "1.2.0", "publisher": "Example Org",
+        "websiteUrl": "https://example.com/", "privacyUrl": "https://example.com/privacy",
+        "termsUrl": "https://example.com/terms",
+    }
+    path = "/channels/teams/configuration/app-package"
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        app.dependency_overrides[teams_channels.require_user] = lambda: SimpleNamespace(is_admin=False)
+        assert (await client.post(path, json=payload)).status_code == 403
+        app.dependency_overrides[teams_channels.require_user] = lambda: SimpleNamespace(is_admin=True)
+        assert (await client.post(path, json={**payload, "version": "1.2"})).status_code == 422
+        assert (await client.post(path, json={**payload, "termsUrl": "https://user:pass@example.com/terms"})).status_code == 422
+        load.assert_not_awaited()
+        response = await client.post(path, json=payload)
+
+    assert response.status_code == 200
+    assert response.headers["content-disposition"] == 'attachment; filename="matoloop-teams-1.2.0.zip"'
+    with ZipFile(BytesIO(response.content)) as archive:
+        assert set(archive.namelist()) == {"manifest.json", "outline.png", "color.png"}
+        raw_manifest = archive.read("manifest.json")
+        manifest = json.loads(raw_manifest)
+        assert manifest["id"] == manifest["bots"][0]["botId"] == str(who.app_id)
+        assert manifest["version"] == payload["version"]
+        assert manifest["name"] == {"short": name[:30].rstrip(), "full": name}
+        assert manifest["developer"]["termsOfUseUrl"] == payload["termsUrl"]
+        for private in (who.tenant_id, settings[TeamsChannelSettings].credential_id, "relay.example"):
+            assert str(private).encode() not in raw_manifest
+        outline_png, color_png = archive.read("outline.png"), archive.read("color.png")
+        if not custom_logo:
+            assert (outline_png, color_png) == (icon(32, outline=True), icon(192, outline=False))
+            return
+        with Image.open(BytesIO(outline_png)) as outline, Image.open(BytesIO(color_png)) as color:
+            assert (outline.size, color.size) == ((32, 32), (192, 192))
+            assert outline.getpixel((0, 0))[3] == 0
+            assert outline.getpixel((16, 16)) == (255, 255, 255, 255)
+            assert color.getpixel((96, 96)) == (255, 0, 0, 255)
 
 
 @pytest.mark.parametrize("admitted", [False, True])

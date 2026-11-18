@@ -127,11 +127,12 @@ canonical sessions.
   reviewed commit. Record the backend and relay image digests, app package
   version and checksum, and database revision. An image archive can be
   imported into Portainer without publishing it to a registry.
-- Monitor both public `/health` and authenticated `/relay/v1/status` (`online`
-  verifies the receiver lease). `/health` alone does not confirm that MatoLoop
-  can receive requests. Alert on prolonged receiver outages and on the
-  backend's `Teams delivery failed` log; review affected users' notifications
-  and pending deliveries rather than replaying failed requests.
+- Use **Gespeicherte Verbindung testen** in MatoLoop to check both relay
+  connectivity and receiver readiness. Public `/health` alone does not
+  confirm that MatoLoop can receive requests. For delivery failures, review
+  the backend's `Teams delivery failed` log and the affected user's MatoLoop
+  notification rather than replaying failed requests. External alerting is
+  optional.
 - Before widening access, verify pairing and unlinking, command menu and chat
   switching, requests and approvals, file uploads and downloads, and
   ordinary replies with streaming on and off. Repeat with MatoLoop offline

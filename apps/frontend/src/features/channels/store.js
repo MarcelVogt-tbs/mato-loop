@@ -85,6 +85,10 @@ export const useChannelStore = defineStore('channels', {
       const { data } = await api.post('/channels/teams/configuration/test')
       return data
     },
+    async exportTeamsAppPackage(payload) {
+      const { data } = await api.post('/channels/teams/configuration/app-package', payload, { responseType: 'blob' })
+      return data
+    },
     async saveEndpoint(provider, id, payload) {
       if (provider === 'telegram') return id ? this.updateTelegram(id, payload) : this.createTelegram(payload)
       const request = { name: payload.name, enabled: payload.enabled }
