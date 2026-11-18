@@ -1415,7 +1415,7 @@ class IntegrationSettings(IntegrationSettingsBase):
         return self
 
     def availability_for(self, adapter_type: str) -> IntegrationAdapterAvailability:
-        if adapter_type in {"jina", "searxng"}:
+        if adapter_type in {"jina", "searxng", "webiq", "webiq_search"}:
             return (
                 IntegrationAdapterAvailability.DISABLED
                 if self.adapter_availability.get(adapter_type) == IntegrationAdapterAvailability.DISABLED

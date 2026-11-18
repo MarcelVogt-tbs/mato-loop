@@ -31,3 +31,14 @@ export const providerDefaults = {
   coding: { provider: 'opencode', label: 'OpenCode', placeholder: 'http://localhost:4096' },
   browser: { provider: 'browser', label: 'Browser', placeholder: '' }
 }
+
+export function providersForType(type) {
+  const primary = providerDefaults[type]
+  if (!primary) return []
+  return [
+    primary,
+    ...(['search', 'webfetch'].includes(type)
+      ? [{ provider: type === 'search' ? 'webiq_search' : 'webiq', label: 'Microsoft Web IQ', placeholder: '' }]
+      : [])
+  ]
+}

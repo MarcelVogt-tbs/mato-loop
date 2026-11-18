@@ -339,6 +339,12 @@ Microsoft 365 calendar-write and To Do tools, including the task-list completion
 
 Microsoft 365 collections return basic fields, bounded mail/calendar previews and task notes/recurrence-presence indicators; [detail reads](integrations.md#microsoft-365) are needed only for missing information. This guidance intentionally changes the offered tool-description prefix. Richer results append to their originating exchanges; historical results are not enriched from current remote state. The existing session-result reference projection replaces encrypted resource tokens with short deterministic references in both live and persisted history. This intentionally changes earlier projected Microsoft 365 result prefixes; canonical stored results remain unchanged. Resolving a reference still requires its original successful tool result in the current session, then current connection, permission and version checks. It does not confer authority or cache authorization.
 
+Selecting Web IQ intentionally changes the `web_search` query bound and the
+`webfetch` passage-query schema and description. Stable Web IQ selections retain
+the same ordered schemas across rounds; unrelated providers keep their existing
+contracts. Search and Browse results remain turn-local tool data, never rebuilt
+into historical turns from current index or crawl state.
+
 ### Stability and isolation rules
 
 Image-tool prompt profiles follow the resolved image target, not the active chat model.

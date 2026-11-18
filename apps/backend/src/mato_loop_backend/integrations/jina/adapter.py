@@ -5,7 +5,6 @@ from urllib.parse import quote, unquote
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 from mato_loop_backend.integrations.contracts import IntegrationAdapterDefinition
-from mato_loop_backend.settings import IntegrationInstance, IntegrationSettings
 
 JINA_CREDENTIAL_KIND = "jina.api_key"
 
@@ -57,33 +56,6 @@ class JinaCookie(BaseModel):
 class JinaCredentials(BaseModel):
     api_key: str | None = Field(default=None, max_length=10_000, pattern=r"^[\x21-\x7e]+$")
     cookies: list[JinaCookie] = Field(default_factory=list, max_length=50)
-
-
-def selected_provider(settings: IntegrationSettings, key: str | None = None) -> IntegrationInstance | None:
-    key = key or provider_key(settings)
-    return next((
-        item for item in settings.instances
-        if f"jina:{item.id}" == key
-        and item.integration_type == "webfetch" and item.adapter_type == "jina"
-        and item.enabled and item.owner_id is None
-        and settings.availability_for("jina") != "disabled"
-    ), None)
-
-
-def provider_key(settings: IntegrationSettings) -> str:
-    return f"jina:{settings.webfetch_integration_id}" if settings.webfetch_integration_id else "builtin"
-
-
-def provider_available(settings: IntegrationSettings) -> bool:
-    return settings.webfetch_integration_id is None or selected_provider(settings) is not None
-
-
-def provider_options(settings: IntegrationSettings) -> list[dict]:
-    return [{"value": "builtin", "name": "Eingebaut"}, *(
-        {"value": f"jina:{item.id}", "name": item.name}
-        for item in settings.instances
-        if selected_provider(settings, f"jina:{item.id}") is not None
-    )]
 
 
 JINA_ADAPTER = IntegrationAdapterDefinition(

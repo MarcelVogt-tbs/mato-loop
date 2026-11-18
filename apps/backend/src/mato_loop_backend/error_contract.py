@@ -523,6 +523,7 @@ _MESSAGES = {
     "webfetch.responseLimitInvalid": "The web response size limit is invalid.",
     "webfetch.responseTooLarge": "The web response exceeds the configured size limit.",
     "webfetch.timeout": "The web server did not answer in time.",
+    "webfetch.crawlPending": "The page crawl is pending. The content is not available yet. Try again later.",
     "webfetch.tlsFailed": "The web server's TLS certificate could not be verified.",
     "webfetch.tooManyRedirects": "The web server sent too many redirects.",
 }

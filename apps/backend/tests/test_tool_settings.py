@@ -55,10 +55,14 @@ def test_legacy_duckduckgo_provider_is_migrated_to_no_key_search() -> None:
     assert settings.web_search.primary_provider == "no_key"
 
 
-async def test_web_provider_defaults_are_saved_through_tool_configuration(monkeypatch):
+@pytest.mark.parametrize("webiq", [False, True])
+async def test_web_provider_defaults_are_saved_through_tool_configuration(monkeypatch, webiq):
     tools = ToolSettings()
     reader = IntegrationInstance(name="Reader", integration_type="webfetch", adapter_type="jina", config={"base_url": "https://reader.test"})
     search = IntegrationInstance(name="Search", integration_type="search", adapter_type="searxng", config={"base_url": "https://search.test"})
+    if webiq:
+        reader = IntegrationInstance(name="Web IQ Browse", integration_type="webfetch", adapter_type="webiq", credential_id=uuid4())
+        search = IntegrationInstance(name="Web IQ Search", integration_type="search", adapter_type="webiq_search", credential_id=uuid4())
     integrations = IntegrationSettings(instances=[reader, search])
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(side_effect=lambda _db, model, **_kwargs: integrations if model is IntegrationSettings else tools))
     monkeypatch.setattr(SettingsStore, "save", AsyncMock())
@@ -66,7 +70,7 @@ async def test_web_provider_defaults_are_saved_through_tool_configuration(monkey
         "toolAvailability", "generateImage", "editImage", "generateSpeech",
         "generateAudio", "transcribeAudio", "analyzeVideo",
     )}
-    request.update(webSearch={"primaryProvider": f"searxng:{search.id}"}, webfetch={"primaryProvider": f"jina:{reader.id}"})
+    request.update(webSearch={"primaryProvider": f"{search.adapter_type}:{search.id}"}, webfetch={"primaryProvider": f"{reader.adapter_type}:{reader.id}"})
 
     result = await update_tool_configuration(ToolConfigurationRequest.model_validate(request), SimpleNamespace(is_admin=True), _db())
 

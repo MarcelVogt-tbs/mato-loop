@@ -709,6 +709,7 @@ const messages = {
   'webfetch.responseTooLarge': () => 'Die Antwort der Webadresse ist zu groß.',
   'webfetch.responseLimitInvalid': () => 'Die maximale Webfetch-Antwortgröße ist ungültig.',
   'webfetch.timeout': () => 'Der Abruf der Webadresse hat zu lange gedauert.',
+  'webfetch.crawlPending': () => 'Die Seite wird noch abgerufen. Der Inhalt ist noch nicht verfügbar. Versuche es später erneut.',
   'webfetch.timeoutInvalid': () => 'Das Zeitlimit für den Webabruf ist ungültig.',
   'webfetch.tlsFailed': () => 'Das TLS-Zertifikat der Webadresse konnte nicht überprüft werden.',
   'webfetch.tooManyRedirects': () => 'Die Webadresse hat zu oft weitergeleitet.',

@@ -11,6 +11,7 @@ import httpx
 from bs4 import BeautifulSoup
 from ddgs import DDGS
 from ddgs.exceptions import DDGSException
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.integrations.registry import (
     effective_integration_contributions,
@@ -72,8 +73,13 @@ def search_provider(
             for instance in settings.instances
             if instance.enabled
             and instance.integration_type == "search"
+            and (
+                instance.adapter_type == "searxng" and instance.config.get("base_url")
+                or instance.adapter_type == "webiq_search"
+                and instance.owner_id is None and instance.credential_id is not None
+            )
+            and settings.availability_for(instance.adapter_type) != "disabled"
             and search_provider_key(instance) == provider_key
-            and instance.config.get("base_url")
         ),
         None,
     )
@@ -183,12 +189,29 @@ async def search_with_key(
     query: str,
     *,
     search_type: Literal["web", "images"] = "web",
+    db: AsyncSession | None = None,
 ) -> str:
     if provider_key == "no_key":
         return await search_without_api_key(query, search_type=search_type)
     provider = search_provider(settings, provider_key)
     if provider is None:
         raise SearchIntegrationError("integration.providerUnavailable")
+    if provider.adapter_type == "webiq_search":
+        from mato_loop_backend.integrations.service import IntegrationSettingsError
+        from mato_loop_backend.integrations.webiq import client, service
+        from mato_loop_backend.integrations.webiq.adapter import WebIqConfig
+
+        if db is None:
+            raise SearchIntegrationError("integration.invalidConfiguration")
+        try:
+            secrets = await service.credentials(db, provider)
+        except IntegrationSettingsError as exc:
+            raise SearchIntegrationError(exc.code) from exc
+        results = await client.search(
+            WebIqConfig.model_validate(provider.config), query,
+            api_key=secrets.api_key, search_type=search_type,
+        )
+        return _compact_results(results, search_type=search_type)
     from mato_loop_backend.integrations.searxng.client import search_with_provider
 
     return await search_with_provider(provider, query, search_type=search_type)
@@ -200,11 +223,12 @@ async def search_web(
     *,
     search_type: Literal["web", "images"] = "web",
     provider: str = "no_key",
+    db: AsyncSession | None = None,
 ) -> str:
     try:
         async with asyncio.timeout(SEARCH_DEADLINE_SECONDS):
             return await search_with_key(
-                settings, provider, query, search_type=search_type
+                settings, provider, query, search_type=search_type, db=db
             )
     except TimeoutError as exc:
         raise SearchIntegrationError("integration.unavailable") from exc
