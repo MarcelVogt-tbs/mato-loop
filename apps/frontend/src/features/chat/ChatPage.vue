@@ -85,7 +85,7 @@
         <q-virtual-scroll
           v-else-if="chat.current || chat.activeQueuedMessages.length"
           ref="virtualScroll"
-          class="chat-transcript q-pa-md"
+          class="chat-transcript q-pa-md relative-position"
           :class="{ invisible: transcriptPreparing }"
           :inert="transcriptPreparing"
           :items="displayMessages"
@@ -94,10 +94,10 @@
           @virtual-scroll="handleVirtualScroll"
         >
           <template #before>
-            <div v-if="chat.olderMessagesLoading" class="q-py-sm" role="status">
+            <div v-if="chat.olderMessagesLoading" class="absolute-top q-px-md" role="status">
               <div class="chat-history-loading" aria-hidden="true">
-                <q-skeleton type="text" width="42%" height="12px" />
-                <q-skeleton type="text" width="72%" height="12px" />
+                <q-skeleton type="text" width="42%" height="10px" />
+                <q-skeleton type="text" width="72%" height="10px" />
               </div>
               <span class="app-sr-only">Ältere Nachrichten werden geladen</span>
             </div>

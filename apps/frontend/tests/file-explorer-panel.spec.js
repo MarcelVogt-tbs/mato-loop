@@ -10,16 +10,16 @@ import { createPinia, setActivePinia } from 'pinia'
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 
-const { chat, workspace, openFile } = vi.hoisted(() => ({
+const { chat, workspaceMock, openFile } = vi.hoisted(() => ({
   openFile: vi.fn(),
   chat: {
-    activeContext: null, current: null, selectedSessionId: 'session-a', running: false,
-    sessionList: vi.fn(), fetchSessions: vi.fn(), fetchMoreSessions: vi.fn()
+    activeContext: null, current: null, selectedSessionId: 'session-a', running: false
   },
-  workspace: {
+  workspaceMock: {
     scope: 'session', sessionId: 'session-a', directoryPath: 'reports', selectedPath: 'other.txt', selectedKind: 'file',
     filter: 'hidden', entries: { reports: [] }, loading: {}, loadErrors: {}, hasMore: {}, contextVersion: 0,
-    uploading: false, archiveUrl: vi.fn(), operationAvailable: vi.fn(), load: vi.fn(), configure: vi.fn(), openDirectory: vi.fn()
+    uploading: false, archiveUrl: vi.fn(), operationAvailable: vi.fn(), load: vi.fn(), configure: vi.fn(), openDirectory: vi.fn(),
+    projectFolders: null, loadProjectFolders: vi.fn()
   }
 }))
 
@@ -45,6 +45,7 @@ const components = {
   QIcon, QInput, QItem, QItemLabel, QItemSection, QLinearProgress, QList, QMenu, QScrollArea, QSelect,
   QSeparator, QSpinner, QToolbar, QTooltip
 }
+const workspace = reactive(workspaceMock)
 let app, root, pinia
 
 beforeEach(() => {
@@ -67,9 +68,8 @@ beforeEach(() => {
   workspace.storageUsageFailed = false
   workspace.fetchStorageUsage = vi.fn().mockResolvedValue(null)
   chat.current = null
-  chat.sessionList.mockReturnValue(null)
-  chat.fetchSessions.mockResolvedValue()
-  chat.fetchMoreSessions.mockResolvedValue()
+  workspace.projectFolders = null
+  workspace.loadProjectFolders.mockReset()
   root = document.createElement('div')
   document.body.append(root)
 })
@@ -120,18 +120,22 @@ it('starts in the session folder and opens sibling sessions through the parent p
   workspace.directoryPath = '.'
   workspace.entries = { '.': [] }
   workspace.operationAvailable.mockReturnValue(true)
-  chat.sessionList.mockReturnValue({
-    loaded: true,
-    items: [
-      chat.current,
-      { id: 'session-b', title: 'Andere', projectId: 'project-a' },
-      { id: 'session-c', title: 'Fremd', projectId: 'project-b' }
-    ]
+  workspace.loadProjectFolders.mockImplementation((projectId) => {
+    workspace.projectFolders = { projectId, items: [], loading: true }
   })
   await mountPanel()
 
   expect(root.textContent).not.toContain('Andere')
+  expect(workspace.loadProjectFolders).not.toHaveBeenCalled()
   root.querySelector('[aria-label="Zum übergeordneten Ordner"]').click()
+  await nextTick()
+  expect(workspace.loadProjectFolders).toHaveBeenCalledWith('project-a')
+  expect(root.textContent).not.toContain('Keine Dateien oder Ordner entsprechen dem Filter.')
+  workspace.projectFolders = { projectId: 'project-a', items: [
+    chat.current,
+    { id: 'session-b', title: 'Andere', projectId: 'project-a' },
+    { id: 'session-c', title: 'Fremd', projectId: 'project-b' }
+  ] }
   await nextTick()
   const folders = [...root.querySelectorAll('[data-file-path^="@session/"]')]
   expect(folders.map((folder) => folder.textContent)).toEqual([
@@ -150,21 +154,20 @@ it('starts in the session folder and opens sibling sessions through the parent p
   })))
 })
 
-it('distinguishes duplicate session folders and returns to the current session when one leaves the project', async () => {
+it('distinguishes duplicate session folders and picks up removals when reopening the project', async () => {
   chat.current = { id: 'session-a', title: 'Gleich', projectId: 'project-a' }
   workspace.directoryPath = '.'
   workspace.entries = { '.': [] }
   workspace.operationAvailable.mockReturnValue(true)
-  const list = reactive({
-    loaded: true,
-    items: [
-      chat.current,
-      { id: 'session-b', title: 'Gleich', projectId: 'project-a' },
-      { id: 'session-c', title: '', projectId: 'project-a' },
-      { id: 'session-d', title: '', projectId: 'project-a' }
-    ]
+  let sessions = [
+    chat.current,
+    { id: 'session-b', title: 'Gleich', projectId: 'project-a' },
+    { id: 'session-c', title: '', projectId: 'project-a' },
+    { id: 'session-d', title: '', projectId: 'project-a' }
+  ]
+  workspace.loadProjectFolders.mockImplementation((projectId) => {
+    workspace.projectFolders = { projectId, items: sessions }
   })
-  chat.sessionList.mockReturnValue(list)
   await mountPanel()
 
   root.querySelector('[aria-label="Zum übergeordneten Ordner"]').click()
@@ -181,7 +184,10 @@ it('distinguishes duplicate session folders and returns to the current session w
     rootIdentity: 'session-b'
   })))
 
-  list.items = list.items.filter((session) => session.id !== 'session-b')
+  sessions = sessions.filter((session) => session.id !== 'session-b')
+  root.querySelector('[aria-label="Zum übergeordneten Ordner"]').click()
+  await nextTick()
+  expect(root.querySelector('[data-file-path="@session/session-b"]')).toBeNull()
 
   await vi.waitFor(() => expect(workspace.configure).toHaveBeenLastCalledWith(expect.objectContaining({
     rootIdentity: 'session-a'

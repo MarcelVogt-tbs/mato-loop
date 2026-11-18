@@ -35,7 +35,7 @@
           dense
           icon="refresh"
           aria-label="Dateien aktualisieren"
-          :loading="!projectOverview && workspace.loading[workspace.directoryPath]"
+          :loading="projectOverview ? projectFoldersLoading : workspace.loading[workspace.directoryPath]"
           :disable="!explorerAvailable"
           @click="refreshFiles"
         >
@@ -150,10 +150,10 @@
     </div>
     <q-separator />
     <q-linear-progress
-      v-if="!projectOverview && workspace.loading[workspace.directoryPath]"
+      v-if="projectOverview ? projectFoldersLoading : workspace.loading[workspace.directoryPath]"
       indeterminate
       color="primary"
-      aria-label="Dateien werden geladen"
+      :aria-label="projectOverview ? 'Session-Ordner werden geladen' : 'Dateien werden geladen'"
     />
 
     <q-scroll-area class="col">
@@ -174,21 +174,21 @@
         @focus.self="focusTreeItem(visibleTreeItems()[0])"
         @keydown="handleTreeKeydown"
       >
-        <div v-if="!projectOverview && workspace.loadErrors[workspace.directoryPath]" class="file-load-state q-ma-sm q-pa-md text-center" role="alert">
+        <div v-if="projectOverview ? projectFoldersError : workspace.loadErrors[workspace.directoryPath]" class="file-load-state q-ma-sm q-pa-md text-center" role="alert">
           <q-icon name="cloud_off" size="32px" class="app-muted" />
-          <div class="q-mt-sm">{{ rootLoadError }}</div>
-          <q-btn class="q-mt-sm" flat no-caps color="primary" label="Erneut versuchen" @click="workspace.load(workspace.directoryPath)" />
+          <div class="q-mt-sm">{{ projectOverview ? projectFoldersError : rootLoadError }}</div>
+          <q-btn class="q-mt-sm" flat no-caps color="primary" label="Erneut versuchen" @click="projectOverview ? refreshFiles() : workspace.load(workspace.directoryPath)" />
         </div>
-        <div v-if="!projectOverview && workspace.loading[workspace.directoryPath] && !workspace.entries[workspace.directoryPath]" class="q-pa-lg text-center">
+        <div v-else-if="!projectOverview && workspace.loading[workspace.directoryPath] && !workspace.entries[workspace.directoryPath]" class="q-pa-lg text-center">
           <q-spinner color="primary" size="32px" />
           <div class="app-muted q-mt-sm">Dateien werden geladen ...</div>
         </div>
-        <div v-else-if="filterEmpty" class="file-load-state app-muted q-ma-sm q-pa-md text-center">
+        <div v-else-if="filterEmpty && !(projectOverview && projectFoldersLoading)" class="file-load-state app-muted q-ma-sm q-pa-md text-center">
           <q-icon name="search_off" size="32px" />
           <div class="q-mt-sm">Keine Dateien oder Ordner entsprechen dem Filter.</div>
         </div>
         <div
-          v-else-if="displayEntries && !displayEntries.length && !workspace.loadErrors[workspace.directoryPath]"
+          v-else-if="!displayEntries.length && !(projectOverview && projectFoldersLoading)"
           class="file-load-state app-muted q-ma-sm q-pa-md text-center"
         >
           <q-icon name="folder_open" size="32px" />
@@ -306,7 +306,7 @@
 import AppMenu from 'src/shared/ui/AppMenu.vue'
 import AppSelect from 'src/shared/ui/AppSelect.vue'
 import InlineToolbarSearch from 'src/shared/ui/InlineToolbarSearch.vue'
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import FileTreeNode from 'src/features/files/components/FileTreeNode.vue'
 import { useConfirm } from 'src/composables/confirm'
@@ -463,12 +463,17 @@ const rootLoadError = computed(() => apiErrorMessage(
   workspace.loadErrors[workspace.directoryPath],
   'Die Dateien konnten nicht geladen werden.'
 ))
+const projectFolders = computed(() => workspace.projectFolders?.projectId === chat.current?.projectId
+  ? workspace.projectFolders : null)
+const projectFoldersLoading = computed(() => Boolean(projectFolders.value?.loading))
+const projectFoldersError = computed(() => projectFolders.value?.error
+  ? apiErrorMessage(projectFolders.value.error, 'Die Session-Ordner konnten nicht geladen werden.') : '')
 const requiredRule = (value) => Boolean(String(value || '').trim()) || 'Name erforderlich.'
 const activeWorkspaceContext = computed(() => executionAgents.workspaceContextFor(chat.activeContext))
 const managedSessionOptions = computed(() => {
   const current = chat.current
   if (props.scope !== 'session' || !current?.id || !current.projectId) return []
-  const sessions = chat.sessionList(current.projectId)?.items || []
+  const sessions = projectFolders.value?.items || []
   const candidates = [current, ...sessions.filter((session) => session.id !== current.id)]
     .filter((session) => session.projectId === current.projectId)
   const titles = candidates.map((session) => session.title?.trim() || 'Unbenannte Session')
@@ -478,17 +483,8 @@ const managedSessionOptions = computed(() => {
     value: session.id
   }))
 })
-async function loadProjectSessions(projectId) {
-  if (!projectId) return
-  const list = chat.sessionList(projectId)
-  if (!list?.loaded) await chat.fetchSessions({ suppressErrorToast: true }, projectId)
-  while (chat.sessionList(projectId)?.nextCursor) {
-    await chat.fetchMoreSessions({ suppressErrorToast: true }, projectId)
-  }
-}
-
 function refreshFiles() {
-  if (projectOverview.value) return loadProjectSessions(chat.current?.projectId)
+  if (projectOverview.value) return workspace.loadProjectFolders(chat.current?.projectId)
   const requests = [workspace.refresh()]
   if (workspace.rootIdentity) requests.push(workspace.fetchStorageUsage(workspace.rootIdentity))
   return Promise.all(requests)
@@ -606,8 +602,10 @@ function handleTreeKeydown(event) {
 
 function navigateDirectory(path) {
   if (path === '@project') {
+    if (projectOverview.value) return
     projectOverview.value = true
     treeFocusPath.value = '@project'
+    void refreshFiles()
     return
   }
   projectOverview.value = false
@@ -726,19 +724,22 @@ function fileTargetForPath(path) {
 }
 
 watch(
-  [() => chat.current?.id || null, () => chat.current?.projectId || null],
-  ([sessionId, projectId]) => {
+  [() => chat.current?.id || null, () => chat.current?.projectId || null, () => chat.draftOwnerUserId],
+  ([sessionId]) => {
     selectedRootIdentity.value = sessionId
     projectOverview.value = false
-    void loadProjectSessions(projectId).catch(() => {})
+    if (props.scope === 'session') workspace.projectFolders = null
   },
   { immediate: true }
 )
 
+onBeforeUnmount(() => {
+  if (props.scope === 'session') workspace.projectFolders = null
+})
+
 watch(managedSessionOptions, (options) => {
   if (!options.some((option) => option.value === selectedRootIdentity.value)) {
     selectedRootIdentity.value = chat.current?.id || null
-    projectOverview.value = false
   }
 })
 
