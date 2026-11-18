@@ -4,14 +4,17 @@ import asyncio
 import re
 from collections import OrderedDict
 from time import monotonic
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel, Field, model_validator
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend import __version__
 from mato_loop_backend.build_info import build_revision
+from mato_loop_backend.settings.models import SettingsDocument
+from mato_loop_backend.settings.store import SettingsStore
 
 Revision = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
 Channel = Literal["stable", "develop"]
@@ -52,10 +55,57 @@ class ChangelogResponse(BaseModel):
     target_revision: Revision | None = None
     target_version: str | None = None
     state: State = "unknown"
-    status: Literal["ok", "unavailable", "unknown_build"] = "ok"
+    status: Literal["ok", "unavailable", "unknown_build", "no_previous_build", "no_release"] = "ok"
     notes: list[ReleaseNote] = Field(default_factory=list)
     incomplete: bool = False
     compare_url: str | None = None
+
+
+class _InstalledBuild(BaseModel):
+    revision: Revision
+    version: str
+
+
+class _InstallationHistory(SettingsDocument):
+    settings_key: ClassVar[str] = "installation_history"
+    current: _InstalledBuild | None = None
+    previous: _InstalledBuild | None = None
+
+
+def _is_clean_build(revision: str, version: str) -> bool:
+    return re.fullmatch(rf"[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}-{revision[:8]}", version) is not None
+
+
+async def record_installed_build(db: AsyncSession) -> None:
+    revision = build_revision()
+    current = (
+        _InstalledBuild(revision=revision, version=__version__)
+        if revision and _is_clean_build(revision, __version__) else None
+    )
+    history = await SettingsStore.load(db, _InstallationHistory, for_update=True)
+    if current != history.current:
+        # An unidentifiable deployment breaks the chain; do not guess its revision.
+        previous = history.current if current else None
+        await SettingsStore.save(db, _InstallationHistory(current=current, previous=previous))
+
+
+async def get_installed_changelog(db: AsyncSession) -> ChangelogResponse:
+    revision = build_revision()
+    result = ChangelogResponse(target_revision=revision, target_version=__version__)
+    if not revision or not _is_clean_build(revision, __version__):
+        result.status = "unknown_build"
+        return result
+    history = await SettingsStore.load(db, _InstallationHistory)
+    if not history.previous or not history.current or history.current.revision != revision:
+        result.status = "no_previous_build"
+        return result
+    await db.rollback()
+    comparison = await get_changelog(ChangelogQuery(
+        base_revision=history.previous.revision, target_revision=revision,
+    ))
+    comparison.base_version = history.previous.version
+    comparison.target_version = __version__
+    return comparison
 
 
 class _Reference(BaseModel):
@@ -134,12 +184,17 @@ async def _json(client: httpx.AsyncClient, path: str, **params: int) -> object:
     return response.json()
 
 
-async def _target(client: httpx.AsyncClient, channel: Channel) -> _Target:
+async def _target(client: httpx.AsyncClient, channel: Channel) -> _Target | None:
     cached = _targets.get((channel,))
     if isinstance(cached, _Target):
         return cached
     if channel == "stable":
-        release = _Release.model_validate(await _json(client, "releases/latest"))
+        try:
+            release = _Release.model_validate(await _json(client, "releases/latest"))
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return None
+            raise
         # target_commitish can be a moving branch: resolve the published tag instead.
         ref = _Reference.model_validate(
             await _json(client, f"commits/refs/tags/{quote(release.tag_name, safe='')}")
@@ -189,9 +244,7 @@ async def get_changelog(query: ChangelogQuery) -> ChangelogResponse:
     explicit = query.base_revision is not None
     base = query.base_revision if explicit else build_revision()
     version = None if explicit else __version__
-    clean = explicit or bool(base and re.fullmatch(
-        rf"[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}-{base[:8]}", version or "",
-    ))
+    clean = explicit or bool(base and _is_clean_build(base, version or ""))
     result = ChangelogResponse(base_revision=base, base_version=version)
     try:
         async with asyncio.timeout(30), httpx.AsyncClient(
@@ -200,8 +253,11 @@ async def get_changelog(query: ChangelogQuery) -> ChangelogResponse:
         ) as client:
             target = (
                 _Target(revision=query.target_revision) if explicit
-                else await _target(client, query.channel or "stable")
+                else await _target(client, query.channel or "develop")
             )
+            if target is None:
+                result.status = "no_release"
+                return result
             result.target_revision = target.revision
             result.target_version = target.version
             if not clean or base is None:

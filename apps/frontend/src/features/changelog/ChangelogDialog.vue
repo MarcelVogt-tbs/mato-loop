@@ -4,14 +4,22 @@
       <q-card-section class="row items-start no-wrap q-gutter-md">
         <div class="col">
           <div id="changelog-title" class="text-h6">Changelog</div>
-          <div class="text-body2 app-muted">{{ changelog.comparison ? 'Neuerungen seit deinem zuletzt geladenen Stand.' : 'Neuerungen gegenüber deiner installierten Instanz.' }}</div>
+          <div class="text-body2 app-muted">{{ changelog.comparison ? 'Neuerungen der neu geladenen Weboberfläche.' : 'Neuerungen für deine MatoLoop-Instanz.' }}</div>
         </div>
         <q-btn flat round dense icon="close" aria-label="Changelog schließen" @click="changelog.open = false" />
       </q-card-section>
       <q-separator />
+      <template v-if="!changelog.comparison">
+        <q-tabs :model-value="changelog.tab" dense no-caps align="justify" active-color="primary"
+          mobile-arrows aria-label="Changelog-Ansicht" @update:model-value="changelog.selectTab($event)">
+          <q-tab name="installed" label="Seit dem letzten Update" />
+          <q-tab name="available" label="Noch nicht installiert" />
+        </q-tabs>
+        <q-separator />
+      </template>
       <q-card-section class="col scroll">
         <q-select
-          v-if="!changelog.comparison" v-model="changelog.channel" outlined dense emit-value map-options
+          v-if="available" v-model="changelog.channel" outlined dense emit-value map-options
           label="Vergleichsziel" :options="channels" class="q-mb-md" @update:model-value="changelog.fetchChanges()"
         />
         <div v-if="changelog.loading" class="row items-center q-gutter-sm" role="status">
@@ -19,9 +27,9 @@
         </div>
         <template v-else-if="result">
           <dl class="q-ma-none text-body2">
-            <dt class="app-muted">{{ changelog.comparison ? 'Bisher geladen' : 'Installierte Instanz' }}</dt>
+            <dt class="app-muted">{{ changelog.comparison ? 'Bisher geladen' : available ? 'Installierte Version' : 'Vorher installierte Version' }}</dt>
             <dd class="q-ml-none q-mb-sm">{{ versionLabel(result.base_version, result.base_revision) }}</dd>
-            <dt class="app-muted">{{ changelog.comparison ? 'Jetzt geladen' : 'Neuester verfügbarer Stand' }}</dt>
+            <dt class="app-muted">{{ changelog.comparison ? 'Jetzt geladen' : available ? 'Neuester verfügbarer Stand' : 'Jetzt installierte Version' }}</dt>
             <dd class="q-ml-none q-mb-md">{{ versionLabel(result.target_version, result.target_revision) }}</dd>
           </dl>
           <p role="status">{{ statusText }}</p>
@@ -57,7 +65,8 @@ import { useChangelogStore } from './store'
 
 const changelog = useChangelogStore()
 const result = computed(() => changelog.result)
-const channels = [{ label: 'Neueste Veröffentlichung', value: 'stable' }, { label: 'Entwicklungsstand (develop)', value: 'develop' }]
+const available = computed(() => !changelog.comparison && changelog.tab === 'available')
+const channels = [{ label: 'Entwicklungsstand (develop)', value: 'develop' }, { label: 'Neueste Veröffentlichung', value: 'stable' }]
 const categories = { Added: 'Neu', Changed: 'Geändert', Fixed: 'Behoben', Security: 'Sicherheit' }
 const groups = computed(() => Object.entries(categories)
   .map(([category, label]) => ({ category, label, notes: result.value?.notes.filter(note => note.category === category) || [] }))
@@ -66,7 +75,10 @@ const statusText = computed(() => {
   const value = result.value
   if (value.status === 'unavailable') return 'Der Vergleich ist momentan nicht verfügbar. Prüfe die Verbindung zu GitHub oder versuche es später erneut.'
   if (value.status === 'unknown_build') return 'Der installierte Stand ist unbekannt oder enthält lokale Änderungen. Ein genauer Vergleich ist nicht möglich.'
-  if (value.state === 'identical') return 'Beide Stände sind identisch.'
+  if (value.status === 'no_previous_build') return 'MatoLoop hat noch keinen vorherigen Installationsstand aufgezeichnet. Nach dem nächsten Update findest du hier die Neuerungen.'
+  if (value.status === 'no_release') return 'Es gibt noch keine offizielle Veröffentlichung. Wähle „Entwicklungsstand (develop)“, um die verfügbaren Änderungen zu sehen.'
+  if (value.state === 'identical') return available.value ? 'Du bist auf dem neuesten Stand für dieses Vergleichsziel.' : 'Beide Stände sind identisch.'
+  if (value.state === 'ahead' && !available.value && !changelog.comparison) return 'Die jetzt installierte Version ist älter als die vorherige. Dadurch sind keine Neuerungen hinzugekommen.'
   if (value.state === 'ahead') return 'Dein Ausgangsstand liegt vor dem Vergleichsziel. Es gibt keine neueren Änderungen in diesem Ziel.'
   if (value.state === 'diverged') return 'Die Stände sind auseinanderentwickelt. Angezeigt werden nur Änderungen auf der Zielseite, kein vollständiger Update-Pfad.'
   if (value.state === 'unknown') return 'Die Stände konnten nicht eindeutig verglichen werden.'

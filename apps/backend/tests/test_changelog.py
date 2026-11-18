@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -102,10 +103,17 @@ async def test_stable_resolves_release_tag_not_moving_commitish(github):
         {"tag_name": "2026-11-17-bbbbbbbb", "target_commitish": "main", "draft": False, "prerelease": False},
         {"sha": TARGET}, comparison(),
     ])
-    result = await changelog.get_changelog(changelog.ChangelogQuery())
+    result = await changelog.get_changelog(changelog.ChangelogQuery(channel="stable"))
     assert result.target_revision == TARGET
     assert result.target_version == "2026-11-17-bbbbbbbb"
     assert requests[1].url.path.endswith("/commits/refs/tags/2026-11-17-bbbbbbbb")
+
+
+async def test_stable_without_release_is_not_a_connection_error(github):
+    _, responses = github
+    responses.append(httpx.Response(404))
+    result = await changelog.get_changelog(changelog.ChangelogQuery(channel="stable"))
+    assert result.status == "no_release"
 
 
 @pytest.mark.parametrize("revision,version", [
@@ -124,9 +132,47 @@ async def test_unknown_build_never_reports_current(github, monkeypatch, revision
 async def test_clean_identical_develop_build(github):
     requests, responses = github
     responses.append({"sha": BASE})
-    result = await changelog.get_changelog(changelog.ChangelogQuery(channel="develop"))
+    result = await changelog.get_changelog(changelog.ChangelogQuery())
     assert (result.state, result.status) == ("identical", "ok")
     assert requests[0].url.path.endswith("/commits/heads/develop")
+
+
+@pytest.fixture
+def stored_history(monkeypatch):
+    payload = {}
+
+    async def save(_db, document):
+        payload.update(document.model_dump(mode="json"))
+
+    monkeypatch.setattr(changelog.SettingsStore, "save", AsyncMock(side_effect=save))
+    monkeypatch.setattr(changelog.SettingsStore, "load", AsyncMock(
+        side_effect=lambda _db, model, **_kwargs: model.model_validate(payload),
+    ))
+
+
+async def test_last_installation_compares_exact_builds_across_restarts(github, stored_history, monkeypatch):
+    requests, responses = github
+    db = AsyncMock()
+    await changelog.record_installed_build(db)
+    assert (await changelog.get_installed_changelog(db)).status == "no_previous_build"
+
+    monkeypatch.setattr(changelog, "build_revision", lambda: TARGET)
+    monkeypatch.setattr(changelog, "__version__", "2026-11-18-bbbbbbbb")
+    await changelog.record_installed_build(db)
+    await changelog.record_installed_build(db)  # A restart of the same build is not another update.
+    newer = "c" * 40
+    responses.extend([
+        comparison(commits=[commit(1, "Subject\n\nRelease-Note: Fixed: Now installed")]),
+        {"sha": newer},
+        comparison(commits=[commit(2, "Subject\n\nRelease-Note: Added: Not installed")]),
+    ])
+    installed = await changelog.get_installed_changelog(db)
+    available = await changelog.get_changelog(changelog.ChangelogQuery())
+    assert (installed.base_version, installed.target_version) == ("2026-11-17-aaaaaaaa", "2026-11-18-bbbbbbbb")
+    assert ([n.text for n in installed.notes], [n.text for n in available.notes]) == (["Now installed"], ["Not installed"])
+    assert [request.url.path.rsplit("/", 1)[-1] for request in requests] == [
+        f"{BASE}...{TARGET}", "develop", f"{TARGET}...{newer}",
+    ]
 
 
 @pytest.mark.parametrize("response", [
@@ -142,13 +188,14 @@ async def test_external_errors_are_safe(github, response):
     assert "private external error" not in result.model_dump_json()
 
 
-async def test_route_authentication_and_revision_validation(github):
+async def test_route_authentication_and_revision_validation(github, stored_history):
     app = FastAPI()
     app.include_router(router, prefix="/api")
     register_error_handlers(app)
-    app.dependency_overrides[get_db_session] = lambda: SimpleNamespace()
+    app.dependency_overrides[get_db_session] = lambda: AsyncMock()
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         assert (await client.get("/api/changelog")).status_code == 401
+        assert (await client.get("/api/changelog/installed")).status_code == 401
         app.dependency_overrides[require_user] = lambda: SimpleNamespace(is_admin=False)
         for params in [
             {"base_revision": BASE},
@@ -160,3 +207,27 @@ async def test_route_authentication_and_revision_validation(github):
         response = await client.get("/api/changelog", params={"base_revision": BASE, "target_revision": BASE})
         assert response.json()["state"] == "identical"
         assert response.headers["Cache-Control"] == "no-store"
+        response = await client.get("/api/changelog/installed")
+        assert response.json()["status"] == "no_previous_build"
+        assert response.headers["Cache-Control"] == "no-store"
+
+
+@pytest.mark.parametrize("path", ["/api/changelog", "/api/changelog/installed"])
+async def test_changelog_releases_read_transaction_before_github(github, stored_history, monkeypatch, path):
+    db = AsyncMock()
+    await changelog.record_installed_build(db)
+    monkeypatch.setattr(changelog, "build_revision", lambda: TARGET)
+    monkeypatch.setattr(changelog, "__version__", "2026-11-18-bbbbbbbb")
+    await changelog.record_installed_build(db)
+
+    async def github_request(_client, endpoint, **_params):
+        db.rollback.assert_awaited_once()
+        return {"sha": TARGET} if endpoint == "commits/heads/develop" else comparison()
+
+    monkeypatch.setattr(changelog, "_json", github_request)
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.dependency_overrides[get_db_session] = lambda: db
+    app.dependency_overrides[require_user] = lambda: SimpleNamespace(is_admin=False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        assert (await client.get(path)).json()["status"] == "ok"

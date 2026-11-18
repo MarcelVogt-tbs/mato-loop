@@ -4,7 +4,12 @@ Diese Anleitung gilt für die Produktionsinstallation mit veröffentlichten Imag
 
 ## Update durchführen
 
-Im Benutzermenü unten links öffnest du **Changelog**. Dort vergleichst du deine installierte Instanz mit der neuesten Veröffentlichung oder dem Entwicklungsstand `develop`. Die Ansicht lädt Release Notes von GitHub und installiert kein Update. Bei unbekannten oder lokal veränderten Builds ist kein genauer Vergleich möglich.
+Öffne im Benutzermenü unten links **Changelog**:
+
+- **Seit dem letzten Update** zeigt die Release Notes zwischen der vorher installierten und der jetzt installierten Version. MatoLoop merkt sich diese Stände ab dem ersten Start mit dieser Funktion. Bis zum nächsten Update gibt es deshalb noch keinen Vergleich.
+- **Noch nicht installiert** zeigt, was seit der jetzt installierten Version hinzugekommen ist. Vergleichsziel ist standardmäßig `develop`; du kannst auch die neueste offizielle Veröffentlichung wählen, sobald es eine gibt.
+
+Die Ansicht lädt Release Notes von GitHub und installiert kein Update. Bei unbekannten oder lokal veränderten Builds ist kein genauer Vergleich möglich.
 
 1. Prüfe den [Changelog](changelog.md) und die unten aufgeführten Upgrade-Hinweise für deinen Ausgangsstand.
 2. Erstelle und prüfe eine [gemeinsame Sicherung](betrieb-und-datensicherung.md#zu-sichernde-daten) von Datenbank, Backenddateien, Schlüsseln, Agentdaten und Konfiguration. Probe die Wiederherstellung isoliert.
