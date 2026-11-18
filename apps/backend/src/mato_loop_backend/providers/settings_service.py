@@ -117,7 +117,7 @@ def available_model(
         or owner is None
         or not value.enabled
         or not owner.enabled
-        or (owner.adapter_type == "openai-codex" and owner.credential_id is None)
+        or (owner.adapter_type in {"openai-codex", "github-copilot"} and owner.credential_id is None)
         or value.availability == ModelAvailability.MISSING
         or (capability is not None and capability not in value.capabilities)
     ):
@@ -683,6 +683,8 @@ class ProviderSettingsService:
         enabled: bool | None,
     ) -> None:
         owner = provider(settings, provider_id)
+        if owner.adapter_type == "github-copilot":
+            raise ProviderSettingsError("provider.modelCapabilityUnavailable")
         if owner.adapter_type in ADAPTER_TYPES and (
             set(values.get("capabilities", {ModelCapability.CHAT})) != {ModelCapability.REALTIME_AUDIO}
             or not values.get("supports_tools", True)

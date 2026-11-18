@@ -10,6 +10,16 @@ MatoLoop zeigt einen einmaligen Gerätecode und die ChatGPT-Anmeldeseite. Bestä
 
 **Fast** und **Ultrafast** erscheinen als eigene Modelle, zum Beispiel **GPT-6.1 Sol Fast**. Fast folgt dem Codex-Katalog; für GPT-6 Astra, GPT-6.1 Sol sowie GPT-6.2 Astra und Sol wird Ultrafast auch angeboten, wenn der Katalog diesen Modus nicht aufführt. Synchronisiere und aktiviere die gewünschten Varianten; die Reasoning-Stufe wählst du weiterhin unabhängig davon. Bestehende Modelle werden nicht umgestellt. Ob die Ausführung erlaubt ist und wie viel Kontingent oder Guthaben sie verbraucht, hängt von deinem ChatGPT-Tarif und den Workspace-Freigaben ab.
 
+### GitHub Copilot (Abonnement)
+
+Nutze dein bestehendes GitHub-Copilot-Abo ohne Copilot SDK, Copilot CLI oder GitHub Models. MatoLoop führt Tool-Aufrufe weiterhin selbst aus und verwaltet die Freigaben.
+
+1. Erstelle auf GitHub einen [Fine-grained Personal Access Token](https://github.com/settings/personal-access-tokens/new). Wähle dein persönliches Konto als Ressourceninhaber und füge unter den Kontoberechtigungen **Copilot Requests** hinzu. Der Token braucht für MatoLoop keinen Zugriff auf private Repositorys.
+2. Wähle in den Provider-Einstellungen **GitHub Copilot**, füge den Token ein und speichere. Richte dein persönliches Abo möglichst als persönlichen Provider ein, damit es nicht von anderen Personen in der Instanz genutzt wird.
+3. Synchronisiere die Modelle und aktiviere das gewünschte Modell. Welche Modelle verfügbar sind und wie viel Kontingent du hast, hängt von deinem Abo und den Richtlinien deiner Organisation ab.
+
+Die direkte Copilot-Schnittstelle ist keine öffentliche, stabile Modell-API. MatoLoop unterstützt hier synchronisierte Modelle mit Tool-Aufrufen über Chat Completions oder Responses; Modelle, die nur das Anthropic-Messages-Protokoll anbieten, werden nicht angezeigt. MatoLoop sendet sichtbare Nachrichten und Tool-Ergebnisse erneut, übernimmt aber keine internen Fortsetzungsdaten von GitHub Copilot in die nächste Anfrage.
+
 ### OpenAI-kompatibel
 
 Verwende Basis-URL, optionalen API-Schlüssel und entweder Chat Completions oder Responses. Modelle werden möglichst über `/models` erkannt; bei fehlender Erkennung ist eine manuelle Modell-ID möglich.

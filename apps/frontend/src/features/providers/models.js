@@ -30,7 +30,7 @@ export function isModelPresent(model) {
 export function isProviderEffective(provider, codex = {}) {
   if (!provider?.enabled) return false
   if (provider.effectiveEnabled === false) return false
-  if (['azure-speech', 'azure-openai-realtime', 'openai-realtime'].includes(provider.adapterType) && provider.hasCredential !== true) return false
+  if (['github-copilot', 'azure-speech', 'azure-openai-realtime', 'openai-realtime'].includes(provider.adapterType) && provider.hasCredential !== true) return false
   return provider.adapterType !== 'openai-codex'
     || provider.hasCredential === true
     || codex.authenticated === true
