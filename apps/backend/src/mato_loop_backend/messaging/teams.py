@@ -29,7 +29,6 @@ from sqlalchemy.orm import aliased, selectinload
 from mato_loop_backend.agent.activity import run_activity_label
 from mato_loop_backend.agent.question_decisions import QuestionDecisionError
 from mato_loop_backend.agent.run_contracts import AgentRunError
-from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.events import run_events
 from mato_loop_backend.media.attachments import (
@@ -89,7 +88,7 @@ from mato_loop_backend.notifications import NotificationDraft, NotificationServi
 from mato_loop_backend.permissions.decisions import ApprovalDecisionError
 from mato_loop_backend.providers.base import ProviderError
 from mato_loop_backend.public_url import normalize_public_base_url
-from mato_loop_backend.settings import GeneralSettings, InstanceLimits, SettingsStore
+from mato_loop_backend.settings import InstanceLimits, SettingsStore
 from mato_loop_backend.settings.models import TeamsChannelSettings
 
 logger = logging.getLogger(__name__)
@@ -760,12 +759,11 @@ async def claim_outbox() -> UUID | None:
         return item.id
 
 
-async def rejected_delivery(db: AsyncSession, event: Event, *, needs_pairing: bool) -> Delivery:
+def rejected_delivery(event: Event, *, needs_pairing: bool, pairing_origin: str | None) -> Delivery:
     card = None
     text = "Die Nachricht wurde nicht angenommen. Prüfe die Teams-Kopplung in MatoLoop; abgelaufene Nachrichten werden nicht nachträglich ausgeführt."
     if needs_pairing:
-        general = await SettingsStore.load(db, GeneralSettings)
-        origin = normalize_public_base_url(general.public_base_url or get_runtime_config().public_base_url)
+        origin = normalize_public_base_url(pairing_origin)
         card = pairing_card(origin if origin and origin.startswith("https://") else None)
         text = "Dein Teams-Konto ist noch nicht mit MatoLoop verbunden. Deine Nachricht wurde nicht ausgeführt."
     return Delivery(
@@ -809,7 +807,7 @@ class TeamsScheduler:
                 settings = await cls.settings()
                 if settings:
                     async with AsyncSessionFactory() as db, relay_client(db, settings) as client:
-                        await client.status(settings)
+                        relay_status = await client.status(settings)
                         await db.execute(
                             update(MessagingEndpoint)
                             .where(
@@ -847,7 +845,10 @@ class TeamsScheduler:
                             )
                             if not admitted:
                                 await client.deliver(
-                                    await rejected_delivery(db, event, needs_pairing=needs_pairing)
+                                    rejected_delivery(
+                                        event, needs_pairing=needs_pairing,
+                                        pairing_origin=relay_status.pairing_origin,
+                                    )
                                 )
                 else:
                     await asyncio.sleep(5)

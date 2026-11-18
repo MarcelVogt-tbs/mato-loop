@@ -4,14 +4,17 @@ import asyncio
 import base64
 import hashlib
 import logging
+import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
+from random import uniform
 from time import monotonic
 from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 import httpx
-from httpx2 import HTTPStatusError
+from httpx2 import HTTPStatusError, RequestError
 from matoloop_teams_protocol import MAX_FILE_BYTES, Blob, Delivery, Event, Identity, StreamPreview
 from matoloop_teams_protocol.onboarding import pairing_card
 from microsoft_teams.api import (
@@ -29,11 +32,13 @@ from microsoft_teams.apps import ActivityContext, App
 
 from .config import RelayConfig
 from .spool import Record, Spool, SpoolError
+from .welcome_queue import WELCOME_TTL, WelcomeJob, WelcomeQueue
 
 logger = logging.getLogger(__name__)
 FILE_HOSTS = ("sharepoint.com", "1drv.com", "onedrive.com")
 IMAGE_HOSTS = ("asm.skype.com", "teams.microsoft.com")
 SERVICE_HOSTS = ("smba.trafficmanager.net", "smba.infra.teams.microsoft.com")
+WELCOME_MAX_ATTEMPTS = 3
 
 
 @dataclass
@@ -69,6 +74,17 @@ def identity_key(identity: Identity) -> UUID:
     )
 
 
+def welcome_retry_delay(retry_after: str, attempts: int) -> float:
+    try:
+        delay = int(retry_after)
+    except ValueError:
+        try:
+            delay = (parsedate_to_datetime(retry_after) - datetime.now(UTC)).total_seconds()
+        except (ValueError, TypeError, OverflowError):
+            delay = 0
+    return min(WELCOME_TTL, max(2**attempts, delay)) + uniform(0, 1)
+
+
 async def download(url: str, *, token: str | None = None) -> bytes:
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     async with httpx.AsyncClient(follow_redirects=False, timeout=30) as client:
@@ -85,8 +101,11 @@ async def download(url: str, *, token: str | None = None) -> bytes:
 
 
 class TeamsTransport:
-    def __init__(self, bot: App, spool: Spool, config: RelayConfig) -> None:
+    def __init__(
+        self, bot: App, spool: Spool, config: RelayConfig, welcomes: WelcomeQueue | None = None,
+    ) -> None:
         self.bot, self.spool, self.config = bot, spool, config
+        self.welcomes = welcomes
         self.tasks: set[asyncio.Task] = set()
         self.send_lock = asyncio.Lock()
         self.streams: dict[UUID, ReplyStream] = {}
@@ -136,29 +155,59 @@ class TeamsTransport:
             or conversation.get("conversationType") != "personal"
             or tenant != str(self.config.tenant_id)
             or not conversation.get("id")
+            or len(conversation["id"]) > 1024
             or not activity.id
+            or len(activity.service_url or "") > 2048
         ):
             return
         service_url = trusted_url(activity.service_url or "", SERVICE_HOSTS)
         welcome_id = uuid5(
             NAMESPACE_URL, f"welcome:{self.config.app_id}:{tenant}:{conversation['id']}:{activity.id}",
         )
-        self.spool.cleanup()
-        if welcome_id in self.spool.records:
+        # Older relays may have already attempted this welcome.
+        if self.spool.records.get(welcome_id) is not None:
             return
-        # Record the attempt before sending so Microsoft retries cannot duplicate a welcome.
-        self.spool.save(Record(
-            id=welcome_id, kind="welcome", status="attempted",
-            expires_at=datetime.now(UTC) + timedelta(hours=24),
-        ))
-        origin = str(self.config.matoloop_url).rstrip("/") if self.config.matoloop_url else None
+        if self.welcomes is not None and not self.welcomes.enqueue(
+            welcome_id, conversation["id"], service_url,
+        ):
+            logger.warning("Teams welcome queue is full; install event was not accepted")
+            raise SpoolError("relay.welcomeCapacity", 503)
+
+    async def send_welcome(self, queue: WelcomeQueue, job: WelcomeJob) -> None:
         message = MessageActivityInput(text="Willkommen!").add_attachments(
             Attachment.model_validate({
                 "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": pairing_card(origin),
+                "content": pairing_card(self.config.pairing_origin, welcome=True),
             })
         )
-        await self.bot.send(conversation["id"], message, service_url=service_url)
+        try:
+            async with asyncio.timeout(15):
+                await self.bot.send(job.conversation_id, message, service_url=job.service_url)
+        except HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status == 429 and job.attempts < WELCOME_MAX_ATTEMPTS and queue.retry(
+                job, welcome_retry_delay(exc.response.headers.get("Retry-After", ""), job.attempts),
+            ):
+                return
+            queue.finish(job, "failed" if 400 <= status < 500 and status != 408 else "unknown")
+            logger.warning("Teams welcome send ended with HTTP %s", status)
+        except (RequestError, RuntimeError, TimeoutError) as exc:
+            queue.finish(job, "unknown")
+            logger.warning("Teams welcome delivery could not be confirmed (%s)", type(exc).__name__)
+        else:
+            queue.finish(job, "sent")
+
+    async def run_welcomes(self, queue: WelcomeQueue) -> None:
+        while True:
+            try:
+                job = queue.claim()
+                if job:
+                    await self.send_welcome(queue, job)
+            except sqlite3.Error:
+                logger.error("Teams welcome queue database operation failed", exc_info=False)
+                await asyncio.sleep(5)
+                continue
+            await asyncio.sleep(0.1 if job else 1)
 
     async def on_message(self, ctx: ActivityContext[MessageActivity]) -> None:
         identity = self.identity(ctx.activity)

@@ -179,7 +179,7 @@ async def test_configuration(
             result = await client.status(settings)
     except TeamsServiceError as exc:
         raise ApiError(502, exc.code) from None
-    return {"ok": True, "receiverOnline": result.online}
+    return {"ok": True, "receiverOnline": result.online, "pairingLinkConfigured": bool(result.pairing_origin)}
 
 
 @router.post("/configuration/app-package", response_class=Response)

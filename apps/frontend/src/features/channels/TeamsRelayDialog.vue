@@ -31,6 +31,9 @@
           </div>
           <q-banner v-if="connection" rounded class="app-surface-tonal" role="status">
             Relay erreichbar. {{ connection.receiverOnline ? 'MatoLoop-Empfänger verbunden.' : 'Noch kein MatoLoop-Empfänger verbunden. Prüfe die globale Kanal- und Teams-Freigabe.' }}
+            <div v-if="!connection.pairingLinkConfigured">
+              Kopplungsbutton fehlt. Setze MATO_TEAMS_MATOLOOP_URL auf dem Relay.
+            </div>
           </q-banner>
           <div>
             <q-btn outline no-caps icon="download" label="Teams-App-Paket exportieren"

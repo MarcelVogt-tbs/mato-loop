@@ -65,9 +65,9 @@ Herkunft einer Nachricht. Übertrage keine Geheimnisse als Chattext.
    `MATO_TEAMS_SECRET_DIRECTORY` auf die IDs und den absoluten Verzeichnispfad.
    Setze `MATO_TEAMS_MATOLOOP_URL` auf die HTTPS-Adresse, unter der deine
    Nutzer MatoLoop im Browser öffnen (ohne Pfad, nicht die Relay-Adresse).
-   Verwende dieselbe Adresse unter **Administration > Grundeinstellungen >
-   Öffentliche MatoLoop-URL (optional)**, damit auch der Kopplungshinweis
-   nach einer ungekoppelten Nachricht einen Button hat.
+   Beide Kopplungskarten verwenden diese Einstellung. Ohne sie zeigen die
+   Karten die manuelle Anleitung; **Gespeicherte Verbindung testen** weist
+   in MatoLoop auf den fehlenden Button hin.
    Starte die separate Vorlage aus dem Repository:
 
    ```bash

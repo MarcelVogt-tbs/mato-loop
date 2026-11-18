@@ -17,6 +17,10 @@ class RelayConfig(BaseSettings):
     max_records: int = Field(default=2000, ge=20, le=100_000)
     matoloop_url: HttpUrl | None = None
 
+    @property
+    def pairing_origin(self) -> str | None:
+        return str(self.matoloop_url).rstrip("/") if self.matoloop_url else None
+
     @field_validator("matoloop_url", mode="before")
     @classmethod
     def empty_matoloop_url(cls, value: str | None) -> str | None:

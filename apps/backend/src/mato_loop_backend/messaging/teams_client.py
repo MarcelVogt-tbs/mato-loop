@@ -102,7 +102,9 @@ class TeamsRelayClient:
 
     async def status(self, settings: TeamsChannelSettings) -> RelayStatus:
         try:
-            result = RelayStatus.model_validate_json(await self.request("GET", "status"))
+            result = RelayStatus.model_validate_json(
+                await self.request("GET", "status", params={"include_pairing_origin": "true"})
+            )
         except ValidationError:
             raise TeamsServiceError("channel.invalidResponse") from None
         if result.app_id != settings.app_id or result.tenant_id != settings.tenant_id:

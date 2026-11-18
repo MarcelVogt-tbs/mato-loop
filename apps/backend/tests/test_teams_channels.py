@@ -40,7 +40,7 @@ from mato_loop_backend.models import (
     MessagingOutbox,
     UserAccount,
 )
-from mato_loop_backend.settings.models import AgentIdentitySettings, GeneralSettings, TeamsChannelSettings
+from mato_loop_backend.settings.models import AgentIdentitySettings, TeamsChannelSettings
 from mato_loop_backend.tools.arguments import QuestionItem, QuestionOption
 
 
@@ -150,13 +150,13 @@ async def test_unpaired_message_gets_setup_card_without_admitting_chat(monkeypat
     db.get.return_value = db.scalar.return_value = None
     monkeypatch.setattr(teams, "AsyncSessionFactory", lambda: nullcontext(db))
     monkeypatch.setattr(teams, "channel_provider_allowed", AsyncMock(return_value=True))
-    monkeypatch.setattr(teams.SettingsStore, "load", AsyncMock(side_effect=[
-        settings, GeneralSettings(publicBaseUrl="https://chat.example.org"),
-    ]))
+    monkeypatch.setattr(teams.SettingsStore, "load", AsyncMock(return_value=settings))
     with pytest.raises(TeamsServiceError, match="channel.pairingRequired"):
         await teams.ingest_event(event, generation, settings)
     db.commit.assert_not_awaited()
-    rejection = await teams.rejected_delivery(db, event, needs_pairing=True)
+    rejection = teams.rejected_delivery(
+        event, needs_pairing=True, pairing_origin="https://chat.example.org",
+    )
     assert rejection.card["actions"][0]["url"] == "https://chat.example.org/settings/channels?pair=teams"
 
 

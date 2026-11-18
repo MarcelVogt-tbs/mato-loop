@@ -14,6 +14,7 @@ from matoloop_teams_relay.app import create_app
 from matoloop_teams_relay.config import RelayConfig
 from matoloop_teams_relay.spool import Record, Spool, SpoolError
 from matoloop_teams_relay.transport import TeamsTransport, identity_key, trusted_url
+from matoloop_teams_relay.welcome_queue import WelcomeQueue
 
 
 @pytest.fixture
@@ -92,7 +93,8 @@ async def test_install_welcome_is_personal_and_deduplicated(spool, tmp_path, sco
     )
     bot = MagicMock(spec=App)
     bot.send = AsyncMock()
-    TeamsTransport(bot, spool, config)
+    queue = WelcomeQueue(tmp_path / "welcome.sqlite3")
+    transport = TeamsTransport(bot, spool, config, queue)
     activity = InstalledActivity.model_validate({
         "type": "installationUpdate", "id": "install", "action": "add", "channelId": "msteams",
         "conversation": {"id": "personal-chat", "conversationType": scope},
@@ -103,15 +105,59 @@ async def test_install_welcome_is_personal_and_deduplicated(spool, tmp_path, sco
     handler = bot.on_install_add.call_args.args[0]
     await handler(SimpleNamespace(activity=activity))
     await handler(SimpleNamespace(activity=activity))
-    if send:
-        bot.send.assert_awaited_once()
-        conversation, message = bot.send.await_args.args
-        assert conversation == "personal-chat"
-        assert message.attachments[0].content["actions"][0]["url"] == (
-            "https://chat.example.org/settings/channels?pair=teams"
-        )
-    else:
-        bot.send.assert_not_awaited()
+    try:
+        job = queue.claim()
+        if send:
+            await transport.send_welcome(queue, job)
+            bot.send.assert_awaited_once()
+            conversation, message = bot.send.await_args.args
+            assert conversation == "personal-chat"
+            assert message.attachments[0].content["actions"][0]["url"] == (
+                "https://chat.example.org/settings/channels?pair=teams"
+            )
+        else:
+            assert job is None
+        assert queue.claim() is None
+        assert not spool.records
+    finally:
+        queue.close()
+
+
+async def test_welcome_retries_throttling_but_not_ambiguous_delivery(spool, tmp_path, monkeypatch):
+    from matoloop_teams_relay import welcome_queue
+
+    now = 0.0
+    monkeypatch.setattr(welcome_queue.time, "time", lambda: now)
+    queue = WelcomeQueue(tmp_path / "welcome.sqlite3", capacity=1)
+    config = RelayConfig(
+        app_id=uuid4(), tenant_id=uuid4(),
+        client_secret_file=tmp_path / "secret", relay_token_file=tmp_path / "token",
+    )
+    bot = MagicMock(spec=App)
+    bot.send = AsyncMock(side_effect=[
+        HTTPStatusError(
+            "throttled", request=Request("POST", "https://example.org"),
+            response=Response(429, headers={"Retry-After": "30"}),
+        ),
+        TimeoutError(),
+    ])
+    transport = TeamsTransport(bot, spool, config, queue)
+    job_id = uuid4()
+    assert queue.enqueue(job_id, "chat", "https://smba.trafficmanager.net/teams/")
+    assert not queue.enqueue(uuid4(), "other", "https://smba.trafficmanager.net/teams/")
+    assert not spool.records
+    try:
+        await transport.send_welcome(queue, queue.claim())
+        now = 29
+        assert queue.claim() is None
+        queue.close()
+        queue = WelcomeQueue(tmp_path / "welcome.sqlite3", capacity=1)
+        now = 31
+        await transport.send_welcome(queue, queue.claim())
+        assert queue.enqueue(job_id, "chat", "https://smba.trafficmanager.net/teams/")
+        assert queue.claim() is None
+    finally:
+        queue.close()
 
 
 def test_oversized_action_cannot_block_the_poll_batch(spool):
@@ -157,6 +203,7 @@ def test_relay_requires_authentication_and_microsoft_callback_auth(tmp_path):
             client_secret_file=secret,
             relay_token_file=token,
             spool_dir=tmp_path / "spool",
+            matoloop_url="https://chat.example.org",
         )
     )
     with TestClient(app) as client:
@@ -167,6 +214,11 @@ def test_relay_requires_authentication_and_microsoft_callback_auth(tmp_path):
                 "/relay/v1/status", headers={"Authorization": "Bearer " + "a" * 43}
             ).status_code,
         ] == [401, 401, 200]
+        headers = {"Authorization": "Bearer " + "a" * 43}
+        assert "pairing_origin" not in client.get("/relay/v1/status", headers=headers).json()
+        assert client.get(
+            "/relay/v1/status?include_pairing_origin=true", headers=headers,
+        ).json()["pairing_origin"] == "https://chat.example.org"
 
 
 async def test_unknown_microsoft_send_is_not_repeated(spool, tmp_path):

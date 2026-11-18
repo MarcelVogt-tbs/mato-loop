@@ -86,3 +86,4 @@ class RelayStatus(WireModel):
     app_id: UUID
     tenant_id: UUID
     online: bool
+    pairing_origin: str | None = Field(default=None, max_length=2083)

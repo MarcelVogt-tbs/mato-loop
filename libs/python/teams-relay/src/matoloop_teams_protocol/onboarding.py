@@ -8,15 +8,18 @@ PAIRING_INSTRUCTIONS = (
 )
 
 
-def pairing_card(matoloop_origin: str | None) -> dict[str, JsonValue]:
+def pairing_card(matoloop_origin: str | None, *, welcome: bool = False) -> dict[str, JsonValue]:
+    instructions = PAIRING_INSTRUCTIONS
+    if welcome:
+        instructions += " Wenn dein Teams-Konto bereits verbunden ist, musst du nichts tun."
     card: dict[str, JsonValue] = {
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "type": "AdaptiveCard",
         "version": "1.2",
-        "fallbackText": PAIRING_INSTRUCTIONS,
+        "fallbackText": instructions,
         "body": [
             {"type": "TextBlock", "text": "Teams-Konto mit MatoLoop verbinden", "weight": "Bolder", "wrap": True},
-            {"type": "TextBlock", "text": PAIRING_INSTRUCTIONS, "wrap": True},
+            {"type": "TextBlock", "text": instructions, "wrap": True},
         ],
     }
     if matoloop_origin:

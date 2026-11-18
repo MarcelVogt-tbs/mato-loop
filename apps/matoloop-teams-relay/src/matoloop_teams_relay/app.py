@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
+import sqlite3
 import time
 from collections import deque
 from contextlib import asynccontextmanager
@@ -26,6 +27,7 @@ from microsoft_teams.apps import App, FastAPIAdapter
 from .config import RelayConfig
 from .spool import Spool, SpoolError
 from .transport import TeamsTransport
+from .welcome_queue import WelcomeQueue
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +50,14 @@ def create_app(config: RelayConfig | None = None) -> FastAPI:
             dangerously_allow_unauthenticated_requests=False,
             fetch_user_token=False,
         )
-        transport = TeamsTransport(bot, spool, config)
+        try:
+            directory = spool.root / "onboarding"
+            directory.mkdir(exist_ok=True, mode=0o700)
+            welcomes = WelcomeQueue(directory / "welcomes.sqlite3")
+        except (OSError, sqlite3.Error):
+            spool.close()
+            raise
+        transport = TeamsTransport(bot, spool, config, welcomes)
         app.state.transport = transport
 
         async def cleanup():
@@ -63,13 +72,21 @@ def create_app(config: RelayConfig | None = None) -> FastAPI:
                     )
 
         cleanup_task = asyncio.create_task(cleanup())
+        welcome_task = None
         try:
             await bot.initialize()
+            welcome_task = asyncio.create_task(transport.run_welcomes(welcomes))
+            if not config.pairing_origin:
+                logger.warning("MATO_TEAMS_MATOLOOP_URL is unset; Teams pairing cards will have no button")
             yield
         finally:
             cleanup_task.cancel()
+            if welcome_task is not None:
+                welcome_task.cancel()
+                await asyncio.gather(welcome_task, return_exceptions=True)
             await asyncio.gather(cleanup_task, return_exceptions=True)
             await transport.close()
+            welcomes.close()
             spool.close()
 
     app = FastAPI(
@@ -179,10 +196,11 @@ def create_app(config: RelayConfig | None = None) -> FastAPI:
     async def health():
         return {"status": "ok"}
 
-    @app.get("/relay/v1/status", dependencies=protected)
-    async def status():
+    @app.get("/relay/v1/status", dependencies=protected, response_model_exclude_none=True)
+    async def status(include_pairing_origin: bool = False) -> RelayStatus:
         return RelayStatus(
-            app_id=config.app_id, tenant_id=config.tenant_id, online=app.state.spool.online
+            app_id=config.app_id, tenant_id=config.tenant_id, online=app.state.spool.online,
+            pairing_origin=config.pairing_origin if include_pairing_origin else None,
         )
 
     @app.get("/relay/v1/events", dependencies=protected)
