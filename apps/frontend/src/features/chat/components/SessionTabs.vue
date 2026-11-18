@@ -1,12 +1,14 @@
 <template>
   <div v-if="enabled && tabs.items.length" class="session-tabs row no-wrap items-center col-auto" :class="{ 'session-tabs--top': position === 'top' }" aria-label="Offene Sessions">
     <q-tabs :model-value="activeKey" content-class="app-tab-scroll" align="left" :breakpoint="0" no-caps dense outside-arrows mobile-arrows :switch-indicator="position === 'bottom'" indicator-color="primary" class="col" aria-label="Session-Tabs" @update:model-value="select">
-      <q-tab v-for="(tab, index) in displayTabs" :key="tab.key" :name="tab.key" class="session-tabs__tab" :class="{ 'session-tabs__preview': tab.preview, 'session-tabs__dragging': draggedId === tab.key, 'session-tabs__drop-before': dropTarget?.id === tab.key && !dropTarget.after, 'session-tabs__drop-after': dropTarget?.id === tab.key && dropTarget.after }" :aria-label="`${tab.label}${tab.preview ? ', Vorschau' : ''}`" draggable="true" @dragstart="startDrag($event, tab.key)" @dragover="updateDropTarget($event, tab.key)" @drop="drop" @dragend="endDrag" @keydown.alt.left.prevent.stop="tabs.move(tab.key, -1)" @keydown.alt.right.prevent.stop="tabs.move(tab.key, 1)" @mouseenter="prepareTitleScroll" @focusin="prepareTitleScroll" @dblclick="tabs.keep(tab.key)">
+      <q-tab v-for="(tab, index) in displayTabs" :key="tab.key" :name="tab.key" class="session-tabs__tab" :class="{ 'session-tabs__preview': tab.preview, 'session-tabs__dragging': draggedId === tab.key, 'session-tabs__drop-before': dropTarget?.id === tab.key && !dropTarget.after, 'session-tabs__drop-after': dropTarget?.id === tab.key && dropTarget.after }" :aria-label="`${tab.label}${tab.preview ? ', Vorschau' : ''}`" draggable="true" @dragstart="startDrag($event, tab.key)" @dragover="updateDropTarget($event, tab.key)" @drop="drop" @dragend="endDrag" @keydown.alt.left.prevent.stop="tabs.move(tab.key, -1)" @keydown.alt.right.prevent.stop="tabs.move(tab.key, 1)" @dblclick="tabs.keep(tab.key)">
         <div class="session-tabs__content row no-wrap items-center">
-          <SessionStatusIndicator v-if="tab.status" :status="tab.status" class="session-tabs__status" />
-          <span class="session-tabs__scroll"><span class="session-tabs__title">{{ tab.title }}</span></span>
+          <span class="session-tabs__status">
+            <SessionStatusIndicator v-if="tab.status" :status="tab.status" />
+          </span>
+          <span v-tab-overflow class="session-tabs__scroll"><span class="session-tabs__title">{{ tab.title }}</span></span>
           <span v-if="tab.projectName" class="session-tabs__separator"> · </span>
-          <span v-if="tab.projectName" class="session-tabs__project">{{ tab.projectName }}</span>
+          <span v-if="tab.projectName" v-tab-overflow class="session-tabs__project"><span>{{ tab.projectName }}</span></span>
           <q-btn flat round dense size="xs" icon="close" class="session-tabs__close q-ml-xs" :aria-label="`Tab ${tab.label} schließen`" @click.stop="close(tab)" @keydown.stop />
         </div>
         <q-menu touch-position context-menu>
@@ -56,12 +58,37 @@ const displayTabs = computed(() => props.tabs.items.map(tab => {
   ) || ((summary || current)?.hasUnreadMessages ? { kind: 'unread', label: 'Ungelesene Antwort' } : null)
   return { ...tab, title, projectName, label: projectName ? `${title} · ${projectName}` : title, status }
 }))
-function prepareTitleScroll(event) {
-  for (const region of event.currentTarget.querySelectorAll('.session-tabs__scroll')) {
-    const text = region.querySelector('.session-tabs__title')
-    const distance = Math.max(0, text.scrollWidth - region.clientWidth)
+const textRegions = new WeakMap()
+let overflowObserver
+function measureOverflow(region) {
+  const distance = Math.max(0, region.firstElementChild.offsetWidth - region.clientWidth)
+  region.classList.toggle('session-tabs__overflow', distance > 0)
+  if (region.classList.contains('session-tabs__scroll')) {
     region.style.setProperty('--session-title-scroll-distance', `${-distance}px`)
     region.style.setProperty('--session-title-scroll-duration', `${distance / 35}s`)
+  }
+}
+const vTabOverflow = {
+  mounted(region) {
+    if (typeof ResizeObserver === 'undefined') return
+    overflowObserver ||= new ResizeObserver(entries => {
+      const regions = new Set(entries.map(({ target }) => textRegions.get(target)))
+      for (const region of regions) if (region) measureOverflow(region)
+    })
+    const text = region.firstElementChild
+    textRegions.set(region, region)
+    textRegions.set(text, region)
+    overflowObserver.observe(region)
+    overflowObserver.observe(text)
+    measureOverflow(region)
+  },
+  beforeUnmount(region) {
+    if (!overflowObserver) return
+    const text = region.firstElementChild
+    overflowObserver.unobserve(region)
+    overflowObserver.unobserve(text)
+    textRegions.delete(region)
+    textRegions.delete(text)
   }
 }
 async function select(key) {
@@ -94,10 +121,10 @@ async function close(tab) {
 }
 
 .session-tabs .session-tabs__tab {
-  width: 220px;
-  min-width: 220px;
-  max-width: 220px;
-  flex: 0 0 220px;
+  width: max-content;
+  min-width: 0;
+  max-width: 280px;
+  flex: none;
   min-height: 32px;
   padding: 0 6px 0 10px;
   border-right: 1px solid var(--app-surface-border);
@@ -115,15 +142,16 @@ async function close(tab) {
   color: var(--app-text);
 }
 
-.session-tabs__tab.q-tab--active .session-tabs__title { font-weight: 600; }
 .session-tabs__content { min-width: 0; width: 100%; text-align: left; font-size: 13px; }
-.session-tabs__status { margin-right: 8px; }
+.session-tabs__status { flex: 0 0 16px; margin-right: 6px; }
 .session-tabs :deep(.q-tab__content) { min-width: 0; width: 100%; padding: 0; }
 .session-tabs :deep(.q-tab__indicator) { height: 2px; }
 .session-tabs :deep(.q-tabs__arrow) { width: 24px; }
-.session-tabs__scroll { min-width: 0; flex: 1 1 0; overflow: hidden; white-space: nowrap; }
-.session-tabs__title { display: block; overflow: hidden; text-overflow: ellipsis; }
-.session-tabs__project { min-width: 0; flex: 0 0 auto; max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-tabs__scroll, .session-tabs__project { overflow: hidden; white-space: nowrap; }
+.session-tabs__scroll { min-width: 0; flex: 0 1 auto; }
+.session-tabs__project { min-width: 7ch; flex: 1 0 0; max-width: 72px; color: var(--app-muted); }
+.session-tabs__scroll > span, .session-tabs__project > span { display: block; width: max-content; }
+.session-tabs__overflow { mask-image: linear-gradient(to right, #000 calc(100% - 10px), transparent); }
 .session-tabs__separator { flex: 0 0 auto; white-space: pre; }
 .session-tabs__preview .session-tabs__title { font-style: italic; }
 
@@ -131,10 +159,15 @@ async function close(tab) {
 .session-tabs__close:hover { color: var(--app-text); }
 
 @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
-  .session-tabs__tab:is(:hover, :focus-visible, :has(:focus-visible)) .session-tabs__title {
-    width: max-content;
-    overflow: visible;
+  .session-tabs__tab:is(:hover, :focus-visible, :has(:focus-visible)) .session-tabs__scroll.session-tabs__overflow {
+    animation: session-tab-title-reveal 0s calc(700ms + var(--session-title-scroll-duration)) forwards;
+  }
+  .session-tabs__tab:is(:hover, :focus-visible, :has(:focus-visible)) .session-tabs__overflow .session-tabs__title {
     animation: session-title-scroll var(--session-title-scroll-duration, 0s) linear 700ms forwards;
   }
+}
+
+@keyframes session-tab-title-reveal {
+  to { mask-image: none; }
 }
 </style>
