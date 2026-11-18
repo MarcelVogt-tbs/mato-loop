@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.settings import ChannelSettings, SettingsStore
 
-CHANNEL_PROVIDERS = {"telegram": "Telegram"}
+CHANNEL_PROVIDERS = {"telegram": "Telegram", "teams": "Microsoft Teams"}
 
 
 async def lock_channel_provider(

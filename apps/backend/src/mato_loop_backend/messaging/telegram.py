@@ -5,7 +5,6 @@ import hashlib
 import hmac
 import logging
 import re
-import secrets
 from contextlib import aclosing
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -13,7 +12,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import String, cast, exists, or_, select, update
+from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,12 +24,8 @@ from telegram.error import InvalidToken, NetworkError, RetryAfter, TelegramError
 from mato_loop_backend.agent.activity import reasoning_activity_label, run_activity_label
 from mato_loop_backend.agent.question_decisions import QuestionDecisionError
 from mato_loop_backend.agent.run_contracts import AgentRunError
-from mato_loop_backend.agent.runtime import AgentRuntime
-from mato_loop_backend.assistant import ensure_personal_chat
-from mato_loop_backend.automations import AutomationError
 from mato_loop_backend.db.session import AsyncSessionFactory
 from mato_loop_backend.events import run_events
-from mato_loop_backend.files.storage import SessionStorage, SessionStorageError
 from mato_loop_backend.media.attachments import (
     AttachmentError,
     AttachmentInput,
@@ -39,7 +34,6 @@ from mato_loop_backend.media.attachments import (
     processing_limits,
 )
 from mato_loop_backend.media.processing import AttachmentProcessingError
-from mato_loop_backend.message_content import canonical_assistant_content
 from mato_loop_backend.messaging.approvals import (
     ApprovalDecision,
     MessagingApprovalError,
@@ -49,7 +43,10 @@ from mato_loop_backend.messaging.approvals import (
     parse_approval_payload,
     resolve_approval_action,
 )
+from mato_loop_backend.messaging.endpoints import pairing_hash
 from mato_loop_backend.messaging.formatting import RenderedChannelText, render_channel_text
+from mato_loop_backend.messaging.outbox import enqueue_text as _enqueue_text
+from mato_loop_backend.messaging.outbox import reconcile_runs
 from mato_loop_backend.messaging.policy import channel_provider_allowed
 from mato_loop_backend.messaging.questions import (
     MessagingQuestionEnvelope,
@@ -61,6 +58,8 @@ from mato_loop_backend.messaging.questions import (
     parse_question_envelope,
     resolve_question_interaction,
 )
+from mato_loop_backend.messaging.sessions import ChannelMessageError, session_command, start_message
+from mato_loop_backend.messaging.sessions import new_session as _new_session
 from mato_loop_backend.messaging.telegram_formatting import TELEGRAM_HTML
 from mato_loop_backend.models import (
     AgentRun,
@@ -72,7 +71,6 @@ from mato_loop_backend.models import (
     MessagingInbox,
     MessagingOutbox,
     QuestionRequest,
-    TitleGenerationStatus,
     UserAccount,
 )
 from mato_loop_backend.permissions.decisions import ApprovalDecisionError
@@ -83,11 +81,9 @@ from mato_loop_backend.settings import (
     InstanceLimits,
     SettingsStore,
 )
-from mato_loop_backend.settings.effective import default_agent_profile_id
 
 logger = logging.getLogger(__name__)
 TELEGRAM_CREDENTIAL_KIND = "telegram.bot_token"
-PAIRING_TTL = timedelta(minutes=15)
 POLL_LEASE = timedelta(seconds=40)
 POLL_TIMEOUT_SECONDS = 20
 POLL_REQUEST_TIMEOUT_SECONDS = 30
@@ -148,14 +144,6 @@ class TelegramServiceError(RuntimeError):
         self.code = code
 
 
-def pairing_code() -> str:
-    return secrets.token_urlsafe(9)
-
-
-def pairing_hash(code: str) -> str:
-    return hashlib.sha256(code.encode()).hexdigest()
-
-
 async def probe_bot(token: str) -> tuple[str, str | None]:
     try:
         async with asyncio.timeout(PROBE_TIMEOUT_SECONDS):
@@ -183,41 +171,6 @@ async def endpoint_token(db: AsyncSession, endpoint: MessagingEndpoint) -> str:
     if not isinstance(token, str) or not token:
         raise TelegramServiceError("channel.authenticationFailed")
     return token
-
-
-def new_pairing(endpoint: MessagingEndpoint) -> str:
-    code = pairing_code()
-    endpoint.pairing_code_hash = pairing_hash(code)
-    endpoint.pairing_expires_at = datetime.now(UTC) + PAIRING_TTL
-    return code
-
-
-def endpoint_payload(endpoint: MessagingEndpoint, *, code: str | None = None) -> dict:
-    paired = endpoint.paired_chat_id is not None
-    return {
-        "id": str(endpoint.id),
-        "name": endpoint.name,
-        "provider": endpoint.provider,
-        "enabled": endpoint.enabled,
-        "hasCredential": endpoint.credential_id is not None,
-        "externalHandle": endpoint.external_handle,
-        "pairingState": "paired"
-        if paired
-        else "pending"
-        if endpoint.pairing_code_hash
-        and endpoint.pairing_expires_at
-        and endpoint.pairing_expires_at > datetime.now(UTC)
-        else "unpaired",
-        "connected": endpoint.last_error_code is None,
-        "pairedDisplayName": endpoint.paired_display_name,
-        "currentSessionId": str(endpoint.current_session_id)
-        if endpoint.current_session_id
-        else None,
-        "pairingExpiresAt": endpoint.pairing_expires_at.isoformat()
-        if endpoint.pairing_expires_at
-        else None,
-        **({"pairingCode": code} if code else {}),
-    }
 
 
 def _normalized_update(update: Update) -> dict | None:
@@ -286,97 +239,6 @@ def _normalized_update(update: Update) -> dict | None:
         ),
         "media": media,
     }
-
-
-def _enqueue_text(
-    db: AsyncSession,
-    endpoint: MessagingEndpoint,
-    *,
-    destination: str,
-    key: str,
-    text: str,
-    inbox_id: UUID | None = None,
-    allow_unpaired: bool = False,
-) -> None:
-    db.add(
-        MessagingOutbox(
-            endpoint_id=endpoint.id,
-            inbox_id=inbox_id,
-            destination=destination,
-            deduplication_key=key,
-            payload={"text": text, "allowUnpaired": allow_unpaired},
-        )
-    )
-
-
-async def invalidate_pending_inbox(
-    db: AsyncSession, endpoint_id: UUID, *, exclude_id: UUID | None = None
-) -> None:
-    conditions = [
-        MessagingInbox.endpoint_id == endpoint_id,
-        MessagingInbox.status.in_(("pending", "processing")),
-    ]
-    if exclude_id is not None:
-        conditions.append(MessagingInbox.id != exclude_id)
-    await db.execute(
-        update(MessagingInbox)
-        .where(*conditions)
-        .values(
-            status="failed",
-            processing_at=None,
-            next_attempt_at=None,
-            error_code="channel.pairingChanged",
-        )
-    )
-    await db.execute(
-        update(MessagingInbox)
-        .where(
-            MessagingInbox.endpoint_id == endpoint_id,
-            MessagingInbox.status == "completed",
-            MessagingInbox.id != exclude_id if exclude_id is not None else True,
-            ~exists(
-                select(MessagingOutbox.id).where(
-                    MessagingOutbox.inbox_id == MessagingInbox.id
-                )
-            ),
-        )
-        .values(status="failed", error_code="channel.pairingChanged")
-    )
-
-
-async def stop_endpoint_work(
-    db: AsyncSession, endpoint_id: UUID, *, exclude_inbox_id: UUID | None = None
-) -> None:
-    await invalidate_pending_inbox(db, endpoint_id, exclude_id=exclude_inbox_id)
-    runs = list(
-        (
-            await db.scalars(
-                select(AutomationRun).where(
-                    AutomationRun.delivery_endpoint_id == endpoint_id,
-                    AutomationRun.delivery_status == "pending",
-                )
-            )
-        ).all()
-    )
-    for run in runs:
-        run.delivery_channel_type = "app"
-        run.delivery_endpoint_id = None
-        run.delivery_destination = None
-    outbox_items = list(
-        (
-            await db.scalars(
-                select(MessagingOutbox).where(
-                    MessagingOutbox.endpoint_id == endpoint_id,
-                    MessagingOutbox.status.in_(("pending", "processing")),
-                )
-            )
-        ).all()
-    )
-    for item in outbox_items:
-        item.status = "failed"
-        item.processing_at = None
-        item.next_attempt_at = None
-        item.error_code = "channel.pairingChanged"
 
 
 async def _release_poll_lease(
@@ -617,136 +479,13 @@ async def _download_media(
     return attachments
 
 
-async def _new_session(
-    db: AsyncSession,
-    endpoint: MessagingEndpoint,
-) -> ChatSession:
-    item = ChatSession(
-        user_id=endpoint.user_id,
-        title="Neue Session",
-        title_generation_status=TitleGenerationStatus.PENDING.value,
-        model_config_id=None,
-        agent_profile_id=await default_agent_profile_id(db),
-    )
-    db.add(item)
-    await db.flush()
-    storage = SessionStorage()
-    try:
-        await asyncio.to_thread(storage.provision, item.id, user_id=item.user_id)
-        return item
-    except BaseException:
-        await db.rollback()
-        try:
-            await asyncio.to_thread(storage.remove_session, item.id)
-        except (OSError, SessionStorageError):
-            logger.exception("Unpersisted Telegram session storage could not be removed")
-        raise
-
-
 async def _command(
     db: AsyncSession, inbox: MessagingInbox, endpoint: MessagingEndpoint, text: str
 ) -> bool:
-    command, _, argument = text.strip().partition(" ")
-    command = command.split("@", 1)[0].casefold()
-    if command not in {"/new", "/sessions", "/use", "/current", "/stop", "/unlink", "/help"}:
+    result = await session_command(db, inbox, endpoint, text, create_session=_new_session)
+    if result is None:
         return False
-    response = ""
-    if command == "/help":
-        response = (
-            "/new - nächste Nachricht in einer neuen Session\n"
-            "/sessions - letzte Sessions anzeigen\n"
-            "/use <ID> - Session auswählen\n"
-            "/current - aktuelle Session anzeigen\n"
-            "/stop - laufende Antwort stoppen\n"
-            "/unlink - Telegram-Verknüpfung lösen"
-            + "\n\nCoding (zuerst eine Session mit Computer und Workspace über /use <ID> auswählen):\n"
-            + "\n".join(f"/{item.name.replace('-', '_')} - {item.description}" for item in registered_commands())
-        )
-    elif command == "/new":
-        session = await _new_session(db, endpoint)
-        endpoint.current_session_id = session.id
-        response = "Die nächste Nachricht startet eine neue Session."
-    elif command == "/sessions":
-        cutoff = datetime.now(UTC) - SESSION_MAX_AGE
-        activity = (
-            select(Message.session_id, Message.created_at)
-            .where(Message.created_at >= cutoff)
-            .distinct(Message.session_id)
-            .order_by(Message.session_id, Message.created_at.desc())
-            .subquery()
-        )
-        sessions = list(
-            (
-                await db.scalars(
-                    select(ChatSession)
-                    .join(activity, activity.c.session_id == ChatSession.id)
-                    .where(
-                        ChatSession.user_id == endpoint.user_id,
-                        ChatSession.session_type == "chat",
-                        ChatSession.parent_session_id.is_(None),
-                    )
-                    .order_by(activity.c.created_at.desc(), ChatSession.id.desc())
-                    .limit(SESSION_LIST_LIMIT)
-                )
-            ).all()
-        )
-        response = (
-            "Letzte Sessions:\n"
-            + "\n".join(f"{str(item.id)[:8]}  {item.title}" for item in sessions)
-            if sessions
-            else "Keine Session aus den letzten sieben Tagen gefunden."
-        )
-    elif command == "/use":
-        short_id = argument.strip().casefold()
-        session = None
-        if 4 <= len(short_id) <= 36 and all(c in "0123456789abcdef-" for c in short_id):
-            matches = list(
-                (
-                    await db.scalars(
-                        select(ChatSession).where(
-                            ChatSession.user_id == endpoint.user_id,
-                            ChatSession.session_type == "chat",
-                            ChatSession.parent_session_id.is_(None),
-                            cast(ChatSession.id, type_=String).startswith(short_id),
-                        )
-                    )
-                ).all()
-            )
-            session = matches[0] if len(matches) == 1 else None
-        if session is None:
-            response = "Session nicht gefunden. Nutze /sessions für gültige IDs."
-        else:
-            endpoint.current_session_id = session.id
-            response = f"Aktuelle Session: {session.title} ({str(session.id)[:8]})"
-    elif command == "/current":
-        session = await db.get(ChatSession, endpoint.current_session_id) if endpoint.current_session_id else None
-        response = (
-            f"Aktuelle Session: {session.title} ({str(session.id)[:8]})"
-            if session is not None and session.user_id == endpoint.user_id
-            else "Keine Session ausgewählt. Die nächste Nachricht öffnet deinen persönlichen Chat."
-        )
-    elif command == "/stop":
-        run_id = (
-            await db.scalar(
-                select(AgentRun.id).join(ChatSession, ChatSession.id == AgentRun.session_id).where(
-                    AgentRun.session_id == endpoint.current_session_id,
-                    ChatSession.user_id == endpoint.user_id,
-                    ChatSession.parent_session_id.is_(None),
-                    AgentRun.parent_run_id.is_(None),
-                    AgentRun.status.in_(("queued", "running", "waiting_approval", "waiting_input")),
-                )
-            )
-            if endpoint.current_session_id
-            else None
-        )
-        response = "Antwort wird gestoppt." if run_id and AgentRuntime.cancel(run_id) else "Keine laufende Antwort."
-    else:
-        await stop_endpoint_work(db, endpoint.id, exclude_inbox_id=inbox.id)
-        endpoint.paired_user_id = None
-        endpoint.paired_chat_id = None
-        endpoint.paired_display_name = None
-        endpoint.current_session_id = None
-        response = "Telegram wurde von MatoLoop getrennt."
+    response, allow_unpaired = result
     _enqueue_text(
         db,
         endpoint,
@@ -754,7 +493,7 @@ async def _command(
         key=f"command:{inbox.id}",
         text=response,
         inbox_id=inbox.id,
-        allow_unpaired=command == "/unlink",
+        allow_unpaired=allow_unpaired,
     )
     return True
 
@@ -1406,43 +1145,7 @@ async def process_inbox(inbox_id: UUID) -> UUID | None:
             attachments = await _download_media(
                 db, endpoint, list(inbox.payload.get("media") or [])
             )
-            content = text.strip()
-            if len(content) > MESSAGE_CONTENT_MAX_LENGTH:
-                raise TelegramServiceError("validation.tooLong")
-            from mato_loop_backend.sessions.service import SessionServiceError, get_owned_session
-
-            try:
-                command = parse_command(content)
-                selected_session_id = (
-                    inbox.session_id or endpoint.current_session_id
-                    if command is not None else endpoint.current_session_id
-                )
-                if command is not None and selected_session_id is None:
-                    raise TelegramServiceError("git.sessionRequired")
-                session = await get_owned_session(
-                    db, selected_session_id, endpoint.user_id
-                ) if selected_session_id else None
-                if selected_session_id is not None and (
-                    session is None or session.user_id != endpoint.user_id
-                    or session.session_type != "chat"
-                ):
-                    raise TelegramServiceError("session.notFound")
-                if selected_session_id is None:
-                    session = await ensure_personal_chat(db, endpoint.user_id)
-            except (AutomationError, SessionServiceError) as exc:
-                raise TelegramServiceError(exc.code) from exc
-            if command is not None:
-                inbox.session_id = session.id
-            run = await AgentRuntime.start(
-                db,
-                session,
-                content,
-                run_id=inbox.id,
-                attachments=attachments,
-                source_type="endpoint",
-                source_provider="telegram",
-                source_endpoint_id=endpoint.id,
-            )
+            run = await start_message(db, endpoint, inbox, text.strip(), attachments)
             allowed = await channel_provider_allowed(db, "telegram", lock=True)
             user = await db.scalar(
                 select(UserAccount)
@@ -1486,6 +1189,7 @@ async def process_inbox(inbox_id: UUID) -> UUID | None:
             AgentRunError,
             AttachmentError,
             AttachmentProcessingError,
+            ChannelMessageError,
             InvalidToken,
             NetworkError,
             OSError,
@@ -1962,70 +1666,6 @@ async def claim_inbox() -> UUID | None:
             await db.rollback()
             return None
         return inbox.id
-
-
-async def reconcile_runs() -> int:
-    async with AsyncSessionFactory() as db:
-        delivery_allowed = await channel_provider_allowed(db, "telegram", lock=True)
-        rows = list(
-            (
-                await db.execute(
-                    select(MessagingInbox, MessagingEndpoint, AgentRun)
-                    .join(MessagingEndpoint, MessagingEndpoint.id == MessagingInbox.endpoint_id)
-                    .join(UserAccount, UserAccount.id == MessagingEndpoint.user_id)
-                    .join(AgentRun, AgentRun.id == MessagingInbox.agent_run_id)
-                    .where(
-                        MessagingInbox.status == "completed",
-                        MessagingEndpoint.provider == "telegram",
-                        AgentRun.status.in_(("completed", "failed", "cancelled")),
-                        UserAccount.is_active.is_(True),
-                    )
-                    .with_for_update(of=MessagingInbox, skip_locked=True)
-                )
-            ).all()
-        )
-        count = 0
-        for inbox, endpoint, run in rows:
-            if await db.scalar(
-                select(MessagingOutbox.id).where(
-                    MessagingOutbox.endpoint_id == endpoint.id,
-                    MessagingOutbox.deduplication_key == f"run:{run.id}",
-                )
-            ):
-                continue
-            result = await db.get(Message, run.result_message_id) if run.result_message_id else None
-            text = (
-                canonical_assistant_content(result.content).strip()
-                if run.status == "completed" and result is not None
-                else "Die Antwort wurde abgebrochen."
-                if run.status == "cancelled"
-                else "Die Antwort wurde durch einen Neustart unterbrochen."
-                if run.error == "agent.backendRestarted"
-                else "Der Agent-Auftrag konnte nicht abgeschlossen werden."
-            )
-            db.add(
-                MessagingOutbox(
-                    endpoint_id=endpoint.id,
-                    inbox_id=inbox.id,
-                    source_message_id=result.id if result else None,
-                    destination=inbox.payload["chatId"],
-                    deduplication_key=f"run:{run.id}",
-                    payload={
-                        "text": text,
-                        "includeAttachments": result is not None,
-                        **(
-                            {"contentFormat": "markdown"}
-                            if run.status == "completed" and result is not None
-                            else {}
-                        ),
-                    },
-                    status="pending" if delivery_allowed else "failed",
-                    error_code=None if delivery_allowed else "channel.providerDisabled",
-                )
-            )
-            count += 1
-        await db.commit()
-        return count
 
 
 async def _send_attachment(

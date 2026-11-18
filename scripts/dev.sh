@@ -210,8 +210,9 @@ usage() {
         "  db [args]           Run Alembic" \
         "  lock <target>       Update the backend, frontend, or MatoLoop Agent lockfile" \
         "  format <target>     Format backend or MatoLoop Agent code" \
-        "  check [target]      Check backend, frontend, and MatoLoop Agent" \
-        "  test [target]       Test backend, frontend, MatoLoop Agent, or local RAG stack" \
+        "  check [target]      Check backend, frontend, MatoLoop Agent, or teams-relay" \
+        "  test [target]       Test backend, frontend, MatoLoop Agent, teams-relay, or RAG" \
+        "  teams-package ...   Generate a personal Teams app ZIP; pass --help for options" \
         "" \
         "Evaluations: ./scripts/eval.sh help"
 }
@@ -230,6 +231,10 @@ run_frontend() {
 
 run_matoloop_agent() {
     compose run --rm --no-deps --env UV_LINK_MODE=copy --volume /opt/matoloop-agent/venv --entrypoint sh matoloop-agent -lc "$1"
+}
+
+run_teams_relay() {
+    compose --profile teams-relay run --rm --no-deps teams-relay sh -lc "$1"
 }
 
 check_backend() {
@@ -304,14 +309,16 @@ run_target() {
     local operation="$1"
     local target="${2:-all}"
     case "$operation:$target" in
-        check:all) check_backend; check_frontend; check_matoloop_agent ;;
+        check:all) check_backend; check_frontend; check_matoloop_agent; run_target check teams-relay ;;
         check:backend) check_backend ;;
         check:frontend) check_frontend ;;
         check:matoloop-agent) check_matoloop_agent ;;
-        test:all) test_backend; test_frontend; test_matoloop_agent ;;
+        check:teams-relay) run_teams_relay "uv sync --frozen && uv run --no-sync ruff check src tests /workspace/libs/python/teams-relay/src" ;;
+        test:all) test_backend; test_frontend; test_matoloop_agent; run_target test teams-relay ;;
         test:backend) test_backend "${@:3}" ;;
         test:frontend) test_frontend ;;
         test:matoloop-agent) test_matoloop_agent ;;
+        test:teams-relay) run_teams_relay "uv sync --frozen && uv run --no-sync pytest" ;;
         test:rag) test_rag ;;
         *) printf 'Unbekanntes Target: %s\n' "$target" >&2; exit 1 ;;
     esac
@@ -349,6 +356,11 @@ case "${1:-}" in
     status) compose ps ;;
     config) shift; compose config "$@" ;;
     compose) shift; compose "$@" ;;
+    teams-package)
+        shift
+        printf -v package_args ' %q' "$@"
+        run_teams_relay "uv sync --frozen && uv run --no-sync python -m matoloop_teams_relay.package$package_args"
+        ;;
     doctor)
         compose ps --all
         compose exec -T backend sh -lc 'curl -fsS "http://localhost:$MATO_LOOP_BIND_BACKEND_PORT/api/health"'
@@ -375,6 +387,7 @@ case "${1:-}" in
             backend) compose run --rm --no-deps backend uv lock ;;
             frontend) run_frontend "yarn install --mode=update-lockfile" ;;
             matoloop-agent) run_matoloop_agent "uv lock" ;;
+            teams-relay) run_teams_relay "uv lock" ;;
             *) printf 'Unbekanntes Lock-Target: %s\n' "${2:-}" >&2; exit 1 ;;
         esac
         ;;
@@ -382,6 +395,7 @@ case "${1:-}" in
         case "${2:-}" in
             backend) format_backend ;;
             matoloop-agent) format_matoloop_agent ;;
+            teams-relay) run_teams_relay "uv sync --frozen && uv run --no-sync ruff check --fix src tests /workspace/libs/python/teams-relay/src" ;;
             *) printf 'Unbekanntes Format-Target: %s\n' "${2:-}" >&2; exit 1 ;;
         esac
         ;;

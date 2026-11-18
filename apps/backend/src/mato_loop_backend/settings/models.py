@@ -1161,6 +1161,17 @@ class ChannelSettings(SettingsDocument):
     allowed_providers: set[str] = Field(default_factory=lambda: {"telegram"})
 
 
+class TeamsChannelSettings(SettingsDocument):
+    settings_key = "teams-channel"
+
+    relay_url: str | None = None
+    app_id: UUID | None = None
+    tenant_id: UUID | None = None
+    credential_id: UUID | None = None
+    revision: str = ""
+    streaming_enabled: bool = True
+
+
 class WebPushSettings(SettingsDocument):
     settings_key = "web-push"
     model_config = ConfigDict(

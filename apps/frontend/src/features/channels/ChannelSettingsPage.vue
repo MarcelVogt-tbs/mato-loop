@@ -48,6 +48,11 @@
           </q-item-section>
           <q-item-section>
             <q-item-label class="settings-list-name text-weight-medium">{{ provider.label }}</q-item-label>
+            <q-btn
+              v-if="provider.provider === 'teams'" class="self-start q-mt-sm"
+              outline no-caps color="primary" icon="settings" label="Teams-Relay konfigurieren"
+              @click="teamsDialogOpen = true"
+            />
           </q-item-section>
           <q-item-section side top class="settings-list-actions">
             <q-toggle dense
@@ -65,6 +70,7 @@
         </q-item>
       </q-list>
     </q-card>
+    <TeamsRelayDialog v-if="admin" v-model="teamsDialogOpen" />
 
     <template v-if="showInstances">
       <q-card v-if="channels.loaded && (!channels.enabled || !allowedProviders.length)" flat class="app-surface q-pa-lg">
@@ -103,10 +109,14 @@
               <q-item-label caption>
                 {{ providerLabel(endpoint.provider) }}<template v-if="endpoint.externalHandle"> · @{{ endpoint.externalHandle }}</template><template v-if="endpoint.pairedDisplayName"> · {{ endpoint.pairedDisplayName }}</template>
               </q-item-label>
+              <q-item-label v-if="endpoint.provider === 'teams' && endpoint.errorCode" caption class="text-negative">
+                {{ apiErrorMessage({ error: { code: endpoint.errorCode } }) }}
+              </q-item-label>
             </q-item-section>
             <q-item-section side top>
-              <div v-if="endpoint.provider === 'telegram'" class="row items-center no-wrap q-gutter-xs">
+              <div class="row items-center no-wrap q-gutter-xs">
                 <q-btn
+                  v-if="endpoint.provider === 'telegram'"
                   flat round dense icon="network_check"
                   :aria-label="`${endpoint.name} testen`"
                   :loading="testingId === endpoint.id"
@@ -143,8 +153,10 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import ChannelConfigDialog from 'src/features/channels/ChannelConfigDialog.vue'
+import TeamsRelayDialog from 'src/features/channels/TeamsRelayDialog.vue'
 import { useConfirm } from 'src/composables/confirm'
 import { useChannelStore } from 'stores/channels'
+import { apiErrorMessage } from 'src/utils/api-errors'
 
 defineOptions({ name: 'ChannelSettingsPage' })
 const { admin } = defineProps({ admin: { type: Boolean, default: false } })
@@ -153,6 +165,7 @@ const $q = useQuasar()
 const { confirm } = useConfirm()
 const channels = useChannelStore()
 const dialogOpen = ref(false)
+const teamsDialogOpen = ref(false)
 const selectedEndpoint = ref(null)
 const togglingProvider = ref(null)
 const savingSettings = ref(false)
@@ -250,9 +263,9 @@ async function testEndpoint(endpoint) {
 async function pairEndpoint(endpoint) {
   pairingId.value = endpoint.id
   try {
-    selectedEndpoint.value = await channels.startTelegramPairing(endpoint.id)
+    selectedEndpoint.value = await channels.startPairing(endpoint.provider, endpoint.id)
     dialogOpen.value = true
-    $q.notify({ type: 'positive', message: 'Neue Telegram-Kopplung gestartet' })
+    $q.notify({ type: 'positive', message: 'Neue Kopplung gestartet' })
   } catch {
     // The central Axios interceptor displays the error.
   } finally {
@@ -269,7 +282,7 @@ async function removeEndpoint(endpoint) {
   if (!accepted) return
   removingId.value = endpoint.id
   try {
-    await channels.removeTelegram(endpoint.id)
+    await channels.removeEndpoint(endpoint)
     $q.notify({ type: 'positive', message: 'Kanal gelöscht' })
   } catch {
     // The central Axios interceptor displays the error.

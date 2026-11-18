@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.db.session import get_db_session
+from mato_loop_backend.messaging.endpoints import endpoint_payload, new_pairing, stop_endpoint_work
 from mato_loop_backend.messaging.policy import (
     CHANNEL_PROVIDERS,
     channel_provider_allowed,
@@ -20,10 +21,7 @@ from mato_loop_backend.messaging.policy import (
 from mato_loop_backend.messaging.telegram import (
     TELEGRAM_CREDENTIAL_KIND,
     TelegramServiceError,
-    endpoint_payload,
-    new_pairing,
     probe_bot,
-    stop_endpoint_work,
 )
 from mato_loop_backend.models import (
     AutomationRun,

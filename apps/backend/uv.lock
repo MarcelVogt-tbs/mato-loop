@@ -1059,6 +1059,7 @@ dependencies = [
     { name = "jsonschema" },
     { name = "markdown-it-py" },
     { name = "markdownify" },
+    { name = "matoloop-teams-protocol" },
     { name = "matoloop-version" },
     { name = "mcp" },
     { name = "openpyxl" },
@@ -1109,6 +1110,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.25.0,<5.0.0" },
     { name = "markdown-it-py", specifier = ">=4.0,<5.0" },
     { name = "markdownify", specifier = ">=1.2.0" },
+    { name = "matoloop-teams-protocol", editable = "../../libs/python/teams-relay" },
     { name = "matoloop-version", editable = "../../libs/python/version" },
     { name = "mcp", specifier = ">=1.14.0,<2.0.0" },
     { name = "openpyxl", specifier = ">=3.1.5" },
@@ -1138,6 +1140,17 @@ dev = [
     { name = "ruff", specifier = ">=0.12.0" },
 ]
 docs = [{ name = "mkdocs-material", specifier = "==9.7.7" }]
+
+[[package]]
+name = "matoloop-teams-protocol"
+version = "0.1.0"
+source = { editable = "../../libs/python/teams-relay" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.11,<3" }]
 
 [[package]]
 name = "matoloop-version"

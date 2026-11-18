@@ -91,6 +91,8 @@ Ordinary browser use includes authenticated website interaction and JavaScript. 
 
 Channels are owner-bound message endpoints, not integrations that contribute tools. Authenticated, deduplicated inbound events enter ordinary sessions and runs. Durable outbox delivery remains separate from process-local typing/activity previews. Disabling a channel stops pending external deliveries rather than replaying them after re-enabling.
 
+Teams uses a separately operated public transport relay and backend-initiated HTTPS long polling; the backend needs no public ingress. The relay cannot run models or tools, but is trusted with channel content and sender assertions. See the [relay contract](../apps/matoloop-teams-relay/README.md) for deployment, bounded spool retention, receiver fencing, and uncertain delivery.
+
 Channel approvals/questions revalidate owner, destination, source message, active run and pending request. Skill publication still needs exact package review in MatoLoop; channels can only deny it. Voice input uses the same attachment/transcription pipeline as web input. See [channel usage](user/kanaele.md) and [command entry points](commands.md#shared-command-entry-points).
 
 ## Agent and Tools

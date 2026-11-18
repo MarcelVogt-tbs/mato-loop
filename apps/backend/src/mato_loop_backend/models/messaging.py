@@ -13,6 +13,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     func,
     text,
@@ -59,7 +60,10 @@ class MessagingEndpoint(Base):
     external_identity: Mapped[str] = mapped_column(String(128), nullable=False)
     external_handle: Mapped[str | None] = mapped_column(String(160), nullable=True)
     paired_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    paired_chat_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    paired_chat_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    channel_state: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
     paired_display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     pairing_code_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     pairing_expires_at: Mapped[datetime | None] = mapped_column(
@@ -104,7 +108,7 @@ class MessagingInbox(Base):
         ForeignKey("messaging_endpoints.id", ondelete="CASCADE"), nullable=False, index=True
     )
     external_event_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    external_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    external_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
@@ -159,7 +163,7 @@ class MessagingOutbox(Base):
     source_message_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    destination: Mapped[str] = mapped_column(String(128), nullable=False)
+    destination: Mapped[str] = mapped_column(Text, nullable=False)
     deduplication_key: Mapped[str] = mapped_column(String(240), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(

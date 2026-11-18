@@ -35,7 +35,7 @@
             :rules="[requiredRule]"
             @update:model-value="selectProvider"
           />
-          <template v-if="form.provider === 'telegram'">
+          <template v-if="['telegram', 'teams'].includes(form.provider)">
           <q-input dense
             v-model="form.name"
             outlined
@@ -46,6 +46,7 @@
             :rules="[requiredRule]"
           />
           <q-input dense
+            v-if="form.provider === 'telegram'"
             v-model="form.token"
             outlined
             type="password"
@@ -64,7 +65,7 @@
 
           <q-banner v-if="pairing" rounded class="app-surface-tonal" role="status" aria-live="polite">
             <div class="row items-center q-gutter-sm q-mb-sm">
-              <div class="text-subtitle2 text-weight-medium">Telegram koppeln</div>
+              <div class="text-subtitle2 text-weight-medium">{{ form.provider === 'teams' ? 'Teams' : 'Telegram' }} koppeln</div>
               <q-chip dense :color="pairingColor" :text-color="pairing.pairingState === 'pending' ? 'black' : 'white'">
                 {{ pairingLabel }}
               </q-chip>
@@ -77,6 +78,10 @@
               </q-input>
               <div v-if="pairing.pairingExpiresAt" class="text-caption q-mt-sm">
                 Gültig bis {{ formatAbsoluteDateTime(pairing.pairingExpiresAt) }}
+              </div>
+              <div v-if="form.provider === 'teams'" class="text-body2 q-mt-sm">
+                Sende <strong>/pair {{ pairing.pairingCode }}</strong> im persönlichen Teams-Chat an die MatoLoop-App.
+                Bestätige anschließend hier deine Teams-Identität.
               </div>
               <q-btn
                 v-if="telegramLink"
@@ -95,6 +100,15 @@
               Verbunden<template v-if="pairing.pairedDisplayName"> mit {{ pairing.pairedDisplayName }}</template>.
             </div>
             <div v-else class="text-body2">Starte eine neue Kopplung, um diesen Bot zu verbinden.</div>
+            <div v-if="pairing.pairingCandidate" class="q-mt-md">
+              <div class="text-weight-medium">{{ pairing.pairingCandidate.display_name || 'Teams-Konto' }}</div>
+              <div class="text-caption text-wrap">Entra-Benutzer-ID: {{ pairing.pairingCandidate.user_id }}</div>
+              <div class="text-caption text-wrap">Mandant: {{ pairing.pairingCandidate.tenant_id }}</div>
+              <q-btn
+                class="q-mt-sm" unelevated no-caps color="primary" label="Dieses Teams-Konto bestätigen"
+                :loading="pairingLoading" @click="confirmTeamsPairing"
+              />
+            </div>
           </q-banner>
 
           <q-btn
@@ -215,7 +229,7 @@ function pollPairing(id) {
       if (!pending) {
         stopPolling()
         if (endpoint.pairingState === 'paired') {
-          $q.notify({ type: 'positive', message: 'Telegram-Kanal verbunden' })
+          $q.notify({ type: 'positive', message: 'Kanal verbunden' })
         }
       }
     } catch {
@@ -230,7 +244,7 @@ function pollPairing(id) {
 
 async function save() {
   if (!await formRef.value?.validate()) return
-  if (form.provider !== 'telegram') {
+  if (!['telegram', 'teams'].includes(form.provider)) {
     $q.notify({ type: 'warning', message: 'Dieser Kanalanbieter wird noch nicht unterstützt.' })
     return
   }
@@ -238,12 +252,12 @@ async function save() {
   try {
     const payload = { name: form.name.trim(), token: form.token, enabled: form.enabled }
     if (props.endpoint) {
-      await channels.updateTelegram(props.endpoint.id, payload)
+      await channels.saveEndpoint(form.provider, props.endpoint.id, payload)
       $q.notify({ type: 'positive', message: 'Kanal gespeichert' })
       close()
       return
     }
-    const result = await channels.createTelegram(payload)
+    const result = await channels.saveEndpoint(form.provider, null, payload)
     createdEndpointId.value = result.id
     pairing.value = result
     $q.notify({ type: 'positive', message: 'Kanal hinzugefügt' })
@@ -260,8 +274,8 @@ async function startPairing() {
   if (!endpointId.value || pairingLoading.value) return
   pairingLoading.value = true
   try {
-    pairing.value = await channels.startTelegramPairing(endpointId.value)
-    $q.notify({ type: 'positive', message: 'Neue Telegram-Kopplung gestartet' })
+    pairing.value = await channels.startPairing(form.provider, endpointId.value)
+    $q.notify({ type: 'positive', message: 'Neue Kopplung gestartet' })
     pollPairing(endpointId.value)
   } catch {
     // The central Axios interceptor displays the error.
@@ -277,6 +291,20 @@ async function copyPairingCode() {
     $q.notify({ type: 'positive', message: 'Kopplungscode kopiert' })
   } catch {
     $q.notify({ type: 'negative', message: 'Kopplungscode konnte nicht kopiert werden' })
+  }
+}
+
+async function confirmTeamsPairing() {
+  if (!endpointId.value || pairingLoading.value) return
+  pairingLoading.value = true
+  try {
+    pairing.value = await channels.confirmTeamsPairing(endpointId.value)
+    stopPolling()
+    $q.notify({ type: 'positive', message: 'Teams-Konto verbunden' })
+  } catch {
+    // The central Axios interceptor displays the error.
+  } finally {
+    pairingLoading.value = false
   }
 }
 
@@ -297,7 +325,7 @@ watch([() => props.modelValue, () => props.endpoint?.id], ([open]) => {
     enabled: props.endpoint?.enabled ?? true
   })
   pairing.value = props.endpoint ? { ...props.endpoint } : null
-  if (pairing.value?.pairingCode && props.endpoint?.id) pollPairing(props.endpoint.id)
+  if (pairing.value?.pairingState === 'pending' && props.endpoint?.id) pollPairing(props.endpoint.id)
 })
 
 onBeforeUnmount(stopPolling)

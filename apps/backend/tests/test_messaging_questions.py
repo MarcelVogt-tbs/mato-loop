@@ -313,6 +313,27 @@ async def test_all_pending_question_interactions_update_valid_envelope_state() -
     assert result.envelope.current_index == 2
 
 
+async def test_teams_answers_advance_and_submit_without_a_second_click(monkeypatch) -> None:
+    request = _request()
+    session, endpoint, message, run, inbox = _provenance(request)
+    outbox = _outbox(request, endpoint)
+    monkeypatch.setattr(AgentRuntime, "claim_question_resolution", Mock(return_value=True))
+    monkeypatch.setattr(AgentRuntime, "resolve_question", Mock(return_value=True))
+    monkeypatch.setattr(run_events, "publish", AsyncMock())
+
+    for interaction in (
+        QuestionInteraction(action="select", optionIndex=1),
+        QuestionInteraction(action="choices", option_indices=[0, 1]),
+        QuestionInteraction(action="text", text="Hinweis"),
+    ):
+        db = _resolution_db(request, session, run, message, inbox, outbox)
+        await resolve_question_interaction(
+            db, endpoint, request.id, interaction, "prompt-1", advance_on_answer=True,
+        )
+
+    assert request.answers == {"format": ["Ausführlich"], "topics": ["API", "UI"], "note": ["Hinweis"]}
+
+
 async def test_text_and_option_actions_are_limited_to_current_mode() -> None:
     request = _request()
     session, endpoint, message, run, inbox = _provenance(request)

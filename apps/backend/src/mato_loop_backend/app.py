@@ -35,6 +35,7 @@ from mato_loop_backend.memory.episode_indexing import (
     EpisodeIndexService,
 )
 from mato_loop_backend.memory.indexing import MemoryIndexScheduler, MemoryIndexService
+from mato_loop_backend.messaging.teams import TeamsScheduler
 from mato_loop_backend.messaging.telegram import TelegramScheduler
 from mato_loop_backend.models import (
     ApprovalRequest,
@@ -188,6 +189,7 @@ async def _application_lifespan(_app: FastAPI):
     EpisodeIndexScheduler.start()
     CodingScheduler.start()
     TelegramScheduler.start()
+    TeamsScheduler.start()
     diagnostic_retention_task = asyncio.create_task(diagnostic_retention_loop())
     try:
         yield
@@ -205,6 +207,7 @@ async def _application_lifespan(_app: FastAPI):
         await EpisodeIndexScheduler.stop()
         await CodingScheduler.stop()
         await TelegramScheduler.stop()
+        await TeamsScheduler.stop()
         from mato_loop_backend.agent.session_secrets import session_secrets
         from mato_loop_backend.execution.browsers import browser_coordinator
         from mato_loop_backend.integrations.mcp.oauth import oauth_logins

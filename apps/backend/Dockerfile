@@ -22,6 +22,7 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f2998
 ENV UV_LINK_MODE=copy
 WORKDIR /build
 COPY libs/python/version /libs/python/version
+COPY libs/python/teams-relay /libs/python/teams-relay
 COPY apps/backend/pyproject.toml apps/backend/uv.lock apps/backend/README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --only-group docs --no-install-project
 COPY mkdocs.yml ./
@@ -38,6 +39,7 @@ RUN apt-get update \
 WORKDIR /app/apps/backend
 ENV UV_LINK_MODE=copy
 COPY libs/python/version /app/libs/python/version
+COPY libs/python/teams-relay /app/libs/python/teams-relay
 COPY --from=version-build /build-version.txt /app/libs/python/version/src/matoloop_version/build-version.txt
 COPY apps/backend/pyproject.toml apps/backend/uv.lock apps/backend/README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-install-project

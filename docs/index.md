@@ -26,6 +26,7 @@ Begin with the [architecture overview](architecture.md) and [module ownership](m
 | Personas and assistant identity | [Agent identity](agent-identity.md) |
 | Reusable instruction packages | [Skills](skills.md) |
 | Questions and secret-bearing tool input | [Questions](questions.md), [protected tool text](protected-tool-text.md) |
+| Personal messaging channels and the public Teams relay | [Channel handbook](user/kanaele.md), [relay protocol](../apps/matoloop-teams-relay/README.md) |
 | Web retrieval and networking | [Webfetch](webfetch.md) |
 | Browser isolation, permissions and viewer | [Browser](browser.md), [Agent browser runtime](../apps/matoloop-agent/BROWSER.md) |
 | Instance branding and themes | [Appearance](appearance.md) |

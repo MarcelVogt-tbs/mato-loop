@@ -49,7 +49,7 @@ The selected Compose project owns exactly three named volumes:
 | Volume | Contents |
 | --- | --- |
 | `db_data` | PostgreSQL database |
-| `app_data` | `backend/` files and secrets, `agent/state/` state and pairing, and `agent/workspace/` Agent home |
+| `app_data` | `backend/` files and secrets, `agent/state/` state and pairing, `agent/workspace/` Agent home, and opt-in `teams/` relay state |
 | `dev_data` | `backend/` and `agent/` installed environments; `frontend/` dependencies, Yarn install state, Quasar state and build output |
 
 Each service mounts only its own subdirectories. Before `up`, `run`, or `create`, `dev.sh` runs the source-free `storage-init` helper to create the required subpaths. It does not copy or delete existing data. The development stack does not use `MATOLOOP_AGENT_DATA` or `MATOLOOP_AGENT_HOME`.
@@ -83,6 +83,8 @@ Use a new `MATO_LOOP_COMPOSE_PROJECT_NAME` for a fresh isolated instance. To ret
 ./scripts/dev.sh test frontend
 ./scripts/dev.sh check matoloop-agent
 ./scripts/dev.sh test matoloop-agent
+./scripts/dev.sh check teams-relay
+./scripts/dev.sh test teams-relay
 ./scripts/dev.sh test rag
 ./scripts/dev.sh db current
 ./scripts/dev.sh db upgrade head
@@ -91,6 +93,30 @@ Use a new `MATO_LOOP_COMPOSE_PROJECT_NAME` for a fresh isolated instance. To ret
 Omit the target to check/test all components. `test rag` starts PostgreSQL and Infinity and verifies real hybrid retrieval, trust filtering, and lexical fallback. Normal tests do not require that infrastructure. Rebuild an affected development image after system dependency changes; bind-mounted source does not update installed binaries.
 
 Generate migrations with `./scripts/dev.sh db revision --autogenerate -m "description"`, then review the complete generated diff. See [AGENTS.md](../AGENTS.md) for validation scope and migration rules.
+
+### Teams relay
+
+The `teams-relay` profile is opt-in. Its checks/tests need no Microsoft credentials,
+running backend, or public endpoint. The running service stores its spool and
+secret files in this worktree's `app_data/teams/`, not `/tmp` or the shared cache.
+Dependency/test output stays disposable.
+
+For an authorized live test, set `MATO_TEAMS_APP_ID` and `MATO_TEAMS_TENANT_ID`
+in `.env.dev.override`. Import this instance's secret files over standard input:
+
+```bash
+./scripts/dev.sh compose --profile teams-relay run --rm --no-deps -T teams-relay \
+  sh -c 'umask 077; cat > /data/teams/secrets/client-secret' < /secure/client-secret
+./scripts/dev.sh compose --profile teams-relay run --rm --no-deps -T teams-relay \
+  sh -c 'umask 077; cat > /data/teams/secrets/relay-token' < /secure/relay-token
+./scripts/dev.sh compose --profile teams-relay up -d teams-relay
+./scripts/dev.sh compose --profile teams-relay port teams-relay 3978
+```
+
+Use the printed loopback port behind a TLS reverse proxy; do not expose the
+backend. `teams-package --help` generates the personal-scope app ZIP. Follow the
+[channel handbook](user/kanaele.md#teams-verbinden) for installation and pairing.
+Do not borrow another instance's registration secrets, spool, users or pairing.
 
 ```bash
 ./scripts/eval.sh help
