@@ -41,9 +41,9 @@ do not disable SDK JWT authentication. This first version supports commercial
 Microsoft 365 tenants, not sovereign clouds.
 
 For Portainer Docker Standalone with Nginx Proxy Manager on the same host, use
-[compose.portainer.yaml](compose.portainer.yaml) instead. Import a built image
-or select an explicitly published one through `MATO_TEAMS_RELAY_IMAGE`; the
-template does not assume a registry release exists. It joins the existing
+[compose.portainer.yaml](compose.portainer.yaml) instead. Select a matching
+[published image or local archive](../../docs/user/kanaele.md) with
+`MATO_TEAMS_RELAY_IMAGE`. The template joins the existing
 `npm_access` network as `matoloop-teams-relay`, exposing port 3978 internally
 without publishing a host port. Only trusted containers should share this
 network. The secret directory is a read-only host bind mount and must already

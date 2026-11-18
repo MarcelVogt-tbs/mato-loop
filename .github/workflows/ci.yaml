@@ -80,7 +80,9 @@ jobs:
           uv run --no-sync pytest
       - name: Build Teams relay image
         if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
-        run: docker build --quiet -f apps/matoloop-teams-relay/Dockerfile .
+        env:
+          CI_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: bash scripts/ci/publish-docker-image.sh build matoloop-teams-relay . apps/matoloop-teams-relay/Dockerfile
 
   frontend:
     runs-on: ubuntu-latest
@@ -341,13 +343,14 @@ jobs:
           CI_REPOSITORY: ${{ github.repository }}
           CI_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 scripts/ci/check-develop-revision.py
-      - name: Build both images before publication
+      - name: Build all images before publication
         if: github.ref != 'refs/heads/develop' || steps.build_freshness.outputs.current == 'true'
         env:
           KEEP_LOCAL_IMAGE: "1"
         run: |
           bash scripts/ci/publish-docker-image.sh build mato-loop . apps/backend/Dockerfile
           bash scripts/ci/publish-docker-image.sh build matoloop-agent . apps/matoloop-agent/Dockerfile
+          bash scripts/ci/publish-docker-image.sh build matoloop-teams-relay . apps/matoloop-teams-relay/Dockerfile
       - name: Check current develop revision
         id: freshness
         if: github.ref == 'refs/heads/develop' && steps.build_freshness.outputs.current == 'true'
@@ -356,7 +359,7 @@ jobs:
           CI_REPOSITORY: ${{ github.repository }}
           CI_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 scripts/ci/check-develop-revision.py
-      - name: Publish both images
+      - name: Publish all images
         if: github.ref != 'refs/heads/develop' || steps.freshness.outputs.current == 'true'
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
@@ -368,9 +371,12 @@ jobs:
           fi
           bash scripts/ci/publish-docker-image.sh "$mode" mato-loop . apps/backend/Dockerfile "$tag"
           bash scripts/ci/publish-docker-image.sh "$mode" matoloop-agent . apps/matoloop-agent/Dockerfile "$tag"
+          bash scripts/ci/publish-docker-image.sh "$mode" matoloop-teams-relay . apps/matoloop-teams-relay/Dockerfile "$tag"
       - name: Remove local publication images
         if: always()
-        run: docker image rm --force "mato-loop:ci-$CI_RUN_ID" "matoloop-agent:ci-$CI_RUN_ID" >/dev/null 2>&1 || true
+        run: |
+          docker image rm --force "mato-loop:ci-$CI_RUN_ID" "matoloop-agent:ci-$CI_RUN_ID" \
+            "matoloop-teams-relay:ci-$CI_RUN_ID" >/dev/null 2>&1 || true
 
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')

@@ -146,8 +146,10 @@ Hostport frei. Verbinde nur vertrauenswürdige Container mit diesem Netz.
    und Dateimodus `0600` mit passendem Eigentümer. Fehlt das Verzeichnis, bricht
    die Bereitstellung ab, statt es unbemerkt anzulegen.
 3. Erstelle einen Stack mit dem Inhalt der Vorlage. Setze in Portainer
-   `MATO_TEAMS_RELAY_IMAGE` auf den genauen importierten Image-Namen samt Tag,
-   außerdem `MATO_TEAMS_APP_ID` und `MATO_TEAMS_TENANT_ID`. Nur bei abweichendem
+   `MATO_TEAMS_RELAY_IMAGE` auf `ghcr.io/devmato/mato-loop/matoloop-teams-relay`
+   mit demselben festen Datum/SHA-Tag wie MatoLoop. Wenn du ein Image-Archiv
+   importiert hast, verwende stattdessen dessen genauen Image-Namen samt Tag.
+   Setze außerdem `MATO_TEAMS_APP_ID` und `MATO_TEAMS_TENANT_ID`. Nur bei abweichendem
    Secretpfad brauchst du zusätzlich `MATO_TEAMS_SECRET_DIRECTORY`.
    Microsoft-Clientgeheimnis und Relay-Token gehören ausschließlich in die
    Secretdateien, nicht in Stack-Variablen oder YAML. Starte den Stack mit einer
