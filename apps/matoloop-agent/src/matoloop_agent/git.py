@@ -766,6 +766,14 @@ async def remove_worktree(config, filesystem, arguments: GitWorktreeRemoveArgume
         ):
             raise AgentError("git.dirty", "The worktree contains changes or additional files")
         await asyncio.to_thread(_check_removal_permissions, arguments.path, current["gitDirectory"])
+        if arguments.expected_registration is not None:
+            # stat() reenters the filesystem lock held by this thread.
+            registration = filesystem.stat(f"{current['gitDirectory']}/gitdir")
+            if (
+                registration["kind"] != "file"
+                or registration["modifiedAt"] != arguments.expected_registration
+            ):
+                raise AgentError("git.worktreeChanged", "The worktree registration changed")
         code, _, _ = await _git(
             arguments.repository,
             "worktree",

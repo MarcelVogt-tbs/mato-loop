@@ -76,18 +76,26 @@ it('keeps trash closed to previews, disables expired restore and reuses permanen
   expect(remove).toHaveBeenCalledWith(expired, { permanent: true })
 })
 
-it('expands trashed projects without exposing session navigation or individual actions', async () => {
+it('only offers permanent deletion for independently trashed sessions inside a trashed project', async () => {
+  const independent = { id: 'independent', title: 'Einzeln gelöscht', deleteAt: '2000-01-01T00:00:00Z' }
+  const remove = vi.fn().mockResolvedValue(false)
   mocks.get.mockImplementation(async (path) => ({ data: path === '/trash'
     ? { projects: [{ id: 'project', name: 'Gelöschtes Projekt', deleteAt: '2999-01-01T00:00:00Z' }], sessions: [] }
-    : { items: [{ id: 'child', title: 'Enthaltenes Gespräch', projectId: 'project', deleteAt: null }] } }))
+    : { items: [{ id: 'child', title: 'Enthaltenes Gespräch', deleteAt: null }, independent] } }))
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: ArchivePage, props: { mode: 'trash' } }] })
   await router.push('/')
   root = document.createElement('div'); document.body.append(root)
   app = createApp({ render: () => h(QLayout, null, () => h(QPageContainer, null, () => h(RouterView))) })
+  app.provide('deleteActions', { sessions: remove })
   app.use(createPinia()).use(router).use(Quasar, { components: { QBanner, QBtn, QExpansionItem, QIcon, QItem, QItemLabel, QItemSection, QList, QMenu, QPage, QSpinner }, directives: { Ripple, ClosePopup } })
   app.mount(root)
   await vi.waitFor(() => expect(root.querySelector('.q-expansion-item__container > .q-item')).not.toBeNull())
   root.querySelector('.q-expansion-item__container > .q-item').click()
   await vi.waitFor(() => expect(root.textContent).toContain('Enthaltenes Gespräch'))
-  expect(root.querySelector('.archive-children a, .archive-children button')).toBeNull()
+  expect([...root.querySelectorAll('.archive-children a, .archive-children button')].map(node => node.getAttribute('aria-label')))
+    .toEqual(['Aktionen für Einzeln gelöscht'])
+  root.querySelector('[aria-label="Aktionen für Einzeln gelöscht"]').click()
+  await vi.waitFor(() => expect(document.querySelector('.q-menu .q-item')?.textContent).toContain('Endgültig löschen'))
+  document.querySelector('.q-menu .q-item').click()
+  await vi.waitFor(() => expect(remove).toHaveBeenCalledWith({ ...independent, projectId: 'project' }, { permanent: true }))
 })

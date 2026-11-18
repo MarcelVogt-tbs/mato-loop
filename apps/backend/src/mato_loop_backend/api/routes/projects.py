@@ -32,7 +32,11 @@ from mato_loop_backend.models import (
 from mato_loop_backend.security import require_user
 from mato_loop_backend.sessions.archive import ArchiveRequest, set_archived
 from mato_loop_backend.sessions.cleanup import descendant_sessions
-from mato_loop_backend.sessions.coding import validate_git_branch, validate_git_remote
+from mato_loop_backend.sessions.coding import (
+    remove_session_worktree,
+    validate_git_branch,
+    validate_git_remote,
+)
 from mato_loop_backend.sessions.service import (
     SessionServiceError,
     unread_response_clause,
@@ -591,6 +595,7 @@ async def purge_project(
         await AgentRuntime.cancel_descendants(session_id)
 
     for attempt in range(2):
+        await db.execute(select(UserAccount.id).where(UserAccount.id == owner_id).with_for_update(key_share=True))
         project = await _owned_project(
             db, project_db_id, owner_id, for_update=True, include_deleted=True
         )
@@ -607,6 +612,7 @@ async def purge_project(
                         ChatSession.user_id == owner_id,
                     )
                     .with_for_update()
+                    .execution_options(populate_existing=True)
                 )
             ).all()
         )
@@ -738,6 +744,12 @@ async def purge_project(
 
     commit_task: asyncio.Task[None] | None = None
     try:
+        for session in sessions:
+            if session.trash_worktree_removal:
+                try:
+                    await remove_session_worktree(db, session, scheduled=session.trash_worktree_removal)
+                except SessionServiceError as exc:
+                    raise ApiError(exc.status_code, exc.code, field=exc.field, params=exc.params) from exc
         if automation_mode == "deleteAutomations":
             for automation in linked_automations:
                 await db.delete(automation)

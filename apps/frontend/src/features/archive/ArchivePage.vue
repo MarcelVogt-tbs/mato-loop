@@ -17,7 +17,7 @@
             </q-item-section>
           </template>
           <div class="archive-children q-ml-md q-pl-sm">
-            <p v-if="isTrash" class="text-caption app-muted q-ma-sm">{{ expiryLabel(project) }}. Aktionen gelten für das ganze Projekt.</p>
+            <p v-if="isTrash" class="text-caption app-muted q-ma-sm">{{ expiryLabel(project) }}</p>
             <q-spinner v-if="loadingProject === project.id" color="primary" size="20px" class="q-ma-sm" aria-label="Sessions werden geladen" />
             <q-list v-else dense>
               <q-item v-for="session in projectSessions(project.id)" :key="session.id" :clickable="!isTrash" @click="!isTrash && openSession(session)" class="sidebar-row rounded-borders q-px-sm q-py-xs">
@@ -27,8 +27,8 @@
                   <q-item-label v-if="isTrash && session.deleteAt" caption>Auch einzeln gelöscht · {{ expiryLabel(session) }}</q-item-label>
                   <q-item-label v-else-if="!isTrash && session.archivedAt" caption>Auch einzeln archiviert</q-item-label>
                 </q-item-section>
-                <q-item-section v-if="!isTrash" side>
-                  <ArchiveEntryActions :title="session.title" label="Session" :restorable="false" :disabled="Boolean(busy)" @delete="deleteEntry('sessions', session)" />
+                <q-item-section v-if="!isTrash || session.deleteAt" side>
+                  <ArchiveEntryActions :title="session.title" label="Session" :trash="isTrash" :restorable="false" :disabled="Boolean(busy)" @delete="deleteEntry('sessions', { ...session, projectId: project.id })" />
                 </q-item-section>
               </q-item>
               <q-item v-if="!projectSessions(project.id).length"><q-item-section class="text-caption app-muted">Keine Sessions.</q-item-section></q-item>

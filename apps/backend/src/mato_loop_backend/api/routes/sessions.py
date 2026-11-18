@@ -995,6 +995,7 @@ async def delete_session(
         str | None,
         Query(alias="worktreeImpact", min_length=64, max_length=64),
     ] = None,
+    keep_worktree: Annotated[bool, Query(alias="keepWorktree")] = False,
     permanent: bool | None = None,
 ) -> None:
     try:
@@ -1020,6 +1021,7 @@ async def delete_session(
             storage_factory=SessionStorage,
             owned_session_query=partial(_deletable_session, allow_deleted=bool(permanent)),
             worktree_impact=worktree_impact,
+            keep_worktree=keep_worktree,
         )
     except session_service.SessionServiceError as exc:
         _raise_api_error(exc)
