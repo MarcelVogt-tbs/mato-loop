@@ -23,6 +23,7 @@ from mato_loop_backend.integrations.paperless.adapter import PAPERLESS_ADAPTER
 from mato_loop_backend.integrations.searxng.adapter import SEARXNG_ADAPTER
 from mato_loop_backend.integrations.sonobin.adapter import SONOBIN_ADAPTER
 from mato_loop_backend.integrations.tbs_desk.adapter import TBS_DESK_ADAPTER
+from mato_loop_backend.integrations.webiq.adapter import WEBIQ_FETCH_ADAPTER, WEBIQ_SEARCH_ADAPTER
 from mato_loop_backend.settings.models import (
     IntegrationAdapterAvailability,
     IntegrationInstance,
@@ -42,6 +43,8 @@ def agent_profile_search_available(
 
 
 _ADAPTERS = {
+    ("webfetch", "webiq"): WEBIQ_FETCH_ADAPTER,
+    ("search", "webiq_search"): WEBIQ_SEARCH_ADAPTER,
     ("webfetch", "jina"): JINA_ADAPTER,
     ("search", "searxng"): SEARXNG_ADAPTER,
     ("calendar", "caldav"): CALDAV_ADAPTER,

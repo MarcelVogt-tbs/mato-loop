@@ -6,14 +6,109 @@ import { useQuestionStore } from 'src/stores/questions'
 import { useInAppNotificationStore } from 'src/stores/in-app-notifications'
 import { useProjectStore } from 'src/stores/projects'
 import { downloadMessageAttachmentFiles, releaseAttachmentDrafts } from 'src/features/chat/attachments'
-import { defaultSessionOptions, lastAssistantMessage, sanitizedSessionOptions, sessionBeforeUserMessage, sessionCreatePayload, sessionScopeKey, sessionScopeParams, sortSessions } from 'src/features/chat/state'
+import { compareSessions, defaultSessionOptions, lastAssistantMessage, sanitizedSessionOptions, sessionBeforeUserMessage, sessionCreatePayload, sessionScopeKey, sessionScopeParams, sortSessions } from 'src/features/chat/state'
 import { deleteChatOutboxEntries, saveChatOutboxEntries } from 'src/features/chat/outbox-storage'
 import { notifyError } from 'src/utils/notifications'
 import { SESSION_PAGE_SIZE, ACTIVE_TITLE_GENERATION_STATUSES, mergeMessages, sessionStateAfterMutation } from 'src/features/chat/model'
 import { useSessionTabsStore } from './session-tabs-store'
 import { useUserPreferencesStore } from 'src/features/settings/user-preferences-store'
 
+const summarySyncs = new WeakMap()
+
 export const sessionsActions = {
+    syncSessionSummaries(ids, config = {}) {
+      let sync = summarySyncs.get(this)
+      if (sync && sync.owner === this.draftOwnerUserId) {
+        ids.forEach((id) => sync.pending.add(id))
+        return sync.promise
+      }
+      sync = { pending: new Set(ids), promise: null, owner: this.draftOwnerUserId }
+      const owner = this.draftOwnerUserId
+      sync.promise = Promise.resolve().then(async () => {
+        while (sync.pending.size && owner === this.draftOwnerUserId) {
+          const requested = [...sync.pending]
+          sync.pending.clear()
+          await Promise.all(Object.values(this.sessionLists).flatMap((list) => [list.loadRequest, list.pageRequest, list.refreshRequest]).filter(Boolean).map((request) => request.catch(() => {})))
+          const summaries = []
+          for (let offset = 0; offset < requested.length; offset += 100) {
+            const params = new URLSearchParams({ pageSize: '100', includeArchived: 'true' })
+            requested.slice(offset, offset + 100).forEach((id) => params.append('sessionIds', id))
+            const { data } = await api.get('/sessions', { ...config, params })
+            summaries.push(...data.items)
+          }
+          if (owner !== this.draftOwnerUserId) return
+          // Pages may have started after the summary GET; apply only after they settle.
+          await Promise.all(Object.values(this.sessionLists).flatMap((list) => [list.loadRequest, list.pageRequest, list.refreshRequest]).filter(Boolean).map((request) => request.catch(() => {})))
+          if (owner !== this.draftOwnerUserId) return
+          const updates = new Map(summaries.map((summary) => [summary.id, summary]))
+          const changedIds = new Set(requested)
+          for (const [scope, list] of Object.entries(this.sessionLists)) {
+            const affected = list.items.filter((item) => changedIds.has(item.id))
+            const incoming = summaries.filter((item) => sessionScopeKey(item.projectId) === scope && !item.archived)
+            if (!affected.length && !incoming.length) continue
+            if (!this.visibleSessionScopes.includes(scope)) { list.stale = true; continue }
+            if (!list.loaded) continue
+            // Preserve the original keyset boundary when its row moves or disappears.
+            const boundary = list.boundary || list.items.at(-1)
+            const withinPage = (item) => !list.nextCursor || !boundary || compareSessions(item, boundary) <= 0
+            const additions = incoming.filter((item) => withinPage(item) && item.id !== this.personalChatSessionId)
+            const replacements = new Map(additions.map((item) => [item.id, item]))
+            let reorder = false
+            const items = list.items.flatMap((item) => {
+              if (!changedIds.has(item.id)) return [item]
+              const replacement = replacements.get(item.id)
+              replacements.delete(item.id)
+              if (!replacement) return []
+              reorder ||= compareSessions(item, replacement) !== 0
+              return [Object.keys(replacement).every((key) => replacement[key] === item[key]) ? item : { ...item, ...replacement }]
+            })
+            reorder ||= replacements.size > 0
+            items.push(...replacements.values())
+            list.version += 1
+            list.boundary ||= boundary ? { ...boundary } : null
+            list.items = reorder ? sortSessions(items) : items
+          }
+          const catalogUpdates = new Map(summaries.map((item) => [item.id, item]))
+          this.sessionCatalog = this.sessionCatalog.filter((item) => !changedIds.has(item.id) || updates.has(item.id))
+            .map((item) => catalogUpdates.has(item.id) ? { ...item, ...catalogUpdates.get(item.id) } : item)
+          if (this.sessionCatalog.some((item) => changedIds.has(item.id))) {
+            this.sessionCatalogVersion += 1
+            this.sessionCatalog = sortSessions(this.sessionCatalog)
+          }
+          const tabs = useSessionTabsStore()
+          const tabIds = new Set(tabs.items.map((tab) => tab.sessionId))
+          const next = { ...tabs.summaries }
+          for (const id of requested) {
+            if (!tabIds.has(id)) continue
+            if (updates.has(id)) next[id] = updates.get(id)
+            else delete next[id]
+          }
+          tabs.applySummaryUpdates(requested, next)
+        }
+      }).finally(() => { if (summarySyncs.get(this) === sync) summarySyncs.delete(this) })
+      summarySyncs.set(this, sync)
+      return sync.promise
+    },
+    async invalidateSessionLists(config = {}) {
+      const requests = []
+      for (const [scope, list] of Object.entries(this.sessionLists)) {
+        list.stale = true
+        if ((list.loaded || list.loadRequest) && this.visibleSessionScopes.includes(scope)) {
+          requests.push((async () => {
+            if (list.loadRequest) await list.loadRequest.catch(() => {})
+            list.stale = true
+            await this.reconcileSessionList(scope === 'standalone' ? null : scope, config)
+          })())
+        }
+      }
+      await Promise.all(requests)
+    },
+    async reconcileSessionList(projectId = null, config = {}) {
+      const list = this.ensureSessionList(projectId)
+      if (list.loadRequest) await list.loadRequest.catch(() => {})
+      // Full recovery without concrete IDs closes unknown gaps across loaded pages.
+      if (list.stale) await this.refreshSessions(config, projectId)
+    },
     async forkSession() {
       const source = this.current
       if (!source || source.readOnly || source.archivedAt) {
@@ -92,7 +187,7 @@ export const sessionsActions = {
     async setSessionScope(projectId = null) {
       const normalizedProjectId = projectId || null
       const targetList = this.ensureSessionList(normalizedProjectId)
-      if (this.sessionsProjectId === normalizedProjectId && targetList.loaded) return
+      if (this.sessionsProjectId === normalizedProjectId && targetList.loaded && !targetList.stale) return
       if (
         this.sessionsProjectId !== normalizedProjectId
         && !this.current
@@ -127,7 +222,7 @@ export const sessionsActions = {
       }
       this.audioDictations.newSession = this.audioDictations.newSessions[scope]
       this.persistDrafts()
-      if (!targetList.loaded) await this.fetchSessions(null, normalizedProjectId)
+      if (!targetList.loaded || targetList.stale) await this.fetchSessions(null, normalizedProjectId)
     },
     async fetchSessions(config = null, projectId = this.sessionsProjectId) {
       const list = this.ensureSessionList(projectId)
@@ -150,6 +245,8 @@ export const sessionsActions = {
         if (version !== list.version) return
         list.items = sortSessions(response.data.items)
         list.nextCursor = response.data.nextCursor
+        list.boundary = list.items.at(-1) ? { ...list.items.at(-1) } : null
+        list.stale = false
         list.loaded = true
         list.loadMoreFailed = false
       })()
@@ -197,6 +294,8 @@ export const sessionsActions = {
         } while (cursor && sessions.length < targetCount)
         list.items = sortSessions([...new Map(sessions.map((session) => [session.id, session])).values()])
         list.nextCursor = cursor
+        list.boundary = list.items.at(-1) ? { ...list.items.at(-1) } : null
+        list.stale = false
         list.loadMoreFailed = false
       })
       queued.promise = markRaw(request)
@@ -236,6 +335,7 @@ export const sessionsActions = {
         for (const session of response.data.items) sessions.set(session.id, session)
         list.items = sortSessions([...sessions.values()])
         list.nextCursor = response.data.nextCursor
+        list.boundary = list.items.at(-1) ? { ...list.items.at(-1) } : null
       })()
       list.pageRequest = markRaw(request)
       try {
@@ -810,7 +910,7 @@ export const sessionsActions = {
       const projects = useProjectStore()
       await Promise.allSettled([
         notifications.fetchLatest({ suppressErrorToast: true }),
-        ...(session.projectId && projects.loaded ? [projects.fetchAll({ suppressErrorToast: true })] : [])
+        ...(session.projectId && projects.loaded ? [projects.refreshSummaries([session.projectId], { suppressErrorToast: true })] : [])
       ])
     },
     async undoUserMessage(message) {

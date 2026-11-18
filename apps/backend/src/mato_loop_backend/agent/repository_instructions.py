@@ -36,6 +36,7 @@ MAX_CONTEXT_BYTES = 64 * 1024
 MAX_DIRECTORIES = 64
 MAX_INSTRUCTION_FILES = 256
 MAX_RULE_DIRECTORY_ENTRIES = 256
+MAX_CONCURRENT_REQUESTS = 16
 MAX_CACHED_TARGETS = 4096
 _TARGET_DIRECTORIES: OrderedDict[tuple[UUID, UUID, UUID, str, UUID, str], str] = OrderedDict()
 INCOMPLETE_INSTRUCTIONS_NOTICE = (
@@ -57,6 +58,15 @@ async def repository_instructions_prompt(
     cwd = client.current_directory
     if not cwd:
         return ""
+    requests = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+    directory_entries: dict[str, set[str]] = {}
+
+    def known_missing(path: str) -> bool:
+        return any(
+            within(path, directory) and path != directory
+            and posixpath.relpath(path, directory).split("/")[0] not in names
+            for directory, names in directory_entries.items()
+        )
 
     async def stat_permission(path: str) -> str:
         request = execution_directory_permission(
@@ -70,7 +80,8 @@ async def repository_instructions_prompt(
 
     async def request_stat(path: str) -> tuple[WorkspaceStatResult | None, str]:
         try:
-            result = await client.request("filesystem.stat", {"path": path}, WorkspaceStatResult)
+            async with requests:
+                result = await client.request("filesystem.stat", {"path": path}, WorkspaceStatResult)
             if result.path != path:
                 return None, "executionAgent.protocolError"
             return result, "found"
@@ -78,8 +89,46 @@ async def repository_instructions_prompt(
             return None, "missing" if exc.code == "file.pathNotFound" else exc.code
 
     async def stat(path: str) -> tuple[WorkspaceStatResult | None, str]:
+        if known_missing(path):
+            return None, "missing"
         status = await stat_permission(path)
         return await request_stat(path) if status == "allowed" else (None, status)
+
+    async def list_directory(path: str) -> None:
+        try:
+            async with requests:
+                listing = await client.request(
+                    "filesystem.list", {"path": path, "offset": 0, "limit": MAX_RULE_DIRECTORY_ENTRIES},
+                    WorkspaceListResult,
+                )
+        except ExecutionClientError:
+            return
+        if listing.has_more or len(listing.entries) > MAX_RULE_DIRECTORY_ENTRIES:
+            return
+        if any(not child.name or child.name in {".", ".."} or "/" in child.name or "\\" in child.name
+               or child.path != posixpath.join(path, child.name) for child in listing.entries):
+            return
+        directory_entries[path] = {child.name for child in listing.entries}
+
+    async def scan_rules(path: str, permission: str) -> tuple[str, WorkspaceListResult | None]:
+        if permission != "allowed":
+            return permission, None
+        info, status = await request_stat(path)
+        if info is None:
+            return status, None
+        if info.kind != "directory":
+            return "file.unsupportedType", None
+        if not client.supports("filesystem.list"):
+            return "listing_unavailable", None
+        try:
+            async with requests:
+                listing = await client.request(
+                    "filesystem.list", {"path": path, "offset": 0, "limit": MAX_RULE_DIRECTORY_ENTRIES},
+                    WorkspaceListResult,
+                )
+            return "discovered", listing
+        except ExecutionClientError as exc:
+            return exc.code, None
 
     # Find a Git boundary only through already authorized paths. Without one, stay at cwd.
     ancestors = []
@@ -149,6 +198,14 @@ async def repository_instructions_prompt(
             directory = parent(directory)
 
     ordered = sorted(directories, key=lambda path: (path.count("/"), path))
+    if client.supports("filesystem.list"):
+        # A fresh complete listing proves absent names without authorizing each
+        # nonexistent file. Denied, failed or truncated listings fall back to stats.
+        permissions = [await stat_permission(path) for path in ordered[:MAX_DIRECTORIES]]
+        async with asyncio.TaskGroup() as group:
+            for path, permission in zip(ordered[:MAX_DIRECTORIES], permissions, strict=True):
+                if permission == "allowed":
+                    group.create_task(list_directory(path))
     root = ancestors[-1] if boundary_status == "found" else cwd
     candidates: list[tuple[str, str, RuleFormat]] = [
         (posixpath.join(root, ".github/copilot-instructions.md"), root, "plain"),
@@ -167,54 +224,49 @@ async def repository_instructions_prompt(
     incomplete = len(ordered) > MAX_DIRECTORIES
     scanned = 0
     while scans and scanned < MAX_DIRECTORIES:
-        path, directory, rule_format = scans.pop(0)
-        scanned += 1
-        info, status = await stat(path)
-        entry = {"path": path, "directory": directory, "status": status}
-        entries.append(entry)
-        if info is None:
-            continue
-        if info.kind != "directory":
-            entry["status"] = "file.unsupportedType"
-            continue
-        if not client.supports("filesystem.list"):
-            entry["status"] = "listing_unavailable"
-            continue
-        try:
-            listing = await client.request(
-                "filesystem.list", {"path": path, "offset": 0, "limit": MAX_RULE_DIRECTORY_ENTRIES},
-                WorkspaceListResult,
-            )
-        except ExecutionClientError as exc:
-            entry["status"] = exc.code
-            continue
-        entry["status"] = "discovered"
-        incomplete |= listing.has_more
-        for child in sorted(listing.entries[:MAX_RULE_DIRECTORY_ENTRIES], key=lambda item: item.name):
-            child_path = posixpath.join(path, child.name)
-            if child.path != child_path or "\\" in child.name:
-                entry["status"] = "executionAgent.protocolError"
+        batch = scans[:min(MAX_CONCURRENT_REQUESTS, MAX_DIRECTORIES - scanned)]
+        del scans[:len(batch)]
+        scanned += len(batch)
+        # Authorize serially on the shared database session, then overlap only I/O.
+        permissions = ["missing" if known_missing(path) else await stat_permission(path)
+                       for path, _directory, _format in batch]
+        async with asyncio.TaskGroup() as group:
+            observations = [group.create_task(scan_rules(path, permission))
+                            for (path, _directory, _format), permission in zip(batch, permissions, strict=True)]
+        # Consume in the original queue order, independent of completion order.
+        for (path, directory, rule_format), observation in zip(batch, observations, strict=True):
+            status, listing = observation.result()
+            entry = {"path": path, "directory": directory, "status": status}
+            entries.append(entry)
+            if listing is None:
                 continue
-            if child.kind == "directory":
-                if len(scans) + scanned < MAX_DIRECTORIES:
-                    scans.append((child_path, directory, rule_format))
-                else:
-                    incomplete = True
-            elif child.name.endswith(".instructions.md" if rule_format == "copilot" else (
-                ".mdc" if rule_format == "cursor" else ".md"
-            )):
-                if len(candidates) < MAX_INSTRUCTION_FILES:
-                    candidates.append((child_path, directory, rule_format))
-                else:
-                    incomplete = True
-            elif child.kind == "symlink":
-                entry["status"] = "file.unsupportedType"
-        incomplete |= len(listing.entries) > MAX_RULE_DIRECTORY_ENTRIES
+            incomplete |= listing.has_more
+            for child in sorted(listing.entries[:MAX_RULE_DIRECTORY_ENTRIES], key=lambda item: item.name):
+                child_path = posixpath.join(path, child.name)
+                if child.path != child_path or "\\" in child.name:
+                    entry["status"] = "executionAgent.protocolError"
+                    continue
+                if child.kind == "directory":
+                    if len(scans) + scanned < MAX_DIRECTORIES:
+                        scans.append((child_path, directory, rule_format))
+                    else:
+                        incomplete = True
+                elif child.name.endswith(".instructions.md" if rule_format == "copilot" else (
+                    ".mdc" if rule_format == "cursor" else ".md"
+                )):
+                    if len(candidates) < MAX_INSTRUCTION_FILES:
+                        candidates.append((child_path, directory, rule_format))
+                    else:
+                        incomplete = True
+                elif child.kind == "symlink":
+                    entry["status"] = "file.unsupportedType"
+            incomplete |= len(listing.entries) > MAX_RULE_DIRECTORY_ENTRIES
     incomplete |= bool(scans) or len(candidates) > MAX_INSTRUCTION_FILES
     candidates = candidates[:MAX_INSTRUCTION_FILES]
 
     # Keep authorization errors unwrapped and database access sequential.
-    permissions = [await stat_permission(path) for path, _directory, _format in candidates]
+    permissions = ["missing" if known_missing(path) else await stat_permission(path)
+                   for path, _directory, _format in candidates]
     observations = []
     async with asyncio.TaskGroup() as group:
         for (path, _directory, _format), status in zip(candidates, permissions, strict=True):

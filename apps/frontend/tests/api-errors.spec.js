@@ -30,7 +30,7 @@ describe('API error messages', () => {
   })
   it('explains how to retry a session without a computer', () => {
     expect(apiErrorMessage({ error: { code: 'session.computerRequired' } })).toBe(
-      'Plan und Build benötigen einen Computer. Wähle einen verbundenen Computer und ein Arbeitsverzeichnis in den Session-Einstellungen. Starte diese Anfrage danach erneut.'
+      'Plan, Build und Interactive benötigen einen Computer. Wähle einen verbundenen Computer und ein Arbeitsverzeichnis in den Session-Einstellungen. Starte diese Anfrage danach erneut.'
     )
   })
   it('explains a missing tool argument using controlled reason metadata', () => {

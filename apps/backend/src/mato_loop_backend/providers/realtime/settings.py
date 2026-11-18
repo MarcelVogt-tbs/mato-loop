@@ -28,13 +28,13 @@ def realtime_model_available(
     settings: AiSettingsBase, model: ModelConfig, provider: LlmProviderConfig,
 ) -> bool:
     return bool(
-        model in settings.models
-        and provider in settings.providers
-        and model.provider_id == provider.id
+        model.provider_id == provider.id
         and model.enabled and provider.enabled
         and model.availability != ModelAvailability.MISSING
         and provider.adapter_type in ADAPTER_TYPES
         and provider.credential_id is not None
         and ModelCapability.REALTIME_AUDIO in model.capabilities
         and model.supports_tools
+        and model in settings.models
+        and provider in settings.providers
     )

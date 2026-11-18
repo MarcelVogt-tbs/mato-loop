@@ -42,8 +42,14 @@ async def stream_changes(
                         if current_user.id != user_id:
                             return
                     next_auth_check = time.monotonic() + 15
-                payload = [{"resource": resource, "sessionId": str(session_id) if session_id else None}
-                           for resource, session_id in changes]
+                payload = [
+                    {
+                        "resource": resource,
+                        "projectId" if resource == "project_summaries" else "sessionId":
+                        str(resource_id) if resource_id else None,
+                    }
+                    for resource, resource_id in changes
+                ]
                 kind = "changed" if changes else "keepalive"
                 yield f"event: {kind}\ndata: {json.dumps(payload)}\n\n"
 

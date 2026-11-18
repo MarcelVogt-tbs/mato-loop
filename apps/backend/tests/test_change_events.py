@@ -1,3 +1,4 @@
+import json
 from contextlib import aclosing, asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call
@@ -8,7 +9,7 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy import ForeignKey, create_engine, delete, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, load_only, mapped_column
 from sqlalchemy.pool import NullPool
 
 from mato_loop_backend.api.routes.events import router
@@ -27,6 +28,7 @@ class Owner(Base):
     __tablename__ = "owners"
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     user_id: Mapped[UUID]
+    project_id: Mapped[UUID | None]
 
 
 class Child(Base):
@@ -95,6 +97,40 @@ def test_bulk_writes_resolve_the_affected_owner(db, monkeypatch, operation):
     publish.assert_called_once_with(owner.user_id, {("messages", None)})
 
 
+@pytest.mark.parametrize("bulk", [False, True])
+def test_session_move_invalidates_uncached_source_and_destination_only_after_commit(db, monkeypatch, bulk):
+    from mato_loop_backend import models
+
+    monkeypatch.setattr(models, "ChatSession", Owner)
+    monkeypatch.setattr(changes, "_sources", lambda: {Owner: ("sessions", Owner, "id")})
+    user_id, source_id, destination_id = uuid4(), uuid4(), uuid4()
+    item = Owner(user_id=user_id, project_id=source_id)
+    db.add_all([item, Owner(user_id=uuid4(), project_id=uuid4())])
+    db.commit()
+    session_id = item.id
+    db.expunge_all()
+    item = db.get(Owner, session_id, options=[load_only(Owner.id, Owner.user_id)])
+    publish = Mock()
+    monkeypatch.setattr(changes.change_events, "publish", publish)
+    if bulk:
+        db.execute(update(Owner).where(Owner.id == session_id).values(project_id=destination_id))
+    else:
+        item.project_id = destination_id
+    db.flush()
+    publish.assert_not_called()
+    db.rollback()
+    db.commit()
+    publish.assert_not_called()
+    if bulk:
+        db.execute(update(Owner).where(Owner.id == session_id).values(project_id=destination_id))
+    else:
+        item.project_id = destination_id
+    db.commit()
+    publish.assert_called_once_with(user_id, {
+        ("sessions", session_id), ("project_summaries", source_id), ("project_summaries", destination_id),
+    })
+
+
 async def test_stream_requires_authentication_and_subscribes_only_to_the_current_owner(monkeypatch):
     app = FastAPI()
     app.include_router(router)
@@ -104,12 +140,13 @@ async def test_stream_requires_authentication_and_subscribes_only_to_the_current
         yield db
 
     app.dependency_overrides[get_db_session] = get_db
-    user_id = uuid4()
+    user_id, project_id = uuid4(), uuid4()
     subscribe = Mock()
 
     async def stream(owner_id):
         subscribe(owner_id)
         yield {("all", None)}
+        yield {("project_summaries", project_id)}
 
     monkeypatch.setattr("mato_loop_backend.api.routes.events.change_events.subscribe", stream)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
@@ -119,13 +156,15 @@ async def test_stream_requires_authentication_and_subscribes_only_to_the_current
     subscribe.assert_called_once_with(user_id)
     assert response.status_code == 200
     assert '"resource": "all"' in response.text
+    payload = [json.loads(line.removeprefix("data: ")) for line in response.text.splitlines() if line.startswith("data: ")]
+    assert payload[-1] == [{"resource": "project_summaries", "projectId": str(project_id)}]
 
 
 @pytest.mark.parametrize("role", ["user", "tool"])
 async def test_native_session_and_bulk_message_changes(request, monkeypatch, role):
     if not request.config.getoption("--memory-db"):
         pytest.skip("requires the migrated development PostgreSQL database")
-    from mato_loop_backend.models import ChatSession, Message, UserAccount
+    from mato_loop_backend.models import ChatSession, Message, Project, UserAccount
 
     engine = create_async_engine(get_runtime_config().database_url, poolclass=NullPool)
     session_factory = async_sessionmaker(engine, expire_on_commit=False, sync_session_class=changes.ChangeTrackingSession)
@@ -133,13 +172,18 @@ async def test_native_session_and_bulk_message_changes(request, monkeypatch, rol
     publish = Mock(wraps=broker.publish)
     monkeypatch.setattr(broker, "publish", publish)
     monkeypatch.setattr(changes, "change_events", broker)
-    user_id, session_id = uuid4(), uuid4()
+    user_id, session_id, project_id = uuid4(), uuid4(), uuid4()
     try:
         async with aclosing(broker.subscribe(user_id)) as stream, session_factory() as db:
             await anext(stream)
             db.add(UserAccount(id=user_id, username=f"events-{user_id}", password_hash="test"))
             await db.flush()
-            db.add(ChatSession(id=session_id, user_id=user_id))
+            db.add(Project(id=project_id, user_id=user_id, name="Event test"))
+            await db.flush()
+            publish.reset_mock()
+            await db.commit()
+            await anext(stream)
+            db.add(ChatSession(id=session_id, user_id=user_id, project_id=project_id))
             await db.flush()
             db.add(Message(session_id=session_id, role=role, content="Test"))
             await db.commit()
@@ -148,8 +192,9 @@ async def test_native_session_and_bulk_message_changes(request, monkeypatch, rol
             await db.execute(delete(Message).where(Message.session_id == session_id))
             await db.commit()
             assert (created, publish.call_args_list) == (
-                {("sessions", session_id)} | ({("messages", session_id)} if role == "user" else set()),
-                [call(user_id, {("messages", session_id)})] if role == "user" else [],
+                {("sessions", session_id), ("project_summaries", project_id)}
+                | ({("messages", session_id)} if role == "user" else set()),
+                [call(user_id, {("messages", session_id), ("project_summaries", project_id)})] if role == "user" else [],
             )
     finally:
         async with session_factory() as db:

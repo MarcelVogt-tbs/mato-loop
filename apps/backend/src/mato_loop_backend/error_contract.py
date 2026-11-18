@@ -468,7 +468,11 @@ _MESSAGES = {
     "tool.cursorInvalid": (
         "The session cursor is unavailable. Retry session_read with error.params.retryArguments exactly."
     ),
-    "tool.superseded": "This tool call was skipped because a new user message superseded the pending request. Reassess the remaining work using the latest instruction.",
+    "tool.superseded": (
+        "This tool call did not run because a new instruction arrived. The underlying task is not "
+        "automatically cancelled. Reassess remaining steps under the latest instruction and current "
+        "permissions; do not replay actions automatically."
+    ),
     "tool.skippedAfterUserDenial": (
         "The tool call was not run because the user denied another action in the same batch."
     ),
@@ -519,6 +523,7 @@ _MESSAGES = {
     "webfetch.responseLimitInvalid": "The web response size limit is invalid.",
     "webfetch.responseTooLarge": "The web response exceeds the configured size limit.",
     "webfetch.timeout": "The web server did not answer in time.",
+    "webfetch.crawlPending": "The page crawl is pending. The content is not available yet. Try again later.",
     "webfetch.tlsFailed": "The web server's TLS certificate could not be verified.",
     "webfetch.tooManyRedirects": "The web server sent too many redirects.",
 }

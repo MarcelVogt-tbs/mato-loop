@@ -29,17 +29,20 @@ Ohne Modelltrennung bearbeitest du unter **Alle Modelle** die privaten Werte. Ö
 
 ## Rechte eines Agentenprofils anpassen
 
-**Allgemein**, **Plan**, **Build** und **Sysadmin** sind mitgelieferte Profile. Ihre Namen und Arbeitsabläufe sind geschützt. Administratoren können deren Zugriffseinstellungen unter **Administration > Tools** anpassen; erlaubte persönliche Anpassungen stehen unter **Einstellungen > Tools** für eigene Profile zur Verfügung.
+**Allgemein**, **Plan**, **Build**, **Interactive** und **Sysadmin** sind mitgelieferte Profile. Ihre Namen und Arbeitsabläufe sind geschützt. Administratoren können deren Zugriffseinstellungen unter **Administration > Tools** anpassen; erlaubte persönliche Anpassungen stehen unter **Einstellungen > Tools** für eigene Profile zur Verfügung.
 
 | Profil | Dateiaktionen im Arbeitsordner | Erkannte Shell-Aktionen |
 | --- | --- | --- |
 | Plan | Lesen automatisch; Schreiben/Löschen nachfragen | Lesen automatisch; Schreiben/Löschen nachfragen |
 | Build | Lesen, Schreiben und Löschen automatisch | Lesen, Schreiben und Löschen automatisch |
+| Interactive | Lesen, Schreiben und Löschen automatisch | Lesen, Schreiben und Löschen automatisch |
 | Sysadmin | Lesen automatisch; Schreiben/Löschen nachfragen | Lesen automatisch; Schreiben/Löschen nachfragen |
 
-Diese Profilregeln können vom Grundstandard abweichen. Plan und Build fragen bei Dateiaktionen außerhalb des Arbeitsordners zusätzlich nach; Sysadmin erlaubt diesen Bereich standardmäßig. Shell ist nicht auf den Arbeitsordner beschränkt. Automatische Lesezugriffe gelten bei diesen Profilen auch für öffentliche Modelle; gelesene Inhalte können an den Provider übertragen werden.
+Diese Profilregeln können vom Grundstandard abweichen. Plan, Build und Interactive fragen bei Dateiaktionen außerhalb des Arbeitsordners zusätzlich nach; Sysadmin erlaubt diesen Bereich standardmäßig. Shell ist nicht auf den Arbeitsordner beschränkt. Automatische Lesezugriffe gelten bei diesen Profilen auch für öffentliche Modelle; gelesene Inhalte können an den Provider übertragen werden.
 
-**Plan implementiert nicht**, auch wenn eine Tool-Freigabe vorliegt. Wechsle für eine gewünschte Umsetzung zu Build und beauftrage sie ausdrücklich.
+**Plan implementiert nicht**, auch wenn eine Tool-Freigabe vorliegt. Wechsle für eine gewünschte Umsetzung zu Build oder Interactive und beauftrage sie ausdrücklich.
+
+**Interactive** verbindet Besprechung und Umsetzung ohne Profilwechsel: Es analysiert standardmäßig und setzt erst einen ausdrücklichen Auftrag wie „Setz das um“ um, einschließlich passender Prüfungen. Ein „Passt“ zu einem Vorschlag genügt nicht. Danach kehrt es zur Analyse zurück. Das ist eine Prompt-Regel, **keine technische Schreibsperre**; die Tool-Rechte entsprechen Build. Wähle Interactive in einer Session mit der aktuellen Coding-Vorlage. Bestehende Sessions behalten ihre Agentenauswahl; erneutes Auswählen der Coding-Vorlage übernimmt auch deren Modell-, Reasoning- und Memory-Vorgaben.
 
 ### Eine eigene Aktionsregel speichern
 

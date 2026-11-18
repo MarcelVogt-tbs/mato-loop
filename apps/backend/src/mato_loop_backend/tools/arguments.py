@@ -722,6 +722,27 @@ class WebFetchArguments(ToolArguments):
         return sorted(set(value))
 
 
+class WebIqSearchArguments(WebSearchArguments):
+    query: str = Field(
+        min_length=1, max_length=1_000,
+        description=WebSearchArguments.model_fields["query"].description,
+    )
+
+
+class WebIqWebFetchArguments(WebFetchArguments):
+    format: Literal["text"] = "text"
+    query: str | None = Field(
+        default=None, min_length=1, max_length=1_000,
+        description="Required relevance query for the passages to extract. Omit only with pdf_pages.",
+    )
+
+    @model_validator(mode="after")
+    def require_passage_query(self) -> WebIqWebFetchArguments:
+        if not self.pdf_pages and (self.query is None or not self.query.strip()):
+            raise invalid_argument("Provide a relevance query for Web IQ passages.", field="query")
+        return self
+
+
 class JinaWebFetchArguments(WebFetchArguments):
     engine: Literal["auto", "browser", "curl"] = Field(
         default="auto", description="Jina Reader engine, not the computer's Browser integration. browser renders JavaScript but cannot click, type, submit forms or automate consent/login. Use computer tools for page interaction. Matching Jina cookies disallow engine=curl; auto handles engine selection.",

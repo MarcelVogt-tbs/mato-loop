@@ -118,7 +118,7 @@ def test_inventory_is_complete() -> None:
         "pdf",
         "provider",
     } <= categories
-    assert 80 <= len(CASES) <= 261
+    assert 80 <= len(CASES) <= 265
     assert {case.scope for case in CASES} == {
         "hard",
         "quality",
@@ -2166,6 +2166,19 @@ def test_direct_message_cases_keep_open_questions_unless_replaced() -> None:
     replacement = _case("replacement_message_cancels_unanswered_question")
     assert evaluate(replacement, ProviderResult(content="BEREIT")) == []
     assert evaluate(replacement, ProviderResult(content="Nicht kompatibel."))
+    for case_id, valid in (
+        ("direct_source_correction_keeps_code_investigation", ProviderResult(tool_calls=[
+            ToolCall("read-code", "read", {"root": "computer", "path": "apps/backend/tasks.py"}),
+        ])),
+        ("direct_quantity_correction_keeps_shopping_list", ProviderResult(content="200 g Nudeln, 400 g Tomaten, 100 g Käse.")),
+        ("direct_side_question_pauses_without_completing_task", ProviderResult(content="Eine Prüfsumme erkennt Datenänderungen. Die Prüfung bleibt pausiert.")),
+        ("direct_stop_does_not_replay_skipped_action", ProviderResult(content="GESTOPPT")),
+    ):
+        case = _case(case_id)
+        direct_messages, _ = build_case(case)
+        assert "Host context: this message continues an active run" in direct_messages[-1]["content"]
+        assert evaluate(case, valid) == []
+        assert evaluate(case, ProviderResult(content="Verstanden."))
 
 
 def test_negative_outcomes_accept_semantic_variants_without_accepting_success_claims() -> None:
@@ -2418,10 +2431,10 @@ def test_markdown_report_contains_totals_failures_usage_and_coverage() -> None:
 
     assert payload["caseCount"] == len(CASES)
     assert payload["semanticContractCount"] == 142
-    assert payload["contractCount"] == 403
-    assert "Cases: 261" in report
+    assert payload["contractCount"] == 407
+    assert "Cases: 265" in report
     assert "Semantic contracts: 142" in report
-    assert "All inventory rows: 403" in report
+    assert "All inventory rows: 407" in report
     assert "Total: 1/2 passed" in report
     assert "| model-a | 1/2 |" in report
     assert "| general | 1/1 |" in report

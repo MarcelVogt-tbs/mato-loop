@@ -1833,6 +1833,24 @@ async def test_stale_login_cannot_persist_credentials(monkeypatch):
     replace.assert_not_awaited()
 
 
+async def test_missing_credentials_keep_connection_available_for_login(monkeypatch):
+    instance, db = account(), AsyncMock()
+    user = UserAccount(id=instance.owner_id)
+    settings = UserIntegrationSettings(instances=[instance])
+    monkeypatch.setattr(routes, "_load_scoped_integrations", AsyncMock(return_value=(settings, user.id)))
+    monkeypatch.setattr(routes, "load_credential", AsyncMock(return_value=None))
+    monkeypatch.setattr(routes, "_session_hash", lambda _request: "session")
+    monkeypatch.setattr(routes.oauth_logins, "start", AsyncMock(return_value={"id": "attempt"}))
+
+    listed = await routes.connections(db, user, "personal")
+    connection = listed["accounts"][0]
+    attempt = await routes.start_login(instance.id, None, Response(), db, user)
+
+    assert (connection["id"], connection["authStatus"], connection["hasCredential"], attempt["id"]) == (
+        str(instance.id), "authorization_required", False, "attempt",
+    )
+
+
 async def test_login_completion_reloads_user_expired_by_rollback(monkeypatch):
     instance = account()
     user = UserAccount(id=instance.owner_id)

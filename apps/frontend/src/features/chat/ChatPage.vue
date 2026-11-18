@@ -33,7 +33,7 @@
       @mousedown="handleScrollAreaMouseDown"
     >
       <div ref="scrollContent" class="chat-page__scroll-content" :class="{ 'chat-messages--small': chat.activeContext.sessionProfile?.messageSize === 'small', 'chat-page__scroll-content--mobile-home': $q.screen.lt.md && showHome && !runPresentation.showActivity && !chat.loading && !chat.loadError }">
-        <div v-if="chat.loading && !chat.current" class="chat-transcript q-pa-md" aria-label="Session wird geladen">
+        <div v-if="chat.loading && !chat.current" class="chat-transcript chat-history-loading q-pa-md" role="status" aria-label="Session wird geladen">
           <div v-for="width in ['42%', '86%', '64%']" :key="width" class="chat-session-skeleton">
             <q-skeleton type="text" width="88px" />
             <q-skeleton type="text" :width="width" height="24px" />
@@ -94,8 +94,11 @@
           @virtual-scroll="handleVirtualScroll"
         >
           <template #before>
-            <div v-if="chat.olderMessagesLoading" class="row justify-center q-py-sm" role="status">
-              <q-spinner color="primary" size="24px" />
+            <div v-if="chat.olderMessagesLoading" class="q-py-sm" role="status">
+              <div class="chat-history-loading" aria-hidden="true">
+                <q-skeleton type="text" width="42%" height="12px" />
+                <q-skeleton type="text" width="72%" height="12px" />
+              </div>
               <span class="app-sr-only">Ältere Nachrichten werden geladen</span>
             </div>
             <q-banner
@@ -109,9 +112,6 @@
                 <q-btn flat dense no-caps color="primary" label="Erneut versuchen" @click="loadOlderHistory" />
               </template>
             </q-banner>
-            <div v-else-if="chat.current?.nextMessageCursor" class="row justify-center q-py-sm">
-              <q-btn flat dense no-caps color="primary" label="Ältere Nachrichten laden" @click="loadOlderHistory" />
-            </div>
           </template>
           <template #default="{ item: message }">
             <div
@@ -317,7 +317,7 @@
         </aside>
       </template>
     </q-splitter>
-    <SessionTabs v-if="sessionTabsEnabled" enabled :tabs="sessionTabs" :active-key="activeSessionTabKey" />
+    <SessionTabs v-if="sessionTabsEnabled" enabled :tabs="sessionTabs" :active-key="activeSessionTabKey" :position="sessionTabsPosition" />
     <SkillDraftPreview ref="skillDraftPreview" />
     <ProjectDialog v-if="draftProjectDialogOpen" v-model="draftProjectDialogOpen" @created="selectCreatedDraftProject" />
   </q-page>
@@ -384,7 +384,7 @@ const router = useRouter()
 const $q = useQuasar()
 const { confirm } = useConfirm()
 const chat = useChatStore()
-const { enabled: sessionTabsEnabled, tabs: sessionTabs, activeKey: activeSessionTabKey } = useSessionTabs({ chat, route })
+const { enabled: sessionTabsEnabled, tabs: sessionTabs, position: sessionTabsPosition, activeKey: activeSessionTabKey } = useSessionTabs({ chat, route })
 const subagents = useSubagentStore()
 const agentProfiles = useAgentProfileStore()
 const approvals = useApprovalStore()

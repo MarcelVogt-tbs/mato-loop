@@ -84,7 +84,13 @@ beforeEach(async () => {
   composer = ref(null)
   const providers = useProviderStore()
   providers.audioTranscriptionModelId = 'audio'
-  vi.spyOn(providers, 'capabilityOptions', 'get').mockReturnValue(() => [{ value: 'audio' }])
+  providers.lastLoadComplete = true
+  providers.providers = [{ id: 'realtime-provider', enabled: true, adapterType: 'openai-realtime', hasCredential: true }]
+  providers.models = [{ id: 'realtime', providerId: 'realtime-provider', enabled: true, capabilities: ['realtime_audio'], executableCapabilities: ['realtime_audio'] }]
+  const capabilityOptions = providers.capabilityOptions
+  vi.spyOn(providers, 'capabilityOptions', 'get').mockReturnValue((capability) => (
+    capability === 'realtime_audio' ? capabilityOptions(capability) : [{ value: 'audio' }]
+  ))
   useToolSettingsStore().loaded = true
   mocks.recorder = {
     starting: ref(false), recording: ref(false), finalizing: ref(false),
@@ -189,6 +195,30 @@ afterEach(() => {
 })
 
 describe('voice attachment composer', () => {
+  it('replaces the send action with the headset only while voice is available and the composer is empty', async () => {
+    const icons = []
+    const providers = useProviderStore()
+    chat.current = null
+    for (const update of [
+      () => { providers.loading = true },
+      () => { providers.loading = false; providers.models[0].enabled = false },
+      () => { providers.models[0].enabled = true; providers.modelDefaults.realtimeModelId = 'missing' },
+      () => { providers.modelDefaults.realtimeModelId = 'realtime' },
+      () => { providers.modelDefaults.realtimeModelId = null },
+      () => chat.setDraft('Hallo'),
+      () => chat.setDraft('  '),
+      () => chat.addAttachmentFiles([file()]),
+      () => { chat.clearAllAttachmentDrafts(); chat.setDraft(quotedMessage([{ type: 'quote', text: 'Antwort' }])) },
+      () => { chat.setDraft(''); mocks.recorder.recording.value = true }
+    ]) {
+      update()
+      await nextTick()
+      icons.push([...root.querySelectorAll('button[data-icon="headset_mic"], button[data-icon="arrow_upward"]')]
+        .map(button => button.dataset.icon))
+    }
+    expect(icons).toEqual([['arrow_upward'], ['arrow_upward'], ['arrow_upward'], ['headset_mic'], ['headset_mic'], ['arrow_upward'], ['headset_mic'], ['arrow_upward'], ['arrow_upward'], ['arrow_upward']])
+  })
+
   it('focuses the message input when pressing the card padding', () => {
     root.querySelector('.chat-composer__card').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
     expect(document.activeElement).toBe(root.querySelector('.chat-composer__input'))
@@ -338,14 +368,14 @@ describe('voice attachment composer', () => {
     expect(target.scrollTop).toBe(300)
   })
 
-  it('bounds automatic history loading for collapsed replies and leaves a manual way to continue', async () => {
+  it('automatically loads collapsed history beyond two pages until the viewport fills', async () => {
+    let pages = 0
     const target = document.createElement('div')
     Object.defineProperties(target, {
       clientHeight: { value: 400 },
-      scrollHeight: { value: 400 }
+      scrollHeight: { get: () => pages >= 3 ? 1000 : 400 }
     })
     mocks.scrollTarget = target
-    let pages = 0
     const messages = page => Array.from({ length: 20 }, (_, index) => ({
       id: `reply-${page}-${index}`, role: 'assistant', content: 'Reply',
       createdAt: new Date(Date.UTC(2026, 0, 1, 0, 100 - page * 20 + index)).toISOString()
@@ -359,14 +389,7 @@ describe('voice attachment composer', () => {
     showPage.value = true
     await nextTick()
     await vi.advanceTimersByTimeAsync(1000)
-    const automaticPages = pages
-    target.getBoundingClientRect = () => ({ top: 0, bottom: 400 })
-    root.querySelector('[data-message-id]').getBoundingClientRect = () => ({ top: 0, bottom: 60 })
-    await click('Ältere Nachrichten laden')
-    await vi.advanceTimersByTimeAsync(500)
-
-    expect([automaticPages, pages, Boolean(root.querySelector('.chat-transcript:not(.invisible)'))])
-      .toEqual([2, 3, true])
+    expect(pages).toBe(3)
   })
 
   it('reveals a search result merged into the final assistant message', async () => {

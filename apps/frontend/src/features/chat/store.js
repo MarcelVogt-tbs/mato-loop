@@ -4,7 +4,7 @@ import { api } from 'src/boot/axios'
 import { useApprovalStore } from 'src/stores/approvals'
 import { useQuestionStore } from 'src/stores/questions'
 import { releaseAttachmentDrafts } from 'src/features/chat/attachments'
-import { defaultSessionOptions, emptyActivity, emptyDrafts, emptySessionList, newSessionQueueKey, normalizedNewSessionDraft, queueKeyForEntry, sessionScopeKey, sortSessions } from 'src/features/chat/state'
+import { compareSessions, defaultSessionOptions, emptyActivity, emptyDrafts, emptySessionList, newSessionQueueKey, normalizedNewSessionDraft, queueKeyForEntry, sessionScopeKey, sortSessions } from 'src/features/chat/state'
 import { compareChatOutboxEntries, deleteChatOutboxEntries, saveChatOutboxEntries } from 'src/features/chat/outbox-storage'
 import { notifyError } from 'src/utils/notifications'
 import { draftActions } from 'src/features/chat/draft'
@@ -16,6 +16,7 @@ import { useSessionTabsStore } from './session-tabs-store'
 export const useChatStore = defineStore('chat', {
   state: () => ({
     sessionLists: { standalone: emptySessionList() },
+    visibleSessionScopes: ['standalone'],
     sessionCatalog: [],
     sessionCatalogVersion: 0,
     sessionsProjectId: null,
@@ -113,6 +114,12 @@ export const useChatStore = defineStore('chat', {
       ? state.attachmentDrafts.sessionMessages[state.current.id] || []
       : state.attachmentDrafts.newSession,
     activeQueueKey: (state) => state.current?.id || newSessionQueueKey(state.sessionsProjectId),
+    sessionHasPendingSend: (state) => (sessionId, projectId = null) => {
+      const key = sessionId || newSessionQueueKey(projectId)
+      const pending = state.pendingOutboxEntry
+      const first = state.queuedMessages[key]?.[0]
+      return Boolean((pending && queueKeyForEntry(pending) === key) || (first && !first.paused))
+    },
     activePendingMessage() {
       return this.pendingOutboxEntry && queueKeyForEntry(this.pendingOutboxEntry) === this.activeQueueKey
         ? this.pendingOutboxEntry : null
@@ -171,18 +178,36 @@ export const useChatStore = defineStore('chat', {
       return this.cachedSessions.find((session) => session.id === id) || null
     },
     updateCachedSession(id, update) {
-      for (const list of Object.values(this.sessionLists)) {
-        const index = list.items.findIndex((session) => session.id === id)
-        if (index < 0) continue
-        list.version += 1
-        list.items[index] = update(list.items[index])
-        list.items = sortSessions(list.items)
+      this.updateCachedSessions([{ id }], (item) => update(item))
+    },
+    updateCachedSessions(summaries, update = (item, summary) => ({ ...item, ...summary })) {
+      const updates = new Map(summaries.map((summary) => [summary.id, summary]))
+      const apply = (items) => {
+        let changed = false
+        let reorder = false
+        for (let index = 0; index < items.length; index += 1) {
+          const previous = items[index]
+          const summary = updates.get(previous.id)
+          if (!summary) continue
+          const next = update(previous, summary)
+          if (Object.keys(next).every((key) => next[key] === previous[key])) continue
+          reorder ||= compareSessions(previous, next) !== 0
+          items[index] = next
+          changed = true
+        }
+        return { changed, items: reorder ? sortSessions(items) : items }
       }
-      const catalogIndex = this.sessionCatalog.findIndex((session) => session.id === id)
-      if (catalogIndex >= 0) {
+      for (const list of Object.values(this.sessionLists)) {
+        const result = apply(list.items)
+        if (result.changed) {
+          list.version += 1
+          list.items = result.items
+        }
+      }
+      const result = apply(this.sessionCatalog)
+      if (result.changed) {
         this.sessionCatalogVersion += 1
-        this.sessionCatalog[catalogIndex] = update(this.sessionCatalog[catalogIndex])
-        this.sessionCatalog = sortSessions(this.sessionCatalog)
+        this.sessionCatalog = result.items
       }
     },
     replaceAgentProfile(profileId, replacementId) {

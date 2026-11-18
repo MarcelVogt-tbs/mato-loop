@@ -23,6 +23,7 @@ import { controlCenterIntegrationIds } from 'src/app/control-center/manifest'
 import { useQuestionStore } from '../src/stores/questions'
 import { useApprovalStore } from '../src/stores/approvals'
 import { useWorkspaceStore } from '../src/stores/workspace'
+import { useProjectStore } from '../src/stores/projects'
 import {
   clearChatOutbox,
   loadChatOutbox,
@@ -2487,6 +2488,168 @@ describe('chat drafts', () => {
     expect(api.get).toHaveBeenCalledOnce()
     expect(chat.activeSessionList.loadingMore).toBe(false)
     expect(chat.activeSessionList.nextCursor).toBeNull()
+  })
+
+  describe('targeted session summary updates', () => {
+    beforeEach(() => {
+      useProjectStore().loaded = false
+    })
+
+    it.each([100, 1000, 10000])('uses one targeted request with %i cached sessions', async (count) => {
+      const chat = useChatStore()
+      setSessions(chat, Array.from({ length: count }, (_, index) => ({
+        id: `session-${index}`, title: 'Alt'
+      })))
+      const summary = { id: 'session-0', title: 'Aktuell' }
+      api.get.mockImplementation((url, { params }) => Promise.resolve(sessionPage(
+        url === '/sessions' && params.get('includeArchived') === 'true'
+          && params.getAll('sessionIds').includes(summary.id) ? [summary] : []
+      )))
+
+      await chat.syncSessionSummaries([summary.id], { suppressErrorToast: true })
+
+      expect(api.get.mock.calls).toEqual([['/sessions', {
+        suppressErrorToast: true,
+        params: new URLSearchParams({ pageSize: '100', includeArchived: 'true', sessionIds: summary.id })
+      }]])
+      expect(chat.sessions.find((session) => session.id === summary.id).title).toBe('Aktuell')
+    })
+
+    it('moves summaries between visible scopes and removes archived or missing rows without duplicates', async () => {
+      const chat = useChatStore()
+      chat.visibleSessionScopes = ['standalone', 'project-1']
+      setSessions(chat, [
+        { id: 'moving', projectId: null },
+        { id: 'archived', projectId: null },
+        { id: 'missing', projectId: null },
+        { id: 'keep', projectId: null }
+      ])
+      const project = chat.ensureSessionList('project-1')
+      project.loaded = true
+      project.items = [
+        { id: 'moving', projectId: 'project-1', title: 'Alt' },
+        { id: 'returning', projectId: 'project-1' }
+      ]
+      const summaries = [
+        { id: 'moving', projectId: 'project-1', title: 'Aktuell' },
+        { id: 'returning', projectId: null },
+        { id: 'archived', projectId: null, archived: true }
+      ]
+      chat.sessionCatalog = [{ id: 'archived', projectId: null }]
+      api.get.mockImplementation((url, { params }) => Promise.resolve(sessionPage(
+        summaries.filter((summary) => url === '/sessions' && params.get('includeArchived') === 'true'
+          && params.getAll('sessionIds').includes(summary.id))
+      )))
+
+      await chat.syncSessionSummaries(['moving', 'returning', 'archived', 'missing'])
+
+      expect({ standalone: chat.sessions, project: project.items, catalog: chat.sessionCatalog }).toEqual({
+        standalone: [{ id: 'returning', projectId: null }, { id: 'keep', projectId: null }],
+        project: [{ id: 'moving', projectId: 'project-1', title: 'Aktuell' }],
+        catalog: [summaries[2]]
+      })
+    })
+
+    it('keeps the original keyset boundary after its row moves and deduplicates the next page', async () => {
+      const chat = useChatStore()
+      const row = (id, day) => ({ id, lastUserMessageAt: `2026-07-${day}T12:00:00Z` })
+      api.get.mockResolvedValueOnce(sessionPage([row('top', 20), row('boundary', 18)], 'original-cursor'))
+      await chat.fetchSessions()
+      api.get.mockImplementation((url, { params }) => {
+        if (url === '/sessions' && params instanceof URLSearchParams && params.get('includeArchived') === 'true') {
+          return Promise.resolve(sessionPage([
+            row('boundary', 22), row('middle', 19), row('outside', 17)
+          ].filter((summary) => params.getAll('sessionIds').includes(summary.id))))
+        }
+        return Promise.resolve(sessionPage([row('top', 20), row('older', 16)]))
+      })
+
+      await chat.syncSessionSummaries(['boundary'])
+      await chat.syncSessionSummaries(['middle', 'outside'])
+
+      expect(chat.sessions.map((session) => session.id)).toEqual(['boundary', 'top', 'middle'])
+      await chat.fetchMoreSessions()
+      expect(api.get).toHaveBeenLastCalledWith('/sessions', {
+        params: { standalone: true, pageSize: 8, cursor: 'original-cursor' }
+      })
+      expect(chat.sessions.map((session) => session.id)).toEqual(['boundary', 'top', 'middle', 'older'])
+    })
+
+    it('applies a targeted update after an in-flight page without losing that page', async () => {
+      const chat = useChatStore()
+      setSessions(chat, [{ id: 'session-1' }], { nextCursor: 'cursor-1' })
+      let finishPage
+      api.get.mockImplementation((url, { params }) => (
+        url === '/sessions' && params instanceof URLSearchParams && params.get('includeArchived') === 'true'
+          ? Promise.resolve(sessionPage([{ id: 'session-2', title: 'Aktuell' }]))
+          : new Promise((resolve) => { finishPage = resolve })
+      ))
+
+      const page = chat.fetchMoreSessions()
+      const sync = chat.syncSessionSummaries(['session-2'])
+      await Promise.resolve()
+      finishPage(sessionPage([{ id: 'session-2', title: 'Alt' }], 'cursor-2'))
+      await Promise.all([page, sync])
+
+      expect({ items: chat.sessions, cursor: chat.activeSessionList.nextCursor }).toEqual({
+        items: [{ id: 'session-2', title: 'Aktuell' }, { id: 'session-1' }], cursor: 'cursor-2'
+      })
+    })
+
+    it('retains a page started during the targeted summary GET and applies the latest summary', async () => {
+      const chat = useChatStore()
+      setSessions(chat, [{ id: 'session-1' }], { nextCursor: 'cursor-1' })
+      let finishSync, finishPage
+      api.get.mockReturnValueOnce(new Promise((resolve) => { finishSync = resolve }))
+        .mockReturnValueOnce(new Promise((resolve) => { finishPage = resolve }))
+
+      const sync = chat.syncSessionSummaries(['session-2'])
+      await vi.waitFor(() => expect(api.get).toHaveBeenCalledOnce())
+      const page = chat.fetchMoreSessions()
+      finishSync(sessionPage([{ id: 'session-2', title: 'Aktuell' }]))
+      await Promise.resolve()
+      await Promise.resolve()
+      finishPage(sessionPage([{ id: 'session-2', title: 'Alt' }], 'cursor-2'))
+      await Promise.all([page, sync])
+
+      expect({ items: chat.sessions, cursor: chat.activeSessionList.nextCursor }).toEqual({
+        items: [{ id: 'session-2', title: 'Aktuell' }, { id: 'session-1' }], cursor: 'cursor-2'
+      })
+    })
+
+    it('does not apply a previous owner summary response after logout', async () => {
+      const chat = useChatStore()
+      setSessions(chat, [{ id: 'session-1', title: 'Privat' }])
+      let finishSync
+      api.get.mockReturnValueOnce(new Promise((resolve) => { finishSync = resolve }))
+      const sync = chat.syncSessionSummaries(['session-1'])
+      await vi.waitFor(() => expect(api.get).toHaveBeenCalledOnce())
+
+      chat.setDraftOwner(null)
+      setSessions(chat, [])
+      finishSync(sessionPage([{ id: 'session-1', title: 'Privat aktualisiert' }]))
+      await sync
+
+      expect(chat.sessions).toEqual([])
+    })
+  })
+
+  it.each([
+    { pinned: true },
+    { lastUserMessageAt: '2026-07-22T12:00:00Z' }
+  ])('reorders cached lists and catalog for an ordering update: %j', (change) => {
+    const chat = useChatStore()
+    const items = [
+      { id: 'newer', lastUserMessageAt: '2026-07-20T12:00:00Z' },
+      { id: 'older', lastUserMessageAt: '2026-07-18T12:00:00Z' }
+    ]
+    setSessions(chat, items.map((item) => ({ ...item })))
+    chat.sessionCatalog = items.map((item) => ({ ...item }))
+
+    chat.updateCachedSessions([{ id: 'older', ...change }])
+
+    const expected = [{ ...items[1], ...change }, items[0]]
+    expect({ items: chat.sessions, catalog: chat.sessionCatalog }).toEqual({ items: expected, catalog: expected })
   })
 
   it('replaces stale loaded summaries when refreshing the visible depth', async () => {

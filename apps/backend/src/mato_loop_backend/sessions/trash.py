@@ -1,4 +1,4 @@
-"""Recoverable deletion; storage is touched only by the existing purge workflows."""
+"""Recoverable deletion; optional worktree removal precedes the trash barrier."""
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, update
@@ -14,6 +14,7 @@ from mato_loop_backend.models import (
     ProjectPlanExecution,
     QuestionRequest,
     QueuedMessage,
+    UserAccount,
 )
 
 from .cleanup import descendant_sessions
@@ -39,9 +40,7 @@ async def _sessions(db, item):
     return list(dict.fromkeys([*roots, *(child for child, _ in await descendant_sessions(db, roots))]))
 
 
-async def move_to_trash(db, item):
-    from mato_loop_backend.agent.runtime import AgentRuntime
-    from mato_loop_backend.agent.session_secrets import session_secrets
+async def _trash_scope(db, item):
     from mato_loop_backend.settings import SettingsStore, UserPreferences
     from mato_loop_backend.voice.admission import active_connections
 
@@ -70,11 +69,47 @@ async def move_to_trash(db, item):
     await db.execute(session_ids.with_for_update())
     if await active_connections(db, session_ids):
         raise SessionServiceError(409, "voice.busy")
-    now = datetime.now(UTC)
-    item.delete_at = now + timedelta(days=preferences.trash_retention_days)
+    return item, ids, preferences
+
+
+async def move_to_trash(db, item, *, worktree_impact=None):
+    from mato_loop_backend.agent.runtime import AgentRuntime
+    from mato_loop_backend.agent.session_secrets import session_secrets
+
+    from .service import SessionServiceError, remove_session_worktree
+
+    if worktree_impact is not None:
+        if not isinstance(item, ChatSession):
+            raise SessionServiceError(400, "validation.invalid", field="worktreeImpact")
+        item, ids, _ = await _trash_scope(db, item)
+        item_id, user_id = item.id, item.user_id
+        runs = list(await db.scalars(select(AgentRun.id).where(
+            AgentRun.session_id.in_(ids), AgentRun.status.in_(ACTIVE),
+        )))
+        # Cancellation uses independent transactions: release locks, then revalidate.
+        await db.rollback()
+        for run_id in runs:
+            await AgentRuntime.cancel_and_wait(run_id)
+        for session_id in ids:
+            await AgentRuntime.cancel_descendants(session_id)
+        await db.execute(select(UserAccount.id).where(UserAccount.id == user_id).with_for_update(key_share=True))
+        item = await db.get(ChatSession, item_id)
+        if item is None:
+            raise SessionServiceError(404, "trash.notFound")
+    item, ids, preferences = await _trash_scope(db, item)
     runs = list(await db.scalars(select(AgentRun.id).where(
         AgentRun.session_id.in_(ids), AgentRun.status.in_(ACTIVE),
     )))
+    if worktree_impact is not None:
+        if runs:
+            raise SessionServiceError(409, "session.runAlreadyActive")
+        try:
+            await remove_session_worktree(db, item, worktree_impact)
+        except BaseException:
+            await db.rollback()
+            raise
+    now = datetime.now(UTC)
+    item.delete_at = now + timedelta(days=preferences.trash_retention_days)
     await db.execute(update(QueuedMessage).where(QueuedMessage.session_id.in_(ids)).values(paused=True))
     await db.execute(update(AutomationRun).where(
         AutomationRun.automation_id.in_(select(Automation.id).where(Automation.execution_session_id.in_(ids))),

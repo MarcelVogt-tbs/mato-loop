@@ -4,6 +4,8 @@ Diese Anleitung gilt für die Produktionsinstallation mit veröffentlichten Imag
 
 ## Update durchführen
 
+Im Benutzermenü unten links öffnest du **Changelog**. Dort vergleichst du deine installierte Instanz mit der neuesten Veröffentlichung oder dem Entwicklungsstand `develop`. Die Ansicht lädt Release Notes von GitHub und installiert kein Update. Bei unbekannten oder lokal veränderten Builds ist kein genauer Vergleich möglich.
+
 1. Prüfe den [Changelog](changelog.md) und die unten aufgeführten Upgrade-Hinweise für deinen Ausgangsstand.
 2. Erstelle und prüfe eine [gemeinsame Sicherung](betrieb-und-datensicherung.md#zu-sichernde-daten) von Datenbank, Backenddateien, Schlüsseln, Agentdaten und Konfiguration. Probe die Wiederherstellung isoliert.
 3. Setze in `.env` beide Imagevariablen auf denselben veröffentlichten festen `YYYY-MM-DD-<SHA8>`-Tag.
@@ -19,6 +21,12 @@ Diese Anleitung gilt für die Produktionsinstallation mit veröffentlichten Imag
 5. Prüfe Anmeldung, bestehende Provider-Zugangsdaten, Sessiondateien und Versionen, Memory, Computer und Integrationen.
 
 Beim Backendstart laufen Datenmigrationen automatisch. `develop` und `latest` sind veränderliche Tags, keine reproduzierbaren Update- oder Rollbackziele. CI veröffentlicht Images, aktualisiert aber deinen Server nicht.
+
+### Weboberfläche neu laden
+
+Nach einem Server-Update kann die installierte Web-App melden: **Eine neue Version der Weboberfläche ist bereit.** Mit **Jetzt neu laden** übernimmst du die bereitstehende Weboberfläche; dadurch wird kein Update auf dem Server installiert. **Später** verschiebt die Meldung um eine Stunde.
+
+**Neuerungen nach dem Neuladen anzeigen** ist standardmäßig aktiviert. Nach dem bewussten Neuladen öffnet sich der Changelog einmalig für die bisher und jetzt geladene Version, nicht für einen neueren Remote-Stand. Entferne das Häkchen, wenn du nur neu laden möchtest. Dafür müssen beide Web-Builds einen eindeutigen Commit-Stempel haben und der Tab-Speicher verfügbar sein. Normales Neuladen oder ein unveränderter Stand öffnet den Dialog nicht automatisch.
 
 ## Computer-Agents aktualisieren
 

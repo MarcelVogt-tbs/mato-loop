@@ -14,15 +14,15 @@ Die Seitenleiste enthält **Home**, **Chat**, **Automationen**, **Projekte** und
 
 Der persönliche Chat erscheint nicht zusätzlich unter **Sessions**. Home zeigt zuletzt aktive Unterhaltungen, offene Anfragen, kommende Automationen und Computerstatus. Manche Übersichtselemente sind auf kleinen Bildschirmen ausgeblendet; der Chat bleibt nutzbar. Eine ausdrückliche neue Unterhaltung öffnet einen leeren Entwurf.
 
-Unter **Zuletzt aktiv** auf Home rücken Sessions bei einer neuen Nutzernachricht, Rückfrage, Freigabeanfrage oder fertigen Agent-Antwort nach oben. Es zählt das neueste dieser Ereignisse; Rückfragen erhalten keinen dauerhaften Vorrang. Streaming, Tools und Zwischenmeldungen ändern die Position nicht. Auch das Lesen einer Antwort oder Erledigen einer Anfrage verschiebt die Session nicht zurück. Stumme Antworten mit `silence` rücken die Session nicht nach oben; Fehler bleiben sichtbar.
+Unter **Zuletzt aktiv** auf Home findest du die sechs zuletzt aktiven Sessions und zusätzlich alle laufenden Sessions, Sessions mit offenen Freigaben oder Rückfragen sowie Sessions mit ungelesenen Antworten. Beim Öffnen zählt die neueste Nutzernachricht, Rückfrage, Freigabeanfrage oder fertige Agent-Antwort für die Reihenfolge. Danach bleiben bestehende Positionen während des Home-Besuchs stabil; neu relevante Sessions kommen unten hinzu. Wie in der Seitenleiste zeigt ein Punkt eine ungelesene Antwort an, sofern kein laufender Agent oder eine offene Anfrage Vorrang hat. Der Status aktualisiert sich weiter. Gelesene Antworten und erledigte Anfragen lassen einen Eintrag nicht sofort verschwinden. Archivierte oder gelöschte Sessions werden entfernt. Stumme Antworten mit `silence` zählen nicht als neue Antwort; Fehler bleiben sichtbar.
 
 Die Seitenleiste bleibt nach deiner letzten Nachricht sortiert, neueste zuerst; angepinnte Sessions stehen oben. Bei leeren Sessions zählt der Erstellungszeitpunkt. Status und Ungelesen-Markierungen bleiben überall aktuell.
 
-Eine bereits geladene Home-Übersicht wird auch während eines Chats im Hintergrund aktualisiert. Beim Zurückkehren bleibt sie erhalten, statt allein durch den Seitenwechsel erneut geladen zu werden.
+Beim Zurückkehren zu Home wird die Auswahl neu geladen und einmal sortiert angezeigt. Bis die Session- und Anfragestatus geladen sind, erscheint eine Ladeanzeige statt einer alten Liste, die anschließend umspringt.
 
 ### Session-Tabs
 
-Aktiviere **Einstellungen > Grundeinstellungen > Session-Tab-Leiste anzeigen**, wenn du mehrere Unterhaltungen als Tabs offen halten möchtest. Die Leiste erscheint unter Chat und Control Center ab Tabletbreite (600 Pixel); auf dem Handy bleibt sie ausgeblendet. Standardmäßig ist sie ausgeschaltet.
+Aktiviere **Einstellungen > Grundeinstellungen > Session-Tab-Leiste anzeigen**, wenn du mehrere Unterhaltungen als Tabs offen halten möchtest. Unter **Position der Session-Tab-Leiste** wählst du **Oben** oder **Unten** am gemeinsamen Chat-/Control-Center-Bereich; die Auswahl wird für dein Konto gespeichert, Vorgabe ist **Unten**. Die Leiste erscheint ab Tabletbreite (600 Pixel); auf dem Handy bleibt sie ausgeblendet. Standardmäßig ist sie ausgeschaltet.
 
 Ein einfacher Klick auf eine Session öffnet einen kursiven Vorschau-Tab und ersetzt die vorherige Vorschau. Mit Doppelklick auf die Session oder den Tab, über **In neuem Tab öffnen** im Sessionmenü oder ab der ersten Texteingabe bzw. einem Anhang bleibt der Tab erhalten. Bereits geöffnete Sessions werden nicht doppelt angelegt. Inhalt und Reihenfolge der Leiste einschließlich der Vorschau werden für dein Konto geräteübergreifend gespeichert und beim Öffnen bzw. Zurückkehren ins Fenster geladen. Bei gleichzeitigen Änderungen gilt die zuletzt gespeicherte Liste. Entwurfstexte und Anhänge werden dabei nicht übertragen.
 
@@ -30,7 +30,7 @@ Ziehe Tabs an die gewünschte Position; eine Markierung zeigt die Einfügestelle
 
 Das Schließen eines Tabs beendet keinen Lauf und löscht weder Session noch Entwurf. Textentwürfe werden pro Benutzer und Session browserlokal gespeichert; ungesendete Anhänge bleiben beim Wechsel oder Tab-Schließen im Arbeitsspeicher, nicht über ein Neuladen hinweg.
 
-Projekt-Sessions zeigen `[Projektname]` vor dem Titel. Lange Namen werden in der einheitlichen Tabbreite gekürzt. Mit Maus oder Tastaturfokus scrollen überlange Projekt- und Sessionnamen wie in der Seitenleiste, ohne Tooltip. Bei reduzierten Animationen bleiben sie gekürzt.
+Projekt-Sessions zeigen `Sessiontitel · Projektname`. Der Projektname bleibt am rechten Ende sichtbar; nur besonders lange Projektnamen werden gekürzt. Der Sessiontitel nutzt den übrigen Platz und scrollt bei Maus- oder Tastaturfokus, ohne Tooltip. Bei reduzierten Animationen bleibt er gekürzt. Der aktive Tab ist durch seine Hintergrundfläche, einen kräftigeren Titel und die Akzentlinie zum Inhalt hin markiert.
 
 ### Suche
 
@@ -44,7 +44,7 @@ Die Suche findet eigene Projekte, Sessions und Nachrichten ab zwei Zeichen. **St
 
 Aktiviere unter **Einstellungen > Grundeinstellungen** bei Bedarf **Papierkorb verwenden** und lege die **Aufbewahrung in Tagen** fest (1–3650, Vorgabe 30). Standardmäßig ist der Papierkorb aus. Änderungen gelten nur für künftige Löschvorgänge; Deaktivieren leert ihn nicht und ändert keine bestehenden Fristen.
 
-Beim Löschen wählst du dann zwischen Verschieben in den Papierkorb und **Sofort endgültig löschen**. Im Papierkorb sind Unterhaltungen nicht lesbar und neue Aufträge gesperrt; Dateien, Worktrees und Automationen bleiben beim Verschieben erhalten. Unter **Papierkorb** siehst du Projekte und unabhängig gelöschte Sessions mit ihrer festen Wiederherstellungsfrist. Sessions innerhalb gelöschter Projekte erscheinen nicht zusätzlich. Stelle zuerst ihr Projekt wieder her. Zuvor einzeln gelöschte Sessions behalten ihre eigene Frist; der Archivstatus bleibt unverändert.
+Beim Löschen wählst du dann zwischen Verschieben in den Papierkorb und **Sofort endgültig löschen**. Unabhängig davon kannst du **Worktree ebenfalls entfernen** auswählen. Ohne diese Auswahl bleiben Worktrees erhalten. Im Papierkorb sind Unterhaltungen nicht lesbar und neue Aufträge gesperrt; Dateien und Automationen bleiben beim Verschieben erhalten. Unter **Papierkorb** siehst du Projekte und unabhängig gelöschte Sessions mit ihrer festen Wiederherstellungsfrist. Klappe Projekte auf, um die enthaltenen Sessiontitel zu sehen; Wiederherstellen und endgültiges Löschen gelten für das ganze Projekt. Zuvor einzeln gelöschte Sessions behalten ihre eigene Frist; der Archivstatus bleibt unverändert. Im Archiv öffnest du Sessions direkt per Klick auf die Zeile und kannst sie über das Aktionsmenü löschen.
 
 !!! warning "Endgültiges Löschen ist unwiderruflich"
     Ohne aktivierten Papierkorb oder mit **Sofort endgültig löschen** werden Inhalte dauerhaft gelöscht. Beachte dabei die zusätzlichen Hinweise zu abhängigen Automationen und einer optionalen Worktree-Entfernung. Nach Ablauf der angezeigten Frist ist keine Wiederherstellung mehr möglich; endgültiges Löschen bleibt verfügbar. Auch bei ausgeschaltetem Papierkorb erreichst du vorhandene Einträge weiterhin über die Seitenleiste.

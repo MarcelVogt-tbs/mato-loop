@@ -4,6 +4,7 @@
     class="app-shell"
     :class="{
       'app-shell--chat': route.name === 'chat',
+      'app-shell--top-session-tabs': route.name === 'chat' && preferences.sessionTabsEnabled && preferences.sessionTabsPosition === 'top' && !$q.screen.lt.sm && sessionTabs.items.length > 0,
       'app-shell--navigation-overlay': showFloatingNavigation,
       'app-shell--floating-chat-controls': route.name === 'chat' && showFloatingControls
     }"
@@ -76,6 +77,8 @@ import ControlCenterPanel from 'src/app/control-center/ControlCenterPanel.vue'
 import { useShellSync } from 'src/app/useShellSync'
 import { useAutomationStore } from 'stores/automations'
 import { useChatStore } from 'src/features/chat/store'
+import { useSessionTabsStore } from 'src/features/chat/session-tabs-store'
+import { useUserPreferencesStore } from 'src/features/settings/user-preferences-store'
 import { useControlCenterStore } from 'stores/control-center'
 import { useInAppNotificationStore } from 'stores/in-app-notifications'
 import { useWorkspaceStore } from 'stores/workspace'
@@ -87,11 +90,13 @@ const $q = useQuasar()
 const drawerOpen = ref(!$q.screen.lt.md)
 const navigation = ref(null)
 provide('deleteActions', {
-  sessions: (session) => navigation.value?.removeSession(session, { permanent: true }),
-  projects: (project) => navigation.value?.deleteProject(project, { permanent: true })
+  sessions: (session, options = { permanent: true }) => navigation.value?.removeSession(session, options),
+  projects: (project, options = { permanent: true }) => navigation.value?.deleteProject(project, options)
 })
 const route = useRoute()
 const chat = useChatStore()
+const sessionTabs = useSessionTabsStore()
+const preferences = useUserPreferencesStore()
 const controlCenter = useControlCenterStore()
 const workspace = useWorkspaceStore()
 const { confirm } = useConfirm()

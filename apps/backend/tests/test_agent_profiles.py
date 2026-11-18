@@ -24,6 +24,7 @@ from mato_loop_backend.models import ChatSession, UserAccount
 from mato_loop_backend.settings import (
     BUILD_PROFILE_ID,
     GENERAL_PROFILE_ID,
+    INTERACTIVE_PROFILE_ID,
     PLAN_PROFILE_ID,
     SYSADMIN_PROFILE_ID,
     AgentIdentitySettings,
@@ -47,17 +48,18 @@ from mato_loop_backend.settings import (
 
 def test_builtin_agent_profile_defaults() -> None:
     profiles = core_profiles()
-    default, plan, build, sysadmin = profiles
+    default, plan, build, sysadmin, interactive = profiles
 
     assert [profile.id for profile in profiles] == [
         GENERAL_PROFILE_ID,
         PLAN_PROFILE_ID,
         BUILD_PROFILE_ID,
         SYSADMIN_PROFILE_ID,
+        INTERACTIVE_PROFILE_ID,
     ]
-    assert [profile.name for profile in profiles] == ["Allgemein", "Plan", "Build", "Sysadmin"]
-    assert [profile.repository_instructions_enabled for profile in profiles] == [False, True, True, False]
-    assert [profile.temporary_files_enabled for profile in profiles] == [False, True, True, True]
+    assert [profile.name for profile in profiles] == ["Allgemein", "Plan", "Build", "Sysadmin", "Interactive"]
+    assert [profile.repository_instructions_enabled for profile in profiles] == [False, True, True, False, True]
+    assert [profile.temporary_files_enabled for profile in profiles] == [False, True, True, True, True]
     assert AgentProfilesSettings().profiles == []
     assert "persona_id" not in type(default).model_fields
     assert default.private_permissions == AgentProfilePermissions()
@@ -96,7 +98,16 @@ def test_builtin_agent_profile_defaults() -> None:
     }
     assert not plan.private_permissions.integration_policies
     assert not build.private_permissions.integration_policies
-    for profile in (plan, build):
+    assert interactive.private_permissions == interactive.public_permissions == build.private_permissions
+    assert all(rule in interactive.runtime_instructions for rule in (
+        "Analyze and discuss by default",
+        "Only an explicit implementation request authorizes changes",
+        "Do not implement merely because the user agrees",
+        "Complete and verify the authorized task across tool rounds",
+        "After completing the task, return to analysis by default",
+        "Apply these workflow limits to delegated work",
+    ))
+    for profile in (plan, build, interactive):
         assert "simplest" in profile.instructions
         assert "current requirements justify" in profile.instructions
         assert "standard-library or native features" in profile.instructions
@@ -355,8 +366,8 @@ def test_agent_profile_payload_marks_only_builtins_as_protected() -> None:
     assert custom_payload["instructions"] == core_profiles()[0].instructions
 
 
-@pytest.mark.parametrize("profile_id", [PLAN_PROFILE_ID, BUILD_PROFILE_ID])
-async def test_plan_and_build_cannot_be_renamed_or_deleted(
+@pytest.mark.parametrize("profile_id", [PLAN_PROFILE_ID, BUILD_PROFILE_ID, INTERACTIVE_PROFILE_ID])
+async def test_coding_profiles_cannot_be_renamed_or_deleted(
     monkeypatch, profile_id
 ) -> None:
     settings = AgentProfilesSettings()
@@ -632,12 +643,12 @@ async def test_effective_agent_profiles_merge_enabled_personal_profiles(
     effective = await load_effective_agent_profiles(AsyncMock(), user_id)
 
     assert [profile.name for profile in effective.profiles] == [
-        "Allgemein", "Plan", "Build", "Sysadmin", "Global", "Personal"
+        "Allgemein", "Plan", "Build", "Sysadmin", "Interactive", "Global", "Personal"
     ]
-    assert effective.profiles[4].owner_id is None
-    assert effective.profiles[5].owner_id == user_id
-    assert effective.profiles[5].delegation_enabled is True
-    assert effective.profiles[5].todo_enabled is False
+    assert effective.profiles[5].owner_id is None
+    assert effective.profiles[6].owner_id == user_id
+    assert effective.profiles[6].delegation_enabled is True
+    assert effective.profiles[6].todo_enabled is False
 
 
 async def test_builtin_access_inherits_per_entry_and_respects_scope(monkeypatch) -> None:

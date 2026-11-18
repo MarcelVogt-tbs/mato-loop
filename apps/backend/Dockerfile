@@ -15,7 +15,10 @@ WORKDIR /build/frontend
 COPY apps/frontend/package.json apps/frontend/yarn.lock apps/frontend/.yarnrc.yml ./
 RUN yarn install --immutable
 COPY apps/frontend/ ./
-RUN yarn build
+COPY --from=version-build /build-version.txt /build-version.txt
+COPY --from=version-build /build-revision.txt /build-revision.txt
+RUN if ! grep -q -- '-dirty$' /build-version.txt; then export BUILD_REVISION="$(cat /build-revision.txt)"; fi; \
+    yarn build
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58 AS documentation
 

@@ -175,6 +175,7 @@ export const useIntegrationStore = defineStore('integrations', {
     }
   },
   actions: {
+    ...integrationActions('WebIq', '/integrations/webiq/providers', { scoped: false, fetchName: 'fetchAll' }),
     ...integrationActions('Search', '/integrations/search/providers'),
     ...integrationActions('Webfetch', '/integrations/webfetch/providers', { scoped: false }),
     ...integrationActions('Calendar', '/integrations/calendar/accounts', { prepareUpdate: withoutEmptyPassword }),
@@ -239,6 +240,10 @@ export const useIntegrationStore = defineStore('integrations', {
     }),
     ...integrationActions('OpenScad', '/integrations/openscad'),
     async testIntegration(integration) {
+      if (['webiq', 'webiq_search'].includes(integration.providerType)) {
+        await this.testWebIq(integration.id)
+        return { type: 'positive', message: 'Verbindung erfolgreich' }
+      }
       if (integration.integrationType === 'browser') {
         const result = await this.browserStatus(integration.id, true)
         return { type: result.state === 'ready' ? 'positive' : 'warning', message: browserStatusLabel(result) }

@@ -129,13 +129,6 @@
               <span>{{ recordingDuration }}</span>
             </div>
             <q-btn
-              flat round dense icon="headset_mic" class="composer-action" type="button"
-              aria-label="Sprachmodus starten"
-              :loading="voicePanel?.starting"
-              :disable="inputDisabled || voicePanel?.starting || (running && !voicePanel?.canStartWhileRunning) || voiceActivity || chat.activeQueuedMessages.length > 0"
-              @click="voicePanel.start()"
-            />
-            <q-btn
               flat
               round
               dense
@@ -207,7 +200,15 @@
               </AppMenu>
             </q-btn>
             <q-btn
-              v-if="!running"
+              v-if="showVoiceStart"
+              flat round dense icon="headset_mic" class="composer-action" type="button" color="primary"
+              aria-label="Sprachmodus starten"
+              :loading="voicePanel?.starting"
+              :disable="inputDisabled || voicePanel?.starting || (running && !voicePanel?.canStartWhileRunning) || chat.activeQueuedMessages.length > 0"
+              @click="voicePanel.start()"
+            />
+            <q-btn
+              v-if="!running && !showVoiceStart"
               flat
               round
               dense
@@ -354,6 +355,10 @@ watch([attachmentsDisabled, () => props.session?.id, () => chat.sessionsProjectI
 const draftHasContent = computed(() => Boolean(props.draft.trim() || props.attachments.length))
 const inputPlaceholder = computed(() => `Eine Nachricht an ${identity.displayName} senden`)
 const voiceActivity = computed(() => starting.value || recording.value || finalizing.value || sendingRecording.value)
+const showVoiceStart = computed(() => !providers.loading && providers.lastLoadComplete
+  && providers.capabilityOptions('realtime_audio').some((option) => (
+    !providers.modelDefaults.realtimeModelId || option.value === providers.modelDefaults.realtimeModelId
+  )) && !draftHasContent.value && !voiceActivity.value)
 const voiceSendLabel = computed(() => queueSend.value ? 'Aufnahme beenden und vormerken' : 'Aufnahme beenden und senden')
 const canFinishAndSend = computed(() => (
   recording.value && !inputDisabled.value && !starting.value && !finalizing.value && !sendingRecording.value

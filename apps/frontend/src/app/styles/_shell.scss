@@ -30,6 +30,10 @@
   pointer-events: none;
 }
 
+.app-shell--top-session-tabs .app-floating-controls {
+  top: calc(33px + var(--app-floating-control-inset) + env(safe-area-inset-top) + var(--app-visual-viewport-offset-top, 0px));
+}
+
 .app-floating-control {
   width: var(--app-floating-control-size);
   height: var(--app-floating-control-size);
@@ -220,16 +224,6 @@ body.body--dark .app-floating-control--flat {
   position: relative;
   width: var(--sidebar-icon-size, 22px);
   height: var(--sidebar-icon-size, 22px);
-}
-
-.session-list-item__status-slot .q-badge--floating {
-  top: -5px;
-  right: -6px;
-  min-width: 16px;
-  min-height: 16px;
-  padding: 1px 4px;
-  font-size: 0.625rem;
-  line-height: 1;
 }
 
 .session-actions-menu {

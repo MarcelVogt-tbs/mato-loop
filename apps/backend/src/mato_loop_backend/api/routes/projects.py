@@ -273,6 +273,7 @@ async def list_projects(
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
     archived: bool = False,
+    project_ids: Annotated[list[UUID] | None, Query(alias="projectIds", max_length=100)] = None,
 ) -> ProjectListResponse:
     rows = (
         await db.execute(
@@ -288,6 +289,7 @@ async def list_projects(
                 Project.user_id == user.id,
                 Project.delete_at.is_(None),
                 Project.archived_at.is_not(None) if archived else Project.archived_at.is_(None),
+                Project.id.in_(project_ids) if project_ids is not None else True,
             )
             .group_by(Project.id)
             .order_by(Project.updated_at.desc(), Project.id.desc())

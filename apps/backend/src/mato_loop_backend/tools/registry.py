@@ -11,10 +11,6 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from mato_loop_backend.integrations.contracts import ToolContribution
-from mato_loop_backend.integrations.jina.adapter import (
-    provider_available as webfetch_provider_available,
-)
-from mato_loop_backend.integrations.jina.adapter import provider_key as webfetch_provider_key
 from mato_loop_backend.integrations.registry import (
     agent_profile_search_available,
     effective_integration_contributions,
@@ -39,6 +35,10 @@ from mato_loop_backend.tools.contracts import (
     ToolResult,
 )
 from mato_loop_backend.tools.display import TOOL_GROUPS
+from mato_loop_backend.web.providers import (
+    provider_available as webfetch_provider_available,
+)
+from mato_loop_backend.web.providers import provider_key as webfetch_provider_key
 
 logger = logging.getLogger("mato_loop_backend.agent.tools")
 
@@ -610,7 +610,27 @@ class ToolRegistry:
         definitions, sources, prompt_fragments = self._combined_definitions(
             integration_settings
         )
-        if "webfetch" in definitions and webfetch_provider_key(integration_settings) != "builtin":
+        if "web_search" in definitions and tool_settings is not None and tool_settings.web_search.primary_provider.startswith("webiq_search:"):
+            from mato_loop_backend.tools.arguments import WebIqSearchArguments
+
+            definitions["web_search"] = replace(
+                definitions["web_search"], arguments_model=WebIqSearchArguments,
+            )
+        if "webfetch" in definitions and webfetch_provider_key(integration_settings).startswith("webiq:"):
+            from mato_loop_backend.tools.arguments import WebIqWebFetchArguments
+
+            definitions["webfetch"] = replace(
+                definitions["webfetch"], arguments_model=WebIqWebFetchArguments,
+                description=(
+                    "Read query-relevant plain-text passages from one public page through Microsoft Web IQ. "
+                    "Provide query to describe the information needed. Returns at most 3000 characters, "
+                    "not the full page, original structured data, or image attachments. "
+                    "Use download_file for original files. pdf_pages uses direct PDF rendering; query is optional. "
+                    "A crawl-pending error means content is not available yet; do not loop or silently switch providers. "
+                    "Do not automatically retry HTTP 401/403, login, or CAPTCHA blocks. No audio/video/captions."
+                ),
+            )
+        elif "webfetch" in definitions and webfetch_provider_key(integration_settings).startswith("jina:"):
             from mato_loop_backend.tools.arguments import JinaWebFetchArguments
 
             definitions["webfetch"] = replace(

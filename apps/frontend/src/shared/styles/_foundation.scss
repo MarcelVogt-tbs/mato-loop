@@ -18,6 +18,10 @@ body {
   touch-action: pan-x pan-y;
 }
 
+.app-tab-scroll {
+  overflow-x: auto;
+}
+
 .app-sr-only {
   position: absolute;
   width: 1px;

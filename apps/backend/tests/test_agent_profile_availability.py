@@ -40,6 +40,7 @@ from mato_loop_backend.settings.models import (
     apply_profile_overrides,
     build_profile,
     general_profile,
+    interactive_profile,
     plan_profile,
 )
 from mato_loop_backend.settings.store import SettingsStore
@@ -55,6 +56,7 @@ from mato_loop_backend.tools.web import _web_search
     (general_profile(), False),
     (plan_profile(), True),
     (build_profile(), True),
+    (interactive_profile(), True),
     (AgentProfile(name="Custom", instructions="Task"), False),
 ])
 def test_todo_tool_follows_profile_availability(profile, enabled):
@@ -66,7 +68,7 @@ def test_todo_tool_follows_profile_availability(profile, enabled):
     assert ("todo_write" in effective.tools) is enabled
 
 
-@pytest.mark.parametrize("profile", [plan_profile(), build_profile()])
+@pytest.mark.parametrize("profile", [plan_profile(), build_profile(), interactive_profile()])
 def test_coding_profiles_share_slim_overridable_tool_baseline(profile):
     assert profile.tool_availability == plan_profile().tool_availability == build_profile().tool_availability
     for name in ("task", "web_search", "webfetch", "search_tools", "memory_retrieve", "update_agent_identity"):

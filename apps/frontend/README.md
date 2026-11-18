@@ -38,6 +38,10 @@ Persistent agent failures appear as canonical MatoLoop chat messages. SSE `run.f
 
 Stores own server state and effective runtime policy. Components present it and coordinate interaction. Failed mutations must not leave optimistic state behind. Approvals/questions are loaded independently of SSE, survive UI reconnects, and stay pending when their UI is dismissed. See [questions](../../docs/questions.md) and [run continuations](../../docs/run-continuations.md).
 
+Session indicators in the sidebar, session tabs, and Home include pending message delivery before a server run is available. Paused delivery does not count as active; pending approvals and questions retain priority.
+
+Session/message invalidations batch concrete session IDs into bounded summary reads rather than reloading every loaded page or open tab. Project-summary hints identify affected source/destination projects, including moves and trash operations. Hidden sidebar scopes are marked stale and reconciled when opened; reconnects and unscoped hints still reconcile loaded pages for correctness. Targeted updates preserve the original pagination boundary, and the sidebar virtualizes rows on its existing outer scroll area while retaining active interactions. Request count and rendered row count therefore do not grow with the total stored session count; merging explicitly loaded rows and full recovery still require work proportional to that loaded data.
+
 ## UI Rules
 
 - Write visible application text in German; support desktop/mobile and light/dark mode.

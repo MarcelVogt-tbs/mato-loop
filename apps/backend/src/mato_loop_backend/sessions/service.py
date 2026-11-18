@@ -968,6 +968,7 @@ async def list_sessions(
     include_archived: bool = False,
     sort: Literal["pinned", "recent"] = "pinned",
     session_ids: list[UUID] | None = None,
+    home_session_ids: list[UUID] | None = None,
 ) -> dict[str, Any]:
     from mato_loop_backend.sessions.archive import active_session_clause
     from mato_loop_backend.sessions.state import deleted_session_clause
@@ -1106,7 +1107,37 @@ async def list_sessions(
         .outerjoin(latest_messages, latest_messages.c.session_id == ChatSession.id)
         .where(*session_filters)
     )
-    if cursor is not None:
+    if home_session_ids is not None:
+        pending_approval = select(ApprovalRequest.id).where(
+            ApprovalRequest.session_id == ChatSession.id,
+            ApprovalRequest.user_id == user_id,
+            ApprovalRequest.status == "pending",
+            ApprovalRequest.action_kind != "terminal_command",
+        ).correlate(ChatSession).exists()
+        pending_question = select(QuestionRequest.id).where(
+            QuestionRequest.session_id == ChatSession.id,
+            QuestionRequest.status == "pending",
+        ).correlate(ChatSession).exists()
+        candidates = statement.add_columns(
+            func.row_number().over(order_by=(activity_at.desc(), ChatSession.id.desc())).label("home_rank"),
+            or_(
+                active_run_status.is_not(None), pending_approval, pending_question,
+                and_(
+                    latest_messages.c.last_assistant_message_at.is_not(None),
+                    or_(ChatSession.last_read_at.is_(None),
+                        latest_messages.c.last_assistant_message_at > ChatSession.last_read_at),
+                ),
+            ).label("home_relevant"),
+        ).cte("home_sessions")
+        home_session = aliased(ChatSession, candidates)
+        rows = (await db.execute(select(
+            home_session, candidates.c.last_message_at, candidates.c.last_assistant_message_at,
+            candidates.c.active_run_status, candidates.c.activity_at, candidates.c.last_user_message_at,
+        ).where(or_(
+            candidates.c.home_rank <= page_size, candidates.c.home_relevant,
+            candidates.c.id.in_(home_session_ids),
+        )).order_by(candidates.c.home_rank))).all()
+    elif cursor is not None:
         cursor_priority, cursor_activity_at, cursor_id = _decode_session_cursor(
             cursor, user_id, scope
         )
@@ -1121,17 +1152,18 @@ async def list_sessions(
                 else and_(priority.is_(False), activity_tail)
             )
         statement = statement.where(activity_tail)
-    if sort == "pinned":
-        statement = statement.order_by(priority.desc())
-    rows = (
-        await db.execute(
-            statement.order_by(
-                activity_at.desc(),
-                ChatSession.id.desc(),
-            ).limit(page_size + 1)
-        )
-    ).all()
-    page = rows[:page_size]
+    if home_session_ids is None:
+        if sort == "pinned":
+            statement = statement.order_by(priority.desc())
+        rows = (
+            await db.execute(
+                statement.order_by(
+                    activity_at.desc(),
+                    ChatSession.id.desc(),
+                ).limit(page_size + 1)
+            )
+        ).all()
+    page = rows if home_session_ids is not None else rows[:page_size]
     if not page:
         return {"items": [], "nextCursor": None}
     session_serializer = await session_serializer_factory(db, [row[0] for row in page])
@@ -1154,7 +1186,7 @@ async def list_sessions(
         for item, last_message_at, last_assistant_message_at, active_status, _activity_at, last_user_message_at in page
     ]
     next_cursor = None
-    if len(rows) > page_size:
+    if home_session_ids is None and len(rows) > page_size:
         item, _last_message_at, _last_assistant_message_at, _active_status, item_activity_at, _last_user_message_at = page[-1]
         next_cursor = _encode_session_cursor(
             user_id, scope,
@@ -2101,6 +2133,19 @@ async def _ensure_session_move_has_no_external_file_references(
         )
 
 
+async def remove_session_worktree(
+    db: AsyncSession, item: ChatSession, worktree_impact: str
+) -> None:
+    from mato_loop_backend.sessions.coding import remove_worktree, session_worktree
+
+    info = await session_worktree(db, item)
+    if info is None:
+        raise SessionServiceError(409, "git.worktreeChanged")
+    await remove_worktree(
+        db, item, info, info.repository, force=True, expected_impact=worktree_impact
+    )
+
+
 async def delete_session(
     session_id: UUID,
     user_id: UUID,
@@ -2343,15 +2388,7 @@ async def delete_session(
     commit_task: asyncio.Task[None] | None = None
     try:
         if worktree_impact is not None:
-            from mato_loop_backend.sessions.coding import (
-                remove_worktree,
-                session_worktree,
-            )
-
-            info = await session_worktree(db, item)
-            if info is None:
-                raise SessionServiceError(409, "git.worktreeChanged")
-            await remove_worktree(db, item, info, info.repository, force=True, expected_impact=worktree_impact)
+            await remove_session_worktree(db, item, worktree_impact)
         for automation in linked_automations:
             if automation_mode == "deleteAutomations":
                 await db.delete(automation)

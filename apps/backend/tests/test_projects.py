@@ -139,7 +139,8 @@ async def test_explicit_soft_delete_rejects_disabled_trash(monkeypatch, kind) ->
     permanent_delete.assert_not_awaited()
 
 
-async def test_project_list_is_owner_scoped_and_counts_sessions(monkeypatch) -> None:
+@pytest.mark.parametrize("targeted", [False, True])
+async def test_project_list_is_owner_scoped_and_counts_sessions(monkeypatch, targeted) -> None:
     user = _user()
     project = _project(user.id)
     project.coding_integration_id = uuid4()
@@ -155,7 +156,8 @@ async def test_project_list_is_owner_scoped_and_counts_sessions(monkeypatch) -> 
     db.execute.return_value = result
     monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=UserPreferences()))
 
-    response = await list_projects(user, db)
+    project_ids = [project.id, uuid4()] if targeted else None
+    response = await list_projects(user, db, project_ids=project_ids)
 
     assert response.items[0].session_count == 3
     assert response.items[0].has_unread_messages is True
@@ -165,6 +167,30 @@ async def test_project_list_is_owner_scoped_and_counts_sessions(monkeypatch) -> 
     statement = db.execute.await_args.args[0]
     assert user.id in statement.compile().params.values()
     assert "LEFT OUTER JOIN chat_sessions" in str(statement)
+    assert "projects.user_id =" in str(statement.whereclause)
+    assert "projects.archived_at IS NULL" in str(statement.whereclause)
+    if targeted:
+        assert project_ids in statement.compile().params.values()
+        assert "projects.id IN" in str(statement.whereclause)
+
+
+@pytest.mark.parametrize("project_ids", [["invalid"], [str(uuid4())] * 101])
+def test_project_list_rejects_invalid_or_unbounded_targets(project_ids) -> None:
+    db = AsyncMock(spec=AsyncSession)
+
+    async def override_db():
+        yield db
+
+    app = FastAPI()
+    register_error_handlers(app)
+    app.include_router(router)
+    app.dependency_overrides[require_user] = _user
+    app.dependency_overrides[get_db_session] = override_db
+
+    response = TestClient(app).get("/projects", params=[("projectIds", value) for value in project_ids])
+
+    assert response.status_code == 422
+    db.execute.assert_not_awaited()
 
 
 async def test_project_order_is_saved_and_used_by_subsequent_lists(monkeypatch) -> None:

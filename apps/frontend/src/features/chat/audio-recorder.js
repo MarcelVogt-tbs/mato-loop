@@ -1,5 +1,6 @@
 import { onBeforeUnmount, ref } from 'vue'
 import { isPwaUpdateReload } from 'src/app/pwa-update'
+import { createScreenWakeLock } from 'src/shared/screen-wake-lock'
 
 const TARGET_SAMPLE_RATE = 16_000
 export const MAX_RECORDING_DURATION_MS = 5 * 60 * 1000
@@ -101,6 +102,7 @@ export function createAudioRecorder({
 
   async function cleanup(resources) {
     if (!resources) return
+    resources.wakeLock.release()
     clearTimer(resources.durationTimer)
     resources.durationTimer = null
     if (resources.processor) resources.processor.onaudioprocess = null
@@ -182,6 +184,7 @@ export function createAudioRecorder({
       processor: null,
       silentGain: null,
       durationTimer: null,
+      wakeLock: createScreenWakeLock(),
       startedAt: 0,
       chunks: [],
       sampleCount: 0,
@@ -245,6 +248,7 @@ export function createAudioRecorder({
         durationMs.value = Math.min(maxDurationMs, now() - resources.startedAt)
         if (durationMs.value >= maxDurationMs) stopAtLimit(resources)
       }, 200)
+      void resources.wakeLock.request()
       return true
     } catch (error) {
       await cleanup(resources)

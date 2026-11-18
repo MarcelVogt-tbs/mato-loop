@@ -7,7 +7,7 @@ Persisted `ai` documents use `AiProviderSettings` and `UserAiSettings` for provi
 `session-templates` settings contain global or personal named templates. Each template selects available agents, a start agent, the existing `full`, `read_only`, or `disabled` memory mode, an optional session-wide chat model and reasoning effort, and optional chat-model/reasoning overrides by agent ID. Auxiliary model overrides do not belong to templates.
 
 - **Allgemein** (internally Default) selects Allgemein and Sysadmin, starting with Allgemein, with standard-size messages and worktree support disabled.
-- **Coding** selects Plan and Build, starting with Plan, with small messages and worktree support enabled.
+- **Coding** selects Plan, Build and Interactive, starting with Plan, with small messages and worktree support enabled.
 - Both start with full memory and inherit model defaults unless configured otherwise.
 - Global and personal management use the existing administrative scope and owner boundary. Each feature has its own personal-setting gate, initially enabled. Administrators retain the established personal exception.
 
@@ -17,7 +17,7 @@ Templates and the Session Control Center expose `messageSize` (`standard` or `sm
 
 Home and the blank-session composer show four equal-size fields in this order: project, workspace, template, memory. At less than 600px they use a centered two-column grid. Web search is configurable in the existing Session Control Center. Projects can select a default session template alongside the computer and working directory. Creation and preview prefer an explicit template, then the project's template, then the general template. Template references are owner-validated when assigned. An unavailable reference must be replaced or explicitly overridden; existing sessions and configured drafts are not rewritten. Fresh drafts reload the current project defaults.
 
-Plan and Build (including derived profiles) require a connected owner-bound computer with the required file operations and an accessible working directory before execution. These prerequisites are checked by the host before model work. Planning still requires relevant source evidence; a working directory alone does not identify a repository.
+Plan, Build and Interactive (including derived profiles) require a connected owner-bound computer with the required file operations and an accessible working directory before execution. Build and Interactive also require file-write support. These prerequisites are checked by the host before model work. Planning still requires relevant source evidence; a working directory alone does not identify a repository.
 
 Accepted session requests report execution and prerequisite failures through persisted host messages, not duplicate API-error toasts. The message projection derives `state` (`normal` or `error`) from existing error data and exposes `origin=host` for host messages. The frontend localizes controlled error codes and shows `Host` in the model-name footer with the existing retry action. Pre-execution failures record `beforeExecution` in host metadata; retry uses current session configuration and repeats the same checks. Started executions retain their existing retry snapshots. Authentication, invalid input, ownership checks, and failures that cannot be persisted remain API/transport errors.
 
@@ -40,6 +40,8 @@ When no agent-model default is configured, the runtime selects the first availab
 The runtime checks the session's available-agent list as well as current owner and instance availability. This list is session configuration, not an additional authority grant. Changes use the session-settings lock and apply to later runs; an active run retains its previous session configuration. Session model resolution skips unavailable references and models without tool support in the precedence chain and uses the next available agent model, including the effective default. When this changes the selected model, an unsupported reasoning effort falls back to the model's default without rewriting stored settings. Without an available candidate, the UI asks the user to select a model. Deleted and missing models are omitted from selectors. Unchanged stale per-agent model references may remain when editing a session; newly assigned models must pass validation.
 
 ## Migration
+
+Revision `9c2944bb95db` adds Interactive to stored Coding templates whose agent selection is still exactly Plan/Build with Plan as the start agent. Other template fields, customized agent selections and existing session snapshots remain unchanged. To offer Interactive in an existing session, reselect the updated Coding template; this also reapplies its model, reasoning and memory settings as described above. Customized templates can add the profile explicitly.
 
 Revision `ee5db377dca5` removes obsolete answer-display values from agent-profile documents and initializes template message sizes, using small for the shipped Coding template and standard for other templates. Existing sessions are untouched. Downgrade removes template/session sizes; removed answer-display values are not restored.
 

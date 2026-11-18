@@ -13,10 +13,6 @@ from mato_loop_backend.api.permission_settings import (
     _validate_permissions,
 )
 from mato_loop_backend.db.session import get_db_session
-from mato_loop_backend.integrations.jina.adapter import provider_key as webfetch_provider_key
-from mato_loop_backend.integrations.jina.adapter import (
-    provider_options as webfetch_provider_options,
-)
 from mato_loop_backend.integrations.search import search_provider_options
 from mato_loop_backend.models import UserAccount
 from mato_loop_backend.security import require_user
@@ -39,6 +35,10 @@ from mato_loop_backend.settings.models import (
     WebFetchToolSettings,
 )
 from mato_loop_backend.tools.catalog import tool_registry
+from mato_loop_backend.web.providers import provider_key as webfetch_provider_key
+from mato_loop_backend.web.providers import (
+    provider_options as webfetch_provider_options,
+)
 
 router = APIRouter(prefix="/tools", dependencies=[Depends(require_user)])
 MEDIA_FIELDS = {
@@ -189,7 +189,7 @@ async def update_tool_configuration(
             settings.web_search = selection
         else:
             integrations.webfetch_integration_id = (
-                UUID(selection.primary_provider.removeprefix("jina:"))
+                UUID(selection.primary_provider.split(":", 1)[1])
                 if selection.primary_provider != "builtin" else None
             )
     if general is not None and not general.model_trust_enabled and payload.tool_permission_presets.get(TrustLevel.PUBLIC, settings.public_permission_preset) != settings.public_permission_preset:

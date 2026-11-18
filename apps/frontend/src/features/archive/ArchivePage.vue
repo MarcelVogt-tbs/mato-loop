@@ -5,53 +5,55 @@
       <template #action><q-btn flat no-caps label="Erneut laden" @click="load" /></template>
     </q-banner>
     <q-spinner v-if="archive.loading" color="primary" size="24px" :aria-label="isTrash ? 'Papierkorb wird geladen' : 'Archiv wird geladen'" />
-    <template v-else-if="isTrash">
-      <section v-for="kind in ['projects', 'sessions']" :key="kind" class="q-mb-lg">
-        <h2 class="text-subtitle1">{{ kind === 'projects' ? 'Projekte' : 'Einzeln gelöschte Sessions' }}</h2>
-        <q-list v-if="archive.trash[kind].length" bordered separator class="rounded-borders">
-          <q-item v-for="item in archive.trash[kind]" :key="item.id">
-            <q-item-section class="text-break">
-              <q-item-label>{{ item.name || item.title }}</q-item-label>
-              <q-item-label v-if="item.projectName" caption>{{ item.projectName }}</q-item-label>
-              <q-item-label caption>{{ expired(item) ? 'Frist abgelaufen' : 'Wiederherstellbar bis' }}: {{ deadline(item.deleteAt) }}</q-item-label>
-            </q-item-section>
-            <q-item-section side>
-              <div class="row">
-                <q-btn flat round icon="restore_from_trash" :loading="restoring === item.id" :disable="expired(item) || Boolean(busy)" :aria-label="kind === 'projects' ? 'Projekt wiederherstellen' : 'Session wiederherstellen'" @click="restoreTrash(kind, item)" />
-                <q-btn flat round color="negative" icon="delete_forever" :loading="deleting === item.id" :disable="Boolean(busy)" :aria-label="kind === 'projects' ? 'Projekt endgültig löschen' : 'Session endgültig löschen'" @click="deleteTrash(kind, item)" />
-              </div>
-            </q-item-section>
-          </q-item>
-        </q-list>
-        <p v-else class="app-muted">{{ kind === 'projects' ? 'Keine gelöschten Projekte.' : 'Keine einzeln gelöschten Sessions.' }}</p>
-      </section>
-    </template>
     <template v-else>
-      <h2 class="text-subtitle1"><q-icon name="folder_open" class="q-mr-sm" />Projekte</h2>
-      <q-list bordered separator class="rounded-borders q-mb-lg" v-if="archive.projects.length">
-        <q-expansion-item v-for="project in archive.projects" :key="project.id" :duration="0" @show="loadSessions(project.id)">
+      <h2 class="text-subtitle2 app-muted q-mb-sm">Projekte</h2>
+      <q-list v-if="projectItems.length" class="archive-list app-surface q-pa-xs q-mb-lg">
+        <q-expansion-item v-for="project in projectItems" :key="project.id" :duration="0" switch-toggle-side dense header-class="sidebar-row rounded-borders q-px-sm q-py-xs" @show="loadSessions(project.id)">
           <template #header>
-            <q-item-section>{{ project.name }}</q-item-section>
-            <q-item-section side><q-btn flat round icon="unarchive" :loading="restoring === project.id" aria-label="Projekt wiederherstellen" @click.stop="restoreProject(project)" /></q-item-section>
+            <q-item-section avatar class="archive-icon"><q-icon name="folder_open" size="20px" /></q-item-section>
+            <q-item-section class="text-body2 ellipsis">{{ project.name }}</q-item-section>
+            <q-item-section side>
+              <ArchiveEntryActions :title="project.name" label="Projekt" :trash="isTrash" :expired="isTrash && expired(project)" :disabled="Boolean(busy)" :restoring="restoring === project.id" @restore="isTrash ? restoreTrash('projects', project) : restoreProject(project)" @delete="deleteEntry('projects', project)" />
+            </q-item-section>
           </template>
-          <q-list dense>
-            <q-item v-for="session in archive.sessionLists[project.id]?.items || []" :key="session.id" clickable :to="sessionRoute(session)">
-              <q-item-section><q-item-label>{{ session.title }}</q-item-label><q-item-label v-if="session.archivedAt" caption>Auch einzeln archiviert</q-item-label></q-item-section>
-            </q-item>
-            <q-item v-if="archive.sessionLists[project.id]?.nextCursor"><q-btn flat no-caps label="Weitere Sessions" @click="loadSessions(project.id, true)" /></q-item>
-          </q-list>
+          <div class="archive-children q-ml-md q-pl-sm">
+            <p v-if="isTrash" class="text-caption app-muted q-ma-sm">{{ expiryLabel(project) }}. Aktionen gelten für das ganze Projekt.</p>
+            <q-spinner v-if="loadingProject === project.id" color="primary" size="20px" class="q-ma-sm" aria-label="Sessions werden geladen" />
+            <q-list v-else dense>
+              <q-item v-for="session in projectSessions(project.id)" :key="session.id" :clickable="!isTrash" @click="!isTrash && openSession(session)" class="sidebar-row rounded-borders q-px-sm q-py-xs">
+                <q-item-section avatar class="archive-icon"><q-icon name="chat_bubble_outline" size="18px" /></q-item-section>
+                <q-item-section class="archive-title">
+                  <q-item-label class="text-body2 ellipsis">{{ session.title }}</q-item-label>
+                  <q-item-label v-if="isTrash && session.deleteAt" caption>Auch einzeln gelöscht · {{ expiryLabel(session) }}</q-item-label>
+                  <q-item-label v-else-if="!isTrash && session.archivedAt" caption>Auch einzeln archiviert</q-item-label>
+                </q-item-section>
+                <q-item-section v-if="!isTrash" side>
+                  <ArchiveEntryActions :title="session.title" label="Session" :restorable="false" :disabled="Boolean(busy)" @delete="deleteEntry('sessions', session)" />
+                </q-item-section>
+              </q-item>
+              <q-item v-if="!projectSessions(project.id).length"><q-item-section class="text-caption app-muted">Keine Sessions.</q-item-section></q-item>
+              <q-btn v-if="projectNextCursor(project.id)" flat no-caps label="Weitere Sessions" @click="loadSessions(project.id, true)" />
+            </q-list>
+          </div>
         </q-expansion-item>
       </q-list>
-      <p v-else class="app-muted">Keine archivierten Projekte.</p>
-      <h2 class="text-subtitle1"><q-icon name="chat_bubble_outline" class="q-mr-sm" />Einzeln archivierte Sessions</h2>
-      <q-list v-if="archive.sessionLists.sessions?.items.length" bordered separator class="rounded-borders">
-        <q-item v-for="session in archive.sessionLists.sessions.items" :key="session.id" clickable :to="sessionRoute(session)">
-          <q-item-section><q-item-label>{{ session.title }}</q-item-label><q-item-label v-if="session.projectId" caption>Aus einem Projekt</q-item-label></q-item-section>
-          <q-item-section side><q-btn flat round icon="unarchive" :loading="restoring === session.id" aria-label="Session wiederherstellen" @click.stop.prevent="restoreSession(session)" /></q-item-section>
+      <p v-else class="app-muted">{{ isTrash ? 'Keine gelöschten Projekte.' : 'Keine archivierten Projekte.' }}</p>
+      <h2 class="text-subtitle2 app-muted q-mb-sm">{{ isTrash ? 'Einzeln gelöschte Sessions' : 'Einzeln archivierte Sessions' }}</h2>
+      <q-list v-if="sessionItems.length" class="archive-list app-surface q-pa-xs">
+        <q-item v-for="session in sessionItems" :key="session.id" :clickable="!isTrash" @click="!isTrash && openSession(session)" class="sidebar-row rounded-borders q-px-sm q-py-xs">
+          <q-item-section avatar class="archive-icon"><q-icon name="chat_bubble_outline" size="18px" /></q-item-section>
+          <q-item-section class="archive-title">
+            <q-item-label class="text-body2 ellipsis">{{ session.title }}</q-item-label>
+            <q-item-label v-if="session.projectId" caption>{{ session.projectName || 'Aus einem Projekt' }}</q-item-label>
+            <q-item-label v-if="isTrash" caption>{{ expiryLabel(session) }}</q-item-label>
+          </q-item-section>
+          <q-item-section side>
+            <ArchiveEntryActions :title="session.title" label="Session" :trash="isTrash" :expired="isTrash && expired(session)" :disabled="Boolean(busy)" :restoring="restoring === session.id" @restore="isTrash ? restoreTrash('sessions', session) : restoreSession(session)" @delete="deleteEntry('sessions', session)" />
+          </q-item-section>
         </q-item>
       </q-list>
-      <p v-else class="app-muted">Keine einzeln archivierten Sessions.</p>
-      <q-btn v-if="archive.sessionLists.sessions?.nextCursor" flat no-caps label="Weitere Sessions" @click="loadSessions(null, true)" />
+      <p v-else class="app-muted">{{ isTrash ? 'Keine einzeln gelöschten Sessions.' : 'Keine einzeln archivierten Sessions.' }}</p>
+      <q-btn v-if="!isTrash && archive.sessionLists.sessions?.nextCursor" flat no-caps label="Weitere Sessions" @click="loadSessions(null, true)" />
     </template>
   </AppPage>
 </template>
@@ -59,7 +61,9 @@
 <script setup>
 import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
+import { useRouter } from 'vue-router'
 import AppPage from 'src/shared/ui/AppPage.vue'
+import ArchiveEntryActions from './ArchiveEntryActions.vue'
 import { useArchiveStore } from './store'
 import { useChatStore } from 'src/features/chat/store'
 import { useProjectStore } from 'stores/projects'
@@ -73,15 +77,23 @@ const chat = useChatStore()
 const projects = useProjectStore()
 const automations = useAutomationStore()
 const $q = useQuasar()
+const router = useRouter()
 const restoring = ref(null)
 const deleting = ref(null)
+const loadingProject = ref(null)
 const busy = computed(() => restoring.value || deleting.value)
+const projectItems = computed(() => isTrash.value ? archive.trash.projects : archive.projects)
+const sessionItems = computed(() => isTrash.value ? archive.trash.sessions : archive.sessionLists.sessions?.items || [])
+const projectList = (id) => isTrash.value ? archive.trashSessionLists[id] : archive.sessionLists[id]
+const projectSessions = (id) => projectList(id)?.items || []
+const projectNextCursor = (id) => projectList(id)?.nextCursor
 const now = ref(Date.now())
 const clock = window.setInterval(() => { now.value = Date.now() }, 1000)
 onBeforeUnmount(() => window.clearInterval(clock))
 const expired = (item) => Date.parse(item.deleteAt) <= now.value
-const deadline = (value) => new Date(value).toLocaleString('de-DE')
+const expiryLabel = (item) => `${expired(item) ? 'Frist abgelaufen' : 'Wiederherstellbar bis'}: ${new Date(item.deleteAt).toLocaleString('de-DE')}`
 const sessionRoute = (session) => ({ name: 'chat', query: { session: session.id, ...(session.projectId ? { project: session.projectId } : {}) } })
+const openSession = (session) => router.push(sessionRoute(session))
 const load = () => archive.load(props.mode)
 
 async function restoreTrash(kind, item) {
@@ -94,37 +106,53 @@ async function restoreTrash(kind, item) {
   } catch { /* Axios displays errors. */ } finally { restoring.value = null }
 }
 
-async function deleteTrash(kind, item) {
+async function deleteEntry(kind, item) {
   if (busy.value) return
   deleting.value = item.id
   try {
-    if (await deleteActions[kind](item)) await load()
+    if (await deleteActions[kind](item, { permanent: isTrash.value })) {
+      const expanded = Object.keys(archive.sessionLists).filter(id => id !== 'sessions' && id !== item.id)
+      await load()
+      if (!isTrash.value) await Promise.all(expanded.map(id => archive.loadSessions(id)))
+    }
   } catch { /* Axios displays errors. */ } finally { deleting.value = null }
 }
 
 async function loadSessions(id, more = false) {
-  try { await archive.loadSessions(id, more) } catch { /* Axios displays errors. */ }
+  loadingProject.value = id
+  try {
+    if (isTrash.value) await archive.loadTrashSessions(id, more)
+    else await archive.loadSessions(id, more)
+  } catch { /* Axios displays errors. */ } finally { loadingProject.value = null }
 }
 
 async function restoreSession(session) {
-  if (restoring.value) return
+  if (busy.value) return
   restoring.value = session.id
   try {
     await chat.setArchived(session.id, false)
-    await Promise.all([archive.load(), automations.fetchAutomations()])
+    const expanded = Object.keys(archive.sessionLists).filter(id => id !== 'sessions')
+    await Promise.all([load(), automations.fetchAutomations(), ...expanded.map(id => archive.loadSessions(id))])
     $q.notify({ type: 'positive', message: 'Session wiederhergestellt' })
   } catch { /* Axios displays errors. */ } finally { restoring.value = null }
 }
 
 async function restoreProject(project) {
-  if (restoring.value) return
+  if (busy.value) return
   restoring.value = project.id
   try {
     await projects.setArchived(project.id, false)
-    await Promise.all([archive.load(), automations.fetchAutomations(), chat.refreshSessions(null, project.id)])
+    await Promise.all([load(), automations.fetchAutomations(), chat.refreshSessions(null, project.id)])
     if (chat.current?.projectId === project.id) await chat.refreshSession(chat.current.id)
     $q.notify({ type: 'positive', message: 'Projekt wiederhergestellt' })
   } catch { /* Axios displays errors. */ } finally { restoring.value = null }
 }
 watch(() => props.mode, load, { immediate: true })
 </script>
+
+<style scoped>
+.archive-list { border-radius: 8px; }
+.archive-icon { min-width: 28px; padding-right: 8px; color: var(--app-muted); }
+.archive-title { min-width: 0; }
+.archive-children { border-left: 1px solid var(--app-surface-border); }
+</style>

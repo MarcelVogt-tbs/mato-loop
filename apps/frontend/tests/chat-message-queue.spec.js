@@ -26,6 +26,7 @@ import { clearChatOutbox, loadChatOutbox, saveChatOutboxEntry } from '../src/fea
 import * as outboxStorage from '../src/features/chat/outbox-storage'
 import { buildAttachmentFormData, MAX_ATTACHMENT_DRAFT_BYTES } from '../src/features/chat/attachments'
 import { withQueuedTranscriptMessages } from '../src/features/chat/transcript'
+import { sessionSidebarStatus } from '../src/features/chat/session-groups'
 
 const originalURL = globalThis.URL
 
@@ -87,6 +88,27 @@ describe('chat message queue', () => {
     delete global.window
     delete global.EventSource
     global.URL = originalURL
+  })
+
+  it('shows a pending send as active across navigation until delivery fails', async () => {
+    const chat = useChatStore()
+    activeSession(chat)
+    let failSend, requestStarted
+    const started = new Promise((resolve) => { requestStarted = resolve })
+    api.post.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      failSend = reject
+      requestStarted()
+    }))
+    const status = () => sessionSidebarStatus({}, 0, 0, chat.sessionHasPendingSend('session-1'))?.kind || null
+    const sending = chat.send('Hallo')
+    const statuses = [status()]
+    await started
+    activeSession(chat, 'session-2')
+    statuses.push(status())
+    failSend(new Error('offline'))
+    await sending
+    statuses.push(status())
+    expect(statuses).toEqual(['active', 'active', null])
   })
 
   it('persists text and attachments while a run is active', async () => {

@@ -23,6 +23,7 @@ from mato_loop_backend.agent.media_prompt_profiles import (
 )
 from mato_loop_backend.agent.projection import (
     _historical_tool_result,
+    command_message_content,
     compaction_messages,
     estimate_tokens,
     message_dict,
@@ -348,6 +349,13 @@ def _exchange(
         },
         {"role": "tool", "tool_call_id": call_id, "content": result},
     )
+
+
+def _direct_message(content: str) -> str:
+    return command_message_content(Message(
+        role="user", content=content,
+        provider_data={"_matoloop": {"continuationRunId": str(SESSION_ID)}},
+    ))
 
 
 @dataclass(frozen=True, slots=True)
@@ -2899,6 +2907,65 @@ CASES = (
     ),
     # Deterministic tool-result continuations.
     PromptCase(
+        id="direct_source_correction_keeps_code_investigation",
+        kind="general",
+        user=_direct_message("Sessiondaten bitte über den Debug-MCP."),
+        working_directory="/work/project",
+        system_options={"agent_profile": plan_profile()},
+        history=(
+            {"role": "user", "content": "Prüfe den Aufgabenfehler in der Session und kläre die Ursache in unserem Code."},
+            *_exchange("mcp_debug_get_diagnostics", {},
+                       '{"errorCode":"integration.operationUnsupported","nextCodePath":"apps/backend/tasks.py"}',
+                       "diagnostics"),
+            *_exchange("read", {"root": "computer", "path": "apps/backend/tasks.py"},
+                       json.dumps(error_payload("tool.superseded")), "skipped-read"),
+        ),
+        tools=("read",),
+        expected_tool="read",
+        expected_arguments={"root": "computer", "path": "apps/backend/tasks.py"},
+    ),
+    PromptCase(
+        id="direct_quantity_correction_keeps_shopping_list",
+        kind="general",
+        user=_direct_message("Doch nur für zwei Personen, bitte."),
+        history=(
+            {"role": "user", "content": "Rechne diese Einkaufsliste für vier Personen um: 400 g Nudeln, 800 g Tomaten, 200 g Käse. Gib alle drei Mengen an."},
+            {"role": "assistant", "content": "Ich rechne die Mengen um."},
+        ),
+        expected_no_tools=True,
+        content_contains=("200", "400", "100", "Nudeln", "Tomaten", "Käse"),
+        max_content_words=80,
+    ),
+    PromptCase(
+        id="direct_side_question_pauses_without_completing_task",
+        kind="general",
+        user=_direct_message("Zwischenfrage: Was bedeutet eine Prüfsumme? Erst erklären, noch nicht weiter ausführen."),
+        history=(
+            {"role": "user", "content": "Lade das Archiv herunter und prüfe danach die Prüfsumme."},
+            *_exchange("shell_run", {"command": "curl -fLo archive.zip https://example.test/archive.zip"},
+                       '{"exitCode":0,"output":{"stdout":"download complete"}}'),
+        ),
+        tools=("shell_run",),
+        working_directory="/work/downloads",
+        expected_no_tools=True,
+        content_contains_any=(("Prüfsumme", "Hash"), ("pausiert", "pausiere", "warte", "noch offen", "ausstehend")),
+        content_excludes=("erfolgreich geprüft", "Prüfung abgeschlossen"),
+        max_content_words=100,
+    ),
+    PromptCase(
+        id="direct_stop_does_not_replay_skipped_action",
+        kind="general",
+        user=_direct_message("Stopp, die Datei nicht erstellen. Antworte nur mit GESTOPPT."),
+        history=(
+            {"role": "user", "content": "Erstelle note.txt mit Hallo."},
+            *_exchange("write_file", {"root": "files", "path": "note.txt", "content": "Hallo"},
+                       json.dumps(error_payload("tool.superseded"))),
+        ),
+        tools=("write_file",),
+        expected_no_tools=True,
+        content_exact_values=("GESTOPPT",),
+    ),
+    PromptCase(
         id="additional_message_keeps_unanswered_question",
         kind="general",
         user="Außerdem: Formuliere die Antwort kurz und nenne die Alternative.",
@@ -4636,6 +4703,10 @@ _SEMANTIC_CONTRACTS = (
         "continuation.success_failed_denied_untrusted",
         "continuation",
         (
+            "direct_source_correction_keeps_code_investigation",
+            "direct_quantity_correction_keeps_shopping_list",
+            "direct_side_question_pauses_without_completing_task",
+            "direct_stop_does_not_replay_skipped_action",
             "additional_message_keeps_unanswered_question",
             "replacement_message_cancels_unanswered_question",
             "sysadmin_completed_prerequisite_resumes_execution",

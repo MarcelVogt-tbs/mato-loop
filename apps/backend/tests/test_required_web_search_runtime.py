@@ -2042,6 +2042,7 @@ async def test_direct_message_supersedes_approval_and_replans(monkeypatch, tmp_p
         assert "Change course" in str(requests[-1]["messages"])
         assert SOURCE_ID in str(requests[-1]["messages"])
         assert "tool.superseded" in str(requests[-1]["messages"])
+        assert "Reconcile it with the unfinished requests above" in str(requests[-1]["messages"])
         if arrival != "before":
             assert old.status == "expired"
             assert old.decision is None

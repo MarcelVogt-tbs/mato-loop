@@ -179,7 +179,7 @@ class WindowsRuntimeTests(unittest.TestCase):
                 timeout=10,
                 stream=stream,
             )
-            self.assertEqual(result["exitCode"], 0)
+            self.assertEqual(result["exitCode"], 0, chunks)
             self.assertIn("Windows ready", "".join(text for _, text in chunks))
             self.assertIn(
                 "C:\\Program Files|C:\\Program Files (x86)|",
@@ -195,6 +195,59 @@ class WindowsRuntimeTests(unittest.TestCase):
             },
         ):
             asyncio.run(execute())
+
+    def test_detached_child_does_not_hold_shell_output_open(self) -> None:
+        async def execute():
+            pid_file = self.home / "child.pid"
+            launcher = self.home / "launch.py"
+            launcher.write_text(
+                "import os, subprocess, sys\n"
+                "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
+                "stdin=subprocess.DEVNULL, stdout=sys.stdout, stderr=sys.stderr, close_fds=False)\n"
+                "with open(sys.argv[1], 'w') as output: output.write(str(child.pid))\n"
+                "os._exit(0)\n",
+                encoding="utf-8",
+            )
+            try:
+                result = await self.process.exec(
+                    current_directory=self.wire,
+                    command=f"& '{sys.executable}' '{launcher}' '{pid_file}'",
+                    timeout=10,
+                    stream=AsyncMock(),
+                )
+                self.assertEqual(
+                    (result["exitCode"], result["timedOut"], result["stdoutTruncated"]),
+                    (0, False, True),
+                )
+            finally:
+                if pid_file.exists():
+                    subprocess.run(
+                        ["taskkill", "/PID", pid_file.read_text(), "/T", "/F"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                        timeout=10,
+                    )
+
+        asyncio.run(execute())
+
+    def test_shell_exit_bounds_blocked_output_delivery(self) -> None:
+        async def execute():
+            async def stream(channel, text):
+                await asyncio.Event().wait()
+
+            result = await self.process.exec(
+                current_directory=self.wire,
+                command="Write-Output 'pending output'",
+                timeout=10,
+                stream=stream,
+            )
+            self.assertEqual(
+                (result["exitCode"], result["timedOut"], result["stdoutTruncated"]),
+                (0, False, True),
+            )
+
+        asyncio.run(execute())
 
     def test_pairing_state_is_protected_by_windows_dpapi(self) -> None:
         from pydantic import SecretStr
@@ -462,7 +515,7 @@ class WindowsRuntimeTests(unittest.TestCase):
         root.mkdir()
         installer = Path(__file__).parents[3] / "scripts/install-matoloop-agent.ps1"
         # Run the real preparation block without installing tools or touching Scheduled Tasks.
-        subprocess.run(
+        result = subprocess.run(
             [
                 self.process.shell,
                 "-NoProfile",
@@ -485,9 +538,12 @@ class WindowsRuntimeTests(unittest.TestCase):
                 "function Fail($message) { throw $message }; "
                 "$uv={ $global:LASTEXITCODE=1 }; "
                 "try { & ([ScriptBlock]::Create("
-                "$ast.Extent.Text.Substring($start, $end-$start))) } catch {}",
+                "$ast.Extent.Text.Substring($start, $end-$start))) } "
+                "catch { if ($_.Exception.Message -ne 'Could not find private Python.') "
+                "{ throw } }; "
+                "exit 0",
             ],
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
             timeout=15,
@@ -498,6 +554,7 @@ class WindowsRuntimeTests(unittest.TestCase):
                 "TEST_KEEP": str(self.home),
             },
         )
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(sentinel.exists())
 
     def test_installer_finds_private_git_without_git_on_path(self) -> None:

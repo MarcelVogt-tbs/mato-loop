@@ -4,7 +4,7 @@
       <q-tabs
         :model-value="activeFlexibleTabId"
         class="control-center__tab-strip col"
-        content-class="control-center__tab-scroll"
+        content-class="app-tab-scroll control-center__tab-scroll"
         dense
         no-caps
         inline-label
