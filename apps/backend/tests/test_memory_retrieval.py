@@ -19,7 +19,7 @@ from mato_loop_backend.memory.service import (
     memory_lexical_terms,
     memory_visible_to,
 )
-from mato_loop_backend.models import MemoryAudience, MemoryRecord
+from mato_loop_backend.models import MemoryAudience, MemoryCategory, MemoryRecord
 from mato_loop_backend.settings import TrustLevel
 
 
@@ -147,6 +147,39 @@ async def test_hybrid_retrieval_boosts_candidates_found_by_both_strategies(
     assert "memories.audience" in str(db.scalars.await_args_list[1].args[0])
     assert "memories.user_id" in str(db.scalars.await_args_list[0].args[0])
     assert "memories.user_id" in str(db.scalars.await_args_list[1].args[0])
+
+
+async def test_reconciliation_keeps_exact_lexical_and_semantic_candidates(
+    monkeypatch,
+) -> None:
+    exact = _record("User prefers vegetarian meals")
+    lexical = [_record(f"User meal preference {index}") for index in range(5)]
+    semantic = _record("Avoid meat in recipes")
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = exact
+    db.scalars.side_effect = [
+        Mock(all=Mock(return_value=items))
+        for items in (lexical, [], [semantic])
+    ]
+    db.begin_nested = Mock(return_value=_NestedTransaction())
+    monkeypatch.setattr(
+        "mato_loop_backend.memory.retrieval.get_runtime_config",
+        lambda: SimpleNamespace(embedding_enabled=True),
+    )
+    monkeypatch.setattr(
+        embedding_client,
+        "embed_query",
+        AsyncMock(return_value=[1.0, *([0.0] * (EMBEDDING_DIMENSIONS - 1))]),
+    )
+
+    result = await MemoryService.reconciliation_candidates(
+        db,
+        owner_id=uuid4(),
+        candidates=[(exact.content, MemoryCategory.FACT)],
+        readable_by=TrustLevel.PRIVATE,
+    )
+
+    assert result == [[exact, lexical[0], semantic, *lexical[1:]]]
 
 
 async def test_search_uses_lexical_fallback_when_embeddings_are_disabled(

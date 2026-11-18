@@ -14,7 +14,7 @@ export const sessionTabTarget = (tab) => ({
 })
 
 export const useSessionTabsStore = defineStore('session-tabs', {
-  state: () => ({ items: [], summaries: {}, summaryRevision: 0, readingPositions: {}, owner: null, loaded: false, loading: false, loadRequest: null,
+  state: () => ({ items: [], summaries: {}, summaryVersions: {}, summaryRevision: 0, readingPositions: {}, owner: null, loaded: false, loading: false, loadRequest: null,
     controlCenterOpen: false, confirmed: { sessionTabs: [], controlCenterOpen: false }, pending: null, saving: null, revision: 0, generation: 0 }),
   actions: {
     async setOwner(owner) {
@@ -46,14 +46,32 @@ export const useSessionTabsStore = defineStore('session-tabs', {
       this.items = (data.sessionTabs || []).map(tab => ({ ...tab, key: sessionTabKey(tab.sessionId, tab.projectId) }))
       this.controlCenterOpen = data.controlCenterOpen === true
     },
+    applySummaryUpdates(ids, summaries) {
+      const next = { ...this.summaries }
+      for (const id of ids) {
+        this.summaryVersions[id] = (this.summaryVersions[id] || 0) + 1
+        if (summaries[id]) next[id] = summaries[id]
+        else delete next[id]
+      }
+      this.summaries = next
+    },
     refreshSummaries() {
       return queueRefresh(this, {}, async revision => {
         const ids = this.items.map(tab => tab.sessionId).filter(Boolean)
         if (!this.owner || !ids.length) { this.summaries = {}; return }
         const params = new URLSearchParams({ pageSize: '100', includeArchived: 'true' })
+        const versions = { ...this.summaryVersions }
         ids.forEach(id => params.append('sessionIds', id))
         const { data } = await api.get('/sessions', { params })
-        if (revision === this.summaryRevision) this.summaries = Object.fromEntries((data.items || []).map(item => [item.id, item]))
+        if (revision === this.summaryRevision) {
+          const next = Object.fromEntries((data.items || []).map(item => [item.id, item]))
+          for (const id of ids) {
+            if ((versions[id] || 0) === (this.summaryVersions[id] || 0)) continue
+            if (this.summaries[id]) next[id] = this.summaries[id]
+            else delete next[id]
+          }
+          this.summaries = next
+        }
       }, 'summaryRevision')
     },
     saveWorkspace(patch) {

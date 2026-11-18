@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select, update
+from sqlalchemy.exc import SQLAlchemyError
 
 from mato_loop_backend import __version__
 from mato_loop_backend.agent.runtime import AgentRuntime
@@ -19,6 +20,7 @@ from mato_loop_backend.api.request_body_limit import MediaRequestBodyLimitMiddle
 from mato_loop_backend.api.router import api_router
 from mato_loop_backend.automations import AutomationService
 from mato_loop_backend.background import BackgroundProcessing
+from mato_loop_backend.changelog import record_installed_build
 from mato_loop_backend.config import get_runtime_config
 from mato_loop_backend.db.session import AsyncSessionFactory, engine
 from mato_loop_backend.diagnostics.logs import install_backend_log_handler
@@ -192,6 +194,11 @@ async def _application_lifespan(_app: FastAPI):
     TeamsScheduler.start()
     diagnostic_retention_task = asyncio.create_task(diagnostic_retention_loop())
     try:
+        try:
+            async with AsyncSessionFactory() as db, db.begin():
+                await record_installed_build(db)
+        except (SQLAlchemyError, ValueError):
+            logger.exception("Could not record the installed build for the changelog")
         yield
     finally:
         debug_mcp_mount.app = None

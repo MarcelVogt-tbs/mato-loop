@@ -1,5 +1,16 @@
 const refreshes = new WeakMap()
 
+export async function waitForRefresh(store, revisionKey = 'revision') {
+  let current
+  while ((current = refreshes.get(store)?.get(revisionKey))) {
+    try {
+      await current.promise
+    } catch (error) {
+      if (current.revision === store[revisionKey]) throw error
+    }
+  }
+}
+
 export function queueRefresh(store, config, read, revisionKey = 'revision') {
   if (!refreshes.has(store)) refreshes.set(store, new Map())
   const requests = refreshes.get(store)

@@ -12,7 +12,7 @@ vi.mock('src/boot/axios', () => ({ api }))
 vi.mock('quasar', () => ({ useQuasar: () => ({ screen: { lt: { sm: false } } }) }))
 vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: async () => true }) }))
 
-let track, stream, peer, socket, audio, negotiate, onError, onWakeLock, wakeLock, client
+let track, stream, peer, socket, audio, negotiate, onPhase, onError, onWakeLock, wakeLock, client
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -48,9 +48,10 @@ beforeEach(() => {
     }
   })
   negotiate = vi.fn().mockResolvedValue({ connectionId: 'connection', sdpAnswer: 'v=0\r\nanswer' })
+  onPhase = vi.fn()
   onError = vi.fn()
   onWakeLock = vi.fn()
-  client = createVoiceClient({ negotiate, onPhase: vi.fn(), onControl: vi.fn(), onError, onClose: vi.fn(), onWakeLock })
+  client = createVoiceClient({ negotiate, onPhase, onControl: vi.fn(), onError, onClose: vi.fn(), onWakeLock })
 })
 
 afterEach(() => {
@@ -165,6 +166,14 @@ describe('Realtime microphone and media lifecycle', () => {
     expect(socket.close).toHaveBeenCalledOnce()
     expect(peer.close).toHaveBeenCalledOnce()
     expect(wakeLock.release).toHaveBeenCalledOnce()
+  })
+
+  it('finishes starting immediately when WebRTC connects after backend initialization', async () => {
+    await client.start('session')
+    socket.onmessage({ data: JSON.stringify({ phase: 'listening' }) })
+    peer.connectionState = 'connected'
+    peer.onconnectionstatechange()
+    expect(onPhase).toHaveBeenLastCalledWith('listening')
   })
 
   it('mutes the active microphone across Pinia action proxies and control updates', async () => {

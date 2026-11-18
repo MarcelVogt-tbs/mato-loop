@@ -29,6 +29,7 @@
         <q-scroll-area
           ref="sidebarScrollArea"
           class="col session-scroll-area"
+          :visible="$q.platform.is.ios ? false : null"
           :content-style="{ width: '100%' }"
           :content-active-style="{ width: '100%' }"
           tabindex="0"
@@ -239,6 +240,7 @@
               <SidebarNavItem icon="manage_accounts" label="Konto" v-close-popup @click="openAccountDialog" />
               <SidebarNavItem :icon="$q.dark.isActive ? 'light_mode' : 'dark_mode'" :label="$q.dark.isActive ? 'Heller Modus' : 'Dunkler Modus'" v-close-popup @click="$q.dark.toggle()" />
               <SidebarNavItem icon="menu_book" label="Dokumentation" href="/docs/" target="_blank" rel="noopener noreferrer" v-close-popup />
+              <SidebarNavItem icon="history" label="Changelog" v-close-popup @click="changelog.show(); closeDrawerOnMobile()" />
               <q-separator class="q-my-sm" />
               <SidebarNavItem icon="logout" label="Abmelden" v-close-popup class="text-negative" @click="logout" />
             </q-list>
@@ -289,6 +291,7 @@
 
 <script setup>
 import { useAppearanceStore } from 'src/features/settings/appearance-store'
+import { useChangelogStore } from 'src/features/changelog/store'
 import { useUserPreferencesStore } from 'src/features/settings/user-preferences-store'
 
 import AppMenu from 'src/shared/ui/AppMenu.vue'
@@ -330,6 +333,7 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const appearance = useAppearanceStore()
+const changelog = useChangelogStore()
 const preferences = useUserPreferencesStore()
 const sidebarSections = computed(() => preferences.sessionsPosition === 'aboveProjects'
   ? ['sessions', 'projects'] : ['projects', 'sessions'])
@@ -487,6 +491,16 @@ watch(selectedProjectId, (projectId, previousProjectId) => {
   void chat.setSessionScope(projectId)
     .then(() => chat.fetchDefaults(projectId))
     .catch(() => {})
+}, { immediate: true })
+
+watch(() => drawerOpen.value ? [
+  ...(sessionsSectionOpen.value ? ['standalone'] : []),
+  ...(projectsSectionOpen.value ? projects.items.filter((project) => expandedProjects[project.id]).map((project) => project.id) : [])
+] : [], (scopes) => {
+  chat.visibleSessionScopes = scopes
+  for (const scope of scopes) {
+    void chat.reconcileSessionList(scope === 'standalone' ? null : scope).catch(() => {})
+  }
 }, { immediate: true })
 
 onMounted(async () => {

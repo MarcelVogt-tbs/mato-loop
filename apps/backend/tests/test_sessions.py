@@ -21,6 +21,7 @@ from mato_loop_backend.agent.session_settings import apply_run_session_settings
 from mato_loop_backend.api.errors import ApiError
 from mato_loop_backend.api.routes.sessions import (
     ActiveFileRequest,
+    HomeSessionsRequest,
     SendMessageRequest,
     SessionCreateRequest,
     SessionOptionsRequest,
@@ -33,6 +34,7 @@ from mato_loop_backend.api.routes.sessions import (
     get_run,
     get_session,
     get_session_messages,
+    home_sessions,
     list_sessions,
     mark_session_read,
     message_payload,
@@ -460,7 +462,8 @@ async def test_session_list_next_page_uses_full_keyset_and_preserves_order(sort)
     assert exc_info.value.field == "cursor"
 
 
-async def test_session_list_batches_payload_inputs_without_changing_payloads(monkeypatch) -> None:
+@pytest.mark.parametrize("home", [False, True])
+async def test_session_list_batches_payload_inputs_without_changing_payloads(monkeypatch, home) -> None:
     from mato_loop_backend.api.routes import sessions as route
 
     user = _user()
@@ -505,13 +508,38 @@ async def test_session_list_batches_payload_inputs_without_changing_payloads(mon
         (item, None, None, None, item.created_at, None) for item in sessions
     ]
 
-    result = await list_sessions(user, db, include_archived=True)
+    result = (await home_sessions(user, db, HomeSessionsRequest()) if home
+              else await list_sessions(user, db, include_archived=True))
 
     payloads = [{key: value for key, value in item.items()
-                 if key not in {"activeRunStatus", "lastUserMessageAt"}}
+                 if key not in {"activeRunStatus", "lastUserMessageAt", "activityAt"}}
                 for item in result["items"]]
     assert (payloads, ai.await_count, memory.await_count, db.scalars.await_count) == (
         expected, 1, 1, 2,
+    )
+
+
+async def test_home_sessions_include_relevant_and_retained_sessions_without_page_limit() -> None:
+    user = _user()
+    retained_id = uuid4()
+    db = AsyncMock(spec=AsyncSession)
+    result = MagicMock()
+    result.all.return_value = []
+    db.execute.return_value = result
+    await home_sessions(user, db, HomeSessionsRequest(retainedIds=[retained_id]))
+    statement = db.execute.await_args.args[0]
+    sql = str(statement)
+    params = statement.compile().params.values()
+    assert (
+        "row_number() OVER" in sql
+        and "home_sessions.home_rank <=" in sql
+        and "home_sessions.home_relevant" in sql
+        and "approval_requests.status" in sql
+        and "question_requests.status" in sql
+        and "last_assistant_message_at > chat_sessions.last_read_at" in sql
+        and "home_sessions.id IN" in sql
+        and statement._limit_clause is None
+        and user.id in params and [retained_id] in params and 6 in params
     )
 
 
@@ -2574,7 +2602,7 @@ async def test_session_delete_impact_discovers_the_worktree_without_waiting_for_
     })
 
 
-@pytest.mark.parametrize("worktree", [None, "remove", "changed", "blocked", "joined", "permission"])
+@pytest.mark.parametrize("worktree", [None, "remove", "changed", "blocked", "joined", "permission", "trash"])
 async def test_session_delete_trashes_commits_and_purges_tree(
     tmp_path: Path, monkeypatch, worktree
 ) -> None:
@@ -2631,6 +2659,16 @@ async def test_session_delete_trashes_commits_and_purges_tree(
                 await delete_session(session_id, user, db, worktree_impact=token, permanent=True)
             assert (session_path.exists(), db.delete.await_count, client.request.await_count) == (True, 0, 0)
             return
+
+    if worktree == "trash":
+        monkeypatch.setattr(sessions_route, "_deletable_session", AsyncMock(return_value=session))
+        monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=UserPreferences(trash_enabled=True)))
+        db.scalar.side_effect = lambda statement: session if str(statement).startswith("SELECT chat_sessions.id,") else None
+        db.get.return_value = session
+        db.scalars.return_value = []
+        await delete_session(session_id, user, db, worktree_impact=token, permanent=False)
+        assert (session.delete_at is not None, client.request.await_count, session_path.exists(), db.delete.await_count) == (True, 1, True, 0)
+        return
 
     await delete_session(session_id, user, db, worktree_impact=token, permanent=True)
 

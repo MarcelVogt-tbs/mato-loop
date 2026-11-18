@@ -10,6 +10,12 @@ Windows shell commands inherit only an allowlisted environment, including
 `ProgramFiles` and `ProgramFiles(x86)` for tools such as NuGet. Other host variables,
 including Agent credentials, are not inherited automatically.
 
+On Windows, shell completion follows the shell process exit, not the lifetime of
+detached children. Output is drained for up to one second after exit; channels
+still held open are closed and reported as truncated. Detached children are not
+managed background jobs, and a successful launch does not prove service readiness.
+Redirect detached service output to files and check readiness separately.
+
 Standalone agent with a portable connection and dispatch core. Linux provides bounded filesystem, process, POSIX terminal, transfer, OpenSCAD, browser, credential-storage, and session-cache operations. Native macOS on Apple Silicon provides POSIX files, Bash shell, PTYs, search, transfer, optional browser, and cache operations without administrator execution. The Windows adapter advertises its native filesystem, PowerShell, search, transfer, browser, and cache operations. It connects outbound to the MatoLoop backend and has no backend package or database dependency.
 
 Platform adapters compose host operations behind the common core. Linux and macOS use normalized absolute POSIX paths; Windows uses forward-slash drive-letter paths such as `C:/Users/Ada/workspace` on the wire. Native Windows paths are converted at the Windows adapter boundary. macOS reports `platform: darwin`; the protocol, database, and existing Computer UI are shared. Unsupported capabilities are not advertised.

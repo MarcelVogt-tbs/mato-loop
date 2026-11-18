@@ -33,10 +33,12 @@ from mato_loop_backend.settings import (
 )
 from mato_loop_backend.settings.models import (
     BUILD_PROFILE_ID,
+    INTERACTIVE_PROFILE_ID,
     AgentProfilePermissions,
     CustomAgentProfile,
     build_profile,
     general_profile,
+    interactive_profile,
     plan_profile,
     resolve_agent_profile,
     sysadmin_profile,
@@ -167,7 +169,7 @@ def browser_script_case(browser_policy_case):
     ("ask_changes", "auto", "ask"), ("ask_delete", "auto", "auto"), ("auto_all", "auto", "auto"),
 ])
 @pytest.mark.parametrize("profile", [
-    general_profile(), plan_profile(), build_profile(), sysadmin_profile(),
+    general_profile(), plan_profile(), build_profile(), interactive_profile(), sysadmin_profile(),
     resolve_agent_profile(CustomAgentProfile(name="Custom Build", description="", baseProfileId=BUILD_PROFILE_ID, overrides={}), build_profile(), None),
 ])
 def test_browser_catalog_uses_the_profile_and_selected_base_preset(browser_policy_case, preset, read, write, profile):
@@ -182,8 +184,7 @@ def test_browser_catalog_uses_the_profile_and_selected_base_preset(browser_polic
     }
     for action in actions:
         for integration_id in (None, case.instance.id):
-            resolved_default = ("ask" if action.capability == "browser.code" else
-                                  ("auto" if (profile.base_profile_id or profile.id) == BUILD_PROFILE_ID and preset != "ask_all" else "ask") if action.capability == "browser.use" else
+            resolved_default = (("auto" if (profile.base_profile_id or profile.id) in {BUILD_PROFILE_ID, INTERACTIVE_PROFILE_ID} and preset != "ask_all" else "ask") if action.capability in {"browser.use", "browser.code"} else
                                   "auto" if action.capability == "session.files.read" and preset != "ask_all" else
                                  read if action.category == "read" else write)
             resolution = mock_permissions_resolution.resolve_tool_execution_policy(
@@ -208,8 +209,6 @@ async def test_browser_code_grant_resource_is_not_the_ordinary_write_resource(br
 
 async def test_inherited_browser_actions_use_runtime_auto_without_approvals(browser_action_case):
     case = browser_action_case
-    if case.capability == "browser.code":
-        case.settings.permissions.integration_policies[str(case.instance.id)] = {"browser.code": "auto"}
     result = await case.effective.execute(case.call, case.context)
     assert not result.is_error
     capabilities = [call.args[0].capability for call in case.context.ask_handler.await_args_list]
@@ -221,7 +220,7 @@ async def test_inherited_browser_actions_use_runtime_auto_without_approvals(brow
     case.context.db.scalars.assert_not_awaited()
     case.coordinator.execute.assert_awaited_once()
     assert not case.settings.permissions.policies
-    assert bool(case.settings.permissions.integration_policies) == (case.capability == "browser.code")
+    assert not case.settings.permissions.integration_policies
 
 
 @pytest.mark.parametrize("scope", ["integration", "profile"])

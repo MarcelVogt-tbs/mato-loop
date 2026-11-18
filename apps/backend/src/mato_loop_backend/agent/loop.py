@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import mato_loop_backend.agent.run_support as agent_run_support
+from mato_loop_backend.agent.context import load_missing_attachments
 from mato_loop_backend.agent.media_model_helpers import media_model_handlers
 from mato_loop_backend.agent.memory_context import MemoryCache, prepare_memory_context
 from mato_loop_backend.agent.model_turn import complete_model_turn, persist_model_response
@@ -461,6 +462,10 @@ async def execute_loop_body(
             excluded_content_hashes=excluded_memory_content_hashes,
             embedding_enabled=lambda: get_runtime_config().embedding_enabled,
             cache=memory_cache,
+            known_names=(
+                *((project.name,) if project is not None else ()),
+                *(item.name for item in integration_settings.instances if item.enabled),
+            ),
         )
         memory_overview_prefetched = memory_turn.overview_prefetched
         context_timings["memoryMs"] = round((time.monotonic() - memory_started) * 1000)
@@ -620,6 +625,7 @@ async def execute_loop_body(
             count_model_request=count_helper_request,
         )
         pdf_started = time.monotonic()
+        await load_missing_attachments(db, records)
         pdf_context = await prepare_pdf_attachments(
             records, AttachmentService(settings=instance_limits, run_id=run.id),
             images=ephemeral_images, cache=pdf_cache,

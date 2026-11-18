@@ -31,6 +31,7 @@ Zugangsdaten werden verschlüsselt gespeichert und nicht wieder im Klartext ange
 | OpenSCAD | Eigener verbundener Linux-Computer | Geprüfter Binary-Pfad über **Erkennen** |
 | Browser | Eigener verbundener Linux-, Windows- oder Apple-Silicon-Mac | [Browser einrichten](browser.md#browser-einrichten) |
 | SearXNG | Globale Serveradresse mit aktivierter JSON-Schnittstelle | Je nach Server |
+| Microsoft Web IQ | Je eine globale Verbindung unter **Websuche** und **Webabruf**, feste Microsoft-API | Je Verbindung ein API-Schlüssel einer freigeschalteten Web-IQ-App; [Einrichtung und Kosten](webrecherche-und-quellen.md#microsoft-web-iq-einrichten) |
 | Jina Reader | Globale Reader-Basis-URL | Optionaler API-Schlüssel; [Webabrufe konfigurieren](webrecherche-und-quellen.md#webabrufe-konfigurieren) |
 
 ## Rechte und Profilverfügbarkeit
@@ -188,6 +189,8 @@ Kalender und Aufgaben bedienst du bisher über den Chat; eigene Control-Center-A
 ### Anmeldung erneuern oder trennen
 
 Token werden verschlüsselt gespeichert und automatisch erneuert. Bei abgelehnter Erneuerung melde dich erneut an. Nach Backend-Neustarts musst du nur laufende Anmeldeversuche neu starten. Bei Gerätecode-Konfigurationsfehlern prüfe zuerst **Öffentliche Clientflows zulassen**.
+
+Auch ohne gespeicherte Zugangsdaten bleibt die Verbindung unter **Einstellungen > Integrationen > Verwaltung** sichtbar. Öffne sie zum Bearbeiten und wähle **Bei Microsoft anmelden**. Fehlt bei der Browser-Anmeldung auch das Client-Secret, trage es vorher erneut ein und speichere.
 
 Änderungen an App-Daten, Anmeldeverfahren, Secret oder Zusatzoptionen erfordern eine neue Anmeldung. Diese setzt Zugriffsfreigaben zurück; bei reinen Optionsänderungen bleibt das Browser-Secret erhalten. **Verbindung trennen** entfernt MatoLoops Token, nicht die App-Konfiguration oder Microsofts Einwilligung. Widerrufe die Einwilligung bei Bedarf zusätzlich in Entra beziehungsweise deinen Microsoft-App-Berechtigungen.
 

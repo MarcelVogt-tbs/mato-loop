@@ -37,6 +37,18 @@ def _memory_rag_query(records: list[Message]) -> str | None:
     )
 
 
+def _mentioned_memory_names(records: list[Message], known_names: tuple[str, ...]) -> tuple[str, ...]:
+    current = next((item.content.strip()[:2_000].casefold() for item in reversed(records) if item.role == "user"), "")
+    matches = []
+    for name in {name.strip().casefold() for name in known_names}:
+        if not 3 <= len(name) <= 100 or not any(char.isalnum() for char in name):
+            continue
+        match = re.search(rf"(?<!\w){re.escape(name)}(?!\w)", current)
+        if match:
+            matches.append((match.start(), -len(name), name))
+    return tuple(name for _, _, name in sorted(matches)[:4])
+
+
 def _automatic_context_suppressed(records: list[Message]) -> bool:
     current = next(
         (item.content.casefold() for item in reversed(records) if item.role == "user"),

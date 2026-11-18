@@ -139,6 +139,7 @@ class LiveConnection:
     browser_attached: bool = False
     heartbeat: float = field(default_factory=lambda: asyncio.get_running_loop().time())
     phase: str = "starting"
+    initialized: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     response_active: bool = False
     response_is_speech: bool = False
     tool_response_pending: bool = False
@@ -302,6 +303,7 @@ class VoiceCoordinator:
                 record.status = "active"
                 await db.commit()
             live.phase = "listening"
+            live.initialized.set()
         if kind == "input_audio_buffer.speech_started":
             live.user_speaking = True
             await self._interrupt(live)

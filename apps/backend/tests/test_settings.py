@@ -51,6 +51,7 @@ def test_missing_settings_fields_use_defaults() -> None:
     assert InstanceLimits().max_upload_mib == 1024
     assert InstanceLimits().user_quota_mib is None
     assert UserPreferences.model_validate({}).session_tabs_enabled is False
+    assert UserPreferences.model_validate({}).session_tabs_position == "bottom"
     assert UserPreferences.model_validate({}).session_tabs == []
     assert UserPreferences.model_validate({}).control_center_open is False
 

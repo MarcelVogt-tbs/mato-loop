@@ -210,7 +210,7 @@ const status = computed(() => integrations.browserStatuses[selectedId.value])
 const visible = computed(() => route.name === 'chat' && route.query.session === chat.current?.id
   && controlCenter.sessionId === chat.current?.id && controlCenter.ready
   && controlCenter.open && controlCenter.activeContentId === 'browser')
-const confirmed = computed(() => controlCenter.confirmedState.open && controlCenter.confirmedState.activeAppId === 'browser'
+const confirmed = computed(() => controlCenter.confirmedState.activeAppId === 'browser'
   && controlCenter.confirmedState.tabs.some((tab) => tab.appId === 'browser'))
 let observer
 let contentSize = { width: 0, height: 0 }

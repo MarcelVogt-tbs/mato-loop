@@ -93,7 +93,7 @@ from mato_loop_backend.integrations.registry import (
     integration_adapters,
     validate_integration,
 )
-from mato_loop_backend.integrations.search import SearchIntegrationError
+from mato_loop_backend.integrations.search import SEARCH_DEADLINE_SECONDS, SearchIntegrationError
 from mato_loop_backend.integrations.searxng.client import search_with_provider
 from mato_loop_backend.integrations.searxng.service import SearchIntegrationService
 from mato_loop_backend.integrations.service import (
@@ -102,6 +102,9 @@ from mato_loop_backend.integrations.service import (
 )
 from mato_loop_backend.integrations.sonobin.adapter import sonobin_base_url
 from mato_loop_backend.integrations.sonobin.service import SonoBinIntegrationService
+from mato_loop_backend.integrations.webiq import client as webiq_client
+from mato_loop_backend.integrations.webiq import service as webiq_service
+from mato_loop_backend.integrations.webiq.adapter import WEBIQ_ADAPTER_TYPES, WebIqConfig
 from mato_loop_backend.models import ExecutionAgent, UserAccount
 from mato_loop_backend.security import load_credential, read_credential, require_admin, require_user
 from mato_loop_backend.settings import (
@@ -149,6 +152,13 @@ class JinaIntegrationRequest(JinaOptions):
     api_key: str | None = Field(default=None, max_length=10_000)
     enabled: bool = True
     cookies: list[JinaCookie] | None = Field(default=None, max_length=50)
+
+
+class WebIqIntegrationRequest(WebIqConfig):
+    integration_type: Literal["search", "webfetch"]
+    name: str = Field(min_length=1, max_length=160)
+    api_key: str | None = Field(default=None, min_length=1, max_length=10_000)
+    enabled: bool = True
 
 
 class CalendarIntegrationRequest(BaseModel):
@@ -467,6 +477,11 @@ def _provider_payload(provider: IntegrationInstance) -> dict:
                     "removeOverlay": provider.config.get("remove_overlay", False),
                     "cookieDomains": provider.config.get("cookie_domains", []),
                 } if provider.adapter_type == "jina" else {}),
+                **({"timeoutSeconds": (
+                    min(provider.config.get("timeout_seconds", 30), SEARCH_DEADLINE_SECONDS)
+                    if provider.adapter_type == "webiq_search" else provider.config.get("timeout_seconds", 30)
+                )}
+                   if provider.adapter_type in {"webiq", "webiq_search"} else {}),
                 **(
                     {"username": provider.config.get("username")}
                     if "username" in provider.config
@@ -761,7 +776,7 @@ async def set_integration_enabled(
 def webfetch_settings_payload(settings: IntegrationSettings) -> dict:
     return {
         "providers": [_provider_payload(item) for item in settings.instances
-                      if item.integration_type == "webfetch" and item.adapter_type == "jina"],
+                      if item.integration_type == "webfetch" and item.adapter_type in {"jina", "webiq"}],
     }
 
 
@@ -840,6 +855,77 @@ async def test_jina_integration(
         )
     except (IntegrationSettingsError, WebFetchError) as exc:
         raise ApiError(502, exc.code) from exc
+    return {"ok": True}
+
+
+@router.post("/webiq/providers", status_code=status.HTTP_201_CREATED)
+async def create_webiq_integration(
+    payload: WebIqIntegrationRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    admin: Annotated[UserAccount, Depends(require_admin)],
+    scope: SettingsApiScope = "instance",
+) -> dict:
+    await api_integration_access._load_scoped_integrations(db, scope, admin, adapter_type=WEBIQ_ADAPTER_TYPES[payload.integration_type], mutation=True)
+    try:
+        settings = await webiq_service.WebIqIntegrationService.save(db, None, **payload.model_dump())
+    except IntegrationSettingsError as exc:
+        raise ApiError(409, exc.code, field=exc.field) from exc
+    return search_settings_payload(settings) if payload.integration_type == "search" else webfetch_settings_payload(settings)
+
+
+@router.put("/webiq/providers/{integration_id}")
+async def update_webiq_integration(
+    integration_id: UUID,
+    payload: WebIqIntegrationRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    admin: Annotated[UserAccount, Depends(require_admin)],
+    scope: SettingsApiScope = "instance",
+) -> dict:
+    await api_integration_access._load_scoped_integrations(db, scope, admin, adapter_type=WEBIQ_ADAPTER_TYPES[payload.integration_type], mutation=True)
+    try:
+        settings = await webiq_service.WebIqIntegrationService.save(db, integration_id, **payload.model_dump())
+    except IntegrationSettingsError as exc:
+        raise ApiError(404 if exc.code == "integration.notFound" else 409, exc.code, field=exc.field) from exc
+    return search_settings_payload(settings) if payload.integration_type == "search" else webfetch_settings_payload(settings)
+
+
+@router.delete("/webiq/providers/{integration_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_webiq_integration(
+    integration_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    _admin: Annotated[UserAccount, Depends(require_admin)],
+    scope: SettingsApiScope = "instance",
+) -> None:
+    if scope != "instance":
+        raise ApiError(409, "integration.personalAdapterDisabled")
+    try:
+        await webiq_service.WebIqIntegrationService.delete(db, integration_id)
+    except IntegrationSettingsError as exc:
+        raise ApiError(404, exc.code) from exc
+
+
+@router.post("/webiq/providers/{integration_id}/test")
+async def test_webiq_integration(
+    integration_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    admin: Annotated[UserAccount, Depends(require_admin)],
+    scope: SettingsApiScope = "instance",
+) -> dict:
+    if scope != "instance":
+        raise ApiError(409, "integration.personalAdapterDisabled")
+    settings, _ = await api_integration_access._load_scoped_integrations(db, scope, admin)
+    try:
+        instance = webiq_service.find(settings, integration_id)
+        if settings.availability_for(instance.adapter_type) == IntegrationAdapterAvailability.DISABLED:
+            raise ApiError(409, "integration.adapterDisabled")
+        secrets = await webiq_service.credentials(db, instance)
+        config = WebIqConfig.model_validate(instance.config)
+        if instance.integration_type == "search":
+            await webiq_client.search(config, "example.com", api_key=secrets.api_key)
+        else:
+            await webiq_client.fetch(config, "https://example.com/", query="Example Domain", api_key=secrets.api_key)
+    except (IntegrationSettingsError, WebFetchError) as exc:
+        raise ApiError(502, exc.code, params=getattr(exc, "params", None)) from exc
     return {"ok": True}
 
 

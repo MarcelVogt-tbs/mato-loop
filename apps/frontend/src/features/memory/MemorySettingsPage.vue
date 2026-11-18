@@ -283,7 +283,7 @@
             <q-card flat class="app-surface dreaming-settings-card">
               <q-card-section>
                 <h3 class="text-subtitle1 text-weight-bold q-mt-none q-mb-sm">Memory-Extraktion</h3>
-                <p class="text-body2 app-muted q-mb-sm">Leitet dauerhafte benutzerspezifische Angaben aus Gesprächen ab und gleicht sie mit vorhandenen Erinnerungen ab. Ausgeschaltet bleiben gespeicherte Erinnerungen weiterhin nutzbar und verwaltbar.</p>
+                <p class="text-body2 app-muted q-mb-sm">Erkennt relevante persönliche Fakten, datierte Erlebnisse, Beziehungen, wiederkehrende Vorlieben, dauerhaften Kontext und ausdrücklich genannte langfristige Ziele und gleicht sie mit vorhandenen Erinnerungen ab. Ausgeschaltet bleiben gespeicherte Erinnerungen weiterhin nutzbar und verwaltbar.</p>
                 <q-toggle
                   :model-value="settingsForm.memoryExtractionEnabled"
                   color="primary"
@@ -300,22 +300,14 @@
                   maxlength="8000"
                   counter
                   label="Zusätzliche Hinweise für die Memory-Extraktion"
-                  hint="Kann Schwerpunkte und Kategorien festlegen. Vertrauen, Sicherheit und Evidenz bleiben hostkontrolliert."
+                  hint="Passt Relevanz, Themen und Detailgrad an. Quellen, Berechtigungen und Datenschutz bleiben hostkontrolliert."
                   class="q-mb-lg"
                   :disable="!settingsForm.memoryExtractionEnabled || memories.settingsLoading"
                 />
                 <div class="text-subtitle2 text-weight-medium">Änderungsrichtlinien</div>
                 <div class="text-body2 app-muted q-mt-xs q-mb-md">
-                  Legt fest, ob die Memory-Extraktion Änderungen verwirft, zur Freigabe vorlegt oder automatisch anwendet.
+                  Automatisch extrahierte Erinnerungen werden standardmäßig automatisch aktualisiert. Entfernungen und Zusammenführungen brauchen standardmäßig deine Freigabe. Manuell angelegte oder von dir bearbeitete Erinnerungen benötigen für alle diese Änderungen deine Freigabe – unabhängig von ihrer Quelle.
                 </div>
-                <q-toggle
-                  :model-value="settingsForm.dreamingIncludeManualMemories"
-                  color="primary"
-                  label="Manuell angelegte Erinnerungen einschließen"
-                  :disable="!settingsLoaded || !settingsForm.memoryExtractionEnabled || memories.settingsLoading"
-                  @update:model-value="value => saveToggle('dreamingIncludeManualMemories', value, value ? 'Manuelle Erinnerungen eingeschlossen' : 'Manuelle Erinnerungen geschützt')"
-                />
-                <p class="text-caption app-muted q-mt-xs q-mb-md">Ausgeschaltet werden manuell angelegte Erinnerungen weder geändert noch zusammengeführt oder entfernt. Dubletten werden weiterhin erkannt.</p>
                 <AppSelect dense
                   v-model="settingsForm.dreamingUpdatePolicy"
                   outlined
@@ -337,7 +329,7 @@
                   class="q-mb-lg"
                 />
                 <div class="text-body2 app-muted q-mb-lg">
-                  Das Zusammenführen von Erinnerungen benötigt sowohl das Ändern der bestehenden als auch das Entfernen der zusammengeführten Erinnerungen.
+                  Das Zusammenführen benötigt beide Richtlinien. Geänderte oder beendete Zustände werden mit ihrem zeitlichen Verlauf aktualisiert, nicht allein deshalb gelöscht. Alter oder geringe Relevanz sind kein Löschgrund.
                 </div>
                 <q-input dense v-model.number="settingsForm.dreamingMaxCandidates" outlined type="number" min="1" max="100" label="Max. Erinnerungskandidaten pro Lauf" :disable="!settingsForm.memoryExtractionEnabled || memories.settingsLoading" :rules="[integerRangeRule(1, 100)]" />
               </q-card-section>
@@ -617,7 +609,6 @@ const settingsForm = reactive({
   dreamingMaxCandidates: 1,
   dreamingUpdatePolicy: 'auto',
   dreamingRemovePolicy: 'ask',
-  dreamingIncludeManualMemories: false,
   automaticMemorySnippetLimit: 2,
   automaticSessionSnippetLimit: 3,
   recentSessionSnippetLimit: 2,

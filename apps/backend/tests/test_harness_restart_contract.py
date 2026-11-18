@@ -75,6 +75,8 @@ async def test_slow_message_admission_does_not_block_later_sessions(monkeypatch)
 async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypatch, restored) -> None:
     db = AsyncMock(spec=AsyncSession)
     monkeypatch.setattr(app_module, "initialize_skill_library", AsyncMock())
+    record_build = AsyncMock()
+    monkeypatch.setattr(app_module, "record_installed_build", record_build)
     order = []
     backfill = AsyncMock(side_effect=lambda _db: order.append("backfill"))
     monkeypatch.setattr(app_module.AttachmentService, "backfill_derived_files", backfill)
@@ -115,7 +117,7 @@ async def test_startup_expires_in_memory_run_state_instead_of_resuming(monkeypat
     monkeypatch.setattr(app_module, "SessionStorage", Mock(return_value=session_storage))
 
     async with app_module.lifespan(None):
-        pass
+        record_build.assert_awaited_once_with(db)
 
     statements = [call.args[0] for call in db.execute.await_args_list if call.args[0].is_update]
     approval_update = next(

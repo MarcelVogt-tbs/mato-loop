@@ -84,14 +84,14 @@ it('retains the active tab when navigation is cancelled', async () => {
   await vi.waitFor(() => expect(tabs.items.map(tab => tab.key)).toEqual(['a']))
 })
 
-it('labels project sessions with their full project prefix', async () => {
+it('labels project sessions with their full project suffix', async () => {
   const { tabs, settings } = await mount()
   useProjectStore().items = [{ id: 'project', name: 'MatoLoop' }]
   settings.sessionTabsEnabled = true
   tabs.visit(b, { keep: true })
   await nextTick()
   expect([...root.querySelectorAll('[role="tab"]')].map(tab => tab.getAttribute('aria-label')))
-    .toEqual(['[MatoLoop] Beta', 'Alpha, Vorschau'])
+    .toEqual(['Beta · MatoLoop', 'Alpha, Vorschau'])
 })
 
 it('shows active-run status from summaries instead of session details', async () => {
@@ -118,6 +118,19 @@ it('loads summaries for restored project sessions without loading sidebar scopes
   api.get.mockResolvedValueOnce({ data: { items: [{ ...b, activeRunStatus: 'running' }] } })
   await tabs.refreshSummaries()
   expect(tabs.summaries.b.activeRunStatus).toBe('running')
+})
+
+it('preserves targeted updates while an in-flight refresh loads other tab summaries', async () => {
+  const { tabs } = await mount()
+  tabs.$patch({ owner: 'owner', loaded: true, items: [{ key: 'a', sessionId: 'a' }, { key: 'b', sessionId: 'b' }] })
+  let resolve
+  api.get.mockReturnValueOnce(new Promise(done => { resolve = done }))
+  const refreshing = tabs.refreshSummaries()
+  const newA = { ...a, title: 'Updated Alpha' }
+  tabs.applySummaryUpdates(['a'], { a: newA })
+  resolve({ data: { items: [a, b] } })
+  await refreshing
+  expect(tabs.summaries).toEqual({ a: newA, b })
 })
 
 it('removes project draft tabs before saving the remaining tabs', async () => {

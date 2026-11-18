@@ -6,7 +6,7 @@ Mit der Browser-Integration bedienst du gemeinsam mit dem Agenten Webseiten im s
 
 1. Lege unter **Einstellungen > Integrationen** eine persönliche Browserverbindung an und wähle den Computer.
 2. Docker-Agents enthalten die Laufzeit bereits. Bei nativen Agents starte bei Bedarf **Browser einrichten**. Unter Linux bestätige benötigte Systempakete ausdrücklich. Unter Windows und macOS läuft die Einrichtung ohne weitere Eingaben und ohne Administratorrechte im Konto des Agents. Die schreibgeschützte Fortschrittsausgabe lässt sich nach dem Schließen erneut öffnen. macOS benötigt dafür kein Homebrew.
-3. Wähle denselben Computer in der Session und erlaube die Verbindung für das gewünschte Profil. Plan, Build und Sysadmin schließen Integrationen standardmäßig aus.
+3. Wähle denselben Computer in der Session und erlaube die Verbindung für das gewünschte Profil. Plan, Build, Interactive und Sysadmin schließen Integrationen standardmäßig aus.
 4. Öffne **Control Center > Browser** oder bitte den Agenten, eine Webseite aufzurufen.
 
 Browser-Tools starten die Laufzeit auch ohne geöffnete App. Abgelehnte Hostpakete können die Funktion unverfügbar lassen.
@@ -43,9 +43,9 @@ Die URL muss vom ausgewählten Computer aus erreichbar sein. `localhost` bezeich
 
 ## Rechte und Risiken
 
-**Browser verwenden** umfasst Lesen, Navigation, Bedienung und JavaScript innerhalb der Webseite. Build und darauf basierende Profile erlauben dies standardmäßig automatisch, außer bei **Alles bestätigen**. Allgemein, Plan und Sysadmin fragen standardmäßig nach. Eigene Verbindungs- und Profilregeln gehen vor.
+**Browser verwenden** umfasst Lesen, Navigation, Bedienung und JavaScript innerhalb der Webseite. Build, Interactive und darauf basierende Profile erlauben dies standardmäßig automatisch, außer bei **Alles bestätigen**. Allgemein, Plan und Sysadmin fragen standardmäßig nach. Eigene Verbindungs- und Profilregeln gehen vor.
 
-**Browser-Python ausführen** benötigt zusätzlich ein eigenes Recht und fragt standardmäßig in jedem Preset nach. Eine gewöhnliche Browserfreigabe erlaubt kein Python. Dateien und Secrets behalten ihre eigenen Rechte.
+**Browser-Python ausführen** benötigt zusätzlich ein eigenes Recht. Build, Interactive und darauf basierende Profile erlauben auch Python standardmäßig automatisch, außer bei **Alles bestätigen**. Andere Profile fragen nach; eigene Verbindungs- und Profilregeln gehen vor. Eine gewöhnliche Browserfreigabe erlaubt kein Python. Datei- und Secret-Tools behalten ihre eigenen Rechte; Browser-Python ist jedoch keine Sandbox und kann mit den Rechten des Browserprozesses direkt auf Betriebssystemressourcen zugreifen.
 
 !!! warning "Website-Aktionen können Daten ändern"
     Ein automatisch erlaubter Klick oder JavaScript kann absenden, kaufen oder löschen. **Automatisch außer Löschen** verhindert das nicht. Freigegebenes Python kann außerdem Dateien, Prozesse, Netzwerk und andere Browserdaten mit den Rechten des Browserprozesses erreichen. Getrennte Chat-Browser sind keine Betriebssystem-Sandbox.

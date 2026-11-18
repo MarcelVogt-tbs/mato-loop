@@ -27,6 +27,7 @@ from mato_loop_backend.agent.runtime_memory import (
     _memory_overview_continuation,
     _memory_overview_requested,
     _memory_rag_query,
+    _mentioned_memory_names,
     _recent_episode_overview_requested,
     _session_bootstrap_requested,
 )
@@ -196,6 +197,7 @@ async def prepare_memory_context(
     excluded_content_hashes: frozenset[str],
     embedding_enabled: Callable[[], bool],
     cache: MemoryCache,
+    known_names: tuple[str, ...] = (),
 ) -> MemoryTurn:
     if cache.overview_required is None:
         cache.overview_required = _memory_overview_requested(records)
@@ -287,8 +289,9 @@ async def prepare_memory_context(
             turn.overview_prefetched = True
             turn.candidates.append((memory_text, len(pinned_memories) + len(overview_payload), 0))
         else:
-            rag_query = _memory_rag_query(records)
             if cache.automatic_memories is None:
+                rag_query = _memory_rag_query(records)
+                names = _mentioned_memory_names(records, known_names) if rag_query and not suppressed else ()
                 cache.automatic_memories = []
                 cache.relevant_episodes = []
                 cache.recent_episodes = []
@@ -312,6 +315,7 @@ async def prepare_memory_context(
                             query_embedding=query_embedding, semantic_enabled=semantic_enabled,
                             max_semantic_distance=AUTOMATIC_EPISODE_MAX_DISTANCE,
                             excluded_content_hashes=excluded_content_hashes,
+                            exact_names=names,
                         )
                     ).items
                 if rag_query and episode_query_enabled and settings.automatic_session_snippet_limit > 0:
@@ -325,6 +329,7 @@ async def prepare_memory_context(
                             max_semantic_distance=AUTOMATIC_EPISODE_MAX_DISTANCE,
                             anchor_only=True, full_sessions_only=True,
                             project_id=session.project_id,
+                            exact_names=names,
                         )
                     ).references
                 if episode_query_enabled and settings.recent_session_snippet_limit > 0 and (

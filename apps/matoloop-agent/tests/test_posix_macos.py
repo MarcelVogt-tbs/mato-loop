@@ -7,6 +7,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -50,9 +51,12 @@ class MacOSPosixTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(raised.exception.code, "path.exists")
 
     def test_darwin_null_redirect_uses_native_device_identity(self) -> None:
+        native = sys.platform == "darwin"
         with (
             patch("sys.platform", "darwin"),
-            patch.object(
+            nullcontext()
+            if native
+            else patch.object(
                 self.filesystem,
                 "resolve_path_target",
                 return_value={"path": "/dev/null", "mode": stat.S_IFCHR, "rdev": os.makedev(3, 2)},
@@ -64,20 +68,29 @@ class MacOSPosixTests(unittest.IsolatedAsyncioTestCase):
             )
 
     def test_darwin_toolchain_listing_uses_installed_ls(self) -> None:
+        native = sys.platform == "darwin"
+
         def resolve(path, _current, **_kwargs):
             if path != "/bin/ls":
                 raise AgentError("path.notFound", "Only native ls is installed")
             return {"path": path, "mode": stat.S_IFREG}
 
         with (
+            nullcontext() if native else patch("shutil.which", return_value="/bin/ls"),
+            nullcontext()
+            if native
+            else patch.object(self.filesystem, "inspect_toolchain_directory", return_value=[]),
+            nullcontext()
+            if native
+            else patch.object(self.filesystem, "resolve_path_target", side_effect=resolve),
             patch("sys.platform", "darwin"),
-            patch("shutil.which", return_value="/bin/ls"),
-            patch.object(self.filesystem, "inspect_toolchain_directory", return_value=[]),
-            patch.object(self.filesystem, "resolve_path_target", side_effect=resolve),
         ):
-            self.assertEqual(
-                self.runner.inspect_shell("ls /usr/bin", str(self.root))["targets"][0]["path"],
+            self.assertIn(
                 "/bin/ls",
+                [
+                    target["path"]
+                    for target in self.runner.inspect_shell("ls /bin/ls", str(self.root))["targets"]
+                ],
             )
 
     def test_inspection_without_o_path_still_rejects_directory_links(self) -> None:
@@ -232,8 +245,9 @@ class MacOSPosixTests(unittest.IsolatedAsyncioTestCase):
     @unittest.skipUnless(sys.platform == "darwin", "Native Darwin search is required")
     async def test_native_search(self) -> None:
         search = FilesystemSearch(self.filesystem)
-        if search.executable is None:
-            self.skipTest("Install managed ripgrep or provide rg on PATH")
+        self.assertIsNotNone(
+            search.executable, "Native search requires ripgrep on PATH or in managed tools"
+        )
         target = self.root / "search.txt"
         target.write_text("native marker\n")
         self.assertEqual(

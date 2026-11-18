@@ -149,10 +149,7 @@ it.each(['general', 'dreaming'])('saves %s separately without submitting or disc
   })
 })
 
-it.each([
-  ['Memories extrahieren', 'memoryExtractionEnabled', false],
-  ['Manuell angelegte Erinnerungen einschließen', 'dreamingIncludeManualMemories', true]
-])('saves %s independently without discarding the settings draft', async (label, field, value) => {
+it('saves extraction independently without exposing the retired manual-memory toggle or discarding the settings draft', async () => {
   const settings = { enabled: true, memoryExtractionEnabled: true, sessionSummariesEnabled: true, dreamingInstructions: '' }
   api.get.mockImplementation(async (url) => ({ data: url === '/memories/settings' ? settings : { items: [], total: 0, offset: 0, limit: 20 } }))
   api.patch.mockImplementation(async (_url, payload) => ({ data: { ...settings, ...payload } }))
@@ -166,10 +163,10 @@ it.each([
   await vi.waitFor(() => expect(root.querySelector('[aria-label="Session-Zusammenfassungen erstellen"]')?.getAttribute('aria-checked')).toBe('true'))
   root.querySelector('textarea').value = 'Unsaved instructions'
   root.querySelector('textarea').dispatchEvent(new Event('input', { bubbles: true }))
-  root.querySelector(`[aria-label="${label}"]`).click()
+  root.querySelector('[aria-label="Memories extrahieren"]').click()
   await vi.waitFor(() => expect(api.patch).toHaveBeenCalledOnce())
   await nextTick()
-  expect({ request: api.patch.mock.calls[0], summaries: root.querySelector('[aria-label="Session-Zusammenfassungen erstellen"]').getAttribute('aria-checked'), draft: root.querySelector('textarea').value }).toEqual({
-    request: ['/memories/settings', { [field]: value }], summaries: 'true', draft: 'Unsaved instructions'
+  expect({ request: api.patch.mock.calls[0], summaries: root.querySelector('[aria-label="Session-Zusammenfassungen erstellen"]').getAttribute('aria-checked'), draft: root.querySelector('textarea').value, manualToggle: root.querySelector('[aria-label="Manuell angelegte Erinnerungen einschließen"]') }).toEqual({
+    request: ['/memories/settings', { memoryExtractionEnabled: false }], summaries: 'true', draft: 'Unsaved instructions', manualToggle: null
   })
 })

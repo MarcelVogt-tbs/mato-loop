@@ -16,7 +16,11 @@ from mato_loop_backend.memory.embeddings import (
     embedding_client,
 )
 from mato_loop_backend.memory.episode_indexing import _eligible_filters
-from mato_loop_backend.memory.retrieval import MemoryRetrievalStrategy
+from mato_loop_backend.memory.retrieval import (
+    MemoryRetrievalStrategy,
+    exact_name_tsquery,
+    lexical_overlap_tsquery,
+)
 from mato_loop_backend.memory.service import memory_lexical_terms
 from mato_loop_backend.models import (
     ChatSession,
@@ -127,11 +131,15 @@ def _ranked_candidates(
 
 def _rank_candidates(
     lexical: list[_Candidate], semantic: list[_Candidate], limit: int,
-    *, distinct_sessions: bool = True,
+    *, distinct_sessions: bool = True, named: _Candidate | None = None,
 ) -> list[_Candidate]:
-    result: list[_Candidate] = []
-    seen_sessions: set[UUID] = set()
+    result = [named] if named is not None else []
+    if len(result) == limit:
+        return result
+    seen_sessions = {named.session.id} if named is not None else set()
     for candidate in _ranked_candidates(lexical, semantic):
+        if named is not None and candidate.chunk.id == named.chunk.id:
+            continue
         if distinct_sessions and candidate.session.id in seen_sessions:
             continue
         seen_sessions.add(candidate.session.id)
@@ -357,6 +365,7 @@ class EpisodeRetrievalService:
         session_id: UUID | None = None,
         project_id: UUID | None = None,
         distinct_sessions: bool = True,
+        exact_names: tuple[str, ...] = (),
     ) -> EpisodeRetrieval:
         cleaned_query = query.strip()
         if not cleaned_query:
@@ -490,7 +499,25 @@ class EpisodeRetrievalService:
                 logger.warning("Semantic episode query failed; using lexical fallback")
                 semantic = []
 
-        anchors = _rank_candidates(lexical, semantic, limit, distinct_sessions=distinct_sessions)
+        named = None
+        if exact_names:
+            name_query = exact_name_tsquery(exact_names)
+            row = (await db.execute(
+                select(MessageSearchChunk, Message, ChatSession)
+                .join(Message, Message.id == MessageSearchChunk.message_id)
+                .join(ChatSession, ChatSession.id == Message.session_id)
+                .where(MessageSearchChunk.search_vector.op("@@")(name_query), *filters)
+                .order_by(
+                    func.ts_rank_cd(MessageSearchChunk.search_vector, lexical_overlap_tsquery(cleaned_query)).desc(),
+                    func.to_tsvector("simple", func.coalesce(ChatSession.title, "")).op("@@")(name_query).desc(),
+                    Message.created_at.desc(),
+                    MessageSearchChunk.id.desc(),
+                )
+                .limit(1)
+            )).first()
+            if row is not None:
+                named = _Candidate(*row)
+        anchors = _rank_candidates(lexical, semantic, limit, distinct_sessions=distinct_sessions, named=named)
         references = (
             [
                 EpisodeReference(
