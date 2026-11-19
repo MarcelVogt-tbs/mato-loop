@@ -22,7 +22,7 @@ const a = { id: 'a', title: 'Alpha', projectId: null }
 const b = { id: 'b', title: 'Beta', projectId: 'project' }
 afterEach(() => { app?.unmount(); root?.remove(); vi.restoreAllMocks() })
 
-async function mount() {
+async function mount({ restoring = false } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const chat = useChatStore()
@@ -32,7 +32,7 @@ async function mount() {
   await router.push({ name: 'chat', query: { session: 'a' } })
   chat.current = a
   let navigation
-  const route = reactive({ query: { session: 'a' }, fullPath: '/?session=a' })
+  const route = reactive({ query: { session: 'a' }, fullPath: '/?session=a', meta: { restoreSessionTabs: restoring } })
   root = document.createElement('div')
   document.body.append(root)
   app = createApp({ setup() {
@@ -84,6 +84,19 @@ it('retains the active tab when navigation is cancelled', async () => {
   await vi.waitFor(() => expect(tabs.items.map(tab => tab.key)).toEqual(['a']))
 })
 
+it('makes room for a newly opened tab by dropping the least recently visited tab, not its draft', async () => {
+  const { tabs, chat, settings } = await mount()
+  settings.sessionTabsLimit = 2
+  chat.setDraft('Keep this draft')
+  tabs.visit(a, { keep: true })
+  tabs.visit(b, { keep: true })
+  tabs.visit(a)
+  tabs.visit(b)
+  tabs.visit({ id: 'c', title: 'Gamma' }, { keep: true })
+  expect(tabs.items.map(tab => tab.key)).toEqual(['b', 'c'])
+  expect(chat.drafts.sessionMessages.a).toBe('Keep this draft')
+})
+
 it('labels project sessions with their full project suffix', async () => {
   const { tabs, settings } = await mount()
   useProjectStore().items = [{ id: 'project', name: 'MatoLoop' }]
@@ -94,6 +107,17 @@ it('labels project sessions with their full project suffix', async () => {
     .toEqual(['Beta · MatoLoop', 'Alpha, Vorschau'])
 })
 
+it('limits tabs to ten by default and applies a lower limit only on the next new tab', async () => {
+  const { tabs, settings } = await mount()
+  for (let index = 0; index < 11; index++) tabs.visit({ id: String(index) }, { keep: true })
+  expect(tabs.items.map(tab => tab.key)).toEqual(Array.from({ length: 10 }, (_, index) => String(index + 1)))
+  settings.sessionTabsLimit = 2
+  tabs.visit({ id: '1' })
+  expect(tabs.items).toHaveLength(10)
+  tabs.visit({ id: '11' })
+  expect(tabs.items.map(tab => tab.key)).toEqual(['1', '11'])
+})
+
 it('shows active-run status from summaries instead of session details', async () => {
   const { chat, settings } = await mount()
   chat.current = { ...a, activeRun: { status: 'running' } }
@@ -101,6 +125,9 @@ it('shows active-run status from summaries instead of session details', async ()
   settings.sessionTabsEnabled = true
   await nextTick()
   expect(root.querySelector('.q-tab--active .q-spinner')).not.toBeNull()
+  chat.ensureSessionList().items = [a]
+  await nextTick()
+  expect(root.querySelector('.q-tab--active .session-tabs__status')).toBeNull()
 })
 
 it('shows pending questions even before a restored session summary is loaded', async () => {
@@ -167,6 +194,27 @@ it('restores the ordered preview list on another device and persists removal', a
     .toEqual([[['b', true]], true])
 })
 
+it('keeps a remotely closed tab closed when a stale client switches tabs', async () => {
+  const first = useSessionTabsStore(createPinia())
+  const second = useSessionTabsStore(createPinia())
+  let saved = { sessionTabs: [a, b].map(({ id, title, projectId }) => ({ sessionId: id, title, projectId, preview: false })), controlCenterOpen: false }
+  api.get.mockImplementation(async () => ({ data: saved }))
+  api.put.mockImplementation(async (_url, { sessionTabUsage, ...patch }) => {
+    saved = { ...saved, ...patch }
+    for (const usage of sessionTabUsage || []) {
+      saved.sessionTabs = saved.sessionTabs.map(tab => tab.sessionId === usage.sessionId ? { ...tab, lastUsedAt: usage.lastUsedAt } : tab)
+    }
+    return { data: saved }
+  })
+  await first.setOwner('owner')
+  await second.setOwner('owner')
+  first.close('b')
+  await first.saving
+  second.visit(a)
+  await second.saving
+  expect(saved.sessionTabs).toEqual([{ sessionId: a.id, title: a.title, projectId: null, preview: false, lastUsedAt: expect.any(Number) }])
+})
+
 it('reorders without navigating and keeps the moved preview', async () => {
   const { tabs, settings, router } = await mount()
   settings.sessionTabsEnabled = true
@@ -190,7 +238,7 @@ it('does not accept a previous account response after the owner changes', async 
 })
 
 it('retains the restored preview when the old route finishes loading later', async () => {
-  const { tabs, settings, chat } = await mount()
+  const { tabs, settings, chat } = await mount({ restoring: true })
   chat.loading = true
   settings.sessionTabsEnabled = true
   api.get.mockResolvedValueOnce({ data: { sessionTabs: [
@@ -203,6 +251,27 @@ it('retains the restored preview when the old route finishes loading later', asy
   await nextTick()
   expect(tabs.items.map(tab => [tab.key, tab.preview])).toEqual([['b', true], ['a', false]])
   await tabs.saving
+})
+
+it('preserves a full restored list until the user opens another session', async () => {
+  const { tabs, settings, chat, route } = await mount({ restoring: true })
+  chat.loading = true
+  settings.sessionTabsEnabled = true
+  settings.sessionTabsLimit = 1
+  const saved = { sessionTabs: [{ sessionId: 'b', projectId: 'project', title: 'Beta', preview: false }], controlCenterOpen: false }
+  api.get.mockResolvedValueOnce({ data: saved })
+  api.put.mockImplementation(async (_url, patch) => ({ data: { ...saved, ...patch } }))
+  await tabs.setOwner('owner')
+  chat.loading = false
+  await nextTick()
+  chat.setDraft('Editing the restored chat must not evict a tab')
+  await nextTick()
+  const afterRestore = tabs.items.map(tab => tab.key)
+  chat.current = { id: 'c', title: 'Gamma' }
+  route.query = { session: 'c' }
+  await nextTick()
+  await tabs.saving
+  expect([afterRestore, tabs.items.map(tab => tab.key)]).toEqual([['b'], ['c']])
 })
 
 it('waits for restoration before persisting an explicit visibility change', async () => {

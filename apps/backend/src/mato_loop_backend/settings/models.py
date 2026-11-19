@@ -1846,6 +1846,7 @@ class SessionTab(BaseModel):
     project_id: UUID | None = None
     title: str = Field(default="", max_length=240)
     preview: StrictBool = False
+    last_used_at: int = Field(default=0, ge=0, le=9_007_199_254_740_991, strict=True)
 
 
 def validate_session_tabs(tabs: list[SessionTab]) -> list[SessionTab]:
@@ -1858,6 +1859,7 @@ def validate_session_tabs(tabs: list[SessionTab]) -> list[SessionTab]:
 
 
 SessionTabs = Annotated[list[SessionTab], Field(max_length=100), AfterValidator(validate_session_tabs)]
+DEFAULT_SESSION_TABS_LIMIT = 10
 
 
 class UserPreferences(SettingsDocument):
@@ -1870,6 +1872,7 @@ class UserPreferences(SettingsDocument):
     sessions_page_size: int = Field(default=8, ge=1, le=100, strict=True)
     session_tabs_enabled: bool = False
     session_tabs_position: Literal["top", "bottom"] = "bottom"
+    session_tabs_limit: int = Field(default=DEFAULT_SESSION_TABS_LIMIT, ge=1, le=100, strict=True)
     session_tabs: SessionTabs = Field(default_factory=list)
     control_center_open: StrictBool = False
     trash_enabled: bool = False
@@ -1880,3 +1883,8 @@ class UserPreferences(SettingsDocument):
         default=None, min_length=2, max_length=35,
         pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$",
     )
+
+    @field_validator("session_tabs_limit", mode="before")
+    @classmethod
+    def normalize_session_tabs_limit(cls, value: Any) -> Any:
+        return DEFAULT_SESSION_TABS_LIMIT if value is None else value

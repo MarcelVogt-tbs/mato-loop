@@ -1,5 +1,5 @@
 import { defineRouter } from '#q-app/wrappers'
-import { createMemoryHistory, createRouter, createWebHistory } from 'vue-router'
+import { createMemoryHistory, createRouter, createWebHistory, START_LOCATION } from 'vue-router'
 
 import routes from './routes'
 import { useAuthStore } from 'stores/auth'
@@ -14,7 +14,7 @@ export default defineRouter(() => {
     scrollBehavior: () => ({ left: 0, top: 0 })
   })
 
-  router.beforeEach(async (to) => {
+  router.beforeEach(async (to, from) => {
     const auth = useAuthStore()
     if (!auth.statusLoaded) await auth.fetchStatus()
     if (to.meta.public) {
@@ -22,6 +22,9 @@ export default defineRouter(() => {
       return true
     }
     if (!auth.authenticated) return { name: 'login', query: { redirect: to.fullPath } }
+    if (to.name === 'chat' && (from === START_LOCATION || (from.name === 'login' && from.query.redirect === to.fullPath))) {
+      to.meta.restoreSessionTabs = true
+    }
     if (to.meta.requiresAdmin && !auth.isAdmin) return { name: 'settings-personalization' }
     if (to.matched.some((record) => record.name === 'settings')) {
       const providers = useProviderStore()

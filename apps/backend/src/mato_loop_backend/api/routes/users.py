@@ -38,7 +38,7 @@ from mato_loop_backend.security import (
 )
 from mato_loop_backend.sessions.state import deleted_session_clause
 from mato_loop_backend.settings import SettingsStore, UserPreferences
-from mato_loop_backend.settings.models import SessionTabs
+from mato_loop_backend.settings.models import DEFAULT_SESSION_TABS_LIMIT, SessionTabs
 
 router = APIRouter(prefix="/users")
 logger = logging.getLogger(__name__)
@@ -88,6 +88,7 @@ class UserPreferencesRequest(BaseModel):
     session_tabs_enabled: bool = Field(default=False, alias="sessionTabsEnabled")
     sessions_page_size: int = Field(default=8, alias="sessionsPageSize", ge=1, le=100, strict=True)
     session_tabs_position: Literal["top", "bottom"] = Field(default="bottom", alias="sessionTabsPosition")
+    session_tabs_limit: int = Field(default=DEFAULT_SESSION_TABS_LIMIT, alias="sessionTabsLimit", ge=1, le=100, strict=True)
     trash_enabled: bool = Field(default=False, alias="trashEnabled")
     trash_retention_days: int = Field(default=30, alias="trashRetentionDays", ge=1, le=3650)
     preferred_language: str | None = Field(
@@ -108,6 +109,7 @@ async def get_user_preferences(
         "sessionsPageSize": settings.sessions_page_size,
         "sessionTabsEnabled": settings.session_tabs_enabled,
         "sessionTabsPosition": settings.session_tabs_position,
+        "sessionTabsLimit": settings.session_tabs_limit,
         "trashEnabled": settings.trash_enabled,
         "trashRetentionDays": settings.trash_retention_days,
     }
@@ -130,15 +132,28 @@ async def update_user_preferences(
         "sessionsPageSize": settings.sessions_page_size,
         "sessionTabsEnabled": settings.session_tabs_enabled,
         "sessionTabsPosition": settings.session_tabs_position,
+        "sessionTabsLimit": settings.session_tabs_limit,
         "trashEnabled": settings.trash_enabled,
         "trashRetentionDays": settings.trash_retention_days,
     }
+
+
+class SessionTabUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: UUID | None = Field(default=None, alias="sessionId")
+    project_id: UUID | None = Field(default=None, alias="projectId")
+    last_used_at: int = Field(alias="lastUsedAt", ge=0, le=9_007_199_254_740_991, strict=True)
+
+    def identity(self) -> tuple[str, UUID | None]:
+        return ("session", self.session_id) if self.session_id else ("draft", self.project_id)
 
 
 class WorkspaceStateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     session_tabs: SessionTabs = Field(default_factory=list, alias="sessionTabs")
+    session_tab_usage: list[SessionTabUsage] = Field(default_factory=list, alias="sessionTabUsage", max_length=100)
     control_center_open: StrictBool = Field(default=False, alias="controlCenterOpen")
 
 
@@ -188,11 +203,25 @@ async def update_workspace_state(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
     settings = await SettingsStore.load(db, UserPreferences, user_id=user.id, for_update=True)
+    usage = {}
     if "session_tabs" in payload.model_fields_set:
-        settings.session_tabs = await _workspace_tabs(db, user.id, payload.session_tabs)
+        # A list change may carry an older snapshot of another device's usage.
+        for tab in settings.session_tabs:
+            key = ("session", tab.session_id) if tab.session_id else ("draft", tab.project_id)
+            usage[key] = tab.last_used_at
+    for touch in payload.session_tab_usage:
+        key = touch.identity()
+        usage[key] = max(touch.last_used_at, usage.get(key, 0))
+    replaces_tabs = "session_tabs" in payload.model_fields_set
+    tabs = await _workspace_tabs(db, user.id, payload.session_tabs if replaces_tabs else settings.session_tabs)
+    if replaces_tabs or payload.session_tab_usage:
+        settings.session_tabs = [
+            tab.model_copy(update={"last_used_at": max(tab.last_used_at, usage.get(
+                ("session", tab.session_id) if tab.session_id else ("draft", tab.project_id), 0,
+            ))})
+            for tab in tabs
+        ]
         tabs = settings.session_tabs
-    else:
-        tabs = await _workspace_tabs(db, user.id, settings.session_tabs)
     if "control_center_open" in payload.model_fields_set:
         settings.control_center_open = payload.control_center_open
     await SettingsStore.save(db, settings, user_id=user.id)

@@ -2,8 +2,10 @@ import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
 import { api } from 'src/boot/axios'
 
+export const DEFAULT_SESSION_TABS_LIMIT = 10
+
 export const useUserPreferencesStore = defineStore('user-preferences', {
-  state: () => ({ preferredLanguage: null, sessionsPosition: 'belowProjects', sessionsPageSize: 8, sessionTabsEnabled: false, sessionTabsPosition: 'bottom', trashEnabled: false, trashRetentionDays: 30, loading: false, loaded: false, loadFailed: false, saving: false, loadRequest: null }),
+  state: () => ({ preferredLanguage: null, sessionsPosition: 'belowProjects', sessionsPageSize: 8, sessionTabsEnabled: false, sessionTabsPosition: 'bottom', sessionTabsLimit: DEFAULT_SESSION_TABS_LIMIT, trashEnabled: false, trashRetentionDays: 30, loading: false, loaded: false, loadFailed: false, saving: false, loadRequest: null }),
   actions: {
     applySettings(data) {
       this.preferredLanguage = data.preferredLanguage
@@ -11,6 +13,7 @@ export const useUserPreferencesStore = defineStore('user-preferences', {
       this.sessionsPageSize = data.sessionsPageSize ?? 8
       this.sessionTabsEnabled = data.sessionTabsEnabled ?? false
       this.sessionTabsPosition = data.sessionTabsPosition ?? 'bottom'
+      this.sessionTabsLimit = data.sessionTabsLimit ?? DEFAULT_SESSION_TABS_LIMIT
       this.trashEnabled = data.trashEnabled ?? false
       this.trashRetentionDays = data.trashRetentionDays ?? 30
     },

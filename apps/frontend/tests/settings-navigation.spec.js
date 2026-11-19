@@ -43,6 +43,21 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
+it.each([true, false])('marks only the initial chat navigation as restoration (already authenticated: %s)', async (authenticated) => {
+  const auth = useAuthStore()
+  auth.authenticated = authenticated
+  const router = createAppRouter()
+  await router.push('/?session=restored')
+  if (!authenticated) {
+    auth.authenticated = true
+    await router.replace(router.currentRoute.value.query.redirect)
+  }
+  const initial = router.currentRoute.value.meta.restoreSessionTabs
+  await router.push('/archive')
+  await router.push('/?session=opened')
+  expect([initial, router.currentRoute.value.meta.restoreSessionTabs]).toEqual([true, undefined])
+})
+
 it('allows admins personal provider settings regardless of the personal gate', async () => {
   useAuthStore().isAdmin = true
   api.get.mockResolvedValue({ data: { personalProvidersEnabled: false } })

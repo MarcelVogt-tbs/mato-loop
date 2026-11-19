@@ -3,6 +3,7 @@ import { markRaw } from 'vue'
 import { api } from 'src/boot/axios'
 import { reorderedTabs } from 'src/shared/ui/useTabReorder'
 import { queueRefresh } from 'src/utils/queued-refresh'
+import { useUserPreferencesStore } from 'src/features/settings/user-preferences-store'
 
 export const sessionTabKey = (sessionId, projectId = null) => sessionId || `draft:${projectId || 'standalone'}`
 export const sessionTabTarget = (tab) => ({
@@ -15,7 +16,7 @@ export const sessionTabTarget = (tab) => ({
 
 export const useSessionTabsStore = defineStore('session-tabs', {
   state: () => ({ items: [], summaries: {}, summaryVersions: {}, summaryRevision: 0, readingPositions: {}, owner: null, loaded: false, loading: false, loadRequest: null,
-    controlCenterOpen: false, confirmed: { sessionTabs: [], controlCenterOpen: false }, pending: null, saving: null, revision: 0, generation: 0 }),
+    lastVisitedKey: null, visitClock: 0, controlCenterOpen: false, confirmed: { sessionTabs: [], controlCenterOpen: false }, pending: null, saving: null, revision: 0, generation: 0 }),
   actions: {
     async setOwner(owner) {
       if (this.owner === owner) return
@@ -43,7 +44,11 @@ export const useSessionTabsStore = defineStore('session-tabs', {
       return request
     },
     applyWorkspace(data) {
-      this.items = (data.sessionTabs || []).map(tab => ({ ...tab, key: sessionTabKey(tab.sessionId, tab.projectId) }))
+      const localUsage = new Map(this.items.map(tab => [tab.key, tab.lastUsedAt ?? 0]))
+      this.items = (data.sessionTabs || []).map(tab => {
+        const key = sessionTabKey(tab.sessionId, tab.projectId)
+        return { ...tab, key, lastUsedAt: Math.max(tab.lastUsedAt ?? 0, localUsage.get(key) ?? 0) }
+      })
       this.controlCenterOpen = data.controlCenterOpen === true
     },
     applySummaryUpdates(ids, summaries) {
@@ -77,7 +82,16 @@ export const useSessionTabsStore = defineStore('session-tabs', {
     saveWorkspace(patch) {
       if (!this.owner || !this.loaded) return Promise.resolve()
       this.revision += 1
-      this.pending = { ...this.pending, ...patch }
+      const pending = { ...this.pending, ...patch }
+      if (patch.sessionTabs) {
+        // A structural save already includes the latest local usage.
+        delete pending.sessionTabUsage
+      } else if (patch.sessionTabUsage) {
+        const usage = new Map((this.pending?.sessionTabUsage || []).map(tab => [sessionTabKey(tab.sessionId, tab.projectId), tab]))
+        for (const tab of patch.sessionTabUsage) usage.set(sessionTabKey(tab.sessionId, tab.projectId), tab)
+        pending.sessionTabUsage = [...usage.values()]
+      }
+      this.pending = pending
       if (this.saving) return this.saving
       const generation = this.generation
       const request = Promise.resolve().then(async () => {
@@ -99,7 +113,7 @@ export const useSessionTabsStore = defineStore('session-tabs', {
       return request
     },
     persistTabs() {
-      const sessionTabs = this.items.map(({ sessionId, projectId, title, preview }) => ({ sessionId, projectId, title, preview }))
+      const sessionTabs = this.items.map(({ sessionId, projectId, title, preview, lastUsedAt }) => ({ sessionId, projectId, title, preview, lastUsedAt }))
       void this.saveWorkspace({ sessionTabs }).catch(() => {})
     },
     async setControlCenterOpen(open) {
@@ -112,21 +126,42 @@ export const useSessionTabsStore = defineStore('session-tabs', {
     },
     visit(context, { keep = false } = {}) {
       const key = sessionTabKey(context.id, context.projectId)
+      const limit = useUserPreferencesStore().sessionTabsLimit
       const existing = this.items.find(tab => tab.key === key)
+      const markUsed = key !== this.lastVisitedKey || !existing
+      if (markUsed) {
+        this.lastVisitedKey = key
+        this.visitClock = Math.max(Date.now(), this.visitClock + 1)
+      }
       if (existing) {
-        const before = JSON.stringify(existing)
-        Object.assign(existing, { title: context.title || 'Neue Session', projectId: context.projectId || null })
-        if (keep) existing.preview = false
-        if (JSON.stringify(existing) !== before) this.persistTabs()
+        const title = context.title || 'Neue Session'
+        const projectId = context.projectId || null
+        const promoted = keep && existing.preview
+        Object.assign(existing, { title, projectId, preview: existing.preview && !keep })
+        if (markUsed) existing.lastUsedAt = Math.max(existing.lastUsedAt ?? 0, this.visitClock)
+        if (promoted) this.persistTabs()
+        else if (markUsed) {
+          const { sessionId, projectId, lastUsedAt } = existing
+          void this.saveWorkspace({ sessionTabUsage: [{ sessionId, projectId, lastUsedAt }] }).catch(() => {})
+        }
         return existing
       }
       const tab = {
         key, sessionId: context.id || null, projectId: context.projectId || null,
-        title: context.title || 'Neue Session', preview: !keep
+        title: context.title || 'Neue Session', preview: !keep, lastUsedAt: this.visitClock
       }
       const preview = this.items.findIndex(item => item.preview)
-      if (preview >= 0 && !keep) this.items.splice(preview, 1, tab)
-      else if (this.items.length < 100) this.items.push(tab)
+      if (preview >= 0 && !keep) {
+        delete this.readingPositions[this.items[preview].key]
+        this.items.splice(preview, 1, tab)
+      } else this.items.push(tab)
+      if (this.items.length > limit) {
+        const removed = new Set(this.items.filter(item => item.key !== key)
+          .sort((a, b) => (a.lastUsedAt ?? 0) - (b.lastUsedAt ?? 0))
+          .slice(0, this.items.length - limit).map(item => item.key))
+        this.items = this.items.filter(item => !removed.has(item.key))
+        for (const key of removed) delete this.readingPositions[key]
+      }
       this.persistTabs()
       return tab
     },

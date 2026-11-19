@@ -30,7 +30,9 @@ Ziehe Tabs an die gewünschte Position; eine Markierung zeigt die Einfügestelle
 
 Das Schließen eines Tabs beendet keinen Lauf und löscht weder Session noch Entwurf. Textentwürfe werden pro Benutzer und Session browserlokal gespeichert; ungesendete Anhänge bleiben beim Wechsel oder Tab-Schließen im Arbeitsspeicher, nicht über ein Neuladen hinweg.
 
-Projekt-Sessions zeigen `Sessiontitel · Projektname`. Kurze Tabs brauchen weniger Platz. Zu lange Texte blenden am Rand aus; lange Sessiontitel scrollen nach kurzem Verweilen mit der Maus oder bei Tastaturfokus einmal bis zum Ende, ohne Tooltip. Bei reduzierter Bewegung bleibt der Text statisch. Hintergrund und Akzentlinie markieren den aktiven Tab, ohne seine Breite zu ändern.
+Projekt-Sessions zeigen `Sessiontitel · Projektname`. Der aktive Tab geht ohne Trennlinie in die Chatfläche über. Bei wenig Platz werden die Tabs schmaler und der Sessiontitel wird zuerst gekürzt. Statussymbole brauchen nur Platz, wenn sie angezeigt werden. Über **+N** erreichst du weitere offene Tabs; der aktive Tab bleibt in der Leiste sichtbar.
+
+Standardmäßig bleiben bis zu 10 Session-Tabs offen. Unter **Maximal offene Session-Tabs** in den Grundeinstellungen kannst du 1 bis 100 einstellen. Beim Öffnen eines neuen Tabs machen bei Bedarf die am längsten nicht genutzten Tabs Platz. Wenn du das Limit senkst, bleiben die Tabs bis zum nächsten Öffnen eines neuen Tabs offen. Ein kleineres Fenster schließt keine Tabs. Ist die Leiste beim Neuladen voll, öffnet sich die Session aus der URL ohne eigenen Tab, falls sie nicht schon in der Leiste steht.
 
 ### Suche
 

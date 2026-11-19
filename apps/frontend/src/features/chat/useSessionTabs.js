@@ -26,28 +26,35 @@ export function useSessionTabNavigation() {
 export function useSessionTabs({ chat, route }) {
   const navigation = useSessionTabNavigation()
   const { enabled, tabs } = navigation
+  const preferences = useUserPreferencesStore()
   const context = computed(() => chat.current || {
     projectId: typeof route.query.project === 'string' ? route.query.project : null
   })
   const activeKey = computed(() => sessionTabKey(context.value.id, context.value.projectId))
-  let restorationPending = false
-  function visit(keep, restoring = false) {
+  const routeKey = computed(() => route.query.session || (Object.hasOwn(route.query, 'new')
+    ? sessionTabKey(null, route.query.project) : null))
+  let restoringKey = route.meta?.restoreSessionTabs ? routeKey.value : null
+  watch(routeKey, () => { restoringKey = null }, { flush: 'sync' })
+  function visit(keep) {
     if (!enabled.value || chat.loading || chat.loadError) return
     if (tabs.owner && !tabs.loaded) return
     if ((route.query.session || null) !== (chat.current?.id || null)) return
     if (!chat.current && !Object.hasOwn(route.query, 'new')) return
-    // A restored preview must not be replaced by the previous device's URL.
-    keep ||= restoring && tabs.items.some(tab => tab.preview && tab.key !== activeKey.value)
+    if (restoringKey === activeKey.value) {
+      // Leave the chat accessible without evicting any saved tab on reload.
+      if (tabs.items.length >= preferences.sessionTabsLimit && !tabs.items.some(tab => tab.key === activeKey.value)) return
+      // A restored preview must not be replaced by the previous device's URL.
+      keep ||= tabs.items.some(tab => tab.preview && tab.key !== activeKey.value)
+      restoringKey = null
+    }
     tabs.visit(context.value, { keep })
-    return true
   }
   watch([
     enabled, () => tabs.loaded, () => chat.loading, () => chat.current?.id, () => chat.current?.title,
     () => chat.current?.projectId, () => route.query.session, () => route.fullPath, () => chat.activeDraft,
     () => chat.activeAttachmentDraft.length, () => chat.running
-  ], (_, previous = []) => {
-    restorationPending ||= tabs.loaded && !previous[1]
-    if (visit(Boolean(chat.activeDraft || chat.activeAttachmentDraft.length || chat.running), restorationPending)) restorationPending = false
+  ], () => {
+    visit(Boolean(chat.activeDraft || chat.activeAttachmentDraft.length || chat.running))
   }, { immediate: true })
   watch([() => chat.activeDraft, () => chat.activeAttachmentDraft.length], () => {
     if (chat.activeDraft || chat.activeAttachmentDraft.length) visit(true)
