@@ -66,7 +66,7 @@
           <q-banner v-if="pairing" rounded class="app-surface-tonal" role="status" aria-live="polite">
             <div class="row items-center q-gutter-sm q-mb-sm">
               <div class="text-subtitle2 text-weight-medium">{{ form.provider === 'teams' ? 'Teams' : 'Telegram' }} koppeln</div>
-              <q-chip dense :color="pairingColor" :text-color="pairing.pairingState === 'pending' ? 'black' : 'white'">
+              <q-chip dense :color="pairingColor" :text-color="pairingStatus === 'pending' ? 'black' : 'white'">
                 {{ pairingLabel }}
               </q-chip>
             </div>
@@ -82,6 +82,9 @@
               <div v-if="form.provider === 'teams'" class="text-body2 q-mt-sm">
                 Kopiere den Befehl und sende ihn im persönlichen Teams-Chat an die MatoLoop-App.
                 Bestätige anschließend hier dein Teams-Konto.
+                <template v-if="pairing.pairingState === 'paired'">
+                  Deine bisherige Verbindung bleibt bis zur Bestätigung aktiv.
+                </template>
               </div>
               <q-btn
                 v-if="telegramLink"
@@ -100,7 +103,7 @@
               Verbunden<template v-if="pairing.pairedDisplayName"> mit {{ pairing.pairedDisplayName }}</template>.
             </div>
             <div v-else class="text-body2">Starte eine neue Kopplung, um diesen Bot zu verbinden.</div>
-            <div v-if="pairing.pairingCandidate" class="q-mt-md">
+            <div v-if="pairing.pairingCandidateId" class="q-mt-md">
               <div class="text-weight-medium">{{ pairing.pairingCandidate.display_name || 'Teams-Konto' }}</div>
               <div class="text-caption text-wrap">Entra-Benutzer-ID: {{ pairing.pairingCandidate.user_id }}</div>
               <div class="text-caption text-wrap">Mandant: {{ pairing.pairingCandidate.tenant_id }}</div>
@@ -112,7 +115,7 @@
           </q-banner>
 
           <q-btn
-            v-if="endpointId"
+            v-if="endpointId && (form.provider !== 'teams' || pairing?.enabled)"
             outline
             no-caps
             color="primary"
@@ -138,7 +141,7 @@
             no-caps
             color="primary"
             type="submit"
-            :label="endpoint ? 'Änderungen speichern' : form.provider === 'teams' ? 'Kopplung starten' : 'Kanal hinzufügen'"
+            :label="endpoint ? 'Änderungen speichern' : form.provider === 'teams' && form.enabled ? 'Kopplung starten' : 'Kanal hinzufügen'"
             :loading="saving"
           />
         </q-card-actions>
@@ -189,16 +192,17 @@ const telegramLink = computed(() => {
     ? `https://t.me/${username}?start=${encodeURIComponent(pairing.value.pairingCode)}`
     : null
 })
+const pairingStatus = computed(() => pairing.value?.pairingPending ? 'pending' : pairing.value?.pairingState)
 const pairingLabel = computed(() => ({
   paired: 'Verbunden',
   pending: 'Kopplung ausstehend',
   unpaired: 'Nicht gekoppelt'
-})[pairing.value?.pairingState] || 'Nicht gekoppelt')
+})[pairingStatus.value] || 'Nicht gekoppelt')
 const pairingColor = computed(() => ({
   paired: 'positive',
   pending: 'warning',
   unpaired: 'grey-7'
-})[pairing.value?.pairingState] || 'grey-7')
+})[pairingStatus.value] || 'grey-7')
 
 function requiredRule(value) {
   return Boolean(String(value || '').trim()) || 'Pflichtfeld'
@@ -220,32 +224,40 @@ function pairingExpired() {
 
 function pollPairing(id) {
   stopPolling()
-  pairingTimer = window.setInterval(async () => {
+  const timer = window.setInterval(async () => {
     try {
       await channels.fetchEndpoints({ suppressErrorToast: true })
+      if (pairingTimer !== timer || pairingLoading.value) return
       const endpoint = channels.endpoints.find((item) => item.id === id)
       if (!endpoint) return
-      const pending = endpoint.pairingState === 'pending' && !pairingExpired()
+      const pending = endpoint.pairingPending ?? (endpoint.pairingState === 'pending')
+      const wasPaired = pairing.value?.pairingState === 'paired'
       pairing.value = {
-        ...pairing.value,
         ...endpoint,
-        pairingState: endpoint.pairingState === 'pending' && !pending ? 'unpaired' : endpoint.pairingState,
-        pairingCode: pending ? pairing.value?.pairingCode : null
+        pairingCode: pending && endpoint.pairingExpiresAt === pairing.value?.pairingExpiresAt
+          ? pairing.value?.pairingCode : null
       }
       if (!pending) {
         stopPolling()
-        if (endpoint.pairingState === 'paired') {
+        if (endpoint.pairingState === 'paired' && !wasPaired) {
           $q.notify({ type: 'positive', message: 'Kanal verbunden' })
         }
       }
     } catch {
       // A failed background check must not interrupt the active pairing flow.
-      if (pairingExpired()) {
-        pairing.value = { ...pairing.value, pairingState: 'unpaired', pairingCode: null }
+      if (pairingTimer === timer && !pairingLoading.value && pairingExpired()) {
+        pairing.value = {
+          ...pairing.value,
+          pairingState: pairing.value.pairingState === 'paired' ? 'paired' : 'unpaired',
+          pairingPending: false,
+          pairingCode: null,
+          pairingCandidateId: null
+        }
         stopPolling()
       }
     }
   }, 2000)
+  pairingTimer = timer
 }
 
 async function save() {
@@ -301,10 +313,11 @@ async function copyPairingInput() {
 }
 
 async function confirmTeamsPairing() {
-  if (!endpointId.value || pairingLoading.value) return
+  const candidateId = pairing.value?.pairingCandidateId
+  if (!endpointId.value || !candidateId || pairingLoading.value) return
   pairingLoading.value = true
   try {
-    pairing.value = await channels.confirmTeamsPairing(endpointId.value)
+    pairing.value = await channels.confirmTeamsPairing(endpointId.value, candidateId)
     stopPolling()
     $q.notify({ type: 'positive', message: 'Teams-Konto verbunden' })
   } catch {
@@ -332,7 +345,7 @@ watch([() => props.modelValue, () => props.endpoint?.id, () => props.initialProv
   })
   if (!props.endpoint && form.provider) selectProvider(form.provider)
   pairing.value = props.endpoint ? { ...props.endpoint } : null
-  if (pairing.value?.pairingState === 'pending' && props.endpoint?.id) pollPairing(props.endpoint.id)
+  if (pairingStatus.value === 'pending' && props.endpoint?.id) pollPairing(props.endpoint.id)
 })
 
 onBeforeUnmount(stopPolling)

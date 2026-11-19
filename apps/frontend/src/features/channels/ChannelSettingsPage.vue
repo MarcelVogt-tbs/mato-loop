@@ -123,6 +123,7 @@
                   @click="testEndpoint(endpoint)"
                 ><q-tooltip>Verbindung testen</q-tooltip></q-btn>
                 <q-btn
+                  v-if="endpoint.provider !== 'teams' || endpoint.enabled"
                   flat round dense color="primary" icon="link"
                   :aria-label="`${endpoint.name} koppeln`"
                   :loading="pairingId === endpoint.id"

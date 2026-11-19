@@ -207,6 +207,10 @@ async def session_command(
         endpoint.paired_chat_id = None
         endpoint.paired_display_name = None
         endpoint.current_session_id = None
+        if endpoint.provider == "teams":
+            endpoint.external_identity = f"pending:{endpoint.id}"
+            endpoint.pairing_code_hash = endpoint.pairing_expires_at = None
+            endpoint.channel_state = {"unlinkedBy": str(inbox.id)}
         response = f"{provider} wurde von MatoLoop getrennt."
     return response, command == "/unlink"
 

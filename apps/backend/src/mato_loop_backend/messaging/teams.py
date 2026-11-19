@@ -211,8 +211,9 @@ async def ingest_event(
             identity = event.identity.model_dump(mode="json")
             if candidate and candidate != identity:
                 return False
-            endpoint.channel_state = {"candidate": identity, "revision": settings.revision}
-            endpoint.paired_display_name = event.identity.display_name
+            if not state.get("candidateId"):
+                return False
+            endpoint.channel_state = {**state, "candidate": identity}
             db.add(
                 MessagingInbox(
                     id=event.id,
@@ -580,9 +581,10 @@ async def deliver_outbox(
                 if (
                     event is None
                     or event.kind != "message"
-                    or event.text.strip() != "/unlink"
+                    or session_command_parts(event.text)[0] != "/unlink"
                     or origin.status != "completed"
                     or endpoint.paired_chat_id is not None
+                    or endpoint.channel_state.get("unlinkedBy") != str(origin.id)
                     or event.identity.app_id != settings.app_id
                     or event.identity.tenant_id != settings.tenant_id
                 ):
@@ -612,7 +614,7 @@ async def deliver_outbox(
                     )
                 )
             if origin is not None and (
-                origin.payload.get("bindingId") != endpoint.channel_state.get("bindingId")
+                (not unpaired and origin.payload.get("bindingId") != endpoint.channel_state.get("bindingId"))
                 or origin.payload.get("chatId") != item.destination
             ):
                 raise TeamsServiceError("channel.pairingChanged")

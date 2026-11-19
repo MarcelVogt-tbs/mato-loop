@@ -109,8 +109,8 @@ export const useChannelStore = defineStore('channels', {
       await this.fetchEndpoints()
       return data
     },
-    async confirmTeamsPairing(id) {
-      const { data } = await api.post(`/channels/teams/endpoints/${id}/confirm`)
+    async confirmTeamsPairing(id, candidateId) {
+      const { data } = await api.post(`/channels/teams/endpoints/${id}/confirm`, { candidateId })
       await this.fetchEndpoints()
       return data
     }

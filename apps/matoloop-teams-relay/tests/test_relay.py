@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -39,7 +40,7 @@ def event(spool):
     )
 
 
-def test_admission_receipt_is_idempotent_and_drops_content(spool):
+def test_admission_receipt_is_idempotent_and_drops_content(spool, monkeypatch):
     item = event(spool)
     spool.save(
         Record(
@@ -50,9 +51,44 @@ def test_admission_receipt_is_idempotent_and_drops_content(spool):
             payload=item.model_dump(mode="json"),
         )
     )
+    with monkeypatch.context() as patch:
+        patch.setattr("os.replace", MagicMock(side_effect=OSError("test write failure")))
+        with pytest.raises(OSError, match="test write failure"):
+            spool.receipt(item.id, item.generation, "admitted")
+    spool.max_bytes = sum(path.stat().st_size for path in spool.root.iterdir())
     spool.receipt(item.id, item.generation, "admitted")
     spool.receipt(item.id, item.generation, "admitted")
-    assert spool.get(item.id, "event").payload == {"generation": str(item.generation)}
+    stored = Record.model_validate_json((spool.root / f"{item.id}.json").read_bytes())
+    assert (stored.status, stored.payload) == ("admitted", {"generation": str(item.generation)})
+
+
+async def test_overlapping_message_callbacks_preserve_the_admission_receipt(spool, tmp_path, monkeypatch):
+    item = event(spool)
+    who = item.identity
+    transport = TeamsTransport(MagicMock(), spool, RelayConfig(
+        app_id=who.app_id, tenant_id=who.tenant_id,
+        client_secret_file=tmp_path / "app-key", relay_token_file=tmp_path / "relay-key",
+    ))
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    async def delayed_download(_ctx, _event_id):
+        if not started.is_set():
+            started.set()
+            await finish.wait()
+        return []
+
+    monkeypatch.setattr(transport, "identity", lambda _activity: who)
+    monkeypatch.setattr(transport, "remember", MagicMock())
+    monkeypatch.setattr(transport, "incoming_files", delayed_download)
+    ctx = SimpleNamespace(activity=SimpleNamespace(id=item.message_id, text=item.text), send=AsyncMock())
+    event_id = uuid5(identity_key(who), item.message_id)
+    async with asyncio.TaskGroup() as group:
+        group.create_task(transport.on_message(ctx))
+        await started.wait()
+        await transport.on_message(ctx)
+        spool.receipt(event_id, item.generation, "admitted")
+        finish.set()
+    assert spool.get(event_id, "event").status == "admitted"
 
 
 def test_restart_never_reexecutes_an_unacknowledged_handoff(tmp_path):

@@ -96,8 +96,9 @@ def create_app(config: RelayConfig | None = None) -> FastAPI:
         redoc_url=None,
         openapi_url=None,
     )
-    slots = asyncio.Semaphore(8)
-    arrivals: deque[float] = deque()
+    callback_slots, backend_slots = asyncio.Semaphore(8), asyncio.Semaphore(8)
+    callback_arrivals: deque[float] = deque()
+    backend_arrivals: deque[float] = deque()
 
     @app.exception_handler(SpoolError)
     async def spool_error(_request: Request, error: SpoolError):
@@ -120,7 +121,8 @@ def create_app(config: RelayConfig | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def body_limit(request: Request, call_next):
-        if request.url.path.startswith("/relay/"):
+        backend_request = request.url.path.startswith("/relay/")
+        if backend_request:
             expected = "Bearer " + relay_token.get_secret_value()
             supplied = request.headers.get("authorization", "")
             if not hmac.compare_digest(supplied.encode(), expected.encode()):
@@ -133,6 +135,8 @@ def create_app(config: RelayConfig | None = None) -> FastAPI:
                     },
                     status_code=401,
                 )
+        slots = backend_slots if backend_request else callback_slots
+        arrivals = backend_arrivals if backend_request else callback_arrivals
         now = time.monotonic()
         while arrivals and arrivals[0] <= now - 1:
             arrivals.popleft()

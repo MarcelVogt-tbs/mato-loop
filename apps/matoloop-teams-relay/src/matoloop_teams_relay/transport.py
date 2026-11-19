@@ -224,6 +224,9 @@ class TeamsTransport:
         generation = self.spool.generation
         try:
             blobs = await self.incoming_files(ctx, event_id)
+            # Another callback may have persisted this event or its receipt during the download.
+            if event_id in self.spool.records:
+                return
             if (
                 not self.spool.online
                 or self.spool.generation != generation

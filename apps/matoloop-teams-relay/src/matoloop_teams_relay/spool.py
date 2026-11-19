@@ -81,9 +81,12 @@ class Spool:
         data = record.model_dump_json().encode()
         if record.id not in self.records and len(self.records) >= self.max_records:
             raise SpoolError("relay.capacity", 503)
-        self._capacity(len(data))
         target = self.root / f"{record.id}.json"
         temporary = self.root / f"{record.id}.tmp"
+        # Charge only growth to the quota; a receipt must be able to replace its larger handoff.
+        previous_size = target.stat().st_size if target.exists() else 0
+        if len(data) > previous_size:
+            self._capacity(len(data) - previous_size)
         with temporary.open("wb") as stream:
             os.chmod(temporary, 0o600)
             stream.write(data)
@@ -212,10 +215,11 @@ class Spool:
             raise SpoolError("relay.idConflict")
         if record.status == status:
             return
-        record.status = status
-        record.payload = {"generation": str(generation)}
-        record.expires_at = datetime.now(UTC) + timedelta(hours=24)
-        self.save(record)
+        self.save(record.model_copy(update={
+            "status": status,
+            "payload": {"generation": str(generation)},
+            "expires_at": datetime.now(UTC) + timedelta(hours=24),
+        }))
 
     def serialized_usage(self) -> str:
         return json.dumps({"records": len(self.records), "online": self.online})

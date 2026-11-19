@@ -35,7 +35,12 @@ def new_pairing(endpoint: MessagingEndpoint) -> str:
 
 def endpoint_payload(endpoint: MessagingEndpoint, *, code: str | None = None) -> dict:
     state = endpoint.channel_state or {}
-    candidate = state.get("candidate")
+    pending = bool(
+        endpoint.pairing_code_hash
+        and endpoint.pairing_expires_at
+        and endpoint.pairing_expires_at > datetime.now(UTC)
+    )
+    candidate = state.get("candidate") if pending and state.get("candidateId") else None
     return {
         "id": str(endpoint.id),
         "name": endpoint.name,
@@ -46,9 +51,7 @@ def endpoint_payload(endpoint: MessagingEndpoint, *, code: str | None = None) ->
         "pairingState": "paired"
         if endpoint.paired_chat_id is not None
         else "pending"
-        if endpoint.pairing_code_hash
-        and endpoint.pairing_expires_at
-        and endpoint.pairing_expires_at > datetime.now(UTC)
+        if pending
         else "unpaired",
         "connected": endpoint.last_error_code is None,
         "errorCode": endpoint.last_error_code,
@@ -60,7 +63,8 @@ def endpoint_payload(endpoint: MessagingEndpoint, *, code: str | None = None) ->
         if endpoint.pairing_expires_at
         else None,
         **({"pairingCode": code} if code else {}),
-        **({"pairingCandidate": candidate} if candidate else {}),
+        **({"pairingPending": pending} if endpoint.provider == "teams" else {}),
+        **({"pairingCandidate": candidate, "pairingCandidateId": state["candidateId"]} if candidate else {}),
     }
 
 

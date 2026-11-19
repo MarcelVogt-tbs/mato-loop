@@ -177,12 +177,14 @@ Hostport frei. Verbinde nur vertrauenswürdige Container mit diesem Netz.
 
 1. Wähle **Kopplung starten** in der Willkommenskarte im persönlichen Teams-Chat.
    Fehlt der Button, öffne **Einstellungen > Kanäle > Kanal hinzufügen** und
-   wähle **Microsoft Teams**. Starte die Kopplung in MatoLoop.
+   wähle **Microsoft Teams**. Aktiviere den Kanal und starte die Kopplung in MatoLoop.
 2. Kopiere den angezeigten **Kopplungsbefehl** und sende ihn im persönlichen
    Teams-Chat. Der Code im Befehl gilt 15 Minuten.
 3. Kehre zu MatoLoop zurück. Prüfe den vorgeschlagenen Anzeigenamen sowie die
    Entra-Benutzer- und Mandanten-ID. Bestätige nur dein eigenes Konto mit
-   **Dieses Teams-Konto bestätigen**. Erst danach nimmt MatoLoop Chatnachrichten an.
+   **Dieses Teams-Konto bestätigen**. Erst danach nimmt MatoLoop Chatnachrichten
+   vom neuen Konto an. Bei einer Neukopplung bleibt deine bisherige Verbindung
+   bis zur Bestätigung aktiv.
 4. Der Bot bestätigt die Kopplung im selben Teams-Chat und zeigt Beispiele
    für eine erste Aufgabe. **Neuer Chat** legt einmalig einen leeren MatoLoop-Chat
    an, ohne eine Nachricht zu senden; **Letzte Chats** öffnet die Chat-Auswahl.

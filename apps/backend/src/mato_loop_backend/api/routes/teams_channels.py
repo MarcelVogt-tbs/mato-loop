@@ -54,6 +54,12 @@ class TeamsEndpointRequest(BaseModel):
     enabled: bool = True
 
 
+class TeamsPairingConfirmation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidateId: UUID
+
+
 class TeamsPackageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -217,6 +223,13 @@ async def export_app_package(
     )
 
 
+def start_teams_pairing(item: MessagingEndpoint) -> str:
+    state = dict(item.channel_state or {})
+    state.pop("candidate", None)
+    item.channel_state = {**state, "candidateId": str(uuid4())}
+    return new_pairing(item)
+
+
 @router.post("/endpoints", status_code=status.HTTP_201_CREATED)
 async def create_endpoint(
     payload: TeamsEndpointRequest,
@@ -244,7 +257,7 @@ async def create_endpoint(
         enabled=payload.enabled,
         channel_state={},
     )
-    code = new_pairing(item)
+    code = start_teams_pairing(item) if item.enabled else None
     db.add(item)
     await db.commit()
     return endpoint_payload(item, code=code)
@@ -261,6 +274,11 @@ async def update_endpoint(
     item = await owned(db, endpoint_id, user.id)
     if item.enabled and not payload.enabled:
         await stop_endpoint_work(db, item.id)
+        item.pairing_code_hash = item.pairing_expires_at = None
+        item.channel_state = {
+            key: value for key, value in (item.channel_state or {}).items()
+            if key not in {"candidate", "candidateId"}
+        }
     item.name, item.enabled = payload.name.strip(), payload.enabled
     await db.commit()
     return endpoint_payload(item)
@@ -274,12 +292,9 @@ async def pairing(
 ) -> dict:
     await available(db)
     item = await owned(db, endpoint_id, user.id)
-    await stop_endpoint_work(db, item.id)
-    item.paired_chat_id = item.paired_user_id = item.paired_display_name = None
-    item.current_session_id = None
-    item.channel_state = {}
-    item.external_identity = f"pending:{item.id}"
-    code = new_pairing(item)
+    if not item.enabled:
+        raise ApiError(409, "channel.pairingChanged")
+    code = start_teams_pairing(item)
     await db.commit()
     return endpoint_payload(item, code=code)
 
@@ -287,6 +302,7 @@ async def pairing(
 @router.post("/endpoints/{endpoint_id}/confirm")
 async def confirm_pairing(
     endpoint_id: UUID,
+    payload: TeamsPairingConfirmation,
     user: Annotated[UserAccount, Depends(require_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> dict:
@@ -294,8 +310,9 @@ async def confirm_pairing(
     item = await owned(db, endpoint_id, user.id)
     state = item.channel_state or {}
     if (
-        state.get("revision") != settings.revision
+        state.get("candidateId") != str(payload.candidateId)
         or not state.get("candidate")
+        or not item.pairing_code_hash
         or not item.pairing_expires_at
         or item.pairing_expires_at <= datetime.now(UTC)
         or not item.enabled
@@ -304,6 +321,9 @@ async def confirm_pairing(
     identity = Identity.model_validate(state["candidate"])
     if identity.app_id != settings.app_id or identity.tenant_id != settings.tenant_id:
         raise ApiError(409, "channel.pairingChanged")
+    if item.paired_chat_id is not None:
+        await stop_endpoint_work(db, item.id)
+        item.current_session_id = None
     item.external_identity = f"{identity.tenant_id}:{identity.user_id}"
     item.paired_chat_id, item.paired_user_id = identity.conversation_id, str(identity.user_id)
     item.paired_display_name = identity.display_name

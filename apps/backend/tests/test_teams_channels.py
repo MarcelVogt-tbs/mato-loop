@@ -17,7 +17,7 @@ from PIL import Image, ImageDraw
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.api.errors import register_error_handlers
+from mato_loop_backend.api.errors import ApiError, register_error_handlers
 from mato_loop_backend.api.routes import teams_channels
 from mato_loop_backend.appearance import AppearanceSettings, normalize_logo
 from mato_loop_backend.messaging import teams
@@ -51,22 +51,66 @@ def identity():
 
 async def test_confirm_pairing_queues_the_start_card_for_the_new_binding(monkeypatch):
     who = identity()
+    candidate_id = uuid4()
     endpoint = MessagingEndpoint(
         id=uuid4(), user_id=uuid4(), enabled=True,
+        pairing_code_hash="active",
         pairing_expires_at=datetime.now(UTC) + timedelta(minutes=5),
-        channel_state={"revision": "relay", "candidate": who.model_dump(mode="json")},
+        channel_state={"candidateId": str(candidate_id), "candidate": who.model_dump(mode="json")},
     )
     db = AsyncMock(spec=AsyncSession)
     monkeypatch.setattr(teams_channels, "owned", AsyncMock(return_value=endpoint))
     monkeypatch.setattr(teams_channels, "available", AsyncMock(return_value=TeamsChannelSettings(
         app_id=who.app_id, tenant_id=who.tenant_id, revision="relay",
     )))
-    await teams_channels.confirm_pairing(endpoint.id, SimpleNamespace(id=endpoint.user_id), db)
+    user = SimpleNamespace(id=endpoint.user_id)
+    with pytest.raises(ApiError, match="channel.pairingChanged"):
+        await teams_channels.confirm_pairing(
+            endpoint.id, teams_channels.TeamsPairingConfirmation(candidateId=uuid4()), user, db,
+        )
+    await teams_channels.confirm_pairing(
+        endpoint.id, teams_channels.TeamsPairingConfirmation(candidateId=candidate_id), user, db,
+    )
     item = db.add.call_args.args[0]
     assert (item.destination, item.payload) == (
         who.conversation_id, {"kind": "teamsPairingConfirmed", "bindingId": endpoint.channel_state["bindingId"]},
     )
     db.commit.assert_awaited_once()
+
+
+async def test_start_pairing_preserves_active_binding(monkeypatch):
+    who = identity()
+    settings = TeamsChannelSettings(app_id=who.app_id, tenant_id=who.tenant_id, revision="relay")
+    endpoint = MessagingEndpoint(
+        id=uuid4(), user_id=uuid4(), provider="teams", enabled=True,
+        paired_chat_id=who.conversation_id, paired_user_id=str(who.user_id),
+        external_identity=f"{who.tenant_id}:{who.user_id}",
+        channel_state={"bindingId": "active", "revision": "relay", "identity": who.model_dump(mode="json")},
+    )
+    db = AsyncMock(spec=AsyncSession)
+    monkeypatch.setattr(teams_channels, "owned", AsyncMock(return_value=endpoint))
+    monkeypatch.setattr(teams_channels, "available", AsyncMock(return_value=settings))
+    monkeypatch.setattr(teams_channels, "stop_endpoint_work", AsyncMock())
+    result = await teams_channels.pairing(endpoint.id, SimpleNamespace(id=endpoint.user_id), db)
+    assert result["pairingCode"] and result["pairingPending"] and teams.bound_identity(endpoint, settings) == who
+    teams_channels.stop_endpoint_work.assert_not_awaited()
+
+
+async def test_disabled_teams_endpoint_is_created_without_pairing_code(monkeypatch):
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    monkeypatch.setattr(teams_channels, "available", AsyncMock())
+    result = await teams_channels.create_endpoint(
+        teams_channels.TeamsEndpointRequest(enabled=False), SimpleNamespace(id=uuid4()), db,
+    )
+    assert "pairingCode" not in result
+
+
+async def test_unlink_releases_teams_identity(monkeypatch):
+    endpoint = MessagingEndpoint(id=uuid4(), provider="teams", external_identity="old")
+    monkeypatch.setattr("mato_loop_backend.messaging.sessions.stop_endpoint_work", AsyncMock())
+    await teams.session_command(AsyncMock(), MessagingInbox(id=uuid4()), endpoint, "/unlink")
+    assert endpoint.external_identity == f"pending:{endpoint.id}"
 
 
 @pytest.mark.parametrize("button_index", [0, 1])
