@@ -6,12 +6,15 @@ from pydantic import Field
 
 from mato_loop_backend.execution import ShellInspectResult
 from mato_loop_backend.files.access import filesystem_permission
+from mato_loop_backend.models.session import WebSearchPolicy
 from mato_loop_backend.permissions.policy import (
     PermissionDecision,
     memory_read_permission,
     session_browse_permission,
     session_search_permission,
     shell_command_permissions,
+    web_search_permission,
+    webfetch_permission,
 )
 from mato_loop_backend.permissions.resolution import tool_execution_policy
 from mato_loop_backend.providers.base import ToolCall
@@ -21,6 +24,7 @@ from mato_loop_backend.tools.actions import ToolAction
 from mato_loop_backend.tools.arguments import ToolArguments
 from mato_loop_backend.tools.context import ToolContext
 from mato_loop_backend.tools.contracts import ToolDefinition, ToolResult
+from mato_loop_backend.web.access import webfetch_available
 
 
 class PermissionTarget(ToolArguments):
@@ -98,6 +102,10 @@ async def builtin_permissions(arguments, context: ToolContext, name: str):
         ])
     if name == "session_browse":
         return (session_browse_permission(include_private=arguments.include_private, trust_level=context.model_trust_level),)
+    if name == "web_search":
+        return (web_search_permission(),)
+    if name == "webfetch":
+        return (webfetch_permission(arguments.url),)
     return ()
 
 
@@ -129,6 +137,8 @@ async def request_session_permissions(arguments: RequestSessionPermissionsArgume
     settings = await profile_tool_settings(context)
     tools = tool_registry.effective(
         await context.current_integrations(), tool_settings=settings,
+        webfetch_enabled=webfetch_available(settings),
+        web_search_enabled=context.session.web_search_policy != WebSearchPolicy.DISABLED,
         memory_enabled=context.memory_read_enabled, memory_write_enabled=context.memory_write_enabled,
         execution_operations=context.execution_client.operations if context.execution_client else frozenset(),
     )
@@ -158,11 +168,11 @@ async def request_session_permissions(arguments: RequestSessionPermissionsArgume
 
 REQUEST_SESSION_PERMISSIONS = ToolDefinition(
     "request_session_permissions",
-    "Prepare session permissions without execution for unattended automation setup or explicit user requests. "
-    "Not for routine interactive work. Use offered names and arguments. "
-    "Supports current-session/workspace files, shell, context search, session read/browse and declared "
-    "integrations. No elevation, environment overrides, automation management, notify or silence. "
-    "For directory read/write/delete, propose read/create_directory/delete_path at that directory. "
+    "Prepare permissions without execution for unattended automations or on explicit request. "
+    "Use offered tools and arguments: session/workspace files, shell, context search, session read/browse, "
+    "web_search, webfetch for known URLs, and declared integrations. "
+    "No elevation, environment overrides, automation management, notify or silence. "
+    "For directories, propose read/create_directory/delete_path at that path. "
     "Files use exact paths; directories and unknown targets include descendants. Approval can select the parent. "
     "Shell scopes bind command/context or the computer. "
     "Allowed access needs no prompt; disabled stays blocked. Action-bound consent requires execution. "

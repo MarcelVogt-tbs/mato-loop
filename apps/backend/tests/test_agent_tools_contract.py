@@ -248,6 +248,29 @@ async def test_permission_preparation_never_executes_the_proposed_write(tmp_path
         assert context.ask_handler.await_args.args[0].available_decisions == ("allow_session", "deny")
 
 
+async def test_permission_preparation_checks_web_access_without_executing_it(tmp_path, monkeypatch):
+    import mato_loop_backend.tools.permissions as permissions
+
+    search = IntegrationInstance(
+        name="Search", integration_type="search", adapter_type="searxng",
+        config={"base_url": "https://search.example.com"},
+    )
+    call = ToolCall("prepare", "request_session_permissions", {"requests": [
+        {"tool": "web_search", "arguments": {"query": "MatoLoop"}},
+        {"tool": "webfetch", "arguments": {"url": "https://example.com/page"}},
+    ]})
+    context = _context(tmp_path, call, web_fetch_policy=ToolExecutionPolicy.AUTO)
+    context.tool_settings.web_search.primary_provider = f"searxng:{search.id}"
+    monkeypatch.setattr(permissions, "profile_tool_settings", AsyncMock(return_value=context.tool_settings))
+    monkeypatch.setattr(ToolContext, "current_integrations", AsyncMock(return_value=IntegrationSettings(instances=[search])))
+    for operation in ("search_web", "fetch_web"):
+        monkeypatch.setattr(mock_tools_web, operation, AsyncMock(side_effect=AssertionError("Unexpected web access")))
+
+    result = await tool_registry.execute(call, context)
+
+    assert json.loads(result.content) == {"permissionsReady": True, "executed": False}
+
+
 @pytest.mark.parametrize(("target", "code", "field", "params"), [
     ({"tool": "functions.write_file", "arguments": {}},
      "tool.invalidArguments", "requests.1.tool", {"reason": "invalid_choice"}),
