@@ -92,7 +92,11 @@ def _model(entry: Any) -> DiscoveredModel | None:
     if supports.get("tool_calls") is not True or supports.get("streaming") is False:
         return None
     routes = entry.get("supported_endpoints")
-    preferred = ["/responses", "/chat/completions"] if model_id.startswith(("gpt-", "o1", "o3", "o4")) else ["/chat/completions", "/responses"]
+    preferred = (
+        ["/responses", "/chat/completions"]
+        if model_id.startswith(("gpt-", "o1", "o3", "o4", "mai-"))
+        else ["/chat/completions", "/responses"]
+    )
     if isinstance(routes, list):
         route = next((path for path in preferred if path in routes), None)
     else:

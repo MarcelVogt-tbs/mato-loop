@@ -2696,6 +2696,8 @@ async def test_github_copilot_discovery_and_tool_round(monkeypatch, route, caplo
     messages = [{"role": "user", "content": "Look up a value"}]
     tools = [{"name": "lookup", "parameters": {"type": "object"}}]
     result = await ProviderService.complete(db, provider=provider, model=model, messages=messages, tools=tools)
+    assert result.provider_data["output_budget"]["allocatedOutputTokens"] == 4_000
+    assert result.provider_data["output_budget"]["transmittedMaxOutputTokens"] == 4_000
     call, = result.tool_calls
     assert (call.id, call.name, call.arguments) == ("call_1", "lookup", {"key": "value"})
     messages.extend([
@@ -2731,3 +2733,15 @@ async def test_github_copilot_rejects_untrusted_catalog_origin():
         with pytest.raises(ProviderError, match="Untrusted"):
             await github_copilot.resolve_api_url(client, "github_pat_test")
     assert requests == [github_copilot.ACCOUNT_URL]
+
+
+def test_github_copilot_prefers_responses_for_mai_code() -> None:
+    model = github_copilot._model({
+        "id": "mai-code-2",
+        "model_picker_enabled": True,
+        "supported_endpoints": ["/chat/completions", "/responses"],
+        "capabilities": {"supports": {"tool_calls": True}},
+    })
+
+    assert model is not None
+    assert model.metadata["copilot_api_type"] == "responses"
