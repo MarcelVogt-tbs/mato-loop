@@ -49,7 +49,11 @@ from mato_loop_backend.models import (
 )
 from mato_loop_backend.notifications import NotificationService
 from mato_loop_backend.providers.base import ProviderError, ProviderResult, ToolCall
-from mato_loop_backend.providers.output_budget import output_token_limit, raw_input_budget
+from mato_loop_backend.providers.output_budget import (
+    model_input_capacity,
+    output_token_limit,
+    raw_input_budget,
+)
 from mato_loop_backend.providers.reasoning import reasoning_profile
 from mato_loop_backend.providers.service import ProviderService
 from mato_loop_backend.sessions.state import deleted_session_clause, is_session_deleted
@@ -414,8 +418,8 @@ def _source_character_limit(
 ) -> int:
     effective_output_tokens = output_token_limit(model, output_tokens)
     assert effective_output_tokens is not None
-    available_input_tokens = raw_input_budget(max(
-        0, model.context_window_tokens - effective_output_tokens - safety_reserve_tokens,
+    available_input_tokens = raw_input_budget(model_input_capacity(
+        model, effective_output_tokens, safety_reserve_tokens,
     ))
     return max(0, int(available_input_tokens * model.characters_per_token) - 16_000)
 

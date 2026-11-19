@@ -477,16 +477,17 @@ The summary model falls back to the active model and then a marked deterministic
 
 `contextWindowTokens` is capacity, with a configuration minimum of two tokens, not a guarantee a request can fit. Discovered models follow endpoint-reported context unless manually overridden. Codex prefers its allowed maximum; a local server's configured context takes precedence over theoretical capacity. Without metadata the fallback is 128,000. Explicit synchronization refreshes provider-following values; deployment alone does not rewrite them.
 
-`maxOutputTokens=null` means Auto; a strict positive integer is a manual ceiling, not a reservation. Context changes do not clamp or rewrite it. `discoveredMaxOutputTokens` is a nullable authoritative provider cap; currently only OpenRouter's documented `top_provider.max_completion_tokens` supplies one. Names, context size and generation defaults are not evidence of a cap.
+`maxOutputTokens=null` means Auto; a strict positive integer is a manual ceiling, not a reservation. Context changes do not clamp or rewrite it. `discoveredMaxOutputTokens` is a nullable provider cap supplied by OpenRouter's `top_provider.max_completion_tokens` or Copilot's `max_output_tokens`. Copilot's `max_prompt_tokens` is a separate input cap, even when the context window is set manually. Names, context size and generation defaults are not evidence of a cap.
 
-Let `C` be context, `S` fixed safety (default 4,096), `M` optional manual ceiling and `H` optional known provider cap. Omit absent limits from minima:
+Let `C` be context, `S` fixed safety (default 4,096), `M` optional manual output ceiling, `H` optional provider output cap, and `P` optional provider prompt cap. Omit absent limits from minima:
 
 ```text
 R = min(2048, M, H)
 raw_input_budget(capacity) = capacity * 10 // 11
-input_budget = raw_input_budget(max(0, C - S - R))
+input_budget = raw_input_budget(max(0, min(C - R, P) - S))
+ratio = compaction_trigger_ratio
 trigger_budget = min(input_budget,
-    raw_input_budget(max(0, floor(C * compaction_trigger_ratio) - S - R)))
+    raw_input_budget(max(0, min(floor(C * ratio) - R, floor(P * ratio)) - S)))
 ```
 
 `R` reserves a useful generation turn, not the entire output ceiling. The inverse `10/11` leaves room for a single later 10% increase. All framing, tools, media, Memory and history count. A smaller selected model can require compaction; a protected minimum that cannot fit produces a controlled error before generation.
@@ -501,7 +502,7 @@ guardedI = ceil(I * 1.1)
 output = min(C - S - guardedI, M, H, Q)
 ```
 
-`Q` is an optional helper ceiling. Safety and proportional margin apply once. A nonpositive allowance or one below the required reserve fails before generation; the provider boundary does not recursively compact. When `M`, `H` and `Q` are absent, compatible transports omit output-limit options and let the provider apply its default. A present limit is reduced to fit. Codex always omits generation options.
+`Q` is an optional helper ceiling. Safety and proportional margin apply once. Generation fails if `guardedI + S` exceeds a known `P`, or if the output allowance is nonpositive or below the required reserve. The provider boundary does not recursively compact. When `M`, `H` and `Q` are absent, compatible transports omit output-limit options and let the provider apply its default. A present limit is reduced to fit. Codex always omits generation options.
 
 Text uses the configured character/token ratio; binary/base64 is not counted as ordinary text. Each image reserves 2,048 input tokens; audio/video/unknown opaque continuation reserves 8,192. Valid scope-matching Responses reasoning usage plus 256 framing tokens replaces that opaque fallback. These are estimates, not tokenizer guarantees or hidden output caps. Large media/templates may still need manual ceilings or fail upstream.
 

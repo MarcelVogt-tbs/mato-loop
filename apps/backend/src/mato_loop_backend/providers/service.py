@@ -590,7 +590,7 @@ class ProviderService:
                 "Unsupported provider adapter", code="provider.configurationInvalid"
             )
         model_trust_level = target_trust_level or effective_model_trust(provider, model)
-        api_type = adapter.api_type(provider)
+        api_type = adapter.api_type(provider, model)
         if media_inputs and api_type not in adapter.native_media_api_types:
             raise ProviderError(
                 "Native audio and video require OpenAI-compatible Chat Completions",
@@ -631,6 +631,9 @@ class ProviderService:
             "trustLevel": model_trust_level.value,
             "pseudonymization": "enabled" if use_pseudonymization else "disabled",
         }
+        if adapter.adapter_type == "github-copilot":
+            # Its account origin is resolved at dispatch, after the context is budgeted.
+            continuation_scope.clear()
         provider_messages, media = await _provider_projection(
             messages,
             supports_image_input=model.supports_image_input,

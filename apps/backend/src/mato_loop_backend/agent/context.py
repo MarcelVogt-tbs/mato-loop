@@ -21,7 +21,11 @@ from mato_loop_backend.agent.projection import (
 )
 from mato_loop_backend.media.attachments import AttachmentService
 from mato_loop_backend.models import ChatSession, ContextSummary, Message, MessageAttachment
-from mato_loop_backend.providers.output_budget import generation_reserve, raw_input_budget
+from mato_loop_backend.providers.output_budget import (
+    generation_reserve,
+    model_input_capacity,
+    raw_input_budget,
+)
 from mato_loop_backend.settings.models import AgentRuntimeSettings, ModelConfig, TrustLevel
 from mato_loop_backend.tools.snapshots import SNAPSHOT_MARKER
 
@@ -99,21 +103,16 @@ class ContextManager:
         interleaved_start = next((i for i, item in enumerate(records)
                                   if getattr(item, "_interleaved_review", False)), len(records))
         reserved_output_tokens = generation_reserve(model)
-        input_budget = raw_input_budget(max(
-            0,
-            model.context_window_tokens
-            - reserved_output_tokens
-            - settings.safety_reserve_tokens,
+        input_budget = raw_input_budget(model_input_capacity(
+            model, reserved_output_tokens, settings.safety_reserve_tokens,
         ))
         if input_budget <= 0:
             raise ContextError("agent.contextWindowTooSmall")
         trigger_tokens = min(
             input_budget,
-            raw_input_budget(max(
-                0,
-                int(model.context_window_tokens * settings.compaction_trigger_ratio)
-                - reserved_output_tokens
-                - settings.safety_reserve_tokens,
+            raw_input_budget(model_input_capacity(
+                model, reserved_output_tokens, settings.safety_reserve_tokens,
+                ratio=settings.compaction_trigger_ratio,
             )),
         )
         latest = await db.scalar(
