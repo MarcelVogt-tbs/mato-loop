@@ -361,6 +361,7 @@ class ProviderSettingsService:
             provider_config.models_last_synced_at = None
             for item in settings.models:
                 if item.provider_id == provider_config.id:
+                    item.discovered_max_prompt_tokens = None
                     item.discovered_max_output_tokens = None
                     if item.origin == ModelOrigin.DISCOVERED:
                         item.availability = ModelAvailability.MISSING
@@ -523,6 +524,11 @@ class ProviderSettingsService:
         }
         for external_id, discovered_model in discovered_by_id.items():
             discovery_metadata = discovered_model.metadata
+            prompt_cap = None
+            output_cap = discovered_model.discovered_max_output_tokens
+            if provider_config.adapter_type == "github-copilot":
+                prompt_cap = discovery_metadata.get("copilot_max_prompt_tokens")
+                output_cap = discovery_metadata.get("copilot_max_output_tokens")
             if (
                 provider_config.adapter_type == "openai-compatible"
                 and "capabilities" in discovered_model.model_fields_set
@@ -530,9 +536,8 @@ class ProviderSettingsService:
                 discovery_metadata["discovered_capabilities"] = sorted(discovered_model.capabilities)
             value = existing_by_id.get(external_id)
             if value is not None:
-                value.discovered_max_output_tokens = (
-                    discovered_model.discovered_max_output_tokens
-                )
+                value.discovered_max_prompt_tokens = prompt_cap
+                value.discovered_max_output_tokens = output_cap
                 if provider_config.adapter_type == "openai-codex" and value.origin == ModelOrigin.MANUAL:
                     value.discovery_metadata.update({
                         key: discovered_model.metadata[key]
@@ -568,9 +573,8 @@ class ProviderSettingsService:
                         context_window_tokens=context_window,
                         discovered_context_window_tokens=discovered_context,
                         use_discovered_context_window=True,
-                        discovered_max_output_tokens=(
-                            discovered_model.discovered_max_output_tokens
-                        ),
+                        discovered_max_prompt_tokens=prompt_cap,
+                        discovered_max_output_tokens=output_cap,
                         supports_parallel_tool_calls=(
                             supports_parallel
                             if isinstance(supports_parallel, bool)
@@ -667,6 +671,7 @@ class ProviderSettingsService:
                 value.provider_id == provider_config.id
                 and value.model_id not in discovered_by_id
             ):
+                value.discovered_max_prompt_tokens = None
                 value.discovered_max_output_tokens = None
                 if value.origin == ModelOrigin.DISCOVERED:
                     value.availability = ModelAvailability.MISSING
@@ -750,6 +755,7 @@ class ProviderSettingsService:
             exclude_id=current.id,
         )
         if (validated.provider_id, validated.model_id) != (current.provider_id, current.model_id):
+            validated.discovered_max_prompt_tokens = None
             validated.discovered_max_output_tokens = None
             validated.discovery_metadata = {
                 key: value for key, value in validated.discovery_metadata.items()

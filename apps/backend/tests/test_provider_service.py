@@ -46,8 +46,10 @@ from mato_loop_backend.providers.output_budget import (
     raw_input_budget,
 )
 from mato_loop_backend.providers.service import ProviderService, _with_retries
+from mato_loop_backend.providers.settings_service import ProviderSettingsService
 from mato_loop_backend.settings.models import (
     AgentRuntimeSettings,
+    AiSettings,
     LlmProviderConfig,
     ModelCapability,
     ModelConfig,
@@ -2627,14 +2629,22 @@ async def test_prepare_is_local_and_matches_transmitted_request(monkeypatch, ada
 
 
 @pytest.mark.parametrize("route", ["/chat/completions", "/responses"])
-async def test_github_copilot_discovery_and_tool_round(monkeypatch, route):
+async def test_github_copilot_discovery_and_tool_round(monkeypatch, route, caplog):
     token = "github_pat_test"
     catalog = {
         "id": "gpt-example", "model_picker_enabled": True,
         "supported_endpoints": [route],
-        "capabilities": {"supports": {"tool_calls": True}},
+        "capabilities": {
+            "supports": {"tool_calls": True},
+            "limits": {
+                "max_context_window_tokens": 32_000,
+                "max_prompt_tokens": 16_000,
+                "max_output_tokens": 4_000,
+            },
+        },
     }
     calls = []
+    provider_error = False
 
     def wire(request):
         assert request.headers["Authorization"] == f"Bearer {token}"
@@ -2648,6 +2658,11 @@ async def test_github_copilot_discovery_and_tool_round(monkeypatch, route):
         assert request.url.path == route
         body = json.loads(request.content)
         assert body["model"] == "gpt-example"
+        assert body["max_output_tokens" if route == "/responses" else "max_tokens"] == 4_000
+        if provider_error:
+            return httpx.Response(400, json={"error": {
+                "code": "context_length_exceeded", "message": "private upstream details",
+            }})
         calls.append((request.headers["X-Initiator"], body))
         if route == "/responses":
             item = {"type": "function_call", "id": "fc_1", "call_id": "call_1",
@@ -2672,10 +2687,12 @@ async def test_github_copilot_discovery_and_tool_round(monkeypatch, route):
         pseudonymization_enabled=False,
     )
     db = AsyncMock(spec=AsyncSession)
-    discovered, = await ProviderService.discover_models(db, provider=provider)
-    model = ModelConfig(
-        provider_id=provider.id, model_id=discovered.id, discovery_metadata=discovered.metadata,
+    settings = AiSettings(providers=[provider])
+    ProviderSettingsService._reconcile_discovered_models(
+        settings, provider, await ProviderService.discover_models(db, provider=provider),
     )
+    model, = settings.models
+    assert (model.context_window_tokens, model.discovered_max_prompt_tokens) == (32_000, 16_000)
     messages = [{"role": "user", "content": "Look up a value"}]
     tools = [{"name": "lookup", "parameters": {"type": "object"}}]
     result = await ProviderService.complete(db, provider=provider, model=model, messages=messages, tools=tools)
@@ -2695,6 +2712,12 @@ async def test_github_copilot_discovery_and_tool_round(monkeypatch, route):
     assert "Found" in str(second_body[key][-1])
     if route == "/responses":
         assert not any(item.get("type") == "reasoning" for item in second_body[key])
+
+    provider_error = True
+    with pytest.raises(ProviderError) as exc_info:
+        await ProviderService.complete(db, provider=provider, model=model, messages=messages, tools=tools)
+    assert exc_info.value.public_code == "agent.contextWindowExceeded"
+    assert "private upstream details" not in caplog.text + str(exc_info.value)
 
 
 async def test_github_copilot_rejects_untrusted_catalog_origin():

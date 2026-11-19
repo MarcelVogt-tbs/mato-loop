@@ -34,6 +34,10 @@ def _object(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _token_limit(value: Any, minimum: int = 1) -> int | None:
+    return value if type(value) is int and minimum <= value <= 10_000_000 else None
+
+
 async def _fetch_json(client: httpx.AsyncClient, url: str, token: str) -> Any:
     response = await client.get(url, headers=headers(token), follow_redirects=False)
     if not response.is_success:
@@ -96,10 +100,10 @@ def _model(entry: Any) -> DiscoveredModel | None:
     if route is None:
         return None
     limits = _object(capabilities.get("limits"))
-    context_length = next((
-        value for key in ("max_context_window_tokens", "max_prompt_tokens")
-        if type(value := limits.get(key)) is int and 2 <= value <= 10_000_000
-    ), None)
+    prompt_limit = _token_limit(limits.get("max_prompt_tokens"))
+    context_length = _token_limit(limits.get("max_context_window_tokens"), 2)
+    if context_length is None and prompt_limit is not None and prompt_limit >= 2:
+        context_length = prompt_limit  # Conservative fallback when total capacity is unknown.
     name = entry.get("name")
     return DiscoveredModel(
         id=model_id,
@@ -109,6 +113,8 @@ def _model(entry: Any) -> DiscoveredModel | None:
         supports_parallel_tool_calls=supports.get("parallel_tool_calls") is True,
         input_modalities=["text", "image"] if supports.get("vision") is True else ["text"],
         context_length=context_length,
+        copilot_max_prompt_tokens=prompt_limit,
+        copilot_max_output_tokens=_token_limit(limits.get("max_output_tokens")),
     )
 
 

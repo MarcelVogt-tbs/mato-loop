@@ -806,6 +806,7 @@ class ModelConfig(BaseModel):
             "use_discovered_context_window", "useDiscoveredContextWindow"
         ),
     )
+    discovered_max_prompt_tokens: int | None = Field(default=None, strict=True, gt=0)
     max_output_tokens: int | None = Field(
         default=None,
         strict=True,

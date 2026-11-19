@@ -127,6 +127,8 @@ class DiscoveredModel(BaseModel):
             "reasoning_efforts",
             "api_model_id",
             "copilot_api_type",
+            "copilot_max_prompt_tokens",
+            "copilot_max_output_tokens",
             "service_tier",
             "supports_reasoning_effort_updates",
             "default_speech_voice",
@@ -657,13 +659,7 @@ def _provider_error_code(error: Any) -> str | None:
 
 
 async def _ensure_success(response: httpx.Response, *, redact_errors: bool = False) -> None:
-    if redact_errors and not response.is_success:
-        raise ProviderError(
-            f"Provider request failed with HTTP {response.status_code}",
-            status_code=response.status_code,
-            retry_after=_retry_after(response),
-        )
-    if response.status_code < 400:
+    if response.is_success or (not redact_errors and response.status_code < 400):
         return
     await response.aread()
     error: Any = None
@@ -673,34 +669,33 @@ async def _ensure_success(response: httpx.Response, *, redact_errors: bool = Fal
         if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
             error = payload["error"]
     except (json.JSONDecodeError, UnicodeDecodeError):
-        non_json_message = response.text
-    error_type = error.get("type") if isinstance(error, dict) else None
-    error_code = error.get("code") if isinstance(error, dict) else None
-    error_param = error.get("param") if isinstance(error, dict) else None
-    error_message = error.get("message") if isinstance(error, dict) else non_json_message
-    try:
-        endpoint = response.request.url.path
-    except RuntimeError:
-        endpoint = None
-    request_id = next(
-        (
-            value
-            for header in _PROVIDER_REQUEST_ID_HEADERS
-            if (value := _safe_provider_text(response.headers.get(header), limit=200))
-        ),
-        None,
-    )
-    logger.warning(
-        "Provider request failed (status=%s, endpoint=%r, type=%r, code=%r, "
-        "param=%r, request_id=%r, message=%r)",
-        response.status_code,
-        endpoint,
-        _safe_provider_text(error_type, limit=80),
-        _safe_provider_text(error_code, limit=80),
-        _safe_provider_text(error_param, limit=80),
-        request_id,
-        _safe_provider_text(error_message, limit=500),
-    )
+        if not redact_errors:
+            non_json_message = response.text
+    if not redact_errors:
+        details = error or {}
+        try:
+            endpoint = response.request.url.path
+        except RuntimeError:
+            endpoint = None
+        request_id = next(
+            (
+                value
+                for header in _PROVIDER_REQUEST_ID_HEADERS
+                if (value := _safe_provider_text(response.headers.get(header), limit=200))
+            ),
+            None,
+        )
+        logger.warning(
+            "Provider request failed (status=%s, endpoint=%r, type=%r, code=%r, "
+            "param=%r, request_id=%r, message=%r)",
+            response.status_code,
+            endpoint,
+            _safe_provider_text(details.get("type"), limit=80),
+            _safe_provider_text(details.get("code"), limit=80),
+            _safe_provider_text(details.get("param"), limit=80),
+            request_id,
+            _safe_provider_text(details.get("message", non_json_message), limit=500),
+        )
     raise ProviderError(
         f"Provider request failed with HTTP {response.status_code}",
         status_code=response.status_code,

@@ -52,6 +52,19 @@ def raw_input_budget(context_capacity: int) -> int:
     return _validate_tokens(context_capacity) * 10 // 11
 
 
+def model_input_capacity(
+    model: ModelConfig,
+    reserved_output_tokens: int,
+    safety_reserve_tokens: int,
+    *,
+    ratio: float = 1.0,
+) -> int:
+    capacity = int(model.context_window_tokens * ratio) - reserved_output_tokens
+    if model.discovered_max_prompt_tokens is not None:
+        capacity = min(capacity, int(model.discovered_max_prompt_tokens * ratio))
+    return max(0, capacity - safety_reserve_tokens)
+
+
 def allocate_output_tokens(
     model: ModelConfig,
     estimated_input_tokens: int,
@@ -69,11 +82,17 @@ def allocate_output_tokens(
     reserve = (
         min(2_048, cap) if cap is not None else 2_048
     ) if reserved_output_tokens is None else _validate_tokens(reserved_output_tokens)
+    guarded_input = guarded_input_tokens(estimated_input_tokens)
     available = (
         _validate_tokens(model.context_window_tokens, minimum=1)
         - _validate_tokens(safety_reserve_tokens)
-        - guarded_input_tokens(estimated_input_tokens)
+        - guarded_input
     )
+    if (
+        model.discovered_max_prompt_tokens is not None
+        and guarded_input + safety_reserve_tokens > model.discovered_max_prompt_tokens
+    ):
+        raise ProviderError("Provider prompt limit exceeded", code="agent.contextWindowExceeded")
     allocated = min(available, cap) if cap is not None else available
     if allocated <= 0 or allocated < reserve:
         raise ProviderError(
