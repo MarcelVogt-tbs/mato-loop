@@ -19,12 +19,14 @@ from telegram import (
 
 from mato_loop_backend.api.routes import channels as routes
 from mato_loop_backend.media.attachments import AttachmentInput
+from mato_loop_backend.messaging import sessions as channel_sessions
 from mato_loop_backend.messaging import telegram
 from mato_loop_backend.messaging.approvals import (
     MessagingApprovalAction,
     MessagingApprovalPayload,
     decode_approval_callback,
 )
+from mato_loop_backend.messaging.endpoints import endpoint_payload
 from mato_loop_backend.messaging.policy import channel_provider_allowed
 from mato_loop_backend.messaging.questions import (
     MessagingQuestionEnvelope,
@@ -33,7 +35,6 @@ from mato_loop_backend.messaging.questions import (
     decode_question_callback,
     encode_question_callback,
 )
-from mato_loop_backend.messaging.telegram import endpoint_payload
 from mato_loop_backend.models import (
     AgentRun,
     ApprovalRequest,
@@ -796,8 +797,8 @@ async def test_telegram_forwards_voice_attachment_and_unchanged_text(monkeypatch
     monkeypatch.setattr(
         telegram, "_download_media", AsyncMock(return_value=attachments)
     )
-    monkeypatch.setattr(telegram.AgentRuntime, "start", start)
-    monkeypatch.setattr(telegram, "ensure_personal_chat", personal_chat)
+    monkeypatch.setattr(channel_sessions.AgentRuntime, "start", start)
+    monkeypatch.setattr(channel_sessions, "ensure_personal_chat", personal_chat)
 
     result = await telegram.process_inbox(inbox.id)
     if binding in {"missing", "archived"}:

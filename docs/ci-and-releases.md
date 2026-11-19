@@ -4,28 +4,29 @@ GitHub is the primary host at [devmato/mato-loop](https://github.com/devmato/mat
 
 ## Published Artifacts
 
-The registry contains two OCI images:
+GitHub Actions publishes three OCI images:
 
 ```text
 ghcr.io/devmato/mato-loop/mato-loop
 ghcr.io/devmato/mato-loop/matoloop-agent
+ghcr.io/devmato/mato-loop/matoloop-teams-relay
 ```
 
-Both images currently target `linux/amd64` only. Every source version uses `YYYY-MM-DD-<SHA8>`, derived from the commit date in UTC and its first eight SHA characters. The same commit has the same version on `develop` and `main`; local changes append `-dirty`. Native MatoLoop Agent installations fetch the running backend's exact commit; CI does not publish native archives.
+All images currently target `linux/amd64` only. Every source version uses `YYYY-MM-DD-<SHA8>`, derived from the commit date in UTC and its first eight SHA characters. The same commit has the same version on `develop` and `main`; local changes append `-dirty`. Native MatoLoop Agent installations fetch the running backend's exact commit; CI does not publish native archives.
 
 The tag policy deliberately limits mutable artifact storage:
 
 | Source | Checks | Image build | Publish |
 | --- | --- | --- | --- |
-| Pull request | Full checks and tests | Both images | Never |
+| Pull request | Full checks and tests | All three images | Never |
 | Feature branch push | Checks and tests except the GitHub macOS ARM64 job | No | Never |
-| `develop` push | Full checks and tests | Both images | Mutable `develop` and immutable date/SHA tag |
+| `develop` push | Full checks and tests | All three images | Mutable `develop` and immutable date/SHA tag |
 | `main` push | Full checks and tests | No | Never; release tags only |
-| Date/SHA release tag | Full checks and tests | Both images | Immutable date/SHA tag and `latest` |
-| Manual GitHub Release | Full checks, tests, and migration round trip | Both images | Immutable date/SHA tag and `latest` |
-| Manual GitHub CI | Full checks, tests, migrations, and version validation | Both images | Never |
+| Date/SHA release tag | Full checks and tests | All three images | Immutable date/SHA tag and `latest` |
+| Manual GitHub Release | Full checks, tests, and migration round trip | All three images | Immutable date/SHA tag and `latest` |
+| Manual GitHub CI | Full checks, tests, migrations, and version validation | All three images | Never |
 
-Feature branches therefore consume runner cache only, each accepted `develop` revision retains an immutable image tag plus the moving `develop` tag, and releases retain fixed version tags. Registry retention remains an operator responsibility. The retained Forgejo workflow publishes to its configured `${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}` instead.
+Feature branches therefore consume runner cache only, each accepted `develop` revision retains an immutable image tag plus the moving `develop` tag, and releases retain fixed version tags. Registry retention remains an operator responsibility. The retained Forgejo workflows publish only MatoLoop and MatoLoop Agent to their configured `${CONTAINER_REGISTRY}/${CONTAINER_IMAGE_NAMESPACE}`.
 
 The verification path also includes migration and source-version jobs; "checks and tests" does not mean only unit tests. Manual CI dispatch builds without publication. Use tags only from successful publication runs.
 
@@ -60,7 +61,7 @@ The backend test job uses a separate UV cache key for its development and docume
 
 Backend and agent test jobs report their slowest tests using the test runners' built-in duration reporting. Develop publication checks the current branch head before building and again before publishing; superseded revisions skip unnecessary image builds, and revisions superseded during a build skip publication.
 
-Develop and release publication workflows share one serialized concurrency group without automatic cancellation: a release and develop push can reference the same immutable version. Superseded develop revisions still skip building or publishing through the branch-head checks. Other refs supersede older runs of that ref. Interrupted publication can leave an incomplete image pair; only use tags from successful runs. Retries reuse validated existing fixed images. Runs already queued with an older workflow retain its concurrency settings.
+Develop and release publication workflows share one serialized concurrency group without automatic cancellation: a release and develop push can reference the same immutable version. Superseded develop revisions still skip building or publishing through the branch-head checks. Other refs supersede older runs of that ref. Interrupted publication can leave an incomplete set of images; only use tags from successful runs. Retries reuse validated existing fixed images. Runs already queued with an older workflow retain its concurrency settings.
 
 ## Test Environment Parity
 
@@ -84,9 +85,9 @@ Keep compatibility cases only for a concrete supported boundary: persisted user 
 
 ## GitHub Configuration
 
-Set `develop` as the default branch. Checks use `contents: read`; image publication gets `packages: write`, and release preparation/publication gets `contents: write`. All GitHub jobs use the automatic `GITHUB_TOKEN`, with no personal token, registry secrets, or publication toggle. After the first publication, make both GHCR packages public to allow anonymous pulls.
+Set `develop` as the default branch. Checks use `contents: read`; image publication gets `packages: write`, and release preparation/publication gets `contents: write`. All GitHub jobs use the automatic `GITHUB_TOKEN`, with no personal token, registry secrets, or publication toggle. For anonymous pulls, make each GHCR package public after its first publication.
 
-The manually dispatched **Release** workflow verifies the migration round trip, then runs `./scripts/release.sh` to check, test, commit, tag, and push. Pushes using `GITHUB_TOKEN` do not trigger push workflows, so a dependent publication job checks out the newly generated commit and builds/publishes both images before creating the GitHub release. Both GitHub workflows use the same `ci-publication` concurrency group. Local releases still trigger CI through the maintainer's normal Git credentials. No repository secret is required for the Release button.
+The manually dispatched **Release** workflow verifies the migration round trip, then runs `./scripts/release.sh` to check, test, commit, tag, and push. Pushes using `GITHUB_TOKEN` do not trigger push workflows, so a dependent publication job checks out the newly generated commit and builds and publishes all three images before creating the GitHub release. Both GitHub workflows use the same `ci-publication` concurrency group. Local releases still trigger CI through the maintainer's normal Git credentials. No repository secret is required for the Release button.
 
 Protect `develop`, `main`, and date/SHA tags. Branch and tag rules must permit the GitHub Actions token to push the checked release commit, fast-forward `main`, and create the release tag; `contents: write` does not bypass protection rules or required checks. Include `.github/workflows`, `.forgejo/workflows`, CI helpers, Dockerfiles, and lockfiles in workflow reviews.
 
@@ -98,7 +99,7 @@ The cutover checklist below records the migration procedure, not installation st
 
 1. Create an empty public `devmato/mato-loop` repository without an initial README or license commit. Configure GitHub permissions before uploading; matching pushes start CI and publication immediately.
 2. Commit the migration changes. Transfer the existing Forgejo server branches and tags to GitHub from a fresh bare clone, rather than pushing every local working branch. Include the migration commit on `develop`.
-3. Set GitHub's default branch to `develop`, verify the first CI/publication run and anonymous pulls of both public GHCR images, then switch this checkout's `origin` to `git@github.com:devmato/mato-loop.git`. Keep the old remote as `forgejo` if useful.
+3. Set GitHub's default branch to `develop`, verify the first CI/publication run and anonymous pulls of the public GHCR images, then switch this checkout's `origin` to `git@github.com:devmato/mato-loop.git`. Keep the old remote as `forgejo` if useful.
 4. Rename the existing Forgejo repository to preserve its issues, PRs, and Actions history. Create a new migration under the previous `devmato/MatoLoop` name from `https://github.com/devmato/mato-loop.git`, selecting **This repository will be a mirror**. Forgejo cannot convert an existing repository into a pull mirror. Disable Actions on the mirror, synchronize it, and compare branch/tag object IDs with GitHub.
 5. Update deployment image addresses deliberately. Keep existing Forgejo images available for rollback. Existing managed Agents preserve their stored source URL and can continue fetching from the Forgejo mirror; new installations default to GitHub.
 
@@ -154,14 +155,14 @@ Local releases require Git, Python 3, Docker/Compose, and both local `develop` a
 
 The script adds dated notes to `docs/user/changelog.md`, runs all checks and tests, and commits on `develop`. It derives the version from that final commit, fast-forwards `main`, creates the annotated date/SHA tag, returns to `develop`, and atomically pushes both branches and the tag. A committed changelog cannot contain its own commit hash, so it uses date headings while the hosted release carries the exact version. Package manifests and lockfiles are not rewritten. `--dry-run` previews the notes and validates the branch state. CI accepts only tags matching their clean source version and pointing to commits on `main`. Do not create release tags manually. Previous `v*` tags remain valid release-note baselines during migration.
 
-After checks and both `linux/amd64` builds succeed, the release job publishes these tags on both images:
+After checks and all required `linux/amd64` builds succeed, the release job publishes these tags on each image:
 
 ```text
 2026-10-08-a1b2c3d4
 latest
 ```
 
-It then creates the matching hosted release from the same categorized notes stored in the changelog. Workflow retries preserve existing fixed tags, publication workflows are serialized, and `latest` never moves to an older source revision. Git ancestry determines release order, including multiple releases on the same day; hashes are not compared alphabetically. Forgejo concurrency is best-effort, so the required task queue and branch/tag protections remain part of the integrity boundary when running there. Registry pushes across two repositories are not transactional: if publication stops partway through, no hosted release is created; retry to publish the missing image. For a failed manual GitHub publication, use **Re-run failed jobs** so the successful preparation job's commit/tag outputs are reused instead of creating another release. Artifact publication is not deployment automation; operators choose when to pull a version.
+It then creates the matching hosted release from the same categorized notes stored in the changelog. Workflow retries preserve existing fixed tags, publication workflows are serialized, and `latest` never moves to an older source revision. Git ancestry determines release order, including multiple releases on the same day; hashes are not compared alphabetically. Forgejo concurrency is best-effort, so the required task queue and branch/tag protections remain part of the integrity boundary when running there. Registry pushes across image repositories are not transactional: if publication stops partway through, no hosted release is created; retry to publish any missing images. For a failed manual GitHub publication, use **Re-run failed jobs** so the successful preparation job's commit/tag outputs are reused instead of creating another release. Artifact publication is not deployment automation; operators choose when to pull a version.
 
 CI passes the calculated version through `MATOLOOP_VERSION` and the full commit through `BUILD_REVISION`. Local Docker builds calculate them from a read-only Git mount in a version build stage, without copying Git into the runtime image. Linked worktrees need host-calculated `MATOLOOP_VERSION` and `BUILD_REVISION` arguments because their Git metadata is outside the build context. Recompute them after source changes. Without a valid full revision the backend cannot provide a managed Agent installation target. The shared helper can be run directly:
 
@@ -200,6 +201,8 @@ docker compose up -d
 ```
 
 Use the same date/SHA tag for MatoLoop and the MatoLoop Agent. `develop` and `latest` are not reproducible deployment references. Managed Docker Agents can also synchronize to the running backend's commit through the WebUI. Such updates survive container restarts, while recreating the container restores the selected image; credentials and workspaces stay in their mounts. See [computer-maintenance.md](computer-maintenance.md).
+
+If you use Teams, pin the separately deployed relay to the same date/SHA tag as MatoLoop. See the [Teams deployment guide](user/kanaele.md) for the Portainer image setting.
 
 Use the mutable `develop` tag only for short-lived test environments and run `docker compose pull` before every recreation. Never use `develop` as a rollback target.
 

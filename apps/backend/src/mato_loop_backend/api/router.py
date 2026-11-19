@@ -40,6 +40,7 @@ from mato_loop_backend.api.routes.session_templates import router as session_tem
 from mato_loop_backend.api.routes.sessions import router as sessions_router
 from mato_loop_backend.api.routes.skills import router as skills_router
 from mato_loop_backend.api.routes.tbs_desk import router as tbs_desk_router
+from mato_loop_backend.api.routes.teams_channels import router as teams_channels_router
 from mato_loop_backend.api.routes.terminals import router as terminals_router
 from mato_loop_backend.api.routes.tool_settings import router as tool_settings_router
 from mato_loop_backend.api.routes.trash import router as trash_router
@@ -57,6 +58,7 @@ api_router.include_router(auth_router, tags=["auth"])
 api_router.include_router(automations_router, tags=["automations"])
 api_router.include_router(assistant_router, tags=["assistant"])
 api_router.include_router(channels_router, tags=["channels"])
+api_router.include_router(teams_channels_router, tags=["channels"])
 api_router.include_router(commands_router, tags=["commands"])
 api_router.include_router(git_router, tags=["git"])
 api_router.include_router(users_router, tags=["users"])

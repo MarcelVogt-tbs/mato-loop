@@ -6,6 +6,47 @@ x-dev-volume: &dev-volume
     matoloop.dev.repository: ${MATO_LOOP_DEV_REPOSITORY:?Use ./scripts/dev.sh}
 
 services:
+  teams-relay:
+    <<: *dev-volume
+    profiles: [teams-relay]
+    user: "0:0"
+    build:
+      context: .
+      dockerfile: apps/matoloop-teams-relay/Dockerfile
+    environment:
+      UV_PROJECT_ENVIRONMENT: /tmp/teams-relay-venv
+      UV_CACHE_DIR: /uv-cache
+      UV_LINK_MODE: copy
+      PYTHONPYCACHEPREFIX: /tmp/python-cache
+      PYTEST_ADDOPTS: -o cache_dir=/tmp/pytest-cache
+      RUFF_CACHE_DIR: /tmp/ruff-cache
+      MATO_TEAMS_APP_ID: ${MATO_TEAMS_APP_ID:-}
+      MATO_TEAMS_TENANT_ID: ${MATO_TEAMS_TENANT_ID:-}
+      MATO_TEAMS_MATOLOOP_URL: ${MATO_TEAMS_MATOLOOP_URL:-}
+      MATO_TEAMS_CLIENT_SECRET_FILE: /data/teams/secrets/client-secret
+      MATO_TEAMS_RELAY_TOKEN_FILE: /data/teams/secrets/relay-token
+      MATO_TEAMS_SPOOL_DIR: /data/teams/spool
+    volumes:
+      - .:/workspace
+      - type: volume
+        source: app_data
+        target: /data/teams
+        volume:
+          subpath: teams
+          nocopy: true
+      - type: volume
+        source: download_cache
+        target: /uv-cache
+        volume:
+          subpath: uv
+          nocopy: true
+    ports:
+      - "127.0.0.1:${MATO_TEAMS_HOST_PORT:-0}:3978"
+    working_dir: /workspace/apps/matoloop-teams-relay
+    command: [sh, -lc, "uv sync --frozen && exec uv run --no-sync uvicorn matoloop_teams_relay.app:create_app --factory --host 0.0.0.0 --port 3978 --no-access-log"]
+    networks:
+      - mato-loop
+
   storage-init:
     <<: *dev-volume
     image: node:22-bookworm-slim
@@ -19,6 +60,7 @@ services:
     command:
       - >-
         mkdir -p /app-data/backend /app-data/agent/state /app-data/agent/workspace
+        /app-data/teams/spool /app-data/teams/secrets
         /dev-data/backend /dev-data/agent /dev-data/frontend/node_modules
         /dev-data/frontend/quasar /dev-data/frontend/dist /dev-data/frontend/yarn
         /download-cache/uv /download-cache/yarn /download-cache/embedding;

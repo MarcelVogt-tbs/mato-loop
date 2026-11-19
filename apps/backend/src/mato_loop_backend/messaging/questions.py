@@ -26,7 +26,7 @@ from mato_loop_backend.tools.arguments import (
 )
 
 QuestionInteractionAction = Literal[
-    "select", "toggle", "next", "back", "custom", "text", "reject", "submit"
+    "select", "toggle", "choices", "next", "back", "custom", "text", "reject", "submit"
 ]
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{22}")
@@ -86,14 +86,21 @@ class QuestionInteraction(BaseModel):
     option_index: int | None = Field(
         default=None, alias="optionIndex", strict=True, ge=0, le=11
     )
+    option_indices: Annotated[
+        list[Annotated[int, Field(strict=True, ge=0, le=11)]], Field(max_length=12)
+    ] | None = None
     text: Annotated[str, Field(min_length=1, max_length=20_000)] | None = None
 
     @model_validator(mode="after")
     def arguments_match_action(self) -> QuestionInteraction:
         if (self.action in {"select", "toggle"}) != (self.option_index is not None):
             raise ValueError("optionIndex is required only for option actions")
-        if (self.action == "text") != (self.text is not None):
-            raise ValueError("text is required only for text actions")
+        if (self.action == "choices") != (self.option_indices is not None):
+            raise ValueError("option_indices is required only for choices actions")
+        if (self.action == "text" and self.text is None) or (
+            self.action not in {"text", "choices"} and self.text is not None
+        ):
+            raise ValueError("invalid text for action")
         return self
 
 
@@ -146,8 +153,8 @@ def decode_question_token(token: str) -> UUID:
 def encode_question_callback(
     question_id: UUID, interaction: QuestionInteraction
 ) -> str:
-    if interaction.action == "text":
-        raise ValueError("text interactions cannot be callbacks")
+    if interaction.action in {"text", "choices"}:
+        raise ValueError("form interactions cannot be callbacks")
     code = _CALLBACK_CODES[interaction.action]
     suffix = (
         f":{interaction.option_index}"
@@ -272,6 +279,9 @@ async def resolve_question_interaction(
     question_id: UUID,
     interaction: QuestionInteraction,
     source_external_message_id: str,
+    *,
+    commit: bool = True,
+    advance_on_answer: bool = False,
 ) -> QuestionInteractionResult:
     request = await db.get(QuestionRequest, question_id, with_for_update=True)
     if request is None or request.id != question_id:
@@ -414,12 +424,31 @@ async def resolve_question_interaction(
         selected = answers.setdefault(current.id, [])
         selected.remove(label) if label in selected else selected.append(label)
         awaiting_text = False
+    elif interaction.action == "choices":
+        indices = interaction.option_indices
+        if (
+            current.type != "multiple_choice"
+            or indices is None
+            or len(indices) != len(set(indices))
+            or any(index >= len(current.options) for index in indices)
+            or (interaction.text is not None and not current.allow_custom)
+        ):
+            raise MessagingQuestionError
+        candidate = [current.options[index].label for index in indices]
+        if interaction.text is not None and interaction.text.strip() not in candidate:
+            candidate.append(interaction.text)
+        answers[current.id] = validate_question_answers(
+            QuestionArguments(questions=[current]), {current.id: candidate}
+        )[current.id]
+        awaiting_text = False
     elif interaction.action == "custom":
         if current.type == "free_text" or not current.allow_custom:
             raise MessagingQuestionError
         awaiting_text = True
     elif interaction.action == "text":
-        if current.type != "free_text" and not awaiting_text:
+        if current.type != "free_text" and not awaiting_text and not (
+            advance_on_answer and current.type == "single_choice" and current.allow_custom
+        ):
             raise MessagingQuestionError
         if interaction.text is None:
             raise MessagingQuestionError
@@ -435,7 +464,8 @@ async def resolve_question_interaction(
         answers[current.id] = validate_question_answers(
             single, {current.id: candidate}
         )[current.id]
-        current_index = min(current_index + 1, len(envelope.questions) - 1)
+        if not advance_on_answer:
+            current_index = min(current_index + 1, len(envelope.questions) - 1)
         awaiting_text = False
     elif interaction.action == "next":
         current_index = min(current_index + 1, len(envelope.questions) - 1)
@@ -446,6 +476,11 @@ async def resolve_question_interaction(
     else:
         raise MessagingQuestionError
 
+    finish = False
+    if advance_on_answer and interaction.action in {"select", "choices", "text"}:
+        finish = current_index == len(envelope.questions) - 1
+        if not finish:
+            current_index += 1
     envelope = MessagingQuestionEnvelope.model_validate(
         {
             **before,
@@ -456,7 +491,15 @@ async def resolve_question_interaction(
     )
     changed = before != envelope.model_dump(mode="json", by_alias=True)
     outbox.payload = envelope.model_dump(mode="json", by_alias=True)
-    await db.commit()
+    if finish:
+        await answer_question(
+            db, request, {item.id: answers.get(item.id, []) for item in envelope.questions}
+        )
+        return QuestionInteractionResult(status="answered", changed=True, finalized=True)
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     return QuestionInteractionResult(
         status="pending",
         envelope=envelope,

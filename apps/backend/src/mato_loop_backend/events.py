@@ -84,6 +84,12 @@ class RunEventBroker:
         })
         events = state["events"]
         kind = event.get("type")
+        if kind == "run.phase":
+            state["active_tool"] = event.get("tool") if event.get("phase") == "processing_tool" else None
+        elif kind in {"message.completed", "message.interrupted", "message.continued"} or (
+            kind == "tool.completed" and state.get("active_tool") == event.get("tool")
+        ):
+            state["active_tool"] = None
         key = (kind,)
         if kind == "message.delta":
             state["content"] += event["delta"]
@@ -141,6 +147,13 @@ class RunEventBroker:
             "events": deepcopy(list(state.get("events", {}).values())),
             "researchSources": deepcopy(list(state.get("sources", {}).values())),
         }
+
+    def draft_text(self, run_id: UUID) -> str:
+        return self._checkpoints.get(run_id, {}).get("content", "")
+
+    def active_tool(self, run_id: UUID) -> str | None:
+        tool = self._checkpoints.get(run_id, {}).get("active_tool")
+        return tool if isinstance(tool, str) else None
 
     def _replay(self, run_id: UUID) -> list[dict[str, Any]]:
         history = self._history.get(run_id, [])

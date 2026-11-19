@@ -1,0 +1,611 @@
+import asyncio
+import json
+from contextlib import nullcontext
+from datetime import UTC, datetime, timedelta
+from io import BytesIO
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4, uuid5
+from zipfile import ZipFile
+
+import httpx
+import pytest
+from fastapi import FastAPI
+from matoloop_teams_protocol import Delivery, Event, Identity
+from matoloop_teams_protocol.app_package import icon
+from PIL import Image, ImageDraw
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from mato_loop_backend.api.errors import ApiError, register_error_handlers
+from mato_loop_backend.api.routes import teams_channels
+from mato_loop_backend.appearance import AppearanceSettings, normalize_logo
+from mato_loop_backend.messaging import teams
+from mato_loop_backend.messaging.formatting import render_channel_text
+from mato_loop_backend.messaging.questions import (
+    MessagingQuestionEnvelope,
+    QuestionInteraction,
+    decode_question_callback,
+)
+from mato_loop_backend.messaging.teams_cards import (
+    card_revision,
+    interaction_card,
+    pairing_confirmed_card,
+    session_list_card,
+)
+from mato_loop_backend.messaging.teams_client import TeamsRelayClient, TeamsServiceError
+from mato_loop_backend.models import (
+    ChatSession,
+    MessagingEndpoint,
+    MessagingInbox,
+    MessagingOutbox,
+    UserAccount,
+)
+from mato_loop_backend.settings.models import AgentIdentitySettings, TeamsChannelSettings
+from mato_loop_backend.tools.arguments import QuestionItem, QuestionOption
+
+
+def identity():
+    return Identity(tenant_id=uuid4(), app_id=uuid4(), user_id=uuid4(), conversation_id="personal")
+
+
+async def test_confirm_pairing_queues_the_start_card_for_the_new_binding(monkeypatch):
+    who = identity()
+    candidate_id = uuid4()
+    endpoint = MessagingEndpoint(
+        id=uuid4(), user_id=uuid4(), enabled=True,
+        pairing_code_hash="active",
+        pairing_expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        channel_state={"candidateId": str(candidate_id), "candidate": who.model_dump(mode="json")},
+    )
+    db = AsyncMock(spec=AsyncSession)
+    monkeypatch.setattr(teams_channels, "owned", AsyncMock(return_value=endpoint))
+    monkeypatch.setattr(teams_channels, "available", AsyncMock(return_value=TeamsChannelSettings(
+        app_id=who.app_id, tenant_id=who.tenant_id, revision="relay",
+    )))
+    user = SimpleNamespace(id=endpoint.user_id)
+    with pytest.raises(ApiError, match="channel.pairingChanged"):
+        await teams_channels.confirm_pairing(
+            endpoint.id, teams_channels.TeamsPairingConfirmation(candidateId=uuid4()), user, db,
+        )
+    await teams_channels.confirm_pairing(
+        endpoint.id, teams_channels.TeamsPairingConfirmation(candidateId=candidate_id), user, db,
+    )
+    item = db.add.call_args.args[0]
+    assert (item.destination, item.payload) == (
+        who.conversation_id, {"kind": "teamsPairingConfirmed", "bindingId": endpoint.channel_state["bindingId"]},
+    )
+    db.commit.assert_awaited_once()
+
+
+async def test_start_pairing_preserves_active_binding(monkeypatch):
+    who = identity()
+    settings = TeamsChannelSettings(app_id=who.app_id, tenant_id=who.tenant_id, revision="relay")
+    endpoint = MessagingEndpoint(
+        id=uuid4(), user_id=uuid4(), provider="teams", enabled=True,
+        paired_chat_id=who.conversation_id, paired_user_id=str(who.user_id),
+        external_identity=f"{who.tenant_id}:{who.user_id}",
+        channel_state={"bindingId": "active", "revision": "relay", "identity": who.model_dump(mode="json")},
+    )
+    db = AsyncMock(spec=AsyncSession)
+    monkeypatch.setattr(teams_channels, "owned", AsyncMock(return_value=endpoint))
+    monkeypatch.setattr(teams_channels, "available", AsyncMock(return_value=settings))
+    monkeypatch.setattr(teams_channels, "stop_endpoint_work", AsyncMock())
+    result = await teams_channels.pairing(endpoint.id, SimpleNamespace(id=endpoint.user_id), db)
+    assert result["pairingCode"] and result["pairingPending"] and teams.bound_identity(endpoint, settings) == who
+    teams_channels.stop_endpoint_work.assert_not_awaited()
+
+
+async def test_disabled_teams_endpoint_is_created_without_pairing_code(monkeypatch):
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = None
+    monkeypatch.setattr(teams_channels, "available", AsyncMock())
+    result = await teams_channels.create_endpoint(
+        teams_channels.TeamsEndpointRequest(enabled=False), SimpleNamespace(id=uuid4()), db,
+    )
+    assert "pairingCode" not in result
+
+
+async def test_unlink_releases_teams_identity(monkeypatch):
+    endpoint = MessagingEndpoint(id=uuid4(), provider="teams", external_identity="old")
+    monkeypatch.setattr("mato_loop_backend.messaging.sessions.stop_endpoint_work", AsyncMock())
+    await teams.session_command(AsyncMock(), MessagingInbox(id=uuid4()), endpoint, "/unlink")
+    assert endpoint.external_identity == f"pending:{endpoint.id}"
+
+
+@pytest.mark.parametrize("button_index", [0, 1])
+async def test_teams_pairing_card_routes_chat_buttons_under_the_current_binding(monkeypatch, button_index):
+    who = identity()
+    endpoint = MessagingEndpoint(id=uuid4(), user_id=uuid4(), channel_state={"bindingId": "paired"})
+    item = MessagingOutbox(
+        id=uuid4(), endpoint_id=endpoint.id, destination=who.conversation_id,
+        status="delivered", external_message_ids=["card"],
+        payload={"kind": "teamsPairingConfirmed", "bindingId": "paired"},
+    )
+    now = datetime.now(UTC)
+    click = Event(
+        id=uuid4(), identity=who, generation=uuid4(), kind="action",
+        message_id="click", source_message_id="card",
+        action=pairing_confirmed_card(item)["actions"][button_index]["data"],
+        received_at=now, expires_at=now + timedelta(seconds=30),
+    )
+    inbox = MessagingInbox(id=click.id)
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = item
+    db.scalar.return_value = None
+    latest = AsyncMock(return_value=[])
+    command = AsyncMock()
+    monkeypatch.setattr(teams, "recent_chat_sessions", latest)
+    monkeypatch.setattr(teams, "session_command", command)
+
+    await teams.process_action(db, endpoint, inbox, click)
+    if button_index == 0:
+        db.scalar.return_value = uuid4()
+        await teams.process_action(db, endpoint, MessagingInbox(id=uuid4()), click)
+        command.assert_awaited_once_with(db, inbox, endpoint, "/new")
+    else:
+        assert db.add.call_args.args[0].payload["kind"] == "teamsSessionPicker"
+    endpoint.channel_state = {"bindingId": "relinked"}
+    with pytest.raises(TeamsServiceError, match="channel.pairingChanged"):
+        await teams.process_action(db, endpoint, inbox, click)
+
+
+@pytest.mark.parametrize("outcome", ["sent", "offline", "relinked"])
+async def test_teams_pairing_card_delivery_is_scoped_and_best_effort(monkeypatch, outcome):
+    who = identity()
+    binding = "different" if outcome == "relinked" else "paired"
+    endpoint = MessagingEndpoint(
+        id=uuid4(), paired_chat_id=who.conversation_id, last_error_code="channel.deliveryUnknown",
+        channel_state={"bindingId": binding},
+    )
+    item = MessagingOutbox(
+        id=uuid4(), endpoint_id=endpoint.id, destination=who.conversation_id,
+        status="processing", attempts=1, payload={"kind": "teamsPairingConfirmed", "bindingId": "paired"},
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = [item, item, endpoint, item]
+    monkeypatch.setattr(teams, "AsyncSessionFactory", lambda: nullcontext(db))
+    monkeypatch.setattr(teams, "available_endpoint", AsyncMock(return_value=endpoint))
+    monkeypatch.setattr(teams, "bound_identity", lambda *_: who)
+    client = AsyncMock(spec=TeamsRelayClient)
+    client.deliver.return_value = SimpleNamespace(status="sent", message_ids=["card"])
+    if outcome == "offline":
+        client.deliver.side_effect = TeamsServiceError("channel.deliveryUnknown")
+
+    await teams.deliver_outbox(item.id, TeamsChannelSettings(), client)
+
+    if outcome == "relinked":
+        client.deliver.assert_not_awaited()
+    else:
+        delivery = client.deliver.await_args.args[0]
+        assert delivery.card == pairing_confirmed_card(item)
+        assert delivery.source_message_id is None
+    assert item.status == ("delivered" if outcome == "sent" else "failed")
+    assert endpoint.paired_chat_id == who.conversation_id
+    assert endpoint.last_error_code == "channel.deliveryUnknown"
+
+
+@pytest.mark.parametrize("custom_logo", [True, False])
+async def test_teams_package_uses_saved_instance_branding(monkeypatch, custom_logo):
+    who = identity()
+    branding = AppearanceSettings(app_name="Instance website name")
+    if custom_logo:
+        logo = Image.new("RGBA", (100, 100))
+        ImageDraw.Draw(logo).ellipse((20, 20, 80, 80), fill=(255, 0, 0, 255))
+        source = BytesIO()
+        logo.save(source, format="PNG")
+        branding.logo_png = normalize_logo(source.getvalue())
+
+    name = "MatoLoop Agent with a very long global name"
+    settings = {
+        TeamsChannelSettings: TeamsChannelSettings(
+            app_id=who.app_id, tenant_id=who.tenant_id, credential_id=uuid4(),
+            relay_url="https://relay.example",
+        ),
+        AppearanceSettings: branding,
+        AgentIdentitySettings: AgentIdentitySettings(display_name=name),
+    }
+    load = AsyncMock(side_effect=lambda _, model: settings[model])
+    monkeypatch.setattr(teams_channels.SettingsStore, "load", load)
+    app = FastAPI()
+    app.include_router(teams_channels.router)
+    register_error_handlers(app)
+    app.dependency_overrides[teams_channels.get_db_session] = lambda: AsyncMock(spec=AsyncSession)
+    payload = {
+        "version": "1.2.0", "publisher": "Example Org",
+        "websiteUrl": "https://example.com/", "privacyUrl": "https://example.com/privacy",
+        "termsUrl": "https://example.com/terms",
+    }
+    path = "/channels/teams/configuration/app-package"
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        app.dependency_overrides[teams_channels.require_user] = lambda: SimpleNamespace(is_admin=False)
+        assert (await client.post(path, json=payload)).status_code == 403
+        app.dependency_overrides[teams_channels.require_user] = lambda: SimpleNamespace(is_admin=True)
+        assert (await client.post(path, json={**payload, "version": "1.2"})).status_code == 422
+        assert (await client.post(path, json={**payload, "termsUrl": "https://user:pass@example.com/terms"})).status_code == 422
+        load.assert_not_awaited()
+        response = await client.post(path, json=payload)
+
+    assert response.status_code == 200
+    assert response.headers["content-disposition"] == 'attachment; filename="matoloop-teams-1.2.0.zip"'
+    with ZipFile(BytesIO(response.content)) as archive:
+        assert set(archive.namelist()) == {"manifest.json", "outline.png", "color.png"}
+        raw_manifest = archive.read("manifest.json")
+        manifest = json.loads(raw_manifest)
+        assert manifest["id"] == manifest["bots"][0]["botId"] == str(who.app_id)
+        assert manifest["version"] == payload["version"]
+        assert manifest["name"] == {"short": name[:30].rstrip(), "full": name}
+        assert manifest["developer"]["termsOfUseUrl"] == payload["termsUrl"]
+        for private in (who.tenant_id, settings[TeamsChannelSettings].credential_id, "relay.example"):
+            assert str(private).encode() not in raw_manifest
+        outline_png, color_png = archive.read("outline.png"), archive.read("color.png")
+        if not custom_logo:
+            assert (outline_png, color_png) == (icon(32, outline=True), icon(192, outline=False))
+            return
+        with Image.open(BytesIO(outline_png)) as outline, Image.open(BytesIO(color_png)) as color:
+            assert (outline.size, color.size) == ((32, 32), (192, 192))
+            assert outline.getpixel((0, 0))[3] == 0
+            assert outline.getpixel((16, 16)) == (255, 255, 255, 255)
+            assert color.getpixel((96, 96)) == (255, 0, 0, 255)
+
+
+@pytest.mark.parametrize("admitted", [False, True])
+async def test_expired_handoff_only_reconciles_previously_committed_admission(
+    monkeypatch, admitted
+):
+    who = identity()
+    event = Event(
+        id=uuid4(),
+        identity=who,
+        generation=uuid4(),
+        kind="message",
+        message_id="message",
+        received_at=datetime.now(UTC) - timedelta(minutes=2),
+        expires_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = MessagingInbox(payload={"event": str(event.id)}) if admitted else None
+    monkeypatch.setattr(teams, "AsyncSessionFactory", lambda: nullcontext(db))
+    result = await teams.ingest_event(
+        event,
+        uuid4(),
+        TeamsChannelSettings(app_id=who.app_id, tenant_id=who.tenant_id),
+    )
+    assert result is admitted
+    db.execute.assert_not_awaited()
+
+
+async def test_unpaired_message_gets_setup_card_without_admitting_chat(monkeypatch):
+    who = identity()
+    generation = uuid4()
+    event = Event(
+        id=uuid4(), identity=who, generation=generation, kind="message", message_id="hello",
+        received_at=datetime.now(UTC), expires_at=datetime.now(UTC) + timedelta(seconds=30),
+    )
+    settings = TeamsChannelSettings(app_id=who.app_id, tenant_id=who.tenant_id)
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = db.scalar.return_value = None
+    monkeypatch.setattr(teams, "AsyncSessionFactory", lambda: nullcontext(db))
+    monkeypatch.setattr(teams, "channel_provider_allowed", AsyncMock(return_value=True))
+    monkeypatch.setattr(teams.SettingsStore, "load", AsyncMock(return_value=settings))
+    with pytest.raises(TeamsServiceError, match="channel.pairingRequired"):
+        await teams.ingest_event(event, generation, settings)
+    db.commit.assert_not_awaited()
+    rejection = teams.rejected_delivery(
+        event, needs_pairing=True, pairing_origin="https://chat.example.org",
+    )
+    assert rejection.card["actions"][0]["url"] == "https://chat.example.org/settings/channels?pair=teams"
+
+
+async def test_lost_relay_receipt_never_blindly_resends_message():
+    requests = []
+
+    def handle(request):
+        requests.append(request.method)
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(
+        base_url="https://relay.example/", transport=httpx.MockTransport(handle)
+    ) as client:
+        with pytest.raises(TeamsServiceError, match="channel.deliveryUnknown"):
+            await TeamsRelayClient(client).deliver(
+                Delivery(id=uuid4(), identity=identity(), kind="message", text="Reply"),
+                recovering=True,
+            )
+    assert requests == ["GET"]
+
+
+async def test_failed_delivery_post_preserves_unknown_outcome():
+    def handle(request):
+        assert request.method == "POST"
+        return httpx.Response(502)
+
+    async with httpx.AsyncClient(
+        base_url="https://relay.example/", transport=httpx.MockTransport(handle)
+    ) as client:
+        with pytest.raises(TeamsServiceError, match="channel.deliveryUnknown"):
+            await TeamsRelayClient(client).deliver(
+                Delivery(id=uuid4(), identity=identity(), kind="message", text="Reply")
+            )
+
+
+async def test_failed_teams_answer_creates_a_notice_in_matoloop(monkeypatch):
+    who = identity()
+    endpoint = MessagingEndpoint(id=uuid4(), user_id=uuid4(), channel_state={"bindingId": "paired"})
+    inbox = MessagingInbox(
+        id=uuid4(), session_id=uuid4(), agent_run_id=uuid4(),
+        payload={"bindingId": "paired", "chatId": who.conversation_id},
+    )
+    item = MessagingOutbox(
+        id=uuid4(), endpoint_id=endpoint.id, inbox_id=inbox.id, status="processing",
+        destination=who.conversation_id, deduplication_key=f"run:{inbox.agent_run_id}",
+        attempts=1, payload={"text": "Antwort"},
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = [item, item, inbox, endpoint, item, inbox]
+    db.scalar.return_value = inbox.session_id
+    monkeypatch.setattr(teams, "AsyncSessionFactory", lambda: nullcontext(db))
+    monkeypatch.setattr(teams, "available_endpoint", AsyncMock(return_value=endpoint))
+    monkeypatch.setattr(teams, "bound_identity", lambda *_: who)
+    create_notice = AsyncMock()
+    monkeypatch.setattr(teams.NotificationService, "create", create_notice)
+    client = AsyncMock(spec=TeamsRelayClient)
+    client.deliver.side_effect = TeamsServiceError("channel.deliveryUnknown")
+
+    await teams.deliver_outbox(item.id, TeamsChannelSettings(), client)
+
+    notice = create_notice.await_args.args[1]
+    assert (item.status, item.error_code, notice.user_id, notice.session_id) == (
+        "failed", "channel.deliveryUnknown", endpoint.user_id, inbox.session_id,
+    )
+
+
+async def test_declining_one_teams_file_does_not_block_another(monkeypatch, tmp_path):
+    who = identity()
+    endpoint = MessagingEndpoint(id=uuid4(), channel_state={"bindingId": "paired"})
+    inbox = MessagingInbox(
+        id=uuid4(), status="completed", payload={"bindingId": "paired", "chatId": who.conversation_id},
+    )
+    item = MessagingOutbox(
+        id=uuid4(), endpoint_id=endpoint.id, inbox_id=inbox.id, status="processing",
+        destination=who.conversation_id, attempts=2, source_message_id=uuid4(),
+        payload={"includeAttachments": True},
+    )
+    attachments = [
+        SimpleNamespace(id=uuid4(), filename=f"{i}.txt", mime_type="text/plain") for i in range(2)
+    ]
+    first, second = [str(uuid5(item.id, f"file:{attachment.id}")) for attachment in attachments]
+    path = tmp_path / "fixture.txt"
+    path.write_text("fixture")
+    db = AsyncMock(spec=AsyncSession)
+    db.get.side_effect = [item, item, inbox]
+    db.scalar.return_value = SimpleNamespace(attachments=attachments, session_id=uuid4())
+    monkeypatch.setattr(teams, "AsyncSessionFactory", lambda: nullcontext(db))
+    monkeypatch.setattr(teams, "available_endpoint", AsyncMock(return_value=endpoint))
+    monkeypatch.setattr(teams, "bound_identity", lambda *_: who)
+    monkeypatch.setattr(teams.AttachmentService, "verified_path", AsyncMock(return_value=path))
+    accepted = []
+
+    def handle(request):
+        if request.method == "POST":
+            accepted.append(request.url.path)
+            return httpx.Response(200, json={"id": second, "status": "sent"})
+        file_id = request.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(200, json={"id": file_id, "status": {first: "declined", second: "pending"}[file_id]})
+
+    async with httpx.AsyncClient(base_url="https://relay.example", transport=httpx.MockTransport(handle)) as http:
+        await teams.deliver_outbox(item.id, TeamsChannelSettings(), TeamsRelayClient(http))
+
+    assert (item.status, accepted) == ("delivered", [f"/relay/v1/deliveries/{second}/accept"])
+
+
+async def test_disabling_streaming_keeps_existing_pairings(monkeypatch):
+    who = identity()
+    settings = TeamsChannelSettings(
+        relay_url="https://relay.example", app_id=who.app_id, tenant_id=who.tenant_id,
+        credential_id=uuid4(), revision="existing",
+    )
+    db = AsyncMock(spec=AsyncSession)
+    monkeypatch.setattr(teams_channels, "lock_channel_provider", AsyncMock())
+    monkeypatch.setattr(teams_channels.SettingsStore, "load", AsyncMock(return_value=settings))
+    save = AsyncMock()
+    monkeypatch.setattr(teams_channels.SettingsStore, "save", save)
+
+    payload = await teams_channels.update_configuration(
+        teams_channels.TeamsConfigurationRequest(
+            relayUrl=settings.relay_url, appId=who.app_id, tenantId=who.tenant_id,
+            streamingEnabled=False,
+        ),
+        UserAccount(), db,
+    )
+
+    assert payload["streamingEnabled"] is False
+    assert settings.revision == "existing"
+    db.scalars.assert_not_awaited()
+    save.assert_awaited_once_with(db, settings)
+
+
+async def test_old_card_cannot_approve_after_same_account_is_paired_again(monkeypatch):
+    who = identity()
+    item = MessagingOutbox(
+        id=uuid4(),
+        endpoint_id=uuid4(),
+        status="delivered",
+        destination=who.conversation_id,
+        external_message_ids=["card"],
+        payload={"runId": str(uuid4())},
+    )
+    event = Event(
+        id=uuid4(),
+        identity=who,
+        generation=uuid4(),
+        kind="action",
+        message_id="click",
+        source_message_id="card",
+        received_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(seconds=30),
+        action={
+            "outboxId": str(item.id),
+            "revision": card_revision(item.payload),
+            "callback": "a1:old:o",
+        },
+    )
+    endpoint = MessagingEndpoint(id=item.endpoint_id, channel_state={"bindingId": "new-pairing"})
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = item
+    db.scalar.return_value = MessagingInbox(
+        status="completed", payload={"bindingId": "old-pairing"}
+    )
+    decide = AsyncMock()
+    monkeypatch.setattr(teams, "resolve_approval_action", decide)
+    with pytest.raises(TeamsServiceError, match="channel.pairingChanged"):
+        await teams.process_action(db, endpoint, MessagingInbox(id=uuid4()), event)
+    decide.assert_not_awaited()
+
+
+async def test_teams_help_queues_a_readable_command_card(monkeypatch):
+    who = identity()
+    now = datetime.now(UTC)
+    event = Event(
+        id=uuid4(), identity=who, generation=uuid4(), kind="message",
+        message_id="help", text="/help", received_at=now,
+        expires_at=now + timedelta(seconds=30),
+    )
+    endpoint = MessagingEndpoint(id=uuid4(), channel_state={"bindingId": "paired"})
+    inbox = MessagingInbox(
+        id=event.id, endpoint_id=endpoint.id, status="processing",
+        payload={"bindingId": "paired", "envelope": event.model_dump(mode="json")},
+    )
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = inbox
+    monkeypatch.setattr(teams, "AsyncSessionFactory", lambda: nullcontext(db))
+    monkeypatch.setattr(teams, "available_endpoint", AsyncMock(return_value=endpoint))
+
+    await teams.process_inbox(event.id, TeamsChannelSettings(), AsyncMock())
+
+    card = db.add.call_args.args[0].payload["card"]
+    command_rows = {
+        row["inlines"][0]["text"] for row in card["body"] if row["type"] == "RichTextBlock"
+    }
+    assert {"/new", "/use <ID>", "/git-review"} <= command_rows
+
+
+@pytest.mark.parametrize("question_type", ["single_choice", "multiple_choice"])
+def test_teams_choice_cards_avoid_per_selection_confirmation(question_type):
+    question_id = uuid4()
+    envelope = MessagingQuestionEnvelope(
+        kind="question",
+        version=1,
+        questionId=question_id,
+        sessionId=uuid4(),
+        runId=uuid4(),
+        questions=[
+            QuestionItem(
+                id="choice",
+                header="Auswahl",
+                question="Welche Option?",
+                type=question_type,
+                options=[QuestionOption(label="A"), QuestionOption(label="B")],
+                allow_custom=False,
+            )
+        ],
+    )
+    item = MessagingOutbox(id=uuid4(), payload=envelope.model_dump(mode="json", by_alias=True))
+    card = interaction_card(item)
+    assert card["body"][0]["text"] == "Deine Antwort ist nötig"
+    choices = [block["actions"] for block in card["body"] if block["type"] == "ActionSet"]
+    if question_type == "multiple_choice":
+        assert not choices
+        field = next(block for block in card["body"] if block["type"] == "Input.ChoiceSet")
+        assert field["isMultiSelect"] and field["id"] == "answer"
+        assert card["actions"][0]["data"]["callback"] == f"qchoices:{question_id}"
+        return
+    assert [[button["title"] for button in row] for row in choices] == [["A", "B"]]
+    button = choices[0][0]
+    assert [action["title"] for action in card["actions"]] == ["Ablehnen"]
+    assert decode_question_callback(button["data"]["callback"]) == (
+        question_id,
+        QuestionInteraction(action="select", optionIndex=0),
+    )
+
+
+async def test_teams_session_picker_switches_chat_in_one_click(monkeypatch):
+    who = identity()
+    now = datetime.now(UTC)
+    event = Event(
+        id=uuid4(), identity=who, generation=uuid4(), kind="message",
+        message_id="list", text="/sessions", received_at=now,
+        expires_at=now + timedelta(seconds=30),
+    )
+    endpoint = MessagingEndpoint(id=uuid4(), user_id=uuid4(), channel_state={"bindingId": "paired"})
+    inbox = MessagingInbox(
+        id=event.id, endpoint_id=endpoint.id, status="processing",
+        payload={"bindingId": "paired", "envelope": event.model_dump(mode="json")},
+    )
+    sessions = [ChatSession(id=uuid4(), title=f"Chat {index}") for index in range(8)]
+    db = AsyncMock(spec=AsyncSession)
+    db.get.return_value = inbox
+    latest = AsyncMock(return_value=sessions)
+    monkeypatch.setattr(teams, "AsyncSessionFactory", lambda: nullcontext(db))
+    monkeypatch.setattr(teams, "available_endpoint", AsyncMock(return_value=endpoint))
+    monkeypatch.setattr(teams, "recent_chat_sessions", latest)
+    await teams.process_inbox(event.id, TeamsChannelSettings(), AsyncMock())
+
+    latest.assert_awaited_once_with(db, endpoint, limit=8)
+    item = db.add.call_args.args[0]
+    item.id, item.status, item.external_message_ids = uuid4(), "delivered", ["card"]
+    card = session_list_card(item)
+    buttons = [row["actions"][0] for row in card["body"] if row["type"] == "ActionSet"]
+    assert [button["title"] for button in buttons] == [session.title for session in sessions]
+
+    click = Event(
+        id=uuid4(), identity=who, generation=event.generation, kind="action",
+        message_id="click", source_message_id="card", action=buttons[-1]["data"],
+        received_at=now, expires_at=now + timedelta(seconds=30),
+    )
+    db.get.side_effect = [item, inbox, item, inbox]
+    db.scalars.return_value.all = MagicMock(return_value=[sessions[-1]])
+    forged = click.model_copy(update={"action": {**click.action, "callback": f"session:{uuid4()}"}})
+    with pytest.raises(TeamsServiceError, match="channel.pairingChanged"):
+        await teams.process_action(db, endpoint, MessagingInbox(id=forged.id), forged)
+    await teams.process_action(db, endpoint, MessagingInbox(id=click.id), click)
+    assert endpoint.current_session_id == sessions[-1].id
+
+
+def test_teams_approval_card_flags_that_the_user_needs_to_act():
+    item = MessagingOutbox(id=uuid4(), payload={
+        "kind": "approval", "version": 1, "text": "Datei speichern?",
+        "approvalId": str(uuid4()), "sessionId": str(uuid4()), "runId": str(uuid4()),
+        "actions": [{"decision": "deny", "label": "Ablehnen"}],
+    })
+    assert interaction_card(item)["body"][0]["text"] == "Deine Freigabe ist nötig"
+
+
+async def test_deleted_endpoint_releases_the_unique_external_identity(monkeypatch):
+    user = UserAccount(id=uuid4())
+    item = MessagingEndpoint(id=uuid4(), external_identity="tenant:user")
+    db = AsyncMock(spec=AsyncSession)
+    monkeypatch.setattr(teams_channels, "owned", AsyncMock(return_value=item))
+    monkeypatch.setattr(teams_channels, "stop_endpoint_work", AsyncMock())
+    await teams_channels.remove_endpoint(item.id, user, db)
+    assert item.external_identity != "tenant:user"
+
+
+async def test_polling_recovers_when_database_cannot_record_the_failure(monkeypatch):
+    settings = AsyncMock(side_effect=[SQLAlchemyError(), None, asyncio.CancelledError()])
+    monkeypatch.setattr(teams.TeamsScheduler, "settings", settings)
+    monkeypatch.setattr(teams, "AsyncSessionFactory", MagicMock(side_effect=SQLAlchemyError()))
+    monkeypatch.setattr(teams.asyncio, "sleep", AsyncMock())
+    with pytest.raises(asyncio.CancelledError):
+        await teams.TeamsScheduler.poll_loop()
+    assert settings.await_count == 3
+
+
+def test_long_teams_code_blocks_stay_bounded_and_keep_complete_content():
+    code = "    print('hello')\n" * 800
+    parts = render_channel_text("teams", f"```python\n{code}```", content_format="markdown")
+    assert (
+        "".join(part.text.removeprefix("```python\n").removesuffix("\n```") for part in parts)
+        == code
+    )
+    assert max(len(part.text.encode()) for part in parts) < 20_000
