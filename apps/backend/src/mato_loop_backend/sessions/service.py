@@ -1025,28 +1025,22 @@ async def list_sessions(
             session_filters.append(~select(Project.id).where(
                 Project.id == ChatSession.project_id, Project.archived_at.is_not(None),
             ).correlate(ChatSession).exists())
-    latest_messages = (
-        select(
-            Message.session_id.label("session_id"),
-            func.max(Message.created_at).label("last_message_at"),
-            func.max(Message.created_at)
-            .filter(unread_response_clause())
-            .label("last_assistant_message_at"),
-            func.max(Message.created_at)
-            .filter(Message.role == "user")
-            .label("last_user_message_at"),
+    # Seek the newest matching row in the session/creation index instead of
+    # aggregating every message before the session page can be selected.
+    def latest_message_at(condition):
+        return (
+            select(Message.created_at)
+            .where(Message.session_id == ChatSession.id, condition)
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(1)
+            .correlate(ChatSession)
+            .scalar_subquery()
         )
-        .join(ChatSession, ChatSession.id == Message.session_id)
-        .where(
-            *session_filters,
-            Message.role.in_(VISIBLE_MESSAGE_ROLES),
-        )
-        .group_by(Message.session_id)
-    )
-    if session_ids is not None:
-        latest_messages = latest_messages.where(ChatSession.id.in_(session_ids))
-    latest_messages = latest_messages.subquery()
-    activity_at = func.coalesce(latest_messages.c.last_user_message_at, ChatSession.created_at)
+
+    last_message_at = latest_message_at(Message.role.in_(VISIBLE_MESSAGE_ROLES))
+    last_assistant_message_at = latest_message_at(unread_response_clause())
+    last_user_message_at = latest_message_at(Message.role == "user")
+    activity_at = func.coalesce(last_user_message_at, ChatSession.created_at)
     if sort == "recent":
         legacy_response = aliased(Message)
         legacy_response_id = (
@@ -1067,17 +1061,17 @@ async def list_sessions(
             .scalar_subquery()
         )
         last_response_at = (
-            select(func.max(AgentRun.completed_at))
-            .join(Message, or_(
-                Message.id == AgentRun.result_message_id,
-                and_(AgentRun.result_message_id.is_(None), Message.id == legacy_response_id),
-            ))
+            select(AgentRun.completed_at)
+            .join(Message, Message.id == func.coalesce(AgentRun.result_message_id, legacy_response_id))
             .where(
                 AgentRun.session_id == ChatSession.id,
                 AgentRun.parent_run_id.is_(None),
                 AgentRun.status.in_(("completed", "failed", "cancelled")),
+                AgentRun.completed_at.is_not(None),
                 unread_response_clause(),
             )
+            .order_by(AgentRun.completed_at.desc())
+            .limit(1)
             .correlate(ChatSession)
             .scalar_subquery()
         )
@@ -1098,13 +1092,12 @@ async def list_sessions(
     statement = (
         select(
             ChatSession,
-            latest_messages.c.last_message_at,
-            latest_messages.c.last_assistant_message_at,
+            last_message_at.label("last_message_at"),
+            last_assistant_message_at.label("last_assistant_message_at"),
             active_run_status.label("active_run_status"),
             activity_at.label("activity_at"),
-            latest_messages.c.last_user_message_at,
+            last_user_message_at.label("last_user_message_at"),
         )
-        .outerjoin(latest_messages, latest_messages.c.session_id == ChatSession.id)
         .where(*session_filters)
     )
     if home_session_ids is not None:
@@ -1123,9 +1116,9 @@ async def list_sessions(
             or_(
                 active_run_status.is_not(None), pending_approval, pending_question,
                 and_(
-                    latest_messages.c.last_assistant_message_at.is_not(None),
+                    last_assistant_message_at.is_not(None),
                     or_(ChatSession.last_read_at.is_(None),
-                        latest_messages.c.last_assistant_message_at > ChatSession.last_read_at),
+                        last_assistant_message_at > ChatSession.last_read_at),
                 ),
             ).label("home_relevant"),
         ).cte("home_sessions")

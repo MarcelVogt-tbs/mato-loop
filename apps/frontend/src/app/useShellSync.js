@@ -111,7 +111,10 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
 
   function refreshSessionsWhenVisible() {
     refreshAppPresence()
-    if (document.visibilityState !== 'visible') return
+    if (document.visibilityState !== 'visible') {
+      chat.flushDraftWrite()
+      return
+    }
     queueChanges([{ resource: 'all' }])
     void sessionTabs.fetchWorkspace().catch(() => {})
   }
@@ -322,6 +325,7 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
     window.addEventListener('focus', refreshWorkspaceOnFocus)
     window.addEventListener('blur', refreshAppPresence)
     window.addEventListener('beforeunload', preventDiscardOnUnload)
+    window.addEventListener('pagehide', chat.flushDraftWrite)
     document.addEventListener('visibilitychange', refreshSessionsWhenVisible)
     window.addEventListener('matoloop:service-worker-ready', refreshPushState)
     window.navigator.serviceWorker?.addEventListener('message', handlePushMessage)
@@ -353,6 +357,8 @@ export function useShellSync({ drawerOpen, controlCenterVisible }) {
       clientId: presenceClientId, sessionId: null, active: false
     })).catch(() => {})
     window.removeEventListener('beforeunload', preventDiscardOnUnload)
+    window.removeEventListener('pagehide', chat.flushDraftWrite)
+    chat.flushDraftWrite()
     terminal.release()
     browser.release()
     document.removeEventListener('visibilitychange', refreshSessionsWhenVisible)

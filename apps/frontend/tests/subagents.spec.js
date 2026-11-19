@@ -83,6 +83,7 @@ describe('read-only subagents', () => {
   })
 
   it.each(['parent', 'child'])('replaces snapshot buffers and clears finished compaction for %s', async (consumer) => {
+    vi.useFakeTimers()
     chat.current = { id: 'parent', messages: [] }
     chat.watchRun('parent', 'parent-run', { status: 'running' })
     await store.loadChildren('parent')
@@ -106,6 +107,7 @@ describe('read-only subagents', () => {
     source.emit('message.delta', { delta: 'Old suffix' })
     source.emit('run.snapshot', snapshot)
     source.emit('message.delta', { delta: ' next' })
+    if (consumer === 'parent') vi.advanceTimersByTime(50)
     expect(target.streamContent).toBe(`${content} next`)
     expect(target.processOutputs.shell.stdout).toBe('Output')
     source.emit('process.output', { toolCallId: 'shell', stream: 'stdout', delta: ' next' })

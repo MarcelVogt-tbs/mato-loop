@@ -19,6 +19,7 @@ import { useInAppNotificationStore } from '../src/stores/in-app-notifications'
 import { useUserProfileStore } from '../src/features/personalization/store'
 import { useHomeStore } from '../src/features/home/store'
 import { useChatStore } from '../src/features/chat/store'
+import { useSessionTabsStore } from '../src/features/chat/session-tabs-store'
 
 let app, root
 afterEach(() => { app?.unmount(); root?.remove(); vi.resetAllMocks() })
@@ -154,8 +155,11 @@ it('shows effective status, opens a session and lets failed or empty data be ref
     ],
     path: '/home'
   })
+  const tabs = useSessionTabsStore()
+  tabs.readingPositions['session-1'] = { following: false, anchor: { id: 'older', offsetTop: 0 } }
   root.querySelector('.home-activity-row').click()
   await vi.waitFor(() => expect(router.currentRoute.value.query).toEqual({ session: 'session-1', project: 'project-1' }))
+  expect(tabs.readingPositions['session-1']).toBeUndefined()
   const sessionRequests = mocks.get.mock.calls.filter(([path]) => path === '/sessions/home').length
   await router.push('/home')
   await vi.waitFor(() => expect(root.textContent).toContain('Ein Gespräch fortsetzen'))

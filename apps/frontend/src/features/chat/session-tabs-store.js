@@ -16,7 +16,7 @@ export const sessionTabTarget = (tab) => ({
 
 export const useSessionTabsStore = defineStore('session-tabs', {
   state: () => ({ items: [], summaries: {}, summaryVersions: {}, summaryRevision: 0, readingPositions: {}, owner: null, loaded: false, loading: false, loadRequest: null,
-    lastVisitedKey: null, visitClock: 0, controlCenterOpen: false, confirmed: { sessionTabs: [], controlCenterOpen: false }, pending: null, saving: null, revision: 0, generation: 0 }),
+    followLatestRequest: null, lastVisitedKey: null, visitClock: 0, controlCenterOpen: false, confirmed: { sessionTabs: [], controlCenterOpen: false }, pending: null, saving: null, revision: 0, generation: 0 }),
   actions: {
     async setOwner(owner) {
       if (this.owner === owner) return

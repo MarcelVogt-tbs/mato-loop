@@ -350,13 +350,15 @@ async def test_session_list_first_page_has_cursor_and_payload_metadata(lookup_id
     assert result["items"][0]["activeRunStatus"] == "running"
     statement = db.execute.await_args.args[0]
     sql = str(statement)
-    assert "max(messages.created_at)" in sql
-    assert "FILTER (WHERE messages.role" in sql
+    assert "max(messages.created_at)" not in sql
+    assert "messages.session_id = chat_sessions.id AND messages.role" in sql
+    assert "ORDER BY messages.created_at DESC, messages.id DESC" in sql
     assert "messages.role IN" in sql
     assert "agent_runs.status IN" in sql
     assert "agent_runs.created_at DESC, agent_runs.id DESC" in sql
     assert "LIMIT" in sql
-    assert "coalesce(anon_1.last_user_message_at, chat_sessions.created_at) DESC" in sql
+    activity = sql[sql.index("coalesce((SELECT messages.created_at"):sql.index(" AS activity_at")]
+    assert f"{activity} DESC" in sql
     assert "chat_sessions.updated_at DESC" not in sql
     assert 2 in statement.compile().params.values()
     assert user.id in statement.compile().params.values()
@@ -426,30 +428,26 @@ async def test_session_list_next_page_uses_full_keyset_and_preserves_order(sort)
     assert second_page["nextCursor"] is None
     statement = second_db.execute.await_args.args[0]
     sql = str(statement)
+    activity_start = "greatest(" if sort == "recent" else "coalesce((SELECT messages.created_at"
+    activity_sql = sql[sql.index(activity_start):sql.index(" AS activity_at")]
     if sort == "pinned":
         assert "chat_sessions.is_pinned IS false OR chat_sessions.is_pinned IS true" in sql
         assert sql.index("chat_sessions.is_pinned DESC") < sql.index(
-            "coalesce(anon_1.last_user_message_at, chat_sessions.created_at) DESC"
+            f"{activity_sql} DESC"
         )
     else:
         assert "chat_sessions.is_pinned IS" not in sql
         assert "chat_sessions.is_pinned DESC" not in str(first_db.execute.await_args.args[0]) + sql
         assert "chat_sessions.last_read_at" not in str(statement._order_by_clauses)
         assert "CASE WHEN" not in sql
-        assert "greatest(coalesce(anon_1.last_user_message_at" in sql
-        assert "max(agent_runs.completed_at)" in sql
-        assert "messages.id = agent_runs.result_message_id" in sql
-        assert "agent_runs.result_message_id IS NULL AND messages.id = (SELECT messages_1.id" in sql
+        assert "greatest(coalesce((SELECT messages.created_at" in sql
+        assert "ORDER BY agent_runs.completed_at DESC" in sql
+        assert "messages.id = coalesce(agent_runs.result_message_id, (SELECT messages_1.id" in sql
         assert "max(question_requests.created_at)" in sql
         assert "max(approval_requests.created_at)" in sql
         assert "question_requests.status" not in sql
         assert "approval_requests.status" not in sql
         assert second_page["items"][0]["activityAt"] == overflow.created_at.isoformat()
-    activity_sql = (
-        sql[sql.index("greatest("):sql.index(" AS activity_at")]
-        if sort == "recent"
-        else str(statement.selected_columns["activity_at"].element)
-    )
     assert f"{activity_sql} <" in sql
     assert f"{activity_sql} =" in sql
     assert "chat_sessions.id <" in sql
@@ -536,7 +534,7 @@ async def test_home_sessions_include_relevant_and_retained_sessions_without_page
         and "home_sessions.home_relevant" in sql
         and "approval_requests.status" in sql
         and "question_requests.status" in sql
-        and "last_assistant_message_at > chat_sessions.last_read_at" in sql
+        and "> chat_sessions.last_read_at" in sql
         and "home_sessions.id IN" in sql
         and statement._limit_clause is None
         and user.id in params and [retained_id] in params and 6 in params
@@ -568,7 +566,7 @@ async def test_session_list_scopes_projects_and_standalone_sessions() -> None:
 
     project_statement = project_db.execute.await_args.args[0]
     assert project_id in project_statement.compile().params.values()
-    assert str(project_statement).count("chat_sessions.project_id = :project_id_1") == 2
+    assert "chat_sessions.project_id = :project_id_1" in str(project_statement)
     owner_statement = project_db.scalar.await_args.args[0]
     assert user.id in owner_statement.compile().params.values()
 
@@ -578,7 +576,6 @@ async def test_session_list_scopes_projects_and_standalone_sessions() -> None:
     assert "chat_sessions.project_id IS NULL" in str(
         standalone_db.execute.await_args.args[0]
     )
-    assert str(standalone_db.execute.await_args.args[0]).count("chat_sessions.project_id IS NULL") == 2
     assert "NOT (EXISTS" in str(standalone_db.execute.await_args.args[0])
 
 

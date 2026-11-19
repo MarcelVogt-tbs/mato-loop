@@ -613,6 +613,8 @@
 
 .chat-transcript {
   width: min(880px, 100%);
+  // The virtual list and viewport controller position messages explicitly.
+  overflow-anchor: none;
   margin: 0 auto;
   padding-top: 28px;
   padding-bottom: 32px;

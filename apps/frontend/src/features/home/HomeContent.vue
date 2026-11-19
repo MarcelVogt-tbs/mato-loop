@@ -17,7 +17,7 @@
         </div>
         <p v-else-if="home.loadFailed" class="app-muted">Sessions konnten nicht geladen werden.</p>
         <q-list v-else-if="recentSessions.length">
-          <q-item v-for="session in recentSessions" :key="session.id" clickable v-ripple :dense="$q.screen.lt.sm" :active="false" @click="router.push(sessionRoute(session))" class="home-activity-row rounded-borders q-px-sm" :class="[$q.screen.lt.sm ? 'q-py-xs' : 'q-py-sm', { 'home-activity-row--menu-open': openSessionMenuId === session.id }]">
+          <q-item v-for="session in recentSessions" :key="session.id" clickable v-ripple :dense="$q.screen.lt.sm" :active="false" @click="openSession(session)" class="home-activity-row rounded-borders q-px-sm" :class="[$q.screen.lt.sm ? 'q-py-xs' : 'q-py-sm', { 'home-activity-row--menu-open': openSessionMenuId === session.id }]">
             <q-item-section side class="q-pr-sm">
               <span class="home-session-status row items-center justify-center relative-position" :role="session.status ? 'status' : undefined" :aria-label="session.status?.label">
                 <template v-if="session.status?.kind === 'approval'">
@@ -118,7 +118,7 @@ const {
   projectOptions, renameDialogOpen, renameTitle, renaming, pinningSessionId,
   moveDialogOpen, moveSourceProjectId, moveProjectId, movingSession,
   openRenameDialog, openMoveDialog, moveSession, renameSession, toggleSessionPinned,
-  removeSession, archiveSession
+  removeSession, archiveSession, openSession
 } = useSidebarSessions({
   chat, projects, approvals, questions, workspace: useWorkspaceStore(),
   controlCenter: useControlCenterStore(), automations, route, router, $q, confirm,
@@ -153,7 +153,6 @@ const upcoming = computed(() => automations.items
   .sort((left, right) => new Date(left.effectiveState.nextRunAt) - new Date(right.effectiveState.nextRunAt))
   .slice(0, 2))
 const projectName = (id) => id ? projects.items.find((item) => item.id === id)?.name || 'Projekt' : 'Ohne Projekt'
-const sessionRoute = (session) => ({ name: 'chat', query: { session: session.id, ...(session.projectId ? { project: session.projectId } : {}) } })
 
 async function refresh() {
   if (refreshing.value) return

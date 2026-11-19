@@ -111,6 +111,18 @@ describe('chat drafts', () => {
     expect(chat.activeDraft).toBe('Neue Session Entwurf')
   })
 
+  it('writes the latest composer draft once, including on an early flush', async () => {
+    vi.useFakeTimers()
+    const chat = useChatStore()
+    const write = vi.spyOn(window.localStorage, 'setItem')
+    chat.setDraft('a', { defer: true })
+    chat.setDraft('ab', { defer: true })
+    expect([chat.activeDraft, write.mock.calls.length]).toEqual(['ab', 0])
+    chat.flushDraftWrite()
+    await vi.advanceTimersByTimeAsync(400)
+    expect(write.mock.calls.map(([, value]) => JSON.parse(value).newSession.message)).toEqual(['ab'])
+  })
+
   it('opens the fork even when the original session refreshes during copying', async () => {
     const chat = useChatStore()
     chat.current = { id: 'source', projectId: 'project', messages: [] }
@@ -1087,7 +1099,7 @@ describe('chat drafts', () => {
 
   it('clears persisted text and attachment drafts together', () => {
     const chat = useChatStore()
-    chat.setDraft('Vertraulicher Entwurf')
+    chat.setDraft('Vertraulicher Entwurf', { defer: true })
     chat.attachmentDrafts.newSession.push({ id: 'file', file: { size: 1 } })
 
     chat.clearAllDrafts()
@@ -1098,6 +1110,8 @@ describe('chat drafts', () => {
       newSessions: { standalone: [] },
       sessionMessages: {}
     })
+    expect(window.localStorage.getItem('matoLoopChatDrafts')).toBeNull()
+    chat.flushDraftWrite()
     expect(window.localStorage.getItem('matoLoopChatDrafts')).toBeNull()
   })
 
@@ -3037,7 +3051,10 @@ describe('chat drafts', () => {
     disconnected.emit('message.delta', { delta: 'Veraltet' })
     const reconnected = EventSourceMock.instances[1]
     reconnected.emit('run.snapshot', { content: 'Anfang und Rest', events: [] })
+    reconnected.emit('message.delta', { delta: '!' })
+    reconnected.emit('run.snapshot', { content: 'Anfang und Rest', events: [] })
     reconnected.emit('message.delta', { delta: '.' })
+    await vi.advanceTimersByTimeAsync(50)
     expect(chat.streamContent).toBe('Anfang und Rest.')
   })
 

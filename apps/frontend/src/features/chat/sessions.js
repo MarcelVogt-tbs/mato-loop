@@ -579,7 +579,7 @@ export const sessionsActions = {
       const { data } = await api.get(`/sessions/${id}`)
       return data
     },
-    async loadOlderMessages(id = this.current?.id) {
+    async loadOlderMessages(id = this.current?.id, pageSize = SESSION_PAGE_SIZE) {
       if (this.loading) return []
       const session = this.current
       const cursor = session?.id === id ? session.nextMessageCursor : null
@@ -589,7 +589,7 @@ export const sessionsActions = {
       this.olderMessagesLoadFailed = false
       const request = (async () => {
         const { data } = await api.get(`/sessions/${id}/messages`, {
-          params: { cursor, pageSize: SESSION_PAGE_SIZE }
+          params: { cursor, pageSize }
         })
         if (this.current?.id !== id || this.current.nextMessageCursor !== cursor) return []
         const existingIds = new Set((this.current.messages || []).map((message) => message.id))

@@ -1,7 +1,9 @@
 import { computed, ref } from 'vue'
+import { isNavigationFailure, NavigationFailureType } from 'vue-router'
 import { sessionSidebarStatus } from 'src/features/chat/session-groups'
 import { notifyError } from 'src/utils/notifications'
 import { chooseDeletion } from 'src/features/archive/deletion-choice'
+import { useSessionTabsStore } from './session-tabs-store'
 
 const emptySidebarList = Object.freeze({
   items: [],
@@ -212,7 +214,10 @@ export function useSidebarSessions({
 
   async function openSession(session, messageId = null) {
     if ($q.screen.lt.md) drawerOpen.value = false
-    await router.push({
+    const tabs = useSessionTabsStore()
+    const alreadyOpen = route.name === 'chat' && route.query.session === session.id && chat.current?.id === session.id
+    if (!messageId) delete tabs.readingPositions[session.id]
+    const failure = await router.push({
       name: 'chat',
       query: chatQuery(
         session.id,
@@ -220,6 +225,9 @@ export function useSidebarSessions({
         messageId ? { message: messageId } : {}
       )
     })
+    if (!messageId && alreadyOpen && (!failure || isNavigationFailure(failure, NavigationFailureType.duplicated))) {
+      tabs.followLatestRequest = { sessionId: session.id }
+    }
   }
 
   async function openSearchProject(project) {

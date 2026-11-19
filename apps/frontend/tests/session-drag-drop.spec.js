@@ -56,7 +56,8 @@ const { chat, confirm, notifications, projects, pending, quasar, routeUpdate, te
       invalidateSessionLists: vi.fn().mockResolvedValue(),
       syncSessionSummaries: vi.fn().mockResolvedValue(),
       updateCachedSessions: vi.fn(),
-      markSessionRead: vi.fn().mockResolvedValue()
+      markSessionRead: vi.fn().mockResolvedValue(),
+      flushDraftWrite: vi.fn()
     },
     projects: { loaded: true, items: [{ id: 'a', name: 'Alpha' }, { id: 'b', name: 'Beta' }], fetchAll: vi.fn().mockResolvedValue(), refreshSummaries: vi.fn().mockResolvedValue() },
     pending: { pending: [], forSession: () => [], fetchPending: vi.fn().mockResolvedValue(), fetchGrants: vi.fn().mockResolvedValue() },

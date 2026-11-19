@@ -8,6 +8,16 @@ import { clearChatOutbox, loadChatOutbox, saveChatOutboxEntries } from 'src/feat
 import { gitFinishEntry } from 'src/features/coding/git-actions-store'
 import { useSessionTabsStore } from './session-tabs-store'
 
+const pendingDraftWrites = new WeakMap()
+const DRAFT_WRITE_INTERVAL_MS = 400
+
+function cancelDraftWrite(state) {
+  const timer = pendingDraftWrites.get(state)
+  if (timer === undefined) return
+  clearTimeout(timer)
+  pendingDraftWrites.delete(state)
+}
+
 export const draftActions = {
     setActivity(phase, details = {}) {
       this.activity = mergeAgentActivity(this.activity, { ...details, phase })
@@ -19,6 +29,7 @@ export const draftActions = {
       this.activity = emptyActivity(this.activity.revision + 1)
     },
     persistDrafts() {
+      cancelDraftWrite(this.$state)
       if (!this.draftOwnerUserId || typeof window === 'undefined') return
       try {
         this.drafts.newSessions[sessionScopeKey(this.sessionsProjectId)] = this.drafts.newSession
@@ -30,6 +41,7 @@ export const draftActions = {
     setDraftOwner(userId) {
       const ownerUserId = typeof userId === 'string' && userId ? userId : null
       if (ownerUserId === this.draftOwnerUserId) return
+      cancelDraftWrite(this.$state)
       void useSessionTabsStore().setOwner(null)
       this.sessionRequestController?.abort()
       this.sessionRequestController = null
@@ -171,10 +183,17 @@ export const draftActions = {
       }
       this.persistDrafts()
     },
-    setDraft(message) {
+    setDraft(message, { defer = false } = {}) {
       if (this.current) this.drafts.sessionMessages[this.current.id] = message
       else this.drafts.newSession.message = message
-      this.persistDrafts()
+      if (!defer) this.persistDrafts()
+      else if (this.draftOwnerUserId && !pendingDraftWrites.has(this.$state)) {
+        // Devtools may wrap `this` per action; the state keeps the same identity.
+        pendingDraftWrites.set(this.$state, setTimeout(() => this.flushDraftWrite(), DRAFT_WRITE_INTERVAL_MS))
+      }
+    },
+    flushDraftWrite() {
+      if (pendingDraftWrites.has(this.$state)) this.persistDrafts()
     },
     hasNewSessionDraft(projectId = this.sessionsProjectId) {
       const scope = sessionScopeKey(projectId)
@@ -301,6 +320,7 @@ export const draftActions = {
     },
     clearAllDrafts() {
       const ownerUserId = this.draftOwnerUserId
+      cancelDraftWrite(this.$state)
       this.cancelQueueDrain()
       this.clearAllAttachmentDrafts()
       releaseAttachmentDrafts(

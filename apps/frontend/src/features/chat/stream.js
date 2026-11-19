@@ -11,6 +11,8 @@ import { managedSessionFileTarget, toolFileActions, toolOutputAttachments } from
 import { notifyError } from 'src/utils/notifications'
 import { ACTIVE_TITLE_GENERATION_STATUSES, FILESYSTEM_MUTATION_TOOLS, controlCenterFileTarget, mergeMessages } from 'src/features/chat/model'
 
+const STREAM_UPDATE_INTERVAL_MS = 50
+
 export const streamActions = {
     watchRun(sessionId, runId, run = {}) {
       this.streamUserMessageId = null
@@ -25,6 +27,31 @@ export const streamActions = {
       if (!run.reconnecting) this.reconnectAttempts = 0
       this.eventSource?.close()
       const source = new EventSource(`/api/sessions/${sessionId}/runs/${runId}/events`)
+      let pendingText = ''
+      let textTimer = null
+      const resetStreamText = () => {
+        clearTimeout(textTimer)
+        textTimer = null
+        pendingText = ''
+        this.streamContent = ''
+      }
+      const flushText = () => {
+        textTimer = null
+        if (this.eventSource !== source || !pendingText) return
+        this.streamContent += pendingText
+        pendingText = ''
+        textTimer = setTimeout(flushText, STREAM_UPDATE_INTERVAL_MS)
+      }
+      const showStreamText = (delta) => {
+        if (!delta) return
+        if (this.activity.phase !== 'streaming') this.setActivity('streaming')
+        if (textTimer !== null) pendingText += delta
+        else {
+          // Show the first chunk immediately, then coalesce updates for the transcript.
+          this.streamContent += delta
+          textTimer = setTimeout(flushText, STREAM_UPDATE_INTERVAL_MS)
+        }
+      }
       const workspace = useWorkspaceStore()
       const controlCenter = useControlCenterStore()
       const refreshChangedFiles = async (session) => {
@@ -99,7 +126,7 @@ export const streamActions = {
       source.addEventListener('run.snapshot', (event) => {
         if (this.eventSource !== source) return
         const payload = JSON.parse(event.data)
-        this.streamContent = ''
+        resetStreamText()
         this.streamUserMessageId = null
         this.streamReasoning = null
         this.streamContextSummary = null
@@ -114,9 +141,7 @@ export const streamActions = {
         for (const item of payload.events || []) {
           source.dispatchEvent(new MessageEvent(item.type, { data: JSON.stringify(item) }))
         }
-        if (payload.content) source.dispatchEvent(new MessageEvent('message.delta', {
-          data: JSON.stringify({ delta: payload.content })
-        }))
+        showStreamText(payload.content)
         void reconciliation.then((session) => {
           if (session && this.eventSource === source) {
             recoveryAnchor = [...(session.messages || [])].reverse().find((message) => message.role !== 'tool')
@@ -176,8 +201,7 @@ export const streamActions = {
       })
       source.addEventListener('message.delta', (event) => {
         if (this.eventSource !== source) return
-        if (this.activity.phase !== 'streaming') this.setActivity('streaming')
-        this.streamContent += JSON.parse(event.data).delta
+        showStreamText(JSON.parse(event.data).delta)
       })
       source.addEventListener('reasoning.updated', (event) => {
         if (this.eventSource !== source) return
@@ -256,7 +280,7 @@ export const streamActions = {
           if (index === -1) this.current.messages = mergeMessages(messages, [promoted])
           else messages[index] = { ...messages[index], ...promoted }
         }
-        this.streamContent = ''
+        resetStreamText()
         this.streamReasoning = null
         this.streamContextSummary = null
       }
@@ -284,7 +308,7 @@ export const streamActions = {
       })
       source.addEventListener('message.continued', () => {
         if (this.eventSource !== source) return
-        this.streamContent = ''
+        resetStreamText()
         this.streamReasoning = null
         this.streamContextSummary = null
         this.runWarnings = []
@@ -472,7 +496,7 @@ export const streamActions = {
         this.running = false
         this.stopping = false
         this.cancelRequested = false
-        this.streamContent = ''
+        resetStreamText()
         this.streamResearchSources = []
         this.streamReasoning = null
         this.streamContextSummary = null
@@ -511,7 +535,7 @@ export const streamActions = {
         if (this.eventSource !== source) return
         source.close()
         this.eventSource = null
-        this.streamContent = ''
+        resetStreamText()
         this.streamResearchSources = []
         this.streamReasoning = null
         this.streamContextSummary = null

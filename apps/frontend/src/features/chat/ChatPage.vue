@@ -279,7 +279,7 @@
           @send="send"
           @stop="chat.stop"
           @update="chat.updateActive"
-          @update:draft="chat.setDraft"
+          @update:draft="chat.setDraft($event, { defer: true })"
         />
       </div>
     </div>

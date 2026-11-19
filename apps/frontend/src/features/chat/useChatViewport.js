@@ -8,6 +8,10 @@ import {
   scrollChatToBottom
 } from './scroll'
 
+// Keep interactive prepends smaller than the rendered slice so the current
+// message stays mounted while Quasar updates its range.
+const SCROLL_HISTORY_PAGE_SIZE = 8
+
 export function useChatViewport({ chat, route, scrollArea, scrollContent, virtualScroll, displayMessages, setWorkHistoryExpanded }) {
   const tabs = useSessionTabsStore()
   const routeSessionId = computed(() => typeof route.query.session === 'string' ? route.query.session : null)
@@ -135,7 +139,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
         ? messages.findIndex(message => (message.renderId || message.id) === request.anchor.id) : -1
       const index = searchedMessage ? messages.findIndex(matches) : followingBottom.value ? messages.length - 1 : anchorIndex
       const id = searchedMessage?.id || (index >= 0 ? messages[index].renderId || messages[index].id : null)
-      if (index >= 0 && (searchedMessage || !findElement(id))) {
+      if (index >= 0 && (searchedMessage || transcriptPreparing.value && request.anchor || !findElement(id))) {
         virtualScroll.value?.scrollTo(index, searchedMessage ? 'center-force' : followingBottom.value ? 'end-force' : 'start-force')
         if (!await rendered(request)) return
       }
@@ -188,10 +192,10 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
       || chat.current.id !== routeSessionId.value) return
     const sessionId = chat.current.id
     const cursor = chat.current.nextMessageCursor
-    const request = { sessionId, firstMessage: chat.current.messages?.[0]?.id }
+    const request = { sessionId, firstMessage: chat.current.messages?.[0]?.id, anchor: captureAnchor() }
     historyRequest = request
     try {
-      await chat.loadOlderMessages(sessionId)
+      await chat.loadOlderMessages(sessionId, followingBottom.value ? undefined : SCROLL_HISTORY_PAGE_SIZE)
       await request.positioned
       if (disposed || historyRequest !== request || chat.current?.id !== sessionId) return
       stalledHistoryCursor = chat.current.nextMessageCursor === cursor ? cursor : null
@@ -207,7 +211,7 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
   async function positionPrependedHistory(request, anchor) {
     const current = () => !disposed && historyRequest === request && !chat.loading
       && chat.current?.id === request.sessionId && routeSessionId.value === request.sessionId
-      && virtualScroll.value === request.view && target && !revealMessageId
+      && virtualScroll.value === request.view && target && !revealMessageId && !followingBottom.value
     cancelLayout()
     positioningHistory = true
     try {
@@ -220,14 +224,12 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
       await nextTick()
       if (!current()) return
       restoreChatReadingAnchor(target, findElement(anchor.id), anchor)
-      await new Promise(resolve => window.requestAnimationFrame(() => {
-        if (current()) {
-          restoreChatReadingAnchor(target, findElement(anchor.id), anchor)
-          lastScrollTop = target.scrollTop
-          readingAnchor = captureAnchor() || anchor
-        }
-        resolve()
-      }))
+      await new Promise(resolve => window.requestAnimationFrame(resolve))
+      await nextTick()
+      if (!current()) return
+      restoreChatReadingAnchor(target, findElement(anchor.id), anchor)
+      lastScrollTop = target.scrollTop
+      readingAnchor = anchor
     } finally {
       positioningHistory = false
     }
@@ -236,7 +238,11 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
   function handleVirtualScroll() {
     if (positioningHistory) return
     if (operation && !operation.refreshing) pending = true
-    if (!operation && !followingBottom.value) readingAnchor = captureAnchor() || readingAnchor
+    if (!operation && !followingBottom.value) {
+      const anchor = captureAnchor()
+      readingAnchor = anchor || readingAnchor
+      if (userScrolling && anchor) maybeLoadOlderHistory()
+    }
     if (!operation && (transcriptPreparing.value || revealMessageId)) scheduleTranscriptLayout()
   }
 
@@ -259,11 +265,12 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     const anchor = !operation && !followingBottom.value ? captureAnchor() : null
     if (!operation) readingAnchor = followingBottom.value ? null : anchor || readingAnchor
     if (userScrolling && movedUp) {
-      if (!anchor && target.scrollTop <= 0 && !transcriptPreparing.value && displayMessages.value.length) {
-        // Quasar debounces native scroll events; a jump to the top can leave its old slice offscreen.
-        virtualScroll.value?.scrollTo(0, 'start')
+      if (!anchor && !transcriptPreparing.value && displayMessages.value.length) {
+        // Wait for Quasar's scroll event rather than prepending to an offscreen slice.
+        if (target.scrollTop <= 0) virtualScroll.value?.scrollTo(0, 'start')
+      } else {
+        maybeLoadOlderHistory()
       }
-      maybeLoadOlderHistory()
     }
     if (userScrolling && !touching) scheduleUserScrollEnd()
   }
@@ -317,6 +324,12 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     scheduleTranscriptLayout()
   }
 
+  watch(() => tabs.followLatestRequest, request => {
+    if (request && request.sessionId === routeSessionId.value && request.sessionId === chat.current?.id) {
+      enableFollowMode()
+    }
+  })
+
   watch([() => chat.current?.id, routeSessionId, routeMessageId], ([sessionId], previous = []) => {
     cancelLayout()
     revealMessageId = routeMessageId.value
@@ -339,10 +352,11 @@ export function useChatViewport({ chat, route, scrollArea, scrollContent, virtua
     const request = historyRequest
     if (request && !request.positioned && !followingBottom.value && virtualScroll.value
       && chat.current?.id === request.sessionId && chat.current.messages?.[0]?.id !== request.firstMessage) {
-      const anchor = captureAnchor() || readingAnchor
+      const anchor = captureAnchor() || request.anchor || readingAnchor
       if (anchor) {
         request.view = virtualScroll.value
         request.positioned = positionPrependedHistory(request, anchor)
+        return
       }
     }
     scheduleTranscriptLayout()
