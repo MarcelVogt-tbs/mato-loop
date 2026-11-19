@@ -72,6 +72,47 @@ export const useChannelStore = defineStore('channels', {
       const { data } = await api.post(`/channels/telegram/endpoints/${id}/pairing`)
       await this.fetchEndpoints()
       return data
+    },
+    async fetchTeamsConfiguration() {
+      const { data } = await api.get('/channels/teams/configuration')
+      return data
+    },
+    async saveTeamsConfiguration(payload) {
+      const { data } = await api.put('/channels/teams/configuration', payload)
+      return data
+    },
+    async testTeamsConfiguration() {
+      const { data } = await api.post('/channels/teams/configuration/test')
+      return data
+    },
+    async exportTeamsAppPackage(payload) {
+      const { data } = await api.post('/channels/teams/configuration/app-package', payload, { responseType: 'blob' })
+      return data
+    },
+    async saveEndpoint(provider, id, payload) {
+      if (provider === 'telegram') return id ? this.updateTelegram(id, payload) : this.createTelegram(payload)
+      const request = { name: payload.name, enabled: payload.enabled }
+      const { data } = id
+        ? await api.put(`/channels/teams/endpoints/${id}`, request)
+        : await api.post('/channels/teams/endpoints', request)
+      await this.fetchEndpoints()
+      return data
+    },
+    async removeEndpoint(endpoint) {
+      if (endpoint.provider === 'telegram') return this.removeTelegram(endpoint.id)
+      await api.delete(`/channels/teams/endpoints/${endpoint.id}`)
+      await this.fetchEndpoints()
+    },
+    async startPairing(provider, id) {
+      if (provider === 'telegram') return this.startTelegramPairing(id)
+      const { data } = await api.post(`/channels/teams/endpoints/${id}/pairing`)
+      await this.fetchEndpoints()
+      return data
+    },
+    async confirmTeamsPairing(id, candidateId) {
+      const { data } = await api.post(`/channels/teams/endpoints/${id}/confirm`, { candidateId })
+      await this.fetchEndpoints()
+      return data
     }
   }
 })

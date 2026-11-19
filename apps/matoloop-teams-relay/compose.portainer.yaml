@@ -1,0 +1,41 @@
+services:
+  relay:
+    image: ${MATO_TEAMS_RELAY_IMAGE:?Set the imported or published relay image}
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      MATO_TEAMS_APP_ID: ${MATO_TEAMS_APP_ID:?Set the Microsoft app ID}
+      MATO_TEAMS_TENANT_ID: ${MATO_TEAMS_TENANT_ID:?Set the Microsoft tenant ID}
+      MATO_TEAMS_MATOLOOP_URL: ${MATO_TEAMS_MATOLOOP_URL:-}
+      MATO_TEAMS_CLIENT_SECRET_FILE: /run/secrets/teams/client-secret
+      MATO_TEAMS_RELAY_TOKEN_FILE: /run/secrets/teams/relay-token
+      MATO_TEAMS_SPOOL_DIR: /spool
+    volumes:
+      - spool:/spool
+      - type: bind
+        source: ${MATO_TEAMS_SECRET_DIRECTORY:-/opt/matoloop-teams-relay/secrets}
+        target: /run/secrets/teams
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,uid=10001,gid=10001
+    expose: ["3978"]
+    networks:
+      default:
+        aliases: [matoloop-teams-relay]
+    healthcheck:
+      test: ["CMD", ".venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3978/health', timeout=5).close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  default:
+    name: npm_access
+    external: true
+
+volumes:
+  spool:

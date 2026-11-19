@@ -34,6 +34,13 @@ Memory, settings, authentication, messaging, automations and notification module
 retain their existing ownership. SQLAlchemy models remain grouped by aggregate
 under `models/`, with one metadata graph and the existing migrations.
 
+`messaging/endpoints.py`, `sessions.py`, and `outbox.py` own shared channel
+lifecycle, admission/commands, and result reconciliation. Telegram and Teams keep
+their transport workers and presentation adapters separate. The independently
+deployed `apps/matoloop-teams-relay` depends only on the small typed
+`libs/python/teams-relay` wire contract, not backend sessions, permissions, models,
+or provider code.
+
 ### Tool assembly
 
 `tools/catalog.py` explicitly assembles the existing tool definitions in their
