@@ -16,6 +16,7 @@ from mato_loop_backend.execution.client import (
     ExecutionClient,
     ExecutionClientError,
     ExecutionResult,
+    WorkspaceStatResult,
 )
 from mato_loop_backend.execution.manager import execution_agent_connections
 from mato_loop_backend.execution.paths import absolute_path, within
@@ -327,9 +328,10 @@ async def session_worktree(db, session, *, check_removal=False) -> RepositoryRes
     return info if any(item.path == info.repository and not item.main for item in info.worktrees) else None
 
 
-def worktree_removal_token(session, info: RepositoryResult, affected) -> str:
+def worktree_removal_token(session, info: RepositoryResult, affected, registered_at: float) -> str:
     return hashlib.sha256(json.dumps([
         str(session.preferred_execution_agent_id), session.current_directory, info.repository, info.common_directory,
+        info.git_directory, info.branch, registered_at,
         sorted(str(item.id) for item in affected),
     ]).encode()).hexdigest()
 
@@ -342,7 +344,90 @@ async def sessions_in_worktree(db, user_id, agent_id, directory):
     )) if within(item.current_directory, directory)]
 
 
-async def remove_worktree(db, session, info: RepositoryResult, directory, *, force=False, expected_impact=None):
+async def _worktree_stat(db, session, agent_id, path) -> WorkspaceStatResult:
+    from mato_loop_backend.sessions.service import SessionServiceError, execution_filesystem_policy
+
+    client = await coding_client(db, session.user_id, agent_id)
+    agent = await db.get(ExecutionAgent, agent_id)
+    if agent is None:
+        raise SessionServiceError(404, "executionAgent.notFound")
+    if execution_filesystem_policy(agent, path) == "deny":
+        raise SessionServiceError(403, "permission.denied")
+    try:
+        result = await client.request("filesystem.stat", {"path": path}, WorkspaceStatResult)
+    except ExecutionClientError as exc:
+        raise SessionServiceError(409, exc.code, params=exc.params) from exc
+    if result.path != path:
+        raise SessionServiceError(502, "executionAgent.protocolError")
+    return result
+
+
+async def scheduled_worktree_is_missing(db, session, removal) -> bool:
+    from mato_loop_backend.sessions.service import SessionServiceError
+
+    try:
+        await _worktree_stat(db, session, UUID(removal["agentId"]), removal["path"])
+    except SessionServiceError as exc:
+        if exc.code == "file.pathNotFound":
+            return True
+        raise
+    return False
+
+
+async def worktree_registration(db, session, info: RepositoryResult) -> float:
+    from mato_loop_backend.sessions.service import SessionServiceError
+
+    if not info.git_directory:
+        raise SessionServiceError(409, "git.worktreeChanged")
+    # Git writes the registration file when creating or moving the worktree, not when editing its files.
+    registration = await _worktree_stat(db, session, session.preferred_execution_agent_id, f"{info.git_directory}/gitdir")
+    if registration.kind != "file":
+        raise SessionServiceError(409, "git.worktreeChanged")
+    return registration.modified_at
+
+
+async def schedule_worktree_removal(db, session, impact) -> dict[str, str]:
+    from mato_loop_backend.sessions.service import SessionServiceError
+
+    info = await session_worktree(db, session)
+    if info is None:
+        raise SessionServiceError(409, "git.worktreeChanged")
+    affected = await sessions_in_worktree(db, session.user_id, session.preferred_execution_agent_id, info.repository)
+    registered_at = await worktree_registration(db, session, info)
+    if worktree_removal_token(session, info, affected, registered_at) != impact:
+        raise SessionServiceError(409, "git.worktreeChanged")
+    return {"agentId": str(session.preferred_execution_agent_id), "path": info.repository, "impact": impact}
+
+
+async def remove_session_worktree(db, session, *, impact=None, scheduled=None) -> None:
+    from mato_loop_backend.sessions.service import SessionServiceError
+
+    async def remove():
+        info = await session_worktree(db, session)
+        if info is None:
+            raise SessionServiceError(409, "git.worktreeChanged")
+        if scheduled is not None and (scheduled["agentId"] != str(session.preferred_execution_agent_id)
+                                      or scheduled["path"] != info.repository):
+            raise SessionServiceError(409, "git.worktreeChanged")
+        await remove_worktree(db, session, info, info.repository, force=True,
+                              expected_impact=scheduled["impact"] if scheduled is not None else impact,
+                              scheduled=scheduled is not None)
+
+    if scheduled is None:
+        await remove()
+        return
+    if await scheduled_worktree_is_missing(db, session, scheduled):
+        return
+    try:
+        # Discard prepared grants if the checkout disappears during removal.
+        async with db.begin_nested():
+            await remove()
+    except SessionServiceError:
+        if not await scheduled_worktree_is_missing(db, session, scheduled):
+            raise
+
+
+async def remove_worktree(db, session, info: RepositoryResult, directory, *, force=False, expected_impact=None, scheduled=False):
     from mato_loop_backend.sessions.service import (
         ACTIVE_RUN_STATUSES,
         SessionServiceError,
@@ -372,8 +457,12 @@ async def remove_worktree(db, session, info: RepositoryResult, directory, *, for
     if any(path and (within(path, directory) or within(directory, path)) for path in active_directories):
         raise SessionServiceError(409, "git.worktreeInUse")
     affected = await sessions_in_worktree(db, session.user_id, session.preferred_execution_agent_id, directory)
-    if expected_impact is not None and worktree_removal_token(session, info, affected) != expected_impact:
-        raise SessionServiceError(409, "git.worktreeChanged")
+    if expected_impact is not None:
+        registered_at = await worktree_registration(db, session, info)
+        if worktree_removal_token(session, info, affected, registered_at) != expected_impact:
+            raise SessionServiceError(409, "git.worktreeChanged")
+    else:
+        registered_at = None
     if affected:
         fallback, fallback_policy = await validate_execution_preferences(
             db, session.user_id, session.preferred_execution_agent_id, root,
@@ -393,8 +482,11 @@ async def remove_worktree(db, session, info: RepositoryResult, directory, *, for
     try:
         await client.request("git.worktree.remove", {
             "path": directory, "repository": root, "commonDirectory": info.common_directory, "force": force,
+            **({"expectedRegistration": registered_at} if scheduled else {}),
         }, WorktreeRemovedResult, timeout=180)
     except ExecutionClientError as exc:
+        if scheduled and exc.code == "tool.invalidArguments" and exc.field == "expectedRegistration":
+            raise SessionServiceError(409, "executionAgent.updateRequired") from exc
         raise SessionServiceError(409, exc.code, params=exc.params) from exc
     for item in affected:
         item.coding_workspace = {**{key: value for key, value in (item.coding_workspace or {}).items()

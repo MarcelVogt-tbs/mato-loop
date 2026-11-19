@@ -275,7 +275,19 @@ class GitChangesTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AgentError) as error:
             await remove_worktree(self.config, self.fs, arguments)
         self.assertEqual(error.exception.code, "git.dirty")
-        await remove_worktree(self.config, self.fs, arguments.model_copy(update={"force": True}))
+        info = await git_module.repository(self.fs, str(path))
+        registered_at = self.fs.stat(f"{info['gitDirectory']}/gitdir")["modifiedAt"]
+        confirmed = arguments.model_copy(
+            update={"force": True, "expected_registration": registered_at}
+        )
+        with self.assertRaises(AgentError) as error:
+            await remove_worktree(
+                self.config,
+                self.fs,
+                confirmed.model_copy(update={"expected_registration": registered_at - 1}),
+            )
+        self.assertEqual(error.exception.code, "git.worktreeChanged")
+        await remove_worktree(self.config, self.fs, confirmed)
         self.assertEqual(
             self.git("show-ref", "--verify", "--quiet", "refs/heads/task", cwd=source), b""
         )

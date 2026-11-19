@@ -10,6 +10,7 @@ import {
 
 vi.mock('quasar', () => import('quasar/dist/quasar.client.js'))
 vi.mock('src/boot/axios', () => ({ api: {} }))
+vi.mock('src/composables/confirm', () => ({ useConfirm: () => ({ confirm: async () => true }) }))
 
 import ProviderConfigDialog from '../src/features/providers/ProviderConfigDialog.vue'
 import ModelConfigDialog from '../src/features/providers/ModelConfigDialog.vue'
@@ -75,6 +76,46 @@ async function selectProvider(label) {
   option.closest('.q-item').click()
   await vi.waitFor(() => expect(field('Name')).toBeDefined())
 }
+
+const copilot = { id: 'copilot', name: 'GitHub Copilot', adapterType: 'github-copilot' }
+
+it.each([false, true])('requires a PAT for an unconfigured GitHub Copilot provider (editing=%s)', async (editing) => {
+  const { createProvider, updateProvider } = await mountDialog(ProviderConfigDialog, {
+    provider: editing ? { ...copilot, hasCredential: false, pseudonymizationEnabled: true } : null
+  })
+  if (!editing) await selectProvider('GitHub Copilot')
+  expect(field('Base URL')).toBeUndefined()
+  expect(field('API-Protokoll')).toBeUndefined()
+  expect(document.querySelector('.provider-dialog').textContent).toContain('Copilot Requests')
+  const label = editing ? 'Änderungen speichern' : 'Provider hinzufügen'
+  const action = editing ? updateProvider : createProvider
+  save(label)
+  await vi.waitFor(() => expect(field('GitHub-Token (PAT)').textContent).toContain('Pflichtfeld'))
+  expect(action).not.toHaveBeenCalled()
+  await fill('GitHub-Token (PAT)', ' mock-token ')
+  save(label)
+  await vi.waitFor(() => expect(action).toHaveBeenCalledWith(editing ? 'copilot' : 'github-copilot', {
+    name: 'GitHub Copilot', api_key: 'mock-token', remove_api_key: false,
+    trust_level: 'public', pseudonymization_enabled: true, memory_policy: 'inherit'
+  }))
+})
+
+it.each([false, true])('retains or explicitly removes a saved GitHub token (remove=%s)', async (removeKey) => {
+  const { updateProvider } = await mountDialog(ProviderConfigDialog, { provider: {
+    ...copilot, hasCredential: true, trustLevel: 'private', memoryPolicy: 'deny'
+  } })
+  expect(field('Neuer GitHub-Token (optional)').querySelector('input').value).toBe('')
+  if (removeKey) {
+    await fill('Neuer GitHub-Token (optional)', 'mock-replacement')
+    document.querySelector('.provider-dialog .q-checkbox').click()
+    await nextTick()
+  }
+  save('Änderungen speichern')
+  await vi.waitFor(() => expect(updateProvider).toHaveBeenCalledWith('copilot', {
+    name: 'GitHub Copilot', api_key: null, remove_api_key: removeKey,
+    trust_level: 'private', pseudonymization_enabled: false, memory_policy: 'deny'
+  }))
+})
 
 it('creates the Kimi subscription preset through the existing OpenAI-compatible endpoint', async () => {
   const { createProvider } = await mountDialog()

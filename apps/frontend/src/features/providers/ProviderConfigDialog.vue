@@ -73,6 +73,7 @@
             :rules="[requiredRule]"
           />
           <q-input dense
+            v-if="!isGitHubCopilot"
             v-model="form.base_url"
             outlined
             :label="isAzureSpeech ? 'Azure-Speech-Endpunkt' : 'Base URL'"
@@ -94,19 +95,24 @@
             v-model="form.api_key"
             outlined
             type="password"
-            :label="provider?.hasCredential ? 'Neuer API-Key (optional)' : isAzureSpeech ? 'Azure-Speech-API-Key' : 'API-Key (optional)'"
+            :label="apiKeyLabel"
             :hint="apiKeyHint"
             :disable="form.remove_api_key"
             lazy-rules
-            :rules="isAzureSpeech && !provider?.hasCredential ? [requiredRule] : []"
+            :rules="(isAzureSpeech || isGitHubCopilot) && !provider?.hasCredential ? [requiredRule] : []"
           />
           <q-checkbox dense
             v-if="provider?.hasCredential"
             v-model="form.remove_api_key"
             class="provider-form-section"
-            label="Gespeicherten API-Key entfernen"
+            :label="isGitHubCopilot ? 'Gespeicherten Token entfernen' : 'Gespeicherten API-Key entfernen'"
           />
 
+          <q-banner v-if="isGitHubCopilot" rounded class="provider-form-section app-surface-tonal">
+            Verwende dein bestehendes GitHub-Copilot-Abonnement mit einem Fine-grained Personal Access Token (PAT)
+            und der Kontoberechtigung „Copilot Requests“. Richte den Provider am besten in deinen persönlichen
+            Einstellungen ein. Die verfügbaren Modelle werden automatisch ermittelt und können nicht manuell hinzugefügt werden.
+          </q-banner>
           <q-banner v-if="isAzureSpeech" rounded class="provider-form-section app-surface-tonal">
             Azure Speech transkribiert abgeschlossene Sprachnachrichten und Audiodateien und erzeugt Sprache aus Text.
             Keine Live-Transkription, kein Chat und keine Tool-Aufrufe.
@@ -265,9 +271,10 @@ const memoryPolicyOptions = [
 const isEditing = computed(() => Boolean(props.provider))
 const hasCodexProvider = computed(() => providers.providers.some((item) => item.adapterType === 'openai-codex'))
 const isAzureSpeech = computed(() => providerType.value === 'azure-speech')
+const isGitHubCopilot = computed(() => providerType.value === 'github-copilot')
 const isRealtime = computed(() => providerType.value === 'realtime')
 const isOpenAICompatible = computed(() => ['openai-compatible', 'kimi-code'].includes(providerType.value))
-const isConfiguredProvider = computed(() => isOpenAICompatible.value || isRealtime.value || ['lemonade', 'azure-speech'].includes(providerType.value))
+const isConfiguredProvider = computed(() => isOpenAICompatible.value || isRealtime.value || isAzureSpeech.value || isGitHubCopilot.value || providerType.value === 'lemonade')
 const endpointPlaceholder = computed(() => {
   if (isAzureSpeech.value) return 'https://my-speech.cognitiveservices.azure.com'
   if (isRealtime.value) return realtimeService.value === 'azure-openai-realtime'
@@ -275,7 +282,16 @@ const endpointPlaceholder = computed(() => {
     : 'https://api.openai.com/v1'
   return providerType.value === 'lemonade' ? 'http://lemonade-host:13305/v1' : 'https://api.example.com/v1'
 })
+const apiKeyLabel = computed(() => {
+  if (isGitHubCopilot.value) return props.provider?.hasCredential ? 'Neuer GitHub-Token (optional)' : 'GitHub-Token (PAT)'
+  if (props.provider?.hasCredential) return 'Neuer API-Key (optional)'
+  return isAzureSpeech.value ? 'Azure-Speech-API-Key' : 'API-Key (optional)'
+})
 const apiKeyHint = computed(() => {
+  if (isGitHubCopilot.value) {
+    if (form.remove_api_key) return 'Ohne Token ist GitHub Copilot in MatoLoop nicht verfügbar.'
+    return props.provider?.hasCredential ? 'Leer lassen, um den gespeicherten Token beizubehalten.' : ''
+  }
   if (isAzureSpeech.value && form.remove_api_key) return 'Ohne API-Key sind weder Transkription noch Spracherzeugung möglich.'
   if (props.provider?.hasCredential) return 'Leer lassen, um den gespeicherten API-Key beizubehalten.'
   return isAzureSpeech.value ? 'Für Transkription und Spracherzeugung ist ein API-Key der Azure-Speech-Ressource erforderlich.' : ''
@@ -287,6 +303,12 @@ const providerOptions = computed(() => [
     icon: 'key',
     description: 'ChatGPT-Abonnement über Gerätecode-Anmeldung',
     disable: !isEditing.value && hasCodexProvider.value
+  },
+  {
+    label: 'GitHub Copilot',
+    value: 'github-copilot',
+    icon: 'smart_toy',
+    description: 'GitHub-Copilot-Abonnement über persönlichen Zugriffstoken'
   },
   {
     label: 'Kimi Code (Abonnement)',
@@ -322,6 +344,7 @@ const providerOptions = computed(() => [
 const dialogTitle = computed(() => isEditing.value ? `${props.provider.name} bearbeiten` : 'Provider hinzufügen')
 const dialogIcon = computed(() => ({
   'openai-codex': 'key',
+  'github-copilot': 'smart_toy',
   lemonade: 'developer_board',
   realtime: 'record_voice_over',
   'azure-speech': 'graphic_eq'
@@ -331,7 +354,7 @@ function defaultForm(type = null) {
   const isLemonade = type === 'lemonade'
   const isKimi = type === 'kimi-code'
   return {
-    name: isKimi ? 'Kimi Code' : '',
+    name: isKimi ? 'Kimi Code' : type === 'github-copilot' ? 'GitHub Copilot' : '',
     base_url: isKimi ? 'https://api.kimi.ai/coding/v1' : '',
     api_type: isKimi ? 'responses' : 'chat_completions',
     api_key: '',
@@ -399,14 +422,19 @@ async function saveConfiguredProvider() {
   try {
     const payload = {
       name: form.name.trim(),
-      base_url: form.base_url.trim(),
       api_key: form.remove_api_key ? null : form.api_key.trim() || null,
       remove_api_key: form.remove_api_key,
       trust_level: form.trust_level,
       pseudonymization_enabled: form.pseudonymization_enabled,
       memory_policy: form.memory_policy
     }
+    if (!isGitHubCopilot.value) payload.base_url = form.base_url.trim()
     if (isOpenAICompatible.value) payload.api_type = form.api_type
+    if (isGitHubCopilot.value && payload.remove_api_key && !await confirm(
+      'Gespeicherten Token entfernen? GitHub Copilot ist in MatoLoop erst wieder verfügbar, wenn du einen neuen Token hinterlegst.',
+      'GitHub-Token entfernen',
+      { okLabel: 'Token entfernen' }
+    )) return
     let providerId = props.provider?.id
     if (props.provider) {
       await providers.updateProvider(props.provider.id, payload)

@@ -43,7 +43,7 @@ export function useProjectNavigation({
   async function deleteProject(project, { permanent = false } = {}) {
     if (!project) return false
     try {
-      permanent = await chooseDeletion($q, 'Projekt', project.name, permanent)
+      permanent = await chooseDeletion($q, 'Projekt', project.name, { permanent })
     } catch { return false }
     if (permanent === null) return false
     let impact
@@ -60,11 +60,6 @@ export function useProjectNavigation({
       })
       return false
     }
-    if (permanent && !await confirm(
-      `Projekt „${project.name}“ mit ${impact.sessionCount} ${impact.sessionCount === 1 ? 'Session' : 'Sessions'} sowie allen zugehörigen Dateien und Versionen unwiderruflich löschen? Eine Wiederherstellung ist nicht möglich.`,
-      'Projekt endgültig löschen?',
-      { okLabel: 'Endgültig löschen', okColor: 'negative' }
-    )) return false
     let automationMode = null
     if (permanent && impact.requiredAutomationCount) {
       const count = impact.automationCount

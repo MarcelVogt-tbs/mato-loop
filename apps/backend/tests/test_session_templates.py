@@ -246,6 +246,7 @@ async def test_preview_inherits_project_template_unless_explicit(documents, expl
     db.scalar.return_value = project
     result = await session_defaults(user, db, SessionOptionsRequest(project_id=project.id, session_template_id=explicit))
     assert (result["sessionTemplateId"], result["workspaceMode"]) == (str(explicit or CODING_TEMPLATE_ID), "local" if explicit else "worktree")
+    assert result["sessionProfile"]["keyboardAgentIds"] == (None if explicit else [str(PLAN_PROFILE_ID), str(BUILD_PROFILE_ID)])
 
 
 @pytest.mark.parametrize("explicit", [False, True])
@@ -286,6 +287,15 @@ def test_default_templates_and_invalid_agent_selection():
     ]
     with pytest.raises(ValidationError):
         SessionTemplate(name="Invalid", agent_ids=[PLAN_PROFILE_ID], start_agent_id=BUILD_PROFILE_ID)
+
+
+def test_stored_coding_template_only_backfills_missing_keyboard_selection():
+    data = SessionTemplatesSettings().templates[1].model_dump(exclude={"keyboard_agent_ids"})
+    assert SessionTemplate.model_validate(data).keyboard_agent_ids == [PLAN_PROFILE_ID, BUILD_PROFILE_ID]
+    assert SessionTemplate.model_validate({**data, "keyboard_agent_ids": None}).keyboard_agent_ids is None
+    assert SessionTemplate.model_validate({**data, "agent_ids": [PLAN_PROFILE_ID]}).keyboard_agent_ids is None
+    with pytest.raises(ValidationError, match="keyboard switching must reference unique selected agents"):
+        SessionTemplate.model_validate({**data, "keyboard_agent_ids": [SYSADMIN_PROFILE_ID]})
 
 
 @pytest.mark.parametrize("enabled", [None, False, True])

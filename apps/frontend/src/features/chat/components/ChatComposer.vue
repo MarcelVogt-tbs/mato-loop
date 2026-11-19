@@ -470,11 +470,14 @@ function handleComposerKeydown(event) {
     if (!props.running || props.stopping) return
     sendMode.value = sendMode.value === 'queue' ? 'interrupt' : 'queue'
   } else {
-    if (inputDisabled.value || agentProfiles.loading || agentProfiles.agents.length < 2) return
-    const agents = agentProfiles.agents.filter((agent) => !props.session?.sessionProfile?.agentIds || props.session.sessionProfile.agentIds.includes(agent.id))
+    if (inputDisabled.value || agentProfiles.loading) return
+    const { agentIds, keyboardAgentIds } = props.session?.sessionProfile ?? {}
+    const switchIds = keyboardAgentIds ?? agentIds
+    const agents = agentProfiles.agents.filter((agent) => !switchIds || switchIds.includes(agent.id))
     if (agents.length < 2) return
     const current = chat.activeAgentProfileId || agentProfiles.defaultAgentProfileId
     const index = agents.findIndex((agent) => agent.id === current)
+    if (keyboardAgentIds && index === -1) return
     void chat.updateActive({ agent_profile_id: agents[(index + 1) % agents.length].id }, { draftOnly: true })
   }
   event.preventDefault()

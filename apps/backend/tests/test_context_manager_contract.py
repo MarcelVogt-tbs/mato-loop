@@ -3153,14 +3153,15 @@ async def test_context_uses_minimum_generation_reserve(manual, discovered, reser
     db.add.assert_not_called()
 
 
-@pytest.mark.parametrize("manual", [None, 7])
-async def test_context_raw_budget_boundary_fits_provider_allocation(manual):
+@pytest.mark.parametrize(("manual", "prompt_cap"), [(None, None), (7, None), (None, 32_768)])
+async def test_context_raw_budget_boundary_fits_provider_allocation(manual, prompt_cap):
     session = _session()
     current = _message(session.id, "user", "")
     model = _model(context_window_tokens=65_536, max_output_tokens=manual)
+    model.discovered_max_prompt_tokens = prompt_cap
     settings = _settings(safety_reserve_tokens=4096)
     reserve = generation_reserve(model)
-    capacity = raw_input_budget(model.context_window_tokens - 4096 - reserve)
+    capacity = raw_input_budget((prompt_cap or model.context_window_tokens - reserve) - 4096)
     estimate = _request_estimator(model)
     reminder = {"role": "user", "content": "<system-reminder>\nHost runtime state, not a new user request:\nTool budget exhausted.\n</system-reminder>"}
     framing = await estimate(
@@ -3182,7 +3183,11 @@ async def test_context_raw_budget_boundary_fits_provider_allocation(manual):
     assert allocate_output_tokens(
         model, projection.estimated_input_tokens,
         reserved_output_tokens=projection.reserved_output_tokens,
-    ) == reserve
+    ) == (reserve if prompt_cap is None else model.context_window_tokens - prompt_cap)
+    if prompt_cap is not None:
+        with pytest.raises(ProviderError) as provider_error:
+            allocate_output_tokens(model, capacity + 1)
+        assert provider_error.value.code == "agent.contextWindowExceeded"
     summarize.assert_not_awaited()
     current.content += "x"
     with pytest.raises(ContextError) as exc_info:

@@ -112,6 +112,8 @@ def _model_reasoning_profile(
         if provider.adapter_type == "lemonade"
         else provider.config.get("api_type", "chat_completions")
     )
+    if provider.adapter_type == "github-copilot":
+        api_type = model.discovery_metadata.get("copilot_api_type")
     profile = reasoning_profile(model.model_id, model.discovery_metadata)
     return (
         profile
@@ -239,6 +241,22 @@ class OpenAIProviderRequest(ApiRequest):
             raise ValueError("base_url must not contain query or fragment")
         if self.remove_api_key and self.api_key and self.api_key.strip():
             raise ValueError("api_key and remove_api_key are mutually exclusive")
+        return self
+
+
+class GitHubCopilotProviderRequest(ApiRequest):
+    name: str = Field(min_length=1, max_length=160)
+    api_key: str | None = Field(default=None, max_length=1024)
+    remove_api_key: bool = False
+    trust_level: TrustLevel = TrustLevel.PUBLIC
+    pseudonymization_enabled: bool = True
+    memory_policy: MemoryPolicy = MemoryPolicy.INHERIT
+
+    @model_validator(mode="after")
+    def validate_token(self) -> Self:
+        token = (self.api_key or "").strip()
+        if token and (self.remove_api_key or not token.isascii() or not token.replace("_", "").isalnum()):
+            raise ValueError("Invalid GitHub Copilot token options")
         return self
 
 
@@ -617,6 +635,54 @@ async def save_openai_provider(
     return result
 
 
+async def _save_github_copilot_provider(
+    db: AsyncSession,
+    settings: AiSettingsDocument,
+    payload: GitHubCopilotProviderRequest,
+    provider: LlmProviderConfig | None = None,
+    owner_id: UUID | None = None,
+) -> dict:
+    if provider is None and not (payload.api_key or "").strip():
+        raise ApiError(400, "provider.notConnected", field="api_key")
+    await _apply_settings(
+        ProviderSettingsService.save_configured_provider(
+            db,
+            settings,
+            adapter_type="github-copilot",
+            credential_kind="github-copilot-api-key",
+            name=payload.name,
+            config={},
+            api_key=payload.api_key,
+            remove_api_key=payload.remove_api_key,
+            trust_level=payload.trust_level,
+            pseudonymization_enabled=payload.pseudonymization_enabled,
+            memory_policy=payload.memory_policy,
+            provider_config=provider,
+            owner_id=owner_id,
+            load_credential=load_credential,
+            store_credential=store_credential,
+            delete_credential=delete_credential,
+        )
+    )
+    return await _settings_response(db, settings, owner_id)
+
+
+@router.post("/github-copilot", status_code=status.HTTP_201_CREATED)
+async def save_github_copilot_provider(
+    payload: GitHubCopilotProviderRequest,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    scope: SettingsApiScope = "instance",
+    user: Annotated[UserAccount | None, Depends(require_user)] = None,
+) -> dict:
+    settings, owner_id = await _load_scoped_ai(
+        db, scope, user, for_update=True, mutation=True
+    )
+    result = await _save_github_copilot_provider(db, settings, payload, owner_id=owner_id)
+    result["providerId"] = str(settings.providers[-1].id)
+    await db.commit()
+    return result
+
+
 @router.post("/lemonade", status_code=status.HTTP_201_CREATED)
 async def save_lemonade_provider(
     payload: LemonadeProviderRequest,
@@ -652,7 +718,7 @@ async def save_azure_speech_provider(
 @router.put("/configuration/{provider_id}")
 async def update_openai_provider(
     provider_id: UUID,
-    payload: OpenAIProviderRequest | LemonadeProviderRequest | AzureSpeechProviderRequest,
+    payload: OpenAIProviderRequest | LemonadeProviderRequest | AzureSpeechProviderRequest | GitHubCopilotProviderRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
     scope: SettingsApiScope = "instance",
     user: Annotated[UserAccount | None, Depends(require_user)] = None,
@@ -661,7 +727,13 @@ async def update_openai_provider(
         db, scope, user, for_update=True, mutation=True
     )
     provider = _provider(settings, provider_id)
-    if provider.adapter_type in ADAPTER_TYPES:
+    if provider.adapter_type == "github-copilot":
+        if not isinstance(payload, GitHubCopilotProviderRequest):
+            raise ApiError(400, "provider.configurationInvalid")
+        result = await _save_github_copilot_provider(db, settings, payload, provider, owner_id)
+    elif isinstance(payload, GitHubCopilotProviderRequest):
+        raise ApiError(400, "provider.configurationInvalid")
+    elif provider.adapter_type in ADAPTER_TYPES:
         result = await _save_realtime_provider(
             db, settings, RealtimeProviderRequest.model_validate(payload.model_dump(exclude_unset=True)),
             provider.adapter_type, provider, owner_id,

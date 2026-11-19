@@ -34,6 +34,7 @@ from mato_loop_backend.models import (
     Automation,
     AutomationRun,
     ChatSession,
+    ExecutionAgent,
     LoginSession,
     Message,
     PermissionGrant,
@@ -698,6 +699,80 @@ async def test_trash_automatic_purge_only_due_and_rechecks_after_cancellation(tr
     assert all(tree.storage.session_path(session_id).exists() for session_id in (rescued_id, future_id))
 
 
+@pytest.mark.parametrize("path_state,mode", [
+    (state, mode) for state in ("present", "missing", "unavailable", "replaced")
+    for mode in ("manual", "automatic")
+] + [("unavailable", "keep"), ("missing", "project"), ("replaced", "before_trash")])
+async def test_trash_purge_honors_worktree_selection(trash_tree, client, monkeypatch, path_state, mode):
+    from mato_loop_backend.api import trash_retention
+    from mato_loop_backend.sessions import coding
+
+    db = trash_tree.db
+    item = trash_tree.records[0][0]
+    agent = ExecutionAgent(id=uuid4(), user_id=trash_tree.user.id, alias="Test workstation")
+    db.add(agent)
+    await db.flush()
+    item.preferred_execution_agent_id = agent.id
+    item.current_directory = "/worktree"
+    if mode == "project":
+        project = Project(user_id=trash_tree.user.id, name="Project in trash")
+        db.add(project)
+        await db.flush()
+        item.project_id = project.id
+    await db.commit()
+    session_id = item.id
+    info = coding.RepositoryResult(repository="/worktree", commonDirectory="/project/.git",
+        gitDirectory="/project/.git/worktrees/worktree", remotes=[], defaultRemote=None, defaultBranch="main", branch="task",
+        worktrees=[{"path": "/project", "main": True, "branch": "main", "locked": False},
+                   {"path": "/worktree", "main": False, "branch": "task", "locked": False}])
+    token = coding.worktree_removal_token(item, info, [], 1.0)
+    monkeypatch.setattr(coding, "session_worktree", AsyncMock(return_value=info))
+    monkeypatch.setattr(coding, "sessions_in_worktree", AsyncMock(return_value=[]))
+    remove = AsyncMock(return_value=coding.WorktreeRemovedResult(removed=True))
+
+    async def request(operation, arguments, result_type, **kwargs):
+        if operation == "git.worktree.remove":
+            return await remove(arguments)
+        path = arguments["path"]
+        if path == "/worktree" and path_state in {"missing", "unavailable"}:
+            raise ExecutionClientError("file.pathNotFound" if path_state == "missing" else "executionAgent.unavailable")
+        return result_type(path=path, kind="directory" if path == "/worktree" else "file", size=None,
+                           modifiedAt=2 if path_state == "replaced" and (item.delete_at or mode == "before_trash") else 1)
+
+    monkeypatch.setattr(coding, "coding_client", AsyncMock(return_value=SimpleNamespace(request=request)))
+    response = await client.delete(f"/api/sessions/{session_id}", params={"permanent": False, "worktreeImpact": token})
+    if mode == "before_trash":
+        assert response.json()["error"]["code"] == "git.worktreeChanged"
+        return
+    assert response.status_code == 204
+    await db.refresh(item)
+    assert item.trash_worktree_removal["impact"] == token
+    remove.assert_not_awaited()
+
+    blocked = path_state in {"unavailable", "replaced"} and mode != "keep"
+    if mode == "automatic":
+        item.delete_at = datetime.now(UTC) - timedelta(days=1)
+        await db.commit()
+        monkeypatch.setattr(trash_retention, "AsyncSessionFactory", lambda: nullcontext(db))
+        monkeypatch.setattr(trash_retention, "SessionStorage", lambda: trash_tree.storage)
+        await trash_retention.purge_expired()
+    elif mode == "project":
+        project_url = f"/api/projects/{project.id}"
+        assert (await client.delete(project_url, params={"permanent": False})).status_code == 204
+        preview = (await client.get(f"{project_url}/delete-impact")).json()
+        response = await client.delete(project_url, params={"permanent": True, "automationImpact": preview["automationImpact"]})
+        assert response.status_code == 204
+    else:
+        response = await client.delete(f"/api/sessions/{session_id}", params={"permanent": True, "keepWorktree": mode == "keep"})
+        assert response.status_code == (409 if blocked else 204)
+
+    remains = await db.scalar(select(ChatSession.id).where(ChatSession.id == session_id)) is not None
+    assert remains == blocked
+    assert remove.await_count == int(path_state == "present")
+    if path_state == "present":
+        assert remove.await_args.args[0]["expectedRegistration"] == 1.0
+
+
 async def test_trash_pauses_automations_and_restore_skips_missed_schedules(trash_tree, client):
     tree = trash_tree
     db = tree.db
@@ -707,12 +782,16 @@ async def test_trash_pauses_automations_and_restore_skips_missed_schedules(trash
         name="Report", task="Report", enabled=True, schedules=[{"run_at": past, "enabled": True}], now=past - timedelta(seconds=1))
     queued = await AutomationService.enqueue_manual(db, automation.id, tree.user.id)
     assert (await client.delete(f"/api/sessions/{session.id}")).status_code == 204
+    session.trash_worktree_removal = {"impact": "a" * 64}
+    await db.commit()
     await db.refresh(queued)
     assert queued.status == "cancelled"
     with pytest.raises(AutomationError, match="session.inTrash"):
         await AutomationService.enqueue_manual(db, automation.id, tree.user.id)
     assert await AutomationService.enqueue_due(db) == 0
     assert (await client.post(f"/api/trash/sessions/{session.id}/restore")).status_code == 204
+    await db.refresh(session)
+    assert session.trash_worktree_removal is None
     assert automation.enabled
     assert await AutomationService.enqueue_due(db) == 0
     assert list(await db.scalars(select(AutomationRun.id).where(AutomationRun.automation_id == automation.id))) == [queued.id]

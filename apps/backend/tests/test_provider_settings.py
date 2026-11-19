@@ -135,6 +135,31 @@ async def test_provider_create_needs_no_model_and_accepts_camel_case(monkeypatch
     assert result["providers"][0]["memoryPolicy"] == "inherit"
 
 
+async def test_github_copilot_token_is_stored_separately_and_can_be_removed(monkeypatch):
+    settings = AiSettings()
+    db = _db()
+    _mock_settings(monkeypatch, settings)
+    credential_id = uuid4()
+    store = AsyncMock(return_value=SimpleNamespace(id=credential_id))
+    delete = AsyncMock()
+    monkeypatch.setattr(provider_routes, "store_credential", store)
+    monkeypatch.setattr(provider_routes, "delete_credential", delete)
+    payload = provider_routes.GitHubCopilotProviderRequest(name="Copilot", api_key="github_pat_test")
+
+    created = await provider_routes.save_github_copilot_provider(payload, db)
+    provider, = settings.providers
+    assert created["providerId"] == str(provider.id)
+    assert store.await_args.kwargs["payload"] == {"api_key": "github_pat_test"}
+    assert "github_pat_test" not in settings.model_dump_json() + str(created)
+    assert created["providers"][0]["config"] == {}
+
+    updated = await update_openai_provider(provider.id, payload.model_copy(update={
+        "api_key": None, "remove_api_key": True,
+    }), db)
+    delete.assert_awaited_once_with(db, credential_id, owner_id=None)
+    assert updated["providers"][0]["hasCredential"] is False
+
+
 @pytest.mark.parametrize(
     "endpoint",
     [

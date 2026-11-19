@@ -10,6 +10,16 @@ MatoLoop zeigt einen einmaligen Gerätecode und die ChatGPT-Anmeldeseite. Bestä
 
 **Fast** und **Ultrafast** erscheinen als eigene Modelle, zum Beispiel **GPT-6.1 Sol Fast**. Fast folgt dem Codex-Katalog; für GPT-6 Astra, GPT-6.1 Sol sowie GPT-6.2 Astra und Sol wird Ultrafast auch angeboten, wenn der Katalog diesen Modus nicht aufführt. Synchronisiere und aktiviere die gewünschten Varianten; die Reasoning-Stufe wählst du weiterhin unabhängig davon. Bestehende Modelle werden nicht umgestellt. Ob die Ausführung erlaubt ist und wie viel Kontingent oder Guthaben sie verbraucht, hängt von deinem ChatGPT-Tarif und den Workspace-Freigaben ab.
 
+### GitHub Copilot (Abonnement)
+
+Nutze dein bestehendes GitHub-Copilot-Abo ohne Copilot SDK, Copilot CLI oder GitHub Models. MatoLoop führt Tool-Aufrufe weiterhin selbst aus und verwaltet die Freigaben.
+
+1. Erstelle auf GitHub einen [Fine-grained Personal Access Token](https://github.com/settings/personal-access-tokens/new). Wähle dein persönliches Konto als Ressourceninhaber und füge unter den Kontoberechtigungen **Copilot Requests** hinzu. Der Token braucht für MatoLoop keinen Zugriff auf private Repositorys.
+2. Wähle in den Provider-Einstellungen **GitHub Copilot**, füge den Token ein und speichere. Richte dein persönliches Abo möglichst als persönlichen Provider ein, damit es nicht von anderen Personen in der Instanz genutzt wird.
+3. Synchronisiere die Modelle und aktiviere das gewünschte Modell. Welche Modelle verfügbar sind und wie viel Kontingent du hast, hängt von deinem Abo und den Richtlinien deiner Organisation ab.
+
+Die direkte Copilot-Schnittstelle ist keine öffentliche, stabile Modell-API. MatoLoop unterstützt hier synchronisierte Modelle mit Tool-Aufrufen über Chat Completions oder Responses; Modelle, die nur das Anthropic-Messages-Protokoll anbieten, werden nicht angezeigt. MatoLoop sendet sichtbare Nachrichten und Tool-Ergebnisse erneut, übernimmt aber keine internen Fortsetzungsdaten von GitHub Copilot in die nächste Anfrage.
+
 ### OpenAI-kompatibel
 
 Verwende Basis-URL, optionalen API-Schlüssel und entweder Chat Completions oder Responses. Modelle werden möglichst über `/models` erkannt; bei fehlender Erkennung ist eine manuelle Modell-ID möglich.
@@ -96,5 +106,7 @@ Die **Reasoning-Stufe** neben **Memory / Dreaming** gilt für Memory-Extraktion,
 **Bilder** legt das gemeinsame Standardmodell für Bilderzeugung und Bildbearbeitung fest. Unter **Abweichendes Modell für Bildbearbeitung** kannst du ein ausführbares, bildbearbeitungsfähiges Modell wählen. **Automatische Auswahl** übernimmt zunächst eine globale Bearbeitungsvorgabe; ohne diese verwendet die Bildbearbeitung das gemeinsame Bildmodell, sofern es Bildbearbeitung unterstützt. Eine persönliche Vorgabe für **Bilder** ersetzt keine geerbte globale Bearbeitungsvorgabe. Die bestehenden aktiven Modell-Fallbacks bleiben erhalten.
 
 **Sessionvorlagen** wählen verfügbare Agenten, Startagent, Memory, Nachrichtengröße und optionale Chatmodell-/Reasoning-Werte für die Session oder einzelne Agenten. **Allgemein** bietet Allgemein/Sysadmin; **Coding** bietet Plan/Build/Interactive und kleine Nachrichten, startet aber weiterhin mit Plan. Beide beginnen mit vollem Memory. Eine Session kopiert die Vorlage einmal; spätere Vorlagenänderungen wirken nicht auf sie zurück.
+
+**Agenten für den Tastaturwechsel** legt fest, zwischen welchen Profilen du im Eingabefeld mit **Strg/⌘ + .** wechselst. In **Coding** sind das standardmäßig Plan und Build, sonst alle verfügbaren Agenten. Ist ein Profil außerhalb der Auswahl aktiv, ändert der Shortcut nichts. Alle verfügbaren Profile bleiben im Menü auswählbar.
 
 Ein agentenspezifischer Sessionwert gewinnt vor dem sessionweiten Wert, dann folgen persönliche und globale Profilvorgaben und schließlich persönliche und globale Standardwerte. Modell und Reasoning werden unabhängig vererbt. Nicht verfügbare Modellwerte werden bei der Sessionauflösung übersprungen. Ohne Agentmodell-Vorgabe dient das erste verfügbare toolfähige Chatmodell in der effektiven Liste. Hilfs-/Medienmodelle verwenden Standardmodelle und ihre bestehenden aktiven Modell-Fallbacks. Plan, Build und Interactive verlangen außerdem einen verbundenen Computer mit zugänglichem Arbeitsordner.

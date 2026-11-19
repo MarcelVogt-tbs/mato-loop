@@ -1797,8 +1797,8 @@ async def update_session(
     ) or (
         "session_profile" in fields
         and payload.session_profile is not None
-        and payload.session_profile.model_dump(exclude={"message_size", "agent_models", "context_state", "assistant_context"})
-        != SessionProfileSnapshot.model_validate(item.session_profile or {}).model_dump(exclude={"message_size", "agent_models", "context_state", "assistant_context"})
+        and payload.session_profile.model_dump(exclude={"message_size", "agent_models", "context_state", "assistant_context", "keyboard_agent_ids"})
+        != SessionProfileSnapshot.model_validate(item.session_profile or {}).model_dump(exclude={"message_size", "agent_models", "context_state", "assistant_context", "keyboard_agent_ids"})
     ):
         await db.execute(
             delete(PermissionGrant).where(
@@ -2040,8 +2040,10 @@ async def session_delete_impact(
     owned_session_query,
 ) -> dict[str, Any]:
     from mato_loop_backend.sessions.coding import (
+        scheduled_worktree_is_missing,
         session_worktree,
         sessions_in_worktree,
+        worktree_registration,
         worktree_removal_token,
     )
 
@@ -2062,27 +2064,41 @@ async def session_delete_impact(
         session_id,
         *(child_id for child_id, _ in await descendant_sessions(db, [session_id])),
     ]
+    scheduled = item.trash_worktree_removal
     impact = {
         "automationCount": len(linked),
         "requiredAutomationCount": len(linked),
         "automationImpact": automation_impact_token(linked),
-        "hasWorktree": (item.coding_workspace or {}).get("mode") == "worktree",
-        "worktree": None,
+        "hasWorktree": bool(scheduled) or (item.coding_workspace or {}).get("mode") == "worktree",
+        "worktree": {"path": scheduled["path"], "scheduled": True,
+                     "removalError": {"code": "git.worktreeChanged"}} if scheduled else None,
         "fileReferenceCount": await _external_file_reference_count_for_roots(
             db, deleted_session_ids,
         ),
     }
     try:
         async with asyncio.timeout(3):
+            if scheduled and await scheduled_worktree_is_missing(db, item, scheduled):
+                impact.update(hasWorktree=False, worktree=None)
+                return impact
             info = await session_worktree(db, item, check_removal=True)
             if info is not None:
                 affected = await sessions_in_worktree(db, user_id, item.preferred_execution_agent_id, info.repository)
-                impact["worktree"] = {"path": info.repository, "impact": worktree_removal_token(item, info, affected),
-                                     "removalError": info.removal_error if info.removal_checked else {"code": "executionAgent.updateRequired"},
+                error = info.removal_error if info.removal_checked else {"code": "executionAgent.updateRequired"}
+                registered_at = await worktree_registration(db, item, info)
+                token = worktree_removal_token(item, info, affected, registered_at)
+                if scheduled and scheduled["impact"] != token:
+                    error = {"code": "git.worktreeChanged"}
+                impact["worktree"] = {"path": scheduled["path"] if scheduled else info.repository,
+                                     "impact": token, "removalError": error,
+                                     **({"scheduled": True} if scheduled else {}),
                                      "sessions": [{"id": str(other.id), "title": other.title} for other in affected if other.id not in deleted_session_ids]}
-    except (SessionServiceError, TimeoutError):
+    except (SessionServiceError, TimeoutError) as exc:
         # Session-only deletion must not depend on optional computer discovery.
-        pass
+        if scheduled:
+            impact["worktree"]["removalError"] = {
+                "code": exc.code if isinstance(exc, SessionServiceError) else "executionAgent.unavailable",
+            }
     return impact
 
 
@@ -2133,19 +2149,6 @@ async def _ensure_session_move_has_no_external_file_references(
         )
 
 
-async def remove_session_worktree(
-    db: AsyncSession, item: ChatSession, worktree_impact: str
-) -> None:
-    from mato_loop_backend.sessions.coding import remove_worktree, session_worktree
-
-    info = await session_worktree(db, item)
-    if info is None:
-        raise SessionServiceError(409, "git.worktreeChanged")
-    await remove_worktree(
-        db, item, info, info.repository, force=True, expected_impact=worktree_impact
-    )
-
-
 async def delete_session(
     session_id: UUID,
     user_id: UUID,
@@ -2156,6 +2159,7 @@ async def delete_session(
     storage_factory,
     owned_session_query,
     worktree_impact: str | None = None,
+    keep_worktree: bool = False,
     expired_only: bool = False,
 ) -> None:
     item = await db.scalar(
@@ -2230,8 +2234,8 @@ async def delete_session(
     await db.rollback()
     for root_id in descendant_roots:
         await AgentRuntime.cancel_descendants(root_id)
-    if worktree_impact is not None:
-        await db.execute(select(UserAccount.id).where(UserAccount.id == user_id).with_for_update(key_share=True))
+    # The pending selection can change while cancellation releases the session lock.
+    await db.execute(select(UserAccount.id).where(UserAccount.id == user_id).with_for_update(key_share=True))
     linked_automations = list(
         (
             await db.scalars(
@@ -2305,6 +2309,7 @@ async def delete_session(
                 storage_factory=storage_factory,
                 owned_session_query=owned_session_query,
                 worktree_impact=worktree_impact,
+                keep_worktree=keep_worktree,
                 expired_only=expired_only,
             )
     session_storage = storage_factory()
@@ -2387,8 +2392,10 @@ async def delete_session(
 
     commit_task: asyncio.Task[None] | None = None
     try:
-        if worktree_impact is not None:
-            await remove_session_worktree(db, item, worktree_impact)
+        if not keep_worktree and (item.trash_worktree_removal or worktree_impact is not None):
+            from mato_loop_backend.sessions.coding import remove_session_worktree
+
+            await remove_session_worktree(db, item, impact=worktree_impact, scheduled=item.trash_worktree_removal)
         for automation in linked_automations:
             if automation_mode == "deleteAutomations":
                 await db.delete(automation)

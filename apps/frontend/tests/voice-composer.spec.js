@@ -677,6 +677,25 @@ describe('voice attachment composer', () => {
       .toEqual([1, false, input, false])
   })
 
+  it('cycles only the template keyboard agents and stays on a manually selected excluded agent', async () => {
+    chat.selectedSessionId = 'session-1'
+    chat.current.agentProfileId = 'plan'
+    chat.current.sessionProfile = { agentIds: ['plan', 'interactive', 'build'], keyboardAgentIds: ['plan', 'build'] }
+    useAgentProfileStore().agents = [{ id: 'plan' }, { id: 'interactive' }, { id: 'build' }]
+    chat.running = true
+    await nextTick()
+    const input = root.querySelector('.chat-composer__input')
+    const shortcut = () => input.dispatchEvent(new KeyboardEvent('keydown', { code: 'Period', ctrlKey: true, bubbles: true, cancelable: true }))
+
+    shortcut()
+    expect(chat.activeAgentProfileId).toBe('build')
+    shortcut()
+    expect(chat.activeAgentProfileId).toBe('plan')
+    await chat.updateActive({ agent_profile_id: 'interactive' }, { draftOnly: true })
+    expect(shortcut()).toBe(true)
+    expect(chat.activeAgentProfileId).toBe('interactive')
+  })
+
   it('returns focus to the composer after selecting an agent or send mode', async () => {
     chat.selectedSessionId = 'session-1'
     chat.current.agentProfileId = 'agent-a'

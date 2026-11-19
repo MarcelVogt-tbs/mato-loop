@@ -126,6 +126,9 @@ class DiscoveredModel(BaseModel):
             "default_reasoning_effort",
             "reasoning_efforts",
             "api_model_id",
+            "copilot_api_type",
+            "copilot_max_prompt_tokens",
+            "copilot_max_output_tokens",
             "service_tier",
             "supports_reasoning_effort_updates",
             "default_speech_voice",
@@ -177,7 +180,9 @@ class _ModelListResponse(BaseModel):
     data: list[DiscoveredModel]
 
 
-async def _sse_events(response: httpx.Response) -> AsyncIterator[dict[str, Any]]:
+async def _sse_events(
+    response: httpx.Response, *, redact_errors: bool = False
+) -> AsyncIterator[dict[str, Any]]:
     async for line in response.aiter_lines():
         if not line.startswith("data:"):
             continue
@@ -193,7 +198,7 @@ async def _sse_events(response: httpx.Response) -> AsyncIterator[dict[str, Any]]
         if isinstance(event, dict):
             if event.get("error") is not None or event.get("type") == "error":
                 raise _failed_response_error(
-                    event if "error" in event else {"error": event}
+                    event if "error" in event else {"error": event}, redact_errors=redact_errors
                 )
             yield event
 
@@ -653,8 +658,8 @@ def _provider_error_code(error: Any) -> str | None:
     return None
 
 
-async def _ensure_success(response: httpx.Response) -> None:
-    if response.status_code < 400:
+async def _ensure_success(response: httpx.Response, *, redact_errors: bool = False) -> None:
+    if response.is_success or (not redact_errors and response.status_code < 400):
         return
     await response.aread()
     error: Any = None
@@ -664,34 +669,33 @@ async def _ensure_success(response: httpx.Response) -> None:
         if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
             error = payload["error"]
     except (json.JSONDecodeError, UnicodeDecodeError):
-        non_json_message = response.text
-    error_type = error.get("type") if isinstance(error, dict) else None
-    error_code = error.get("code") if isinstance(error, dict) else None
-    error_param = error.get("param") if isinstance(error, dict) else None
-    error_message = error.get("message") if isinstance(error, dict) else non_json_message
-    try:
-        endpoint = response.request.url.path
-    except RuntimeError:
-        endpoint = None
-    request_id = next(
-        (
-            value
-            for header in _PROVIDER_REQUEST_ID_HEADERS
-            if (value := _safe_provider_text(response.headers.get(header), limit=200))
-        ),
-        None,
-    )
-    logger.warning(
-        "Provider request failed (status=%s, endpoint=%r, type=%r, code=%r, "
-        "param=%r, request_id=%r, message=%r)",
-        response.status_code,
-        endpoint,
-        _safe_provider_text(error_type, limit=80),
-        _safe_provider_text(error_code, limit=80),
-        _safe_provider_text(error_param, limit=80),
-        request_id,
-        _safe_provider_text(error_message, limit=500),
-    )
+        if not redact_errors:
+            non_json_message = response.text
+    if not redact_errors:
+        details = error or {}
+        try:
+            endpoint = response.request.url.path
+        except RuntimeError:
+            endpoint = None
+        request_id = next(
+            (
+                value
+                for header in _PROVIDER_REQUEST_ID_HEADERS
+                if (value := _safe_provider_text(response.headers.get(header), limit=200))
+            ),
+            None,
+        )
+        logger.warning(
+            "Provider request failed (status=%s, endpoint=%r, type=%r, code=%r, "
+            "param=%r, request_id=%r, message=%r)",
+            response.status_code,
+            endpoint,
+            _safe_provider_text(details.get("type"), limit=80),
+            _safe_provider_text(details.get("code"), limit=80),
+            _safe_provider_text(details.get("param"), limit=80),
+            request_id,
+            _safe_provider_text(details.get("message", non_json_message), limit=500),
+        )
     raise ProviderError(
         f"Provider request failed with HTTP {response.status_code}",
         status_code=response.status_code,
@@ -820,19 +824,22 @@ def _responses_finish_reason(data: dict[str, Any]) -> str | None:
     return str(status) if status else None
 
 
-def _failed_response_error(data: dict[str, Any]) -> ProviderError:
+def _failed_response_error(
+    data: dict[str, Any], *, redact_errors: bool = False
+) -> ProviderError:
     error = data.get("error")
     details = error if isinstance(error, dict) else {"message": error}
     code = _provider_error_code(error)
     raw_code = details.get("code")
     status_code = raw_code if type(raw_code) is int and 400 <= raw_code <= 599 else None
-    logger.warning(
-        "Provider response failed (type=%r, code=%r, param=%r, message=%r)",
-        _safe_provider_text(details.get("type"), limit=80),
-        status_code or _safe_provider_text(raw_code, limit=80),
-        _safe_provider_text(details.get("param"), limit=80),
-        _safe_provider_text(details.get("message"), limit=500),
-    )
+    if not redact_errors:
+        logger.warning(
+            "Provider response failed (type=%r, code=%r, param=%r, message=%r)",
+            _safe_provider_text(details.get("type"), limit=80),
+            status_code or _safe_provider_text(raw_code, limit=80),
+            _safe_provider_text(details.get("param"), limit=80),
+            _safe_provider_text(details.get("message"), limit=500),
+        )
     return ProviderError(
         "Provider response failed",
         status_code=(
@@ -844,10 +851,10 @@ def _failed_response_error(data: dict[str, Any]) -> ProviderError:
     )
 
 
-def _responses_result(data: dict[str, Any]) -> ProviderResult:
+def _responses_result(data: dict[str, Any], *, redact_errors: bool = False) -> ProviderResult:
     status = data.get("status")
     if status == "failed":
-        raise _failed_response_error(data)
+        raise _failed_response_error(data, redact_errors=redact_errors)
     incomplete_reason = (data.get("incomplete_details") or {}).get("reason")
     if status == "incomplete" and incomplete_reason not in {None, "max_output_tokens"}:
         raise ProviderError("Provider response incomplete", code="provider.invalidResponse")
@@ -903,8 +910,10 @@ async def chat_completions(
     request: ProviderRequest,
     on_delta: DeltaCallback | None,
     on_reasoning: ReasoningDeltaCallback | None = None,
+    extra_headers: Mapping[str, str] | None = None,
+    redact_errors: bool = False,
 ) -> ProviderResult:
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json", **(extra_headers or {})}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     body = _chat_body(
@@ -914,7 +923,7 @@ async def chat_completions(
     async with httpx.AsyncClient(timeout=request.timeout, headers={"User-Agent": f"MatoLoop/{__version__}"}) as client:
         if not request.stream:
             response = await client.post(url, headers=headers, json=body)
-            await _ensure_success(response)
+            await _ensure_success(response, redact_errors=redact_errors)
             result = _chat_result(_response_json(response))
             if on_reasoning and result.reasoning:
                 await on_reasoning(result.reasoning.text, result.reasoning.kind)
@@ -932,8 +941,8 @@ async def chat_completions(
         reasoning_started_at: float | None = None
         reasoning_finished_at: float | None = None
         async with client.stream("POST", url, headers=headers, json=body) as response:
-            await _ensure_success(response)
-            async for event in _sse_events(response):
+            await _ensure_success(response, redact_errors=redact_errors)
+            async for event in _sse_events(response, redact_errors=redact_errors):
                 if event.get("usage"):
                     usage = _normalize_usage(event["usage"])
                 choices = event.get("choices") or []
@@ -1015,15 +1024,16 @@ async def responses_api(
     on_reasoning: ReasoningDeltaCallback | None = None,
     extra_body: dict[str, Any] | None = None,
     on_response_headers: Callable[[Mapping[str, str]], None] | None = None,
+    redact_errors: bool = False,
 ) -> ProviderResult:
     body = _responses_body(request, extra_body)
     async with httpx.AsyncClient(timeout=request.timeout, headers={"User-Agent": f"MatoLoop/{__version__}"}) as client:
         if not request.stream:
             response = await client.post(url, headers=headers, json=body)
-            await _ensure_success(response)
+            await _ensure_success(response, redact_errors=redact_errors)
             if on_response_headers:
                 on_response_headers(response.headers)
-            result = _responses_result(_response_json(response))
+            result = _responses_result(_response_json(response), redact_errors=redact_errors)
             if on_reasoning and result.reasoning:
                 await on_reasoning(result.reasoning.text, result.reasoning.kind)
             if on_delta and result.content:
@@ -1041,10 +1051,10 @@ async def responses_api(
         reasoning_started_at: float | None = None
         reasoning_finished_at: float | None = None
         async with client.stream("POST", url, headers=headers, json=body) as response:
-            await _ensure_success(response)
+            await _ensure_success(response, redact_errors=redact_errors)
             if on_response_headers:
                 on_response_headers(response.headers)
-            async for event in _sse_events(response):
+            async for event in _sse_events(response, redact_errors=redact_errors):
                 event_type = event.get("type")
                 if event_type == "response.output_text.delta":
                     text = event.get("delta") or ""
@@ -1115,7 +1125,7 @@ async def responses_api(
                 }:
                     response_data = event.get("response") or {}
                     if event_type == "response.failed":
-                        raise _failed_response_error(response_data)
+                        raise _failed_response_error(response_data, redact_errors=redact_errors)
                     incomplete_reason = (response_data.get("incomplete_details") or {}).get(
                         "reason"
                     )

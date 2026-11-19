@@ -256,6 +256,9 @@ class GitWorktreeRemoveArguments(PathArguments):
     common_directory: str = Field(alias="commonDirectory", min_length=1, max_length=4096)
     repository: str = Field(min_length=1, max_length=4096)
     force: bool = False
+    expected_registration: float | None = Field(
+        default=None, alias="expectedRegistration", allow_inf_nan=False
+    )
 
     _common_path = field_validator("common_directory")(_absolute_path)
     _repository_path = field_validator("repository")(_absolute_path)

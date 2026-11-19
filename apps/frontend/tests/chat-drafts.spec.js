@@ -2406,6 +2406,23 @@ describe('chat drafts', () => {
     ])
   })
 
+  it('does not consume the next sidebar page when loading all project folders', async () => {
+    const projectId = 'project-1'
+    const first = { id: 'newest', projectId }
+    const older = { id: 'older', projectId }
+    api.get.mockResolvedValueOnce(sessionPage([first], 'sidebar-next'))
+      .mockResolvedValueOnce(sessionPage([first], 'folders-next'))
+      .mockResolvedValueOnce(sessionPage([older]))
+    const chat = useChatStore()
+    const workspace = useWorkspaceStore()
+    await chat.fetchSessions(null, projectId)
+    await workspace.loadProjectFolders(projectId)
+
+    expect({ folders: workspace.projectFolders.items, sidebar: chat.sessionList(projectId) }).toMatchObject({
+      folders: [first, older], sidebar: { items: [first], nextCursor: 'sidebar-next' }
+    })
+  })
+
   it('preserves an in-flight list page when a new session is created', async () => {
     let resolveList
     api.get.mockReturnValue(new Promise((resolve) => { resolveList = resolve }))

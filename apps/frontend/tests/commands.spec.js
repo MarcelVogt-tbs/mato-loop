@@ -27,6 +27,7 @@ import { useGitChangesStore } from '../src/features/files/git-store'
 import { api } from 'src/boot/axios'
 import { apiErrorMessage } from 'src/utils/api-errors'
 import { useSidebarSessions } from '../src/features/chat/useSidebarSessions'
+import { chooseDeletion } from '../src/features/archive/deletion-choice'
 import { useWorkspaceStore } from '../src/stores/workspace'
 import { useConfirm } from 'src/composables/confirm'
 
@@ -286,89 +287,83 @@ it('adds Git once per new project draft without opening it or creating a session
   await vi.waitFor(() => expect(controlCenter.tabs.some(tab => tab.appId === 'git')).toBe(true))
 })
 
-it.each([[false, false], [true, false], ['blocked', false], ['cancel', true]])('offers optional worktree removal when deleting an unopened session (selected: %s, permanent: %s)', async (remove, permanent) => {
+function openDeletionDialog(action, trashEnabled) {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
-  const pinia = createPinia()
-  setActivePinia(pinia)
-  const chat = useChatStore(), impact = 'a'.repeat(64)
-  api.get.mockResolvedValueOnce({ data: { trashEnabled: permanent } })
-  vi.spyOn(chat, 'sessionDeleteImpact').mockResolvedValue({ worktree: permanent ? null : { path: '/worktree', impact, sessions: [],
-    removalError: remove === 'blocked' ? { code: 'git.worktreePermissionDenied', params: { path: '/worktree/cache' } } : null } })
-  const deleted = vi.spyOn(chat, 'deleteSession').mockResolvedValue()
+  api.get.mockImplementation(async () => ({ data: { trashEnabled, trashRetentionDays: 7 } }))
   root = document.createElement('div')
   document.body.append(root)
-  app = createApp({ setup() {
-    const sidebar = useSidebarSessions({
-      chat, projects: useProjectStore(), controlCenter: useControlCenterStore(), workspace: {},
-      route: { query: {} }, $q: { dialog: Dialog.create, notify: vi.fn() },
-      confirm: vi.fn().mockResolvedValue(true)
-    })
-    return () => h('button', { onClick: () => sidebar.removeSession({ id: 'other', title: 'Auftrag' }, { permanent }) }, 'Löschen')
-  } })
-  app.use(pinia).use(Quasar, { ...quasarOptions, plugins: { Dialog } }).mount(root)
-  root.querySelector('button').click()
-  await vi.waitFor(() => expect(document.querySelector('.q-dialog [role="checkbox"]')).not.toBeNull())
-  const checkbox = document.querySelector('.q-dialog [role="checkbox"]')
-  if (remove === 'cancel') {
-    expect([checkbox.getAttribute('aria-checked'), checkbox.getAttribute('aria-disabled')]).toEqual(['true', 'true'])
-    ;[...document.querySelectorAll('.q-dialog button')].find(button => button.textContent === 'Abbrechen').click()
-    await vi.waitFor(() => expect(document.querySelector('.q-dialog')).toBeNull())
-    expect(deleted).not.toHaveBeenCalled()
-    return
-  }
-  expect(checkbox.getAttribute('aria-checked')).toBe('false')
-  if (remove === 'blocked') {
-    expect([checkbox.getAttribute('aria-disabled'), document.querySelector('.q-dialog').textContent.includes('/worktree/cache')]).toEqual(['true', true])
-  }
-  expect(document.querySelector('.q-dialog').textContent).toContain('Commits, die durch keinen Branch gesichert sind, können danach verloren gehen.')
-  if (remove) checkbox.click()
-  await nextTick()
-  ;[...document.querySelectorAll('.q-dialog button')].find(button => button.textContent === 'Endgültig löschen').click()
-  await vi.waitFor(() => expect(deleted).toHaveBeenCalledWith('other', {
-    permanent: true, automationMode: null, automationImpact: null, worktreeImpact: remove === true ? impact : null
-  }))
-  await vi.waitFor(() => expect(document.querySelector('.q-dialog')).toBeNull())
-})
+  app = createApp({ render: () => h('div') })
+  app.use(Quasar, { ...quasarOptions, plugins: { Dialog } }).mount(root)
+  return action(app.config.globalProperties.$q)
+}
 
-it.each([false, true, 'cancel'])('keeps soft deletion independent from worktree removal (selected: %s)', async remove => {
-  vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
-  const pinia = createPinia()
-  setActivePinia(pinia)
+const deletionDialog = () => document.querySelector('.q-dialog')
+const deletionButtons = () => [...deletionDialog().querySelectorAll('button')]
+const permanentCheckbox = () => deletionDialog().querySelector('[aria-label="Sofort endgültig löschen"]')
+
+it.each([
+  { name: 'keep by default' }, { name: 'remove', select: true }, { name: 'blocked', blocked: true },
+  { name: 'cancel from trash', trash: true, fromTrash: true, cancel: true },
+  { name: 'keep despite scheduling', trash: true, fromTrash: true, scheduled: true },
+  { name: 'move without scheduling', trash: true }, { name: 'schedule', trash: true, select: true },
+  { name: 'cancel move', trash: true, cancel: true }, { name: 'delete immediately', trash: true, select: true, toggle: true }
+])('confirms deletion of an unopened session: $name', async ({ trash = false, fromTrash = false, select, blocked, scheduled, cancel, toggle }) => {
+  setActivePinia(createPinia())
   const chat = useChatStore()
-  api.get.mockResolvedValueOnce({ data: { trashEnabled: true, trashRetentionDays: 7 } })
   const impact = 'a'.repeat(64)
+  const startsInTrashMode = trash && !fromTrash
   vi.spyOn(chat, 'sessionDeleteImpact').mockResolvedValue({
-    fileReferenceCount: 1, requiredAutomationCount: 1,
-    worktree: { path: '/worktree', impact, sessions: [] }
+    ...(startsInTrashMode && !toggle ? { fileReferenceCount: 1, requiredAutomationCount: 1 } : {}),
+    worktree: fromTrash && cancel ? null : { path: '/worktree', impact, sessions: [], scheduled,
+      removalError: blocked ? { code: 'git.worktreePermissionDenied', params: { path: '/worktree/cache' } } : null }
   })
   const deleted = vi.spyOn(chat, 'deleteSession').mockResolvedValue()
-  let removal
-  root = document.createElement('div'); document.body.append(root)
-  app = createApp({ setup() {
-    const sidebar = useSidebarSessions({ chat, projects: useProjectStore(),
-      controlCenter: useControlCenterStore(), workspace: {}, automations: { fetchAutomations: vi.fn().mockResolvedValue() },
-      route: { query: {} }, $q: { dialog: Dialog.create, notify: vi.fn() } })
-    return () => h('button', { onClick: () => { removal = sidebar.removeSession({ id: 'other', title: 'Auftrag' }) } }, 'Löschen')
-  } })
-  app.use(pinia).use(Quasar, { ...quasarOptions, plugins: { Dialog } }).mount(root)
-  root.querySelector('button').click()
-  await vi.waitFor(() => expect(document.querySelector('.q-dialog')?.textContent).toContain('7 Tage'))
-  const checkbox = document.querySelector('.q-dialog [role="checkbox"]')
-  checkbox.click()
-  await nextTick()
-  expect(document.querySelector('.q-dialog').textContent).toContain('Unwiderruflich')
-  checkbox.click()
-  await nextTick()
-  if (remove === true) {
-    ;[...document.querySelectorAll('.q-dialog [role="checkbox"]')].find(item => item.textContent.includes('Worktree ebenfalls entfernen')).click()
-    await nextTick()
+  const removal = openDeletionDialog($q => useSidebarSessions({ chat, projects: useProjectStore(),
+    controlCenter: useControlCenterStore(), workspace: {}, automations: { fetchAutomations: vi.fn().mockResolvedValue() },
+    route: { query: {} }, $q: { dialog: $q.dialog, notify: vi.fn() }
+  }).removeSession({ id: 'other', title: 'Auftrag' }, { permanent: fromTrash }), trash)
+  await vi.waitFor(() => expect(deletionDialog()?.textContent ?? '').toContain(startsInTrashMode
+    ? 'Session in den Papierkorb verschieben' : 'Session endgültig löschen'))
+  expect(Boolean(permanentCheckbox())).toBe(startsInTrashMode)
+  expect(deletionDialog().textContent).not.toContain('7 Tage')
+  const checkbox = deletionDialog().querySelector('[aria-label="Worktree ebenfalls entfernen"]')
+  expect(checkbox?.getAttribute('aria-checked')).toBe(fromTrash && cancel ? undefined : String(Boolean(scheduled)))
+  if (blocked) {
+    expect(checkbox.getAttribute('aria-disabled')).toBe('true')
+    expect(deletionDialog().textContent).toContain('/worktree/cache')
   }
-  ;[...document.querySelectorAll('.q-dialog button')].find(button => button.textContent === (remove === 'cancel' ? 'Abbrechen' : 'In Papierkorb verschieben')).click()
+  if (select || scheduled) checkbox.click()
+  await nextTick()
+  if (select) expect(deletionDialog().textContent).toContain(startsInTrashMode
+    ? 'Erst beim endgültigen Löschen.' : 'Nicht committete Änderungen und unversionierte Dateien gehen verloren.')
+  if (toggle) {
+    permanentCheckbox().click()
+    await nextTick()
+    expect(deletionDialog().textContent).toContain('Session endgültig löschen')
+    expect(deletionDialog().textContent).not.toContain('Erst beim endgültigen Löschen.')
+  }
+  expect(deletionButtons().map(button => button.textContent)).toEqual(['Abbrechen', 'Bestätigen'])
+  deletionButtons()[cancel ? 0 : 1].click()
   await removal
-  expect(deleted.mock.calls).toEqual(remove === 'cancel' ? [] : [['other', {
-    permanent: false, worktreeImpact: remove ? impact : null
+  const permanent = !startsInTrashMode || Boolean(toggle)
+  expect(deleted.mock.calls).toEqual(cancel ? [] : [['other', {
+    permanent, worktreeImpact: select ? impact : null, keepWorktree: Boolean(scheduled),
+    ...(permanent ? { automationMode: null, automationImpact: null } : {})
   }]])
-  await vi.waitFor(() => expect(document.querySelector('.q-dialog')).toBeNull())
+  await vi.waitFor(() => expect(deletionDialog()).toBeNull())
+})
+
+it('uses the same confirmation for both project deletion actions', async () => {
+  setActivePinia(createPinia())
+  const choice = openDeletionDialog($q => chooseDeletion($q, 'Projekt', 'Beispiel'), true)
+  await vi.waitFor(() => expect(deletionDialog()?.textContent ?? '').toContain('Projekt in den Papierkorb verschieben'))
+  permanentCheckbox().click()
+  await nextTick()
+  expect(deletionDialog().textContent).toContain('Projekt endgültig löschen')
+  expect(deletionButtons().map(button => button.textContent)).toEqual(['Abbrechen', 'Bestätigen'])
+  deletionButtons()[1].click()
+  expect(await choice).toBe(true)
+  await vi.waitFor(() => expect(deletionDialog()).toBeNull())
 })
 
 it('adopts a draft remote without changing an unrelated project workspace', async () => {

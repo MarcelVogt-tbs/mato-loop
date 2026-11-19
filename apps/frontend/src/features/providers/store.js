@@ -222,8 +222,8 @@ export const useProviderStore = defineStore('providers', {
         || (data?.id && !Array.isArray(data.providers) ? data.id : null)
         || this.providers.find((provider) => !previousIds.has(provider.id))?.id
         || this.providers.find((provider) => (
-          provider.name === payload.name
-          && (provider.config?.baseUrl || provider.config?.base_url) === payload.base_url.replace(/\/$/, '')
+          provider.adapterType === type && provider.name === payload.name
+          && (provider.config?.baseUrl || provider.config?.base_url) === payload.base_url?.replace(/\/$/, '')
         ))?.id
         || null
     },

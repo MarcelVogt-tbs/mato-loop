@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from 'src/boot/axios'
 import { useControlCenterStore } from 'src/stores/control-center'
+import { sessionScopeParams } from 'src/features/chat/state'
 import { safeFileDownloadUrl } from 'src/features/files/attachments'
 import {
   absoluteComputerPath,
@@ -23,6 +24,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     currentDirectory: null,
     workspaceContext: null,
     rootIdentity: null,
+    projectFolders: null,
     entries: {},
     hasMore: {},
     loading: {},
@@ -79,6 +81,31 @@ export const useWorkspaceStore = defineStore('workspace', {
     )
   },
   actions: {
+    async loadProjectFolders(projectId) {
+      if (!projectId) return
+      const previous = this.projectFolders?.projectId === projectId ? this.projectFolders : null
+      if (previous?.loading) return
+      this.projectFolders = { projectId, items: previous?.items || [], loading: true, error: null }
+      const folders = this.projectFolders
+      try {
+        const items = new Map()
+        let cursor
+        do {
+          const { data } = await api.get('/sessions', {
+            params: { ...sessionScopeParams(projectId), pageSize: 100, cursor },
+            suppressErrorToast: true
+          })
+          if (this.projectFolders !== folders) return
+          for (const session of data.items) items.set(session.id, session)
+          cursor = data.nextCursor
+        } while (cursor)
+        folders.items = [...items.values()]
+      } catch (error) {
+        folders.error = error
+      } finally {
+        folders.loading = false
+      }
+    },
     persistView() {
       const controlCenter = useControlCenterStore()
       if (

@@ -7,7 +7,7 @@ from typing import Any, Literal, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mato_loop_backend.providers import azure_speech, codex_oauth
+from mato_loop_backend.providers import azure_speech, codex_oauth, github_copilot
 from mato_loop_backend.providers.base import (
     DeltaCallback,
     ProviderError,
@@ -16,7 +16,7 @@ from mato_loop_backend.providers.base import (
     ReasoningDeltaCallback,
 )
 from mato_loop_backend.providers.openai_compatible import DiscoveredModel
-from mato_loop_backend.settings.models import LlmProviderConfig
+from mato_loop_backend.settings.models import LlmProviderConfig, ModelConfig
 
 ApiType = Literal["chat_completions", "responses"]
 ProviderOperation = Callable[[], Awaitable[ProviderResult]]
@@ -70,7 +70,12 @@ class ProviderAdapter:
     reasoning_profile_for_responses: bool = False
     controls_thinking_without_profile: bool = False
 
-    def api_type(self, provider: LlmProviderConfig) -> ApiType:
+    def api_type(self, provider: LlmProviderConfig, model: ModelConfig) -> ApiType:
+        if self.adapter_type == "github-copilot":
+            discovered = model.discovery_metadata.get("copilot_api_type")
+            if discovered not in ("chat_completions", "responses"):
+                raise ProviderError("Synchronize GitHub Copilot models first", code="provider.configurationInvalid")
+            return cast(ApiType, discovered)
         if self.forced_api_type is not None:
             return self.forced_api_type
         return cast(
@@ -141,6 +146,54 @@ async def _discover_codex(
         account_id=refreshed.get("account_id"),
         timeout=timeout,
     )
+
+
+def _copilot_token(api_key: str | None) -> str:
+    if not api_key:
+        raise ProviderError("GitHub Copilot is not connected", code="provider.notConnected")
+    return api_key
+
+
+async def _discover_github_copilot(
+    runtime: AdapterRuntime,
+    _db: AsyncSession,
+    _provider: LlmProviderConfig,
+    credential: Any | None,
+    timeout: float,
+) -> list[DiscoveredModel]:
+    payload = runtime.read_credential(credential) if credential else {}
+    return await github_copilot.discover_models(_copilot_token(payload.get("api_key")), timeout)
+
+
+async def _github_copilot_operation(
+    runtime: AdapterRuntime,
+    _db: AsyncSession,
+    _provider: LlmProviderConfig,
+    _credential: Any | None,
+    api_key: str | None,
+    api_type: ApiType,
+    request: ProviderRequest,
+    on_delta: DeltaCallback | None,
+    on_reasoning: ReasoningDeltaCallback | None,
+) -> ProviderOperation:
+    token = _copilot_token(api_key)
+    headers = github_copilot.headers(token, request)
+    base_url: str | None = None
+
+    async def execute() -> ProviderResult:
+        nonlocal base_url
+        if base_url is None:
+            base_url = await github_copilot.account_api_url(token, request.timeout)
+        callbacks = {"on_delta": on_delta, "on_reasoning": on_reasoning}
+        if api_type == "responses":
+            return await runtime.responses_api(
+                url=f"{base_url}/responses", headers=headers, request=request, redact_errors=True, **callbacks,
+            )
+        return await runtime.chat_completions(
+            base_url=base_url, api_key=None, extra_headers=headers, request=request, redact_errors=True, **callbacks,
+        )
+
+    return execute
 
 
 async def _discover_azure_speech(
@@ -285,6 +338,11 @@ _CODEX = ProviderAdapter(
     supports_prompt_cache=True,
     reasoning_profile_for_responses=True,
 )
+_GITHUB_COPILOT = ProviderAdapter(
+    adapter_type="github-copilot",
+    discover=_discover_github_copilot,
+    operation=_github_copilot_operation,
+)
 _LEMONADE = ProviderAdapter(
     adapter_type="lemonade",
     discover=_discover_lemonade,
@@ -302,6 +360,6 @@ _AZURE_SPEECH = ProviderAdapter(
 PROVIDER_ADAPTERS: Mapping[str, ProviderAdapter] = MappingProxyType(
     {
         adapter.adapter_type: adapter
-        for adapter in (_OPENAI_COMPATIBLE, _CODEX, _LEMONADE, _AZURE_SPEECH)
+        for adapter in (_OPENAI_COMPATIBLE, _CODEX, _GITHUB_COPILOT, _LEMONADE, _AZURE_SPEECH)
     }
 )

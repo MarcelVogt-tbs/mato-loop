@@ -61,7 +61,7 @@
         <q-avatar color="grey-7" text-color="white" icon="hub" />
         <div>
           <div class="text-weight-medium">Noch kein Provider konfiguriert</div>
-          <div class="text-body2 app-muted">Füge ChatGPT Codex, Lemonade, Realtime, Azure Speech oder einen OpenAI-kompatiblen Endpunkt hinzu.</div>
+          <div class="text-body2 app-muted">Füge zum Beispiel GitHub Copilot, ChatGPT Codex oder einen OpenAI-kompatiblen Endpunkt hinzu.</div>
         </div>
       </div>
     </q-card>
@@ -141,7 +141,7 @@
                 :disable="!canEdit(provider) || !supportsDiscovery(provider)"
                 @click="syncProviderModels(provider)"
               >
-                <q-tooltip>{{ supportsDiscovery(provider) ? 'Modelle vom Provider aktualisieren' : 'Automatische Erkennung wird nicht unterstützt' }}</q-tooltip>
+                <q-tooltip>{{ discoveryHint(provider) }}</q-tooltip>
               </q-btn>
               <q-btn
                 v-if="supportsManualModels(provider) && showProminentManualAction(provider) && providerModels(provider).length"
@@ -187,7 +187,7 @@
               class="provider-models-empty app-surface-tonal q-mt-md"
               icon="view_in_ar"
               title="Keine Modelle verfügbar"
-              :description="supportsManualModels(provider) ? 'Starte die Erkennung erneut oder hinterlege ein Modell manuell.' : 'Aktualisiere die Modelle, um Azure Speech Fast Transcription zu erkennen.'"
+              :description="emptyModelsHint(provider)"
             >
               <template #actions>
                 <q-btn
@@ -343,7 +343,7 @@ const listedModels = ref([])
 const scope = computed(() => admin ? 'instance' : 'personal')
 const showManagement = computed(() => !admin || section.value === 'management')
 const llmProviders = computed(() => listedProviders.value.filter((item) => (
-  ['openai-codex', 'openai-compatible', 'lemonade', 'azure-speech', 'azure-openai-realtime', 'openai-realtime'].includes(item.adapterType)
+  ['openai-codex', 'github-copilot', 'openai-compatible', 'lemonade', 'azure-speech', 'azure-openai-realtime', 'openai-realtime'].includes(item.adapterType)
 )))
 const personalBlocked = computed(() => !providers.personalProvidersEnabled && !auth.isAdmin)
 const canEdit = (provider) => provider.scope === scope.value && (admin ? auth.isAdmin : !personalBlocked.value)
@@ -408,6 +408,7 @@ function openEditDialog(provider) {
 }
 
 function openModelDialog(provider, model = null) {
+  if (!model && !supportsManualModels(provider)) return
   selectedModelProvider.value = provider
   selectedModel.value = model
   void prepareScope(provider.scope).then(() => { modelDialogOpen.value = true }).catch(() => {})
@@ -433,6 +434,7 @@ function activeModelCount(provider) {
 
 function providerIcon(provider) {
   if (provider.adapterType === 'openai-codex') return 'key'
+  if (provider.adapterType === 'github-copilot') return 'smart_toy'
   if (provider.adapterType === 'lemonade') return 'developer_board'
   if (provider.adapterType === 'azure-speech') return 'graphic_eq'
   if (['azure-openai-realtime', 'openai-realtime'].includes(provider.adapterType)) return 'record_voice_over'
@@ -441,6 +443,9 @@ function providerIcon(provider) {
 
 function providerStatus(provider) {
   if (!provider.enabled) return { label: 'Deaktiviert', color: 'grey-7' }
+  if (provider.adapterType === 'github-copilot' && !provider.hasCredential) {
+    return { label: 'GitHub-Token fehlt', color: 'warning' }
+  }
   if (['azure-speech', 'azure-openai-realtime', 'openai-realtime'].includes(provider.adapterType) && !provider.hasCredential) {
     return { label: 'API-Key fehlt', color: 'warning' }
   }
@@ -456,6 +461,7 @@ function providerDescription(provider) {
     return `${provider.config?.baseUrl || provider.config?.base_url || 'Globale Verbindung'} · Realtime · ${service}`
   }
   if (provider.adapterType === 'openai-codex') return 'ChatGPT-Abonnement · Codex OAuth'
+  if (provider.adapterType === 'github-copilot') return 'GitHub Copilot · Abonnement'
   if (provider.scope === 'instance' && !Object.keys(provider.config || {}).length) return 'Globale Verbindung'
   if (provider.adapterType === 'lemonade') {
     return `${provider.config?.baseUrl || provider.config?.base_url || 'Keine URL'} · Lemonade`
@@ -482,13 +488,29 @@ function canTestModel(model, provider) {
 }
 
 function supportsDiscovery(provider) {
-  if (provider.adapterType === 'azure-speech') return provider.hasCredential === true
+  if (['azure-speech', 'github-copilot'].includes(provider.adapterType)) return provider.hasCredential === true
   return ['openai-compatible', 'lemonade'].includes(provider.adapterType)
     || (provider.adapterType === 'openai-codex' && providers.codex.authenticated === true)
 }
 
 function supportsManualModels(provider) {
-  return provider.adapterType !== 'azure-speech'
+  return !['azure-speech', 'github-copilot'].includes(provider.adapterType)
+}
+
+function discoveryHint(provider) {
+  if (supportsDiscovery(provider)) return 'Modelle vom Provider aktualisieren'
+  if (provider.adapterType === 'github-copilot') return 'Für die Modellerkennung fehlt der GitHub-Token.'
+  return 'Automatische Erkennung wird nicht unterstützt'
+}
+
+function emptyModelsHint(provider) {
+  if (provider.adapterType === 'github-copilot') {
+    return provider.hasCredential
+      ? 'Aktualisiere die Modelle, um die für dein Copilot-Abonnement verfügbaren Modelle zu laden.'
+      : 'Hinterlege einen GitHub-Token, um die verfügbaren Modelle zu laden.'
+  }
+  return supportsManualModels(provider) ? 'Starte die Erkennung erneut oder hinterlege ein Modell manuell.'
+    : 'Aktualisiere die Modelle, um Azure Speech Fast Transcription zu erkennen.'
 }
 
 function capabilityIcon(capability) {

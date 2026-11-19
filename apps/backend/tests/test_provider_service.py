@@ -19,7 +19,7 @@ from mato_loop_backend.files.service import RootFileService
 from mato_loop_backend.files.storage import SessionStorage
 from mato_loop_backend.media.attachments import AttachmentService, validate_image
 from mato_loop_backend.models import ChatSession, Message
-from mato_loop_backend.providers import lemonade, token_counting
+from mato_loop_backend.providers import github_copilot, lemonade, token_counting
 from mato_loop_backend.providers import service as service_module
 from mato_loop_backend.providers.base import (
     ProviderError,
@@ -46,8 +46,10 @@ from mato_loop_backend.providers.output_budget import (
     raw_input_budget,
 )
 from mato_loop_backend.providers.service import ProviderService, _with_retries
+from mato_loop_backend.providers.settings_service import ProviderSettingsService
 from mato_loop_backend.settings.models import (
     AgentRuntimeSettings,
+    AiSettings,
     LlmProviderConfig,
     ModelCapability,
     ModelConfig,
@@ -2624,3 +2626,108 @@ async def test_prepare_is_local_and_matches_transmitted_request(monkeypatch, ada
     assert decrypt.call_count == int(not adapter.codex_auth)
     settings.assert_not_awaited()
     assert (messages, tools) == original
+
+
+@pytest.mark.parametrize("route", ["/chat/completions", "/responses"])
+async def test_github_copilot_discovery_and_tool_round(monkeypatch, route, caplog):
+    token = "github_pat_test"
+    catalog = {
+        "id": "gpt-example", "model_picker_enabled": True,
+        "supported_endpoints": [route],
+        "capabilities": {
+            "supports": {"tool_calls": True},
+            "limits": {
+                "max_context_window_tokens": 32_000,
+                "max_prompt_tokens": 16_000,
+                "max_output_tokens": 4_000,
+            },
+        },
+    }
+    calls = []
+    provider_error = False
+
+    def wire(request):
+        assert request.headers["Authorization"] == f"Bearer {token}"
+        if str(request.url) == github_copilot.ACCOUNT_URL:
+            return httpx.Response(200, json={"endpoints": {"api": github_copilot.DEFAULT_API_URL}})
+        assert request.url.host == "api.individual.githubcopilot.com"
+        if request.url.path == "/models":
+            return httpx.Response(200, json={"data": [catalog, {
+                **catalog, "id": "claude-example", "supported_endpoints": ["/v1/messages"],
+            }]})
+        assert request.url.path == route
+        body = json.loads(request.content)
+        assert body["model"] == "gpt-example"
+        assert body["max_output_tokens" if route == "/responses" else "max_tokens"] == 4_000
+        if provider_error:
+            return httpx.Response(400, json={"error": {
+                "code": "context_length_exceeded", "message": "private upstream details",
+            }})
+        calls.append((request.headers["X-Initiator"], body))
+        if route == "/responses":
+            item = {"type": "function_call", "id": "fc_1", "call_id": "call_1",
+                    "name": "lookup", "arguments": '{"key":"value"}'}
+            reasoning = {"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque", "summary": []}
+            events = [{"type": "response.output_item.done", "item": item}, {
+                "type": "response.completed", "response": {"status": "completed", "output": [reasoning, item]},
+            }]
+        else:
+            events = [{"choices": [{"delta": {"tool_calls": [{
+                "index": 0, "id": "call_1", "function": {"name": "lookup", "arguments": '{"key":"value"}'},
+            }]}, "finish_reason": "tool_calls"}]}]
+        return httpx.Response(200, text="".join(f"data: {json.dumps(event)}\n\n" for event in events))
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **kw: client(
+        *a, transport=httpx.MockTransport(wire), **kw,
+    ))
+    monkeypatch.setattr(service_module, "load_credential", AsyncMock(return_value=object()))
+    monkeypatch.setattr(service_module, "read_credential", Mock(return_value={"api_key": token}))
+    provider = LlmProviderConfig(name="Copilot", adapter_type="github-copilot", credential_id=uuid4(),
+        pseudonymization_enabled=False,
+    )
+    db = AsyncMock(spec=AsyncSession)
+    settings = AiSettings(providers=[provider])
+    ProviderSettingsService._reconcile_discovered_models(
+        settings, provider, await ProviderService.discover_models(db, provider=provider),
+    )
+    model, = settings.models
+    assert (model.context_window_tokens, model.discovered_max_prompt_tokens) == (32_000, 16_000)
+    messages = [{"role": "user", "content": "Look up a value"}]
+    tools = [{"name": "lookup", "parameters": {"type": "object"}}]
+    result = await ProviderService.complete(db, provider=provider, model=model, messages=messages, tools=tools)
+    call, = result.tool_calls
+    assert (call.id, call.name, call.arguments) == ("call_1", "lookup", {"key": "value"})
+    messages.extend([
+        {"role": "assistant", "content": "", "provider_data": result.provider_data, "tool_calls": [{
+            "id": call.id, "name": call.name, "arguments": call.arguments,
+        }]},
+        {"role": "tool", "tool_call_id": call.id, "content": "Found"},
+    ])
+    await ProviderService.complete(db, provider=provider, model=model, messages=messages, tools=tools)
+    (first_initiator, first_body), (second_initiator, second_body) = calls
+    assert (first_initiator, second_initiator) == ("user", "agent")
+    key = "input" if route == "/responses" else "messages"
+    assert second_body[key][:len(first_body[key])] == first_body[key]
+    assert "Found" in str(second_body[key][-1])
+    if route == "/responses":
+        assert not any(item.get("type") == "reasoning" for item in second_body[key])
+
+    provider_error = True
+    with pytest.raises(ProviderError) as exc_info:
+        await ProviderService.complete(db, provider=provider, model=model, messages=messages, tools=tools)
+    assert exc_info.value.public_code == "agent.contextWindowExceeded"
+    assert "private upstream details" not in caplog.text + str(exc_info.value)
+
+
+async def test_github_copilot_rejects_untrusted_catalog_origin():
+    requests = []
+
+    def wire(request):
+        requests.append(str(request.url))
+        return httpx.Response(200, json={"endpoints": {"api": "https://api.individual.githubcopilot.com.example.org"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(wire)) as client:
+        with pytest.raises(ProviderError, match="Untrusted"):
+            await github_copilot.resolve_api_url(client, "github_pat_test")
+    assert requests == [github_copilot.ACCOUNT_URL]

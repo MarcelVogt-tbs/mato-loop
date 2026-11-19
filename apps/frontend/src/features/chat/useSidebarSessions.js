@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { sessionSidebarStatus } from 'src/features/chat/session-groups'
 import { notifyError } from 'src/utils/notifications'
-import { chooseSessionDeletion } from 'src/features/archive/deletion-choice'
+import { chooseDeletion } from 'src/features/archive/deletion-choice'
 
 const emptySidebarList = Object.freeze({
   items: [],
@@ -258,11 +258,12 @@ export function useSidebarSessions({
     }
     let selection
     try {
-      selection = await chooseSessionDeletion($q, title || 'Ohne Titel', { permanent, impact })
+      selection = await chooseDeletion($q, 'Session', title || 'Ohne Titel', { permanent, impact })
     } catch { return false }
     if (selection === null) return false
     permanent = selection.permanent
-    const worktreeImpact = selection.worktreeImpact
+    const { worktreeImpact, keepWorktree } = selection
+    const removingWorktree = permanent && (worktreeImpact || (impact.worktree?.scheduled && !keepWorktree))
     if (permanent && impact.fileReferenceCount) {
       $q.notify({
         type: 'negative',
@@ -270,7 +271,7 @@ export function useSidebarSessions({
       })
       return false
     }
-    if (worktreeImpact && workspace.hasDirtyEditors) {
+    if (removingWorktree && workspace.hasDirtyEditors) {
       $q.notify({ type: 'warning', message: 'Bitte zuerst die ungespeicherten Editoränderungen speichern oder verwerfen.' })
       return false
     }
@@ -294,7 +295,7 @@ export function useSidebarSessions({
     ) return false
     try {
       await chat.deleteSession(id, {
-        permanent, worktreeImpact,
+        permanent, worktreeImpact, keepWorktree,
         ...(permanent ? { automationMode,
           automationImpact: automationMode ? impact.automationImpact : null } : {})
       })
@@ -306,7 +307,7 @@ export function useSidebarSessions({
       void controlCenter.removeFileTabs(affectedTabs.map((tab) => tab.tabId)).catch(() => {})
     }
     affectedTabs.forEach((tab) => workspace.discardFileTab(tab.tabId))
-    if (worktreeImpact && impact.worktree.sessions.some(item => item.id === chat.current?.id)) {
+    if (removingWorktree && impact.worktree?.sessions?.some(item => item.id === chat.current?.id)) {
       void chat.refreshSession(chat.current.id).catch(() => {})
     }
     if (automationMode || !permanent) void automations.fetchAutomations().catch(() => {})

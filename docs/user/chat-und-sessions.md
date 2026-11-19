@@ -35,7 +35,7 @@ Unter **Control Center > Session** bearbeitest du die Vorgaben; Agent, Modell un
 | Websuche | Erzwingen, verfügbar oder deaktiviert |
 | Computer und Arbeitsordner | Optionaler lokaler Ausführungsort |
 
-**Allgemein** bietet Allgemein und Sysadmin, **Coding** Plan und Build. Plan und Build benötigen einen verbundenen Computer mit zugänglichem Arbeitsordner. Eine Vorlagenauswahl ersetzt deren Sessionwerte, aber nicht Projekt, Computer, Arbeitsordner oder Websuche. Spätere Vorlagenänderungen wirken nicht rückwirkend.
+**Allgemein** bietet Allgemein und Sysadmin. Die **Coding**-Profile Plan, Build und Interactive benötigen einen verbundenen Computer mit zugänglichem Arbeitsordner. Eine Vorlagenauswahl ersetzt deren Sessionwerte, aber nicht Projekt, Computer, Arbeitsordner oder Websuche. Spätere Vorlagenänderungen wirken nicht rückwirkend.
 
 Modellvorgaben gehören zu [Standardmodellen und Sessionvorlagen](provider-und-modelle.md#standardmodelle-und-sessionvorlagen), nicht ins Agentenprofil. Ein laufender Auftrag behält sein Startprofil und seinen Modellkontext; Änderungen gelten für spätere Läufe. Instanzweite Verfügbarkeit und Rechte bleiben wirksam.
 

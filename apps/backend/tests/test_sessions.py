@@ -2586,6 +2586,7 @@ async def test_session_delete_impact_discovers_the_worktree_without_waiting_for_
         return info
 
     monkeypatch.setattr(coding, "inspect_repository", inspect)
+    monkeypatch.setattr(coding, "worktree_registration", AsyncMock(return_value=1.0))
     timeout = asyncio.timeout
     monkeypatch.setattr(asyncio, "timeout", lambda seconds: timeout(0.01))
     db = AsyncMock(spec=AsyncSession)
@@ -2596,7 +2597,7 @@ async def test_session_delete_impact_discovers_the_worktree_without_waiting_for_
         session.id, session.user_id, db, owned_session_query=AsyncMock(return_value=session),
     ), timeout=0.5)
     assert result["worktree"] == (None if computer not in {"online", "permission"} else {
-        "path": "/worktree", "impact": coding.worktree_removal_token(session, info, affected),
+        "path": "/worktree", "impact": coding.worktree_removal_token(session, info, affected, 1.0),
         "removalError": info.removal_error,
         "sessions": [{"id": str(other.id), "title": other.title}],
     })
@@ -2628,11 +2629,13 @@ async def test_session_delete_trashes_commits_and_purges_tree(
     token = None
     if worktree:
         info = coding.RepositoryResult(repository="/missing/worktree", commonDirectory="/project/.git",
+            gitDirectory="/project/.git/worktrees/worktree",
             remotes=[], defaultRemote=None, defaultBranch="main", branch="task", worktrees=[
                 {"path": "/project", "branch": "main", "main": True, "locked": False},
                 {"path": "/missing/worktree", "branch": "task", "main": False, "locked": False},
             ])
-        token = coding.worktree_removal_token(session, info, [])
+        token = coding.worktree_removal_token(session, info, [], 1.0)
+        monkeypatch.setattr(coding, "worktree_registration", AsyncMock(return_value=1.0))
         monkeypatch.setattr(coding, "session_worktree", AsyncMock(return_value=info))
         affected = [ChatSession(id=uuid4())] if worktree == "joined" else []
         monkeypatch.setattr(coding, "sessions_in_worktree", AsyncMock(return_value=affected))
@@ -2664,10 +2667,10 @@ async def test_session_delete_trashes_commits_and_purges_tree(
         monkeypatch.setattr(sessions_route, "_deletable_session", AsyncMock(return_value=session))
         monkeypatch.setattr(SettingsStore, "load", AsyncMock(return_value=UserPreferences(trash_enabled=True)))
         db.scalar.side_effect = lambda statement: session if str(statement).startswith("SELECT chat_sessions.id,") else None
-        db.get.return_value = session
         db.scalars.return_value = []
         await delete_session(session_id, user, db, worktree_impact=token, permanent=False)
-        assert (session.delete_at is not None, client.request.await_count, session_path.exists(), db.delete.await_count) == (True, 1, True, 0)
+        assert (session.delete_at is not None, client.request.await_count, session_path.exists(), db.delete.await_count) == (True, 0, True, 0)
+        assert session.trash_worktree_removal["impact"] == token
         return
 
     await delete_session(session_id, user, db, worktree_impact=token, permanent=True)
@@ -3156,8 +3159,8 @@ async def test_template_switch_replaces_session_overrides(monkeypatch) -> None:
     }
 
 
-@pytest.mark.parametrize("field,revokes", [("message_size", False), ("agent_ids", True), ("agent_models", False), ("model_id", False), ("assistant_context", False)])
-async def test_session_changes_preserve_grants_for_model_and_message_size(monkeypatch, field, revokes) -> None:
+@pytest.mark.parametrize("field,revokes", [("message_size", False), ("agent_ids", True), ("agent_models", False), ("model_id", False), ("assistant_context", False), ("keyboard_agent_ids", False)])
+async def test_session_changes_only_revoke_grants_for_policy_changes(monkeypatch, field, revokes) -> None:
     from mato_loop_backend.settings.session_profiles import (
         ChatModelOverride,
         SessionTemplatesSettings,
@@ -3176,13 +3179,16 @@ async def test_session_changes_preserve_grants_for_model_and_message_size(monkey
     if field == "model_id":
         session.model_config_id = None
     else:
-        profile = profile.model_copy(update={field: {
+        updates = {field: {
             "message_size": "standard",
             "agent_ids": [template.start_agent_id],
             "agent_models": {template.start_agent_id: ChatModelOverride(model_id=model.id)},
             "assistant_context": "disabled",
-        }[field]})
-        payload = SessionUpdateRequest(session_profile=profile)
+            "keyboard_agent_ids": [template.start_agent_id],
+        }[field]}
+        if field == "agent_ids":
+            updates["keyboard_agent_ids"] = [template.start_agent_id]
+        payload = SessionUpdateRequest(session_profile=profile.model_copy(update=updates))
     db = AsyncMock(spec=AsyncSession)
     db.scalar.side_effect = [session.id, session, False, None]
     db.scalars.return_value = MagicMock(all=lambda: [])
